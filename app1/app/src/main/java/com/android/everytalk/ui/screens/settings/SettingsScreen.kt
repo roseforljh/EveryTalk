@@ -5,11 +5,8 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
-import androidx.compose.material3.TabRow
-import androidx.compose.material3.Tab
 import androidx.compose.runtime.*
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.text.font.FontWeight
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
@@ -18,10 +15,27 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
-import androidx.compose.material3.TabRowDefaults
-import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.wrapContentSize
-import androidx.compose.foundation.layout.width
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.animation.togetherWith
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.Brush
 import androidx.navigation.NavController
 import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.ApiConfig
@@ -235,221 +249,344 @@ fun SettingsScreen(
     }
 
 
+    val isDark = isSystemInDarkTheme()
+    val buttonBg = if (isDark) Color(0xFF303030) else Color(0xFFEDEDED)
+    val borderColor = if (isDark) Color(0xFF414141) else Color(0xFFF3F3F3)
+    val contentColor = if (isDark) Color.White else Color(0xFF0D0D0D)
+    val iconButtonSize = 44.dp
+
+    // Tab 状态：0=平台配置, 1=联网搜索, 2=MCP
+    val tabs = listOf("平台配置", "联网搜索", "MCP")
+    var currentTabIndex by remember { mutableIntStateOf(0) }
+    var showTabMenu by remember { mutableStateOf(false) }
+    var showMcpAddDialog by remember { mutableStateOf(false) }
+
+    val topContentPadding = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + iconButtonSize + 24.dp
+
     Scaffold(
         modifier = modifier.fillMaxSize(),
         containerColor = MaterialTheme.colorScheme.background,
-        contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
-        topBar = {
-            TopAppBar(
-                title = { 
-                    val titleText = if (isInImageMode) "图像生成配置" else "设置"
-                    Text(titleText, color = MaterialTheme.colorScheme.onSurface) 
-                },
-                navigationIcon = {
-                    IconButton(onClick = {
-                        if (backButtonEnabled) {
-                            backButtonEnabled = false; navController.popBackStack()
-                        }
-                    }, enabled = backButtonEnabled) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_arrow_back),
-                            contentDescription = "返回",
-                            tint = if (backButtonEnabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                        )
-                    }
-                },
-                actions = {
-                    IconButton(onClick = { showImportExportDialog = true }) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_import_export),
-                            contentDescription = "导入/导出配置",
-                            tint = MaterialTheme.colorScheme.onSurface
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
-                    titleContentColor = MaterialTheme.colorScheme.onSurface,
-                    navigationIconContentColor = MaterialTheme.colorScheme.onSurface
-                )
-            )
-        }
-    ) { paddingValues ->
-        val tabs = listOf("平台配置", "联网搜索", "MCP")
-        val pagerState = rememberPagerState(pageCount = { tabs.size })
-
-        Column(modifier = Modifier.fillMaxSize().padding(paddingValues)) {
-            if (!isInImageMode) {
-                TabRow(
-                    selectedTabIndex = pagerState.currentPage,
-                    containerColor = MaterialTheme.colorScheme.background,
-                    contentColor = MaterialTheme.colorScheme.onSurface,
-                    indicator = { tabPositions ->
-                        if (pagerState.currentPage < tabPositions.size) {
-                            val fraction = pagerState.currentPageOffsetFraction
-                            val currentTab = tabPositions[pagerState.currentPage]
-                            
-                            val targetPage = if (fraction > 0) {
-                                (pagerState.currentPage + 1).coerceAtMost(tabPositions.lastIndex)
-                            } else if (fraction < 0) {
-                                (pagerState.currentPage - 1).coerceAtLeast(0)
+        contentWindowInsets = WindowInsets(0.dp)
+    ) { _ ->
+        Box(modifier = Modifier.fillMaxSize()) {
+            // 内容层
+            Column(modifier = Modifier.fillMaxSize()) {
+                if (isInImageMode) {
+                    SettingsScreenContent(
+                        paddingValues = PaddingValues(top = topContentPadding),
+                        apiConfigsByApiKeyAndModality = apiConfigsByApiKeyAndModality,
+                        isImageMode = isInImageMode,
+                        onAddFullConfigClick = {
+                            newFullConfigProvider = ""
+                            newFullConfigKey = ""
+                            newFullConfigAddress = ""
+                            showAddFullConfigDialog = true
+                        },
+                        onSelectConfig = { configToSelect ->
+                            viewModel.selectConfig(configToSelect, isInImageMode)
+                        },
+                        selectedConfigIdInApp = selectedConfigForApp?.id,
+                        onAddModelForApiKeyClick = { apiKey, existingProvider, existingAddress, existingChannel, existingModality ->
+                            addModelToKeyTargetApiKey = apiKey
+                            addModelToKeyTargetProvider = existingProvider
+                            addModelToKeyTargetAddress = existingAddress
+                            addModelToKeyTargetChannel = existingChannel
+                            addModelToKeyTargetModality = existingModality
+                            addModelToKeyNewModelName = ""
+                            showAddModelToKeyDialog = true
+                        },
+                        onDeleteModelForApiKey = { configToDelete ->
+                            viewModel.deleteConfig(configToDelete, isInImageMode)
+                        },
+                        onEditConfigClick = { config ->
+                            configToEdit = config
+                            showEditConfigDialog = true
+                        },
+                        onDeleteConfigGroup = { representativeConfig ->
+                            viewModel.deleteConfigGroup(representativeConfig, isInImageMode)
+                        },
+                        onRefreshModelsClick = { config ->
+                            viewModel.refreshModelsForConfig(config)
+                        },
+                        isRefreshingModels = isRefreshingModels
+                    )
+                } else {
+                    AnimatedContent(
+                        targetState = currentTabIndex,
+                        transitionSpec = {
+                            val direction = if (targetState > initialState) {
+                                slideInHorizontally { it / 3 } + fadeIn(
+                                    animationSpec = tween(200)
+                                ) togetherWith
+                                slideOutHorizontally { -it / 3 } + fadeOut(
+                                    animationSpec = tween(200)
+                                )
                             } else {
-                                pagerState.currentPage
+                                slideInHorizontally { -it / 3 } + fadeIn(
+                                    animationSpec = tween(200)
+                                ) togetherWith
+                                slideOutHorizontally { it / 3 } + fadeOut(
+                                    animationSpec = tween(200)
+                                )
                             }
-                            
-                            val targetTab = tabPositions[targetPage]
-                            val absFraction = kotlin.math.abs(fraction)
-                            
-                            val width = androidx.compose.ui.unit.lerp(currentTab.width, targetTab.width, absFraction)
-                            val left = androidx.compose.ui.unit.lerp(currentTab.left, targetTab.left, absFraction)
-                            
-                            TabRowDefaults.SecondaryIndicator(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .wrapContentSize(Alignment.BottomStart)
-                                    .offset(x = left)
-                                    .width(width),
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                        }
-                    }
-                ) {
-                    tabs.forEachIndexed { index, title ->
-                        val isSelected = pagerState.currentPage == index
-                        Tab(
-                            selected = isSelected,
-                            onClick = {
-                                coroutineScope.launch {
-                                    pagerState.animateScrollToPage(index)
+                            direction.using(SizeTransform(clip = false))
+                        },
+                        label = "settings_tab_transition"
+                    ) { tabIndex ->
+                        when (tabIndex) {
+                            0 -> {
+                                SettingsScreenContent(
+                                    paddingValues = PaddingValues(top = topContentPadding),
+                                    apiConfigsByApiKeyAndModality = apiConfigsByApiKeyAndModality,
+                                    isImageMode = isInImageMode,
+                                    onAddFullConfigClick = {
+                                        newFullConfigProvider = ""
+                                        newFullConfigKey = ""
+                                        newFullConfigAddress = ""
+                                        showAddFullConfigDialog = true
+                                    },
+                                    onSelectConfig = { configToSelect ->
+                                        viewModel.selectConfig(configToSelect, isInImageMode)
+                                    },
+                                    selectedConfigIdInApp = selectedConfigForApp?.id,
+                                    onAddModelForApiKeyClick = { apiKey, existingProvider, existingAddress, existingChannel, existingModality ->
+                                        addModelToKeyTargetApiKey = apiKey
+                                        addModelToKeyTargetProvider = existingProvider
+                                        addModelToKeyTargetAddress = existingAddress
+                                        addModelToKeyTargetChannel = existingChannel
+                                        addModelToKeyTargetModality = existingModality
+                                        addModelToKeyNewModelName = ""
+                                        showAddModelToKeyDialog = true
+                                    },
+                                    onDeleteModelForApiKey = { configToDelete ->
+                                        viewModel.deleteConfig(configToDelete, isInImageMode)
+                                    },
+                                    onEditConfigClick = { config ->
+                                        configToEdit = config
+                                        showEditConfigDialog = true
+                                    },
+                                    onDeleteConfigGroup = { representativeConfig ->
+                                        viewModel.deleteConfigGroup(representativeConfig, isInImageMode)
+                                    },
+                                    onRefreshModelsClick = { config ->
+                                        viewModel.refreshModelsForConfig(config)
+                                    },
+                                    isRefreshingModels = isRefreshingModels
+                                )
+                            }
+                            1 -> {
+                                ExternalWebSearchSettingsContent(
+                                    selectedProviderId = selectedExternalWebSearchProviderId,
+                                    configs = externalWebSearchConfigs,
+                                    onSelectProvider = { viewModel.selectExternalWebSearchProvider(it) },
+                                    onEditProvider = { editingExternalProvider = it },
+                                    topContentPadding = topContentPadding
+                                )
+                            }
+                            2 -> {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(horizontal = 20.dp)
+                                        .padding(bottom = 20.dp)
+                                ) {
+                                    Spacer(Modifier.height(topContentPadding))
+                                    McpServerListContent(
+                                        serverStates = allMcpConfigs.mapValues { (id, persistedState) ->
+                                            mcpServerStates[id] ?: persistedState
+                                        },
+                                        onAddServer = { config -> 
+                                            viewModel.addMcpServer(config) 
+                                        },
+                                        onUpdateServer = { config ->
+                                            viewModel.updateMcpServer(config)
+                                        },
+                                        onRemoveServer = { id -> 
+                                            viewModel.removeMcpServer(id) 
+                                        },
+                                        onToggleServer = { id, enabled -> 
+                                            viewModel.toggleMcpServer(id, enabled) 
+                                        }
+                                    )
                                 }
-                            },
-                            text = { 
-                                Text(
-                                    text = title,
-                                    color = if (isSelected) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
-                                ) 
                             }
-                        )
+                        }
                     }
                 }
             }
 
-            if (isInImageMode) {
-                SettingsScreenContent(
-                    paddingValues = PaddingValues(0.dp),
-                    apiConfigsByApiKeyAndModality = apiConfigsByApiKeyAndModality,
-                    isImageMode = isInImageMode,
-                    onAddFullConfigClick = {
-                        newFullConfigProvider = ""
-                        newFullConfigKey = ""
-                        newFullConfigAddress = ""
-                        showAddFullConfigDialog = true
-                    },
-                    onSelectConfig = { configToSelect ->
-                        viewModel.selectConfig(configToSelect, isInImageMode)
-                    },
-                    selectedConfigIdInApp = selectedConfigForApp?.id,
-                    onAddModelForApiKeyClick = { apiKey, existingProvider, existingAddress, existingChannel, existingModality ->
-                        addModelToKeyTargetApiKey = apiKey
-                        addModelToKeyTargetProvider = existingProvider
-                        addModelToKeyTargetAddress = existingAddress
-                        addModelToKeyTargetChannel = existingChannel
-                        addModelToKeyTargetModality = existingModality
-                        addModelToKeyNewModelName = ""
-                        showAddModelToKeyDialog = true
-                    },
-                    onDeleteModelForApiKey = { configToDelete ->
-                        viewModel.deleteConfig(configToDelete, isInImageMode)
-                    },
-                    onEditConfigClick = { config ->
-                        configToEdit = config
-                        showEditConfigDialog = true
-                    },
-                    onDeleteConfigGroup = { representativeConfig ->
-                        viewModel.deleteConfigGroup(representativeConfig, isInImageMode)
-                    },
-                    onRefreshModelsClick = { config ->
-                        viewModel.refreshModelsForConfig(config)
-                    },
-                    isRefreshingModels = isRefreshingModels
-                )
-            } else {
-                HorizontalPager(
-                    state = pagerState,
-                    modifier = Modifier.fillMaxSize()
-                ) { page ->
-                    when (page) {
-                        0 -> {
-                            SettingsScreenContent(
-                                paddingValues = PaddingValues(0.dp),
-                                apiConfigsByApiKeyAndModality = apiConfigsByApiKeyAndModality,
-                                isImageMode = isInImageMode,
-                                onAddFullConfigClick = {
-                                    newFullConfigProvider = ""
-                                    newFullConfigKey = ""
-                                    newFullConfigAddress = ""
-                                    showAddFullConfigDialog = true
-                                },
-                                onSelectConfig = { configToSelect ->
-                                    viewModel.selectConfig(configToSelect, isInImageMode)
-                                },
-                                selectedConfigIdInApp = selectedConfigForApp?.id,
-                                onAddModelForApiKeyClick = { apiKey, existingProvider, existingAddress, existingChannel, existingModality ->
-                                    addModelToKeyTargetApiKey = apiKey
-                                    addModelToKeyTargetProvider = existingProvider
-                                    addModelToKeyTargetAddress = existingAddress
-                                    addModelToKeyTargetChannel = existingChannel
-                                    addModelToKeyTargetModality = existingModality
-                                    addModelToKeyNewModelName = ""
-                                    showAddModelToKeyDialog = true
-                                },
-                                onDeleteModelForApiKey = { configToDelete ->
-                                    viewModel.deleteConfig(configToDelete, isInImageMode)
-                                },
-                                onEditConfigClick = { config ->
-                                    configToEdit = config
-                                    showEditConfigDialog = true
-                                },
-                                onDeleteConfigGroup = { representativeConfig ->
-                                    viewModel.deleteConfigGroup(representativeConfig, isInImageMode)
-                                },
-                                onRefreshModelsClick = { config ->
-                                    viewModel.refreshModelsForConfig(config)
-                                },
-                                isRefreshingModels = isRefreshingModels
+            // 浮动顶栏：顶部阴影渐隐，内容仍可滚动到其后方
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        brush = Brush.verticalGradient(
+                            colorStops = arrayOf(
+                                0.0f to MaterialTheme.colorScheme.background,
+                                0.65f to MaterialTheme.colorScheme.background.copy(alpha = 0.72f),
+                                1.0f to Color.Transparent
                             )
-                        }
-                        1 -> {
-                            ExternalWebSearchSettingsContent(
-                                selectedProviderId = selectedExternalWebSearchProviderId,
-                                configs = externalWebSearchConfigs,
-                                onSelectProvider = { viewModel.selectExternalWebSearchProvider(it) },
-                                onEditProvider = { editingExternalProvider = it }
-                            )
-                        }
-                        2 -> {
-                            Column(
-                                modifier = Modifier.fillMaxSize().padding(20.dp)
+                        )
+                    )
+                    .windowInsetsPadding(WindowInsets.statusBars)
+                    .padding(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    // 左侧返回按钮
+                    Box(
+                        modifier = Modifier
+                            .size(iconButtonSize)
+                            .shadow(6.dp, CircleShape, clip = false)
+                            .clip(CircleShape)
+                            .background(buttonBg)
+                            .border(1.dp, borderColor, CircleShape)
+                            .clickable(enabled = backButtonEnabled) {
+                                backButtonEnabled = false
+                                navController.popBackStack()
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_arrow_back),
+                            contentDescription = "返回",
+                            tint = contentColor,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.weight(1f))
+
+                    // 右侧按钮
+                    if (!isInImageMode) {
+                        val showAddButton = currentTabIndex != 1
+                        val rightButtonWidth by animateDpAsState(
+                            targetValue = if (showAddButton) iconButtonSize * 2 else iconButtonSize,
+                            animationSpec = tween(durationMillis = 180),
+                            label = "settingsRightButtonWidth"
+                        )
+                        Box {
+                            Row(
+                                modifier = Modifier
+                                    .width(rightButtonWidth)
+                                    .height(iconButtonSize)
+                                    .shadow(6.dp, RoundedCornerShape(percent = 50), clip = false)
+                                    .clip(RoundedCornerShape(percent = 50))
+                                    .background(buttonBg)
+                                    .border(1.dp, borderColor, RoundedCornerShape(percent = 50)),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.End
                             ) {
-                                McpServerListContent(
-                                    serverStates = allMcpConfigs.mapValues { (id, persistedState) ->
-                                        mcpServerStates[id] ?: persistedState
-                                    },
-                                    onAddServer = { config -> 
-                                        viewModel.addMcpServer(config) 
-                                    },
-                                    onUpdateServer = { config ->
-                                        viewModel.updateMcpServer(config)
-                                    },
-                                    onRemoveServer = { id -> 
-                                        viewModel.removeMcpServer(id) 
-                                    },
-                                    onToggleServer = { id, enabled -> 
-                                        viewModel.toggleMcpServer(id, enabled) 
+                                if (showAddButton) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(iconButtonSize)
+                                            .clip(CircleShape)
+                                            .clickable {
+                                                if (currentTabIndex == 0) {
+                                                    newFullConfigProvider = ""
+                                                    newFullConfigKey = ""
+                                                    newFullConfigAddress = ""
+                                                    showAddFullConfigDialog = true
+                                                } else if (currentTabIndex == 2) {
+                                                    showMcpAddDialog = true
+                                                }
+                                            },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            painter = painterResource(R.drawable.ic_plus),
+                                            contentDescription = "添加",
+                                            tint = contentColor,
+                                            modifier = Modifier.size(20.dp)
+                                        )
                                     }
-                                )
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .size(iconButtonSize)
+                                        .clip(CircleShape)
+                                        .clickable { showTabMenu = true },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_dots_horizontal),
+                                        contentDescription = "更多",
+                                        tint = contentColor,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
                             }
+                            SettingsTabMenu(
+                                expanded = showTabMenu,
+                                tabs = tabs,
+                                currentTabIndex = currentTabIndex,
+                                onTabSelected = { index ->
+                                    currentTabIndex = index
+                                    showTabMenu = false
+                                },
+                                onImportExport = { showImportExportDialog = true },
+                                onDismiss = { showTabMenu = false }
+                            )
+                        }
+                    } else {
+                        // 图像模式：胶囊形状（左边添加 + 右边更多）
+                        Box {
+                            Row(
+                                modifier = Modifier
+                                    .width(iconButtonSize * 2)
+                                    .height(iconButtonSize)
+                                    .shadow(6.dp, RoundedCornerShape(percent = 50), clip = false)
+                                    .clip(RoundedCornerShape(percent = 50))
+                                    .background(buttonBg)
+                                    .border(1.dp, borderColor, RoundedCornerShape(percent = 50)),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.End
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(iconButtonSize)
+                                        .clip(CircleShape)
+                                        .clickable {
+                                            newFullConfigProvider = ""
+                                            newFullConfigKey = ""
+                                            newFullConfigAddress = ""
+                                            showAddFullConfigDialog = true
+                                        },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_plus),
+                                        contentDescription = "添加",
+                                        tint = contentColor,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .size(iconButtonSize)
+                                        .clip(CircleShape)
+                                        .clickable { showTabMenu = true },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_dots_horizontal),
+                                        contentDescription = "更多",
+                                        tint = contentColor,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
+                            }
+                            SettingsTabMenu(
+                                expanded = showTabMenu,
+                                tabs = emptyList(),
+                                currentTabIndex = -1,
+                                onTabSelected = { showTabMenu = false },
+                                onImportExport = { showImportExportDialog = true },
+                                onDismiss = { showTabMenu = false }
+                            )
                         }
                     }
                 }
@@ -715,5 +852,140 @@ fun SettingsScreen(
             chatHistoryCount = chatHistory.size,
             imageHistoryCount = imageHistory.size
         )
+    }
+
+    if (showMcpAddDialog) {
+        com.android.everytalk.ui.screens.mcp.AddMcpServerDialog(
+            onConfirm = { config ->
+                viewModel.addMcpServer(config)
+                showMcpAddDialog = false
+            },
+            onDismiss = { showMcpAddDialog = false }
+        )
+    }
+}
+
+@Composable
+private fun SettingsTabMenu(
+    expanded: Boolean,
+    tabs: List<String>,
+    currentTabIndex: Int,
+    onTabSelected: (Int) -> Unit,
+    onImportExport: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val isDark = isSystemInDarkTheme()
+    val cardBg = if (isDark) Color(0xFF212121) else Color(0xFFFFFFFF)
+    val popupBorderColor = if (isDark) Color(0xFF414141) else Color(0xFFF3F3F3)
+    val textColor = if (isDark) Color.White else Color(0xFF0D0D0D)
+    val selectedColor = if (isDark) Color(0xFF6EB5FF) else Color(0xFF3B82F6)
+    val subtextColor = if (isDark) Color.White.copy(alpha = 0.5f) else Color(0xFF0D0D0D).copy(alpha = 0.5f)
+
+    var showPopup by remember { mutableStateOf(false) }
+    val scaleAnim = remember { androidx.compose.animation.core.Animatable(0.8f) }
+    val alphaAnim = remember { androidx.compose.animation.core.Animatable(0f) }
+    val emphasizedDecelerate = androidx.compose.animation.core.CubicBezierEasing(0.0f, 0.0f, 0.2f, 1.0f)
+    val decelerateEasing = androidx.compose.animation.core.CubicBezierEasing(0.4f, 0.0f, 0.2f, 1.0f)
+
+    LaunchedEffect(expanded) {
+        if (expanded) {
+            showPopup = true
+            scaleAnim.snapTo(0.8f)
+            alphaAnim.snapTo(0f)
+            kotlinx.coroutines.coroutineScope {
+                launch { scaleAnim.animateTo(1f, androidx.compose.animation.core.tween(120, easing = emphasizedDecelerate)) }
+                launch { alphaAnim.animateTo(1f, androidx.compose.animation.core.tween(30, easing = decelerateEasing)) }
+            }
+        } else if (showPopup) {
+            kotlinx.coroutines.coroutineScope {
+                launch { alphaAnim.animateTo(0f, androidx.compose.animation.core.tween(75, easing = decelerateEasing)) }
+                launch { kotlinx.coroutines.delay(74); scaleAnim.snapTo(0.8f) }
+            }
+            showPopup = false
+        }
+    }
+
+    val sortedTabs = remember(tabs) {
+        tabs.mapIndexed { index, title -> index to title }
+            .sortedBy { it.second.length }
+    }
+
+    if (!showPopup) return
+
+    androidx.compose.ui.window.Popup(
+        alignment = Alignment.TopEnd,
+        offset = androidx.compose.ui.unit.IntOffset(0, with(androidx.compose.ui.platform.LocalDensity.current) { 48.dp.toPx().toInt() }),
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.PopupProperties(focusable = true)
+    ) {
+        Surface(
+            modifier = Modifier
+                .widthIn(min = 112.dp, max = 176.dp)
+                .graphicsLayer {
+                    this.scaleX = scaleAnim.value
+                    this.scaleY = scaleAnim.value
+                    this.alpha = alphaAnim.value
+                    this.transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 0f)
+                }
+                .shadow(8.dp, RoundedCornerShape(16.dp))
+                .border(1.dp, popupBorderColor, RoundedCornerShape(16.dp)),
+            shape = RoundedCornerShape(16.dp),
+            color = cardBg
+        ) {
+            Column(
+                modifier = Modifier.padding(vertical = 6.dp)
+            ) {
+                sortedTabs.forEach { (index, title) ->
+                    val isSelected = index == currentTabIndex
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(38.dp)
+                            .clickable { onTabSelected(index) }
+                            .padding(horizontal = 14.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = title,
+                            fontSize = 16.sp,
+                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                            color = textColor,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                        if (isSelected) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_check),
+                                contentDescription = null,
+                                tint = textColor,
+                                modifier = Modifier
+                                    .align(Alignment.CenterStart)
+                                    .size(12.dp)
+                            )
+                        }
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(38.dp)
+                        .clickable {
+                            onImportExport()
+                            onDismiss()
+                        }
+                        .padding(horizontal = 14.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "导入/导出",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = textColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+        }
     }
 }

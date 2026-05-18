@@ -8,6 +8,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.clickable
@@ -18,6 +19,10 @@ import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.ui.window.Dialog
+import androidx.compose.material3.Surface
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.painterResource
@@ -40,6 +45,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
@@ -85,6 +91,9 @@ internal fun EditExternalWebSearchProviderDialog(
     val dialogBg = if (isSystemInDarkTheme()) Color.Black else Color.White; val borderColor = if (isSystemInDarkTheme()) Color(0xFF414141) else Color(0xFFF3F3F3); val contentColor = if (isSystemInDarkTheme()) Color.White else Color(0xFF0D0D0D)
 
     AlertDialog(
+        modifier = Modifier
+            .wrapContentHeight()
+            .border(1.dp, borderColor, RoundedCornerShape(28.dp)),
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(28.dp),
         containerColor = dialogBg,
@@ -92,7 +101,8 @@ internal fun EditExternalWebSearchProviderDialog(
             Text(
                 text = "编辑 ${provider.displayName}",
                 style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.Bold,
+                color = contentColor
             )
         },
         text = {
@@ -451,34 +461,14 @@ internal fun AddNewFullConfigDialog(
                     && provider.isNotBlank()
                     && provider.trim().lowercase() !in listOf("默认","default","default_text")
 
-            Column(modifier = Modifier.wrapContentHeight()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 520.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
                 Column(
-                    modifier = Modifier
-                        .weight(1f, fill = false)
-                        .drawWithContent {
-                            drawContent()
-                            // 顶部渐变
-                            drawRect(
-                                brush = androidx.compose.ui.graphics.Brush.verticalGradient(
-                                    colors = listOf(dialogBg, dialogBg.copy(alpha = 0f)),
-                                    startY = 0f,
-                                    endY = 48f
-                                ),
-                                size = androidx.compose.ui.geometry.Size(size.width, 48f)
-                            )
-                            // 底部渐变
-                            drawRect(
-                                brush = androidx.compose.ui.graphics.Brush.verticalGradient(
-                                    colors = listOf(dialogBg.copy(alpha = 0f), dialogBg),
-                                    startY = size.height - 48f,
-                                    endY = size.height
-                                ),
-                                topLeft = androidx.compose.ui.geometry.Offset(0f, size.height - 48f),
-                                size = androidx.compose.ui.geometry.Size(size.width, 48f)
-                            )
-                        }
-                        .verticalScroll(rememberScrollState())
-                        .padding(vertical = 8.dp)
+                    modifier = Modifier.padding(vertical = 8.dp)
                 ) {
                     SettingsFieldLabel("模型平台")
                     ExposedDropdownMenuBox(
@@ -797,52 +787,45 @@ internal fun EditConfigDialog(
         channelMenuTransitionState.targetState = shouldShowChannelMenuLogical
     }
 
-    AlertDialog(
-        modifier = Modifier
-            .wrapContentHeight()
-            .border(1.dp, borderColor, RoundedCornerShape(28.dp)),
+    Dialog(
         onDismissRequest = onDismissRequest,
-        shape = RoundedCornerShape(28.dp),
-        containerColor = dialogBg,
-        titleContentColor = contentColor,
-        textContentColor = contentColor,
-        title = {
-            Text(
-                "编辑配置",
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-                color = contentColor
-            )
-        },
-        text = {
-            val canSubmit = apiKey.isNotBlank() && apiAddress.isNotBlank() && provider.isNotBlank()
+        properties = androidx.compose.ui.window.DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false
+        )
+    ) {
+        val canSubmit = apiKey.isNotBlank() && apiAddress.isNotBlank() && provider.isNotBlank()
 
-            Column(modifier = Modifier.wrapContentHeight()) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.92f)
+                .wrapContentHeight()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .imePadding()
+                .border(1.dp, borderColor, RoundedCornerShape(28.dp)),
+            shape = RoundedCornerShape(28.dp),
+            color = dialogBg
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp)
+            ) {
+                Text(
+                    "编辑配置",
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = contentColor
+                )
+                Spacer(modifier = Modifier.height(16.dp))
+
                 Column(
                     modifier = Modifier
+                        .fillMaxWidth()
                         .weight(1f, fill = false)
-                        .drawWithContent {
-                            drawContent()
-                            drawRect(
-                                brush = androidx.compose.ui.graphics.Brush.verticalGradient(
-                                    colors = listOf(dialogBg, dialogBg.copy(alpha = 0f)),
-                                    startY = 0f,
-                                    endY = 48f
-                                ),
-                                size = androidx.compose.ui.geometry.Size(size.width, 48f)
-                            )
-                            drawRect(
-                                brush = androidx.compose.ui.graphics.Brush.verticalGradient(
-                                    colors = listOf(dialogBg.copy(alpha = 0f), dialogBg),
-                                    startY = size.height - 48f,
-                                    endY = size.height
-                                ),
-                                topLeft = androidx.compose.ui.geometry.Offset(0f, size.height - 48f),
-                                size = androidx.compose.ui.geometry.Size(size.width, 48f)
-                            )
-                        }
+                        .heightIn(max = 380.dp)
                         .verticalScroll(rememberScrollState())
-                        .padding(vertical = 8.dp)
                 ) {
                     SettingsFieldLabel("模型平台")
                     OutlinedTextField(
@@ -961,10 +944,10 @@ internal fun EditConfigDialog(
                     )
                 }
 
+                Spacer(modifier = Modifier.height(16.dp))
+
                 Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 16.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     OutlinedButton(
@@ -1021,10 +1004,8 @@ internal fun EditConfigDialog(
                     }
                 }
             }
-        },
-        confirmButton = {},
-        dismissButton = {}
-    )
+        }
+    }
 }
 
 @Composable
@@ -1134,30 +1115,43 @@ internal fun ImportExportDialog(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // 包含历史选项
                 if (chatHistoryCount > 0 || imageHistoryCount > 0) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
+                            .clip(RoundedCornerShape(16.dp))
+                            .border(1.dp, borderColor, RoundedCornerShape(16.dp))
                             .clickable { includeHistory = !includeHistory }
-                            .padding(vertical = 8.dp),
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Checkbox(
-                            checked = includeHistory,
-                            onCheckedChange = { includeHistory = it },
-                            colors = CheckboxDefaults.colors(
-                                checkedColor = contentColor,
-                                checkmarkColor = dialogBg
-                            )
-                        )
-                        Spacer(Modifier.width(8.dp))
+                        Box(
+                            modifier = Modifier
+                                .size(22.dp)
+                                .clip(RoundedCornerShape(7.dp))
+                                .background(if (includeHistory) contentColor else Color.Transparent)
+                                .border(
+                                    1.dp,
+                                    if (includeHistory) contentColor else borderColor,
+                                    RoundedCornerShape(7.dp)
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (includeHistory) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_check),
+                                    contentDescription = null,
+                                    tint = dialogBg,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                        }
+                        Spacer(Modifier.width(12.dp))
                         Column {
                             Text(
                                 "包含聊天历史",
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Medium,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold,
                                 color = contentColor
                             )
                             Text(
@@ -1178,7 +1172,8 @@ internal fun ImportExportDialog(
         },
         confirmButton = {
             Row(
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 OutlinedButton(
                     onClick = onImport,
@@ -1204,11 +1199,6 @@ internal fun ImportExportDialog(
                 ) {
                     Text("导出", fontWeight = FontWeight.SemiBold)
                 }
-            }
-        },
-        dismissButton = {
-            TextButton(onClick = onDismissRequest) {
-                Text("关闭", color = subtextColor)
             }
         }
     )

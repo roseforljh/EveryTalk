@@ -3,15 +3,24 @@ package com.android.everytalk.ui.screens.ImageGeneration
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -125,41 +134,21 @@ fun ImageGenerationSettingsScreen(
         }
     }
 
+    val isDark = isSystemInDarkTheme()
+    val buttonBg = if (isDark) Color(0xFF303030) else Color(0xFFEDEDED)
+    val borderColor = if (isDark) Color(0xFF414141) else Color(0xFFF3F3F3)
+    val contentColor = if (isDark) Color.White else Color(0xFF0D0D0D)
+    val iconButtonSize = 44.dp
+    val topContentPadding = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + iconButtonSize + 24.dp
+
     Scaffold(
         modifier = modifier.fillMaxSize(),
         containerColor = MaterialTheme.colorScheme.background,
-        contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal),
-        topBar = {
-            TopAppBar(
-                title = { 
-                    // 图像设置界面固定显示图像配置标题
-                    Text("图像生成配置", color = MaterialTheme.colorScheme.onSurface) 
-                },
-                navigationIcon = {
-                    IconButton(onClick = {
-                        if (backButtonEnabled) {
-                            backButtonEnabled = false; navController.popBackStack()
-                        }
-                    }, enabled = backButtonEnabled) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            "返回",
-                            tint = if (backButtonEnabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                        )
-                    }
-                },
-                actions = {
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
-                    titleContentColor = MaterialTheme.colorScheme.onSurface,
-                    navigationIconContentColor = MaterialTheme.colorScheme.onSurface
-                )
-            )
-        }
-    ) { paddingValues ->
-        SettingsScreenContent(
-            paddingValues = paddingValues,
+        contentWindowInsets = WindowInsets(0.dp)
+    ) { _ ->
+        Box(modifier = Modifier.fillMaxSize()) {
+            SettingsScreenContent(
+                paddingValues = PaddingValues(top = topContentPadding),
             apiConfigsByApiKeyAndModality = apiConfigsByApiKeyAndModality,
             onAddFullConfigClick = {
                 // 图像模式新增时默认即为"默认"
@@ -195,8 +184,78 @@ fun ImageGenerationSettingsScreen(
             onRefreshModelsClick = { config ->
                 viewModel.refreshModelsForConfig(config)
             },
-            isRefreshingModels = isRefreshingModels
-        )
+                isRefreshingModels = isRefreshingModels,
+                isImageMode = true
+            )
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(
+                        brush = Brush.verticalGradient(
+                            colorStops = arrayOf(
+                                0.0f to MaterialTheme.colorScheme.background,
+                                0.65f to MaterialTheme.colorScheme.background.copy(alpha = 0.72f),
+                                1.0f to Color.Transparent
+                            )
+                        )
+                    )
+                    .windowInsetsPadding(WindowInsets.statusBars)
+                    .padding(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(iconButtonSize)
+                            .shadow(6.dp, CircleShape, clip = false)
+                            .clip(CircleShape)
+                            .background(buttonBg)
+                            .border(1.dp, borderColor, CircleShape)
+                            .clickable(enabled = backButtonEnabled) {
+                                backButtonEnabled = false
+                                navController.popBackStack()
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "返回",
+                            tint = contentColor,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.weight(1f))
+
+                    Box(
+                        modifier = Modifier
+                            .size(iconButtonSize)
+                            .shadow(6.dp, CircleShape, clip = false)
+                            .clip(CircleShape)
+                            .background(buttonBg)
+                            .border(1.dp, borderColor, CircleShape)
+                            .clickable {
+                                val initialProvider = "默认"
+                                newFullConfigProvider = initialProvider
+                                newFullConfigKey = ""
+                                newFullConfigAddress = SettingsDefaults.imageDefaultApiAddressFor(initialProvider)
+                                showAddFullConfigDialog = true
+                            },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            Icons.Filled.Add,
+                            contentDescription = "添加",
+                            tint = contentColor,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+            }
+        }
     }
 
     if (showAddFullConfigDialog) {

@@ -1,6 +1,8 @@
 package com.android.everytalk.ui.screens.mcp
 
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -11,6 +13,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -22,13 +25,18 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import com.android.everytalk.data.mcp.*
 import com.android.everytalk.ui.screens.settings.DialogShape
@@ -447,39 +455,64 @@ private fun McpServerToolsDialog(
                     )
                 }
             } else {
-                LazyColumn(
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 400.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                        .heightIn(max = 400.dp)
+                        .drawWithContent {
+                            drawContent()
+                            drawRect(
+                                brush = Brush.verticalGradient(
+                                    colors = listOf(dlgBg, Color.Transparent),
+                                    startY = 0f,
+                                    endY = 56f
+                                ),
+                                size = Size(size.width, 56f)
+                            )
+                            drawRect(
+                                brush = Brush.verticalGradient(
+                                    colors = listOf(Color.Transparent, dlgBg),
+                                    startY = size.height - 56f,
+                                    endY = size.height
+                                ),
+                                topLeft = Offset(0f, size.height - 56f),
+                                size = Size(size.width, 56f)
+                            )
+                        }
                 ) {
-                    items(serverState.tools, key = { it.name }) { tool ->
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(16.dp),
-                            colors = CardDefaults.cardColors(
-                                containerColor = if (isDark) Color(0xFF1A1A1A) else Color(0xFFF8F8F8)
-                            ),
-                            border = BorderStroke(1.dp, dlgBorder)
-                        ) {
-                            Column(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(14.dp)
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(top = 12.dp, bottom = 12.dp)
+                    ) {
+                        items(serverState.tools, key = { it.name }) { tool ->
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (isDark) Color(0xFF1A1A1A) else Color(0xFFF8F8F8)
+                                ),
+                                border = BorderStroke(1.dp, dlgBorder)
                             ) {
-                                Text(
-                                    text = tool.name,
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = dlgContent
-                                )
-                                tool.description?.takeIf { it.isNotBlank() }?.let { description ->
-                                    Spacer(modifier = Modifier.height(4.dp))
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(14.dp)
+                                ) {
                                     Text(
-                                        text = description,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = dlgSubtext
+                                        text = tool.name,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = dlgContent
                                     )
+                                    tool.description?.takeIf { it.isNotBlank() }?.let { description ->
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Text(
+                                            text = description,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = dlgSubtext
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -642,50 +675,79 @@ fun AddMcpServerDialog(
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
-                    LazyRow(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        contentPadding = PaddingValues(horizontal = 2.dp)
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(44.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .border(1.dp, mcpBorderColor, RoundedCornerShape(16.dp))
+                            .padding(4.dp)
+                            .horizontalScroll(rememberScrollState())
                     ) {
-                        items(McpServerPreset.entries, key = { it.name }) { preset ->
-                            val isSelected = selectedPreset == preset
-                            val presetColor = when (preset) {
-                                McpServerPreset.CUSTOM -> Color(0xFF8B5CF6)
-                                McpServerPreset.EXA_SEARCH -> Color(0xFF6366F1)
-                                McpServerPreset.FIRECRAWL -> Color(0xFFEF4444)
-                                McpServerPreset.CONTEXT7 -> Color(0xFF10B981)
-                            }
+                        val presets = McpServerPreset.entries
+                        val itemWidth = 112.dp
+                        val itemSpacing = 6.dp
+                        val selectedIndex = presets.indexOf(selectedPreset).coerceAtLeast(0)
+                        val indicatorOffset by animateDpAsState(
+                            targetValue = (itemWidth + itemSpacing) * selectedIndex,
+                            animationSpec = tween(durationMillis = 180),
+                            label = "mcpPresetIndicatorOffset"
+                        )
 
-                            Surface(
-                                onClick = { selectedPreset = preset },
-                                shape = RoundedCornerShape(12.dp),
-                                color = if (isSelected) presetColor.copy(alpha = 0.15f) else MaterialTheme.colorScheme.surfaceContainerHighest,
-                                border = BorderStroke(1.dp, if (isSelected) presetColor else Color.Transparent),
+                        Box(
+                            modifier = Modifier
+                                .width(itemWidth * presets.size + itemSpacing * (presets.size - 1))
+                                .fillMaxHeight()
+                        ) {
+                            Box(
                                 modifier = Modifier
-                                    .widthIn(min = 104.dp)
-                                    .height(40.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .padding(horizontal = 12.dp),
-                                    horizontalArrangement = Arrangement.Center,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Icon(
-                                        imageVector = getServerIcon(preset.name),
-                                        contentDescription = null,
-                                        tint = if (isSelected) presetColor else MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.size(16.dp)
+                                    .offset(x = indicatorOffset)
+                                    .width(itemWidth)
+                                    .fillMaxHeight()
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(mcpContentColor.copy(alpha = 0.10f))
+                                    .border(
+                                        1.dp,
+                                        mcpContentColor.copy(alpha = 0.28f),
+                                        RoundedCornerShape(12.dp)
                                     )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = preset.displayName,
-                                        style = MaterialTheme.typography.labelMedium,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                        color = if (isSelected) presetColor else MaterialTheme.colorScheme.onSurface,
-                                        maxLines = 1
-                                    )
+                            )
+
+                            Row(modifier = Modifier.fillMaxSize()) {
+                                presets.forEachIndexed { index, preset ->
+                                    val isSelected = selectedPreset == preset
+                                    Box(
+                                        modifier = Modifier
+                                            .width(itemWidth)
+                                            .fillMaxHeight()
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .clickable { selectedPreset = preset }
+                                            .padding(horizontal = 10.dp),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Row(
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Icon(
+                                                imageVector = getServerIcon(preset.name),
+                                                contentDescription = null,
+                                                tint = mcpContentColor.copy(alpha = if (isSelected) 1f else 0.62f),
+                                                modifier = Modifier.size(15.dp)
+                                            )
+                                            Spacer(modifier = Modifier.width(5.dp))
+                                            Text(
+                                                text = preset.displayName,
+                                                fontSize = 14.sp,
+                                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                                                color = mcpContentColor,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis
+                                            )
+                                        }
+                                    }
+                                    if (index < presets.size - 1) {
+                                        Spacer(modifier = Modifier.width(itemSpacing))
+                                    }
                                 }
                             }
                         }
@@ -736,34 +798,54 @@ fun AddMcpServerDialog(
                                 style = MaterialTheme.typography.labelLarge,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
-                            Row(
+                            BoxWithConstraints(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .height(40.dp)
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(MaterialTheme.colorScheme.surfaceContainerHighest),
-                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    .height(44.dp)
+                                    .clip(RoundedCornerShape(16.dp))
+                                    .border(1.dp, mcpBorderColor, RoundedCornerShape(16.dp))
+                                    .padding(4.dp)
                             ) {
-                                McpTransportType.entries.forEach { type ->
-                                    val isSelected = transportType == type
-                                    val buttonColor = MaterialTheme.colorScheme.primary
-                                    val textColor = if (isSelected) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-                                    
-                                    Box(
-                                        modifier = Modifier
-                                            .weight(1f)
-                                            .fillMaxHeight()
-                                            .clip(RoundedCornerShape(12.dp))
-                                            .background(if (isSelected) buttonColor else Color.Transparent)
-                                            .clickable { transportType = type },
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            text = type.name,
-                                            style = MaterialTheme.typography.labelMedium,
-                                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
-                                            color = textColor
+                                val itemWidth = (maxWidth - 8.dp) / McpTransportType.entries.size
+                                val selectedIndex = McpTransportType.entries.indexOf(transportType).coerceAtLeast(0)
+                                val indicatorOffset by animateDpAsState(
+                                    targetValue = itemWidth * selectedIndex,
+                                    animationSpec = tween(durationMillis = 180),
+                                    label = "mcpTransportIndicatorOffset"
+                                )
+
+                                Box(
+                                    modifier = Modifier
+                                        .offset(x = indicatorOffset)
+                                        .width(itemWidth)
+                                        .fillMaxHeight()
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(mcpContentColor.copy(alpha = 0.10f))
+                                        .border(
+                                            width = 1.dp,
+                                            color = mcpContentColor.copy(alpha = 0.28f),
+                                            shape = RoundedCornerShape(12.dp)
                                         )
+                                )
+
+                                Row(modifier = Modifier.fillMaxSize()) {
+                                    McpTransportType.entries.forEach { type ->
+                                        val isSelected = transportType == type
+                                        Box(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .fillMaxHeight()
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .clickable { transportType = type },
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = type.name,
+                                                fontSize = 15.sp,
+                                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                                                color = mcpContentColor
+                                            )
+                                        }
                                     }
                                 }
                             }

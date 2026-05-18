@@ -165,11 +165,11 @@ internal fun SettingsScreenContent(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(paddingValues)
             .background(Color.Transparent) // 设置为完全透明,实现沉浸式效果
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp, vertical = 20.dp)
     ) {
+        Spacer(Modifier.height(paddingValues.calculateTopPadding()))
         if (apiConfigsByApiKeyAndModality.isEmpty()) {
             // 空状态提示 - 更友好的设计
             Column(
@@ -311,9 +311,10 @@ internal fun ExternalWebSearchSettingsContent(
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp)
-            .padding(top = topContentPadding + 20.dp, bottom = 20.dp),
+            .padding(top = 20.dp, bottom = 20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        Spacer(Modifier.height(topContentPadding - 16.dp))
         ExternalWebSearchProvider.entries.forEach { provider ->
             val config = configs[provider.providerId]
             val isSelected = selectedProviderId == provider.providerId
@@ -587,16 +588,21 @@ private fun ApiKeyItemGroup(
                         horizontalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
                         if (!isPinnedGroup && canExpandModels) {
-                            val infiniteTransition = rememberInfiniteTransition(label = "refresh_spin")
-                            val rotation by infiniteTransition.animateFloat(
-                                initialValue = 0f,
-                                targetValue = 360f,
-                                animationSpec = infiniteRepeatable(
-                                    animation = tween(800, easing = LinearEasing),
-                                    repeatMode = RepeatMode.Restart
-                                ),
-                                label = "refresh_rotation"
-                            )
+                            val rotation = if (isRefreshing) {
+                                val infiniteTransition = rememberInfiniteTransition(label = "refresh_spin")
+                                val animatedRotation by infiniteTransition.animateFloat(
+                                    initialValue = 0f,
+                                    targetValue = 360f,
+                                    animationSpec = infiniteRepeatable(
+                                        animation = tween(800, easing = LinearEasing),
+                                        repeatMode = RepeatMode.Restart
+                                    ),
+                                    label = "refresh_rotation"
+                                )
+                                animatedRotation
+                            } else {
+                                0f
+                            }
                             IconButton(
                                 onClick = onRefreshModelsClick,
                                 modifier = Modifier.size(36.dp)
@@ -607,9 +613,7 @@ private fun ApiKeyItemGroup(
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier
                                         .size(20.dp)
-                                        .graphicsLayer {
-                                            rotationZ = if (isRefreshing) rotation else 0f
-                                        }
+                                        .graphicsLayer { rotationZ = rotation }
                                 )
                             }
                         }
