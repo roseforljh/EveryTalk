@@ -2,6 +2,9 @@ package com.android.everytalk.ui.screens.MainScreen
 
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.shouldClearTransientBottomReserveOnStreamChange
+import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.shouldEnableUserScrollForPinnedUserBubble
+import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.shouldResetTransientBottomReserve
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -45,5 +48,58 @@ class ChatScreenScrollSessionTest {
         )
 
         assertFalse(result)
+    }
+
+    @Test
+    fun `resets transient bottom reserve when visible conversation changes after streaming`() {
+        val result = shouldResetTransientBottomReserve(
+            previousConversationId = "conversation_a",
+            currentConversationId = "conversation_b",
+            isApiCalling = false
+        )
+
+        assertTrue(result)
+    }
+
+    @Test
+    fun `keeps transient bottom reserve while active stream still owns pinned bubble`() {
+        val result = shouldResetTransientBottomReserve(
+            previousConversationId = "conversation_a",
+            currentConversationId = "conversation_b",
+            isApiCalling = true
+        )
+
+        assertFalse(result)
+    }
+
+    @Test
+    fun `does not clear transient bottom reserve when stream stops in same conversation`() {
+        val result = shouldClearTransientBottomReserveOnStreamChange(isApiCalling = false)
+
+        assertFalse(result)
+    }
+
+    @Test
+    fun `keeps user scroll enabled while user bubble is pinned over dynamic reserve`() {
+        val result = shouldEnableUserScrollForPinnedUserBubble(
+            grokScrollCompleted = true,
+            isApiCalling = true,
+            hasPinnedUserMessage = true,
+            hasDynamicBottomReserve = true
+        )
+
+        assertTrue(result)
+    }
+
+    @Test
+    fun `enables user scroll when no pinned dynamic reserve exists`() {
+        val result = shouldEnableUserScrollForPinnedUserBubble(
+            grokScrollCompleted = true,
+            isApiCalling = false,
+            hasPinnedUserMessage = false,
+            hasDynamicBottomReserve = false
+        )
+
+        assertTrue(result)
     }
 }

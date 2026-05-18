@@ -76,6 +76,23 @@ import kotlinx.coroutines.launch
 import androidx.compose.ui.layout.onSizeChanged
 import kotlinx.coroutines.flow.first
 
+internal fun shouldResetTransientBottomReserve(
+    previousConversationId: String?,
+    currentConversationId: String,
+    isApiCalling: Boolean
+): Boolean = !isApiCalling &&
+    !previousConversationId.isNullOrBlank() &&
+    previousConversationId != currentConversationId
+
+internal fun shouldEnableUserScrollForPinnedUserBubble(
+    grokScrollCompleted: Boolean,
+    isApiCalling: Boolean,
+    hasPinnedUserMessage: Boolean,
+    hasDynamicBottomReserve: Boolean
+): Boolean = grokScrollCompleted
+
+internal fun shouldClearTransientBottomReserveOnStreamChange(isApiCalling: Boolean): Boolean = false
+
 @Composable
 fun ChatMessagesList(
     chatItems: List<com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem>,
@@ -83,6 +100,7 @@ fun ChatMessagesList(
     listState: LazyListState,
     scrollStateManager: com.android.everytalk.ui.screens.MainScreen.chat.text.state.ChatScrollStateManager,
     scrollSessionKey: String,
+    conversationId: String = scrollSessionKey,
     bubbleMaxWidth: Dp,
     onShowAiMessageOptions: (Message) -> Unit,
     onImageLoaded: () -> Unit,
@@ -148,8 +166,16 @@ fun ChatMessagesList(
         val saved = viewModel.getScrollState(scrollSessionKey)?.firstBubbleScreenY ?: -1
         mutableStateOf(saved)
     }
+    var previousConversationIdForReserve by remember { mutableStateOf<String?>(null) }
 
     var skipAnimation by remember(scrollSessionKey) { mutableStateOf(true) }
+
+    fun clearTransientBottomReserve() {
+        skipAnimation = true
+        pinnedUserMessageId = null
+        dynamicBottomPaddingTarget = 0.dp
+        dynamicBottomPaddingImmediate = 0.dp
+    }
 
     // 流式期间用快速动画，结束归零用慢动画
     val isTargetZero = dynamicBottomPaddingTarget <= 0.dp
@@ -175,17 +201,24 @@ fun ChatMessagesList(
 
     LaunchedEffect(scrollSessionKey) {
         grokScrollCompleted = true
-        pinnedUserMessageId = null
-        dynamicBottomPaddingTarget = 0.dp
-        dynamicBottomPaddingImmediate = 0.dp
+        clearTransientBottomReserve()
         firstBubbleScreenY = viewModel.getScrollState(scrollSessionKey)?.firstBubbleScreenY ?: -1
         android.util.Log.d("GrokScroll", "Session changed, reset state, restored firstBubbleScreenY=$firstBubbleScreenY")
     }
+
+    LaunchedEffect(conversationId, isApiCalling) {
+        if (shouldResetTransientBottomReserve(previousConversationIdForReserve, conversationId, isApiCalling)) {
+            grokScrollCompleted = true
+            clearTransientBottomReserve()
+            firstBubbleScreenY = viewModel.getScrollState(conversationId)?.firstBubbleScreenY ?: -1
+            android.util.Log.d("GrokScroll", "Conversation changed, cleared transient bottom reserve")
+        }
+        previousConversationIdForReserve = conversationId
+    }
     
     LaunchedEffect(isApiCalling) {
-        if (!isApiCalling) {
-            pinnedUserMessageId = null
-            // 流式结束后不清零 padding，避免回落。切换会话时由 scrollSessionKey 重置自动清零。
+        if (shouldClearTransientBottomReserveOnStreamChange(isApiCalling)) {
+            clearTransientBottomReserve()
         }
     }
 
@@ -235,7 +268,6 @@ fun ChatMessagesList(
 
     LaunchedEffect(pinnedUserMessageId, isApiCalling, grokScrollCompleted, firstBubbleScreenY) {
         val pinnedId = pinnedUserMessageId ?: return@LaunchedEffect
-        if (!isApiCalling) return@LaunchedEffect
         if (!grokScrollCompleted) return@LaunchedEffect
         val targetY = firstBubbleScreenY
         if (targetY <= 0) return@LaunchedEffect
@@ -448,7 +480,12 @@ fun ChatMessagesList(
             LazyColumn(
                 state = listState,
                 reverseLayout = false,
-                userScrollEnabled = grokScrollCompleted,
+                userScrollEnabled = shouldEnableUserScrollForPinnedUserBubble(
+                    grokScrollCompleted = grokScrollCompleted,
+                    isApiCalling = isApiCalling,
+                    hasPinnedUserMessage = pinnedUserMessageId != null,
+                    hasDynamicBottomReserve = dynamicBottomPaddingTarget > 0.dp
+                ),
                 modifier = Modifier
                     .fillMaxSize()
                     .nestedScroll(scrollStateManager.nestedScrollConnection),

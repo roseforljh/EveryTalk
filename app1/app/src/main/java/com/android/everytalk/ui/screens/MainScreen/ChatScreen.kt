@@ -464,6 +464,7 @@ fun ChatScreen(
                                 listState = listState,
                                 scrollStateManager = scrollStateManager,
                                 scrollSessionKey = scrollSessionKey,
+                                conversationId = conversationId,
                                 bubbleMaxWidth = bubbleMaxWidth,
                                 onShowAiMessageOptions = { msg ->
                                     selectedMessageForOptions = msg
