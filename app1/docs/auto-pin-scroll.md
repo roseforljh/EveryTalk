@@ -27,7 +27,7 @@ stateHolder._lastSentUserMessageId.value = newUserMessageForUi.id
 stateHolder._lastSentImageUserMessageId.value = newUserMessageForUi.id
 ```
 
-`RegenerateController.kt` 在重新生成时也会设置 `_lastSentUserMessageId`。
+`RegenerateController.kt` 重新生成时会重新走 `sendMessage(...)`，从而设置文本或图像对应的 lastSent 用户消息 ID。
 
 ### 3. UI 层置顶逻辑
 
@@ -330,9 +330,8 @@ return derivedStableConversationId == newConversationId
     │       └─ dynamic reserve 存活期间逐帧修正用户气泡 drift
     │
     └─► API 完成 → LaunchedEffect(isApiCalling = false)
-            ├─ delay(300) → 清空 dynamicBottomPadding
-            ├─ pinnedUserMessageId = null
-            └─ grokScrollCompleted = true
+            └─ 不因 stream 结束立即清空 dynamicBottomPadding
+               reserve 继续由 session/conversation 切换或下一轮置顶流程接管
 ```
 
 ## 关键设计决策
