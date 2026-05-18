@@ -68,10 +68,13 @@ object OpenClawSettingsRules {
     fun endpointPathFor(provider: String, channel: String?, withV1: Boolean): String {
         val p = provider.lowercase().trim()
         val ch = channel?.lowercase()?.trim().orEmpty()
-        return if (p.contains("google") || ch.contains("gemini")) {
-            if (withV1) "v1beta/models:generateContent" else "models:generateContent"
-        } else {
-            if (withV1) "v1/chat/completions" else "chat/completions"
+        return when {
+            p.contains("google") || ch.contains("gemini") ->
+                if (withV1) "v1beta/models:generateContent" else "models:generateContent"
+            ch.contains("codex") ->
+                if (withV1) "v1/responses" else "responses"
+            else ->
+                if (withV1) "v1/chat/completions" else "chat/completions"
         }
     }
 
@@ -237,6 +240,14 @@ object OpenClawSettingsRules {
                 return "Gemini官方API：按输入直连（去掉末尾/）"
             }
             return "仅域名→ 自动拼接Gemini固定路径 /v1beta/models:generateContent"
+        }
+
+        val isCodex = ch.contains("codex")
+        if (isCodex) {
+            if (hasPathAfterHost(noHash)) {
+                return "Codex：按输入直连，不追加路径"
+            }
+            return "Codex：自动拼接 /v1/responses"
         }
 
         if (accessMode?.equals("bridge", ignoreCase = true) == true) {

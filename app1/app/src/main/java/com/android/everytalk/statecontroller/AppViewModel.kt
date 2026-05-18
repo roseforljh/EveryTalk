@@ -90,6 +90,7 @@ import com.android.everytalk.data.network.ExternalWebSearchProviderConfig
 import com.android.everytalk.data.network.ExternalWebSearchService
 import com.android.everytalk.data.network.JinaSearchService
 import com.android.everytalk.data.network.OpenAIDirectClient
+import com.android.everytalk.data.network.OpenAIResponsesClient
 import com.android.everytalk.data.network.WebSearchSupport
 import com.android.everytalk.data.network.WebFetchToolExecutor
 import com.android.everytalk.util.storage.IncrementalBackupManager
@@ -751,6 +752,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             )
          }
          OpenAIDirectClient.setMcpToolExecutor { toolName, arguments, updateStatus ->
+            executeSharedToolCall(
+                toolName = toolName,
+                arguments = arguments,
+                updateStatus = updateStatus,
+                mcpWebFetchFallback = buildMcpWebFetchFallback(),
+                localWebSearchExecutor = buildLocalWebSearchExecutor(),
+                fallbackExecutor = { fallbackToolName, fallbackArguments ->
+                    mcpManager.callTool(fallbackToolName, fallbackArguments)
+                }
+            )
+         }
+         OpenAIResponsesClient.setMcpToolExecutor { toolName, arguments, updateStatus ->
             executeSharedToolCall(
                 toolName = toolName,
                 arguments = arguments,

@@ -446,6 +446,7 @@ object OpenAIDirectClient {
                 var hasContent = false
                 var parseResult: OpenAIParseResult? = null
                 var shouldRetryWithoutImages = false
+                var shouldFallbackResponses = false
 
                 client.preparePost(url) {
                     contentType(ContentType.Application.Json)
@@ -463,6 +464,12 @@ object OpenAIDirectClient {
                                     content.toString().contains("image_url")
                             }
                             shouldRetryWithoutImages = true
+                            return@execute
+                        }
+                        // 403 + HTML/Cloudflare 响应 → 自动 fallback 到 /v1/responses
+                        if (response.status.value == 403 && shouldFallbackToResponses(errorBody)) {
+                            Log.w(TAG, "403 Cloudflare/HTML 响应，fallback 到 /v1/responses")
+                            shouldFallbackResponses = true
                             return@execute
                         }
                         val result = NetworkUtils.handleApiError(response.status, errorBody, "OpenAI")
@@ -497,6 +504,14 @@ object OpenAIDirectClient {
                             kotlinx.coroutines.yield()
                         }
                     )
+                }
+
+                if (shouldFallbackResponses) {
+                    send(AppStreamEvent.StatusUpdate("切换到 Responses API..."))
+                    OpenAIResponsesClient.streamChatResponses(client, request).collect { event ->
+                        send(event)
+                    }
+                    return@channelFlow
                 }
 
                 if (shouldRetryWithoutImages) {
@@ -1501,5 +1516,15 @@ object OpenAIDirectClient {
         }
 
         return OpenAIParseResult(hasToolCalls = hasToolCalls, fullText = fullText, reasoningContent = fullReasoningContent)
+    }
+
+    private fun shouldFallbackToResponses(errorBody: String?): Boolean {
+        if (errorBody.isNullOrBlank()) return false
+        val lower = errorBody.lowercase()
+        // HTML 页面（Cloudflare 拦截）或非 JSON 响应
+        return lower.contains("<html") ||
+            lower.contains("cloudflare") ||
+            lower.contains("<!doctype") ||
+            (lower.contains("403 forbidden") && !lower.startsWith("{"))
     }
 }

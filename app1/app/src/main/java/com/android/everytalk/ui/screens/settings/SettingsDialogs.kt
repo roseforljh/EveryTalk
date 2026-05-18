@@ -447,7 +447,7 @@ internal fun AddNewFullConfigDialog(
     val channels = if (isImageMode) {
         listOf("OpenAI兼容", "Gemini")
     } else {
-        listOf("OpenAI兼容", "Gemini", "OpenClaw")
+        listOf("OpenAI兼容", "Gemini", "OpenClaw", "Codex")
     }
     var selectedChannel by remember { mutableStateOf(channels.first()) }
     // val focusRequesterApiKey = remember { FocusRequester() } // Removed auto-focus
@@ -847,7 +847,7 @@ internal fun EditConfigDialog(
     val channelTypes = if (isImageMode) {
         listOf("OpenAI兼容", "Gemini")
     } else {
-        listOf("OpenAI兼容", "Gemini", "OpenClaw")
+        listOf("OpenAI兼容", "Gemini", "OpenClaw", "Codex")
     }
     
     var channelMenuExpanded by remember { mutableStateOf(false) }
