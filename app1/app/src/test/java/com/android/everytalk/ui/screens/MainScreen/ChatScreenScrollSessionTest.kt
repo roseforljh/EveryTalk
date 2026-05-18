@@ -4,10 +4,13 @@ import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.pinnedAnchorLayoutVersion
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.resolvePinnedAnchorPreScrollConsumption
+import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.resolveDynamicBottomReserveForVisibleGap
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.restorePinnedBubbleAnchorForSession
+import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.shouldDispatchImageLoadedToBottomScroller
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.shouldClearTransientBottomReserveOnStreamChange
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.shouldEnableUserScrollForPinnedUserBubble
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.shouldResetTransientBottomReserve
+import com.android.everytalk.ui.screens.viewmodel.resolveHistoryExpectedStableConversationId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -173,5 +176,67 @@ class ChatScreenScrollSessionTest {
         )
 
         assertEquals(184, restored)
+    }
+
+    @Test
+    fun `image loaded callback does not jump bottom while pinned reserve is active after stream finishes`() {
+        val shouldDispatch = shouldDispatchImageLoadedToBottomScroller(
+            isApiCalling = false,
+            isAtBottom = true,
+            hasPinnedUserMessage = true,
+            hasDynamicBottomReserve = true
+        )
+
+        assertFalse(shouldDispatch)
+    }
+
+    @Test
+    fun `pinned image reserve shrinks to visible gap like text mode`() {
+        val reserve = resolveDynamicBottomReserveForVisibleGap(
+            currentReservePx = 900,
+            visibleGapPx = 640,
+            minPinnedReservePx = 96,
+            maxPinnedReservePx = 240,
+            hasPinnedUserMessage = true
+        )
+
+        assertEquals(640, reserve)
+    }
+
+    @Test
+    fun `pinned image reserve can shrink to zero like text mode`() {
+        val reserve = resolveDynamicBottomReserveForVisibleGap(
+            currentReservePx = 900,
+            visibleGapPx = 0,
+            minPinnedReservePx = 96,
+            maxPinnedReservePx = 240,
+            hasPinnedUserMessage = true
+        )
+
+        assertEquals(0, reserve)
+    }
+
+    @Test
+    fun `image regeneration keeps loaded conversation stable id instead of new first message id`() {
+        val stableId = resolveHistoryExpectedStableConversationId(
+            isImageGeneration = true,
+            loadedHistoryIndex = 2,
+            currentConversationId = "original_user_id",
+            stableIdFromMessages = "new_regenerated_user_id"
+        )
+
+        assertEquals("original_user_id", stableId)
+    }
+
+    @Test
+    fun `new image conversation still migrates to first message stable id`() {
+        val stableId = resolveHistoryExpectedStableConversationId(
+            isImageGeneration = true,
+            loadedHistoryIndex = null,
+            currentConversationId = "new_image_generation_123",
+            stableIdFromMessages = "first_user_id"
+        )
+
+        assertEquals("first_user_id", stableId)
     }
 }

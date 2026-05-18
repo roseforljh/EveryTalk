@@ -17,6 +17,18 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.runBlocking
 
+internal fun resolveHistoryExpectedStableConversationId(
+    isImageGeneration: Boolean,
+    loadedHistoryIndex: Int?,
+    currentConversationId: String,
+    stableIdFromMessages: String?
+): String? {
+    if (isImageGeneration && loadedHistoryIndex != null && currentConversationId.isNotBlank()) {
+        return currentConversationId
+    }
+    return stableIdFromMessages ?: currentConversationId.takeIf { it.isNotBlank() }
+}
+
 class HistoryManager(
     private val stateHolder: ViewModelStateHolder,
     private val persistenceManager: DataPersistenceManager,
@@ -279,7 +291,12 @@ class HistoryManager(
             val mutableHistory = currentHistory.toMutableList()
             val requestedLoadedIdx = loadedHistoryIndex
             val stableIdFromMessages = stableConversationId(messagesToSave)
-            val expectedStableId = stableIdFromMessages ?: currentConversationId.takeIf { it.isNotBlank() }
+            val expectedStableId = resolveHistoryExpectedStableConversationId(
+                isImageGeneration = isImageGeneration,
+                loadedHistoryIndex = requestedLoadedIdx,
+                currentConversationId = currentConversationId,
+                stableIdFromMessages = stableIdFromMessages
+            )
             val requestedHistoryFingerprint = requestedLoadedIdx
                 ?.takeIf { it >= 0 && it < mutableHistory.size }
                 ?.let { conversationFingerprint(mutableHistory[it]) }
@@ -474,8 +491,12 @@ class HistoryManager(
         }
         
         val stableKeyFromMessages = if (isImageGeneration) {
-            // 图像模式：优先使用首条消息ID
-            messagesToSave.firstOrNull()?.id
+            resolveHistoryExpectedStableConversationId(
+                isImageGeneration = true,
+                loadedHistoryIndex = loadedHistoryIndex,
+                currentConversationId = currentId,
+                stableIdFromMessages = stableConversationId(messagesToSave)
+            )
         } else {
             // 文本模式：优先使用首条用户消息ID，其次系统消息ID
             messagesToSave.firstOrNull { it.sender == Sender.User }?.id

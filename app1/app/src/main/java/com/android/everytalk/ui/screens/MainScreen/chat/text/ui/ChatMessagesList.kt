@@ -122,6 +122,30 @@ internal fun restorePinnedBubbleAnchorForSession(
     isPinnedRuntimeActive: Boolean
 ): Int = if (isPinnedRuntimeActive && savedAnchorY > 0) savedAnchorY else -1
 
+internal fun shouldDispatchImageLoadedToBottomScroller(
+    isApiCalling: Boolean,
+    isAtBottom: Boolean,
+    hasPinnedUserMessage: Boolean,
+    hasDynamicBottomReserve: Boolean
+): Boolean = !isApiCalling && isAtBottom && !(hasPinnedUserMessage && hasDynamicBottomReserve)
+
+internal fun shouldShrinkDynamicBottomReserveForVisibleGap(
+    hasPinnedUserMessage: Boolean,
+    preservePinnedReserve: Boolean
+): Boolean = !preservePinnedReserve || !hasPinnedUserMessage
+
+internal fun resolveDynamicBottomReserveForVisibleGap(
+    currentReservePx: Int,
+    visibleGapPx: Int,
+    minPinnedReservePx: Int,
+    maxPinnedReservePx: Int,
+    hasPinnedUserMessage: Boolean
+): Int {
+    val safeCurrent = currentReservePx.coerceAtLeast(0)
+    val safeGap = visibleGapPx.coerceAtLeast(0)
+    return safeGap.coerceAtMost(safeCurrent)
+}
+
 @Composable
 fun ChatMessagesList(
     chatItems: List<com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem>,
