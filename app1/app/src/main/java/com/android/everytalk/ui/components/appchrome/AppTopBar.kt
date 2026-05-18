@@ -196,6 +196,7 @@ fun AppTopBar(
                         Box(
                             modifier = Modifier
                                 .size(iconButtonSize)
+                                .clip(CircleShape)
                                 .clickable(onClick = onNewChat),
                             contentAlignment = Alignment.Center
                         ) {
@@ -209,6 +210,7 @@ fun AppTopBar(
                         Box(
                             modifier = Modifier
                                 .size(iconButtonSize)
+                                .clip(CircleShape)
                                 .clickable(onClick = { showMoreMenu = true }),
                             contentAlignment = Alignment.Center
                         ) {
@@ -447,7 +449,8 @@ private fun ModelSelectionDropdown(
     ) {
         Surface(
             modifier = Modifier
-                .widthIn(min = 200.dp, max = 280.dp)
+                .width(IntrinsicSize.Max)
+                .widthIn(max = 280.dp)
                 .heightIn(max = 320.dp)
                 .graphicsLayer {
                     this.scaleX = scaleAnim.value
@@ -464,6 +467,8 @@ private fun ModelSelectionDropdown(
                 modifier = Modifier
                     .fillMaxWidth()
                     .verticalScroll(rememberScrollState())
+                    .padding(vertical = 8.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 models.forEach { modelConfig ->
                     val isSelected = modelConfig.id == selectedApiConfig?.id
@@ -471,36 +476,27 @@ private fun ModelSelectionDropdown(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clickable { onModelSelected(modelConfig) }
-                            .padding(horizontal = 14.dp, vertical = 9.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.Center
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = modelConfig.name.ifEmpty { modelConfig.model },
-                                fontSize = 14.sp,
-                                fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
-                                color = if (isSelected) Color(0xFF66B5FF) else textColor,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                            if (modelConfig.name.isNotEmpty() && modelConfig.model.isNotEmpty() && modelConfig.name != modelConfig.model) {
-                                Text(
-                                    text = modelConfig.model,
-                                    fontSize = 11.sp,
-                                    color = if (isDark) Color(0xFF888888) else Color(0xFF999999),
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
                         if (isSelected) {
-                            androidx.compose.material3.Icon(
+                            Icon(
                                 painter = painterResource(R.drawable.ic_check),
                                 contentDescription = null,
-                                tint = Color(0xFF66B5FF),
+                                tint = textColor,
                                 modifier = Modifier.size(16.dp)
                             )
+                            Spacer(modifier = Modifier.width(6.dp))
                         }
+                        Text(
+                            text = modelConfig.name.ifEmpty { modelConfig.model },
+                            fontSize = 14.sp,
+                            fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
+                            color = textColor,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
                     }
                 }
             }
