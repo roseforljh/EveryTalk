@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.18.1](https://github.com/roseforljh/EveryTalk/compare/v1.18.0...v1.18.1) (2026-05-18)
+
+
+### Bug Fixes
+
+* claude是世界上最垃圾、最司马的模型 ([615656b](https://github.com/roseforljh/EveryTalk/commit/615656b019cab3020530e7f134724f62720fd4e3))
+* 优化编辑配置对话框遮罩效果 ([e3718cf](https://github.com/roseforljh/EveryTalk/commit/e3718cf09240a668b9d7c1511bd38ae9e123b08d))
+* 修复历史切换后 AI 回复丢失 ([62184c7](https://github.com/roseforljh/EveryTalk/commit/62184c70934edfddb8f33ce686d0eb334321ee83))
+* 切换回话消除底部空白 ([f17f875](https://github.com/roseforljh/EveryTalk/commit/f17f875294b56c8df308de67717ac7f22b587374))
+* 完美 ([4bf2d31](https://github.com/roseforljh/EveryTalk/commit/4bf2d3155c0c98abeeefe191882b88c120cb772e))
+* 完美置顶 ([9dbf85a](https://github.com/roseforljh/EveryTalk/commit/9dbf85a213d993a7b7494d0042b5ef4061245aad))
+* 对齐图像模式置顶滚动 ([cf24b6a](https://github.com/roseforljh/EveryTalk/commit/cf24b6a1bc30e7ea6b54628100a535771fe52f9c))
+* 新增codex渠道 ([ce50d2f](https://github.com/roseforljh/EveryTalk/commit/ce50d2f10378a891ecced55f53e59ba016350e72))
+* 无敌的寂寞 ([2020c86](https://github.com/roseforljh/EveryTalk/commit/2020c863706d80157fd26f0a393c82fecc796f54))
+* 移除气泡置顶上滑强制消费 ([8558c35](https://github.com/roseforljh/EveryTalk/commit/8558c3501e64c0f6f68716c2d8f16c3c8bbfbb5c))
+* 编辑配置对话框键盘弹出时按钮不再溢出框外 ([15fb3d5](https://github.com/roseforljh/EveryTalk/commit/15fb3d5600b4bcda894fdc06bff8941a584ca1bd))
+* 顶栏按钮圆形按压效果及模型选择卡片样式统一 ([94036b6](https://github.com/roseforljh/EveryTalk/commit/94036b63586760a1985ee680e493f8e79e85562b))
+* 顶级前端设计 ([e2a9150](https://github.com/roseforljh/EveryTalk/commit/e2a9150f106a1769d65d2c8dc76b6d962873e49c))
+
 ## [1.18.0](https://github.com/roseforljh/EveryTalk/compare/v1.17.1...v1.18.0) (2026-05-18)
 
 
