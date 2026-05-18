@@ -1536,6 +1536,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         regenerateController.regenerateFrom(message, isImageGeneration, scrollToNewMessage)
     }
 
+    fun regenerateAiResponseWithConfig(
+        message: Message,
+        config: ApiConfig,
+        isImageGeneration: Boolean = false,
+        scrollToNewMessage: Boolean = false
+    ) {
+        selectConfig(config, isImageGeneration)
+        regenerateController.regenerateFrom(message, isImageGeneration, scrollToNewMessage)
+    }
+
    fun showSystemPromptDialog() {
        systemPromptController.showSystemPromptDialog(systemPrompt.value)
    }

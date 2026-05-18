@@ -59,6 +59,8 @@ fun AppTopBar(
     onModelSelected: (com.android.everytalk.data.DataClass.ApiConfig) -> Unit = {},
     onDismissModelSelection: () -> Unit = {},
     onTitleLongClick: () -> Unit = {},
+    allApiConfigs: List<com.android.everytalk.data.DataClass.ApiConfig> = emptyList(),
+    onConfigModelSelected: (com.android.everytalk.data.DataClass.ApiConfig) -> Unit = {},
     modifier: Modifier = Modifier,
     barHeight: Dp = 85.dp,
     contentPaddingHorizontal: Dp = 12.dp,
@@ -124,6 +126,7 @@ fun AppTopBar(
 
                 // 模型选择器 - 胶囊，固定最大宽度
                 Box {
+                    var showConfigSwitch by remember { mutableStateOf(false) }
                     @OptIn(ExperimentalFoundationApi::class)
                     Box(
                         modifier = Modifier
@@ -134,7 +137,13 @@ fun AppTopBar(
                             .border(1.dp, borderColor, RoundedCornerShape(percent = 50))
                             .combinedClickable(
                                 onClick = onTitleClick,
-                                onLongClick = onTitleLongClick
+                                onLongClick = {
+                                    if (allApiConfigs.isNotEmpty()) {
+                                        showConfigSwitch = true
+                                    } else {
+                                        onTitleLongClick()
+                                    }
+                                }
                             )
                             .padding(horizontal = 16.dp),
                         contentAlignment = Alignment.Center
@@ -157,6 +166,16 @@ fun AppTopBar(
                             onDismiss = onDismissModelSelection
                         )
                     }
+
+                    ConfigSwitchPopup(
+                        visible = showConfigSwitch,
+                        allConfigs = allApiConfigs,
+                        selectedApiConfig = selectedApiConfig,
+                        onModelSelected = { config ->
+                            onConfigModelSelected(config)
+                        },
+                        onDismiss = { showConfigSwitch = false }
+                    )
                 }
             }
 
@@ -410,6 +429,16 @@ private fun ModelSelectionDropdown(
     val popupBorderColor = if (isDark) Color.White.copy(alpha = 0.10f) else Color(0xFF0D0D0D).copy(alpha = 0.05f)
     val textColor = if (isDark) Color.White else Color(0xFF0D0D0D)
 
+    val scaleAnim = remember { Animatable(0.8f) }
+    val alphaAnim = remember { Animatable(0f) }
+    val emphasizedDecelerate = CubicBezierEasing(0.0f, 0.0f, 0.2f, 1.0f)
+    val decelerateEasing = CubicBezierEasing(0.4f, 0.0f, 0.2f, 1.0f)
+
+    LaunchedEffect(Unit) {
+        launch { scaleAnim.animateTo(1f, tween(120, easing = emphasizedDecelerate)) }
+        launch { alphaAnim.animateTo(1f, tween(30, easing = decelerateEasing)) }
+    }
+
     Popup(
         alignment = Alignment.TopStart,
         offset = androidx.compose.ui.unit.IntOffset(0, with(androidx.compose.ui.platform.LocalDensity.current) { 48.dp.toPx().toInt() }),
@@ -420,6 +449,12 @@ private fun ModelSelectionDropdown(
             modifier = Modifier
                 .widthIn(min = 200.dp, max = 280.dp)
                 .heightIn(max = 320.dp)
+                .graphicsLayer {
+                    this.scaleX = scaleAnim.value
+                    this.scaleY = scaleAnim.value
+                    this.alpha = alphaAnim.value
+                    this.transformOrigin = TransformOrigin(0.2f, 0f)
+                }
                 .shadow(8.dp, RoundedCornerShape(20.dp))
                 .border(1.dp, popupBorderColor, RoundedCornerShape(20.dp)),
             shape = RoundedCornerShape(20.dp),

@@ -6,9 +6,11 @@ import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Log
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
@@ -18,6 +20,11 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -65,10 +72,14 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import androidx.core.content.FileProvider
 import com.android.everytalk.data.DataClass.ApiConfig
@@ -735,6 +746,11 @@ fun ChatInputArea(
                 var showFunctionPanel by remember { mutableStateOf(false) }
                 var lastFunctionPanelDismissAt by remember { mutableStateOf(0L) }
 
+                BackHandler(enabled = showFunctionPanel) {
+                    lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
+                    showFunctionPanel = false
+                }
+
                 // 输入法收起/展开进度直接跟随 imeInsets，避免等 isImeVisible 布尔值最后一刻才切换
                 val imeBottomPx = imeInsets.getBottom(density)
                 var maxImeBottomPx by remember { mutableIntStateOf(0) }
@@ -787,6 +803,24 @@ fun ChatInputArea(
                 var renderMoreOptionsPanel by remember { mutableStateOf(false) }
                 val moreAlpha = remember { Animatable(0f) }
                 val moreScale = remember { Animatable(0.8f) }
+
+                val functionPanelPositionProvider = remember(chatInputContentHeightPx, density) {
+                    object : PopupPositionProvider {
+                        override fun calculatePosition(
+                            anchorBounds: IntRect,
+                            windowSize: IntSize,
+                            layoutDirection: LayoutDirection,
+                            popupContentSize: IntSize
+                        ): IntOffset {
+                            val marginPx = with(density) { 8.dp.roundToPx() }
+                            val x = ((windowSize.width - popupContentSize.width) / 2)
+                                .coerceIn(0, (windowSize.width - popupContentSize.width).coerceAtLeast(0))
+                            val y = (windowSize.height - chatInputContentHeightPx - marginPx - popupContentSize.height)
+                                .coerceIn(0, (windowSize.height - popupContentSize.height).coerceAtLeast(0))
+                            return IntOffset(x, y)
+                        }
+                    }
+                }
 
                 LaunchedEffect(showFunctionPanel) {
                     if (showFunctionPanel) {
@@ -933,73 +967,59 @@ fun ChatInputArea(
 
                             if (renderFunctionPanel) {
                                 Popup(
-                                    alignment = Alignment.BottomCenter,
+                                    popupPositionProvider = functionPanelPositionProvider,
                                     onDismissRequest = {
                                         lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
                                         if (showFunctionPanel) showFunctionPanel = false
                                     },
-                                    properties = PopupProperties(focusable = true, dismissOnBackPress = true, dismissOnClickOutside = true)
+                                    properties = PopupProperties(focusable = false, dismissOnBackPress = false, dismissOnClickOutside = true)
                                 ) {
                                     Box(
                                         modifier = Modifier
-                                            .fillMaxSize()
-                                            .clickable(
-                                                indication = null,
-                                                interactionSource = remember { MutableInteractionSource() }
-                                            ) {
+                                            .widthIn(max = 320.dp)
+                                            .wrapContentHeight()
+                                            .graphicsLayer {
+                                                alpha = functionPanelAlpha.value
+                                                scaleX = functionPanelScale.value
+                                                scaleY = functionPanelScale.value
+                                                transformOrigin = TransformOrigin(0.5f, 1f)
+                                            }
+                                    ) {
+                                        FunctionPanelContent(
+                                            isWebSearchEnabled = isWebSearchEnabled,
+                                            isWebSearchAvailable = effectiveWebSearchAvailable,
+                                            onToggleWebSearch = onToggleWebSearch,
+                                            isCodeExecutionEnabled = isCodeExecutionEnabled,
+                                            onToggleCodeExecution = onToggleCodeExecution,
+                                            isGeminiChannel = isGeminiChannel,
+                                            onToggleImagePanel = onToggleImagePanel,
+                                            onToggleMoreOptionsPanel = onToggleMoreOptionsPanel,
+                                            hasContent = hasContent,
+                                            onClearContent = {
+                                                localTextFieldValue = TextFieldValue("", TextRange(0))
+                                                lastExternalText = ""
+                                                onTextChange("")
+                                                onClearMediaItems()
+                                                syncJob?.cancel()
+                                            },
+                                            onDismiss = {
                                                 lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
                                                 showFunctionPanel = false
+                                            },
+                                            isMcpEnabled = isMcpEnabled,
+                                            onToggleMcp = { viewModel.setMcpEnabledForNextRequest(!isMcpEnabled) },
+                                            onOpenConversationParams = { showConversationParamsDialog = true },
+                                            onOpenFilePicker = { filePickerLauncher.launch(arrayOf("*/*")) },
+                                            onOpenCamera = { cameraPermissionLauncher.launch(Manifest.permission.CAMERA) },
+                                            onOpenGallery = {
+                                                photoPickerLauncher.launch(
+                                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
+                                                )
+                                            },
+                                            onOpenSystemPrompt = {
+                                                viewModel.showSystemPromptDialog()
                                             }
-                                            .padding(bottom = with(density) { (chatInputContentHeightPx / density.density + 8f).dp }),
-                                        contentAlignment = Alignment.BottomCenter
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .widthIn(max = 320.dp)
-                                                .wrapContentHeight()
-                                                .graphicsLayer {
-                                                    alpha = functionPanelAlpha.value
-                                                    scaleX = functionPanelScale.value
-                                                    scaleY = functionPanelScale.value
-                                                    transformOrigin = TransformOrigin(0.5f, 1f)
-                                                }
-                                        ) {
-                                            FunctionPanelContent(
-                                                isWebSearchEnabled = isWebSearchEnabled,
-                                                isWebSearchAvailable = effectiveWebSearchAvailable,
-                                                onToggleWebSearch = onToggleWebSearch,
-                                                isCodeExecutionEnabled = isCodeExecutionEnabled,
-                                                onToggleCodeExecution = onToggleCodeExecution,
-                                                isGeminiChannel = isGeminiChannel,
-                                                onToggleImagePanel = onToggleImagePanel,
-                                                onToggleMoreOptionsPanel = onToggleMoreOptionsPanel,
-                                                hasContent = hasContent,
-                                                onClearContent = {
-                                                    localTextFieldValue = TextFieldValue("", TextRange(0))
-                                                    lastExternalText = ""
-                                                    onTextChange("")
-                                                    onClearMediaItems()
-                                                    syncJob?.cancel()
-                                                },
-                                                onDismiss = {
-                                                    lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
-                                                    showFunctionPanel = false
-                                                },
-                                                isMcpEnabled = isMcpEnabled,
-                                                onToggleMcp = { viewModel.setMcpEnabledForNextRequest(!isMcpEnabled) },
-                                                onOpenConversationParams = { showConversationParamsDialog = true },
-                                                onOpenFilePicker = { filePickerLauncher.launch(arrayOf("*/*")) },
-                                                onOpenCamera = { cameraPermissionLauncher.launch(Manifest.permission.CAMERA) },
-                                                onOpenGallery = {
-                                                    photoPickerLauncher.launch(
-                                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
-                                                    )
-                                                },
-                                                onOpenSystemPrompt = {
-                                                    viewModel.showSystemPromptDialog()
-                                                }
-                                            )
-                                        }
+                                        )
                                     }
                                 }
                             }
@@ -1193,28 +1213,49 @@ fun ChatInputArea(
                                         innerTextField()
                                     }
                                     Spacer(Modifier.width(8.dp))
-                                    FilledIconButton(
-                                        onClick = onSendClick,
-                                        shape = CircleShape,
-                                        colors = IconButtonDefaults.filledIconButtonColors(
-                                            containerColor = buttonBackgroundColor,
-                                            contentColor = iconColor
-                                        ),
-                                        modifier = Modifier.size(36.dp)
-                                    ) {
-                                        Icon(
-                                            painter = when {
-                                                isApiCalling -> painterResource(R.drawable.ic_stop)
-                                                hasContent -> painterResource(R.drawable.ic_arrow_up)
-                                                else -> painterResource(R.drawable.ic_voice_bold)
-                                            },
-                                            contentDescription = when {
-                                                isApiCalling -> "停止"
-                                                hasContent -> "发送"
-                                                else -> "语音输入"
-                                            },
-                                            modifier = Modifier.size(20.dp)
-                                        )
+                                    val buttonState = when {
+                                        isApiCalling -> 2
+                                        hasContent -> 1
+                                        else -> 0
+                                    }
+                                    AnimatedContent(
+                                        targetState = buttonState,
+                                        transitionSpec = {
+                                            (fadeIn(tween(220)) + scaleIn(
+                                                tween(220),
+                                                initialScale = 0.8f
+                                            )).togetherWith(
+                                                fadeOut(tween(150)) + scaleOut(
+                                                    tween(150),
+                                                    targetScale = 0.6f
+                                                )
+                                            )
+                                        },
+                                        label = "InputSendButton"
+                                    ) { state ->
+                                        FilledIconButton(
+                                            onClick = onSendClick,
+                                            shape = CircleShape,
+                                            colors = IconButtonDefaults.filledIconButtonColors(
+                                                containerColor = buttonBackgroundColor,
+                                                contentColor = iconColor
+                                            ),
+                                            modifier = Modifier.size(36.dp)
+                                        ) {
+                                            Icon(
+                                                painter = when (state) {
+                                                    2 -> painterResource(R.drawable.ic_stop)
+                                                    1 -> painterResource(R.drawable.ic_arrow_up)
+                                                    else -> painterResource(R.drawable.ic_voice_bold)
+                                                },
+                                                contentDescription = when (state) {
+                                                    2 -> "停止"
+                                                    1 -> "发送"
+                                                    else -> "语音输入"
+                                                },
+                                                modifier = Modifier.size(20.dp)
+                                            )
+                                        }
                                     }
                                     }
                                 }

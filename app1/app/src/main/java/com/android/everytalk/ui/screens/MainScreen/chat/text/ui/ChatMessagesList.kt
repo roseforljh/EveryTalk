@@ -28,6 +28,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.items
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -56,6 +57,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
+import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.ui.screens.BubbleMain.Main.AttachmentsContent
@@ -1202,9 +1204,11 @@ fun AiMessageFooterItem(
                         viewModel.regenerateAiResponse(latestMessage, scrollToNewMessage = true)
                     },
                     modelName = message.modelName,
-                    onChangeModel = {
+                    availableModels = viewModel.apiConfigs.collectAsState().value,
+                    selectedModelId = viewModel.selectedApiConfig.collectAsState().value?.id,
+                    onChangeModelConfirm = { config ->
                         val latestMessage = viewModel.getMessageById(message.id) ?: message
-                        viewModel.regenerateAiResponse(latestMessage, scrollToNewMessage = true)
+                        viewModel.regenerateAiResponseWithConfig(latestMessage, config, scrollToNewMessage = true)
                     },
                     onExport = {
                         val latestMessage = viewModel.getMessageById(message.id) ?: message
@@ -1222,7 +1226,9 @@ private fun AiMessagePopupMenu(
     onDismiss: () -> Unit,
     onRegenerate: () -> Unit,
     modelName: String?,
-    onChangeModel: () -> Unit,
+    availableModels: List<ApiConfig>,
+    selectedModelId: String?,
+    onChangeModelConfirm: (ApiConfig) -> Unit,
     onExport: () -> Unit,
 ) {
     var showPopup by remember { mutableStateOf(false) }
@@ -1253,6 +1259,9 @@ private fun AiMessagePopupMenu(
         }
     }
 
+    var showModelPicker by remember { mutableStateOf(false) }
+    var pendingConfirmModel by remember { mutableStateOf<ApiConfig?>(null) }
+
     if (!showPopup) return
 
     val isDark = isSystemInDarkTheme()
@@ -1263,7 +1272,10 @@ private fun AiMessagePopupMenu(
 
     Popup(
         alignment = Alignment.BottomStart,
-        onDismissRequest = onDismiss,
+        onDismissRequest = {
+            showModelPicker = false
+            onDismiss()
+        },
         properties = PopupProperties(focusable = true)
     ) {
         Surface(
@@ -1281,34 +1293,166 @@ private fun AiMessagePopupMenu(
             shape = RoundedCornerShape(28.dp),
             color = cardBg
         ) {
-            Column(modifier = Modifier
-                .width(IntrinsicSize.Max)
-                .padding(vertical = 12.dp)
-            ) {
-                PopupMenuItem(
-                    painter = painterResource(R.drawable.ic_regenerate),
-                    text = "重新回答",
+            if (showModelPicker) {
+                ModelPickerPopupContent(
+                    availableModels = availableModels,
+                    selectedModelId = selectedModelId,
                     textColor = textColor,
                     iconTint = iconTint,
-                    onClick = { onRegenerate(); onDismiss() }
+                    onModelSelected = { pendingConfirmModel = it }
                 )
-                PopupMenuItem(
-                    painter = painterResource(R.drawable.ic_robot_head),
-                    text = modelName ?: "切换模型",
-                    textColor = textColor,
-                    iconTint = iconTint,
-                    onClick = { onChangeModel(); onDismiss() }
-                )
-                PopupMenuItem(
-                    painter = painterResource(R.drawable.ic_export),
-                    text = "导出文本",
-                    textColor = textColor,
-                    iconTint = iconTint,
-                    onClick = { onExport(); onDismiss() }
-                )
+            } else {
+                Column(modifier = Modifier
+                    .width(IntrinsicSize.Max)
+                    .padding(vertical = 12.dp)
+                ) {
+                    PopupMenuItem(
+                        painter = painterResource(R.drawable.ic_regenerate),
+                        text = "重新回答",
+                        textColor = textColor,
+                        iconTint = iconTint,
+                        onClick = { onRegenerate(); onDismiss() }
+                    )
+                    PopupMenuItem(
+                        painter = painterResource(R.drawable.ic_robot_head),
+                        text = modelName ?: "切换模型",
+                        textColor = textColor,
+                        iconTint = iconTint,
+                        onClick = { showModelPicker = true }
+                    )
+                    PopupMenuItem(
+                        painter = painterResource(R.drawable.ic_export),
+                        text = "导出文本",
+                        textColor = textColor,
+                        iconTint = iconTint,
+                        onClick = { onExport(); onDismiss() }
+                    )
+                }
             }
         }
     }
+
+    pendingConfirmModel?.let { config ->
+        ConfirmModelRegenerateDialog(
+            modelName = config.name.takeIf { it.isNotBlank() } ?: config.model,
+            onBack = { pendingConfirmModel = null },
+            onConfirm = {
+                pendingConfirmModel = null
+                showModelPicker = false
+                onChangeModelConfirm(config)
+                onDismiss()
+            }
+        )
+    }
+}
+
+@Composable
+private fun ModelPickerPopupContent(
+    availableModels: List<ApiConfig>,
+    selectedModelId: String?,
+    textColor: Color,
+    iconTint: Color,
+    onModelSelected: (ApiConfig) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .widthIn(min = 240.dp, max = 320.dp)
+            .heightIn(max = 360.dp)
+            .padding(vertical = 12.dp)
+    ) {
+        if (availableModels.isEmpty()) {
+            Text(
+                text = "当前无可用模型",
+                color = textColor.copy(alpha = 0.7f),
+                fontSize = 16.sp,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+            )
+        } else {
+            LazyColumn {
+                items(availableModels, key = { it.id }) { config ->
+                    val displayName = config.name.takeIf { it.isNotBlank() } ?: config.model
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp)
+                            .clickable { onModelSelected(config) }
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_robot_head),
+                            contentDescription = null,
+                            tint = if (config.id == selectedModelId) Color(0xFF66B5FF) else iconTint,
+                            modifier = Modifier.size(24.dp)
+                        )
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = displayName,
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Normal,
+                                color = textColor,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (config.model != displayName) {
+                                Text(
+                                    text = config.model,
+                                    fontSize = 12.sp,
+                                    color = textColor.copy(alpha = 0.65f),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConfirmModelRegenerateDialog(
+    modelName: String,
+    onBack: () -> Unit,
+    onConfirm: () -> Unit,
+) {
+    val isDark = isSystemInDarkTheme()
+    val cardBg = if (isDark) Color(0xFF424242) else Color(0xFFFFFFFF)
+    val textColor = if (isDark) Color.White else Color(0xFF0D0D0D)
+    val subtextColor = if (isDark) Color.White.copy(alpha = 0.7f) else Color(0xFF0D0D0D).copy(alpha = 0.7f)
+
+    AlertDialog(
+        onDismissRequest = onBack,
+        shape = RoundedCornerShape(20.dp),
+        containerColor = cardBg,
+        title = {
+            Text(
+                text = "切换模型重新回答",
+                color = textColor,
+                fontWeight = FontWeight.Bold,
+                fontSize = 20.sp
+            )
+        },
+        text = {
+            Text(
+                text = "将使用“$modelName”重新回答这个问题。",
+                color = subtextColor,
+                fontSize = 14.sp
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text("确定", color = Color(0xFF66B5FF), fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onBack) {
+                Text("返回", color = textColor)
+            }
+        }
+    )
 }
 
 @Composable

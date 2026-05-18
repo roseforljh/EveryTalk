@@ -36,6 +36,9 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.gestures.detectTransformGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -109,6 +112,7 @@ import com.android.everytalk.ui.screens.BubbleMain.Main.UserOrErrorMessageConten
 import com.android.everytalk.ui.theme.ChatDimensions
 import com.android.everytalk.ui.theme.chatColors
 import com.android.everytalk.ui.components.EnhancedMarkdownText
+import com.android.everytalk.ui.components.scrollFadeEdge
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
@@ -279,7 +283,8 @@ fun ImageGenerationMessagesList(
     bubbleMaxWidth: Dp,
     onShowAiMessageOptions: (Message) -> Unit,
     onImageLoaded: () -> Unit,
-    additionalBottomPadding: Dp = 0.dp
+    additionalBottomPadding: Dp = 0.dp,
+    scrollSessionKey: String = ""
 ) {
     val haptic = LocalHapticFeedback.current
     val animatedItems = remember { mutableStateMapOf<String, Boolean>() }
@@ -341,16 +346,37 @@ fun ImageGenerationMessagesList(
     val currentStreamingId by viewModel.currentImageStreamingAiMessageId.collectAsState()
 
     // Grok-style 置顶逻辑（与文本模式对齐）
-    var dynamicBottomPaddingTarget by remember { mutableStateOf(0.dp) }
-    var dynamicBottomPaddingImmediate by remember { mutableStateOf(0.dp) }
-    var firstBubbleScreenY by remember { mutableStateOf(-1) }
-    var grokScrollCompleted by remember { mutableStateOf(true) }
-    var pinnedUserMessageId by remember { mutableStateOf<String?>(null) }
+    var dynamicBottomPaddingTarget by remember(scrollSessionKey) { mutableStateOf(0.dp) }
+    var dynamicBottomPaddingImmediate by remember(scrollSessionKey) { mutableStateOf(0.dp) }
+    var firstBubbleScreenY by remember(scrollSessionKey) { mutableStateOf(-1) }
+    var grokScrollCompleted by remember(scrollSessionKey) { mutableStateOf(true) }
+    var pinnedUserMessageId by remember(scrollSessionKey) { mutableStateOf<String?>(null) }
+    var skipAnimation by remember(scrollSessionKey) { mutableStateOf(true) }
 
+    val dynamicBottomPaddingAnimated by androidx.compose.animation.core.animateDpAsState(
+        targetValue = dynamicBottomPaddingTarget,
+        animationSpec = if (skipAnimation) {
+            androidx.compose.animation.core.snap()
+        } else {
+            androidx.compose.animation.core.tween(
+                durationMillis = 200,
+                easing = androidx.compose.animation.core.CubicBezierEasing(0.25f, 0.1f, 0.25f, 1.0f)
+            )
+        },
+        finishedListener = { if (skipAnimation) skipAnimation = false },
+        label = "dynamicBottomPadding"
+    )
     val dynamicBottomPadding = if (isApiCalling) {
         dynamicBottomPaddingImmediate
     } else {
-        dynamicBottomPaddingTarget
+        dynamicBottomPaddingAnimated
+    }
+
+    LaunchedEffect(scrollSessionKey) {
+        grokScrollCompleted = true
+        pinnedUserMessageId = null
+        dynamicBottomPaddingTarget = 0.dp
+        dynamicBottomPaddingImmediate = 0.dp
     }
 
     LaunchedEffect(isApiCalling) {
@@ -445,8 +471,15 @@ fun ImageGenerationMessagesList(
         }
     }
 
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val topPaddingPx = with(density) { 85.dp.toPx().toInt() }
+    val fadeBackgroundColor = MaterialTheme.colorScheme.background
+    BoxWithConstraints(
+        modifier = Modifier
+            .fillMaxSize()
+            .scrollFadeEdge(listState = listState, backgroundColor = fadeBackgroundColor)
+    ) {
+        val statusBarTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+        val topPadding = statusBarTop + 72.dp
+        val topPaddingPx = with(density) { topPadding.toPx().toInt() }
 
         val lastSentImageUserMessageId by viewModel.lastSentImageUserMessageId.collectAsState()
 
@@ -580,12 +613,12 @@ fun ImageGenerationMessagesList(
                     .fillMaxSize()
                     .nestedScroll(scrollStateManager.nestedScrollConnection),
                 contentPadding = PaddingValues(
-                    start = 16.dp,
+                    start = 6.dp,
                     end = 16.dp,
-                    top = 85.dp,
-                    bottom = additionalBottomPadding + 8.dp
+                    top = topPadding,
+                    bottom = additionalBottomPadding + 12.dp
                 ),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 itemsIndexed(
                     items = chatItems,

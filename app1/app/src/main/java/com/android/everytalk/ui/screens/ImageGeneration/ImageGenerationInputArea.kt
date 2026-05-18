@@ -6,19 +6,27 @@ import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Log
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.navigationBarsIgnoringVisibility
@@ -29,7 +37,9 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.ui.res.painterResource
 import com.android.everytalk.R
@@ -37,6 +47,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -52,16 +63,20 @@ import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntRect
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
+import androidx.compose.ui.zIndex
 import androidx.core.content.FileProvider
 import coil3.compose.AsyncImage
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.ImageRatio
-import com.android.everytalk.models.ImageSourceOption
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.components.ImageRatioSelector
 import com.android.everytalk.ui.components.ImageGenCapabilities
@@ -177,63 +192,6 @@ private fun safeDeleteTempFile(context: Context, uri: Uri?) {
 }
 
 @Composable
-fun ImageSelectionPanel(
-    modifier: Modifier = Modifier,
-    onOptionSelected: (ImageSourceOption) -> Unit
-) {
-    var activeOption by remember { mutableStateOf<ImageSourceOption?>(null) }
-    val panelBackgroundColor = MaterialTheme.colorScheme.surfaceDim
-    val darkerBackgroundColor = MaterialTheme.colorScheme.surfaceVariant
-
-    Surface(
-        modifier = modifier
-            .width(150.dp)
-            .wrapContentHeight(),
-        shape = RoundedCornerShape(20.dp),
-        color = panelBackgroundColor
-    ) {
-        Column {
-            ImageSourceOption.values().forEach { option ->
-                val isSelected = activeOption == option
-                val animatedBackgroundColor by animateColorAsState(
-                    targetValue = if (isSelected) darkerBackgroundColor else panelBackgroundColor,
-                    animationSpec = tween(durationMillis = 200),
-                    label = "ImageOptionPanelItemBackground"
-                )
-                val onClickCallback = remember(option) {
-                    {
-                        activeOption = option
-                        onOptionSelected(option)
-                        Unit
-                    }
-                }
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(onClick = onClickCallback)
-                        .background(animatedBackgroundColor)
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    val iconTint = when (option) {
-                        ImageSourceOption.ALBUM -> Color(0xff2cb334)
-                        ImageSourceOption.CAMERA -> Color(0xff2196F3)
-                    }
-                    Icon(
-                        imageVector = option.icon,
-                        contentDescription = option.label,
-                        tint = iconTint,
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Text(text = option.label, color = MaterialTheme.colorScheme.onSurface, fontSize = 16.sp)
-                }
-            }
-        }
-    }
-}
-
-@Composable
 fun SelectedItemPreview(
     mediaItem: SelectedMediaItem,
     onRemoveClicked: () -> Unit,
@@ -322,7 +280,8 @@ fun ImageGenerationInputArea(
     // GPT-Image-2 质量参数
     currentGptImageQuality: ImageGenCapabilities.GptImageQuality = ImageGenCapabilities.GptImageQuality.AUTO,
     onGptImageQualityChanged: ((ImageGenCapabilities.GptImageQuality) -> Unit)? = null,
-    onHeightChange: (Int) -> Unit = {}
+    onHeightChange: (Int) -> Unit = {},
+    onShowVoiceInput: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
@@ -404,10 +363,6 @@ fun ImageGenerationInputArea(
     var seedreamQuality by remember(detectedFamily) {
         mutableStateOf(QualityTier.Q2K)
     }
- 
-    var showImageSelectionPanel by remember { mutableStateOf(false) }
-    // 记录外点关闭的时间戳，用于忽略随后紧邻的按钮抬起点击，避免“先关后又开”
-    var lastImagePanelDismissAt by remember { mutableStateOf(0L) }
 
     // 步数调整对话框状态
     var showStepsDialog by remember { mutableStateOf(false) }
@@ -416,12 +371,6 @@ fun ImageGenerationInputArea(
     // 参数调整对话框状态 (Qwen Edit)
     var showParamsDialog by remember { mutableStateOf(false) }
 
-    // 当当前图像模型不支持图像编辑时，确保关闭相册选择面板
-    LaunchedEffect(supportsImageEditing) {
-        if (!supportsImageEditing && showImageSelectionPanel) {
-            showImageSelectionPanel = false
-        }
-    }
     var tempCameraImageUri by remember { mutableStateOf<Uri?>(null) }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
@@ -492,16 +441,6 @@ fun ImageGenerationInputArea(
 
     var chatInputContentHeightPx by remember { mutableIntStateOf(0) }
 
-    val onToggleImagePanel = {
-        // 若刚刚由外点关闭，忽略紧随其后的按钮抬起点击，避免“先关后开”
-        val now = android.os.SystemClock.uptimeMillis()
-        if (!showImageSelectionPanel && now - lastImagePanelDismissAt < 200L) {
-            // ignore reopen right after outside-dismiss
-        } else {
-            showImageSelectionPanel = !showImageSelectionPanel
-        }
-    }
-
     val onClearContent = remember {
         {
             // 清空时同时清空本地状态
@@ -521,6 +460,8 @@ fun ImageGenerationInputArea(
                 try {
                     if (isApiCalling) {
                         onStopApiCall()
+                    } else if (localText.isBlank() && selectedMediaItems.isEmpty()) {
+                        onShowVoiceInput()
                     } else if ((localText.isNotBlank() || selectedMediaItems.isNotEmpty()) && selectedApiConfig != null) {
                         onSendMessageRequest(localText, selectedMediaItems.toList())
                         // 同时清空本地状态和 ViewModel 状态
@@ -551,13 +492,69 @@ fun ImageGenerationInputArea(
     var showFunctionPanel by remember { mutableStateOf(false) }
     var lastFunctionPanelDismissAt by remember { mutableStateOf(0L) }
 
+    BackHandler(enabled = showFunctionPanel) {
+        lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
+        showFunctionPanel = false
+    }
+
     var renderFunctionPanel by remember { mutableStateOf(false) }
     val functionPanelAlpha = remember { Animatable(0f) }
     val functionPanelScale = remember { Animatable(0.8f) }
 
-    var renderImageSelectionPanel by remember { mutableStateOf(false) }
-    val imageAlpha = remember { Animatable(0f) }
-    val imageScale = remember { Animatable(0.8f) }
+    // 输入法展开进度
+    val imeBottomPx = imeInsets.getBottom(density)
+    var maxImeBottomPx by remember { mutableIntStateOf(0) }
+    if (imeBottomPx > maxImeBottomPx) {
+        maxImeBottomPx = imeBottomPx
+    }
+    val imeProgress = if (maxImeBottomPx > 0) {
+        (imeBottomPx.toFloat() / maxImeBottomPx.toFloat()).coerceIn(0f, 1f)
+    } else {
+        0f
+    }
+    val isImeVisible = imeProgress > 0.01f
+    val focusManager = androidx.compose.ui.platform.LocalFocusManager.current
+    LaunchedEffect(isImeVisible, localText) {
+        if (!isImeVisible && !showFunctionPanel && localText.isEmpty()) {
+            focusManager.clearFocus()
+        }
+    }
+    LaunchedEffect(localText, isFocused) {
+        if (localText.isNotEmpty() && !isFocused) {
+            focusRequester.requestFocus()
+        }
+    }
+
+    val keepInputSeparated = localText.isNotEmpty() && isFocused
+    val separationTarget = if (keepInputSeparated) 1f else imeProgress
+    val separationProgress by androidx.compose.animation.core.animateFloatAsState(
+        targetValue = separationTarget,
+        animationSpec = androidx.compose.animation.core.spring(
+            dampingRatio = 0.857f,
+            stiffness = 150f
+        ),
+        label = "separationProgress"
+    )
+    val sizeProgress = separationProgress
+    val inputMinHeight = ((48f - 4f * sizeProgress).coerceIn(44f, 48f)).dp
+
+    val functionPanelPositionProvider = remember(chatInputContentHeightPx, density) {
+        object : PopupPositionProvider {
+            override fun calculatePosition(
+                anchorBounds: IntRect,
+                windowSize: IntSize,
+                layoutDirection: LayoutDirection,
+                popupContentSize: IntSize
+            ): IntOffset {
+                val marginPx = with(density) { 8.dp.roundToPx() }
+                val x = ((windowSize.width - popupContentSize.width) / 2)
+                    .coerceIn(0, (windowSize.width - popupContentSize.width).coerceAtLeast(0))
+                val y = (windowSize.height - chatInputContentHeightPx - marginPx - popupContentSize.height)
+                    .coerceIn(0, (windowSize.height - popupContentSize.height).coerceAtLeast(0))
+                return IntOffset(x, y)
+            }
+        }
+    }
 
     LaunchedEffect(showFunctionPanel) {
         if (showFunctionPanel) {
@@ -571,20 +568,8 @@ fun ImageGenerationInputArea(
         }
     }
 
-    LaunchedEffect(showImageSelectionPanel) {
-        if (showImageSelectionPanel) {
-            renderImageSelectionPanel = true
-            launch { imageAlpha.animateTo(1f, animationSpec = tween(durationMillis = 150)) }
-            launch { imageScale.animateTo(1f, animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) }
-        } else if (renderImageSelectionPanel) {
-            launch { imageAlpha.animateTo(0f, animationSpec = tween(durationMillis = 140)) }
-            launch { imageScale.animateTo(0.9f, animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing)) }
-                .invokeOnCompletion { renderImageSelectionPanel = false }
-        }
-    }
-
     val buttonBackgroundColor by animateColorAsState(
-        targetValue = if (isDarkTheme) Color(0xFFB3B3B3) else Color.Black,
+        targetValue = if (isDarkTheme) Color.White else Color.Black,
         animationSpec = tween(durationMillis = 200),
         label = "SendButtonBackground"
     )
@@ -625,7 +610,9 @@ fun ImageGenerationInputArea(
                 .padding(start = 6.dp, end = 6.dp)
         ) {
             Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier
+                    .fillMaxWidth()
                     .padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 4.dp)
             ) {
                 if (selectedMediaItems.isNotEmpty()) {
@@ -644,205 +631,266 @@ fun ImageGenerationInputArea(
                     }
                 }
 
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
+                val inputBackground = if (isDarkTheme) Color(0xFF1F1F1F) else Color(0xFFE8E8E8)
+
+                BoxWithConstraints(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .align(Alignment.CenterHorizontally),
+                    contentAlignment = Alignment.Center
                 ) {
-                    // + 按钮
-                    Box {
-                        val addButtonBackground = if (isDarkTheme) Color(0xFF3B3B3B) else Color(0xFFE8E8E8)
-                        val addButtonBorderColor = if (isDarkTheme) Color.White.copy(alpha = 0.3f) else Color.Black.copy(alpha = 0.15f)
+                    val sep = separationProgress.coerceIn(0f, 1f)
+                    val layoutProgress = sep * sep * (3f - 2f * sep)
+                    val plusMotionProgress = layoutProgress
+                    val textPaddingProgress = layoutProgress * layoutProgress
+                    val expandedInputFieldWidth = (maxWidth * 0.82f).coerceAtMost(maxWidth - 48.dp)
+                    val collapsedInputFieldWidth = expandedInputFieldWidth + 16.dp
+                    val inputFieldWidth = collapsedInputFieldWidth + (expandedInputFieldWidth - collapsedInputFieldWidth) * layoutProgress
+                    val plusBoxWidth = 64.dp
+
+                    val plusStretchProgress = (plusMotionProgress * 2f).coerceIn(0f, 1f)
+                    val plusRecoverProgress = ((plusMotionProgress - 0.5f) * 2f).coerceIn(0f, 1f)
+                    val plusBorderInset = 1.dp * (1f - plusMotionProgress)
+                    val plusWidth = (48f + 16f * plusStretchProgress - 20f * plusRecoverProgress).dp - plusBorderInset * 2
+                    val plusOffset = plusBorderInset + (-20f * plusStretchProgress - 40f * plusRecoverProgress).dp
+                    val groupLeft = if (plusOffset < 0.dp) plusOffset * layoutProgress else 0.dp
+                    val groupWidth = inputFieldWidth - groupLeft
+                    val plusHeight = inputMinHeight - plusBorderInset * 2
+                    val plusCorner = plusHeight / 2
+                    val plusShape = RoundedCornerShape(plusCorner)
+                    val plusBg = inputBackground
+                    val borderColor = if (isDarkTheme) Color(0xFF48474C) else Color(0xFFD6D6D6)
+                    val separatedBorderAlpha = ((layoutProgress - 0.15f) / 0.35f).coerceIn(0f, 1f)
+                    val plusBorderAlpha = if (separationTarget > 0.5f) separatedBorderAlpha else 0f
+                    val collapsedInputBorderAlpha = ((0.35f - layoutProgress) / 0.35f).coerceIn(0f, 1f)
+                    val inputBorderAlpha = kotlin.math.max(separatedBorderAlpha, collapsedInputBorderAlpha)
+
+                    val inputShape = RoundedCornerShape(inputMinHeight / 2)
+                    val textStartPadding = 48.dp - (48.dp - 16.dp) * textPaddingProgress
+
+                    Box(
+                        modifier = Modifier
+                            .width(groupWidth)
+                            .wrapContentHeight(),
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        // 加号按钮
                         Box(
                             modifier = Modifier
-                                .size(40.dp)
-                                .background(addButtonBackground, CircleShape)
-                                .border(1.dp, addButtonBorderColor, CircleShape),
-                            contentAlignment = Alignment.Center
+                                .offset(x = -groupLeft)
+                                .zIndex(2f)
                         ) {
-                            IconButton(
-                                onClick = {
-                                    val now = android.os.SystemClock.uptimeMillis()
-                                    if (!showFunctionPanel && now - lastFunctionPanelDismissAt < 200L) {
-                                        return@IconButton
-                                    }
-                                    showFunctionPanel = !showFunctionPanel
-                                },
-                                modifier = Modifier.size(40.dp)
-                            ) {
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_plus),
-                                    contentDescription = "功能面板",
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                            }
-                        }
-
-                        if (renderFunctionPanel) {
-                            Popup(
-                                alignment = Alignment.BottomStart,
-                                offset = IntOffset(0, with(density) { (-56).dp.toPx().toInt() }),
-                                onDismissRequest = {
-                                    lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
-                                    if (showFunctionPanel) showFunctionPanel = false
-                                },
-                                properties = PopupProperties(
-                                    focusable = false,
-                                    dismissOnBackPress = true,
-                                    dismissOnClickOutside = true
-                                )
-                            ) {
-                                Box(modifier = Modifier.graphicsLayer {
-                                    alpha = functionPanelAlpha.value
-                                    scaleX = functionPanelScale.value
-                                    scaleY = functionPanelScale.value
-                                    transformOrigin = TransformOrigin(0f, 1f)
-                                }) {
-                                    ImageFunctionPanelContent(
-                                        supportsImageEditing = supportsImageEditing,
-                                        hasContent = hasContent,
-                                        isQwenEdit = isQwenEdit,
-                                        detectedFamily = detectedFamily,
-                                        onChangeImageSteps = onChangeImageSteps,
-                                        onChangeImageParams = onChangeImageParams,
-                                        onToggleImagePanel = {
-                                            lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
-                                            showFunctionPanel = false
-                                            onToggleImagePanel()
-                                        },
-                                        onShowRatioDialog = {
-                                            lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
-                                            showFunctionPanel = false
-                                            showRatioDialog = true
-                                        },
-                                        onShowStepsDialog = {
-                                            lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
-                                            showFunctionPanel = false
-                                            showStepsDialog = true
-                                        },
-                                        onShowParamsDialog = {
-                                            lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
-                                            showFunctionPanel = false
-                                            showParamsDialog = true
-                                        },
-                                        onClearContent = {
-                                            onClearContent()
-                                            lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
-                                            showFunctionPanel = false
-                                        },
-                                        currentImageSteps = currentImageSteps,
-                                        selectedImageRatio = selectedImageRatio,
-                                        isGptImage = detectedFamily == ImageGenCapabilities.ModelFamily.GPT_IMAGE,
-                                        currentGptImageQuality = currentGptImageQuality,
-                                        onShowQualityDialog = {
-                                            lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
-                                            showFunctionPanel = false
-                                            showGptQualityDialog = true
-                                        }
-                                    )
-                                }
-                            }
-                        }
-
-                        if (renderImageSelectionPanel) {
-                            Popup(
-                                alignment = Alignment.BottomStart,
-                                offset = IntOffset(0, with(density) { (-56).dp.toPx().toInt() }),
-                                onDismissRequest = {
-                                    lastImagePanelDismissAt = android.os.SystemClock.uptimeMillis()
-                                    if (showImageSelectionPanel) showImageSelectionPanel = false
-                                },
-                                properties = PopupProperties(
-                                    focusable = false,
-                                    dismissOnBackPress = true,
-                                    dismissOnClickOutside = true
-                                )
-                            ) {
-                                Box(modifier = Modifier.graphicsLayer {
-                                    alpha = imageAlpha.value
-                                    scaleX = imageScale.value
-                                    scaleY = imageScale.value
-                                    transformOrigin = TransformOrigin(0f, 1f)
-                                }) {
-                                    ImageSelectionPanel { selectedOption ->
-                                        if (showImageSelectionPanel) showImageSelectionPanel = false
-                                        when (selectedOption) {
-                                            ImageSourceOption.ALBUM -> photoPickerLauncher.launch(
-                                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
-                                            )
-                                            ImageSourceOption.CAMERA -> cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    Spacer(Modifier.width(10.dp))
-
-                    // 输入框（与文本模式一致的 BasicTextField 样式）
-                    BasicTextField(
-                        value = localText,
-                        onValueChange = { newText -> localText = newText },
-                        modifier = Modifier
-                            .weight(1f)
-                            .focusRequester(focusRequester)
-                            .onFocusChanged { focusState ->
-                                isFocused = focusState.isFocused
-                                if (focusState.isFocused) onFocusChange(true)
-                            },
-                        textStyle = MaterialTheme.typography.bodyLarge.copy(
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        ),
-                        cursorBrush = androidx.compose.ui.graphics.SolidColor(MaterialTheme.colorScheme.primary),
-                        maxLines = 5,
-                        decorationBox = { innerTextField ->
-                            val inputBackground = if (isDarkTheme) Color(0xFF3B3B3B) else Color(0xFFE8E8E8)
-                            val inputBorderColor = if (isDarkTheme) {
-                                if (isFocused) Color.White.copy(alpha = 0.5f) else Color.White.copy(alpha = 0.3f)
-                            } else {
-                                if (isFocused) Color.Black.copy(alpha = 0.3f) else Color.Black.copy(alpha = 0.15f)
-                            }
-                            val isMultiLine = localText.contains('\n') || localText.length > 40
-                            val inputShape = if (isMultiLine) RoundedCornerShape(20.dp) else CircleShape
-                            Row(
+                            Box(
                                 modifier = Modifier
-                                    .background(inputBackground, inputShape)
-                                    .border(1.dp, inputBorderColor, inputShape)
-                                    .padding(start = 14.dp, end = 5.dp, top = 6.dp, bottom = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically
+                                    .width(plusBoxWidth)
+                                    .height(plusHeight)
+                                    .wrapContentWidth(Alignment.Start)
                             ) {
-                                Box(modifier = Modifier.weight(1f)) {
-                                    if (localText.isEmpty()) {
-                                        Text(
-                                            "输入消息...",
-                                            style = MaterialTheme.typography.bodyLarge,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                                Box(
+                                    modifier = Modifier
+                                        .offset(x = plusOffset)
+                                        .width(plusWidth)
+                                        .height(plusHeight)
+                                        .background(plusBg, plusShape)
+                                        .border(1.dp, borderColor.copy(alpha = plusBorderAlpha), plusShape),
+                                    contentAlignment = Alignment.CenterStart
+                                ) {
+                                    IconButton(
+                                        onClick = {
+                                            val now = android.os.SystemClock.uptimeMillis()
+                                            if (!showFunctionPanel && now - lastFunctionPanelDismissAt < 200L) {
+                                                return@IconButton
+                                            }
+                                            showFunctionPanel = !showFunctionPanel
+                                        },
+                                        modifier = Modifier.size(44.dp)
+                                    ) {
+                                        Icon(
+                                            painter = painterResource(R.drawable.ic_plus),
+                                            contentDescription = "功能面板",
+                                            tint = if (isDarkTheme) Color.White else Color(0xFF0D0D0D),
+                                            modifier = Modifier.size(24.dp)
                                         )
                                     }
-                                    innerTextField()
-                                }
-                                Spacer(Modifier.width(8.dp))
-                                FilledIconButton(
-                                    onClick = onSendClick,
-                                    shape = CircleShape,
-                                    colors = IconButtonDefaults.filledIconButtonColors(
-                                        containerColor = buttonBackgroundColor,
-                                        contentColor = iconColor
-                                    ),
-                                    modifier = Modifier.size(36.dp)
-                                ) {
-                                    Icon(
-                                        painter = if (isApiCalling) painterResource(R.drawable.ic_stop) else painterResource(R.drawable.ic_arrow_up),
-                                        contentDescription = if (isApiCalling) "停止" else "发送",
-                                        modifier = Modifier.size(20.dp)
-                                    )
                                 }
                             }
-                        }
-                    )
-                }
 
+                            if (renderFunctionPanel) {
+                                Popup(
+                                    popupPositionProvider = functionPanelPositionProvider,
+                                    onDismissRequest = {
+                                        lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
+                                        if (showFunctionPanel) showFunctionPanel = false
+                                    },
+                                    properties = PopupProperties(
+                                        focusable = false,
+                                        dismissOnBackPress = false,
+                                        dismissOnClickOutside = true
+                                    )
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .widthIn(max = 320.dp)
+                                            .wrapContentHeight()
+                                            .graphicsLayer {
+                                                alpha = functionPanelAlpha.value
+                                                scaleX = functionPanelScale.value
+                                                scaleY = functionPanelScale.value
+                                                transformOrigin = TransformOrigin(0.5f, 1f)
+                                            }
+                                    ) {
+                                        ImageFunctionPanelContent(
+                                            supportsImageEditing = supportsImageEditing,
+                                            hasContent = hasContent,
+                                            isQwenEdit = isQwenEdit,
+                                            detectedFamily = detectedFamily,
+                                            onChangeImageSteps = onChangeImageSteps,
+                                            onChangeImageParams = onChangeImageParams,
+                                            onOpenGallery = {
+                                                lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
+                                                showFunctionPanel = false
+                                                photoPickerLauncher.launch(
+                                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
+                                                )
+                                            },
+                                            onOpenCamera = {
+                                                lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
+                                                showFunctionPanel = false
+                                                cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                                            },
+                                            onShowRatioDialog = {
+                                                lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
+                                                showFunctionPanel = false
+                                                showRatioDialog = true
+                                            },
+                                            onShowStepsDialog = {
+                                                lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
+                                                showFunctionPanel = false
+                                                showStepsDialog = true
+                                            },
+                                            onShowParamsDialog = {
+                                                lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
+                                                showFunctionPanel = false
+                                                showParamsDialog = true
+                                            },
+                                            onClearContent = {
+                                                onClearContent()
+                                                lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
+                                                showFunctionPanel = false
+                                            },
+                                            currentImageSteps = currentImageSteps,
+                                            selectedImageRatio = selectedImageRatio,
+                                            isGptImage = detectedFamily == ImageGenCapabilities.ModelFamily.GPT_IMAGE,
+                                            currentGptImageQuality = currentGptImageQuality,
+                                            onShowQualityDialog = {
+                                                lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
+                                                showFunctionPanel = false
+                                                showGptQualityDialog = true
+                                            }
+                                        )
+                                    }
+                                }
+                            }
+
+                        }
+
+                        // 输入框
+                        BasicTextField(
+                            value = localText,
+                            onValueChange = { newText -> localText = newText },
+                            modifier = Modifier
+                                .offset(x = -groupLeft)
+                                .width(inputFieldWidth)
+                                .align(Alignment.CenterStart)
+                                .zIndex(1f)
+                                .focusRequester(focusRequester)
+                                .onFocusChanged { focusState ->
+                                    isFocused = focusState.isFocused
+                                    if (focusState.isFocused) onFocusChange(true)
+                                },
+                            textStyle = MaterialTheme.typography.bodyLarge.copy(
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            ),
+                            cursorBrush = androidx.compose.ui.graphics.SolidColor(
+                                if (isDarkTheme) Color(0xFF99CEFF) else Color(0xFF0285FF)
+                            ),
+                            maxLines = 5,
+                            decorationBox = { innerTextField ->
+                                val safeVerticalPadding = ((4f - 1f * sizeProgress).coerceAtLeast(0f)).dp
+                                Column(
+                                    modifier = Modifier
+                                        .heightIn(min = inputMinHeight)
+                                        .background(inputBackground, inputShape)
+                                        .border(1.dp, borderColor.copy(alpha = inputBorderAlpha), inputShape)
+                                        .padding(start = textStartPadding, end = 5.dp, top = safeVerticalPadding, bottom = safeVerticalPadding)
+                                ) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .heightIn(min = (inputMinHeight - safeVerticalPadding * 2).coerceAtLeast(0.dp)),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box(modifier = Modifier.weight(1f)) {
+                                            if (localText.isEmpty()) {
+                                                Text(
+                                                    "输入消息...",
+                                                    style = MaterialTheme.typography.bodyLarge,
+                                                    color = if (isDarkTheme) Color(0xFFAFAFAF) else Color(0xFF8F8F8F)
+                                                )
+                                            }
+                                            innerTextField()
+                                        }
+                                        Spacer(Modifier.width(8.dp))
+                                        val buttonState = when {
+                                            isApiCalling -> 2
+                                            hasContent -> 1
+                                            else -> 0
+                                        }
+                                        AnimatedContent(
+                                            targetState = buttonState,
+                                            transitionSpec = {
+                                                (fadeIn(tween(220)) + scaleIn(
+                                                    tween(220),
+                                                    initialScale = 0.8f
+                                                )).togetherWith(
+                                                    fadeOut(tween(150)) + scaleOut(
+                                                        tween(150),
+                                                        targetScale = 0.6f
+                                                    )
+                                                )
+                                            },
+                                            label = "ImageGenSendButton"
+                                        ) { state ->
+                                            FilledIconButton(
+                                                onClick = onSendClick,
+                                                shape = CircleShape,
+                                                colors = IconButtonDefaults.filledIconButtonColors(
+                                                    containerColor = buttonBackgroundColor,
+                                                    contentColor = iconColor
+                                                ),
+                                                modifier = Modifier.size(36.dp)
+                                            ) {
+                                                Icon(
+                                                    painter = when (state) {
+                                                        2 -> painterResource(R.drawable.ic_stop)
+                                                        1 -> painterResource(R.drawable.ic_arrow_up)
+                                                        else -> painterResource(R.drawable.ic_voice_bold)
+                                                    },
+                                                    contentDescription = when (state) {
+                                                        2 -> "停止"
+                                                        1 -> "发送"
+                                                        else -> "语音输入"
+                                                    },
+                                                    modifier = Modifier.size(20.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        )
+                    }
+                }
             }
         }
     }
@@ -1112,7 +1160,8 @@ private fun ImageFunctionPanelContent(
     detectedFamily: ImageGenCapabilities.ModelFamily?,
     onChangeImageSteps: ((Int) -> Unit)?,
     onChangeImageParams: ((Int, Float) -> Unit)?,
-    onToggleImagePanel: () -> Unit,
+    onOpenGallery: () -> Unit,
+    onOpenCamera: () -> Unit,
     onShowRatioDialog: () -> Unit,
     onShowStepsDialog: () -> Unit,
     onShowParamsDialog: () -> Unit,
@@ -1123,60 +1172,92 @@ private fun ImageFunctionPanelContent(
     currentGptImageQuality: ImageGenCapabilities.GptImageQuality = ImageGenCapabilities.GptImageQuality.AUTO,
     onShowQualityDialog: () -> Unit = {}
 ) {
+    val isDark = isSystemInDarkTheme()
+    val cardBg = if (isDark) Color(0xFF212121) else Color(0xFFFFFFFF)
+    val borderColor = if (isDark) Color.White.copy(alpha = 0.10f) else Color(0xFF0D0D0D).copy(alpha = 0.05f)
+    val iconBg = if (isDark) Color(0xFF3B3B3B) else Color(0xFFE8E8E8)
+    val textColor = if (isDark) Color.White else Color(0xFF0D0D0D)
+    val iconTint = if (isDark) Color.White else Color(0xFF0D0D0D)
+
     Surface(
         modifier = Modifier
-            .width(150.dp)
-            .wrapContentHeight(),
-        shape = RoundedCornerShape(20.dp),
-        color = MaterialTheme.colorScheme.surfaceDim,
-        shadowElevation = 4.dp
+            .fillMaxWidth()
+            .heightIn(max = 370.dp)
+            .shadow(8.dp, RoundedCornerShape(28.dp))
+            .border(1.dp, borderColor, RoundedCornerShape(28.dp)),
+        shape = RoundedCornerShape(28.dp),
+        color = cardBg
     ) {
-        Column(modifier = Modifier.padding(vertical = 4.dp)) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+        ) {
             if (!isQwenEdit) {
-                ImageFunctionPanelItem(
-                    icon = painterResource(R.drawable.ic_aspect_ratio),
-                    label = selectedImageRatio.displayName,
-                    tint = MaterialTheme.colorScheme.primary,
+                ImageFunctionPanelRow(
+                    iconRes = R.drawable.ic_aspect_ratio,
+                    label = "比例: ${selectedImageRatio.displayName}",
+                    iconBg = iconBg,
+                    iconTint = Color(0xFF66B5FF),
+                    textColor = textColor,
                     onClick = onShowRatioDialog
                 )
             }
             if (isGptImage) {
-                ImageFunctionPanelItem(
-                    icon = painterResource(R.drawable.ic_settings_slider),
+                ImageFunctionPanelRow(
+                    iconRes = R.drawable.ic_settings_slider,
                     label = "质量: ${currentGptImageQuality.displayName}",
-                    tint = Color(0xFF9C27B0),
+                    iconBg = iconBg,
+                    iconTint = Color(0xFF9C27B0),
+                    textColor = textColor,
                     onClick = onShowQualityDialog
                 )
             }
             if (supportsImageEditing) {
-                ImageFunctionPanelItem(
-                    icon = painterResource(R.drawable.ic_image_gallery),
+                ImageFunctionPanelRow(
+                    iconRes = R.drawable.ic_image_gallery,
                     label = "选择图片",
-                    tint = Color(0xff2cb334),
-                    onClick = onToggleImagePanel
+                    iconBg = iconBg,
+                    iconTint = Color(0xff2cb334),
+                    textColor = textColor,
+                    onClick = onOpenGallery
+                )
+                ImageFunctionPanelRow(
+                    iconRes = R.drawable.ic_camera,
+                    label = "拍照",
+                    iconBg = iconBg,
+                    iconTint = Color(0xFF2196F3),
+                    textColor = textColor,
+                    onClick = onOpenCamera
                 )
             }
             if (detectedFamily == ImageGenCapabilities.ModelFamily.MODAL_Z_IMAGE && onChangeImageSteps != null) {
-                ImageFunctionPanelItem(
-                    icon = painterResource(R.drawable.ic_tuning),
-                    label = "步数 ${currentImageSteps ?: 4}",
-                    tint = MaterialTheme.colorScheme.primary,
+                ImageFunctionPanelRow(
+                    iconRes = R.drawable.ic_tuning,
+                    label = "步数: ${currentImageSteps ?: 4}",
+                    iconBg = iconBg,
+                    iconTint = Color(0xFF66B5FF),
+                    textColor = textColor,
                     onClick = onShowStepsDialog
                 )
             }
             if (isQwenEdit && onChangeImageParams != null) {
-                ImageFunctionPanelItem(
-                    icon = painterResource(R.drawable.ic_tuning),
+                ImageFunctionPanelRow(
+                    iconRes = R.drawable.ic_tuning,
                     label = "参数调节",
-                    tint = Color(0xFFFF9800),
+                    iconBg = iconBg,
+                    iconTint = Color(0xFFFF9800),
+                    textColor = textColor,
                     onClick = onShowParamsDialog
                 )
             }
             if (hasContent) {
-                ImageFunctionPanelItem(
-                    icon = painterResource(R.drawable.ic_x),
+                ImageFunctionPanelRow(
+                    iconRes = R.drawable.ic_x,
                     label = "清除内容",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    iconBg = iconBg,
+                    iconTint = iconTint,
+                    textColor = textColor,
                     onClick = onClearContent
                 )
             }
@@ -1185,37 +1266,41 @@ private fun ImageFunctionPanelContent(
 }
 
 @Composable
-private fun ImageFunctionPanelItem(
-    icon: androidx.compose.ui.graphics.painter.Painter,
+private fun ImageFunctionPanelRow(
+    iconRes: Int,
     label: String,
-    tint: Color,
+    iconBg: Color,
+    iconTint: Color,
+    textColor: Color,
     onClick: () -> Unit
 ) {
-    Surface(
-        onClick = onClick,
-        shape = RoundedCornerShape(12.dp),
-        color = Color.Transparent
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        Row(
+        Box(
             modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .size(44.dp)
+                .background(iconBg, CircleShape),
+            contentAlignment = Alignment.Center
         ) {
             Icon(
-                painter = icon,
-                contentDescription = label,
-                tint = tint,
+                painter = painterResource(iconRes),
+                contentDescription = null,
+                tint = iconTint,
                 modifier = Modifier.size(22.dp)
             )
-            Spacer(modifier = Modifier.width(10.dp))
-            Text(
-                text = label,
-                style = MaterialTheme.typography.bodyMedium.copy(
-                    fontWeight = androidx.compose.ui.text.font.FontWeight.Medium
-                ),
-                color = MaterialTheme.colorScheme.onSurface
-            )
         }
+        Spacer(modifier = Modifier.width(14.dp))
+        Text(
+            text = label,
+            fontSize = 18.sp,
+            fontWeight = androidx.compose.ui.text.font.FontWeight.Normal,
+            color = textColor,
+            modifier = Modifier.weight(1f)
+        )
     }
 }

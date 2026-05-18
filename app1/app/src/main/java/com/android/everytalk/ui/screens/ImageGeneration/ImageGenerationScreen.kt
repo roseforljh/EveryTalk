@@ -34,7 +34,6 @@ import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.ui.components.AppTopBar
 import com.android.everytalk.statecontroller.SimpleModeManager
 import com.android.everytalk.data.DataClass.Message
-import com.android.everytalk.ui.screens.MainScreen.chat.models.ModelSelectionBottomSheet
 import com.android.everytalk.ui.screens.MainScreen.chat.text.state.rememberChatScrollStateManager
 import com.android.everytalk.ui.screens.MainScreen.chat.dialog.EditMessageDialog
 import kotlinx.coroutines.launch
@@ -76,6 +75,21 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
     val imageMessageOptionsSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     
     var showModelSelection by remember { mutableStateOf(false) }
+    val allImageConfigs by viewModel.imageGenApiConfigs.collectAsState()
+    val filteredModelsForDropdown = remember(selectedApiConfig, allImageConfigs) {
+        val currentSelectedConfig = selectedApiConfig
+        if (currentSelectedConfig != null) {
+            allImageConfigs.filter {
+                it.provider == currentSelectedConfig.provider &&
+                it.address == currentSelectedConfig.address &&
+                it.key == currentSelectedConfig.key &&
+                it.channel == currentSelectedConfig.channel
+            }
+        } else {
+            allImageConfigs
+        }
+    }
+    val loadedImageHistoryIndex by viewModel.loadedImageGenerationHistoryIndex.collectAsState()
     
     // 图像比例状态（使用全局StateHolder，便于下游请求读取）
     val selectedImageRatio by viewModel.stateHolder._selectedImageRatio.collectAsState()
@@ -182,37 +196,7 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
         )
     }
 
-    if (showModelSelection) {
-        val allImageConfigs by viewModel.imageGenApiConfigs.collectAsState()
-        val availableModels = remember(selectedApiConfig, allImageConfigs) {
-            val currentSelectedConfig = selectedApiConfig
-            if (currentSelectedConfig != null) {
-                allImageConfigs.filter {
-                    it.provider == currentSelectedConfig.provider &&
-                    it.address == currentSelectedConfig.address &&
-                    it.key == currentSelectedConfig.key &&
-                    it.channel == currentSelectedConfig.channel
-                }
-            } else {
-                allImageConfigs
-            }
-        }
 
-        ModelSelectionBottomSheet(
-            onDismissRequest = { showModelSelection = false },
-            sheetState = androidx.compose.material3.rememberModalBottomSheetState(),
-            availableModels = availableModels,
-            onModelSelected = {
-                viewModel.selectConfig(it, isImageGen = true)
-                showModelSelection = false
-            },
-            selectedApiConfig = selectedApiConfig,
-            allApiConfigs = viewModel.imageGenApiConfigs.collectAsState().value,
-            onPlatformSelected = {
-                viewModel.selectConfig(it, isImageGen = true)
-            }
-        )
-    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
@@ -228,6 +212,7 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                 viewModel = viewModel,
                 listState = listState,
                 scrollStateManager = scrollStateManager,
+                scrollSessionKey = currentImageConvId,
                 bubbleMaxWidth = bubbleMaxWidth,
                 onShowAiMessageOptions = { msg ->
                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
@@ -295,7 +280,8 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                     },
                     currentGptImageQuality = gptImageQuality,
                     onGptImageQualityChanged = { viewModel.stateHolder._gptImageQuality.value = it },
-                    onHeightChange = { height -> inputAreaHeightPx = height }
+                    onHeightChange = { height -> inputAreaHeightPx = height },
+                    onShowVoiceInput = { navController.navigate(Screen.VOICE_INPUT_SCREEN) }
                 )
             }
 
@@ -306,10 +292,39 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                 onSettingsClick = {
                     navController.navigate(Screen.IMAGE_GENERATION_SETTINGS_SCREEN)
                 },
-                onTitleClick = { showModelSelection = true },
+                onTitleClick = { showModelSelection = !showModelSelection },
                 onSystemPromptClick = {},
                 systemPrompt = "",
-                isSystemPromptExpanded = false
+                isSystemPromptExpanded = false,
+                hasContent = imageGenerationChatListItems.isNotEmpty(),
+                onNewChat = { viewModel.startNewImageGeneration() },
+                onShareChat = {
+                    val idx = loadedImageHistoryIndex
+                    if (idx != null) viewModel.shareConversation(idx, true)
+                },
+                onPinChat = {
+                    val idx = loadedImageHistoryIndex
+                    if (idx != null) viewModel.togglePinForConversation(idx, true)
+                },
+                onDeleteChat = {
+                    val idx = loadedImageHistoryIndex
+                    if (idx != null) {
+                        viewModel.deleteImageGenerationConversation(idx)
+                        viewModel.startNewImageGeneration()
+                    }
+                },
+                showModelSelection = showModelSelection,
+                modelList = filteredModelsForDropdown,
+                selectedApiConfig = selectedApiConfig,
+                onModelSelected = { modelConfig ->
+                    viewModel.selectConfig(modelConfig, isImageGen = true)
+                    showModelSelection = false
+                },
+                onDismissModelSelection = { showModelSelection = false },
+                allApiConfigs = allImageConfigs,
+                onConfigModelSelected = { config ->
+                    viewModel.selectConfig(config, isImageGen = true)
+                }
             )
         }
     }

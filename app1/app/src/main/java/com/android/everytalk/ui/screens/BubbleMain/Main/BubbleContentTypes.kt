@@ -7,8 +7,11 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.horizontalScroll
@@ -19,6 +22,7 @@ import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.unit.Velocity
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.animation.animateContentSize
 import androidx.compose.material.icons.Icons
@@ -50,6 +54,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalClipboardManager
@@ -60,6 +65,7 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.android.everytalk.data.DataClass.Message
@@ -73,12 +79,8 @@ import android.graphics.Bitmap
 import android.util.Base64
 import java.io.ByteArrayOutputStream
 
-private const val CONTEXT_MENU_ANIMATION_DURATION_MS = 150
-private val CONTEXT_MENU_CORNER_RADIUS = 16.dp
-private val CONTEXT_MENU_ITEM_ICON_SIZE = 20.dp
-// 基本对齐采用"角点贴手指"，再整体向下微移，避免"整体偏高"
-private val CONTEXT_MENU_FINGER_VERTICAL_OFFSET = -90.dp
-private val CONTEXT_MENU_FIXED_WIDTH = 120.dp
+private val CONTEXT_MENU_CORNER_RADIUS = 28.dp
+private val CONTEXT_MENU_ITEM_ICON_SIZE = 22.dp
 
 internal fun attachmentStripHorizontalAlignment(sender: Sender): Alignment.Horizontal =
     if (sender == Sender.User) Alignment.End else Alignment.Start
@@ -300,6 +302,7 @@ fun AttachmentsContent(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 imageAttachments.forEach { attachment ->
+                    var imageGlobalPosition by remember { mutableStateOf(Offset.Zero) }
                     val imageModel: Any = when (attachment) {
                         is SelectedMediaItem.ImageFromUri -> if (attachment.uri.scheme == "data") attachment.uri.toString() else attachment.uri
                         is SelectedMediaItem.ImageFromBitmap -> attachment.bitmap as Any
@@ -313,6 +316,7 @@ fun AttachmentsContent(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(12.dp))
+                            .onGloballyPositioned { imageGlobalPosition = it.localToRoot(Offset.Zero) }
                             .pointerInput(message.id) {
                                 detectTapGestures(
                                     onTap = {
@@ -327,7 +331,7 @@ fun AttachmentsContent(
                                     },
                                     onLongPress = { localOffset ->
                                         haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                        onLongPress(message, localOffset)
+                                        onLongPress(message, imageGlobalPosition + localOffset)
                                     }
                                 )
                             }
@@ -599,23 +603,34 @@ fun MessageContextMenu(
     pressOffset: Offset = Offset.Zero
 ) {
     if (isVisible) {
-        val context = LocalContext.current
-        val clipboardManager = LocalClipboardManager.current
         val density = LocalDensity.current
         val configuration = LocalConfiguration.current
-        
-        val menuWidthPx = with(density) { CONTEXT_MENU_FIXED_WIDTH.toPx() }
+        val isDark = isSystemInDarkTheme()
+
+        val menuWidth = 160.dp
+        val menuWidthPx = with(density) { menuWidth.toPx() }
         val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
         val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
-        val estimatedMenuHeightPx = with(density) { (48.dp * 3 + 16.dp).toPx() }
+        val estimatedMenuHeightPx = with(density) { (56.dp * 3 + 16.dp).toPx() }
 
-        // 用户消息：右上角对准手指位置
         val rawX = pressOffset.x - menuWidthPx
         val rawY = pressOffset.y
 
-        // 边界夹紧
         val finalX = rawX.coerceIn(0f, screenWidthPx - menuWidthPx)
         val finalY = rawY.coerceIn(0f, screenHeightPx - estimatedMenuHeightPx)
+
+        val cardBg = if (isDark) Color(0xFF212121) else Color(0xFFFFFFFF)
+        val borderColor = if (isDark) Color.White.copy(alpha = 0.10f) else Color(0xFF0D0D0D).copy(alpha = 0.05f)
+        val iconBg = if (isDark) Color(0xFF3B3B3B) else Color(0xFFE8E8E8)
+        val textColor = if (isDark) Color.White else Color(0xFF0D0D0D)
+        val iconTint = if (isDark) Color.White else Color(0xFF0D0D0D)
+
+        val scaleAnim = remember { Animatable(0.8f) }
+        val alphaAnim = remember { Animatable(0f) }
+        LaunchedEffect(Unit) {
+            launch { scaleAnim.animateTo(1f, tween(120, easing = CubicBezierEasing(0.0f, 0.0f, 0.2f, 1.0f))) }
+            launch { alphaAnim.animateTo(1f, tween(30, easing = CubicBezierEasing(0.4f, 0.0f, 0.2f, 1.0f))) }
+        }
 
         Popup(
             alignment = Alignment.TopStart,
@@ -629,114 +644,44 @@ fun MessageContextMenu(
             )
         ) {
             Surface(
-                shape = RoundedCornerShape(CONTEXT_MENU_CORNER_RADIUS),
-                color = MaterialTheme.colorScheme.surfaceDim,
-                tonalElevation = 0.dp,
                 modifier = Modifier
-                    .width(CONTEXT_MENU_FIXED_WIDTH)
-                    .shadow(
-                        elevation = 8.dp,
-                        shape = RoundedCornerShape(CONTEXT_MENU_CORNER_RADIUS)
-                    )
-                    .padding(1.dp)
+                    .width(menuWidth)
+                    .graphicsLayer {
+                        this.scaleX = scaleAnim.value
+                        this.scaleY = scaleAnim.value
+                        this.alpha = alphaAnim.value
+                        this.transformOrigin = TransformOrigin(1f, 0f)
+                    }
+                    .shadow(8.dp, RoundedCornerShape(CONTEXT_MENU_CORNER_RADIUS))
+                    .border(1.dp, borderColor, RoundedCornerShape(CONTEXT_MENU_CORNER_RADIUS)),
+                shape = RoundedCornerShape(CONTEXT_MENU_CORNER_RADIUS),
+                color = cardBg
             ) {
-                Column {
-                    val menuVisibility =
-                        remember { MutableTransitionState(false) }
-                    LaunchedEffect(isVisible) {
-                        menuVisibility.targetState = isVisible
-                    }
-
-                    @Composable
-                    fun AnimatedDropdownMenuItem(
-                        visibleState: MutableTransitionState<Boolean>,
-                        delay: Int = 0,
-                        text: @Composable () -> Unit,
-                        onClick: () -> Unit,
-                        leadingIcon: @Composable (() -> Unit)? = null
-                    ) {
-                        AnimatedVisibility(
-                            visibleState = visibleState,
-                            enter = fadeIn(
-                                animationSpec = tween(
-                                    CONTEXT_MENU_ANIMATION_DURATION_MS,
-                                    delayMillis = delay,
-                                    easing = LinearOutSlowInEasing
-                                )
-                            ) +
-                                    scaleIn(
-                                        animationSpec = tween(
-                                            CONTEXT_MENU_ANIMATION_DURATION_MS,
-                                            delayMillis = delay,
-                                            easing = LinearOutSlowInEasing
-                                        ), transformOrigin = TransformOrigin(0f, 0f)
-                                    ),
-                            exit = fadeOut(
-                                animationSpec = tween(
-                                    CONTEXT_MENU_ANIMATION_DURATION_MS,
-                                    easing = FastOutLinearInEasing
-                                )
-                            ) +
-                                    scaleOut(
-                                        animationSpec = tween(
-                                            CONTEXT_MENU_ANIMATION_DURATION_MS,
-                                            easing = FastOutLinearInEasing
-                                        ), transformOrigin = TransformOrigin(0f, 0f)
-                                    )
-                        ) {
-                            DropdownMenuItem(
-                                text = text, onClick = onClick, leadingIcon = leadingIcon,
-                                colors = MenuDefaults.itemColors(
-                                    textColor = MaterialTheme.colorScheme.onSurface,
-                                    leadingIconColor = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            )
-                        }
-                    }
-
-                    AnimatedDropdownMenuItem(
-                        menuVisibility,
-                        text = { Text("复制") },
-                        onClick = {
-                            onCopy(message)
-                        },
-                        leadingIcon = {
-                            Icon(
-                                Icons.Filled.ContentCopy,
-                                "复制",
-                                Modifier.size(CONTEXT_MENU_ITEM_ICON_SIZE)
-                            )
-                        })
-
-                    AnimatedDropdownMenuItem(
-                        menuVisibility,
-                        delay = 30,
-                        text = { Text("编辑") },
-                        onClick = {
-                            onEdit(message)
-                        },
-                        leadingIcon = {
-                            Icon(
-                                Icons.Filled.Edit,
-                                "编辑",
-                                Modifier.size(CONTEXT_MENU_ITEM_ICON_SIZE)
-                            )
-                        })
-
-                    AnimatedDropdownMenuItem(
-                        menuVisibility,
-                        delay = 60,
-                        text = { Text("重新回答") },
-                        onClick = {
-                            onRegenerate(message)
-                        },
-                        leadingIcon = {
-                            Icon(
-                                Icons.Filled.Refresh,
-                                "重新回答",
-                                Modifier.size(CONTEXT_MENU_ITEM_ICON_SIZE)
-                            )
-                        })
+                Column(modifier = Modifier.padding(vertical = 8.dp)) {
+                    ContextMenuRow(
+                        icon = Icons.Filled.ContentCopy,
+                        label = "复制",
+                        iconBg = iconBg,
+                        iconTint = iconTint,
+                        textColor = textColor,
+                        onClick = { onCopy(message) }
+                    )
+                    ContextMenuRow(
+                        icon = Icons.Filled.Edit,
+                        label = "编辑",
+                        iconBg = iconBg,
+                        iconTint = iconTint,
+                        textColor = textColor,
+                        onClick = { onEdit(message) }
+                    )
+                    ContextMenuRow(
+                        icon = Icons.Filled.Refresh,
+                        label = "重新回答",
+                        iconBg = iconBg,
+                        iconTint = iconTint,
+                        textColor = textColor,
+                        onClick = { onRegenerate(message) }
+                    )
                 }
             }
         }
@@ -755,20 +700,33 @@ fun ImageContextMenu(
    if (isVisible) {
        val density = LocalDensity.current
        val configuration = LocalConfiguration.current
+       val isDark = isSystemInDarkTheme()
 
-       val menuWidthPx = with(density) { CONTEXT_MENU_FIXED_WIDTH.toPx() }
+       val menuWidth = 160.dp
+       val menuWidthPx = with(density) { menuWidth.toPx() }
        val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
        val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
+       val estimatedMenuHeightPx = with(density) { (56.dp * 2 + 16.dp).toPx() }
 
-       val estimatedMenuHeightPx = with(density) { (48.dp * 2 + 16.dp).toPx() }
-
-       // 将菜单左上角精确对齐到手指按压位置
+       val fingerVerticalOffsetPx = with(density) { 20.dp.toPx() }
        val rawX = pressOffset.x
-       val rawY = pressOffset.y
- 
+       val rawY = pressOffset.y + fingerVerticalOffsetPx
 
        val finalX = rawX.coerceIn(0f, screenWidthPx - menuWidthPx)
        val finalY = rawY.coerceIn(0f, screenHeightPx - estimatedMenuHeightPx)
+
+       val cardBg = if (isDark) Color(0xFF212121) else Color(0xFFFFFFFF)
+       val borderColor = if (isDark) Color.White.copy(alpha = 0.10f) else Color(0xFF0D0D0D).copy(alpha = 0.05f)
+       val iconBg = if (isDark) Color(0xFF3B3B3B) else Color(0xFFE8E8E8)
+       val textColor = if (isDark) Color.White else Color(0xFF0D0D0D)
+       val iconTint = if (isDark) Color.White else Color(0xFF0D0D0D)
+
+       val scaleAnim = remember { Animatable(0.8f) }
+       val alphaAnim = remember { Animatable(0f) }
+       LaunchedEffect(Unit) {
+           launch { scaleAnim.animateTo(1f, tween(120, easing = CubicBezierEasing(0.0f, 0.0f, 0.2f, 1.0f))) }
+           launch { alphaAnim.animateTo(1f, tween(30, easing = CubicBezierEasing(0.4f, 0.0f, 0.2f, 1.0f))) }
+       }
 
        Popup(
            alignment = Alignment.TopStart,
@@ -782,98 +740,76 @@ fun ImageContextMenu(
            )
        ) {
            Surface(
-               shape = RoundedCornerShape(CONTEXT_MENU_CORNER_RADIUS),
-               color = MaterialTheme.colorScheme.surfaceDim,
-               tonalElevation = 0.dp,
                modifier = Modifier
-                   .width(CONTEXT_MENU_FIXED_WIDTH)
-                   .shadow(
-                       elevation = 8.dp,
-                       shape = RoundedCornerShape(CONTEXT_MENU_CORNER_RADIUS)
-                   )
-                   .padding(1.dp)
-           ) {
-               Column {
-                   val menuVisibility = remember { MutableTransitionState(false) }
-                   LaunchedEffect(isVisible) { menuVisibility.targetState = isVisible }
-
-                   @Composable
-                   fun AnimatedDropdownMenuItem(
-                       visibleState: MutableTransitionState<Boolean>,
-                       delay: Int = 0,
-                       text: @Composable () -> Unit,
-                       onClick: () -> Unit,
-                       leadingIcon: @Composable (() -> Unit)? = null
-                   ) {
-                       AnimatedVisibility(
-                           visibleState = visibleState,
-                           enter = fadeIn(
-                               animationSpec = tween(
-                                   CONTEXT_MENU_ANIMATION_DURATION_MS,
-                                   delayMillis = delay,
-                                   easing = LinearOutSlowInEasing
-                               )
-                           ) + scaleIn(
-                               animationSpec = tween(
-                                   CONTEXT_MENU_ANIMATION_DURATION_MS,
-                                   delayMillis = delay,
-                                   easing = LinearOutSlowInEasing
-                               ),
-                               transformOrigin = TransformOrigin(0f, 0f)
-                           ),
-                           exit = fadeOut(
-                               animationSpec = tween(
-                                   CONTEXT_MENU_ANIMATION_DURATION_MS,
-                                   easing = FastOutLinearInEasing
-                               )
-                           ) + scaleOut(
-                               animationSpec = tween(
-                                   CONTEXT_MENU_ANIMATION_DURATION_MS,
-                                   easing = FastOutLinearInEasing
-                               ),
-                               transformOrigin = TransformOrigin(0f, 0f)
-                           )
-                       ) {
-                           DropdownMenuItem(
-                               text = text,
-                               onClick = onClick,
-                               leadingIcon = leadingIcon,
-                               colors = MenuDefaults.itemColors(
-                                   textColor = MaterialTheme.colorScheme.onSurface,
-                                   leadingIconColor = MaterialTheme.colorScheme.onSurfaceVariant
-                               )
-                           )
-                       }
+                   .width(menuWidth)
+                   .graphicsLayer {
+                       this.scaleX = scaleAnim.value
+                       this.scaleY = scaleAnim.value
+                       this.alpha = alphaAnim.value
+                       this.transformOrigin = TransformOrigin(0f, 0f)
                    }
-
-                   AnimatedDropdownMenuItem(
-                       menuVisibility,
-                       text = { Text("查看图片") },
-                       onClick = { onView(message) },
-                       leadingIcon = {
-                           Icon(
-                               Icons.Outlined.Image,
-                               "查看图片",
-                               Modifier.size(CONTEXT_MENU_ITEM_ICON_SIZE)
-                           )
-                       }
+                   .shadow(8.dp, RoundedCornerShape(CONTEXT_MENU_CORNER_RADIUS))
+                   .border(1.dp, borderColor, RoundedCornerShape(CONTEXT_MENU_CORNER_RADIUS)),
+               shape = RoundedCornerShape(CONTEXT_MENU_CORNER_RADIUS),
+               color = cardBg
+           ) {
+               Column(modifier = Modifier.padding(vertical = 8.dp)) {
+                   ContextMenuRow(
+                       icon = Icons.Outlined.Image,
+                       label = "查看图片",
+                       iconBg = iconBg,
+                       iconTint = iconTint,
+                       textColor = textColor,
+                       onClick = { onView(message) }
                    )
-
-                   AnimatedDropdownMenuItem(
-                       menuVisibility,
-                       delay = 30,
-                       text = { Text("下载图片") },
-                       onClick = { onDownload(message) },
-                       leadingIcon = {
-                           Icon(
-                               Icons.Outlined.Download,
-                               "下载图片",
-                               Modifier.size(CONTEXT_MENU_ITEM_ICON_SIZE)
-                           )
-                       }
+                   ContextMenuRow(
+                       icon = Icons.Outlined.Download,
+                       label = "下载图片",
+                       iconBg = iconBg,
+                       iconTint = iconTint,
+                       textColor = textColor,
+                       onClick = { onDownload(message) }
                    )
                }
            }
        }
    }
+}
+
+@Composable
+private fun ContextMenuRow(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    iconBg: Color,
+    iconTint: Color,
+    textColor: Color,
+    onClick: () -> Unit
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .background(iconBg, CircleShape),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = null,
+                tint = iconTint,
+                modifier = Modifier.size(CONTEXT_MENU_ITEM_ICON_SIZE)
+            )
+        }
+        Spacer(modifier = Modifier.width(12.dp))
+        Text(
+            text = label,
+            fontSize = 16.sp,
+            color = textColor
+        )
+    }
 }

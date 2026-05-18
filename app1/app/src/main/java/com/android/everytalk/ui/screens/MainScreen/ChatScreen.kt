@@ -630,6 +630,10 @@ fun ChatScreen(
                     showModelSelectionBottomSheet = false
                 },
                 onDismissModelSelection = { showModelSelectionBottomSheet = false },
+                allApiConfigs = availableModels,
+                onConfigModelSelected = { config ->
+                    viewModel.selectConfig(config)
+                },
                 onTitleLongClick = {
                     if (selectedApiConfig != null) {
                         showEditConfigDialog = true
