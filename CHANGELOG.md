@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.18.0](https://github.com/roseforljh/EveryTalk/compare/v1.17.1...v1.18.0) (2026-05-18)
+
+
+### Features
+
+* UI improvements - custom icons, function panel positioning, system prompt border, input animation ([e78c063](https://github.com/roseforljh/EveryTalk/commit/e78c06331e08a242eda11a9228712e85f940ae10))
+* 前端大升级 ([b4cc58c](https://github.com/roseforljh/EveryTalk/commit/b4cc58cf29db7d9ebf1b469384c60eb390c35a14))
+
+
+### Bug Fixes
+
+* 上学的时候抄学霸作业，工作了抄大厂代码01 ([fb01b10](https://github.com/roseforljh/EveryTalk/commit/fb01b10ec5added8d19757c1f0169ae60850cd45))
+* 上学的时候抄学霸作业，工作了抄大厂代码02 ([ea86df8](https://github.com/roseforljh/EveryTalk/commit/ea86df87680f4c2c671eebf0a5a202ec355e5adb))
+* 上学的时候抄学霸作业，工作了抄大厂代码03 ([8307270](https://github.com/roseforljh/EveryTalk/commit/83072702b483f36188823b541334885a54f70acf))
+* 上学的时候抄学霸作业，工作了抄大厂代码04 ([c4ace9c](https://github.com/roseforljh/EveryTalk/commit/c4ace9c2751a68b73c6f25a3db5b5521ab2b5026))
+* 修复 Gemini 思考内容回收 ([fdff339](https://github.com/roseforljh/EveryTalk/commit/fdff339bf4b5278463e7204c85b91535463646ff))
+
 ## [1.17.1](https://github.com/roseforljh/EveryTalk/compare/v1.17.0...v1.17.1) (2026-05-15)
 
 
