@@ -222,6 +222,7 @@ fun McpServerListDialog(
 private fun getServerIcon(name: String): androidx.compose.ui.graphics.vector.ImageVector {
     val lowerName = name.lowercase()
     return when {
+        lowerName.contains("context7") -> Icons.Filled.AutoAwesome
         lowerName.contains("exa") -> Icons.Filled.Search
         lowerName.contains("firecrawl") || lowerName.contains("crawl") -> Icons.Filled.Language
         lowerName.contains("wiki") -> Icons.Filled.MenuBook
@@ -245,12 +246,14 @@ private fun getServerIcon(name: String): androidx.compose.ui.graphics.vector.Ima
 private fun getServerIconColor(name: String): Color {
     val lowerName = name.lowercase()
     return when {
+        lowerName.contains("context7") -> Color(0xFF10B981)
         lowerName.contains("exa") -> Color(0xFF6366F1)
         lowerName.contains("firecrawl") -> Color(0xFFEF4444)
         lowerName.contains("wiki") -> Color(0xFF3B82F6)
         lowerName.contains("news") -> Color(0xFF8B5CF6)
         lowerName.contains("tavily") -> Color(0xFF10B981)
-        else -> MaterialTheme.colorScheme.primary
+        lowerName.contains("code") || lowerName.contains("github") -> Color(0xFFF59E0B)
+        else -> Color(0xFF6B7280)
     }
 }
 
@@ -268,24 +271,26 @@ private fun McpServerItem(
     val iconColor = getServerIconColor(config.name)
     val icon = getServerIcon(config.name)
 
-    val containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
+    val isDarkMode = isSystemInDarkTheme()
+    val containerColor = if (isDarkMode) Color.Black else Color.White
+    val cardBorderColor = if (isDarkMode) Color(0xFF414141) else Color(0xFFF3F3F3)
     val contentColor = MaterialTheme.colorScheme.onSurface
 
-    Card(
+    OutlinedCard(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
-        shape = RoundedCornerShape(20.dp),
-        colors = CardDefaults.cardColors(
+        shape = RoundedCornerShape(24.dp),
+        colors = CardDefaults.outlinedCardColors(
             containerColor = containerColor
         ),
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+        elevation = CardDefaults.outlinedCardElevation(defaultElevation = 0.dp),
         border = BorderStroke(
-            width = 1.25.dp,
+            width = 1.dp,
             color = if (config.enabled && status is McpStatus.Connected)
-                iconColor.copy(alpha = 0.65f)
+                iconColor.copy(alpha = 0.5f)
             else
-                Color.White.copy(alpha = 0.42f)
+                cardBorderColor
         )
     ) {
         Column(

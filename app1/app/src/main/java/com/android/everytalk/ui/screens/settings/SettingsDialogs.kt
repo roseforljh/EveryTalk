@@ -794,7 +794,8 @@ internal fun EditConfigDialog(
         channelMenuTransitionState.targetState = shouldShowChannelMenuLogical
     }
 
-    var isDialogVisible by remember { mutableStateOf(true) }
+    var isDialogVisible by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { isDialogVisible = true }
     val dialogAlpha by animateFloatAsState(
         targetValue = if (isDialogVisible) 1f else 0f,
         animationSpec = tween(140),
@@ -818,15 +819,22 @@ internal fun EditConfigDialog(
         onDismissRequest = { dismissWithAnimation() },
         properties = androidx.compose.ui.window.DialogProperties(
             usePlatformDefaultWidth = false,
-            decorFitsSystemWindows = false
+            decorFitsSystemWindows = false,
+            dismissOnClickOutside = false,
+            dismissOnBackPress = true
         )
     ) {
         val canSubmit = apiKey.isNotBlank() && apiAddress.isNotBlank() && provider.isNotBlank()
-        val maxDialogHeight = LocalConfiguration.current.screenHeightDp.dp - 48.dp
+        val scrimAlpha by animateFloatAsState(
+            targetValue = if (isDialogVisible) 0.32f else 0f,
+            animationSpec = tween(200),
+            label = "editConfigScrimAlpha"
+        )
 
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .background(Color.Black.copy(alpha = scrimAlpha))
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
@@ -841,7 +849,8 @@ internal fun EditConfigDialog(
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = maxDialogHeight)
+                    .wrapContentHeight()
+                    .heightIn(max = (LocalConfiguration.current.screenHeightDp * 0.85f).dp)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,

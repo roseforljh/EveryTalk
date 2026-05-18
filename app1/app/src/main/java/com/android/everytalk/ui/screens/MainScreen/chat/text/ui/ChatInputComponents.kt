@@ -94,7 +94,42 @@ fun OptimizedSelectedItemPreview(
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
             )
-            is SelectedMediaItem.GenericFile, is SelectedMediaItem.Audio -> {
+            is SelectedMediaItem.GenericFile -> {
+                if (mediaItem.mimeType?.startsWith("image/") == true) {
+                    AsyncImage(
+                        model = mediaItem.uri,
+                        contentDescription = mediaItem.displayName,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                } else {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(8.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.Center
+                    ) {
+                        icon?.let {
+                            Icon(
+                                imageVector = it,
+                                contentDescription = text,
+                                modifier = Modifier.size(32.dp),
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                        Spacer(Modifier.height(4.dp))
+                        Text(
+                            text = text,
+                            fontSize = 12.sp,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
+            is SelectedMediaItem.Audio -> {
                 Column(
                     modifier = Modifier
                         .fillMaxSize()
@@ -122,25 +157,23 @@ fun OptimizedSelectedItemPreview(
             }
         }
         
-        IconButton(
-            onClick = onRemoveClicked,
+        Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(1.dp)
-                .size(16.dp)
+                .offset(x = (-2).dp, y = 2.dp)
+                .size(22.dp)
                 .background(
-                    // 小而轻的对比底，避免大片遮挡
-                    color = Color.Black.copy(alpha = 0.32f),
+                    color = Color(0xFF616161),
                     shape = CircleShape
-                ),
-            colors = IconButtonDefaults.iconButtonColors(
-                containerColor = Color.Transparent,
-                contentColor = Color.White
-            )
+                )
+                .clip(CircleShape)
+                .clickable(onClick = onRemoveClicked),
+            contentAlignment = Alignment.Center
         ) {
             Icon(
-                Icons.Filled.Close,
+                painter = androidx.compose.ui.res.painterResource(com.android.everytalk.R.drawable.ic_close_bold),
                 contentDescription = "Remove item",
+                tint = Color.White,
                 modifier = Modifier.size(12.dp)
             )
         }
