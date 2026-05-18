@@ -188,6 +188,7 @@ open class MessageItemsController(
                                 (!expectedHasFooter || cachedFooter?.message?.webSearchResults == message.webSearchResults)
 
                             val cacheValid = cached != null &&
+                                cached.text == message.text &&
                                 cached.reasoning == message.reasoning &&
                                 cached.outputType == message.outputType &&
                                 cached.hasReasoning == hasReasoning &&
@@ -279,6 +280,7 @@ open class MessageItemsController(
                             )
 
                             val cacheValid = cached != null &&
+                                cached.text == message.text &&
                                 cached.reasoning == message.reasoning &&
                                 cached.outputType == message.outputType &&
                                 cached.hasReasoning == hasReasoning &&

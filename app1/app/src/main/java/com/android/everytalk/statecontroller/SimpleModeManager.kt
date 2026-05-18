@@ -341,10 +341,21 @@ class SimpleModeManager(
 
         withContext(Dispatchers.Main.immediate) {
             Log.d(TAG, "🔥 Updating state on Main thread...")
-            
-            clearTextApiState()
+
+            // 只清理流式状态，不调用 clearForNewTextChat()（它会设置临时 conversationId 导致竞态）
+            stateHolder._isTextApiCalling.value = false
+            stateHolder.textApiJob?.cancel()
+            stateHolder.textApiJob = null
+            stateHolder._currentTextStreamingAiMessageId.value = null
+            stateHolder.streamingMessageStateManager.clearAll()
+            stateHolder.textReasoningCompleteMap.clear()
+            stateHolder.textExpandedReasoningStates.clear()
+            stateHolder.textMessageAnimationStates.clear()
+            stateHolder.selectedMediaItems.clear()
+            stateHolder.getApiHandler().clearTextChatResources()
+            android.util.Log.d("ViewModelStateHolder", "Cleared all StreamingBuffers and streaming states for text chat")
+
             // 关键修复：不清除图像模式索引，保持两个模式的历史索引独立
-            // stateHolder._loadedImageGenerationHistoryIndex.value = null  // 删除这行，保持图像模式索引不变
             // 保留图像消息（不在加载文本历史时清空）
             Log.d(TAG, "🔥 Preserved image generation messages (${stateHolder.imageGenerationMessages.size} messages).")
             

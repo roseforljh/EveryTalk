@@ -5,6 +5,7 @@ import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.network.extractThinkTagContent
 import com.android.everytalk.statecontroller.ViewModelStateHolder
+import com.android.everytalk.util.ConversationNameHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -62,6 +63,9 @@ class HistoryManager(
         return filtered.joinToString("||") { messageFingerprint(it) }
     }
 
+    private fun stableConversationId(messages: List<Message>): String? =
+        ConversationNameHelper.resolveStableId(messages)
+
     init {
         scope.launch(Dispatchers.IO) {
             for (req in saveRequestChannel) {
@@ -71,10 +75,44 @@ class HistoryManager(
         }
     }
 
-    private data class SaveRequest(val force: Boolean, val isImageGen: Boolean)
+    private data class SaveRequest(
+        val force: Boolean,
+        val isImageGen: Boolean,
+        val messagesSnapshot: List<Message>,
+        val conversationId: String,
+        val loadedHistoryIndex: Int?,
+        val isDirty: Boolean,
+    )
+
+    private fun buildSaveRequest(force: Boolean, isImageGeneration: Boolean): SaveRequest {
+        return SaveRequest(
+            force = force,
+            isImageGen = isImageGeneration,
+            messagesSnapshot = if (isImageGeneration) {
+                stateHolder.imageGenerationMessages.toList()
+            } else {
+                stateHolder.messages.toList()
+            },
+            conversationId = if (isImageGeneration) {
+                stateHolder._currentImageGenerationConversationId.value
+            } else {
+                stateHolder._currentConversationId.value
+            },
+            loadedHistoryIndex = if (isImageGeneration) {
+                stateHolder._loadedImageGenerationHistoryIndex.value
+            } else {
+                stateHolder._loadedHistoryIndex.value
+            },
+            isDirty = if (isImageGeneration) {
+                stateHolder.isImageConversationDirty.value
+            } else {
+                stateHolder.isTextConversationDirty.value
+            },
+        )
+    }
 
     private suspend fun performSave(req: SaveRequest) {
-        saveCurrentChatToHistoryIfNeededInternal(req.force, req.isImageGen)
+        saveCurrentChatToHistoryIfNeededInternal(req.force, req.isImageGen, req)
     }
 
     private fun filterMessagesForSaving(messagesToFilter: List<Message>): List<Message> {
@@ -148,11 +186,11 @@ class HistoryManager(
     suspend fun saveCurrentChatToHistoryIfNeeded(forceSave: Boolean = false, isImageGeneration: Boolean = false) {
         debouncedSaveJob?.cancel()
         if (forceSave) {
-            saveRequestChannel.send(SaveRequest(force = true, isImageGen = isImageGeneration))
+            saveRequestChannel.send(buildSaveRequest(force = true, isImageGeneration = isImageGeneration))
         } else {
             debouncedSaveJob = scope.launch {
                 delay(DEBOUNCE_SAVE_MS)
-                saveRequestChannel.send(SaveRequest(force = false, isImageGen = isImageGeneration))
+                saveRequestChannel.send(buildSaveRequest(force = false, isImageGeneration = isImageGeneration))
             }
         }
     }
@@ -172,20 +210,38 @@ class HistoryManager(
         }
     }
 
-    private suspend fun saveCurrentChatToHistoryIfNeededInternal(forceSave: Boolean = false, isImageGeneration: Boolean = false): Boolean {
-        val currentMessagesSnapshot = if (isImageGeneration) stateHolder.imageGenerationMessages.toList() else stateHolder.messages.toList()
+    private suspend fun saveCurrentChatToHistoryIfNeededInternal(
+        forceSave: Boolean = false,
+        isImageGeneration: Boolean = false,
+        request: SaveRequest? = null,
+    ): Boolean {
+        val currentMessagesSnapshot = request?.messagesSnapshot
+            ?: if (isImageGeneration) stateHolder.imageGenerationMessages.toList() else stateHolder.messages.toList()
         
-        val currentConversationId = if (isImageGeneration) {
-            stateHolder._currentImageGenerationConversationId.value
-        } else {
-            stateHolder._currentConversationId.value
+        val currentConversationId = request?.conversationId
+            ?: if (isImageGeneration) {
+                stateHolder._currentImageGenerationConversationId.value
+            } else {
+                stateHolder._currentConversationId.value
+            }
+        fun isStillSavingLiveConversation(): Boolean {
+            if (request == null) return true
+            val latestLiveConversationId = if (isImageGeneration) {
+                stateHolder._currentImageGenerationConversationId.value
+            } else {
+                stateHolder._currentConversationId.value
+            }
+            val stableIdFromSnapshot = stableConversationId(filterMessagesForSaving(currentMessagesSnapshot))
+            return currentConversationId == latestLiveConversationId || stableIdFromSnapshot == latestLiveConversationId
         }
 
         val messagesToSave = filterMessagesForSaving(currentMessagesSnapshot)
         var historyListModified = false
         var loadedIndexChanged = false
 
-        val loadedHistoryIndex = if (isImageGeneration) {
+        val loadedHistoryIndex = if (request != null) {
+            request.loadedHistoryIndex
+        } else if (isImageGeneration) {
             stateHolder._loadedImageGenerationHistoryIndex.value
         } else {
             stateHolder._loadedHistoryIndex.value
@@ -197,7 +253,8 @@ class HistoryManager(
             stateHolder.messages.isNotEmpty()
         }
         
-        val isDirty = if (isImageGeneration) stateHolder.isImageConversationDirty.value else stateHolder.isTextConversationDirty.value
+        val isDirty = request?.isDirty
+            ?: if (isImageGeneration) stateHolder.isImageConversationDirty.value else stateHolder.isTextConversationDirty.value
         Log.d(
             TAG_HM,
             "saveCurrent: Mode=${if (isImageGeneration) "IMAGE" else "TEXT"}, Snapshot msgs=${currentMessagesSnapshot.size}, Filtered to save=${messagesToSave.size}, Force=$forceSave, isDirty=$isDirty, CurrentLoadedIdx=$loadedHistoryIndex, HasMessages=$currentModeHasMessages"
@@ -220,7 +277,38 @@ class HistoryManager(
         val historicalConversations = if (isImageGeneration) stateHolder._imageGenerationHistoricalConversations else stateHolder._historicalConversations
         historicalConversations.update { currentHistory ->
             val mutableHistory = currentHistory.toMutableList()
-            val currentLoadedIdx = loadedHistoryIndex
+            val requestedLoadedIdx = loadedHistoryIndex
+            val stableIdFromMessages = stableConversationId(messagesToSave)
+            val expectedStableId = stableIdFromMessages ?: currentConversationId.takeIf { it.isNotBlank() }
+            val requestedHistoryFingerprint = requestedLoadedIdx
+                ?.takeIf { it >= 0 && it < mutableHistory.size }
+                ?.let { conversationFingerprint(mutableHistory[it]) }
+            val requestedLooksLikeDraftOfCurrent = !requestedHistoryFingerprint.isNullOrEmpty() &&
+                (newConversationFingerprint == requestedHistoryFingerprint ||
+                    newConversationFingerprint.startsWith("$requestedHistoryFingerprint||"))
+            val currentLoadedIdx = if (
+                requestedLoadedIdx != null &&
+                requestedLoadedIdx >= 0 &&
+                requestedLoadedIdx < mutableHistory.size &&
+                (
+                    expectedStableId == null ||
+                        stableConversationId(mutableHistory[requestedLoadedIdx]) == expectedStableId ||
+                        requestedLooksLikeDraftOfCurrent
+                )
+            ) {
+                requestedLoadedIdx
+            } else {
+                val resolvedIndex = expectedStableId?.let { stableId ->
+                    mutableHistory.indexOfFirst { stableConversationId(it) == stableId }
+                }?.takeIf { it >= 0 }
+                if (requestedLoadedIdx != null && resolvedIndex != null && resolvedIndex != requestedLoadedIdx) {
+                    Log.w(
+                        TAG_HM,
+                        "Loaded index drift detected. requested=$requestedLoadedIdx, resolved=$resolvedIndex, stableId=$expectedStableId"
+                    )
+                }
+                resolvedIndex
+            }
 
             if (currentLoadedIdx != null && currentLoadedIdx >= 0 && currentLoadedIdx < mutableHistory.size) {
                 val isDirty = if (isImageGeneration) stateHolder.isImageConversationDirty.value else stateHolder.isTextConversationDirty.value
@@ -231,6 +319,7 @@ class HistoryManager(
                     )
                     if (messagesToSave.isNotEmpty()) {
                         mutableHistory[currentLoadedIdx] = messagesToSave
+                        finalNewLoadedIndex = currentLoadedIdx
                         historyListModified = true
                         needsPersistenceSaveOfHistoryList = true
                         Log.d(TAG_HM, "Updated existing history at index=$currentLoadedIdx, fp=${newConversationFingerprint.take(64)}")
@@ -342,7 +431,7 @@ class HistoryManager(
             deduped
         }
  
-        if (loadedHistoryIndex != finalNewLoadedIndex) {
+        if (isStillSavingLiveConversation() && loadedHistoryIndex != finalNewLoadedIndex) {
             if (isImageGeneration) {
                 stateHolder._loadedImageGenerationHistoryIndex.value = finalNewLoadedIndex
             } else {
@@ -360,10 +449,12 @@ class HistoryManager(
                 persistenceManager.saveConversationApiConfigIds(stateHolder.conversationApiConfigIds.value)
             }
 
-            if (isImageGeneration) {
-                stateHolder.isImageConversationDirty.value = false
-            } else {
-                stateHolder.isTextConversationDirty.value = false
+            if (isStillSavingLiveConversation()) {
+                if (isImageGeneration) {
+                    stateHolder.isImageConversationDirty.value = false
+                } else {
+                    stateHolder.isTextConversationDirty.value = false
+                }
             }
             Log.d(TAG_HM, "Chat history list persisted and dirty flag reset.")
         }
@@ -463,7 +554,7 @@ class HistoryManager(
             }
 
             // 切换当前会话ID到稳定key
-            if (currentId != stableId) {
+            if (isStillSavingLiveConversation() && currentId != stableId) {
                 if (isImageGeneration) {
                     stateHolder._currentImageGenerationConversationId.value = stableId
                 } else {
@@ -480,17 +571,21 @@ class HistoryManager(
         }
 
         // 使用“本次保存后的最终索引”决策 last-open，避免首次入库与瞬时旧值导致的双源重复
-        if (messagesToSave.isNotEmpty()) {
-            if (finalNewLoadedIndex == null) {
-                persistenceManager.saveLastOpenChat(messagesToSave, isImageGeneration)
-                Log.d(TAG_HM, "Current conversation saved as last open chat for recovery.")
-            } else {
+        if (isStillSavingLiveConversation()) {
+            if (messagesToSave.isNotEmpty()) {
+                if (finalNewLoadedIndex == null) {
+                    persistenceManager.saveLastOpenChat(messagesToSave, isImageGeneration)
+                    Log.d(TAG_HM, "Current conversation saved as last open chat for recovery.")
+                } else {
+                    persistenceManager.clearLastOpenChat(isImageGeneration)
+                    Log.d(TAG_HM, "\"Last open chat\" record has been cleared in persistence.")
+                }
+            } else if (forceSave) {
                 persistenceManager.clearLastOpenChat(isImageGeneration)
                 Log.d(TAG_HM, "\"Last open chat\" record has been cleared in persistence.")
             }
-        } else if (forceSave) {
-            persistenceManager.clearLastOpenChat(isImageGeneration)
-            Log.d(TAG_HM, "\"Last open chat\" record has been cleared in persistence.")
+        } else {
+            Log.d(TAG_HM, "Skipping live-only persistence side effects for stale save request.")
         }
 
         if (historyListModified) {

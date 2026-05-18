@@ -3,11 +3,14 @@ package com.android.everytalk.statecontroller.facade
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
+import androidx.compose.runtime.snapshots.Snapshot
 import io.mockk.every
 import io.mockk.mockkStatic
 import io.mockk.unmockkAll
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -309,6 +312,44 @@ class MessageItemsControllerStatusTest {
 
         assertTrue(items.any { it is ChatListItem.AiMessage })
         assertFalse(items.any { it is ChatListItem.LoadingIndicator })
+    }
+
+    @Test
+    fun `chat list rebuilds ai item when final text arrives after streaming cache`() = runBlocking {
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.seedStreamingRenderContent("ai-final", "你好！请问有什么我可以帮你的吗？")
+        controller.stateHolder.messages.add(
+            Message(
+                id = "ai-final",
+                text = "",
+                sender = Sender.AI,
+                contentStarted = true
+            )
+        )
+
+        controller.chatListItems.first { it.any { item -> item is ChatListItem.AiMessage } }
+        val updatedItems = async {
+            withTimeout(1_000) {
+                controller.chatListItems.first { chatItems ->
+                    chatItems.filterIsInstance<ChatListItem.AiMessage>().firstOrNull()?.text ==
+                        "你好！请问有什么我可以帮你的吗？"
+                }
+            }
+        }
+        controller.stateHolder.messages.clear()
+        controller.stateHolder.messages.add(
+            Message(
+                id = "ai-final",
+                text = "你好！请问有什么我可以帮你的吗？",
+                sender = Sender.AI,
+                contentStarted = true
+            )
+        )
+        Snapshot.sendApplyNotifications()
+
+        val items = updatedItems.await()
+
+        assertEquals("你好！请问有什么我可以帮你的吗？", items.filterIsInstance<ChatListItem.AiMessage>().first().text)
     }
 
 }

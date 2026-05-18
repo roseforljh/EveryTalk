@@ -416,9 +416,7 @@ val _isStreamingPaused = MutableStateFlow(false)
         cleanupOldConversationParameters()
         
         // 🎯 关键修复：确保ApiHandler中的会话状态完全清理
-        if (::_apiHandler.isInitialized) {
-            _apiHandler.clearTextChatResources()
-        }
+        _apiHandler?.clearTextChatResources()
         isTextConversationDirty.value = false
     }
 
@@ -451,9 +449,7 @@ val _isStreamingPaused = MutableStateFlow(false)
         android.util.Log.d("ViewModelStateHolder", "Cleared all StreamingBuffers and streaming states for image chat")
         
         // 🎯 关键修复：确保ApiHandler中的会话状态完全清理
-        if (::_apiHandler.isInitialized) {
-            _apiHandler.clearImageChatResources()
-        }
+        _apiHandler?.clearImageChatResources()
         isImageConversationDirty.value = false
         applyCurrentImageConversationFunctionToggleState()
     }
@@ -1072,15 +1068,12 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
         _shouldShowImageGenerationError.value = false
         _imageGenerationError.value = null
     }
-    private lateinit var _apiHandler: ApiHandler
+    private var _apiHandler: ApiHandler? = null
     fun setApiHandler(handler: ApiHandler) {
         _apiHandler = handler
     }
 
     fun getApiHandler(): ApiHandler {
-        if (!::_apiHandler.isInitialized) {
-            throw IllegalStateException("ApiHandler not initialized")
-        }
-        return _apiHandler
+        return _apiHandler ?: throw IllegalStateException("ApiHandler not initialized")
     }
 }

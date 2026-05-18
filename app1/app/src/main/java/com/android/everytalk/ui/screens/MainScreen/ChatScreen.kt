@@ -439,7 +439,6 @@ fun ChatScreen(
                         EmptyChatView()
                     }
                     else -> {
-                        val chatListItems by viewModel.chatListItems.collectAsState()
 
                         var stickyHeaderTopPx by remember { mutableFloatStateOf(0f) }
                         val contentPaddingTopPx = with(density) { 8.dp.toPx() }

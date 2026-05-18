@@ -151,25 +151,27 @@ fun ChatMessagesList(
 
     var skipAnimation by remember(scrollSessionKey) { mutableStateOf(true) }
 
+    // 流式期间用快速动画，结束归零用慢动画
+    val isTargetZero = dynamicBottomPaddingTarget <= 0.dp
     val dynamicBottomPaddingAnimated by androidx.compose.animation.core.animateDpAsState(
         targetValue = dynamicBottomPaddingTarget,
-        animationSpec = if (skipAnimation) {
-            androidx.compose.animation.core.snap()
-        } else {
-            androidx.compose.animation.core.tween(
-                durationMillis = 200,
-                easing = androidx.compose.animation.core.CubicBezierEasing(0.25f, 0.1f, 0.25f, 1.0f)
+        animationSpec = when {
+            skipAnimation -> androidx.compose.animation.core.snap()
+            isTargetZero -> androidx.compose.animation.core.tween(
+                durationMillis = 800,
+                easing = androidx.compose.animation.core.CubicBezierEasing(0.22f, 1.0f, 0.36f, 1.0f)
+            )
+            else -> androidx.compose.animation.core.tween(
+                durationMillis = 80,
+                easing = androidx.compose.animation.core.LinearEasing
             )
         },
         finishedListener = { if (skipAnimation) skipAnimation = false },
         label = "dynamicBottomPadding"
     )
 
-    val dynamicBottomPadding = if (isApiCalling) {
-        dynamicBottomPaddingImmediate
-    } else {
-        dynamicBottomPaddingAnimated
-    }
+    // 始终用 animated 值，避免 immediate/animated 切换时的跳变
+    val dynamicBottomPadding = dynamicBottomPaddingAnimated
 
     LaunchedEffect(scrollSessionKey) {
         grokScrollCompleted = true
@@ -181,13 +183,9 @@ fun ChatMessagesList(
     }
     
     LaunchedEffect(isApiCalling) {
-        if (!isApiCalling && dynamicBottomPaddingTarget > 0.dp) {
-            dynamicBottomPaddingTarget = 0.dp
-            dynamicBottomPaddingImmediate = 0.dp
-            android.util.Log.d("GrokScroll", "API done, cleared padding")
-        }
         if (!isApiCalling) {
             pinnedUserMessageId = null
+            // 流式结束后不清零 padding，避免回落。切换会话时由 scrollSessionKey 重置自动清零。
         }
     }
 
@@ -213,7 +211,6 @@ fun ChatMessagesList(
             gap.coerceAtLeast(0)
         }.collect { gapPx ->
             if (gapPx < 0) return@collect
-            if (pinnedUserMessageId != null) return@collect
             val newPadding = with(density) { gapPx.toDp() }
             if (newPadding < dynamicBottomPaddingTarget) {
                 dynamicBottomPaddingImmediate = newPadding
@@ -1033,8 +1030,8 @@ fun AiMessageItem(
             contentColor = MaterialTheme.colorScheme.onSurface,
             shadowElevation = 0.dp
         ) {
-            // 流式结束后不回落：保持 minHeight 不释放，切换会话时 remember(message.id) 自然重置
-            val minHeightModifier = if (lastMeasuredHeightPx > 0) {
+            // 流式期间保持 minHeight 只增不减，防止向上跳；流式结束后不再约束
+            val minHeightModifier = if (isStreaming && lastMeasuredHeightPx > 0) {
                 Modifier.heightIn(min = with(density) { lastMeasuredHeightPx.toDp() })
             } else {
                 Modifier
@@ -1046,7 +1043,10 @@ fun AiMessageItem(
                         vertical = ChatDimensions.BUBBLE_INNER_PADDING_VERTICAL
                     )
                     .onSizeChanged { size ->
-                        if (size.height > lastMeasuredHeightPx) {
+                        if (isStreaming && size.height > lastMeasuredHeightPx) {
+                            lastMeasuredHeightPx = size.height
+                        }
+                        if (!isStreaming) {
                             lastMeasuredHeightPx = size.height
                         }
                     }

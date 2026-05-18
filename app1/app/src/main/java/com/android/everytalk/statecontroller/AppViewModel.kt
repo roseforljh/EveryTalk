@@ -94,6 +94,7 @@ import com.android.everytalk.data.network.OpenAIResponsesClient
 import com.android.everytalk.data.network.WebSearchSupport
 import com.android.everytalk.data.network.WebFetchToolExecutor
 import com.android.everytalk.util.storage.IncrementalBackupManager
+import com.android.everytalk.util.ConversationNameHelper
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -177,6 +178,48 @@ internal suspend fun executeSharedToolCall(
         return result
     }
     return fallbackExecutor(toolName, arguments)
+}
+
+internal fun resolveHistoryIndexAfterSave(
+    requestedIndex: Int,
+    historyBeforeSave: List<List<Message>>,
+    historyAfterSave: List<List<Message>>,
+): Int {
+    val clickedConversation = historyBeforeSave.getOrNull(requestedIndex)
+    val clickedStableId = ConversationNameHelper.resolveStableId(clickedConversation)
+        ?: return requestedIndex
+    val completedDuplicateIndex = resolveCompletedDuplicateIndex(clickedConversation, historyAfterSave)
+    if (completedDuplicateIndex != null) return completedDuplicateIndex
+    return historyAfterSave.indexOfFirst { conversation ->
+        ConversationNameHelper.resolveStableId(conversation) == clickedStableId
+    }.takeIf { it >= 0 } ?: requestedIndex
+}
+
+private fun resolveCompletedDuplicateIndex(
+    clickedConversation: List<Message>?,
+    historyAfterSave: List<List<Message>>,
+): Int? {
+    if (clickedConversation.isNullOrEmpty()) return null
+    val clickedFingerprint = conversationDraftFingerprint(clickedConversation)
+    if (clickedFingerprint.isBlank()) return null
+    return historyAfterSave.indexOfFirst { conversation ->
+        conversation.size > clickedConversation.size &&
+            conversationDraftFingerprint(conversation).startsWith("$clickedFingerprint||")
+    }.takeIf { it >= 0 }
+}
+
+private fun conversationDraftFingerprint(messages: List<Message>): String {
+    return messages
+        .filter { it.sender != Sender.System }
+        .joinToString("||") { message ->
+            val senderTag = when (message.sender) {
+                Sender.User -> "U"
+                Sender.AI -> "A"
+                Sender.System -> "S"
+                else -> "O"
+            }
+            listOf(senderTag, message.text.trim(), message.reasoning.orEmpty().trim()).joinToString("::")
+        }
 }
 
 // Constructor changed: removed dataSource
@@ -1666,7 +1709,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         dismissEditDialog()
         dismissSourcesDialog()
         apiHandler.cancelCurrentApiJob("加载文本模式历史索引 $index", isNewMessageSend = false, isImageGeneration = false)
-        historyController.loadTextHistory(index)
+        // 先同步保存当前会话，确保切换前最新 AI 回复已写入历史列表
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val historyBeforeSave = stateHolder._historicalConversations.value
+            historyManager.saveCurrentChatToHistoryNow(forceSave = true, isImageGeneration = false)
+            val resolvedIndex = resolveHistoryIndexAfterSave(
+                requestedIndex = index,
+                historyBeforeSave = historyBeforeSave,
+                historyAfterSave = stateHolder._historicalConversations.value,
+            )
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                historyController.loadTextHistory(resolvedIndex)
+            }
+        }
     }
 
     fun loadImageGenerationConversationFromHistory(index: Int) {
