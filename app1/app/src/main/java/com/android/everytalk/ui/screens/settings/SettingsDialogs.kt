@@ -844,13 +844,13 @@ internal fun EditConfigDialog(
                 .navigationBarsPadding()
                 .imePadding()
                 .padding(horizontal = 16.dp),
-            contentAlignment = Alignment.Center
+            contentAlignment = Alignment.TopCenter
         ) {
             Surface(
                 modifier = Modifier
                     .fillMaxWidth()
                     .wrapContentHeight()
-                    .heightIn(max = (LocalConfiguration.current.screenHeightDp * 0.85f).dp)
+                    .padding(top = 24.dp)
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = null,
