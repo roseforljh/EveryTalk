@@ -132,7 +132,8 @@ fun EnhancedMarkdownText(
         }
         val inStreamingCooldown = !isActuallyStreaming &&
             streamEndTimeMs > 0L &&
-            (android.os.SystemClock.elapsedRealtime() - streamEndTimeMs) < 300L
+            (android.os.SystemClock.elapsedRealtime() - streamEndTimeMs) < 
+                if (content.length < 200) 80L else 300L
         val effectiveIsStreaming = isActuallyStreaming || inStreamingCooldown
 
         var throttledMathContent by remember(resolvedContentKey) { mutableStateOf(content) }

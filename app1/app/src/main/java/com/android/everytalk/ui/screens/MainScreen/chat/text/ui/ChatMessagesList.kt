@@ -1018,16 +1018,6 @@ fun AiMessageItem(
 
     val density = LocalDensity.current
     var lastMeasuredHeightPx by remember(message.id) { mutableStateOf(0) }
-    var heightProtectionActive by remember(message.id) { mutableStateOf(false) }
-
-    LaunchedEffect(isStreaming) {
-        if (isStreaming) {
-            heightProtectionActive = true
-        } else if (heightProtectionActive) {
-            kotlinx.coroutines.delay(500L)
-            heightProtectionActive = false
-        }
-    }
 
     Row(
         modifier = modifier.wrapContentWidth(),
@@ -1043,7 +1033,8 @@ fun AiMessageItem(
             contentColor = MaterialTheme.colorScheme.onSurface,
             shadowElevation = 0.dp
         ) {
-            val minHeightModifier = if ((isStreaming || heightProtectionActive) && lastMeasuredHeightPx > 0) {
+            // 流式结束后不回落：保持 minHeight 不释放，切换会话时 remember(message.id) 自然重置
+            val minHeightModifier = if (lastMeasuredHeightPx > 0) {
                 Modifier.heightIn(min = with(density) { lastMeasuredHeightPx.toDp() })
             } else {
                 Modifier
@@ -1055,10 +1046,7 @@ fun AiMessageItem(
                         vertical = ChatDimensions.BUBBLE_INNER_PADDING_VERTICAL
                     )
                     .onSizeChanged { size ->
-                        if (isStreaming && size.height > lastMeasuredHeightPx) {
-                            lastMeasuredHeightPx = size.height
-                        }
-                        if (!isStreaming && size.height > 0) {
+                        if (size.height > lastMeasuredHeightPx) {
                             lastMeasuredHeightPx = size.height
                         }
                     }

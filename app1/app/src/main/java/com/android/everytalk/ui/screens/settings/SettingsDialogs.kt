@@ -1,6 +1,7 @@
 package com.android.everytalk.ui.screens.settings
 
 import android.util.Log
+import android.view.WindowManager
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.animateFloatAsState
@@ -31,6 +32,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.painterResource
 import com.android.everytalk.R
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -51,6 +53,7 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.input.ImeAction
@@ -58,6 +61,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.DialogWindowProvider
 import androidx.compose.ui.window.PopupProperties
 import com.android.everytalk.data.DataClass.ModalityType
 import com.android.everytalk.data.network.ExternalWebSearchProvider
@@ -798,19 +802,19 @@ internal fun EditConfigDialog(
     LaunchedEffect(Unit) { isDialogVisible = true }
     val dialogAlpha by animateFloatAsState(
         targetValue = if (isDialogVisible) 1f else 0f,
-        animationSpec = tween(140),
+        animationSpec = tween(if (isDialogVisible) 140 else 280),
         label = "editConfigDialogAlpha"
     )
     val dialogScale by animateFloatAsState(
         targetValue = if (isDialogVisible) 1f else 0.96f,
-        animationSpec = tween(140),
+        animationSpec = tween(if (isDialogVisible) 140 else 280),
         label = "editConfigDialogScale"
     )
     val dialogScope = rememberCoroutineScope()
     fun dismissWithAnimation() {
         isDialogVisible = false
         dialogScope.launch {
-            kotlinx.coroutines.delay(140)
+            kotlinx.coroutines.delay(280)
             onDismissRequest()
         }
     }
@@ -819,22 +823,19 @@ internal fun EditConfigDialog(
         onDismissRequest = { dismissWithAnimation() },
         properties = androidx.compose.ui.window.DialogProperties(
             usePlatformDefaultWidth = false,
-            decorFitsSystemWindows = false,
-            dismissOnClickOutside = false,
-            dismissOnBackPress = true
+            decorFitsSystemWindows = false
         )
     ) {
         val canSubmit = apiKey.isNotBlank() && apiAddress.isNotBlank() && provider.isNotBlank()
-        val scrimAlpha by animateFloatAsState(
-            targetValue = if (isDialogVisible) 0.32f else 0f,
-            animationSpec = tween(200),
-            label = "editConfigScrimAlpha"
-        )
+        val dialogWindow = (LocalView.current.parent as? DialogWindowProvider)?.window
+        SideEffect {
+            dialogWindow?.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            dialogWindow?.setDimAmount(0f)
+        }
 
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.Black.copy(alpha = scrimAlpha))
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,

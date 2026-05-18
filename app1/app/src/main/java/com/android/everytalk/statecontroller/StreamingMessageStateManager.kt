@@ -56,9 +56,17 @@ class StreamingMessageStateManager {
 
     private val DEBOUNCE_MS = 60L
     private val MAX_BUFFER_BEFORE_FORCE = 1024
+    
+    // 短内容快速响应：首次 flush 不走 debounce
+    private val FIRST_FLUSH_DEBOUNCE_MS = 8L
+    // 短内容（< 200 字符）使用更短的 flush 间隔
+    private val SHORT_CONTENT_FLUSH_INTERVAL_MS = 30L
+    private val SHORT_CONTENT_THRESHOLD = 200
 
     private val lastFlushTime = ConcurrentHashMap<String, Long>()
     private val MIN_FLUSH_INTERVAL_MS = 90L
+    // 记录每个消息是否已经执行过首次 flush
+    private val hasFirstFlushed = ConcurrentHashMap.newKeySet<String>()
 
     private val contentLengthTracker = ConcurrentHashMap<String, Int>()
 
@@ -97,6 +105,7 @@ class StreamingMessageStateManager {
         )
         pendingBuffers.remove(messageId)
         pendingJobs.remove(messageId)?.cancel()
+        hasFirstFlushed.remove(messageId)
         Log.d("StreamingMessageStateManager", "Started streaming for message: $messageId")
     }
 
@@ -120,9 +129,13 @@ class StreamingMessageStateManager {
             return
         }
 
+        // 首次 flush 使用极短延迟，确保短回复快速显示
+        val isFirstFlush = !hasFirstFlushed.contains(messageId)
+        val effectiveDebounce = if (isFirstFlush) FIRST_FLUSH_DEBOUNCE_MS else DEBOUNCE_MS
+
         pendingJobs.remove(messageId)?.cancel()
         pendingJobs[messageId] = scope.launch {
-            delay(DEBOUNCE_MS)
+            delay(effectiveDebounce)
             flushNow(messageId)
         }
     }
@@ -141,6 +154,7 @@ class StreamingMessageStateManager {
         contentLengthTracker[messageId] = currentLength
 
         val adaptiveInterval = when {
+            currentLength < SHORT_CONTENT_THRESHOLD -> SHORT_CONTENT_FLUSH_INTERVAL_MS
             currentLength < 500 -> MIN_FLUSH_INTERVAL_MS
             currentLength < 2000 -> MIN_FLUSH_INTERVAL_MS + 30L
             currentLength < 5000 -> MIN_FLUSH_INTERVAL_MS + 60L
@@ -165,6 +179,7 @@ class StreamingMessageStateManager {
         PerformanceMonitor.recordStateFlowFlush(messageId, delta.length, currentLength + delta.length)
 
         stateFlow.value = stateFlow.value + delta
+        hasFirstFlushed.add(messageId)
         updateRenderState(messageId, stateFlow.value, isComplete = false)
         lastFlushTime[messageId] = now
     }
@@ -233,6 +248,7 @@ class StreamingMessageStateManager {
         activeStreamingMessages.remove(messageId)
         pendingJobs.remove(messageId)?.cancel()
         pendingBuffers.remove(messageId)
+        hasFirstFlushed.remove(messageId)
         streamingStates.remove(messageId)
         // 不删除 streamingRenderStates：UI 侧仍在 collectAsState 订阅该 Flow，
         // 如果此时 remove，UI 会收到一个全新的空 RenderState，导致一帧内容空白和高度坍塌。
@@ -246,6 +262,7 @@ class StreamingMessageStateManager {
         pendingJobs.values.forEach { it.cancel() }
         pendingJobs.clear()
         pendingBuffers.clear()
+        hasFirstFlushed.clear()
         streamingStates.clear()
         streamingRenderStates.clear()
         Log.d("StreamingMessageStateManager", "Cleared all streaming states (count: $count)")
@@ -292,6 +309,7 @@ class StreamingMessageStateManager {
         pendingJobs.clear()
 
         pendingBuffers.clear()
+        hasFirstFlushed.clear()
         activeStreamingMessages.clear()
         streamingStates.clear()
         streamingRenderStates.clear()
@@ -303,6 +321,8 @@ class StreamingMessageStateManager {
 
     private fun shouldDelayFlush(previous: String, current: String, pendingLength: Int): Boolean {
         if (pendingLength >= MAX_BUFFER_BEFORE_FORCE) return false
+        // 短内容不做 markdown 延迟，优先保证响应速度
+        if (current.length < SHORT_CONTENT_THRESHOLD) return false
         if (isInsideUnclosedFence(current)) return true
         if (endsWithDangerousMarkdownPrefix(current)) return true
         if (hasUnclosedInlineMarkers(current)) return true
