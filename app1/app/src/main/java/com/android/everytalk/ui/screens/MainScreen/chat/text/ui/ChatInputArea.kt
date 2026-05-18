@@ -775,7 +775,34 @@ fun ChatInputArea(
                     }
                 }
 
-                val keepInputSeparated = localText.isNotEmpty() && isFocused
+                // 增强 Gemini 渠道检测
+                val isGeminiChannel = selectedApiConfig?.let { config ->
+                    com.android.everytalk.data.network.WebSearchSupport.isGeminiNativeSearch(config)
+                } == true
+                val supportsNativeWebSearch = selectedApiConfig?.let { config ->
+                    com.android.everytalk.data.network.WebSearchSupport.supportsNativeWebSearch(config)
+                } == true
+                val effectiveWebSearchAvailable = isWebSearchAvailable || supportsNativeWebSearch
+                val hasActiveTags = (isWebSearchEnabled && effectiveWebSearchAvailable) || isMcpEnabled
+
+                // 合并保护：只有输入框完全回到原始状态（无文本、无媒体、无标签）
+                // 且输入框高度动画已完成后，才允许合并
+                val hasAnyContent = localText.isNotEmpty() || selectedMediaItems.isNotEmpty() || hasActiveTags
+                var inputHeightSettled by remember { mutableStateOf(true) }
+                var prevHasAnyContent by remember { mutableStateOf(hasAnyContent) }
+
+                // 当内容从有变无时，标记高度未稳定，等待 animateContentSize 完成
+                LaunchedEffect(hasAnyContent) {
+                    if (prevHasAnyContent && !hasAnyContent) {
+                        // 内容刚清空，等输入框高度动画结束再允许合并
+                        inputHeightSettled = false
+                        delay(300L)
+                        inputHeightSettled = true
+                    }
+                    prevHasAnyContent = hasAnyContent
+                }
+
+                val keepInputSeparated = hasAnyContent || !inputHeightSettled
                 val separationTarget = if (keepInputSeparated) 1f else imeProgress
                 val separationProgress by animateFloatAsState(
                     targetValue = separationTarget,
@@ -870,15 +897,6 @@ fun ChatInputArea(
                     animationSpec = tween(durationMillis = 200),
                     label = "SendButtonIcon"
                 )
-
-                // 增强 Gemini 渠道检测
-                val isGeminiChannel = selectedApiConfig?.let { config ->
-                    com.android.everytalk.data.network.WebSearchSupport.isGeminiNativeSearch(config)
-                } == true
-                val supportsNativeWebSearch = selectedApiConfig?.let { config ->
-                    com.android.everytalk.data.network.WebSearchSupport.supportsNativeWebSearch(config)
-                } == true
-                val effectiveWebSearchAvailable = isWebSearchAvailable || supportsNativeWebSearch
 
                 val inputBackground = if (isDarkTheme) Color(0xFF1F1F1F) else Color(0xFFE8E8E8)
 
@@ -1115,7 +1133,6 @@ fun ChatInputArea(
                             maxLines = 5,
                             decorationBox = { innerTextField ->
                                 val safeVerticalPadding = verticalPadding.coerceAtLeast(0.dp)
-                                val hasActiveTags = (isWebSearchEnabled && effectiveWebSearchAvailable) || isMcpEnabled
                                 Column(
                                     modifier = Modifier
                                         .heightIn(min = inputMinHeight)

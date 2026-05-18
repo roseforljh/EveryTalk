@@ -3,6 +3,8 @@ package com.android.everytalk.ui.screens.settings
 import android.util.Log
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -12,6 +14,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -31,7 +34,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -40,6 +45,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
@@ -787,31 +794,76 @@ internal fun EditConfigDialog(
         channelMenuTransitionState.targetState = shouldShowChannelMenuLogical
     }
 
+    var isDialogVisible by remember { mutableStateOf(true) }
+    val dialogAlpha by animateFloatAsState(
+        targetValue = if (isDialogVisible) 1f else 0f,
+        animationSpec = tween(140),
+        label = "editConfigDialogAlpha"
+    )
+    val dialogScale by animateFloatAsState(
+        targetValue = if (isDialogVisible) 1f else 0.96f,
+        animationSpec = tween(140),
+        label = "editConfigDialogScale"
+    )
+    val dialogScope = rememberCoroutineScope()
+    fun dismissWithAnimation() {
+        isDialogVisible = false
+        dialogScope.launch {
+            kotlinx.coroutines.delay(140)
+            onDismissRequest()
+        }
+    }
+
     Dialog(
-        onDismissRequest = onDismissRequest,
+        onDismissRequest = { dismissWithAnimation() },
         properties = androidx.compose.ui.window.DialogProperties(
             usePlatformDefaultWidth = false,
             decorFitsSystemWindows = false
         )
     ) {
         val canSubmit = apiKey.isNotBlank() && apiAddress.isNotBlank() && provider.isNotBlank()
+        val maxDialogHeight = LocalConfiguration.current.screenHeightDp.dp - 48.dp
 
-        Surface(
+        Box(
             modifier = Modifier
-                .fillMaxWidth(0.92f)
-                .wrapContentHeight()
+                .fillMaxSize()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = { dismissWithAnimation() }
+                )
                 .statusBarsPadding()
                 .navigationBarsPadding()
                 .imePadding()
-                .border(1.dp, borderColor, RoundedCornerShape(28.dp)),
-            shape = RoundedCornerShape(28.dp),
-            color = dialogBg
+                .padding(horizontal = 16.dp),
+            contentAlignment = Alignment.Center
         ) {
-            Column(
+            Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(24.dp)
+                    .heightIn(max = maxDialogHeight)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = {}
+                    )
+                    .graphicsLayer {
+                        alpha = dialogAlpha
+                        scaleX = dialogScale
+                        scaleY = dialogScale
+                        transformOrigin = TransformOrigin(0.5f, 0.5f)
+                    }
+                    .clip(RoundedCornerShape(28.dp))
+                    .border(1.dp, borderColor, RoundedCornerShape(28.dp)),
+                shape = RoundedCornerShape(28.dp),
+                color = dialogBg
             ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(24.dp)
+                ) {
                 Text(
                     "编辑配置",
                     fontSize = 20.sp,
@@ -821,11 +873,7 @@ internal fun EditConfigDialog(
                 Spacer(modifier = Modifier.height(16.dp))
 
                 Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .weight(1f, fill = false)
-                        .heightIn(max = 380.dp)
-                        .verticalScroll(rememberScrollState())
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     SettingsFieldLabel("模型平台")
                     OutlinedTextField(
@@ -951,7 +999,7 @@ internal fun EditConfigDialog(
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     OutlinedButton(
-                        onClick = onDismissRequest,
+                        onClick = { dismissWithAnimation() },
                         modifier = Modifier
                             .weight(1f)
                             .height(48.dp),
@@ -1002,6 +1050,7 @@ internal fun EditConfigDialog(
                             )
                         )
                     }
+                }
                 }
             }
         }
