@@ -236,7 +236,7 @@ fun SelectedItemPreview(
             )
         ) {
             Icon(
-                painter = painterResource(R.drawable.ic_x),
+                painter = painterResource(R.drawable.ic_close),
                 contentDescription = "Remove item",
                 modifier = Modifier.size(12.dp)
             )
@@ -1253,7 +1253,7 @@ private fun ImageFunctionPanelContent(
             }
             if (hasContent) {
                 ImageFunctionPanelRow(
-                    iconRes = R.drawable.ic_x,
+                    iconRes = R.drawable.ic_close,
                     label = "清除内容",
                     iconBg = iconBg,
                     iconTint = iconTint,

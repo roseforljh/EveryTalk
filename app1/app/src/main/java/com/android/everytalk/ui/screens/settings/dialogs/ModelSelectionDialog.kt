@@ -1,6 +1,9 @@
 package com.android.everytalk.ui.screens.settings.dialogs
 
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -9,21 +12,21 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import com.android.everytalk.R
+import com.android.everytalk.ui.screens.settings.DialogTextFieldColors
+import com.android.everytalk.ui.screens.settings.DialogShape
+import androidx.compose.foundation.background
 
-/**
- * 模型选择对话框
- * 
- * 显示从API获取的模型列表,支持全选或手动选择多个模型
- * 
- * @param showDialog 是否显示对话框
- * @param models 可用的模型列表
- * @param onDismiss 当请求关闭对话框时调用
- * @param onSelectAll 当用户选择添加全部模型时调用
- * @param onSelectModels 当用户选择添加部分模型时调用,参数为选中的模型列表
- * @param onManualInput 当用户选择手动输入时调用
- */
 @Composable
 fun ModelSelectionDialog(
     showDialog: Boolean,
@@ -34,202 +37,228 @@ fun ModelSelectionDialog(
     onManualInput: () -> Unit
 ) {
     if (!showDialog) return
-    
+
+    val isDark = isSystemInDarkTheme()
+    val dialogBg = if (isDark) Color.Black else Color.White
+    val borderColor = if (isDark) Color(0xFF414141) else Color(0xFFF3F3F3)
+    val contentColor = if (isDark) Color.White else Color(0xFF0D0D0D)
+    val subtextColor = if (isDark) Color.White.copy(alpha = 0.6f) else Color(0xFF0D0D0D).copy(alpha = 0.6f)
+    val selectedColor = if (isDark) Color(0xFF6EB5FF) else Color(0xFF3B82F6)
+
     var selectedModels by remember { mutableStateOf(setOf<String>()) }
     var searchText by remember { mutableStateOf("") }
-    
-    // 重置选中状态当对话框显示时
+
     LaunchedEffect(showDialog) {
         if (showDialog) {
             selectedModels = emptySet()
             searchText = ""
         }
     }
-    
+
     val filteredModels = remember(models, searchText) {
-        if (searchText.isBlank()) {
-            models
-        } else {
-            models.filter { it.contains(searchText, ignoreCase = true) }
-        }
+        if (searchText.isBlank()) models
+        else models.filter { it.contains(searchText, ignoreCase = true) }
     }
-    
-    AlertDialog(
+
+    Dialog(
         onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(32.dp),
-        title = { 
-            Column {
-                Text(
-                    "选择模型",
-                    style = MaterialTheme.typography.titleLarge
-                )
-                Spacer(modifier = Modifier.height(4.dp))
-                Text(
-                    "${models.size} 个可用",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Spacer(modifier = Modifier.height(8.dp))
+        properties = DialogProperties(usePlatformDefaultWidth = false)
+    ) {
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth(0.9f)
+                .fillMaxHeight(0.75f)
+                .border(1.dp, borderColor, RoundedCornerShape(28.dp)),
+            shape = RoundedCornerShape(28.dp),
+            color = dialogBg
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(24.dp)
+            ) {
+                // 标题行
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column {
+                        Text(
+                            "选择模型",
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = contentColor
+                        )
+                        Text(
+                            "${models.size} 个可用",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = subtextColor
+                        )
+                    }
+                    TextButton(
+                        onClick = {
+                            selectedModels = if (selectedModels.size == models.size) emptySet()
+                            else models.toSet()
+                        }
+                    ) {
+                        Text(
+                            if (selectedModels.size == models.size) "取消全选" else "全选",
+                            color = contentColor,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
                 // 搜索框
                 OutlinedTextField(
                     value = searchText,
                     onValueChange = { searchText = it },
-                    placeholder = { Text("搜索模型...") },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = true,
-                    shape = RoundedCornerShape(12.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                        focusedBorderColor = MaterialTheme.colorScheme.primary,
-                        unfocusedBorderColor = MaterialTheme.colorScheme.outline
-                    )
-                )
-            }
-        },
-        text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(320.dp)
-            ) {
-                // 全选按钮
-                Row(
+                    placeholder = { Text("搜索...", style = MaterialTheme.typography.bodySmall) },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { 
-                            selectedModels = if (selectedModels.size == models.size) {
-                                emptySet()
-                            } else {
-                                models.toSet()
+                        .height(48.dp),
+                    singleLine = true,
+                    shape = DialogShape,
+                    colors = DialogTextFieldColors,
+                    textStyle = MaterialTheme.typography.bodySmall
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // 模型列表
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                ) {
+                    if (filteredModels.isEmpty()) {
+                        Box(
+                            modifier = Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                if (searchText.isBlank()) "没有可用的模型" else "没有匹配的模型",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = subtextColor
+                            )
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxSize(),
+                            contentPadding = PaddingValues(top = 8.dp, bottom = 8.dp)
+                        ) {
+                            items(filteredModels) { model ->
+                                val isSelected = model in selectedModels
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            selectedModels = if (isSelected)
+                                                selectedModels - model
+                                            else
+                                                selectedModels + model
+                                        }
+                                        .padding(vertical = 12.dp, horizontal = 8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.Center
+                                ) {
+                                    if (isSelected) {
+                                        Icon(
+                                            painter = painterResource(R.drawable.ic_check),
+                                            contentDescription = null,
+                                            tint = selectedColor,
+                                            modifier = Modifier.size(18.dp)
+                                        )
+                                        Spacer(modifier = Modifier.width(8.dp))
+                                    }
+                                    Text(
+                                        text = model,
+                                        fontSize = 15.sp,
+                                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
+                                        color = if (isSelected) selectedColor else contentColor,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        textAlign = TextAlign.Center
+                                    )
+                                }
                             }
                         }
-                        .padding(vertical = 12.dp, horizontal = 8.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Checkbox(
-                        checked = selectedModels.size == models.size && models.isNotEmpty(),
-                        onCheckedChange = null
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        "全选 (${selectedModels.size}/${models.size})",
-                        style = MaterialTheme.typography.bodyLarge
-                    )
-                }
-                
-                HorizontalDivider()
-                
-                Spacer(modifier = Modifier.height(8.dp))
-                
-                // 模型列表
-                if (filteredModels.isEmpty()) {
+                    }
+
+                    // 顶部渐变
                     Box(
                         modifier = Modifier
-                            .fillMaxSize()
-                            .padding(16.dp),
-                        contentAlignment = Alignment.Center
+                            .align(Alignment.TopCenter)
+                            .fillMaxWidth()
+                            .height(20.dp)
+                            .background(
+                                brush = Brush.verticalGradient(
+                                    colors = listOf(dialogBg, dialogBg.copy(alpha = 0f))
+                                )
+                            )
+                    )
+
+                    // 底部渐变
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .fillMaxWidth()
+                            .height(32.dp)
+                            .background(
+                                brush = Brush.verticalGradient(
+                                    colors = listOf(dialogBg.copy(alpha = 0f), dialogBg)
+                                )
+                            )
+                    )
+                }
+
+                // 底部按钮（紧贴列表下方）
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        modifier = Modifier.weight(1f).height(44.dp),
+                        shape = RoundedCornerShape(22.dp),
+                        colors = ButtonDefaults.outlinedButtonColors(
+                            containerColor = Color.Transparent,
+                            contentColor = contentColor
+                        ),
+                        border = BorderStroke(1.dp, borderColor)
+                    ) {
+                        Text("取消", fontWeight = FontWeight.SemiBold)
+                    }
+                    Button(
+                        onClick = {
+                            if (selectedModels.isNotEmpty()) {
+                                onSelectModels(selectedModels.toList())
+                            } else {
+                                onSelectAll()
+                            }
+                            onDismiss()
+                        },
+                        enabled = selectedModels.isNotEmpty() || models.isNotEmpty(),
+                        modifier = Modifier.weight(1f).height(44.dp),
+                        shape = RoundedCornerShape(22.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = contentColor,
+                            contentColor = dialogBg,
+                            disabledContainerColor = borderColor,
+                            disabledContentColor = subtextColor
+                        )
                     ) {
                         Text(
-                            if (searchText.isBlank()) "没有可用的模型" else "没有匹配的模型",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            if (selectedModels.isEmpty()) "全部添加" else "添加 (${selectedModels.size})",
+                            fontWeight = FontWeight.SemiBold
                         )
-                    }
-                } else {
-                    LazyColumn(
-                        modifier = Modifier.weight(1f),
-                        contentPadding = PaddingValues(vertical = 4.dp)
-                    ) {
-                        items(filteredModels) { model ->
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable {
-                                        selectedModels = if (model in selectedModels) {
-                                            selectedModels - model
-                                        } else {
-                                            selectedModels + model
-                                        }
-                                    }
-                                    .padding(vertical = 8.dp, horizontal = 8.dp),
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Checkbox(
-                                    checked = model in selectedModels,
-                                    onCheckedChange = null
-                                )
-                                Spacer(modifier = Modifier.width(8.dp))
-                                Text(
-                                    model,
-                                    style = MaterialTheme.typography.bodyMedium
-                                )
-                            }
-                        }
                     }
                 }
             }
-        },
-        confirmButton = {
-            Column(
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    FilledTonalButton(
-                        onClick = {
-                            onSelectAll()
-                            onDismiss()
-                        },
-                        enabled = models.isNotEmpty(),
-                        shape = RoundedCornerShape(20.dp),
-                        modifier = Modifier.height(52.dp).padding(horizontal = 4.dp),
-                        colors = ButtonDefaults.filledTonalButtonColors(
-                            containerColor = MaterialTheme.colorScheme.primaryContainer,
-                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                        )
-                    ) {
-                        Text("添加全部", fontWeight = FontWeight.Bold)
-                    }
-                    FilledTonalButton(
-                        onClick = {
-                            onSelectModels(selectedModels.toList())
-                            onDismiss()
-                        },
-                        enabled = selectedModels.isNotEmpty(),
-                        shape = RoundedCornerShape(20.dp),
-                        modifier = Modifier.height(52.dp).padding(horizontal = 4.dp),
-                        colors = ButtonDefaults.filledTonalButtonColors(
-                            containerColor = MaterialTheme.colorScheme.primaryContainer,
-                            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
-                            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                        )
-                    ) {
-                        Text("添加选中 (${selectedModels.size})", fontWeight = FontWeight.Bold)
-                    }
-                }
-            }
-        },
-        dismissButton = {
-            Column(
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                TextButton(
-                    onClick = onDismiss,
-                    shape = RoundedCornerShape(20.dp),
-                    modifier = Modifier.height(52.dp).padding(horizontal = 4.dp)
-                ) {
-                    Text("取消", fontWeight = FontWeight.Medium)
-                }
-            }
-        },
-        containerColor = MaterialTheme.colorScheme.surface,
-        titleContentColor = MaterialTheme.colorScheme.onSurface,
-        textContentColor = MaterialTheme.colorScheme.onSurface
-    )
+        }
+    }
 }

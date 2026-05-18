@@ -7,10 +7,12 @@ import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -23,6 +25,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.unit.Velocity
+import androidx.compose.ui.unit.Dp
 import androidx.compose.material3.*
 import androidx.compose.material3.surfaceColorAtElevation
 import androidx.compose.runtime.*
@@ -30,11 +33,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import kotlinx.coroutines.launch
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.ModalityType
@@ -44,7 +52,7 @@ import com.android.everytalk.data.network.ExternalWebSearchProviderConfig
 @SuppressLint("ConfigurationScreenWidthHeight")
 @OptIn(ExperimentalMaterial3Api::class)
 
-// 顶层默认配置卡片（供空列表时调用）
+// 顶层默认配置卡片(供空列表时调用)
 @Composable
 private fun DefaultPinnedCard(
     onActivate: () -> Unit,
@@ -77,7 +85,7 @@ private fun DefaultPinnedCard(
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        text = "一键启用平台“默认”配置。密钥与地址由后端安全注入。",
+                        text = "一键启用平台默认配置。密钥与地址由后端安全注入。",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -98,7 +106,7 @@ private fun DefaultPinnedCard(
             Column(modifier = Modifier.fillMaxWidth()) {
                 if (isImageMode) {
                     Text(
-                        text = "将自动添加以下图像模型：",
+                        text = "将自动添加以下图像模型:",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurface
                     )
@@ -110,7 +118,7 @@ private fun DefaultPinnedCard(
                     )
                 } else {
                     Text(
-                        text = "将自动添加以下文本模型：",
+                        text = "将自动添加以下文本模型:",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurface
                     )
@@ -158,41 +166,10 @@ internal fun SettingsScreenContent(
         modifier = Modifier
             .fillMaxSize()
             .padding(paddingValues)
-            .background(Color.Transparent) // 设置为完全透明，实现沉浸式效果
+            .background(Color.Transparent) // 设置为完全透明,实现沉浸式效果
             .verticalScroll(rememberScrollState())
             .padding(horizontal = 20.dp, vertical = 20.dp)
     ) {
-        // 添加配置按钮 - 更现代的设计
-        ElevatedButton(
-            onClick = onAddFullConfigClick,
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(56.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = ButtonDefaults.elevatedButtonColors(
-                containerColor = Color(0xFF616161),
-                contentColor = Color.White
-            ),
-            elevation = ButtonDefaults.elevatedButtonElevation(
-                defaultElevation = 4.dp,
-                pressedElevation = 8.dp
-            )
-        ) {
-            Icon(
-                painter = painterResource(R.drawable.ic_plus),
-                contentDescription = "添加配置",
-                modifier = Modifier.size(24.dp)
-            )
-            Spacer(Modifier.width(12.dp))
-            Text(
-                "添加新配置",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
         if (apiConfigsByApiKeyAndModality.isEmpty()) {
             // 空状态提示 - 更友好的设计
             Column(
@@ -234,26 +211,26 @@ internal fun SettingsScreenContent(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // 默认配置卡片（空列表时展示，点击一键启用“默认”配置）
+                // 默认配置卡片(空列表时展示,点击一键启用"默认"配置)
                 DefaultPinnedCard(
                     onActivate = { onAddFullConfigClick() },
                     isImageMode = isImageMode
                 )
             }
         } else {
-            // 将配置分为默认配置和其他配置，确保默认配置始终置顶
+            // 将配置分为默认配置和其他配置,确保默认配置始终置顶
             val allGroups = apiConfigsByApiKeyAndModality.flatMap { (apiKey, configsByModality) ->
                 configsByModality.map { (modalityType, configsForKeyAndModality) ->
                     Triple(apiKey, modalityType, configsForKeyAndModality)
                 }
             }.filter { it.third.isNotEmpty() }
-            
+
             val (defaultGroups, otherGroups) = allGroups.partition { (_, _, configs) ->
                 val firstCfg = configs.firstOrNull()
                 firstCfg != null && firstCfg.provider.trim().lowercase() in listOf("默认", "default")
             }
-            
-            // 先渲染默认配置组（置顶）
+
+            // 先渲染默认配置组(置顶)
             defaultGroups.forEach { (apiKey, modalityType, configsForKeyAndModality) ->
                 ApiKeyItemGroup(
                     apiKey = apiKey,
@@ -275,11 +252,11 @@ internal fun SettingsScreenContent(
                     onEditConfigClick = { onEditConfigClick(configsForKeyAndModality.first()) },
                     onDeleteGroup = { onDeleteConfigGroup(configsForKeyAndModality.first()) },
                     onRefreshModelsClick = { onRefreshModelsClick(configsForKeyAndModality.first()) },
-                    isRefreshing = isRefreshingModels.contains("$apiKey-${modalityType}")
+                    isRefreshing = isRefreshingModels.contains("${configsForKeyAndModality.first().key}-${modalityType}")
                 )
                 Spacer(Modifier.height(16.dp))
             }
-            
+
             // 再渲染其他配置组
             otherGroups.forEach { (apiKey, modalityType, configsForKeyAndModality) ->
                 ApiKeyItemGroup(
@@ -302,7 +279,7 @@ internal fun SettingsScreenContent(
                     onEditConfigClick = { onEditConfigClick(configsForKeyAndModality.first()) },
                     onDeleteGroup = { onDeleteConfigGroup(configsForKeyAndModality.first()) },
                     onRefreshModelsClick = { onRefreshModelsClick(configsForKeyAndModality.first()) },
-                    isRefreshing = isRefreshingModels.contains("$apiKey-${modalityType}")
+                    isRefreshing = isRefreshingModels.contains("${configsForKeyAndModality.first().key}-${modalityType}")
                 )
                 Spacer(Modifier.height(16.dp))
             }
@@ -316,6 +293,7 @@ internal fun ExternalWebSearchSettingsContent(
     configs: Map<String, ExternalWebSearchProviderConfig>,
     onSelectProvider: (ExternalWebSearchProvider) -> Unit,
     onEditProvider: (ExternalWebSearchProvider) -> Unit,
+    topContentPadding: Dp = 0.dp,
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "breath")
     val breatheAlpha by infiniteTransition.animateFloat(
@@ -332,7 +310,8 @@ internal fun ExternalWebSearchSettingsContent(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp, vertical = 20.dp),
+            .padding(horizontal = 20.dp)
+            .padding(top = topContentPadding + 20.dp, bottom = 20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         ExternalWebSearchProvider.entries.forEach { provider ->
@@ -430,17 +409,17 @@ private fun ApiKeyItemGroup(
     onRefreshModelsClick: () -> Unit,
     isRefreshing: Boolean
 ) {
-    var expandedModels by remember { mutableStateOf(false) }
+    var showModelPopup by remember { mutableStateOf(false) }
     var showConfirmDeleteGroupDialog by remember { mutableStateOf(false) }
-    // 仅拦截“甩动”(fling)的动量，避免外层跟随；不拦截普通滚动，确保列表可正常滚动
+    // 仅拦截"甩动"(fling)的动量,避免外层跟随;不拦截普通滚动,确保列表可正常滚动
     val innerListNestedScroll = remember {
         object : NestedScrollConnection {
             override suspend fun onPreFling(available: Velocity): Velocity {
-                // 消耗所有可用的 fling 速度，阻止向外层传递
+                // 消耗所有可用的 fling 速度,阻止向外层传递
                 return available
             }
             override suspend fun onPostFling(consumed: Velocity, available: Velocity): Velocity {
-                // 同样消耗剩余 fling 动量，彻底避免连带外层
+                // 同样消耗剩余 fling 动量,彻底避免连带外层
                 return available
             }
         }
@@ -452,25 +431,21 @@ private fun ApiKeyItemGroup(
     val connectionSummary = OpenClawSettingsRules.connectionSummaryLabel(providerName, configsInGroup.firstOrNull()?.address.orEmpty())
     val secretSummary = OpenClawSettingsRules.secretSummaryLabel(providerName, apiKey)
     val remoteTargetSummary = OpenClawSettingsRules.remoteTargetLabel(configsInGroup.firstOrNull()?.openClawSessionId.orEmpty())
-    // 默认配置组标识：
-    // - 始终将“默认/default”视为默认组
-    // - 在图像模式下，将“硅基流动/siliconflow”视为默认组（不可删除）
+    // 默认配置组标识:
+    // - 始终将"默认/default"视为默认组
+    // - 在图像模式下,将"硅基流动/siliconflow"视为默认组(不可删除)
     val firstCfg = configsInGroup.firstOrNull()
     val isPinnedGroup = firstCfg != null && OpenClawSettingsRules.isPinnedSettingsGroup(firstCfg.provider)
     val isEditableGroup = firstCfg != null && OpenClawSettingsRules.isSettingsGroupEditable(firstCfg.provider)
     val canExpandModels = firstCfg != null && OpenClawSettingsRules.canExpandSettingsModels(firstCfg.provider)
     val isDarkMode = isSystemInDarkTheme()
-    val cardContainerColor = MaterialTheme.colorScheme.surface
-    val cardBorderColor = if (isDarkMode) {
-        Color.White.copy(alpha = 0.2f)
-    } else {
-        MaterialTheme.colorScheme.outline.copy(alpha = 0.2f)
-    }
-    val cardElevation = 2.dp
+    val cardContainerColor = if (isDarkMode) Color.Black else Color.White
+    val cardBorderColor = if (isDarkMode) Color(0xFF414141) else Color(0xFFF3F3F3)
+    val cardElevation = 0.dp
 
     OutlinedCard(
         modifier = modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(24.dp),
         colors = CardDefaults.outlinedCardColors(
             containerColor = cardContainerColor
         ),
@@ -478,7 +453,7 @@ private fun ApiKeyItemGroup(
             defaultElevation = cardElevation
         ),
         border = androidx.compose.foundation.BorderStroke(
-            width = 2.dp,
+            width = 1.dp,
             color = cardBorderColor
         )
     ) {
@@ -511,14 +486,14 @@ private fun ApiKeyItemGroup(
                         Text(
                             text = displaySubtitle,
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontWeight = FontWeight.Medium,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
                     Spacer(modifier = Modifier.height(4.dp))
-                    // 图像模式“默认”配置卡片内不显示 Key 信息
+                    // 图像模式"默认"配置卡片内不显示 Key 信息
                     if (!isPinnedGroup) {
                         Text(
                             text = connectionSummary,
@@ -538,7 +513,7 @@ private fun ApiKeyItemGroup(
                             Text(
                                 text = remoteTargetSummary,
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.primary,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
                                 fontWeight = FontWeight.Medium
                             )
                         }
@@ -549,7 +524,7 @@ private fun ApiKeyItemGroup(
                     Icon(
                         painter = painterResource(R.drawable.ic_pin),
                         contentDescription = "默认配置(固定)",
-                        tint = MaterialTheme.colorScheme.primary.copy(alpha = 0.7f),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier
                             .size(40.dp)
                             .padding(8.dp)
@@ -563,7 +538,7 @@ private fun ApiKeyItemGroup(
                         Icon(
                             painter = painterResource(R.drawable.ic_remove_circle),
                             contentDescription = "删除配置组",
-                            tint = MaterialTheme.colorScheme.error,
+                            tint = Color(0xFFEF5350).copy(alpha = 0.8f),
                             modifier = Modifier.size(22.dp)
                         )
                     }
@@ -575,50 +550,53 @@ private fun ApiKeyItemGroup(
                 color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
             )
 
-            // 模型列表标题行（图像模式“默认”卡片不可点击，且无点击效果）
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
-                    .clickable(
-                        enabled = canExpandModels,
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null
-                    ) {
-                        if (canExpandModels) {
-                            expandedModels = !expandedModels
-                        }
-                    }
-                    .padding(vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = "模型列表",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Spacer(modifier = Modifier.height(2.dp))
-                    Text(
-                        text = "${configsInGroup.size} 个模型",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
+            // 模型列表标题行
+            Box {
                 Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .clickable(
+                            enabled = canExpandModels,
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) {
+                            if (canExpandModels) {
+                                showModelPopup = true
+                            }
+                        }
+                        .padding(vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // 默认配置和不可展开模型组不显示刷新按钮
-                    if (!isPinnedGroup && canExpandModels) {
-                        if (isRefreshing) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(20.dp),
-                                strokeWidth = 2.dp,
-                                color = MaterialTheme.colorScheme.primary
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = "模型列表",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Spacer(modifier = Modifier.height(2.dp))
+                        Text(
+                            text = "${configsInGroup.size} 个模型",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        if (!isPinnedGroup && canExpandModels) {
+                            val infiniteTransition = rememberInfiniteTransition(label = "refresh_spin")
+                            val rotation by infiniteTransition.animateFloat(
+                                initialValue = 0f,
+                                targetValue = 360f,
+                                animationSpec = infiniteRepeatable(
+                                    animation = tween(800, easing = LinearEasing),
+                                    repeatMode = RepeatMode.Restart
+                                ),
+                                label = "refresh_rotation"
                             )
-                        } else {
                             IconButton(
                                 onClick = onRefreshModelsClick,
                                 modifier = Modifier.size(36.dp)
@@ -626,68 +604,44 @@ private fun ApiKeyItemGroup(
                                 Icon(
                                     painter = painterResource(R.drawable.ic_refresh),
                                     contentDescription = "刷新模型列表",
-                                    tint = MaterialTheme.colorScheme.primary,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier
+                                        .size(20.dp)
+                                        .graphicsLayer {
+                                            rotationZ = if (isRefreshing) rotation else 0f
+                                        }
+                                )
+                            }
+                        }
+                        if (!isPinnedGroup) {
+                            IconButton(
+                                onClick = onAddModelForApiKeyClick,
+                                modifier = Modifier.size(36.dp)
+                            ) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_plus),
+                                    contentDescription = "为此Key和类型添加模型",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(20.dp)
                                 )
                             }
                         }
                     }
-                    // 图像模式“默认”卡片不显示“添加模型”按钮
-                    if (!isPinnedGroup) {
-                        IconButton(
-                            onClick = onAddModelForApiKeyClick,
-                            modifier = Modifier.size(36.dp)
-                        ) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_plus),
-                                contentDescription = "为此Key和类型添加模型",
-                                tint = Color(0xFF4CAF50),
-                                modifier = Modifier.size(20.dp)
-                            )
-                        }
-                    }
                 }
-            }
 
-            AnimatedVisibility(
-                visible = expandedModels,
-                enter = expandVertically(animationSpec = tween(durationMillis = 200)),
-                exit = shrinkVertically(animationSpec = tween(durationMillis = 200)) + fadeOut(
-                    animationSpec = tween(durationMillis = 150)
-                )
-            ) {
-                // 限高 + 内部滚动，避免长列表撑满屏幕
-                if (configsInGroup.isEmpty()) {
-                    Text(
-                        "此分类下暂无模型，点击右上方 \"+\" 添加模型",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(top = 8.dp, bottom = 16.dp),
-                        fontWeight = FontWeight.Normal
+                if (showModelPopup && canExpandModels) {
+                    ModelListPopup(
+                        configs = configsInGroup,
+                        selectedConfigId = selectedConfigIdInApp,
+                        onSelectConfig = onSelectConfig,
+                        onDeleteConfig = onDeleteModelForApiKey,
+                        onDismiss = { showModelPopup = false }
                     )
-                } else {
-                    LazyColumn(
-                        modifier = Modifier
-                            .padding(top = 8.dp)
-                            .heightIn(max = 360.dp),
-                        contentPadding = PaddingValues(vertical = 4.dp)
-                    ) {
-                        items(configsInGroup) { config ->
-                            ModelItem(
-                                config = config,
-                                isSelected = config.id == selectedConfigIdInApp,
-                                onSelect = { onSelectConfig(config) },
-                                onDelete = { onDeleteModelForApiKey(config) }
-                            )
-                        }
-                    }
                 }
             }
         }
     }
-    
+
 
     if (showConfirmDeleteGroupDialog) {
         ConfirmDeleteDialog(
@@ -697,7 +651,7 @@ private fun ApiKeyItemGroup(
                 showConfirmDeleteGroupDialog = false
             },
             title = "删除整个配置组?",
-            text = "您确定要删除 \"$providerName\" 的所有 ${modalityType.displayName} 模型配置吗？\n\n此操作会删除 ${configsInGroup.size} 个模型，且不可撤销。"
+            text = "您确定要删除 \"$providerName\" 的所有 ${modalityType.displayName} 模型配置吗?\n\n此操作会删除 ${configsInGroup.size} 个模型,且不可撤销。"
         )
     }
 }
@@ -744,9 +698,9 @@ private fun ModelItem(
                 MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(20.dp)
         )
-        
+
         Spacer(Modifier.width(12.dp))
-        
+
         // 模型名称
         Column(modifier = Modifier.weight(1f)) {
             Text(
@@ -768,16 +722,16 @@ private fun ModelItem(
                 )
             }
         }
-        
+
         // 删除按钮
         IconButton(
             onClick = { showConfirmDeleteDialog = true },
             modifier = Modifier.size(32.dp)
         ) {
             Icon(
-                painter = painterResource(R.drawable.ic_x),
+                painter = painterResource(R.drawable.ic_close),
                 contentDescription = "删除模型",
-                tint = MaterialTheme.colorScheme.error,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                 modifier = Modifier.size(18.dp)
             )
         }
@@ -791,7 +745,125 @@ private fun ModelItem(
                 showConfirmDeleteDialog = false
             },
             title = "删除模型",
-            text = "您确定要删除模型 \"${config.name.ifEmpty { config.model }}\" 吗？此操作不可撤销。"
+            text = "您确定要删除模型 \"${config.name.ifEmpty { config.model }}\" 吗?此操作不可撤销。"
         )
+    }
+}
+
+@Composable
+private fun ModelListPopup(
+    configs: List<ApiConfig>,
+    selectedConfigId: String?,
+    onSelectConfig: (ApiConfig) -> Unit,
+    onDeleteConfig: (ApiConfig) -> Unit,
+    onDismiss: () -> Unit
+) {
+    val isDark = isSystemInDarkTheme()
+    val cardBg = if (isDark) Color(0xFF212121) else Color(0xFFFFFFFF)
+    val popupBorderColor = if (isDark) Color(0xFF414141) else Color(0xFFF3F3F3)
+    val textColor = if (isDark) Color.White else Color(0xFF0D0D0D)
+    val selectedColor = if (isDark) Color(0xFF6EB5FF) else Color(0xFF3B82F6)
+
+    val scaleAnim = remember { androidx.compose.animation.core.Animatable(0.8f) }
+    val alphaAnim = remember { androidx.compose.animation.core.Animatable(0f) }
+    val emphasizedDecelerate = androidx.compose.animation.core.CubicBezierEasing(0.0f, 0.0f, 0.2f, 1.0f)
+    val decelerateEasing = androidx.compose.animation.core.CubicBezierEasing(0.4f, 0.0f, 0.2f, 1.0f)
+
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.coroutineScope {
+            launch { scaleAnim.animateTo(1f, androidx.compose.animation.core.tween(120, easing = emphasizedDecelerate)) }
+            launch { alphaAnim.animateTo(1f, androidx.compose.animation.core.tween(30, easing = decelerateEasing)) }
+        }
+    }
+
+    androidx.compose.ui.window.Popup(
+        alignment = Alignment.TopCenter,
+        offset = androidx.compose.ui.unit.IntOffset(0, with(androidx.compose.ui.platform.LocalDensity.current) { 48.dp.toPx().toInt() }),
+        onDismissRequest = onDismiss,
+        properties = androidx.compose.ui.window.PopupProperties(focusable = true)
+    ) {
+        Surface(
+            modifier = Modifier
+                .widthIn(min = 220.dp, max = 320.dp)
+                .heightIn(max = 400.dp)
+                .graphicsLayer {
+                    scaleX = scaleAnim.value
+                    scaleY = scaleAnim.value
+                    alpha = alphaAnim.value
+                    transformOrigin = TransformOrigin(0.5f, 0f)
+                }
+                .shadow(
+                    elevation = 8.dp,
+                    shape = RoundedCornerShape(20.dp)
+                )
+                .border(1.dp, popupBorderColor, RoundedCornerShape(20.dp)),
+            shape = RoundedCornerShape(20.dp),
+            color = cardBg
+        ) {
+            if (configs.isEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(24.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = "暂无模型",
+                        fontSize = 16.sp,
+                        color = textColor.copy(alpha = 0.6f)
+                    )
+                }
+            } else {
+                Column(
+                    modifier = Modifier
+                        .verticalScroll(rememberScrollState())
+                        .padding(vertical = 8.dp)
+                ) {
+                    configs.forEach { config ->
+                        val isSelected = config.id == selectedConfigId
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    onSelectConfig(config)
+                                    onDismiss()
+                                }
+                                .padding(horizontal = 16.dp, vertical = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            if (isSelected) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_check),
+                                    contentDescription = null,
+                                    tint = selectedColor,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                                Spacer(modifier = Modifier.width(10.dp))
+                            }
+                            Text(
+                                text = config.name.ifEmpty { config.model },
+                                fontSize = 16.sp,
+                                fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
+                                color = if (isSelected) selectedColor else textColor,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f)
+                            )
+                            IconButton(
+                                onClick = { onDeleteConfig(config) },
+                                modifier = Modifier.size(32.dp)
+                            ) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_trash),
+                                    contentDescription = "删除",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }

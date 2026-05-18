@@ -5,6 +5,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -28,6 +29,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.android.everytalk.data.mcp.*
 import com.android.everytalk.ui.screens.settings.DialogShape
 import com.android.everytalk.ui.screens.settings.DialogTextFieldColors
@@ -80,35 +82,6 @@ fun McpServerListContent(
     }
 
     Column(modifier = modifier.fillMaxSize()) {
-        ElevatedButton(
-            onClick = { showAddDialog = true },
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(bottom = 16.dp)
-                .height(56.dp),
-            shape = RoundedCornerShape(16.dp),
-            colors = ButtonDefaults.elevatedButtonColors(
-                containerColor = Color(0xFF616161),
-                contentColor = Color.White
-            ),
-            elevation = ButtonDefaults.elevatedButtonElevation(
-                defaultElevation = 4.dp,
-                pressedElevation = 8.dp
-            )
-        ) {
-            Icon(
-                Icons.Filled.Add,
-                contentDescription = "添加 MCP 服务器",
-                modifier = Modifier.size(24.dp)
-            )
-            Spacer(Modifier.width(12.dp))
-            Text(
-                "添加 MCP 服务器",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-        }
-
         if (serverStates.isEmpty()) {
             Box(
                 modifier = Modifier
@@ -431,21 +404,31 @@ private fun McpServerToolsDialog(
     serverState: McpServerState,
     onDismiss: () -> Unit
 ) {
+    val isDark = isSystemInDarkTheme()
+    val dlgBg = if (isDark) Color.Black else Color.White
+    val dlgBorder = if (isDark) Color(0xFF414141) else Color(0xFFF3F3F3)
+    val dlgContent = if (isDark) Color.White else Color(0xFF0D0D0D)
+    val dlgSubtext = if (isDark) Color.White.copy(alpha = 0.6f) else Color(0xFF0D0D0D).copy(alpha = 0.6f)
+
     AlertDialog(
         onDismissRequest = onDismiss,
-        shape = DialogShape,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = Modifier.border(1.dp, dlgBorder, RoundedCornerShape(28.dp)),
+        shape = RoundedCornerShape(28.dp),
+        containerColor = dlgBg,
+        titleContentColor = dlgContent,
+        textContentColor = dlgContent,
         title = {
             Column {
                 Text(
                     text = "可用工具",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.Bold
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = dlgContent
                 )
                 Text(
                     text = serverState.config.name,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = dlgSubtext
                 )
             }
         },
@@ -460,40 +443,42 @@ private fun McpServerToolsDialog(
                     Text(
                         text = "暂无可用工具",
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = dlgSubtext
                     )
                 }
             } else {
                 LazyColumn(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(max = 360.dp),
+                        .heightIn(max = 400.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(serverState.tools, key = { it.name }) { tool ->
                         Card(
                             modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(12.dp),
+                            shape = RoundedCornerShape(16.dp),
                             colors = CardDefaults.cardColors(
-                                containerColor = MaterialTheme.colorScheme.surfaceVariant
-                            )
+                                containerColor = if (isDark) Color(0xFF1A1A1A) else Color(0xFFF8F8F8)
+                            ),
+                            border = BorderStroke(1.dp, dlgBorder)
                         ) {
                             Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(12.dp)
+                                    .padding(14.dp)
                             ) {
                                 Text(
                                     text = tool.name,
                                     style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.SemiBold
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = dlgContent
                                 )
                                 tool.description?.takeIf { it.isNotBlank() }?.let { description ->
                                     Spacer(modifier = Modifier.height(4.dp))
                                     Text(
                                         text = description,
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        color = dlgSubtext
                                     )
                                 }
                             }
@@ -503,8 +488,15 @@ private fun McpServerToolsDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("关闭")
+            Button(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(24.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = dlgContent,
+                    contentColor = dlgBg
+                )
+            ) {
+                Text("关闭", fontWeight = FontWeight.SemiBold)
             }
         }
     )
@@ -614,22 +606,27 @@ fun AddMcpServerDialog(
         name.isNotBlank() && apiKey.isNotBlank()
     }
 
+    val isDarkTheme = isSystemInDarkTheme()
+    val mcpDialogBg = if (isDarkTheme) Color.Black else Color.White
+    val mcpBorderColor = if (isDarkTheme) Color(0xFF414141) else Color(0xFFF3F3F3)
+    val mcpContentColor = if (isDarkTheme) Color.White else Color(0xFF0D0D0D)
     val textFieldShape = RoundedCornerShape(16.dp)
 
     AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(28.dp),
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        containerColor = mcpDialogBg,
         modifier = Modifier.border(
-            width = 0.5.dp,
-            color = Color.White.copy(alpha = 0.15f),
+            width = 1.dp,
+            color = mcpBorderColor,
             shape = RoundedCornerShape(28.dp)
         ),
         title = {
             Text(
                 text = if (existingConfig == null) "新建连接" else "编辑连接",
-                style = MaterialTheme.typography.headlineSmall,
-                fontWeight = FontWeight.Bold
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                color = mcpContentColor
             )
         },
         text = {
@@ -800,7 +797,7 @@ fun AddMcpServerDialog(
             }
         },
         confirmButton = {
-            TextButton(
+            Button(
                 onClick = {
                     val finalUrl = if (selectedPreset == McpServerPreset.CUSTOM) {
                         url.trim()
@@ -832,14 +829,32 @@ fun AddMcpServerDialog(
                     )
                     onConfirm(config)
                 },
-                enabled = isValid
+                enabled = isValid,
+                shape = RoundedCornerShape(24.dp),
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = mcpContentColor,
+                    contentColor = mcpDialogBg,
+                    disabledContainerColor = mcpBorderColor,
+                    disabledContentColor = mcpContentColor.copy(alpha = 0.4f)
+                )
             ) {
-                Text(if (existingConfig == null) "添加" else "保存")
+                Text(
+                    if (existingConfig == null) "添加" else "保存",
+                    fontWeight = FontWeight.SemiBold
+                )
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
-                Text("取消")
+            OutlinedButton(
+                onClick = onDismiss,
+                shape = RoundedCornerShape(24.dp),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = Color.Transparent,
+                    contentColor = mcpContentColor
+                ),
+                border = BorderStroke(1.dp, mcpBorderColor)
+            ) {
+                Text("取消", fontWeight = FontWeight.SemiBold)
             }
         }
     )

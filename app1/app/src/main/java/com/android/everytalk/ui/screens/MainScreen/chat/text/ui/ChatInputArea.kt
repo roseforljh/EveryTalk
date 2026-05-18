@@ -1155,7 +1155,7 @@ fun ChatInputArea(
                                                     )
                                                     Spacer(Modifier.width(4.dp))
                                                     Icon(
-                                                        painter = painterResource(R.drawable.ic_x),
+                                                        painter = painterResource(R.drawable.ic_close),
                                                         contentDescription = "关闭联网搜索",
                                                         tint = Color(0xFF66B5FF),
                                                         modifier = Modifier.size(12.dp)
@@ -1187,7 +1187,7 @@ fun ChatInputArea(
                                                     )
                                                     Spacer(Modifier.width(4.dp))
                                                     Icon(
-                                                        painter = painterResource(R.drawable.ic_x),
+                                                        painter = painterResource(R.drawable.ic_close),
                                                         contentDescription = "关闭MCP",
                                                         tint = Color(0xFF66B5FF),
                                                         modifier = Modifier.size(12.dp)

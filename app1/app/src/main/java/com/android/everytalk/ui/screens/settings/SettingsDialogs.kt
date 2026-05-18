@@ -12,6 +12,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -31,6 +32,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.boundsInWindow
@@ -42,30 +44,33 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.PopupProperties
 import com.android.everytalk.data.DataClass.ModalityType
 import com.android.everytalk.data.network.ExternalWebSearchProvider
 
 val DialogTextFieldColors
     @Composable get() = run {
-        val highlightColor = if (isSystemInDarkTheme()) Color.White else MaterialTheme.colorScheme.primary
+        val isDark = isSystemInDarkTheme()
+        val highlightColor = if (isDark) Color.White else MaterialTheme.colorScheme.primary
+        val borderColor = if (isDark) Color(0xFF414141) else Color(0xFFF3F3F3)
         OutlinedTextFieldDefaults.colors(
             focusedTextColor = MaterialTheme.colorScheme.onSurface,
             unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
             disabledTextColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
             cursorColor = highlightColor,
             focusedBorderColor = highlightColor,
-            unfocusedBorderColor = MaterialTheme.colorScheme.outline,
-            disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
+            unfocusedBorderColor = borderColor,
+            disabledBorderColor = borderColor.copy(alpha = 0.5f),
             focusedLabelColor = highlightColor,
             unfocusedLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
             disabledLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
-            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+            focusedContainerColor = Color.Transparent,
+            unfocusedContainerColor = Color.Transparent,
+            disabledContainerColor = Color.Transparent
         )
     }
-val DialogShape = RoundedCornerShape(12.dp)
+val DialogShape = RoundedCornerShape(16.dp)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -77,14 +82,12 @@ internal fun EditExternalWebSearchProviderDialog(
 ) {
     var apiKey by remember(currentApiKey, provider.providerId) { mutableStateOf(currentApiKey) }
     var apiKeyVisible by remember { mutableStateOf(false) }
-    val cancelButtonColor = if (isSystemInDarkTheme()) Color(0xFFFF5252) else Color(0xFFD32F2F)
-    val confirmButtonColor = if (isSystemInDarkTheme()) Color.White else Color(0xFF212121)
-    val confirmButtonTextColor = if (isSystemInDarkTheme()) Color.Black else Color.White
+    val dialogBg = if (isSystemInDarkTheme()) Color.Black else Color.White; val borderColor = if (isSystemInDarkTheme()) Color(0xFF414141) else Color(0xFFF3F3F3); val contentColor = if (isSystemInDarkTheme()) Color.White else Color(0xFF0D0D0D)
 
     AlertDialog(
         onDismissRequest = onDismiss,
         shape = RoundedCornerShape(28.dp),
-        containerColor = MaterialTheme.colorScheme.surface,
+        containerColor = dialogBg,
         title = {
             Text(
                 text = "编辑 ${provider.displayName}",
@@ -170,10 +173,10 @@ internal fun EditExternalWebSearchProviderDialog(
                         .height(48.dp),
                     shape = RoundedCornerShape(24.dp),
                     colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = MaterialTheme.colorScheme.surface,
-                        contentColor = cancelButtonColor
+                        containerColor = dialogBg,
+                        contentColor = contentColor
                     ),
-                    border = BorderStroke(1.dp, cancelButtonColor)
+                    border = BorderStroke(1.dp, borderColor)
                 ) {
                     Text("取消", fontWeight = FontWeight.SemiBold)
                 }
@@ -187,8 +190,8 @@ internal fun EditExternalWebSearchProviderDialog(
                         .height(48.dp),
                     shape = RoundedCornerShape(24.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = confirmButtonColor,
-                        contentColor = confirmButtonTextColor
+                        containerColor = contentColor,
+                        contentColor = dialogBg
                     )
                 ) {
                     Text("保存", fontWeight = FontWeight.SemiBold)
@@ -221,159 +224,77 @@ internal fun AddProviderDialog(
     onDismissRequest: () -> Unit,
     onConfirm: () -> Unit
 ) {
-    // val focusRequester = remember { FocusRequester() } // Removed auto-focus
-
     val isDarkTheme = isSystemInDarkTheme()
-    val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
-    val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
-    val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
+    val dialogBg = if (isDarkTheme) Color.Black else Color.White; val borderColor = if (isDarkTheme) Color(0xFF414141) else Color(0xFFF3F3F3); val contentColor = if (isDarkTheme) Color.White else Color(0xFF0D0D0D)
 
     AlertDialog(
-        modifier = Modifier.wrapContentHeight(),
+        modifier = Modifier
+            .wrapContentHeight()
+            .border(1.dp, borderColor, RoundedCornerShape(28.dp)),
         onDismissRequest = onDismissRequest,
-        shape = RoundedCornerShape(32.dp),
-        containerColor = MaterialTheme.colorScheme.surface,
-        titleContentColor = MaterialTheme.colorScheme.onSurface,
-        textContentColor = MaterialTheme.colorScheme.onSurface,
+        shape = RoundedCornerShape(28.dp),
+        containerColor = dialogBg,
+        titleContentColor = contentColor,
+        textContentColor = contentColor,
         title = {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(bottom = 8.dp)
-            ) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_plus),
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(end = 12.dp).size(24.dp)
-                )
-                Text(
-                    "添加新模型平台",
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-            }
+            Text(
+                "添加新模型平台",
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                color = contentColor
+            )
         },
         text = {
             Column(
                 modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text(
-                    "为自定义API提供商添加一个标识名称，方便后续管理和配置",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    lineHeight = MaterialTheme.typography.bodyMedium.lineHeight * 1.5f
+                SettingsFieldLabel("平台名称")
+                OutlinedTextField(
+                    value = newProviderName,
+                    onValueChange = onNewProviderNameChange,
+                    placeholder = { Text("例如: OpenRouter, Anthropic...") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { if (newProviderName.isNotBlank()) onConfirm() }),
+                    shape = DialogShape,
+                    colors = DialogTextFieldColors
                 )
-                Column(
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    SettingsFieldLabel("平台名称")
-                    OutlinedTextField(
-                        value = newProviderName,
-                        onValueChange = onNewProviderNameChange,
-                        placeholder = { Text("例如: OpenRouter, Anthropic...") },
-                        singleLine = true,
-                        modifier = Modifier
-                            .fillMaxWidth(),
-                            // .focusRequester(focusRequester), // Removed auto-focus
-                        keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
-                        keyboardActions = KeyboardActions(onDone = { if (newProviderName.isNotBlank()) onConfirm() }),
-                        shape = DialogShape,
-                        colors = DialogTextFieldColors
-                    )
-                }
-                // 提示信息
-                if (newProviderName.isNotBlank()) {
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.3f),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                "",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.secondary,
-                                modifier = Modifier.padding(end = 8.dp)
-                            )
-                            Text(
-                                "平台名称: $newProviderName",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
-                    }
-                }
             }
         },
         confirmButton = {
             Row(
-                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // 取消按钮（红色描边）
                 OutlinedButton(
                     onClick = onDismissRequest,
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp),
                     shape = RoundedCornerShape(24.dp),
                     colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = MaterialTheme.colorScheme.surface,
-                        contentColor = cancelButtonColor
+                        containerColor = Color.Transparent,
+                        contentColor = contentColor
                     ),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
+                    border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
                 ) {
-                    Text(
-                        text = "取消",
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    )
+                    Text("取消", fontWeight = FontWeight.SemiBold)
                 }
-
-                // 确定按钮（与语音模式一致）
                 Button(
                     onClick = onConfirm,
                     enabled = newProviderName.isNotBlank(),
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp),
                     shape = RoundedCornerShape(24.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = confirmButtonColor,
-                        contentColor = confirmButtonTextColor,
-                        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                        disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                        containerColor = contentColor,
+                        contentColor = dialogBg,
+                        disabledContainerColor = borderColor,
+                        disabledContentColor = contentColor.copy(alpha = 0.4f)
                     )
                 ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_plus),
-                        contentDescription = null,
-                        modifier = Modifier
-                            .size(20.dp)
-                            .padding(end = 4.dp)
-                    )
-                    Text(
-                        text = "添加平台",
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    )
+                    Text("添加", fontWeight = FontWeight.SemiBold)
                 }
             }
         },
         dismissButton = {}
     )
-
-    // LaunchedEffect(Unit) {
-    //     focusRequester.requestFocus() // Removed auto-focus
-    // }
 }
 
 @Composable
@@ -382,7 +303,7 @@ private fun CustomStyledDropdownMenu(
     onDismissRequest: () -> Unit,
     anchorBounds: Rect?,
     modifier: Modifier = Modifier,
-    yOffsetDp: Dp = 8.dp,
+    yOffsetDp: Dp = 0.dp,
     content: @Composable ColumnScope.() -> Unit
 ) {
     Log.d(
@@ -393,13 +314,16 @@ private fun CustomStyledDropdownMenu(
     if ((transitionState.currentState || transitionState.targetState) && anchorBounds != null) {
         val density = LocalDensity.current
         val menuWidth = with(density) { anchorBounds.width.toDp() }
-        // 使用 DropdownMenu 并设置样式和颜色
+        val isDark = isSystemInDarkTheme()
+        val menuBg = if (isDark) Color(0xFF212121) else Color(0xFFFFFFFF)
+        val menuBorder = if (isDark) Color(0xFF414141) else Color(0xFFF3F3F3)
+
         MaterialTheme(
             shapes = MaterialTheme.shapes.copy(
-                extraSmall = RoundedCornerShape(32.dp)
+                extraSmall = RoundedCornerShape(20.dp)
             ),
             colorScheme = MaterialTheme.colorScheme.copy(
-                surface = MaterialTheme.colorScheme.surfaceContainerHighest
+                surface = menuBg
             )
         ) {
             DropdownMenu(
@@ -407,7 +331,8 @@ private fun CustomStyledDropdownMenu(
                 onDismissRequest = onDismissRequest,
                 modifier = modifier
                     .width(menuWidth)
-                    .heightIn(max = 280.dp),
+                    .heightIn(max = 280.dp)
+                    .border(1.dp, menuBorder, RoundedCornerShape(20.dp)),
                 offset = DpOffset(0.dp, yOffsetDp),
                 properties = PopupProperties(
                     focusable = true,
@@ -450,6 +375,7 @@ internal fun AddNewFullConfigDialog(
         listOf("OpenAI兼容", "Gemini", "OpenClaw", "Codex")
     }
     var selectedChannel by remember { mutableStateOf(channels.first()) }
+    var apiKeyVisible by remember { mutableStateOf(false) }
     // val focusRequesterApiKey = remember { FocusRequester() } // Removed auto-focus
     var textFieldAnchorBounds by remember { mutableStateOf<Rect?>(null) }
     var channelTextFieldAnchorBounds by remember { mutableStateOf<Rect?>(null) }
@@ -457,9 +383,10 @@ internal fun AddNewFullConfigDialog(
    var numInferenceSteps by remember { mutableStateOf("20") }
    var guidanceScale by remember { mutableStateOf("7.5") }
     val isDarkTheme = isSystemInDarkTheme()
-    val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
-    val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
-    val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
+    val dialogBg = if (isDarkTheme) Color.Black else Color.White
+    val borderColor = if (isDarkTheme) Color(0xFF414141) else Color(0xFFF3F3F3)
+    val contentColor = if (isDarkTheme) Color.White else Color(0xFF0D0D0D)
+    val subtextColor = if (isDarkTheme) Color.White.copy(alpha = 0.6f) else Color(0xFF0D0D0D).copy(alpha = 0.6f)
 
     val providerMenuTransitionState = remember { MutableTransitionState(initialState = false) }
     val channelMenuTransitionState = remember { MutableTransitionState(initialState = false) }
@@ -502,38 +429,21 @@ internal fun AddNewFullConfigDialog(
     }
 
     AlertDialog(
-        modifier = Modifier.wrapContentHeight(),
+        modifier = Modifier
+            .wrapContentHeight()
+            .border(1.dp, borderColor, RoundedCornerShape(28.dp)),
         onDismissRequest = onDismissRequest,
-        shape = RoundedCornerShape(32.dp),
-        containerColor = MaterialTheme.colorScheme.surface,
-        titleContentColor = MaterialTheme.colorScheme.onSurface,
-        textContentColor = MaterialTheme.colorScheme.onSurface,
+        shape = RoundedCornerShape(28.dp),
+        containerColor = dialogBg,
+        titleContentColor = contentColor,
+        textContentColor = contentColor,
         title = {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(bottom = 8.dp)
-            ) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_plus),
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(end = 12.dp).size(24.dp)
-                )
-                Column {
-                    Text(
-                        "添加配置",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        "为模型平台配置API访问信息",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 2.dp)
-                    )
-                }
-            }
+            Text(
+                "添加配置",
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                color = contentColor
+            )
         },
         text = {
             val canSubmit = apiKey.isNotBlank()
@@ -541,11 +451,34 @@ internal fun AddNewFullConfigDialog(
                     && provider.isNotBlank()
                     && provider.trim().lowercase() !in listOf("默认","default","default_text")
 
-            Column(modifier = Modifier.wrapContentHeight().imePadding()) {
+            Column(modifier = Modifier.wrapContentHeight()) {
                 Column(
                     modifier = Modifier
                         .weight(1f, fill = false)
+                        .drawWithContent {
+                            drawContent()
+                            // 顶部渐变
+                            drawRect(
+                                brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                                    colors = listOf(dialogBg, dialogBg.copy(alpha = 0f)),
+                                    startY = 0f,
+                                    endY = 48f
+                                ),
+                                size = androidx.compose.ui.geometry.Size(size.width, 48f)
+                            )
+                            // 底部渐变
+                            drawRect(
+                                brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                                    colors = listOf(dialogBg.copy(alpha = 0f), dialogBg),
+                                    startY = size.height - 48f,
+                                    endY = size.height
+                                ),
+                                topLeft = androidx.compose.ui.geometry.Offset(0f, size.height - 48f),
+                                size = androidx.compose.ui.geometry.Size(size.width, 48f)
+                            )
+                        }
                         .verticalScroll(rememberScrollState())
+                        .padding(vertical = 8.dp)
                 ) {
                     SettingsFieldLabel("模型平台")
                     ExposedDropdownMenuBox(
@@ -613,7 +546,7 @@ internal fun AddNewFullConfigDialog(
                                                         modifier = Modifier.size(24.dp)
                                                     ) {
                                                         Icon(
-                                                            painter = painterResource(R.drawable.ic_x),
+                                                            painter = painterResource(R.drawable.ic_close),
                                                             contentDescription = "删除 $providerItem",
                                                             tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                                                         )
@@ -732,8 +665,18 @@ internal fun AddNewFullConfigDialog(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(bottom = 12.dp),
-                                // .focusRequester(focusRequesterApiKey), // Removed auto-focus
                             singleLine = true,
+                            visualTransformation = if (apiKeyVisible) androidx.compose.ui.text.input.VisualTransformation.None else androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                            trailingIcon = {
+                                IconButton(onClick = { apiKeyVisible = !apiKeyVisible }) {
+                                    Icon(
+                                        painter = painterResource(if (apiKeyVisible) R.drawable.ic_eye else R.drawable.ic_eye_off),
+                                        contentDescription = if (apiKeyVisible) "隐藏密钥" else "显示密钥",
+                                        modifier = Modifier.size(20.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                            },
                             keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
                             keyboardActions = KeyboardActions(onDone = {
                                 if (apiKey.isNotBlank() && provider.isNotBlank() && apiAddress.isNotBlank()) {
@@ -761,10 +704,10 @@ internal fun AddNewFullConfigDialog(
                             .height(48.dp),
                         shape = RoundedCornerShape(24.dp),
                         colors = ButtonDefaults.outlinedButtonColors(
-                            containerColor = MaterialTheme.colorScheme.surface,
-                            contentColor = cancelButtonColor
+                            containerColor = dialogBg,
+                            contentColor = contentColor
                         ),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
+                        border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
                     ) {
                         Text(
                             text = "取消",
@@ -796,21 +739,14 @@ internal fun AddNewFullConfigDialog(
                             .height(48.dp),
                         shape = RoundedCornerShape(24.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = confirmButtonColor,
-                            contentColor = confirmButtonTextColor,
+                            containerColor = contentColor,
+                            contentColor = dialogBg,
                             disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
                             disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                         )
                     ) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_plus),
-                            contentDescription = null,
-                            modifier = Modifier
-                                .size(20.dp)
-                                .padding(end = 4.dp)
-                        )
                         Text(
-                            text = "确定添加",
+                            text = "添加",
                             style = MaterialTheme.typography.labelLarge.copy(
                                 fontWeight = FontWeight.SemiBold
                             )
@@ -838,11 +774,13 @@ internal fun EditConfigDialog(
     var provider by remember { mutableStateOf(representativeConfig.provider) }
     var apiAddress by remember { mutableStateOf(representativeConfig.address) }
     var apiKey by remember { mutableStateOf(representativeConfig.key) }
+    var apiKeyVisible by remember { mutableStateOf(false) }
     var selectedChannel by remember { mutableStateOf(representativeConfig.channel) }
     val isDarkTheme = isSystemInDarkTheme()
-    val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
-    val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
-    val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
+    val dialogBg = if (isDarkTheme) Color.Black else Color.White
+    val borderColor = if (isDarkTheme) Color(0xFF414141) else Color(0xFFF3F3F3)
+    val contentColor = if (isDarkTheme) Color.White else Color(0xFF0D0D0D)
+    val subtextColor = if (isDarkTheme) Color.White.copy(alpha = 0.6f) else Color(0xFF0D0D0D).copy(alpha = 0.6f)
 
     val channelTypes = if (isImageMode) {
         listOf("OpenAI兼容", "Gemini")
@@ -860,47 +798,51 @@ internal fun EditConfigDialog(
     }
 
     AlertDialog(
-        modifier = Modifier.wrapContentHeight(),
+        modifier = Modifier
+            .wrapContentHeight()
+            .border(1.dp, borderColor, RoundedCornerShape(28.dp)),
         onDismissRequest = onDismissRequest,
-        shape = RoundedCornerShape(32.dp),
-        containerColor = MaterialTheme.colorScheme.surface,
-        titleContentColor = MaterialTheme.colorScheme.onSurface,
-        textContentColor = MaterialTheme.colorScheme.onSurface,
+        shape = RoundedCornerShape(28.dp),
+        containerColor = dialogBg,
+        titleContentColor = contentColor,
+        textContentColor = contentColor,
         title = {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(bottom = 8.dp)
-            ) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_arrow_up),
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.tertiary,
-                    modifier = Modifier.padding(end = 12.dp).size(24.dp)
-                )
-                Column {
-                    Text(
-                        "编辑配置",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        "修改API访问配置信息",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 2.dp)
-                    )
-                }
-            }
+            Text(
+                "编辑配置",
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                color = contentColor
+            )
         },
         text = {
             val canSubmit = apiKey.isNotBlank() && apiAddress.isNotBlank() && provider.isNotBlank()
 
-            Column(modifier = Modifier.wrapContentHeight().imePadding()) {
+            Column(modifier = Modifier.wrapContentHeight()) {
                 Column(
                     modifier = Modifier
                         .weight(1f, fill = false)
+                        .drawWithContent {
+                            drawContent()
+                            drawRect(
+                                brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                                    colors = listOf(dialogBg, dialogBg.copy(alpha = 0f)),
+                                    startY = 0f,
+                                    endY = 48f
+                                ),
+                                size = androidx.compose.ui.geometry.Size(size.width, 48f)
+                            )
+                            drawRect(
+                                brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                                    colors = listOf(dialogBg.copy(alpha = 0f), dialogBg),
+                                    startY = size.height - 48f,
+                                    endY = size.height
+                                ),
+                                topLeft = androidx.compose.ui.geometry.Offset(0f, size.height - 48f),
+                                size = androidx.compose.ui.geometry.Size(size.width, 48f)
+                            )
+                        }
                         .verticalScroll(rememberScrollState())
+                        .padding(vertical = 8.dp)
                 ) {
                     SettingsFieldLabel("模型平台")
                     OutlinedTextField(
@@ -983,7 +925,7 @@ internal fun EditConfigDialog(
                             Text(
                                 text = "预览: $fullUrlPreview",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.primary,
+                                color = subtextColor,
                                 modifier = Modifier.padding(start = 12.dp, bottom = 12.dp)
                             )
                         }
@@ -997,6 +939,17 @@ internal fun EditConfigDialog(
                             .fillMaxWidth()
                             .padding(bottom = 12.dp),
                         singleLine = true,
+                        visualTransformation = if (apiKeyVisible) androidx.compose.ui.text.input.VisualTransformation.None else androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { apiKeyVisible = !apiKeyVisible }) {
+                                Icon(
+                                    painter = painterResource(if (apiKeyVisible) R.drawable.ic_eye else R.drawable.ic_eye_off),
+                                    contentDescription = if (apiKeyVisible) "隐藏密钥" else "显示密钥",
+                                    modifier = Modifier.size(20.dp),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        },
                         keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
                         keyboardActions = KeyboardActions(onDone = {
                             if (canSubmit) {
@@ -1011,7 +964,7 @@ internal fun EditConfigDialog(
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 8.dp),
+                        .padding(top = 16.dp),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     OutlinedButton(
@@ -1021,10 +974,10 @@ internal fun EditConfigDialog(
                             .height(48.dp),
                         shape = RoundedCornerShape(24.dp),
                         colors = ButtonDefaults.outlinedButtonColors(
-                            containerColor = MaterialTheme.colorScheme.surface,
-                            contentColor = cancelButtonColor
+                            containerColor = Color.Transparent,
+                            contentColor = contentColor
                         ),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
+                        border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
                     ) {
                         Text(
                             text = "取消",
@@ -1053,21 +1006,14 @@ internal fun EditConfigDialog(
                             .height(48.dp),
                         shape = RoundedCornerShape(24.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = confirmButtonColor,
-                            contentColor = confirmButtonTextColor,
-                            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                            containerColor = contentColor,
+                            contentColor = dialogBg,
+                            disabledContainerColor = borderColor,
+                            disabledContentColor = subtextColor
                         )
                     ) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_check),
-                            contentDescription = null,
-                            modifier = Modifier
-                                .size(20.dp)
-                                .padding(end = 4.dp)
-                        )
                         Text(
-                            text = "保存更新",
+                            text = "保存",
                             style = MaterialTheme.typography.labelLarge.copy(
                                 fontWeight = FontWeight.SemiBold
                             )
@@ -1088,95 +1034,65 @@ internal fun ConfirmDeleteDialog(
     title: String,
     text: String
 ) {
+    val isDarkTheme = isSystemInDarkTheme()
+    val dialogBg = if (isDarkTheme) Color.Black else Color.White
+    val borderColor = if (isDarkTheme) Color(0xFF414141) else Color(0xFFF3F3F3)
+    val contentColor = if (isDarkTheme) Color.White else Color(0xFF0D0D0D)
     AlertDialog(
+        modifier = Modifier
+            .wrapContentHeight()
+            .border(1.dp, borderColor, RoundedCornerShape(28.dp)),
         onDismissRequest = onDismissRequest,
-        shape = RoundedCornerShape(32.dp),
-        containerColor = MaterialTheme.colorScheme.surface,
-        titleContentColor = MaterialTheme.colorScheme.onSurface,
-        textContentColor = MaterialTheme.colorScheme.onSurface,
+        shape = RoundedCornerShape(28.dp),
+        containerColor = dialogBg,
+        titleContentColor = contentColor,
+        textContentColor = contentColor,
         title = {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(bottom = 8.dp)
-            ) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_x),
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(end = 12.dp).size(24.dp)
-                )
-                Text(
-                    title,
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-            }
+            Text(
+                title,
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                color = contentColor
+            )
         },
         text = {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+            Text(
+                text,
+                style = MaterialTheme.typography.bodyMedium,
+                color = contentColor.copy(alpha = 0.8f)
+            )
+        },
+        confirmButton = {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text(
-                    text,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    lineHeight = MaterialTheme.typography.bodyMedium.lineHeight * 1.5f
-                )
-                Surface(
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.2f),
-                    modifier = Modifier.fillMaxWidth()
+                OutlinedButton(
+                    onClick = onDismissRequest,
+                    shape = RoundedCornerShape(24.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = Color.Transparent,
+                        contentColor = contentColor
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
                 ) {
-                    Row(
-                        modifier = Modifier.padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Text(
-                            "",
-                            style = MaterialTheme.typography.titleMedium,
-                            modifier = Modifier.padding(end = 8.dp)
-                        )
-                        Text(
-                            "此操作不可撤销，请谨慎操作",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onErrorContainer,
-                            fontWeight = FontWeight.Medium
-                        )
-                    }
+                    Text("取消", fontWeight = FontWeight.SemiBold)
+                }
+                Button(
+                    onClick = {
+                        onConfirm()
+                        onDismissRequest()
+                    },
+                    shape = RoundedCornerShape(24.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFEF5350),
+                        contentColor = Color.White
+                    )
+                ) {
+                    Text("删除", fontWeight = FontWeight.SemiBold)
                 }
             }
         },
-        confirmButton = {
-            FilledTonalButton(
-                onClick = {
-                    onConfirm()
-                    onDismissRequest()
-                },
-                shape = RoundedCornerShape(20.dp),
-                colors = ButtonDefaults.filledTonalButtonColors(
-                    containerColor = MaterialTheme.colorScheme.errorContainer,
-                    contentColor = MaterialTheme.colorScheme.onErrorContainer
-                ),
-                modifier = Modifier.height(52.dp).padding(horizontal = 4.dp)
-            ) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_x),
-                    contentDescription = null,
-                    modifier = Modifier.size(20.dp).padding(end = 4.dp)
-                )
-                Text("确认删除", fontWeight = FontWeight.Bold)
-            }
-        },
-        dismissButton = {
-            TextButton(
-                onClick = onDismissRequest,
-                modifier = Modifier.height(52.dp).padding(horizontal = 4.dp)
-            ) {
-                Text("取消", fontWeight = FontWeight.Medium)
-            }
-        }
+        dismissButton = {}
     )
 }
 
@@ -1189,203 +1105,110 @@ internal fun ImportExportDialog(
     chatHistoryCount: Int,
     imageHistoryCount: Int
 ) {
+    val isDarkTheme = isSystemInDarkTheme()
+    val dialogBg = if (isDarkTheme) Color.Black else Color.White
+    val borderColor = if (isDarkTheme) Color(0xFF414141) else Color(0xFFF3F3F3)
+    val contentColor = if (isDarkTheme) Color.White else Color(0xFF0D0D0D)
+    val subtextColor = if (isDarkTheme) Color.White.copy(alpha = 0.6f) else Color(0xFF0D0D0D).copy(alpha = 0.6f)
     var includeHistory by remember { mutableStateOf(false) }
 
     AlertDialog(
+        modifier = Modifier
+            .wrapContentHeight()
+            .border(1.dp, borderColor, RoundedCornerShape(28.dp)),
         onDismissRequest = onDismissRequest,
         shape = RoundedCornerShape(28.dp),
-        containerColor = MaterialTheme.colorScheme.surface,
-        titleContentColor = MaterialTheme.colorScheme.onSurface,
-        textContentColor = MaterialTheme.colorScheme.onSurface,
+        containerColor = dialogBg,
+        titleContentColor = contentColor,
+        textContentColor = contentColor,
         title = {
             Text(
-                "配置管理",
-                style = MaterialTheme.typography.headlineSmall,
+                "导入 / 导出",
+                fontSize = 20.sp,
                 fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface
+                color = contentColor
             )
         },
         text = {
             Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // 导出配置卡片
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(24.dp),
-                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.15f),
-                    onClick = { onExport(includeHistory) },
-                    enabled = isExportEnabled
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 20.dp, vertical = 20.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                "导出配置",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = if (isExportEnabled)
-                                    MaterialTheme.colorScheme.onSurface
-                                else
-                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                "保存当前配置到文件",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (isExportEnabled)
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                else
-                                    MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                            )
-                        }
-                        Icon(
-                            painter = painterResource(R.drawable.ic_arrow_down),
-                            contentDescription = "导出",
-                            tint = if (isExportEnabled)
-                                MaterialTheme.colorScheme.primary
-                            else
-                                MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
-                            modifier = Modifier.size(32.dp)
-                        )
-                    }
-                }
-
                 // 包含历史选项
-                AnimatedVisibility(
-                    visible = chatHistoryCount > 0 || imageHistoryCount > 0,
-                    enter = expandVertically() + fadeIn(),
-                    exit = shrinkVertically() + fadeOut()
-                ) {
-                    Surface(
+                if (chatHistoryCount > 0 || imageHistoryCount > 0) {
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clip(RoundedCornerShape(16.dp))
-                            .clickable { includeHistory = !includeHistory },
-                        shape = RoundedCornerShape(16.dp),
-                        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+                            .clip(RoundedCornerShape(12.dp))
+                            .clickable { includeHistory = !includeHistory }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Row(
-                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Checkbox(
-                                checked = includeHistory,
-                                onCheckedChange = { includeHistory = it }
+                        Checkbox(
+                            checked = includeHistory,
+                            onCheckedChange = { includeHistory = it },
+                            colors = CheckboxDefaults.colors(
+                                checkedColor = contentColor,
+                                checkmarkColor = dialogBg
                             )
-                            Spacer(Modifier.width(8.dp))
-                            Column {
-                                Text(
-                                    "包含聊天历史",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    "文本: $chatHistoryCount 个会话, 图像: $imageHistoryCount 个会话",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Column {
+                            Text(
+                                "包含聊天历史",
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                color = contentColor
+                            )
+                            Text(
+                                "文本: $chatHistoryCount 个会话, 图像: $imageHistoryCount 个会话",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = subtextColor
+                            )
                         }
                     }
                 }
 
-                // 警告提示
-                AnimatedVisibility(
-                    visible = true,
-                    enter = fadeIn(),
-                    exit = fadeOut()
-                ) {
-                    Surface(
-                        color = MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.2f),
-                        shape = RoundedCornerShape(16.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(16.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                "",
-                                style = MaterialTheme.typography.titleMedium,
-                                modifier = Modifier.padding(end = 12.dp)
-                            )
-                            Text(
-                                "导出文件包含API密钥等敏感信息，请妥善保管",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
-                    }
-                }
-                
-                // 导入配置卡片
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(24.dp),
-                    color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.15f),
-                    onClick = onImport
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 20.dp, vertical = 20.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                "导入配置",
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                "从文件加载配置",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                        Icon(
-                            painter = painterResource(R.drawable.ic_arrow_up),
-                            contentDescription = "导入",
-                            tint = MaterialTheme.colorScheme.secondary,
-                            modifier = Modifier.size(32.dp)
-                        )
-                    }
-                }
-                
-                // 提示信息
                 Text(
-                    "导出的配置文件可在其他设备导入使用",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                    modifier = Modifier.padding(top = 8.dp)
+                    "导出文件包含API密钥等敏感信息，请妥善保管",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = subtextColor
                 )
             }
         },
-        confirmButton = {},
-        dismissButton = {
-            TextButton(
-                onClick = onDismissRequest,
-                shape = RoundedCornerShape(20.dp)
+        confirmButton = {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text(
-                    "关闭",
-                    fontWeight = FontWeight.Medium,
-                    color = MaterialTheme.colorScheme.error
-                )
+                OutlinedButton(
+                    onClick = onImport,
+                    shape = RoundedCornerShape(24.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = Color.Transparent,
+                        contentColor = contentColor
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
+                ) {
+                    Text("导入", fontWeight = FontWeight.SemiBold)
+                }
+                Button(
+                    onClick = { onExport(includeHistory) },
+                    enabled = isExportEnabled,
+                    shape = RoundedCornerShape(24.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = contentColor,
+                        contentColor = dialogBg,
+                        disabledContainerColor = borderColor,
+                        disabledContentColor = subtextColor
+                    )
+                ) {
+                    Text("导出", fontWeight = FontWeight.SemiBold)
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismissRequest) {
+                Text("关闭", color = subtextColor)
             }
         }
     )
@@ -1398,164 +1221,76 @@ internal fun AddModelDialog(
     onConfirm: (String) -> Unit
 ) {
     var modelName by remember { mutableStateOf("") }
-    // val focusRequester = remember { FocusRequester() } // Removed auto-focus
 
     val isDarkTheme = isSystemInDarkTheme()
-    val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
-    val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
-    val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
+    val dialogBg = if (isDarkTheme) Color.Black else Color.White; val borderColor = if (isDarkTheme) Color(0xFF414141) else Color(0xFFF3F3F3); val contentColor = if (isDarkTheme) Color.White else Color(0xFF0D0D0D)
 
     AlertDialog(
+        modifier = Modifier
+            .wrapContentHeight()
+            .border(1.dp, borderColor, RoundedCornerShape(28.dp)),
         onDismissRequest = onDismissRequest,
-        shape = RoundedCornerShape(32.dp),
-        containerColor = MaterialTheme.colorScheme.surface,
-        titleContentColor = MaterialTheme.colorScheme.onSurface,
-        textContentColor = MaterialTheme.colorScheme.onSurface,
+        shape = RoundedCornerShape(28.dp),
+        containerColor = dialogBg,
+        titleContentColor = contentColor,
+        textContentColor = contentColor,
         title = {
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(bottom = 8.dp)
-            ) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_plus),
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.secondary,
-                    modifier = Modifier.padding(end = 12.dp).size(24.dp)
-                )
-                Column {
-                    Text(
-                        "添加新模型",
-                        style = MaterialTheme.typography.headlineSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        "添加模型到当前配置组",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(top = 2.dp)
-                    )
-                }
-            }
+            Text(
+                "添加新模型",
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                color = contentColor
+            )
         },
         text = {
             Column(
                 modifier = Modifier.fillMaxWidth(),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text(
-                    "输入模型的完整名称（例如: gpt-4, claude-3-opus, gemini-pro）",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    lineHeight = MaterialTheme.typography.bodyMedium.lineHeight * 1.5f
+                SettingsFieldLabel("模型名称")
+                OutlinedTextField(
+                    value = modelName,
+                    onValueChange = { modelName = it },
+                    placeholder = { Text("例如: gpt-4-turbo") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(onDone = { if (modelName.isNotBlank()) onConfirm(modelName) }),
+                    shape = DialogShape,
+                    colors = DialogTextFieldColors
                 )
-                Column(
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    SettingsFieldLabel("模型名称")
-                    OutlinedTextField(
-                        value = modelName,
-                        onValueChange = { modelName = it },
-                        placeholder = { Text("例如: gpt-4-turbo") },
-                        singleLine = true,
-                        modifier = Modifier
-                            .fillMaxWidth(),
-                            // .focusRequester(focusRequester), // Removed auto-focus
-                        keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
-                        keyboardActions = KeyboardActions(onDone = { if (modelName.isNotBlank()) onConfirm(modelName) }),
-                        shape = DialogShape,
-                        colors = DialogTextFieldColors
-                    )
-                }
-                // 提示信息
-                if (modelName.isNotBlank()) {
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.3f),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier.padding(12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                "",
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.secondary,
-                                modifier = Modifier.padding(end = 8.dp)
-                            )
-                            Text(
-                                "将添加模型: $modelName",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
-                    }
-                }
             }
         },
         confirmButton = {
             Row(
-                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                // 取消按钮（红色描边）
                 OutlinedButton(
                     onClick = onDismissRequest,
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp),
                     shape = RoundedCornerShape(24.dp),
                     colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = MaterialTheme.colorScheme.surface,
-                        contentColor = cancelButtonColor
+                        containerColor = Color.Transparent,
+                        contentColor = contentColor
                     ),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
+                    border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
                 ) {
-                    Text(
-                        text = "取消",
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    )
+                    Text("取消", fontWeight = FontWeight.SemiBold)
                 }
-
-                // 确定按钮（与语音模式一致）
                 Button(
                     onClick = { onConfirm(modelName) },
                     enabled = modelName.isNotBlank(),
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp),
                     shape = RoundedCornerShape(24.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = confirmButtonColor,
-                        contentColor = confirmButtonTextColor,
-                        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                        disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                        containerColor = contentColor,
+                        contentColor = dialogBg,
+                        disabledContainerColor = borderColor,
+                        disabledContentColor = contentColor.copy(alpha = 0.4f)
                     )
                 ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_plus),
-                        contentDescription = null,
-                        modifier = Modifier
-                            .size(20.dp)
-                            .padding(end = 4.dp)
-                    )
-                    Text(
-                        text = "添加模型",
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    )
+                    Text("添加", fontWeight = FontWeight.SemiBold)
                 }
             }
         },
         dismissButton = {}
     )
-
-    // LaunchedEffect(Unit) {
-    //     focusRequester.requestFocus() // Removed auto-focus
-    // }
 }

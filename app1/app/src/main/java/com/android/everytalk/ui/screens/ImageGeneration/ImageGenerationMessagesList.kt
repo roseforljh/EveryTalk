@@ -1404,7 +1404,7 @@ fun ImageGenerationMessagesList(
                         ) {
                             IconButton(onClick = { isImagePreviewVisible = false }) {
                                 Icon(
-                                    painter = painterResource(R.drawable.ic_x),
+                                    painter = painterResource(R.drawable.ic_close),
                                     contentDescription = "关闭预览",
                                     tint = Color.White,
                                     modifier = Modifier.size(24.dp)

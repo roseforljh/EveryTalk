@@ -372,7 +372,7 @@ fun AppDrawerContent(
                     trailingIcon = {
                         if (currentSearchQuery.isNotEmpty()) {
                             IconButton(onClick = { onSearchQueryChange("") }) {
-                                Icon(painter = painterResource(R.drawable.ic_x), "清除搜索")
+                                Icon(painter = painterResource(R.drawable.ic_close), "清除搜索")
                             }
                         }
                     },
