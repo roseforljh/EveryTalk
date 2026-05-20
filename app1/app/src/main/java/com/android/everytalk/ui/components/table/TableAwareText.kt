@@ -268,7 +268,9 @@ fun TableAwareText(
                         val isTrailingStreamingText = isStreaming && index == parsedParts.lastIndex
                         val trailingLooksLightweightMarkdown = isTrailingStreamingText &&
                             shouldRenderTrailingStreamingTextWithMarkdown(part.content)
-                        val shouldRerouteCompletedFencedText = !isStreaming && containsFencedCodeSyntax(part.content)
+                        val shouldRerouteCompletedFencedText = !isStreaming &&
+                            recursionDepth < 3 &&
+                            containsFencedCodeSyntax(part.content)
                         val shouldUseStableFallback = shouldPreferStableMarkdownFallback(
                             content = part.content,
                             isStreaming = isStreaming,

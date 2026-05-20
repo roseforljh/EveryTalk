@@ -24,6 +24,7 @@ object ContentParser {
     private val fencedBlockLanguageRegex = Regex("^[A-Za-z0-9_+\\-#.]+$")
     private val openingFenceRegex = Regex("^([`~]{3,})([^`~]*)$")
     private val listMarkerRegex = Regex("^\\s{0,3}(?:[-*+]\\s+|\\d+[.)]\\s+)")
+    private val inlineFenceRegex = Regex("(?m)(\\S)([ \\t]*)(`{3,}|~{3,})([a-zA-Z0-9_+\\-#.]*)[ \\t]*$")
 
     /**
      * 解析完整内容。
@@ -31,7 +32,18 @@ object ContentParser {
      */
     fun parseCompleteContent(text: String, isStreaming: Boolean = false): List<ContentPart> {
         if (text.isEmpty()) return emptyList()
-        return parseContent(text)
+        return parseContent(normalizeInlineFences(text))
+    }
+
+    /**
+     * 修复行内围栏标记：将粘在正文后面的 ``` 拆到新行。
+     * 例如 "文本：```python" → "文本：\n```python"
+     */
+    private fun normalizeInlineFences(text: String): String {
+        if (!text.contains("```") && !text.contains("~~~")) return text
+        return inlineFenceRegex.replace(text) { mr ->
+            "${mr.groupValues[1]}\n${mr.groupValues[3]}${mr.groupValues[4]}"
+        }
     }
 
     /**
