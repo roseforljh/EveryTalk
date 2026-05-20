@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.18.2](https://github.com/roseforljh/EveryTalk/compare/v1.18.1...v1.18.2) (2026-05-20)
+
+
+### Bug Fixes
+
+* 修复内联围栏代码块导致 TableAwareText 无限递归 OOM ([05752d1](https://github.com/roseforljh/EveryTalk/commit/05752d114de7070d8e1446868bd8afd6eccb7171))
+
 ## [1.18.1](https://github.com/roseforljh/EveryTalk/compare/v1.18.0...v1.18.1) (2026-05-18)
 
 
