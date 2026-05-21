@@ -19,7 +19,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.Button
@@ -124,7 +123,7 @@ fun SystemPromptDialog(
                     this.scaleY = scaleAnim.value
                 },
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant)
+            border = BorderStroke(1.5.dp, MaterialTheme.colorScheme.outlineVariant)
         ) {
             Column(
                 modifier = Modifier
@@ -266,7 +265,10 @@ fun SystemPromptDialog(
                         colors = ButtonDefaults.buttonColors(
                             containerColor = buttonColor.value,
                             contentColor = contentColor.value
-                        )
+                        ),
+                        border = if (isEngaged) {
+                            BorderStroke(1.5.dp, MaterialTheme.colorScheme.onSurfaceVariant)
+                        } else null
                     ) {
                         if (isEngaged) {
                             Icon(

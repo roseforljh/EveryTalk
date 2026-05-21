@@ -436,7 +436,34 @@ fun ChatScreen(
                         }
                     }
                     messages.isEmpty() -> {
-                        EmptyChatView()
+                        EmptyChatView(
+                            onNavigateToImageGen = {
+                                viewModel.simpleModeManager.setIntendedMode(com.android.everytalk.statecontroller.SimpleModeManager.ModeType.IMAGE)
+                                navController.navigate(Screen.IMAGE_GENERATION_SCREEN) {
+                                    popUpTo(navController.graph.findStartDestination().id) {
+                                        saveState = true
+                                    }
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
+                            },
+                            onNavigateToVoice = {
+                                navController.navigate(Screen.VOICE_INPUT_SCREEN)
+                            },
+                            onNavigateToSettings = {
+                                navController.navigate(Screen.SETTINGS_SCREEN) {
+                                    popUpTo(navController.graph.findStartDestination().id) {
+                                        saveState = true
+                                    }
+                                    launchSingleTop = true
+                                    restoreState = true
+                                }
+                            },
+                            onShowSystemPrompt = {
+                                viewModel.toggleSystemPromptExpanded()
+                                viewModel.showSystemPromptDialog()
+                            }
+                        )
                     }
                     else -> {
 

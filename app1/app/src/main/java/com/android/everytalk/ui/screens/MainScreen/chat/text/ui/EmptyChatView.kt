@@ -3,17 +3,29 @@ package com.android.everytalk.ui.screens.MainScreen.chat.text.ui
 import android.util.Log
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -22,84 +34,222 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.android.everytalk.R
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 
 @Composable
-fun EmptyChatView() {
+fun EmptyChatView(
+    onNavigateToImageGen: () -> Unit,
+    onNavigateToVoice: () -> Unit,
+    onNavigateToSettings: () -> Unit,
+    onShowSystemPrompt: () -> Unit
+) {
     Box(
         Modifier
             .fillMaxSize()
-            .padding(16.dp),
+            .padding(horizontal = 20.dp),
         contentAlignment = Alignment.Center
     ) {
         val isImeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
-        val scale by animateFloatAsState(
-            targetValue = if (isImeVisible) 0.6f else 1.0f,
-            animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing),
-            label = "ScaleAnimation"
+        val imeHeight = WindowInsets.ime.getBottom(LocalDensity.current)
+        val density = LocalDensity.current
+        val imeHeightDp = with(density) { imeHeight.toDp() }
+
+        val contentTranslationY by animateFloatAsState(
+            targetValue = if (isImeVisible) with(density) { -(imeHeightDp / 2.2f).toPx() } else 0f,
+            animationSpec = tween(durationMillis = 280, easing = FastOutSlowInEasing),
+            label = "ContentTranslationY"
+        )
+        val spacerHeight by animateDpAsState(
+            targetValue = if (isImeVisible) 16.dp else 56.dp,
+            animationSpec = tween(durationMillis = 280, easing = FastOutSlowInEasing),
+            label = "SpacerHeight"
         )
 
-        Row(
-            modifier = Modifier.graphicsLayer(
-                scaleX = scale,
-                scaleY = scale
-            ),
-            verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.Center,
+        Column(
+            modifier = Modifier
+                .graphicsLayer {
+                    translationY = contentTranslationY
+                }
+                .fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
         ) {
-            val style = MaterialTheme.typography.displayMedium.copy(
-                fontWeight = FontWeight.ExtraBold,
-            )
-            Text("你好", style = style)
-            val animY = remember { List(3) { Animatable(0f) } }
-            val coroutineScope = rememberCoroutineScope()
-            val density = androidx.compose.ui.platform.LocalDensity.current
+            Row(
+                verticalAlignment = Alignment.Bottom,
+                horizontalArrangement = Arrangement.Center,
+            ) {
+                val style = MaterialTheme.typography.headlineMedium.copy(
+                    fontWeight = FontWeight.Bold,
+                )
+                Text("EveryTalk", style = style)
 
-            LaunchedEffect(Unit) {
-                animY.forEach { it.snapTo(0f) } // Initialize
-                try {
-                    repeat(Int.MAX_VALUE) { // Loop indefinitely
-                        if (!isActive) throw CancellationException("你好动画取消")
-                        animY.forEachIndexed { index, anim ->
-                            launch {
-                                delay((index * 150L) % 450) // Staggered start
-                                anim.animateTo(
-                                    targetValue = with(density) { (-6).dp.toPx() },
-                                    animationSpec = tween(
-                                        durationMillis = 300,
-                                        easing = FastOutSlowInEasing
+                val dotStyle = style.copy(fontSize = 18.sp)
+                val animY = remember { List(3) { Animatable(0f) } }
+                val coroutineScope = rememberCoroutineScope()
+                val density = LocalDensity.current
+
+                LaunchedEffect(Unit) {
+                    animY.forEach { it.snapTo(0f) }
+                    try {
+                        repeat(Int.MAX_VALUE) {
+                            if (!isActive) throw CancellationException("动画取消")
+                            animY.forEachIndexed { index, anim ->
+                                launch {
+                                    delay((index * 150L) % 450)
+                                    anim.animateTo(
+                                        targetValue = with(density) { (-4).dp.toPx() },
+                                        animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing)
                                     )
-                                )
-                                anim.animateTo(
-                                    targetValue = 0f,
-                                    animationSpec = tween(
-                                        durationMillis = 450,
-                                        easing = FastOutSlowInEasing
+                                    anim.animateTo(
+                                        targetValue = 0f,
+                                        animationSpec = tween(durationMillis = 450, easing = FastOutSlowInEasing)
                                     )
-                                )
-                                if (index == animY.lastIndex) delay(600) // Pause at the end of a full cycle
+                                    if (index == animY.lastIndex) delay(600)
+                                }
                             }
+                            delay(1200)
                         }
-                        delay(1200) // Wait for one full cycle of all dots to roughly complete + pause
+                    } catch (e: CancellationException) {
+                        Log.d("Animation", "动画已取消")
+                        coroutineScope.launch { animY.forEach { launch { it.snapTo(0f) } } }
                     }
-                } catch (e: CancellationException) {
-                    Log.d("Animation", "你好动画已取消")
-                    // Ensure dots reset on cancellation
-                    coroutineScope.launch { animY.forEach { launch { it.snapTo(0f) } } }
+                }
+
+                Text(",在听", style = style)
+
+                animY.forEach {
+                    Text(
+                        text = ".",
+                        style = dotStyle,
+                        modifier = Modifier.offset(y = with(density) { it.value.toDp() })
+                    )
                 }
             }
-            animY.forEach {
+
+            Spacer(modifier = Modifier.height(spacerHeight))
+
+            Column(
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    GlassCard(
+                        modifier = Modifier.weight(1f),
+                        title = "创建图片",
+                        subtitle = "生成创意图片",
+                        iconRes = R.drawable.gpt_images,
+                        iconTint = Color(0xFF4CAF50),
+                        onClick = { if (!isImeVisible) onNavigateToImageGen() }
+                    )
+                    GlassCard(
+                        modifier = Modifier.weight(1f),
+                        title = "语音对话",
+                        subtitle = "进行语音交流",
+                        iconRes = R.drawable.gpt_voice,
+                        iconTint = Color(0xFF2196F3),
+                        onClick = { if (!isImeVisible) onNavigateToVoice() }
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(10.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    GlassCard(
+                        modifier = Modifier.weight(1f),
+                        title = "配置修改",
+                        subtitle = "修改设置与接口",
+                        iconRes = R.drawable.gpt_settings,
+                        iconTint = Color(0xFFFF9800),
+                        onClick = { if (!isImeVisible) onNavigateToSettings() }
+                    )
+                    GlassCard(
+                        modifier = Modifier.weight(1f),
+                        title = "会话风格",
+                        subtitle = "设定系统提示词",
+                        iconRes = R.drawable.gpt_tuning,
+                        iconTint = Color(0xFFAB47BC),
+                        onClick = { if (!isImeVisible) onShowSystemPrompt() }
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun GlassCard(
+    modifier: Modifier = Modifier,
+    title: String,
+    subtitle: String,
+    iconRes: Int,
+    iconTint: Color,
+    onClick: () -> Unit
+) {
+    val isDark = isSystemInDarkTheme()
+    val cardColor = if (isDark) Color.White.copy(alpha = 0.08f) else Color.White.copy(alpha = 0.55f)
+    val borderColor = if (isDark) Color.White.copy(alpha = 0.15f) else Color.Black.copy(alpha = 0.08f)
+
+    Surface(
+        modifier = modifier
+            .clip(RoundedCornerShape(24.dp))
+            .border(
+                width = 0.8.dp,
+                color = borderColor,
+                shape = RoundedCornerShape(24.dp)
+            )
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(24.dp),
+        color = cardColor,
+        tonalElevation = 0.dp
+    ) {
+        Row(
+            modifier = Modifier
+                .padding(horizontal = 10.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Icon(
+                painter = painterResource(id = iconRes),
+                contentDescription = null,
+                tint = iconTint,
+                modifier = Modifier.size(22.dp)
+            )
+            Column(
+                modifier = Modifier.weight(1f)
+            ) {
                 Text(
-                    text = ".",
-                    style = style,
-                    modifier = Modifier.offset(y = with(density) { it.value.toDp() })
+                    text = title,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 13.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(1.dp))
+                Text(
+                    text = subtitle,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    fontSize = 10.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }
