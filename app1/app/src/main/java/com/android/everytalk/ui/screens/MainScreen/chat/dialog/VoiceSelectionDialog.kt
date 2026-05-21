@@ -25,6 +25,8 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.android.everytalk.data.DataClass.VoiceBackendConfig
 import com.android.everytalk.statecontroller.AppViewModel
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.foundation.lazy.rememberLazyListState
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -231,6 +233,9 @@ fun VoiceSelectionDialog(
     val contentColor = if (isDark) Color.White else Color(0xFF0D0D0D)
     val subtextColor = if (isDark) Color.White.copy(alpha = 0.6f) else Color(0xFF0D0D0D).copy(alpha = 0.6f)
     
+    val topPadding = if (ttsPlatform == "Aliyun") 196.dp else 136.dp
+    val bottomPadding = 92.dp
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(
@@ -249,83 +254,20 @@ fun VoiceSelectionDialog(
                 containerColor = dialogBg
             )
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+            Box(
+                modifier = Modifier.fillMaxSize()
             ) {
-                // 标题
-                Text(
-                    text = "选择音色",
-                    style = MaterialTheme.typography.headlineSmall.copy(
-                        fontWeight = FontWeight.Bold
-                    ),
-                    color = contentColor
-                )
-                
-                // 当前选择提示
-                Text(
-                    text = "当前: $selectedVoice",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = subtextColor
-                )
-                
-                // 阿里云音色分类选项卡（圆角样式）
-                if (ttsPlatform == "Aliyun") {
-                    val categories = listOf("🇨🇳 国内", "🌍 国外", "🏠 乡音")
-                    Card(
-                        shape = RoundedCornerShape(16.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = if (isDark) Color(0xFF1A1A1A) else Color(0xFFF5F5F5)
-                        ),
-                        modifier = Modifier.fillMaxWidth()
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(4.dp),
-                            horizontalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            categories.forEachIndexed { index, title ->
-                                val isSelected = aliyunCategory == index
-                                val backgroundColor by animateColorAsState(
-                                    if (isSelected) (if (isDark) Color.White else Color.Black) else Color.Transparent,
-                                    animationSpec = tween(durationMillis = 300),
-                                    label = "tabBackground"
-                                )
-                                val tabContentColor by animateColorAsState(
-                                    if (isSelected) (if (isDark) Color.Black else Color.White) else subtextColor,
-                                    animationSpec = tween(durationMillis = 300),
-                                    label = "tabContent"
-                                )
-                                
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .clip(RoundedCornerShape(12.dp))
-                                        .background(backgroundColor)
-                                        .clickable { aliyunCategory = index }
-                                        .padding(vertical = 10.dp),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Text(
-                                        text = title,
-                                        fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                        color = tabContentColor,
-                                        style = MaterialTheme.typography.labelLarge
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-                
-                // 音色列表
+                // 音色列表（处于底层，占满全部空间）
+                val listState = rememberLazyListState()
                 LazyColumn(
-                    modifier = Modifier
-                        .weight(1f)
-                        .fillMaxWidth(),
+                    state = listState,
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(
+                        top = topPadding,
+                        bottom = bottomPadding,
+                        start = 24.dp,
+                        end = 24.dp
+                    ),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(voices) { (voiceName, description) ->
@@ -382,56 +324,162 @@ fun VoiceSelectionDialog(
                         }
                     }
                 }
-                
-                // 确定按钮
-                Button(
-                    onClick = {
-                        coroutineScope.launch {
-                            // 修复：如果 currentConfig 为 null，说明 effectiveConfig 是新创建的默认配置
-                            // 需要检查 allConfigs 中是否已有该配置，如果没有则添加
-                            val configToUpdate = currentConfig ?: effectiveConfig
-                            
-                            // 更新当前配置的音色
-                            val newConfig = configToUpdate.copy(
-                                voiceName = selectedVoice,
-                                updatedAt = System.currentTimeMillis()
-                            )
-                            
-                            // 更新列表：如果配置已存在则更新，否则添加
-                            val configExists = allConfigs.any { it.id == newConfig.id }
-                            val newConfigs = if (configExists) {
-                                allConfigs.map {
-                                    if (it.id == newConfig.id) newConfig else it
-                                }
-                            } else {
-                                // 配置不存在，添加到列表
-                                allConfigs + newConfig
-                            }
-                            
-                            // 保存到 Room
-                            viewModel.stateHolder._voiceBackendConfigs.value = newConfigs
-                            viewModel.stateHolder._selectedVoiceConfig.value = newConfig
-                            viewModel.persistenceManager.saveVoiceBackendConfigs(newConfigs)
-                            viewModel.persistenceManager.saveSelectedVoiceConfigId(newConfig.id)
-                            
-                            onDismiss()
-                        }
-                    },
+
+                // 顶栏透明渐变层 + 标题、当前选择及选项卡
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(48.dp),
-                    shape = RoundedCornerShape(24.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = contentColor,
-                        contentColor = dialogBg
-                    )
-                ) {
-                    Text(
-                        text = "确定",
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontWeight = FontWeight.SemiBold
+                        .height(topPadding)
+                        .align(Alignment.TopCenter)
+                        .background(
+                            Brush.verticalGradient(
+                                colorStops = arrayOf(
+                                    0.0f to dialogBg,
+                                    0.75f to dialogBg.copy(alpha = 0.96f),
+                                    1.0f to Color.Transparent
+                                )
+                            )
                         )
-                    )
+                        .padding(top = 24.dp, start = 24.dp, end = 24.dp)
+                ) {
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        // 标题
+                        Text(
+                            text = "选择音色",
+                            style = MaterialTheme.typography.headlineSmall.copy(
+                                fontWeight = FontWeight.Bold
+                            ),
+                            color = contentColor
+                        )
+
+                        // 当前选择提示
+                        Text(
+                            text = "当前: $selectedVoice",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = subtextColor
+                        )
+
+                        // 阿里云音色分类选项卡（圆角样式）
+                        if (ttsPlatform == "Aliyun") {
+                            val categories = listOf("🇨🇳 国内", "🌍 国外", "🏠 乡音")
+                            Card(
+                                shape = RoundedCornerShape(16.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = if (isDark) Color(0xFF1A1A1A) else Color(0xFFF5F5F5)
+                                ),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(4.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    categories.forEachIndexed { index, title ->
+                                        val isSelected = aliyunCategory == index
+                                        val backgroundColor by animateColorAsState(
+                                            if (isSelected) (if (isDark) Color.White else Color.Black) else Color.Transparent,
+                                            animationSpec = tween(durationMillis = 300),
+                                            label = "tabBackground"
+                                        )
+                                        val tabContentColor by animateColorAsState(
+                                            if (isSelected) (if (isDark) Color.Black else Color.White) else subtextColor,
+                                            animationSpec = tween(durationMillis = 300),
+                                            label = "tabContent"
+                                        )
+
+                                        Box(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .background(backgroundColor)
+                                                .clickable { aliyunCategory = index }
+                                                .padding(vertical = 10.dp),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = title,
+                                                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                                color = tabContentColor,
+                                                style = MaterialTheme.typography.labelLarge
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // 底栏透明渐变层 + 确定按钮
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(bottomPadding)
+                        .align(Alignment.BottomCenter)
+                        .background(
+                            Brush.verticalGradient(
+                                colorStops = arrayOf(
+                                    0.0f to Color.Transparent,
+                                    0.25f to dialogBg.copy(alpha = 0.96f),
+                                    1.0f to dialogBg
+                                )
+                            )
+                        )
+                        .padding(bottom = 24.dp, start = 24.dp, end = 24.dp),
+                    contentAlignment = Alignment.BottomCenter
+                ) {
+                    Button(
+                        onClick = {
+                            coroutineScope.launch {
+                                // 修复：如果 currentConfig 为 null，说明 effectiveConfig 是新创建的默认配置
+                                // 需要检查 allConfigs 中是否已有该配置，如果没有则添加
+                                val configToUpdate = currentConfig ?: effectiveConfig
+
+                                // 更新当前配置的音色
+                                val newConfig = configToUpdate.copy(
+                                    voiceName = selectedVoice,
+                                    updatedAt = System.currentTimeMillis()
+                                )
+
+                                // 更新列表：如果配置已存在则更新，否则添加
+                                val configExists = allConfigs.any { it.id == newConfig.id }
+                                val newConfigs = if (configExists) {
+                                    allConfigs.map {
+                                        if (it.id == newConfig.id) newConfig else it
+                                    }
+                                } else {
+                                    // 配置不存在，添加到列表
+                                    allConfigs + newConfig
+                                }
+
+                                // 保存到 Room
+                                viewModel.stateHolder._voiceBackendConfigs.value = newConfigs
+                                viewModel.stateHolder._selectedVoiceConfig.value = newConfig
+                                viewModel.persistenceManager.saveVoiceBackendConfigs(newConfigs)
+                                viewModel.persistenceManager.saveSelectedVoiceConfigId(newConfig.id)
+
+                                onDismiss()
+                            }
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp),
+                        shape = RoundedCornerShape(24.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = contentColor,
+                            contentColor = dialogBg
+                        )
+                    ) {
+                        Text(
+                            text = "确定",
+                            style = MaterialTheme.typography.labelLarge.copy(
+                                fontWeight = FontWeight.SemiBold
+                            )
+                        )
+                    }
                 }
             }
         }
