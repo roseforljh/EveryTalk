@@ -6,7 +6,6 @@ import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.statecontroller.ApiHandler
 import com.android.everytalk.statecontroller.ViewModelStateHolder
-import com.android.everytalk.ui.screens.viewmodel.HistoryManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -14,6 +13,14 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.UUID
+
+internal fun collectRegenerationBranch(messages: List<Message>, userMessageIndex: Int): List<Message> =
+    if (userMessageIndex in messages.indices) messages.drop(userMessageIndex) else emptyList()
+
+internal fun filterRegenerationMediaCleanupMessages(
+    messagesToRemove: List<Message>,
+    baseUserMessageId: String
+): List<Message> = messagesToRemove.filter { it.id != baseUserMessageId }
 
 /**
  * RegenerateController
@@ -27,7 +34,6 @@ import java.util.UUID
 class RegenerateController(
     private val stateHolder: ViewModelStateHolder,
     private val apiHandler: ApiHandler,
-    private val historyManager: HistoryManager,
     private val scope: CoroutineScope,
     private val messagesMutex: Mutex,
     private val persistenceDeleteMediaFor: suspend (List<List<Message>>) -> Unit,
@@ -93,16 +99,11 @@ class RegenerateController(
                     return@withContext false
                 }
 
-                // 收集需要删除的 AI 消息（位于用户消息之后的连续段）
-                val messagesToRemove = mutableListOf<Message>()
-                var cursor = userMsgIndex + 1
-                while (cursor < listRef.size) {
-                    val cur = listRef[cursor]
-                    if (cur.sender == Sender.AI) {
-                        messagesToRemove.add(cur)
-                        cursor++
-                    } else break
-                }
+                val messagesToRemove = collectRegenerationBranch(listRef, userMsgIndex)
+                val messagesForMediaCleanup = filterRegenerationMediaCleanupMessages(
+                    messagesToRemove = messagesToRemove,
+                    baseUserMessageId = originalUserMessageId
+                )
 
                 messagesMutex.withLock {
                     withContext(Dispatchers.Main.immediate) {
@@ -132,19 +133,18 @@ class RegenerateController(
                         }
 
                         // 先异步删除关联媒体
-                        scope.launch(Dispatchers.IO) {
-                            try {
-                                persistenceDeleteMediaFor(listOf(messagesToRemove))
-                            } catch (e: Exception) {
-                                Log.w("RegenerateController", "删除媒体失败: ${e.message}")
+                        if (messagesForMediaCleanup.isNotEmpty()) {
+                            scope.launch {
+                                try {
+                                    persistenceDeleteMediaFor(listOf(messagesForMediaCleanup))
+                                } catch (e: Exception) {
+                                    Log.w("RegenerateController", "删除媒体失败: ${e.message}")
+                                }
                             }
                         }
 
-                        // 从列表移除 AI 消息
+                        // 截断从基准用户消息开始的整条后续分支，再以原用户消息ID重新发送。
                         listRef.removeAll(messagesToRemove.toSet())
-
-                        // The original user message will be removed AFTER the new message is sent
-                        // to ensure the conversation history is correctly passed to the API.
                     }
                 }
                 true
@@ -157,38 +157,14 @@ class RegenerateController(
                     stateHolder.isTextConversationDirty.value = true
                 }
 
-                // 强制保存历史（包含仅推理更新等情况）
-                withContext(Dispatchers.IO) {
-                    historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = isImageGeneration)
-                }
-
-                val newUserMessageId = "user_${UUID.randomUUID()}"
-                
                 // 重新发送消息（函数类型禁止命名参数，改为位置参数）
                 sendMessage(
                     originalUserMessageText,
                     true,
                     originalAttachments,
                     isImageGeneration,
-                    newUserMessageId
+                    originalUserMessageId
                 )
-
-                // Clean up the original user message AFTER sending the new one.
-                // This ensures the history is intact for the sendMessage call.
-                messagesMutex.withLock {
-                    withContext(Dispatchers.Main.immediate) {
-                        val listRef = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
-                        val finalUserIndex = listRef.indexOfFirst { it.id == originalUserMessageId }
-                        if (finalUserIndex != -1) {
-                            if (isImageGeneration) {
-                                stateHolder.imageMessageAnimationStates.remove(originalUserMessageId)
-                            } else {
-                                stateHolder.textMessageAnimationStates.remove(originalUserMessageId)
-                            }
-                            listRef.removeAt(finalUserIndex)
-                        }
-                    }
-                }
             }
         }
     }

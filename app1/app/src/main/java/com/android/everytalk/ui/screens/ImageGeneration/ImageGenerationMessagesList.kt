@@ -839,6 +839,27 @@ fun ImageGenerationMessagesList(
                                 )
                             }
                         }
+                        is ChatListItem.ErrorMessage -> {
+                            val message = viewModel.getMessageById(item.messageId)
+                            if (message != null) {
+                                UserOrErrorMessageContent(
+                                    message = message,
+                                    displayedText = item.text,
+                                    showLoadingDots = false,
+                                    bubbleColor = MaterialTheme.chatColors.aiBubble,
+                                    contentColor = MaterialTheme.chatColors.errorContent,
+                                    isError = true,
+                                    maxWidth = bubbleMaxWidth,
+                                    onLongPress = { msg, offset ->
+                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                        contextMenuMessage = msg
+                                        contextMenuPressOffset = offset
+                                        isContextMenuVisible = true
+                                    },
+                                    scrollStateManager = scrollStateManager
+                                )
+                            }
+                        }
                         is ChatListItem.LoadingIndicator -> {
                             Box(
                                 modifier = Modifier

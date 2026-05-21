@@ -653,7 +653,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
    private val regenerateController = RegenerateController(
        stateHolder = stateHolder,
        apiHandler = apiHandler,
-       historyManager = historyManager,
        scope = viewModelScope,
        messagesMutex = messagesMutex,
        persistenceDeleteMediaFor = { lists ->
