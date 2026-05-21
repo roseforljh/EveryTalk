@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.19.0](https://github.com/roseforljh/EveryTalk/compare/v1.18.2...v1.19.0) (2026-05-21)
+
+
+### Features
+
+* add glass-morphic quick action cards to empty chat home screen with keyboard animation ([5eb726e](https://github.com/roseforljh/EveryTalk/commit/5eb726eac45c96ce079460bb691a96944aee9604))
+
+
+### Bug Fixes
+
+* ConfigSwitchPopup model selection dismiss flash ([e286a06](https://github.com/roseforljh/EveryTalk/commit/e286a06134e135d72e5d95e1ff288d3c69c0c420))
+* optimize voice selection scroll view area and overlays ([032c394](https://github.com/roseforljh/EveryTalk/commit/032c3944ea7dd1769e99bbb3017254120dee2e48))
+* preserve regenerate conversation identity ([940e980](https://github.com/roseforljh/EveryTalk/commit/940e9807d6412b0a6c87d9c3683baab421fdb229))
+* unify voice dialog styling ([aac436a](https://github.com/roseforljh/EveryTalk/commit/aac436aceae09e763c76c99ab8c7ea33a512abf0))
+
 ## [1.18.2](https://github.com/roseforljh/EveryTalk/compare/v1.18.1...v1.18.2) (2026-05-20)
 
 
