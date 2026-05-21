@@ -2,6 +2,7 @@ package com.android.everytalk.ui.screens.MainScreen.chat.dialog
 
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -224,9 +225,11 @@ fun VoiceSelectionDialog(
         else -> geminiVoices
     }
     
-    val isDarkTheme = isSystemInDarkTheme()
-    val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
-    val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
+    val isDark = isSystemInDarkTheme()
+    val dialogBg = if (isDark) Color.Black else Color.White
+    val borderColor = if (isDark) Color(0xFF414141) else Color(0xFFF3F3F3)
+    val contentColor = if (isDark) Color.White else Color(0xFF0D0D0D)
+    val subtextColor = if (isDark) Color.White.copy(alpha = 0.6f) else Color(0xFF0D0D0D).copy(alpha = 0.6f)
     
     Dialog(
         onDismissRequest = onDismiss,
@@ -240,9 +243,10 @@ fun VoiceSelectionDialog(
             shape = RoundedCornerShape(28.dp),
             modifier = Modifier
                 .fillMaxWidth(0.9f)
-                .fillMaxHeight(0.8f),
+                .fillMaxHeight(0.8f)
+                .border(1.dp, borderColor, RoundedCornerShape(28.dp)),
             colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surface
+                containerColor = dialogBg
             )
         ) {
             Column(
@@ -257,14 +261,14 @@ fun VoiceSelectionDialog(
                     style = MaterialTheme.typography.headlineSmall.copy(
                         fontWeight = FontWeight.Bold
                     ),
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = contentColor
                 )
                 
                 // 当前选择提示
                 Text(
                     text = "当前: $selectedVoice",
                     style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = subtextColor
                 )
                 
                 // 阿里云音色分类选项卡（圆角样式）
@@ -273,7 +277,7 @@ fun VoiceSelectionDialog(
                     Card(
                         shape = RoundedCornerShape(16.dp),
                         colors = CardDefaults.cardColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceVariant
+                            containerColor = if (isDark) Color(0xFF1A1A1A) else Color(0xFFF5F5F5)
                         ),
                         modifier = Modifier.fillMaxWidth()
                     ) {
@@ -286,12 +290,12 @@ fun VoiceSelectionDialog(
                             categories.forEachIndexed { index, title ->
                                 val isSelected = aliyunCategory == index
                                 val backgroundColor by animateColorAsState(
-                                    if (isSelected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+                                    if (isSelected) (if (isDark) Color.White else Color.Black) else Color.Transparent,
                                     animationSpec = tween(durationMillis = 300),
                                     label = "tabBackground"
                                 )
-                                val contentColor by animateColorAsState(
-                                    if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                                val tabContentColor by animateColorAsState(
+                                    if (isSelected) (if (isDark) Color.Black else Color.White) else subtextColor,
                                     animationSpec = tween(durationMillis = 300),
                                     label = "tabContent"
                                 )
@@ -308,7 +312,7 @@ fun VoiceSelectionDialog(
                                     Text(
                                         text = title,
                                         fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                                        color = contentColor,
+                                        color = tabContentColor,
                                         style = MaterialTheme.typography.labelLarge
                                     )
                                 }
@@ -330,12 +334,17 @@ fun VoiceSelectionDialog(
                         Card(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { selectedVoice = voiceName },
+                                .clickable { selectedVoice = voiceName }
+                                .border(
+                                    1.dp,
+                                    if (isSelected) (if (isDark) Color.White else Color.Black) else borderColor,
+                                    RoundedCornerShape(12.dp)
+                                ),
                             colors = CardDefaults.cardColors(
                                 containerColor = if (isSelected) 
-                                    MaterialTheme.colorScheme.primaryContainer 
+                                    (if (isDark) Color(0xFF1A1A1A) else Color(0xFFF5F5F5))
                                 else 
-                                    MaterialTheme.colorScheme.surfaceVariant
+                                    Color.Transparent
                             ),
                             shape = RoundedCornerShape(12.dp)
                         ) {
@@ -352,18 +361,12 @@ fun VoiceSelectionDialog(
                                         style = MaterialTheme.typography.titleMedium.copy(
                                             fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
                                         ),
-                                        color = if (isSelected)
-                                            MaterialTheme.colorScheme.onPrimaryContainer
-                                        else
-                                            MaterialTheme.colorScheme.onSurfaceVariant
+                                        color = if (isSelected) contentColor else subtextColor
                                     )
                                     Text(
                                         text = description,
                                         style = MaterialTheme.typography.bodySmall,
-                                        color = if (isSelected)
-                                            MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
-                                        else
-                                            MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                        color = subtextColor.copy(alpha = 0.7f)
                                     )
                                 }
                                 
@@ -371,7 +374,7 @@ fun VoiceSelectionDialog(
                                     Icon(
                                         imageVector = androidx.compose.material.icons.Icons.Default.Check,
                                         contentDescription = "已选择",
-                                        tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        tint = if (isDark) Color.White else Color.Black,
                                         modifier = Modifier.size(24.dp)
                                     )
                                 }
@@ -419,8 +422,8 @@ fun VoiceSelectionDialog(
                         .height(48.dp),
                     shape = RoundedCornerShape(24.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = confirmButtonColor,
-                        contentColor = confirmButtonTextColor
+                        containerColor = contentColor,
+                        contentColor = dialogBg
                     )
                 ) {
                     Text(

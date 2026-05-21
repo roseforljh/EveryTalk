@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.screens.MainScreen.chat.dialog
 
+import androidx.compose.foundation.border
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -17,6 +18,9 @@ import com.android.everytalk.data.DataClass.VoiceBackendConfig
 import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.ui.screens.MainScreen.chat.models.DynamicModelSelector
 import com.android.everytalk.ui.screens.MainScreen.chat.voice.logic.VoiceConfigManager
+import com.android.everytalk.ui.screens.settings.DialogTextFieldColors
+import com.android.everytalk.ui.screens.settings.DialogShape
+import com.android.everytalk.ui.screens.settings.SettingsFieldLabel
 import kotlinx.coroutines.launch
 
 /**
@@ -154,9 +158,10 @@ fun VoiceSettingsDialog(
     }
     
     val isDarkTheme = isSystemInDarkTheme()
-    val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
-    val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
-    val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
+    val dialogBg = if (isDarkTheme) Color.Black else Color.White
+    val borderColor = if (isDarkTheme) Color(0xFF414141) else Color(0xFFF3F3F3)
+    val contentColor = if (isDarkTheme) Color.White else Color(0xFF0D0D0D)
+    val subtextColor = if (isDarkTheme) Color.White.copy(alpha = 0.6f) else Color(0xFF0D0D0D).copy(alpha = 0.6f)
     
     Dialog(
         onDismissRequest = onDismiss,
@@ -170,16 +175,17 @@ fun VoiceSettingsDialog(
             shape = RoundedCornerShape(28.dp),
             modifier = Modifier
                 .fillMaxWidth(0.9f)
-                .wrapContentHeight(),
+                .wrapContentHeight()
+                .border(1.dp, borderColor, RoundedCornerShape(28.dp)),
             colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surface
+                containerColor = dialogBg
             )
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(20.dp)
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 // 标题
                 Text(
@@ -187,21 +193,14 @@ fun VoiceSettingsDialog(
                     style = MaterialTheme.typography.headlineSmall.copy(
                         fontWeight = FontWeight.Bold
                     ),
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = contentColor
                 )
                 
                 // 平台下拉框
                 Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(
-                        text = "TTS 平台",
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontWeight = FontWeight.SemiBold
-                        ),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    SettingsFieldLabel("TTS 平台")
                     ExposedDropdownMenuBox(
                         expanded = expanded,
                         onExpandedChange = { expanded = it }
@@ -214,13 +213,8 @@ fun VoiceSettingsDialog(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .menuAnchor(),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                                focusedBorderColor = MaterialTheme.colorScheme.primary,
-                                unfocusedBorderColor = MaterialTheme.colorScheme.outline
-                            ),
-                            shape = RoundedCornerShape(12.dp)
+                            colors = DialogTextFieldColors,
+                            shape = DialogShape
                         )
                         ExposedDropdownMenu(
                             expanded = expanded,
@@ -228,7 +222,7 @@ fun VoiceSettingsDialog(
                         ) {
                             platforms.forEach { platform ->
                                 DropdownMenuItem(
-                                    text = { Text(platform) },
+                                    text = { Text(platform, color = contentColor) },
                                     onClick = {
                                         if (platform != selectedPlatform) {
                                             // 先保存当前平台的配置到缓存
@@ -247,44 +241,25 @@ fun VoiceSettingsDialog(
                 
                 // API Key 输入框
                 Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(
-                        text = "TTS API Key",
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontWeight = FontWeight.SemiBold
-                        ),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    SettingsFieldLabel("TTS API Key")
                     OutlinedTextField(
                         value = apiKey,
                         onValueChange = { apiKey = it },
                         modifier = Modifier.fillMaxWidth(),
                         placeholder = { Text("请输入 API Key") },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            focusedBorderColor = MaterialTheme.colorScheme.primary,
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline
-                        ),
-                        shape = RoundedCornerShape(12.dp),
+                        colors = DialogTextFieldColors,
+                        shape = DialogShape,
                         singleLine = true
                     )
                 }
 
                 // 语音 API 地址输入框
                 Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(
-                        text = "TTS API 地址",
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontWeight = FontWeight.SemiBold
-                        ),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    SettingsFieldLabel("TTS API 地址")
                     OutlinedTextField(
                         value = if (selectedPlatform == "Gemini") "自动使用默认地址" else baseUrl,
                         onValueChange = { if (selectedPlatform != "Gemini") baseUrl = it },
@@ -298,15 +273,15 @@ fun VoiceSettingsDialog(
                         },
                         supportingText = {
                             if (selectedPlatform == "Gemini") {
-                                Text("自动使用 https://generativelanguage.googleapis.com", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("自动使用 https://generativelanguage.googleapis.com", color = subtextColor)
                             } else if (selectedPlatform == "Aliyun") {
-                                Text("默认: https://dashscope.aliyuncs.com/api/v1", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("默认: https://dashscope.aliyuncs.com/api/v1", color = subtextColor)
                             } else if (baseUrl.isNotEmpty() && !baseUrl.startsWith("http")) {
                                 Text("请填写完整的 http(s) 地址", color = MaterialTheme.colorScheme.error)
                             } else if (selectedPlatform == "Minimax" && baseUrl.isBlank()) {
                                 Text("Minimax 平台必须填写 API 地址", color = MaterialTheme.colorScheme.error)
                             } else if (selectedPlatform == "SiliconFlow") {
-                                Text("默认: https://api.siliconflow.cn/v1/audio/speech", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("默认: https://api.siliconflow.cn/v1/audio/speech", color = subtextColor)
                             } else {
                                 // 智能提示最终使用的完整URL
                                 val finalUrl = if (selectedPlatform == "OpenAI" && baseUrl.isNotBlank()) {
@@ -322,18 +297,12 @@ fun VoiceSettingsDialog(
                                 if (finalUrl != null) {
                                     Text("最终请求地址: $finalUrl", color = MaterialTheme.colorScheme.primary)
                                 } else {
-                                    Text("大模型厂商的 API 地址", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text("大模型厂商的 API 地址", color = subtextColor)
                                 }
                             }
                         },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                            focusedBorderColor = MaterialTheme.colorScheme.primary,
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline
-                        ),
-                        shape = RoundedCornerShape(12.dp),
+                        colors = DialogTextFieldColors,
+                        shape = DialogShape,
                         singleLine = true
                     )
                 }
@@ -375,10 +344,10 @@ fun VoiceSettingsDialog(
                             .height(48.dp),
                         shape = RoundedCornerShape(24.dp),
                         colors = ButtonDefaults.outlinedButtonColors(
-                            containerColor = MaterialTheme.colorScheme.surface,
-                            contentColor = cancelButtonColor
+                            containerColor = Color.Transparent,
+                            contentColor = contentColor
                         ),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
+                        border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
                     ) {
                         Text(
                             text = "取消",
@@ -437,8 +406,8 @@ fun VoiceSettingsDialog(
                             .height(48.dp),
                         shape = RoundedCornerShape(24.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = confirmButtonColor,
-                            contentColor = confirmButtonTextColor
+                            containerColor = contentColor,
+                            contentColor = dialogBg
                         )
                     ) {
                         Text(

@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.screens.MainScreen.chat.dialog
 
+import androidx.compose.foundation.border
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
@@ -18,6 +19,9 @@ import com.android.everytalk.data.DataClass.VoiceBackendConfig
 import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.ui.screens.MainScreen.chat.models.DynamicModelSelector
 import com.android.everytalk.ui.screens.MainScreen.chat.voice.logic.VoiceConfigManager
+import com.android.everytalk.ui.screens.settings.DialogTextFieldColors
+import com.android.everytalk.ui.screens.settings.DialogShape
+import com.android.everytalk.ui.screens.settings.SettingsFieldLabel
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -155,9 +159,10 @@ fun SttSettingsDialog(
     }
     
     val isDarkTheme = isSystemInDarkTheme()
-    val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
-    val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
-    val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
+    val dialogBg = if (isDarkTheme) Color.Black else Color.White
+    val borderColor = if (isDarkTheme) Color(0xFF414141) else Color(0xFFF3F3F3)
+    val contentColor = if (isDarkTheme) Color.White else Color(0xFF0D0D0D)
+    val subtextColor = if (isDarkTheme) Color.White.copy(alpha = 0.6f) else Color(0xFF0D0D0D).copy(alpha = 0.6f)
     
     Dialog(
         onDismissRequest = onDismiss,
@@ -171,37 +176,31 @@ fun SttSettingsDialog(
             shape = RoundedCornerShape(28.dp),
             modifier = Modifier
                 .fillMaxWidth(0.9f)
-                .wrapContentHeight(),
+                .wrapContentHeight()
+                .border(1.dp, borderColor, RoundedCornerShape(28.dp)),
             colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surface
+                containerColor = dialogBg
             )
         ) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(24.dp),
-                verticalArrangement = Arrangement.spacedBy(20.dp)
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 Text(
                     text = "STT 设置 (语音识别)",
                     style = MaterialTheme.typography.headlineSmall.copy(
                         fontWeight = FontWeight.Bold
                     ),
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = contentColor
                 )
                 
                 // 平台选择
                 Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(
-                        text = "平台",
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontWeight = FontWeight.SemiBold
-                        ),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    SettingsFieldLabel("平台")
                     ExposedDropdownMenuBox(
                         expanded = expanded,
                         onExpandedChange = { expanded = it }
@@ -212,13 +211,8 @@ fun SttSettingsDialog(
                             readOnly = true,
                             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
                             modifier = Modifier.fillMaxWidth().menuAnchor(),
-                            colors = OutlinedTextFieldDefaults.colors(
-                                focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                                unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                                focusedBorderColor = MaterialTheme.colorScheme.primary,
-                                unfocusedBorderColor = MaterialTheme.colorScheme.outline
-                            ),
-                            shape = RoundedCornerShape(12.dp)
+                            colors = DialogTextFieldColors,
+                            shape = DialogShape
                         )
                         ExposedDropdownMenu(
                             expanded = expanded,
@@ -226,7 +220,7 @@ fun SttSettingsDialog(
                         ) {
                             platforms.forEach { platform ->
                                 DropdownMenuItem(
-                                    text = { Text(platform) },
+                                    text = { Text(platform, color = contentColor) },
                                     onClick = {
                                         if (platform != selectedPlatform) {
                                             // 先保存当前平台的配置到缓存
@@ -245,44 +239,25 @@ fun SttSettingsDialog(
                 
                 // API Key
                 Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(
-                        text = "API Key",
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontWeight = FontWeight.SemiBold
-                        ),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    SettingsFieldLabel("API Key")
                     OutlinedTextField(
                         value = apiKey,
                         onValueChange = { apiKey = it },
                         modifier = Modifier.fillMaxWidth(),
                         placeholder = { Text("请输入 API Key") },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            focusedBorderColor = MaterialTheme.colorScheme.primary,
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline
-                        ),
-                        shape = RoundedCornerShape(12.dp),
+                        colors = DialogTextFieldColors,
+                        shape = DialogShape,
                         singleLine = true
                     )
                 }
 
                 // API 地址
                 Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                    modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text(
-                        text = "API 地址",
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontWeight = FontWeight.SemiBold
-                        ),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    SettingsFieldLabel("API 地址")
                     OutlinedTextField(
                         value = apiUrl,
                         onValueChange = { apiUrl = it },
@@ -294,11 +269,11 @@ fun SttSettingsDialog(
                             } else if (selectedPlatform == "OpenAI" && apiUrl.isBlank()) {
                                 Text("OpenAI 平台必须填写 API 地址", color = MaterialTheme.colorScheme.error)
                             } else if (selectedPlatform == "OpenAI") {
-                                Text("将使用你配置的 OpenAI API 地址", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("将使用你配置的 OpenAI API 地址", color = subtextColor)
                             } else if (selectedPlatform == "SiliconFlow") {
-                                Text("默认: https://api.siliconflow.cn/v1/audio/transcriptions", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("默认: https://api.siliconflow.cn/v1/audio/transcriptions", color = subtextColor)
                             } else if (selectedPlatform == "Aliyun") {
-                                Text("阿里云使用SDK自动连接，此地址仅为占位符", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text("阿里云使用SDK自动连接，此地址仅为占位符", color = subtextColor)
                             } else {
                                 // 智能提示最终使用的完整URL
                                 val finalUrl = if (selectedPlatform == "OpenAI" && apiUrl.isNotBlank()) {
@@ -314,17 +289,12 @@ fun SttSettingsDialog(
                                 if (finalUrl != null) {
                                     Text("最终请求地址: $finalUrl", color = MaterialTheme.colorScheme.primary)
                                 } else {
-                                    Text("留空则使用默认地址", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text("留空则使用默认地址", color = subtextColor)
                                 }
                             }
                         },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            focusedBorderColor = MaterialTheme.colorScheme.primary,
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline
-                        ),
-                        shape = RoundedCornerShape(12.dp),
+                        colors = DialogTextFieldColors,
+                        shape = DialogShape,
                         singleLine = true
                     )
                 }
@@ -357,12 +327,9 @@ fun SttSettingsDialog(
                 if (selectedPlatform == "Aliyun") {
                     Card(
                         colors = CardDefaults.cardColors(
-                            containerColor = if (isDarkTheme)
-                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                            else
-                                MaterialTheme.colorScheme.surface
+                            containerColor = if (isDarkTheme) Color(0xFF1A1A1A) else Color(0xFFF5F5F5)
                         ),
-                        border = if (!isDarkTheme) BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant) else null,
+                        border = BorderStroke(1.dp, borderColor),
                         shape = RoundedCornerShape(16.dp),
                         modifier = Modifier.fillMaxWidth()
                     ) {
@@ -379,25 +346,25 @@ fun SttSettingsDialog(
                                     style = MaterialTheme.typography.titleMedium.copy(
                                         fontWeight = FontWeight.SemiBold
                                     ),
-                                    color = MaterialTheme.colorScheme.onSurface
+                                    color = contentColor
                                 )
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
                                     text = "边说边识别，实时显示文字（直连阿里云）",
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    color = subtextColor
                                 )
                             }
                             Switch(
                                 checked = useRealtimeStreaming,
                                 onCheckedChange = { useRealtimeStreaming = it },
                                 colors = SwitchDefaults.colors(
-                                    checkedThumbColor = MaterialTheme.colorScheme.onPrimary,
-                                    checkedTrackColor = MaterialTheme.colorScheme.primary,
+                                    checkedThumbColor = if (isDarkTheme) Color.Black else Color.White,
+                                    checkedTrackColor = contentColor,
                                     checkedBorderColor = Color.Transparent,
                                     uncheckedThumbColor = if (isDarkTheme) Color.White else MaterialTheme.colorScheme.outline,
-                                    uncheckedTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                                    uncheckedBorderColor = if (isDarkTheme) Color.Transparent else MaterialTheme.colorScheme.outline
+                                    uncheckedTrackColor = if (isDarkTheme) Color(0xFF333333) else Color(0xFFE0E0E0),
+                                    uncheckedBorderColor = Color.Transparent
                                 )
                             )
                         }
@@ -414,10 +381,10 @@ fun SttSettingsDialog(
                         modifier = Modifier.weight(1f).height(48.dp),
                         shape = RoundedCornerShape(24.dp),
                         colors = ButtonDefaults.outlinedButtonColors(
-                            containerColor = MaterialTheme.colorScheme.surface,
-                            contentColor = cancelButtonColor
+                            containerColor = Color.Transparent,
+                            contentColor = contentColor
                         ),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
+                        border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
                     ) {
                         Text("取消", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold))
                     }
@@ -461,8 +428,8 @@ fun SttSettingsDialog(
                         modifier = Modifier.weight(1f).height(48.dp),
                         shape = RoundedCornerShape(24.dp),
                         colors = ButtonDefaults.buttonColors(
-                            containerColor = confirmButtonColor,
-                            contentColor = confirmButtonTextColor
+                            containerColor = contentColor,
+                            contentColor = dialogBg
                         )
                     ) {
                         Text("确定", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold))

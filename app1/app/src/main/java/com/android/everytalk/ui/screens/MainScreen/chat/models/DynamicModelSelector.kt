@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.screens.MainScreen.chat.models
 
+import androidx.compose.foundation.border
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -15,6 +16,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.android.everytalk.ui.screens.settings.DialogTextFieldColors
+import com.android.everytalk.ui.screens.settings.DialogShape
+import com.android.everytalk.ui.screens.settings.SettingsFieldLabel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -30,6 +34,11 @@ fun DynamicModelSelector(
     var showAddDialog by remember { mutableStateOf(false) }
     var newModelName by remember { mutableStateOf("") }
     
+    val isDark = isSystemInDarkTheme()
+    val dialogBg = if (isDark) Color.Black else Color.White
+    val borderColor = if (isDark) Color(0xFF414141) else Color(0xFFF3F3F3)
+    val contentColor = if (isDark) Color.White else Color(0xFF0D0D0D)
+
     // 添加模型对话框
     if (showAddDialog) {
         Dialog(
@@ -40,39 +49,40 @@ fun DynamicModelSelector(
                 shape = RoundedCornerShape(28.dp),
                 modifier = Modifier
                     .fillMaxWidth(0.9f)
-                    .wrapContentHeight(),
+                    .wrapContentHeight()
+                    .border(1.dp, borderColor, RoundedCornerShape(28.dp)),
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surface
+                    containerColor = dialogBg
                 )
             ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(24.dp),
-                    verticalArrangement = Arrangement.spacedBy(24.dp)
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     Text(
                         text = "添加模型",
                         style = MaterialTheme.typography.headlineSmall.copy(
                             fontWeight = FontWeight.Bold
                         ),
-                        color = MaterialTheme.colorScheme.onSurface
+                        color = contentColor
                     )
                     
-                    OutlinedTextField(
-                        value = newModelName,
-                        onValueChange = { newModelName = it },
-                        placeholder = { Text("请输入模型名称") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth(),
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            focusedBorderColor = MaterialTheme.colorScheme.primary,
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline
-                        ),
-                        shape = RoundedCornerShape(12.dp)
-                    )
+                    Column(
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        SettingsFieldLabel("模型名称")
+                        OutlinedTextField(
+                            value = newModelName,
+                            onValueChange = { newModelName = it },
+                            placeholder = { Text("请输入模型名称") },
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = DialogTextFieldColors,
+                            shape = DialogShape
+                        )
+                    }
                     
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -83,10 +93,10 @@ fun DynamicModelSelector(
                             modifier = Modifier.weight(1f).height(48.dp),
                             shape = RoundedCornerShape(24.dp),
                             colors = ButtonDefaults.outlinedButtonColors(
-                                containerColor = MaterialTheme.colorScheme.surface,
-                                contentColor = if (isSystemInDarkTheme()) Color(0xFFFF5252) else Color(0xFFD32F2F)
+                                containerColor = Color.Transparent,
+                                contentColor = contentColor
                             ),
-                            border = androidx.compose.foundation.BorderStroke(1.dp, if (isSystemInDarkTheme()) Color(0xFFFF5252) else Color(0xFFD32F2F))
+                            border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
                         ) {
                             Text("取消", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold))
                         }
@@ -102,8 +112,8 @@ fun DynamicModelSelector(
                             modifier = Modifier.weight(1f).height(48.dp),
                             shape = RoundedCornerShape(24.dp),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isSystemInDarkTheme()) Color.White else Color(0xFF212121),
-                                contentColor = if (isSystemInDarkTheme()) Color.Black else Color.White
+                                containerColor = contentColor,
+                                contentColor = dialogBg
                             )
                         ) {
                             Text("确定", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold))
@@ -115,16 +125,9 @@ fun DynamicModelSelector(
     }
 
     Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
+        modifier = Modifier.fillMaxWidth()
     ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelLarge.copy(
-                fontWeight = FontWeight.SemiBold
-            ),
-            color = MaterialTheme.colorScheme.onSurfaceVariant
-        )
+        SettingsFieldLabel(label)
         
         ExposedDropdownMenuBox(
             expanded = expanded && modelList.isNotEmpty(),
@@ -153,13 +156,8 @@ fun DynamicModelSelector(
                         trailingIcon = {
                             ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
                         },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                            focusedBorderColor = MaterialTheme.colorScheme.primary,
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline
-                        ),
-                        shape = RoundedCornerShape(12.dp),
+                        colors = DialogTextFieldColors,
+                        shape = DialogShape,
                         singleLine = true
                     )
 
@@ -172,7 +170,7 @@ fun DynamicModelSelector(
                         Icon(
                             imageVector = androidx.compose.material.icons.Icons.Default.Add,
                             contentDescription = "添加模型",
-                            tint = MaterialTheme.colorScheme.primary
+                            tint = if (isDark) Color.White else Color.Black
                         )
                     }
                 }
