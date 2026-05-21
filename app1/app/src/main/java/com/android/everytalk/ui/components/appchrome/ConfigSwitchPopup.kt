@@ -85,10 +85,6 @@ fun ConfigSwitchPopup(
                 launch { alphaAnim.animateTo(1f, tween(30, easing = decelerateEasing)) }
             }
         } else if (showPopup) {
-            coroutineScope {
-                launch { alphaAnim.animateTo(0f, tween(75, easing = decelerateEasing)) }
-                launch { delay(74); scaleAnim.snapTo(0.8f) }
-            }
             showPopup = false
             selectedGroup = null
         }
@@ -184,8 +180,9 @@ fun ConfigSwitchPopup(
             group = selectedGroup!!,
             selectedApiConfig = selectedApiConfig,
             onModelSelected = { config ->
-                onModelSelected(config)
+                showPopup = false
                 selectedGroup = null
+                onModelSelected(config)
                 onDismiss()
             },
             onDismiss = { selectedGroup = null }
