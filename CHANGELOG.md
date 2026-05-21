@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.19.2](https://github.com/roseforljh/EveryTalk/compare/v1.19.1...v1.19.2) (2026-05-21)
+
+
+### Bug Fixes
+
+* redesign empty chat view with compact pill cards and updated title ([49d7047](https://github.com/roseforljh/EveryTalk/commit/49d704796671975b2079af4b14ea1b988ed3d850))
+
 ## [1.19.1](https://github.com/roseforljh/EveryTalk/compare/v1.19.0...v1.19.1) (2026-05-21)
 
 
