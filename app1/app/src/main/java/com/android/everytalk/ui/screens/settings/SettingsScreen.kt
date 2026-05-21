@@ -625,7 +625,6 @@ fun SettingsScreen(
                 val pLower = providerTrim.lowercase()
                 val isDefaultProvider = pLower in listOf("默认", "default")
                 if (isDefaultProvider && isInImageMode) {
-                    // 图像模式下的"默认"平台：直接创建 Kolors 配置（地址/Key 由后端隐藏注入）
                     val config = ApiConfig(
                         id = UUID.randomUUID().toString(),
                         name = "Kwai-Kolors/Kolors",

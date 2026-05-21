@@ -38,9 +38,6 @@ object OpenClawSettingsRules {
         return normalizedProvider in setOf("默认", "default")
     }
 
-    fun isSettingsGroupEditable(provider: String): Boolean =
-        !isPinnedSettingsGroup(provider)
-
     fun canExpandSettingsModels(provider: String): Boolean =
         !isPinnedSettingsGroup(provider) && provider.trim().lowercase() !in setOf("openclaw", "openclaw remote")
 

@@ -23,11 +23,6 @@ class OpenClawUiRulesTest {
     }
 
     @Test
-    fun `openclaw group keeps card editable`() {
-        assertTrue(OpenClawSettingsRules.isSettingsGroupEditable("OpenClaw"))
-    }
-
-    @Test
     fun `openclaw group cannot expand models`() {
         assertFalse(OpenClawSettingsRules.canExpandSettingsModels("OpenClaw"))
     }
