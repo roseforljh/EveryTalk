@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -22,6 +23,7 @@ import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -73,7 +75,7 @@ fun EmptyChatView(
             label = "ContentTranslationY"
         )
         val spacerHeight by animateDpAsState(
-            targetValue = if (isImeVisible) 16.dp else 56.dp,
+            targetValue = if (isImeVisible) 16.dp else 36.dp,
             animationSpec = tween(durationMillis = 280, easing = FastOutSlowInEasing),
             label = "SpacerHeight"
         )
@@ -83,7 +85,7 @@ fun EmptyChatView(
                 .graphicsLayer {
                     translationY = contentTranslationY
                 }
-                .fillMaxWidth(),
+                .width(IntrinsicSize.Max),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
@@ -91,8 +93,9 @@ fun EmptyChatView(
                 verticalAlignment = Alignment.Bottom,
                 horizontalArrangement = Arrangement.Center,
             ) {
-                val style = MaterialTheme.typography.headlineMedium.copy(
+                val style = MaterialTheme.typography.titleLarge.copy(
                     fontWeight = FontWeight.Bold,
+                    fontSize = 24.sp,
                 )
                 Text("EveryTalk", style = style)
 
@@ -128,7 +131,7 @@ fun EmptyChatView(
                     }
                 }
 
-                Text(",在听", style = style)
+                Text(",一直都在", style = style)
 
                 animY.forEach {
                     Text(
@@ -142,48 +145,36 @@ fun EmptyChatView(
             Spacer(modifier = Modifier.height(spacerHeight))
 
             Column(
-                modifier = Modifier.fillMaxWidth()
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    GlassCard(
-                        modifier = Modifier.weight(1f),
+                    PillCard(
                         title = "创建图片",
-                        subtitle = "生成创意图片",
                         iconRes = R.drawable.gpt_images,
                         iconTint = Color(0xFF4CAF50),
                         onClick = { if (!isImeVisible) onNavigateToImageGen() }
                     )
-                    GlassCard(
-                        modifier = Modifier.weight(1f),
+                    PillCard(
                         title = "语音对话",
-                        subtitle = "进行语音交流",
                         iconRes = R.drawable.gpt_voice,
                         iconTint = Color(0xFF2196F3),
                         onClick = { if (!isImeVisible) onNavigateToVoice() }
                     )
                 }
 
-                Spacer(modifier = Modifier.height(10.dp))
-
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    GlassCard(
-                        modifier = Modifier.weight(1f),
+                    PillCard(
                         title = "配置修改",
-                        subtitle = "修改设置与接口",
                         iconRes = R.drawable.gpt_settings,
                         iconTint = Color(0xFFFF9800),
                         onClick = { if (!isImeVisible) onNavigateToSettings() }
                     )
-                    GlassCard(
-                        modifier = Modifier.weight(1f),
+                    PillCard(
                         title = "会话风格",
-                        subtitle = "设定系统提示词",
                         iconRes = R.drawable.gpt_tuning,
                         iconTint = Color(0xFFAB47BC),
                         onClick = { if (!isImeVisible) onShowSystemPrompt() }
@@ -195,10 +186,9 @@ fun EmptyChatView(
 }
 
 @Composable
-private fun GlassCard(
+private fun PillCard(
     modifier: Modifier = Modifier,
     title: String,
-    subtitle: String,
     iconRes: Int,
     iconTint: Color,
     onClick: () -> Unit
@@ -209,49 +199,38 @@ private fun GlassCard(
 
     Surface(
         modifier = modifier
-            .clip(RoundedCornerShape(24.dp))
+            .clip(RoundedCornerShape(50))
             .border(
                 width = 0.8.dp,
                 color = borderColor,
-                shape = RoundedCornerShape(24.dp)
+                shape = RoundedCornerShape(50)
             )
             .clickable(onClick = onClick),
-        shape = RoundedCornerShape(24.dp),
+        shape = RoundedCornerShape(50),
         color = cardColor,
         tonalElevation = 0.dp
     ) {
         Row(
             modifier = Modifier
-                .padding(horizontal = 10.dp, vertical = 10.dp),
+                .padding(horizontal = 14.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+            horizontalArrangement = Arrangement.Center
         ) {
             Icon(
                 painter = painterResource(id = iconRes),
                 contentDescription = null,
                 tint = iconTint,
-                modifier = Modifier.size(22.dp)
+                modifier = Modifier.size(20.dp)
             )
-            Column(
-                modifier = Modifier.weight(1f)
-            ) {
-                Text(
-                    text = title,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    fontWeight = FontWeight.SemiBold,
-                    fontSize = 13.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Spacer(modifier = Modifier.height(1.dp))
-                Text(
-                    text = subtitle,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                    fontSize = 10.sp,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = title,
+                color = MaterialTheme.colorScheme.onSurface,
+                fontWeight = FontWeight.Medium,
+                fontSize = 14.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
         }
     }
 }
