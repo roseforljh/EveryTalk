@@ -383,7 +383,6 @@ class ApiHandler(
             suspend fun ensureFinalStreamingSync(source: String) {
                 if (finalSyncDone) return
                 try {
-                    stateHolder.flushStreamingBuffer(aiMessageId)
                     stateHolder.syncStreamingMessageToList(aiMessageId, isImageGeneration)
                     finalSyncDone = true
                     logger.debug("Final streaming sync completed from $source for message: $aiMessageId")
@@ -824,12 +823,6 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     }
                     processedMessageIds.add(aiMessageId)
 
-                    // 🎯 刷新 StreamingBuffer 确保所有内容已提交（Requirements: 3.3, 7.1, 7.2）
-                    stateHolder.flushStreamingBuffer(aiMessageId)
-                    
-                    // 🎯 Task 11: Log performance metrics at stream completion
-                    // This provides a summary of streaming performance for debugging
-                    // Requirements: 1.4, 3.4
                     try {
                         val metrics = stateHolder.getStreamingPerformanceMetrics()
                         logger.debug("Stream completion performance metrics: $metrics")

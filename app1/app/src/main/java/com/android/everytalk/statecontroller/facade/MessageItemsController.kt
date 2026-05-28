@@ -186,13 +186,19 @@ open class MessageItemsController(
                             }
                             val footerMatches = (cachedFooter != null) == expectedHasFooter &&
                                 (!expectedHasFooter || cachedFooter?.message?.webSearchResults == message.webSearchResults)
+                            val blocksHashMatches = cached?.blocksHash == parseResult.blocksHash
+                            val allowStreamingBlocksHashReuse = cached != null &&
+                                !isCurrentlyStreaming &&
+                                !parseResult.hasPendingMath &&
+                                cached.text == message.text &&
+                                cached.items.any { it is ChatListItem.AiMessage || it is ChatListItem.AiMessageCode }
 
                             val cacheValid = cached != null &&
                                 cached.text == message.text &&
                                 cached.reasoning == message.reasoning &&
                                 cached.outputType == message.outputType &&
                                 cached.hasReasoning == hasReasoning &&
-                                cached.blocksHash == parseResult.blocksHash &&
+                                (blocksHashMatches || allowStreamingBlocksHashReuse) &&
                                 cached.hasPendingMath == parseResult.hasPendingMath &&
                                 cached.imageUrls == message.imageUrls &&
                                 cached.contentStarted == effectiveMessage.contentStarted &&
@@ -202,9 +208,8 @@ open class MessageItemsController(
                                 (cached.items.isNotEmpty() || message.text.isBlank()) &&
                                 footerMatches &&
                                 // 校验流式状态兼容性：
-                                // 1. 如果当前是流式：我们接受任何缓存（因为 AiMessage 现在也用于流式），只要内容匹配
-                                // 2. 如果当前非流式：缓存中不能包含“仅流式”组件（如 Loading/StatusIndicator）
-                                (isCurrentlyStreaming || !hasStreamingOnlyItems)
+                                // 当前正文 item 已复用完成态组件，结束时允许剔除 Loading/StatusIndicator 后继续命中缓存。
+                                (isCurrentlyStreaming || !hasStreamingOnlyItems || allowStreamingBlocksHashReuse)
 
                             if (cacheValid) {
                                 android.util.Log.d(

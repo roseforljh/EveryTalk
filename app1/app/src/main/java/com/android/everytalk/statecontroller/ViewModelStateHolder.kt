@@ -1007,6 +1007,7 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
             return
         }
 
+        streamingBuffers[messageId]?.flush()
         val finalText = streamingMessageStateManager.finishStreaming(messageId)
 
         android.util.Log.d("ViewModelStateHolder", "🎯 Syncing streaming message $messageId: finalText.length=${finalText.length}")
