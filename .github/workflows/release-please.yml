@@ -58,9 +58,8 @@ jobs:
           )
           PY
 
-      - name: Release Please (manifest)
+      - name: Release Please
         uses: googleapis/release-please-action@v4
         with:
           token: ${{ secrets.PAT }}
-          config-file: release-please-config.json
-          manifest-file: .release-please-manifest.json
+          release-type: simple
