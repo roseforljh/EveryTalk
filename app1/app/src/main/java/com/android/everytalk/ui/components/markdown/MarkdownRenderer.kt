@@ -1042,6 +1042,15 @@ fun MarkdownRenderer(
             tv.overScrollMode = View.OVER_SCROLL_NEVER
             tv.movementMethod = null
 
+            val allowSystemTextSelection = sender == Sender.AI && onLongPress == null
+            tv.setTextIsSelectable(allowSystemTextSelection)
+            if (allowSystemTextSelection) {
+                tv.isFocusable = true
+                tv.isFocusableInTouchMode = true
+                tv.isClickable = true
+                tv.isLongClickable = true
+            }
+
             // 缓存优化：尝试从缓存获取 Spanned 对象
             // 流式期间：上游 TableAwareText 只对已稳定的 part 提供 contentKey
             // 最后一个（持续变化的）part 的 contentKey 为空，不缓存
