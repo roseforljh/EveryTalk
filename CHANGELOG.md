@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.19.3](https://github.com/roseforljh/EveryTalk/compare/v1.19.2...v1.19.3) (2026-05-28)
+
+
+### Bug Fixes
+
+* align release-please manifest config ([997fddf](https://github.com/roseforljh/EveryTalk/commit/997fddff80e578b429457782125783bda7aa7cbd))
+* reduce streaming completion re-rendering ([bd339b8](https://github.com/roseforljh/EveryTalk/commit/bd339b8af4c704e4574bcd58172303a700a347f4))
+* restore AI message text selection ([4de3bb0](https://github.com/roseforljh/EveryTalk/commit/4de3bb0c8cc2fe197f08be477e6d7233bc8236b6))
+* use release-please simple mode ([bc738b1](https://github.com/roseforljh/EveryTalk/commit/bc738b1f18bebc7083dcc4a95c7eb9ea28abdc4d))
+
 ## [1.19.2](https://github.com/roseforljh/EveryTalk/compare/v1.19.1...v1.19.2) (2026-05-21)
 
 
