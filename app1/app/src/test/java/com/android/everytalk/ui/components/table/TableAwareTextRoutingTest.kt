@@ -49,12 +49,53 @@ class TableAwareTextRoutingTest {
     }
 
     @Test
-    fun `fenced code text should keep stable fallback while streaming`() {
-        assertTrue(
+    fun `closed fenced code text should not keep stable fallback while streaming`() {
+        assertFalse(
             shouldPreferStableMarkdownFallback(
                 content = "```powershell\nwmic diskdrive get model,caption,size\n```",
                 isStreaming = true,
                 isTrailingStreamingText = true,
+            )
+        )
+    }
+
+    @Test
+    fun `table text should not keep stable fallback while streaming`() {
+        assertFalse(
+            shouldPreferStableMarkdownFallback(
+                content = "| A | B |\n|---|---|\n| 1 | 2 |",
+                isStreaming = true,
+                isTrailingStreamingText = true,
+            )
+        )
+    }
+
+    @Test
+    fun `complete table text should reroute through table aware parser while streaming`() {
+        assertTrue(
+            shouldRerouteTextPartThroughTableAwareParser(
+                content = "前言\n\n| A | B |\n|---|---|\n| 1 | 2 |",
+                recursionDepth = 0,
+            )
+        )
+    }
+
+    @Test
+    fun `partial table text should not reroute through table aware parser`() {
+        assertFalse(
+            shouldRerouteTextPartThroughTableAwareParser(
+                content = "前言\n\n| A | B |",
+                recursionDepth = 0,
+            )
+        )
+    }
+
+    @Test
+    fun `table text reroute should respect recursion guard`() {
+        assertFalse(
+            shouldRerouteTextPartThroughTableAwareParser(
+                content = "| A | B |\n|---|---|\n| 1 | 2 |",
+                recursionDepth = 3,
             )
         )
     }

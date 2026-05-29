@@ -111,13 +111,42 @@ internal fun containsFencedCodeSyntax(content: String): Boolean {
     return content.contains("```") || content.contains("~~~")
 }
 
+internal fun shouldRerouteTextPartThroughTableAwareParser(
+    content: String,
+    recursionDepth: Int,
+): Boolean {
+    return recursionDepth < 3 && containsCompleteMarkdownTableSyntax(content)
+}
+
+private fun containsCompleteMarkdownTableSyntax(content: String): Boolean {
+    val lines = content.replace("\r\n", "\n").replace('\r', '\n').split('\n')
+    return lines.indices.any { index -> TableUtils.isValidTableStart(lines, index) }
+}
+
 internal fun shouldPreferStableMarkdownFallback(
     content: String,
     isStreaming: Boolean,
     isTrailingStreamingText: Boolean,
 ): Boolean {
-    if (containsFencedCodeSyntax(content)) return isStreaming
-    return isTrailingStreamingText && !shouldRenderTrailingStreamingTextWithMarkdown(content)
+    if (!isStreaming) return false
+    if (containsFencedCodeSyntax(content)) return hasUnclosedFencedCodeSyntax(content)
+    if (!isTrailingStreamingText) return false
+    return content.contains("$$") || content.contains("\\[")
+}
+
+private fun hasUnclosedFencedCodeSyntax(content: String): Boolean =
+    countFenceMarkers(content, "```") % 2 == 1 ||
+        countFenceMarkers(content, "~~~") % 2 == 1
+
+private fun countFenceMarkers(content: String, marker: String): Int {
+    var index = 0
+    var count = 0
+    while (true) {
+        val found = content.indexOf(marker, index)
+        if (found < 0) return count
+        count++
+        index = found + marker.length
+    }
 }
 
 internal data class TableAwareParseRequest(
@@ -274,6 +303,10 @@ fun TableAwareText(
                         val shouldRerouteCompletedFencedText = !isStreaming &&
                             recursionDepth < 3 &&
                             containsFencedCodeSyntax(part.content)
+                        val shouldRerouteTableText = shouldRerouteTextPartThroughTableAwareParser(
+                            content = part.content,
+                            recursionDepth = recursionDepth,
+                        )
                         val shouldUseStableFallback = shouldPreferStableMarkdownFallback(
                             content = part.content,
                             isStreaming = isStreaming,
@@ -299,6 +332,31 @@ fun TableAwareText(
                                     onCodeCopied = onCodeCopied,
                                 )
                             }
+                            shouldUseStableFallback -> {
+                                StableMarkdownText(
+                                    markdown = part.content,
+                                    style = style,
+                                    modifier = Modifier.fillMaxWidth()
+                                )
+                            }
+                            shouldRerouteTableText -> {
+                                TableAwareText(
+                                    text = part.content,
+                                    style = style,
+                                    color = color,
+                                    isStreaming = isStreaming,
+                                    modifier = Modifier.fillMaxWidth(),
+                                    recursionDepth = recursionDepth + 1,
+                                    contentKey = if (contentKey.isNotBlank()) {
+                                        "${contentKey}_table_text_${index}_${part.content.hashCode()}"
+                                    } else "",
+                                    onLongPress = onLongPress,
+                                    onImageClick = onImageClick,
+                                    sender = sender,
+                                    onCodePreviewRequested = onCodePreviewRequested,
+                                    onCodeCopied = onCodeCopied,
+                                )
+                            }
                             trailingLooksLightweightMarkdown -> {
                                 MarkdownRenderer(
                                     markdown = part.content,
@@ -311,13 +369,6 @@ fun TableAwareText(
                                     sender = sender,
                                     contentKey = "",
                                     disableVerticalPadding = disableMarkdownVerticalPadding
-                                )
-                            }
-                            shouldUseStableFallback -> {
-                                StableMarkdownText(
-                                    markdown = part.content,
-                                    style = style,
-                                    modifier = Modifier.fillMaxWidth()
                                 )
                             }
                             else -> {
