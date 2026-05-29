@@ -1,13 +1,39 @@
 package com.android.everytalk.ui.components.streaming
 
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.android.everytalk.data.DataClass.Sender
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class StreamBlocksRendererRoutingTest {
+
+    @Test
+    fun `ai stream markdown does not consume long press so text selection can open`() {
+        var called = false
+
+        val handler = streamMarkdownLongPressHandler(Sender.AI) { called = true }
+
+        assertNull(handler)
+        assertFalse(called)
+    }
+
+    @Test
+    fun `non ai stream markdown keeps parent long press handler`() {
+        var called = false
+
+        val handler = streamMarkdownLongPressHandler(Sender.User) { called = true }
+
+        assertNotNull(handler)
+        handler?.invoke(Offset.Zero)
+        assertTrue(called)
+    }
 
     @Test
     fun `plain text uses compose text path`() {

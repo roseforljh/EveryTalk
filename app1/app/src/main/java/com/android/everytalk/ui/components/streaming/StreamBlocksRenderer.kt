@@ -12,12 +12,14 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.background
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.ClipEntry
@@ -30,6 +32,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.android.everytalk.data.DataClass.Message
+import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.ui.components.EnhancedMarkdownText
 import com.android.everytalk.ui.components.StableMarkdownText
@@ -56,6 +59,16 @@ internal enum class StreamingMarkdownRenderPath {
     PlainText,
     ComposeInlineMarkdown,
     FullMarkdown,
+}
+
+internal fun streamMarkdownLongPressHandler(
+    sender: Sender,
+    onLongPress: (() -> Unit)?,
+): ((Offset) -> Unit)? {
+    if (sender == Sender.AI) return null
+    return onLongPress?.let { callback ->
+        { callback() }
+    }
 }
 
 enum class NativeStreamingMarkdownBlockType {
@@ -109,7 +122,7 @@ fun StreamBlocksRenderer(
     color: Color,
     messageOutputType: String,
     viewModel: AppViewModel,
-    onLongPress: () -> Unit,
+    onLongPress: (() -> Unit)? = null,
     onImageClick: ((String) -> Unit)? = null,
     onCodePreviewRequested: ((String, String) -> Unit)? = null,
     onCodeCopied: (() -> Unit)? = null,
@@ -132,11 +145,13 @@ fun StreamBlocksRenderer(
     }
 
     if (nativeBlocks.isNotEmpty()) {
-        NativeMarkdownBlocksSegment(
-            blocks = nativeBlocks,
-            style = style,
-            color = color,
-        )
+        StreamTextSelectionContainer(enabled = message.sender == Sender.AI) {
+            NativeMarkdownBlocksSegment(
+                blocks = nativeBlocks,
+                style = style,
+                color = color,
+            )
+        }
         return
     }
 
@@ -171,7 +186,7 @@ fun StreamBlocksRenderer(
             color = color,
             isStreaming = false,
             messageOutputType = messageOutputType,
-            onLongPress = { _ -> onLongPress() },
+            onLongPress = streamMarkdownLongPressHandler(message.sender, onLongPress),
             onImageClick = onImageClick,
             onCodePreviewRequested = onCodePreviewRequested,
             onCodeCopied = onCodeCopied,
@@ -181,70 +196,119 @@ fun StreamBlocksRenderer(
         return
     }
 
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-        segments.forEach { segment ->
-            key(segment.stableId) {
-                when (segment) {
-                    is RenderSegment.InlineText -> {
-                        when (resolveStreamingMarkdownRenderPath(segment.text)) {
-                            StreamingMarkdownRenderPath.PlainText -> {
-                                PlainTextSegment(
-                                    text = segment.text,
-                                    style = style,
-                                    color = color,
-                                )
-                            }
-                            StreamingMarkdownRenderPath.ComposeInlineMarkdown -> {
-                                ComposeInlineMarkdownSegment(
-                                    text = segment.text,
-                                    style = style,
-                                    color = color,
-                                )
-                            }
-                            StreamingMarkdownRenderPath.FullMarkdown -> {
-                                val nativeBlocks = remember(segment.stableId, segment.text) {
-                                    parseNativeStreamingMarkdownBlocks(
+    StreamTextSelectionContainer(enabled = message.sender == Sender.AI) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            segments.forEach { segment ->
+                key(segment.stableId) {
+                    when (segment) {
+                        is RenderSegment.InlineText -> {
+                            when (resolveStreamingMarkdownRenderPath(segment.text)) {
+                                StreamingMarkdownRenderPath.PlainText -> {
+                                    PlainTextSegment(
                                         text = segment.text,
-                                        segmentId = segment.stableId,
+                                        style = style,
+                                        color = color,
                                     )
                                 }
-                                if (nativeBlocks != null) {
-                                    NativeMarkdownBlocksSegment(
-                                        blocks = nativeBlocks,
-                                        style = style,
-                                        color = color,
-                                    )
-                                } else {
-                                    SegmentMarkdown(
-                                        message = message,
-                                        segmentId = segment.stableId,
+                                StreamingMarkdownRenderPath.ComposeInlineMarkdown -> {
+                                    ComposeInlineMarkdownSegment(
                                         text = segment.text,
                                         style = style,
                                         color = color,
-                                        messageOutputType = messageOutputType,
-                                        viewModel = viewModel,
-                                        onLongPress = onLongPress,
-                                        onImageClick = onImageClick,
-                                        onCodePreviewRequested = onCodePreviewRequested,
-                                        onCodeCopied = onCodeCopied,
                                     )
+                                }
+                                StreamingMarkdownRenderPath.FullMarkdown -> {
+                                    val nativeBlocks = remember(segment.stableId, segment.text) {
+                                        parseNativeStreamingMarkdownBlocks(
+                                            text = segment.text,
+                                            segmentId = segment.stableId,
+                                        )
+                                    }
+                                    if (nativeBlocks != null) {
+                                        NativeMarkdownBlocksSegment(
+                                            blocks = nativeBlocks,
+                                            style = style,
+                                            color = color,
+                                        )
+                                    } else {
+                                        SegmentMarkdown(
+                                            message = message,
+                                            segmentId = segment.stableId,
+                                            text = segment.text,
+                                            style = style,
+                                            color = color,
+                                            messageOutputType = messageOutputType,
+                                            viewModel = viewModel,
+                                            onLongPress = onLongPress,
+                                            onImageClick = onImageClick,
+                                            onCodePreviewRequested = onCodePreviewRequested,
+                                            onCodeCopied = onCodeCopied,
+                                        )
+                                    }
                                 }
                             }
                         }
-                    }
 
-                    is RenderSegment.BlockOnly -> {
-                        when (val block = segment.block) {
-                            is StreamBlock.MathInline -> {
-                                if (block.state == MathBlockState.RAW) {
-                                    StableMarkdownText(
-                                        markdown = block.text,
-                                        style = style,
+                        is RenderSegment.BlockOnly -> {
+                            when (val block = segment.block) {
+                                is StreamBlock.MathInline -> {
+                                    if (block.state == MathBlockState.RAW) {
+                                        StableMarkdownText(
+                                            markdown = block.text,
+                                            style = style,
+                                        )
+                                    } else {
+                                        SegmentMarkdown(
+                                            message = message,
+                                            segmentId = block.stableId,
+                                            text = block.text,
+                                            style = style,
+                                            color = color,
+                                            messageOutputType = messageOutputType,
+                                            viewModel = viewModel,
+                                            onLongPress = onLongPress,
+                                            onImageClick = onImageClick,
+                                            onCodePreviewRequested = onCodePreviewRequested,
+                                            onCodeCopied = onCodeCopied,
+                                        )
+                                    }
+                                }
+
+                                is StreamBlock.MathBlock -> {
+                                    if (block.state == MathBlockState.RAW) {
+                                        StableMarkdownText(
+                                            markdown = block.text,
+                                            style = style,
+                                        )
+                                    } else {
+                                        SegmentMarkdown(
+                                            message = message,
+                                            segmentId = block.stableId,
+                                            text = block.text,
+                                            style = style,
+                                            color = color,
+                                            messageOutputType = messageOutputType,
+                                            viewModel = viewModel,
+                                            onLongPress = onLongPress,
+                                            onImageClick = onImageClick,
+                                            onCodePreviewRequested = onCodePreviewRequested,
+                                            onCodeCopied = onCodeCopied,
+                                        )
+                                    }
+                                }
+
+                                is StreamBlock.CodeBlock -> {
+                                    CodeBlockSegment(
+                                        block = block,
+                                        onCodePreviewRequested = onCodePreviewRequested,
+                                        onCodeCopied = onCodeCopied,
                                     )
-                                } else {
+                                }
+
+                                else -> {
                                     SegmentMarkdown(
                                         message = message,
                                         segmentId = block.stableId,
@@ -259,59 +323,26 @@ fun StreamBlocksRenderer(
                                         onCodeCopied = onCodeCopied,
                                     )
                                 }
-                            }
-
-                            is StreamBlock.MathBlock -> {
-                                if (block.state == MathBlockState.RAW) {
-                                    StableMarkdownText(
-                                        markdown = block.text,
-                                        style = style,
-                                    )
-                                } else {
-                                    SegmentMarkdown(
-                                        message = message,
-                                        segmentId = block.stableId,
-                                        text = block.text,
-                                        style = style,
-                                        color = color,
-                                        messageOutputType = messageOutputType,
-                                        viewModel = viewModel,
-                                        onLongPress = onLongPress,
-                                        onImageClick = onImageClick,
-                                        onCodePreviewRequested = onCodePreviewRequested,
-                                        onCodeCopied = onCodeCopied,
-                                    )
-                                }
-                            }
-
-                            is StreamBlock.CodeBlock -> {
-                                CodeBlockSegment(
-                                    block = block,
-                                    onCodePreviewRequested = onCodePreviewRequested,
-                                    onCodeCopied = onCodeCopied,
-                                )
-                            }
-
-                            else -> {
-                                SegmentMarkdown(
-                                    message = message,
-                                    segmentId = block.stableId,
-                                    text = block.text,
-                                    style = style,
-                                    color = color,
-                                    messageOutputType = messageOutputType,
-                                    viewModel = viewModel,
-                                    onLongPress = onLongPress,
-                                    onImageClick = onImageClick,
-                                    onCodePreviewRequested = onCodePreviewRequested,
-                                    onCodeCopied = onCodeCopied,
-                                )
                             }
                         }
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun StreamTextSelectionContainer(
+    enabled: Boolean,
+    content: @Composable () -> Unit,
+) {
+    if (enabled) {
+        SelectionContainer {
+            content()
+        }
+    } else {
+        content()
     }
 }
 
@@ -543,7 +574,7 @@ private fun SegmentMarkdown(
     color: Color,
     messageOutputType: String,
     viewModel: AppViewModel,
-    onLongPress: () -> Unit,
+    onLongPress: (() -> Unit)?,
     onImageClick: ((String) -> Unit)?,
     onCodePreviewRequested: ((String, String) -> Unit)?,
     onCodeCopied: (() -> Unit)?,
@@ -558,7 +589,7 @@ private fun SegmentMarkdown(
         color = color,
         isStreaming = false,
         messageOutputType = messageOutputType,
-        onLongPress = { _ -> onLongPress() },
+        onLongPress = streamMarkdownLongPressHandler(message.sender, onLongPress),
         onImageClick = onImageClick,
         onCodePreviewRequested = onCodePreviewRequested,
         onCodeCopied = onCodeCopied,
