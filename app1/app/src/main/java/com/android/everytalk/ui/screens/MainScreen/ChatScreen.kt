@@ -7,6 +7,7 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyListState
@@ -55,8 +56,14 @@ import com.android.everytalk.ui.components.AppTopBar
 import com.android.everytalk.ui.components.ScrollToBottomButton
 import com.android.everytalk.ui.components.WebSourcesDialog
 import com.android.everytalk.ui.components.ImagePreviewDialog
+import com.android.everytalk.ui.components.dialog.AppDialogShape
+import com.android.everytalk.ui.components.dialog.appDialogBorderColor
+import com.android.everytalk.ui.components.dialog.appDialogCancelColor
+import com.android.everytalk.ui.components.dialog.appDialogContainerColor
+import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.ChatInputArea
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.ChatMessagesList
+import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.HistoryLoadingBubblePlaceholderItem
 import com.android.everytalk.ui.components.content.LocalStickyHeaderTop
 import com.android.everytalk.ui.screens.MainScreen.chat.dialog.EditMessageDialog
 import com.android.everytalk.ui.screens.MainScreen.chat.dialog.SystemPromptDialog
@@ -125,30 +132,9 @@ internal fun buildHistoryLoadingBubblePlaceholders(conversationId: String): List
 }
 
 internal fun shouldHideHistoryLoadingSkeleton(
-    messages: List<Message>,
     chatItems: List<ChatListItem>,
 ): Boolean {
-    val renderableMessages = messages.dropWhile {
-        it.sender == Sender.System && !it.isPlaceholderName && it.text.isNotBlank()
-    }
-    val firstRenderableId = renderableMessages.firstOrNull()?.id ?: return true
-    val renderedMessageIds = chatItems.mapNotNull { it.sourceMessageId() }.toSet()
-    return firstRenderableId in renderedMessageIds
-}
-
-private fun ChatListItem.sourceMessageId(): String? = when (this) {
-    is ChatListItem.UserMessage -> messageId
-    is ChatListItem.SystemMessage -> messageId
-    is ChatListItem.AiMessage -> messageId
-    is ChatListItem.AiMessageCode -> messageId
-    is ChatListItem.AiMessageStreaming -> messageId
-    is ChatListItem.AiMessageCodeStreaming -> messageId
-    is ChatListItem.AiMessageReasoning -> message.id
-    is ChatListItem.AiMessageFooter -> message.id
-    is ChatListItem.ErrorMessage -> messageId
-    is ChatListItem.LoadingIndicator -> messageId
-    is ChatListItem.StatusIndicator -> messageId
-    is ChatListItem.LoadingBubblePlaceholder -> null
+    return chatItems.isNotEmpty()
 }
 
 
@@ -208,34 +194,58 @@ fun ChatScreen(
      val loadedHistoryIndex by viewModel.loadedHistoryIndex.collectAsState()
     val chatListItems by viewModel.chatListItems.collectAsState()
     var historySkeletonKey by remember { mutableStateOf<String?>(null) }
+    var isHistorySkeletonReadyToReveal by remember { mutableStateOf(false) }
+
+    var previousConversationIdForSkeleton by remember { mutableStateOf<String?>(null) }
 
     LaunchedEffect(isLoadingHistory, conversationId) {
         if (isLoadingHistory) {
             historySkeletonKey = conversationId.ifBlank { "history" }
+            isHistorySkeletonReadyToReveal = false
+        } else if (previousConversationIdForSkeleton != null &&
+            previousConversationIdForSkeleton != conversationId
+        ) {
+            historySkeletonKey = null
+            isHistorySkeletonReadyToReveal = false
         }
+        previousConversationIdForSkeleton = conversationId
     }
 
     LaunchedEffect(
         isLoadingHistory,
         historySkeletonKey,
-        messages.size,
-        messages.firstOrNull()?.id,
-        messages.lastOrNull()?.id,
         chatListItems,
     ) {
         if (!isLoadingHistory && historySkeletonKey != null) {
-            if (shouldHideHistoryLoadingSkeleton(messages.toList(), chatListItems)) {
-                historySkeletonKey = null
+            if (shouldHideHistoryLoadingSkeleton(chatListItems)) {
+                isHistorySkeletonReadyToReveal = true
             }
         }
     }
 
-    val isHistorySkeletonVisible = isLoadingHistory || historySkeletonKey != null
+    LaunchedEffect(historySkeletonKey) {
+        if (historySkeletonKey != null) {
+            delay(5_000L)
+            if (historySkeletonKey != null) {
+                historySkeletonKey = null
+                isHistorySkeletonReadyToReveal = false
+            }
+        }
+    }
+
     val historySkeletonRenderKey = historySkeletonKey ?: conversationId.ifBlank { "history" }
+    val shouldRenderHistorySkeletonItems = isLoadingHistory ||
+        (historySkeletonKey != null && !isHistorySkeletonReadyToReveal)
+    val shouldShowHistorySkeletonOverlay = historySkeletonKey != null && isHistorySkeletonReadyToReveal
+    val isHistorySkeletonVisible = shouldRenderHistorySkeletonItems || shouldShowHistorySkeletonOverlay
     val isLoadingHistoryState = rememberUpdatedState(isLoadingHistory)
     val isHistorySkeletonVisibleState = rememberUpdatedState(isHistorySkeletonVisible)
-    val visibleChatListItems = remember(isHistorySkeletonVisible, historySkeletonRenderKey, chatListItems) {
-        if (isHistorySkeletonVisible) {
+    val isHistorySkeletonItemListVisibleState = rememberUpdatedState(shouldRenderHistorySkeletonItems)
+    val isHistorySkeletonReadyToRevealState = rememberUpdatedState(isHistorySkeletonReadyToReveal)
+    val historySkeletonKeyState = rememberUpdatedState(historySkeletonKey)
+    val chatListItemsState = rememberUpdatedState(chatListItems)
+    val visibleChatListItems = remember(shouldRenderHistorySkeletonItems, historySkeletonRenderKey, chatListItems) {
+        if (shouldRenderHistorySkeletonItems) {
             buildHistoryLoadingBubblePlaceholders(historySkeletonRenderKey)
         } else {
             chatListItems
@@ -289,51 +299,38 @@ fun ChatScreen(
         LazyListState(0, 0)
     }
 
-    val savedStateForConversation by remember(conversationId) {
-        derivedStateOf { viewModel.getScrollState(conversationId) }
-    }
-
     var initialScrollHandled by remember(conversationId) { mutableStateOf(false) }
 
-    LaunchedEffect(conversationId, savedStateForConversation) {
+    LaunchedEffect(conversationId, listState) {
         if (initialScrollHandled) return@LaunchedEffect
-        if (System.currentTimeMillis() - lastSendAt.value < 1200) {
-            return@LaunchedEffect
-        }
-        val savedState = savedStateForConversation
-        val shouldRestore = savedState != null && (
-            savedState.firstVisibleItemIndex > 0 || savedState.firstVisibleItemScrollOffset > 0
-        )
-        if (shouldRestore) {
-            snapshotFlow {
-                !isLoadingHistoryState.value &&
-                    !isHistorySkeletonVisibleState.value &&
-                    listState.layoutInfo.totalItemsCount > savedState.firstVisibleItemIndex
-            }
-                .filter { it }
-                .first()
 
-            listState.scrollToItem(
-                index = savedState.firstVisibleItemIndex,
-                scrollOffset = savedState.firstVisibleItemScrollOffset
-            )
-            initialScrollHandled = true
-        } else if (savedState == null) {
-            snapshotFlow {
-                !isLoadingHistoryState.value &&
-                    !isHistorySkeletonVisibleState.value &&
-                    listState.layoutInfo.totalItemsCount > 0
-            }
-                .filter { it }
-                .first()
-            val totalItems = listState.layoutInfo.totalItemsCount
-            if (totalItems > 0) {
-                listState.scrollToItem(totalItems - 1)
-            }
-            initialScrollHandled = true
-        } else {
-            initialScrollHandled = true
+        val skipScrollToBottom = System.currentTimeMillis() - lastSendAt.value < 1200
+
+        snapshotFlow {
+            val noSkeleton = historySkeletonKeyState.value == null
+            if (noSkeleton) return@snapshotFlow true
+            val realItemCount = chatListItemsState.value.size
+            !isLoadingHistoryState.value &&
+                !isHistorySkeletonItemListVisibleState.value &&
+                realItemCount > 0 &&
+                listState.layoutInfo.totalItemsCount >= realItemCount
         }
+            .filter { it }
+            .first()
+
+        if (!skipScrollToBottom) {
+            withFrameNanos { }
+            val targetIndex = chatListItemsState.value.lastIndex
+            if (targetIndex >= 0) {
+                listState.scrollToItem(targetIndex)
+                listState.scrollBy(Float.MAX_VALUE)
+            }
+        }
+        if (historySkeletonKeyState.value != null) {
+            historySkeletonKey = null
+            isHistorySkeletonReadyToReveal = false
+        }
+        initialScrollHandled = true
     }
 
     val density = LocalDensity.current
@@ -629,6 +626,36 @@ fun ChatScreen(
                                 },
                                 additionalBottomPadding = inputAreaHeightDp
                             )
+                                if (shouldShowHistorySkeletonOverlay) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .background(MaterialTheme.colorScheme.background)
+                                            .padding(
+                                                start = 6.dp,
+                                                top = 8.dp,
+                                                end = 16.dp,
+                                                bottom = inputAreaHeightDp + 12.dp,
+                                            ),
+                                        contentAlignment = Alignment.BottomCenter,
+                                    ) {
+                                        Column(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            verticalArrangement = Arrangement.spacedBy(12.dp),
+                                        ) {
+                                            buildHistoryLoadingBubblePlaceholders(historySkeletonRenderKey)
+                                                .forEach { placeholder ->
+                                                    if (placeholder is ChatListItem.LoadingBubblePlaceholder) {
+                                                        HistoryLoadingBubblePlaceholderItem(
+                                                            role = placeholder.role,
+                                                            widthFraction = placeholder.widthFraction,
+                                                            estimatedHeight = placeholder.estimatedHeightDp.dp,
+                                                        )
+                                                    }
+                                                }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -912,17 +939,19 @@ private fun AboutDialog(
     val packageInfo = remember { context.packageManager.getPackageInfo(context.packageName, 0) }
     val versionName = packageInfo.versionName
 
-    val isDarkTheme = isSystemInDarkTheme()
-    val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
-    val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
-    val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
+    val dialogBg = appDialogContainerColor()
+    val contentColor = appDialogContentColor()
+    val cancelButtonColor = appDialogCancelColor()
+    val confirmButtonColor = contentColor
+    val confirmButtonTextColor = dialogBg
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(32.dp),
-        containerColor = MaterialTheme.colorScheme.surface,
-        titleContentColor = MaterialTheme.colorScheme.onSurface,
-        textContentColor = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
+        shape = AppDialogShape,
+        containerColor = dialogBg,
+        titleContentColor = contentColor,
+        textContentColor = contentColor,
         title = { Text("关于 EveryTalk") },
         text = {
             val uriHandler = LocalUriHandler.current
@@ -937,7 +966,7 @@ private fun AboutDialog(
 
             ClickableText(
                 text = annotatedString,
-                style = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                style = MaterialTheme.typography.bodyMedium.copy(color = contentColor),
                 onClick = { offset ->
                     annotatedString.getStringAnnotations(tag = "URL", start = offset, end = offset)
                         .firstOrNull()?.let { annotation ->
@@ -959,7 +988,7 @@ private fun AboutDialog(
                         .height(48.dp),
                     shape = RoundedCornerShape(24.dp),
                     colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = MaterialTheme.colorScheme.surface,
+                        containerColor = dialogBg,
                         contentColor = cancelButtonColor
                     ),
                     border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
