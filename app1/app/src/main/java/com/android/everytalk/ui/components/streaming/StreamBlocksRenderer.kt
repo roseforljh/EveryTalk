@@ -3,6 +3,7 @@ package com.android.everytalk.ui.components.streaming
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
@@ -15,6 +16,7 @@ import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.ui.components.EnhancedMarkdownText
 import com.android.everytalk.ui.components.StableMarkdownText
+import com.android.everytalk.ui.components.table.InlineMarkdownParser
 
 private sealed interface RenderSegment {
     val stableId: String
@@ -76,26 +78,36 @@ fun StreamBlocksRenderer(
             key(segment.stableId) {
                 when (segment) {
                     is RenderSegment.InlineText -> {
-                        if (isPlainText(segment.text)) {
-                            PlainTextSegment(
-                                text = segment.text,
-                                style = style,
-                                color = color,
-                            )
-                        } else {
-                            SegmentMarkdown(
-                                message = message,
-                                segmentId = segment.stableId,
-                                text = segment.text,
-                                style = style,
-                                color = color,
-                                messageOutputType = messageOutputType,
-                                viewModel = viewModel,
-                                onLongPress = onLongPress,
-                                onImageClick = onImageClick,
-                                onCodePreviewRequested = onCodePreviewRequested,
-                                onCodeCopied = onCodeCopied,
-                            )
+                        when {
+                            isPlainText(segment.text) -> {
+                                PlainTextSegment(
+                                    text = segment.text,
+                                    style = style,
+                                    color = color,
+                                )
+                            }
+                            isInlineOnlyMarkdown(segment.text) -> {
+                                ComposeInlineMarkdownSegment(
+                                    text = segment.text,
+                                    style = style,
+                                    color = color,
+                                )
+                            }
+                            else -> {
+                                SegmentMarkdown(
+                                    message = message,
+                                    segmentId = segment.stableId,
+                                    text = segment.text,
+                                    style = style,
+                                    color = color,
+                                    messageOutputType = messageOutputType,
+                                    viewModel = viewModel,
+                                    onLongPress = onLongPress,
+                                    onImageClick = onImageClick,
+                                    onCodePreviewRequested = onCodePreviewRequested,
+                                    onCodeCopied = onCodeCopied,
+                                )
+                            }
                         }
                     }
 
@@ -220,14 +232,47 @@ private fun PlainTextSegment(
     )
 }
 
+@Composable
+private fun ComposeInlineMarkdownSegment(
+    text: String,
+    style: TextStyle,
+    color: Color,
+) {
+    val codeBackground = MaterialTheme.colorScheme.surfaceVariant
+    val annotatedString = remember(text, color, codeBackground) {
+        InlineMarkdownParser.parse(
+            text = text,
+            baseColor = color,
+            codeBackground = codeBackground,
+        )
+    }
+    androidx.compose.material3.Text(
+        text = annotatedString,
+        style = style.copy(
+            color = color,
+            platformStyle = PlatformTextStyle(includeFontPadding = false)
+        ),
+    )
+}
+
 private val markdownInlinePattern = Regex(
     """(\*\*|__|\*(?=[^\s*])|_(?=[^\s_])|~~|`|!\[|\]\(|^#{1,6}\s)""",
+    RegexOption.MULTILINE
+)
+
+private val complexMarkdownPattern = Regex(
+    """(!\[|\]\(|^#{1,6}\s|^\s*[-*+]\s|^\s*\d+\.\s|^\s*>)""",
     RegexOption.MULTILINE
 )
 
 private fun isPlainText(text: String): Boolean {
     if (text.isEmpty()) return true
     return !markdownInlinePattern.containsMatchIn(text)
+}
+
+private fun isInlineOnlyMarkdown(text: String): Boolean {
+    if (text.isEmpty()) return false
+    return !complexMarkdownPattern.containsMatchIn(text)
 }
 
 private fun buildSegments(blocks: List<StreamBlock>): List<RenderSegment> {

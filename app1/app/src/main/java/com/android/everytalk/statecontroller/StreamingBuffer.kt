@@ -17,10 +17,10 @@ class StreamingBuffer(
     private val messageId: String,
     private var updateInterval: Long = PerformanceConfig.STREAMING_BUFFER_UPDATE_INTERVAL_MS,
     private val batchThreshold: Int = PerformanceConfig.STREAMING_BUFFER_BATCH_THRESHOLD,
-    private val onUpdate: (String) -> Unit,
+    private val onUpdate: (fullContent: String, delta: String) -> Unit,
     private val coroutineScope: CoroutineScope,
     private val enableAdaptiveThrottling: Boolean = true,
-    private val enableBatchMerging: Boolean = true // 启用批量合并策略
+    private val enableBatchMerging: Boolean = true
 ) {
     private val TAG = "StreamingBuffer"
     
@@ -162,7 +162,7 @@ class StreamingBuffer(
         }
         
         try {
-            onUpdate(fullContent)
+            onUpdate(fullContent, incrementalContent)
         } catch (e: Exception) {
             Log.e(TAG, "[$messageId] onUpdate callback ERROR", e)
         }

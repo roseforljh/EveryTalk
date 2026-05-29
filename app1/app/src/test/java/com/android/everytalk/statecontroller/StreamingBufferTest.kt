@@ -53,7 +53,7 @@ class StreamingBufferTest {
         return StreamingBuffer(
             messageId = "test-message-1",
             batchThreshold = batchThreshold,
-            onUpdate = { chunk -> collectedChunks.add(chunk) },
+            onUpdate = { _, delta -> collectedChunks.add(delta) },
             coroutineScope = testScope,
             enableAdaptiveThrottling = false,
             enableBatchMerging = false
