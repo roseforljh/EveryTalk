@@ -24,6 +24,7 @@ import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -754,28 +755,7 @@ fun AppDrawerContent(
             Box(modifier = Modifier.weight(1f)) {
                 when {
                     isLoadingHistoryData -> {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(vertical = 20.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Column(
-                                horizontalAlignment = Alignment.CenterHorizontally,
-                                verticalArrangement = Arrangement.Center
-                            ) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(32.dp),
-                                    color = MaterialTheme.colorScheme.primary
-                                )
-                                Spacer(modifier = Modifier.height(12.dp))
-                                Text(
-                                    text = "正在加载历史记录...",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                        }
+                        HistorySkeletonLoading()
                     }
 
                     historicalConversations.isEmpty() && !isLoadingHistoryData -> {
@@ -1218,6 +1198,71 @@ fun CollapsibleGroupHeader(
                 }
             },
             shape = RoundedCornerShape(16.dp)
+        )
+    }
+}
+
+@Composable
+private fun HistorySkeletonLoading() {
+    val isDark = isSystemInDarkTheme()
+    val baseColor = if (isDark) Color.White else Color.Black
+
+    val infiniteTransition = rememberInfiniteTransition(label = "skeletonPulse")
+    val alpha by infiniteTransition.animateFloat(
+        initialValue = 0.06f,
+        targetValue = 0.14f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 900, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "skeletonAlpha",
+    )
+
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        repeat(6) { index ->
+            SkeletonItem(
+                color = baseColor.copy(alpha = alpha),
+                widthFraction = when (index % 3) {
+                    0 -> 0.85f
+                    1 -> 0.65f
+                    else -> 0.75f
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun SkeletonItem(
+    color: Color,
+    widthFraction: Float,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(48.dp)
+            .padding(vertical = 4.dp),
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(widthFraction)
+                .height(14.dp)
+                .clip(RoundedCornerShape(4.dp))
+                .background(color),
+        )
+        Spacer(modifier = Modifier.height(8.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(widthFraction * 0.6f)
+                .height(10.dp)
+                .clip(RoundedCornerShape(3.dp))
+                .background(color),
         )
     }
 }
