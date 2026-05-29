@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.19.4](https://github.com/roseforljh/EveryTalk/compare/v1.19.3...v1.19.4) (2026-05-29)
+
+
+### Bug Fixes
+
+* add history loading skeleton bubbles ([f8f5e8c](https://github.com/roseforljh/EveryTalk/commit/f8f5e8c7c2eb98061d5ff7e3797d0424e433845e))
+* align drawer history reset with gpt logic ([f2ec70c](https://github.com/roseforljh/EveryTalk/commit/f2ec70cf4b30d84d5be9b75ce15827234459830f))
+* align enter-conversation scroll behavior with GPT ([0a30def](https://github.com/roseforljh/EveryTalk/commit/0a30def4434650bc44cd1c10c9099d55d36c1537))
+* improve chat markdown rendering fidelity ([1718ca6](https://github.com/roseforljh/EveryTalk/commit/1718ca6a4c458499e1d94939faf1a73bbcbef435))
+* optimize HTML code block preview layout and responsiveness ([44456b4](https://github.com/roseforljh/EveryTalk/commit/44456b498154c33595a6bd54364c369268212ed3))
+* P2 streaming render optimizations - plain text Compose rendering and incremental parsing ([02bbb03](https://github.com/roseforljh/EveryTalk/commit/02bbb034c9de2e1203c87e52f3da257f6fcb1480))
+* P3 streaming optimizations - delta callback and Compose-native inline markdown rendering ([c9874f1](https://github.com/roseforljh/EveryTalk/commit/c9874f18d5f288d9cb4762f9ff265c67e2c46903))
+* refactor empty chat PillCard styles to have thinner borders and transparent background ([703da0d](https://github.com/roseforljh/EveryTalk/commit/703da0d7491cfc293b221dba39e8d3fd6a9ea102))
+* replace history loading spinner with skeleton pulse animation ([29ec540](https://github.com/roseforljh/EveryTalk/commit/29ec540ce71336eb8cddda24f8a01ce599b9d523))
+* restore ai bubble text selection ([bcc6a58](https://github.com/roseforljh/EveryTalk/commit/bcc6a58fd35e41ce48bda78c0e1db134bad88690))
+* 修复流式表格渲染路由 ([7e79081](https://github.com/roseforljh/EveryTalk/commit/7e790816ff0ccd891ae870131bcf0e13ee796fa6))
+* 统一对话框样式与复制图标 ([f88577d](https://github.com/roseforljh/EveryTalk/commit/f88577d3c4801b911a0adbc1d50a59818a89c7fb))
+
 ## [1.19.3](https://github.com/roseforljh/EveryTalk/compare/v1.19.2...v1.19.3) (2026-05-28)
 
 
