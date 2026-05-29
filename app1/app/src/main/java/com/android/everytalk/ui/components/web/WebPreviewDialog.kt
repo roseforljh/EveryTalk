@@ -107,6 +107,10 @@ fun WebPreviewDialog(
                         settings.domStorageEnabled = true
                         settings.allowFileAccess = true
                         settings.allowContentAccess = true
+                        settings.useWideViewPort = true
+                        settings.loadWithOverviewMode = true
+                        settings.builtInZoomControls = true
+                        settings.displayZoomControls = false
                         setBackgroundColor(0)
                         webViewClient = WebViewClient()
                     }

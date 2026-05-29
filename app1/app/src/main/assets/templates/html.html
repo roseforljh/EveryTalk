@@ -4,32 +4,42 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
-        html, body { height: 100%; }
-        body {
+        * { box-sizing: border-box; }
+        html, body {
             margin: 0;
-            padding: calc(env(safe-area-inset-top, 0px) + 100px) 20px 40px 20px;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+        }
+        body {
+            padding: 56px 12px 24px 12px;
+            display: flex;
+            align-items: safe center;
+            justify-content: safe center;
             background-color: #ffffff;
             color: #000000;
-            box-sizing: border-box;
             overflow: auto;
+            -webkit-overflow-scrolling: touch;
         }
         .preview-container {
             width: 100%;
-            max-width: 1200px;
-            margin: 0 auto;
+            min-height: calc(100vh - 80px);
             display: flex;
-            align-items: flex-start;
-            justify-content: center;
+            flex-direction: column;
+            align-items: center;
+            justify-content: safe center;
         }
-        img {
-            display: block;
-            max-width: 100%;
-            height: auto;
-            margin: 16px auto;
-            border-radius: 8px;
+        .preview-container > *,
+        .preview-container img,
+        .preview-container canvas,
+        .preview-container svg,
+        .preview-container iframe {
+            max-width: 100% !important;
+            margin-left: auto !important;
+            margin-right: auto !important;
         }
         @media (prefers-color-scheme: dark) {
-            body { background-color: #101010; color: #f7f7f7; }
+            body { background-color: #1a1a1a; color: #f0f0f0; }
         }
     </style>
 </head>
@@ -37,5 +47,41 @@
     <div class="preview-container">
         <!-- CONTENT_PLACEHOLDER -->
     </div>
+    <style id="everytalk-preview-override">
+        html, body {
+            width: 100% !important;
+            min-height: 100% !important;
+            margin: 0 !important;
+        }
+        body {
+            display: flex !important;
+            align-items: safe center !important;
+            justify-content: safe center !important;
+            padding: 56px 12px 24px 12px !important;
+            overflow: auto !important;
+        }
+        .preview-container {
+            width: 100% !important;
+            min-height: calc(100vh - 80px) !important;
+            display: flex !important;
+            flex-direction: column !important;
+            align-items: center !important;
+            justify-content: safe center !important;
+        }
+        .preview-container > *,
+        .preview-container img,
+        .preview-container canvas,
+        .preview-container svg,
+        .preview-container iframe {
+            max-width: 100% !important;
+            margin-left: auto !important;
+            margin-right: auto !important;
+        }
+        .preview-container img,
+        .preview-container canvas,
+        .preview-container svg {
+            height: auto !important;
+        }
+    </style>
 </body>
 </html>
