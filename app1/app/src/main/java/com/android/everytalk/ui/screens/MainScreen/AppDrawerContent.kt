@@ -1212,7 +1212,7 @@ private fun HistorySkeletonLoading() {
         initialValue = 0.06f,
         targetValue = 0.14f,
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 900, easing = FastOutSlowInEasing),
+            animation = tween(900, 0, FastOutSlowInEasing),
             repeatMode = RepeatMode.Reverse,
         ),
         label = "skeletonAlpha",

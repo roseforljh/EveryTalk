@@ -1708,17 +1708,26 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         dismissEditDialog()
         dismissSourcesDialog()
         apiHandler.cancelCurrentApiJob("加载文本模式历史索引 $index", isNewMessageSend = false, isImageGeneration = false)
+        stateHolder._isLoadingHistory.value = true
         // 先同步保存当前会话，确保切换前最新 AI 回复已写入历史列表
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-            val historyBeforeSave = stateHolder._historicalConversations.value
-            historyManager.saveCurrentChatToHistoryNow(forceSave = true, isImageGeneration = false)
-            val resolvedIndex = resolveHistoryIndexAfterSave(
-                requestedIndex = index,
-                historyBeforeSave = historyBeforeSave,
-                historyAfterSave = stateHolder._historicalConversations.value,
-            )
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                historyController.loadTextHistory(resolvedIndex)
+            try {
+                val historyBeforeSave = stateHolder._historicalConversations.value
+                historyManager.saveCurrentChatToHistoryNow(forceSave = true, isImageGeneration = false)
+                val resolvedIndex = resolveHistoryIndexAfterSave(
+                    requestedIndex = index,
+                    historyBeforeSave = historyBeforeSave,
+                    historyAfterSave = stateHolder._historicalConversations.value,
+                )
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    historyController.loadTextHistory(resolvedIndex)
+                }
+            } catch (e: Exception) {
+                Log.e("AppViewModel", "Error preparing text history load", e)
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                    stateHolder._isLoadingHistory.value = false
+                    showSnackbar("加载文本历史对话失败: ${e.message}")
+                }
             }
         }
     }

@@ -42,6 +42,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import android.content.Intent
 import android.os.SystemClock
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -54,6 +55,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
@@ -64,6 +66,8 @@ import com.android.everytalk.ui.screens.BubbleMain.Main.AttachmentsContent
 import com.android.everytalk.ui.screens.BubbleMain.Main.ReasoningToggleAndContent
 import com.android.everytalk.ui.screens.BubbleMain.Main.UserOrErrorMessageContent
 import com.android.everytalk.ui.screens.BubbleMain.Main.MessageContextMenu
+import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
+import com.android.everytalk.ui.screens.MainScreen.chat.core.PlaceholderRole
 import com.android.everytalk.ui.theme.ChatDimensions
 import com.android.everytalk.ui.theme.chatColors
 
@@ -149,8 +153,59 @@ internal fun resolveDynamicBottomReserveForVisibleGap(
 }
 
 @Composable
+private fun rememberHistoryLoadingShimmerBrush(): Brush {
+    val transition = rememberInfiniteTransition(label = "historyLoadingShimmer")
+    val shimmerOffset by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 3000f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 2000, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart,
+        ),
+        label = "historyLoadingShimmerOffset",
+    )
+    val baseColor = if (isSystemInDarkTheme()) {
+        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f)
+    } else {
+        Color(0xFFDFDFE2)
+    }
+    val highlightColor = if (isSystemInDarkTheme()) {
+        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.28f)
+    } else {
+        baseColor.copy(alpha = 0.20f)
+    }
+    return Brush.linearGradient(
+        colors = listOf(baseColor, highlightColor, baseColor),
+        start = Offset(shimmerOffset - 3000f, 0f),
+        end = Offset(shimmerOffset, 0f),
+    )
+}
+
+@Composable
+private fun HistoryLoadingBubblePlaceholderItem(
+    role: PlaceholderRole,
+    widthFraction: Float,
+    estimatedHeight: Dp,
+) {
+    val shimmerBrush = rememberHistoryLoadingShimmerBrush()
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = if (role == PlaceholderRole.User) Arrangement.End else Arrangement.Start,
+        verticalAlignment = Alignment.Top,
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(widthFraction.coerceIn(0.1f, 1f))
+                .height(estimatedHeight)
+                .clip(RoundedCornerShape(18.dp))
+                .background(shimmerBrush),
+        )
+    }
+}
+
+@Composable
 fun ChatMessagesList(
-    chatItems: List<com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem>,
+    chatItems: List<ChatListItem>,
     viewModel: AppViewModel,
     listState: LazyListState,
     scrollStateManager: com.android.everytalk.ui.screens.MainScreen.chat.text.state.ChatScrollStateManager,
@@ -628,6 +683,14 @@ fun ChatMessagesList(
                     // 前端消息列表渲染：这里按消息类型分发到不同气泡组件。
                     // 用户消息靠右，AI 和系统消息靠左，附件、思考过程、正文等内容在各自分支里渲染。
                     when (item) {
+                        is ChatListItem.LoadingBubblePlaceholder -> {
+                            HistoryLoadingBubblePlaceholderItem(
+                                role = item.role,
+                                widthFraction = item.widthFraction,
+                                estimatedHeight = item.estimatedHeightDp.dp,
+                            )
+                        }
+
                         is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage -> {
                             // 使用 Row + Arrangement.End，确保用户消息稳定靠右显示
                             Row(

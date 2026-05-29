@@ -64,6 +64,7 @@ import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.EmptyChatView
 import com.android.everytalk.ui.screens.MainScreen.chat.models.ModelSelectionBottomSheet
 import com.android.everytalk.ui.screens.MainScreen.chat.text.state.rememberChatScrollStateManager
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
+import com.android.everytalk.ui.screens.MainScreen.chat.core.PlaceholderRole
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.delay
@@ -85,6 +86,69 @@ internal fun shouldPreserveScrollSessionOnConversationIdChange(
         ?: messages.firstOrNull()?.id
 
     return derivedStableConversationId == newConversationId
+}
+
+internal fun buildHistoryLoadingBubblePlaceholders(conversationId: String): List<ChatListItem> {
+    val keyPrefix = conversationId.ifBlank { "history" }
+    return listOf(
+        ChatListItem.LoadingBubblePlaceholder(
+            id = "$keyPrefix-history-placeholder-0",
+            role = PlaceholderRole.User,
+            widthFraction = 0.58f,
+            estimatedHeightDp = 52,
+        ),
+        ChatListItem.LoadingBubblePlaceholder(
+            id = "$keyPrefix-history-placeholder-1",
+            role = PlaceholderRole.Assistant,
+            widthFraction = 0.82f,
+            estimatedHeightDp = 92,
+        ),
+        ChatListItem.LoadingBubblePlaceholder(
+            id = "$keyPrefix-history-placeholder-2",
+            role = PlaceholderRole.User,
+            widthFraction = 0.46f,
+            estimatedHeightDp = 48,
+        ),
+        ChatListItem.LoadingBubblePlaceholder(
+            id = "$keyPrefix-history-placeholder-3",
+            role = PlaceholderRole.Assistant,
+            widthFraction = 0.76f,
+            estimatedHeightDp = 128,
+        ),
+        ChatListItem.LoadingBubblePlaceholder(
+            id = "$keyPrefix-history-placeholder-4",
+            role = PlaceholderRole.Assistant,
+            widthFraction = 0.64f,
+            estimatedHeightDp = 72,
+        ),
+    )
+}
+
+internal fun shouldHideHistoryLoadingSkeleton(
+    messages: List<Message>,
+    chatItems: List<ChatListItem>,
+): Boolean {
+    val renderableMessages = messages.dropWhile {
+        it.sender == Sender.System && !it.isPlaceholderName && it.text.isNotBlank()
+    }
+    val firstRenderableId = renderableMessages.firstOrNull()?.id ?: return true
+    val renderedMessageIds = chatItems.mapNotNull { it.sourceMessageId() }.toSet()
+    return firstRenderableId in renderedMessageIds
+}
+
+private fun ChatListItem.sourceMessageId(): String? = when (this) {
+    is ChatListItem.UserMessage -> messageId
+    is ChatListItem.SystemMessage -> messageId
+    is ChatListItem.AiMessage -> messageId
+    is ChatListItem.AiMessageCode -> messageId
+    is ChatListItem.AiMessageStreaming -> messageId
+    is ChatListItem.AiMessageCodeStreaming -> messageId
+    is ChatListItem.AiMessageReasoning -> message.id
+    is ChatListItem.AiMessageFooter -> message.id
+    is ChatListItem.ErrorMessage -> messageId
+    is ChatListItem.LoadingIndicator -> messageId
+    is ChatListItem.StatusIndicator -> messageId
+    is ChatListItem.LoadingBubblePlaceholder -> null
 }
 
 
@@ -142,6 +206,41 @@ fun ChatScreen(
  
      val coroutineScope = rememberCoroutineScope()
      val loadedHistoryIndex by viewModel.loadedHistoryIndex.collectAsState()
+    val chatListItems by viewModel.chatListItems.collectAsState()
+    var historySkeletonKey by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(isLoadingHistory, conversationId) {
+        if (isLoadingHistory) {
+            historySkeletonKey = conversationId.ifBlank { "history" }
+        }
+    }
+
+    LaunchedEffect(
+        isLoadingHistory,
+        historySkeletonKey,
+        messages.size,
+        messages.firstOrNull()?.id,
+        messages.lastOrNull()?.id,
+        chatListItems,
+    ) {
+        if (!isLoadingHistory && historySkeletonKey != null) {
+            if (shouldHideHistoryLoadingSkeleton(messages.toList(), chatListItems)) {
+                historySkeletonKey = null
+            }
+        }
+    }
+
+    val isHistorySkeletonVisible = isLoadingHistory || historySkeletonKey != null
+    val historySkeletonRenderKey = historySkeletonKey ?: conversationId.ifBlank { "history" }
+    val isLoadingHistoryState = rememberUpdatedState(isLoadingHistory)
+    val isHistorySkeletonVisibleState = rememberUpdatedState(isHistorySkeletonVisible)
+    val visibleChatListItems = remember(isHistorySkeletonVisible, historySkeletonRenderKey, chatListItems) {
+        if (isHistorySkeletonVisible) {
+            buildHistoryLoadingBubblePlaceholders(historySkeletonRenderKey)
+        } else {
+            chatListItems
+        }
+    }
 
     // 获取抽屉和搜索相关状态
     val isDrawerOpen = !viewModel.drawerState.isClosed
@@ -206,7 +305,11 @@ fun ChatScreen(
             savedState.firstVisibleItemIndex > 0 || savedState.firstVisibleItemScrollOffset > 0
         )
         if (shouldRestore) {
-            snapshotFlow { !isLoadingHistory && listState.layoutInfo.totalItemsCount > savedState.firstVisibleItemIndex }
+            snapshotFlow {
+                !isLoadingHistoryState.value &&
+                    !isHistorySkeletonVisibleState.value &&
+                    listState.layoutInfo.totalItemsCount > savedState.firstVisibleItemIndex
+            }
                 .filter { it }
                 .first()
 
@@ -216,7 +319,11 @@ fun ChatScreen(
             )
             initialScrollHandled = true
         } else if (savedState == null) {
-            snapshotFlow { !isLoadingHistory && listState.layoutInfo.totalItemsCount > 0 }
+            snapshotFlow {
+                !isLoadingHistoryState.value &&
+                    !isHistorySkeletonVisibleState.value &&
+                    listState.layoutInfo.totalItemsCount > 0
+            }
                 .filter { it }
                 .first()
             val totalItems = listState.layoutInfo.totalItemsCount
@@ -253,7 +360,9 @@ fun ChatScreen(
             )
         }
             .distinctUntilChanged()
-            .filter { (_, _, isScrolling) -> !isScrolling && !isLoadingHistory }
+            .filter { (_, _, isScrolling) ->
+                !isScrolling && !isLoadingHistoryState.value && !isHistorySkeletonVisibleState.value
+            }
             .collect { (index, offset, _) ->
                 if (listState.layoutInfo.totalItemsCount > 0) {
                     val existing = viewModel.getScrollState(conversationId)
@@ -292,7 +401,6 @@ fun ChatScreen(
     }
 
     // 监听滚动到指定消息的事件
-    val chatListItems by viewModel.chatListItems.collectAsState()
     LaunchedEffect(scrollStateManager) {
         viewModel.scrollToItemEvent.collect { messageId ->
             android.util.Log.d("ChatScreen", "scrollToItemEvent received: messageId=$messageId")
@@ -427,15 +535,7 @@ fun ChatScreen(
                 contentAlignment = Alignment.BottomCenter
             ) {
                 when {
-                    isLoadingHistory -> {
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            CircularProgressIndicator()
-                        }
-                    }
-                    messages.isEmpty() -> {
+                    messages.isEmpty() && !isHistorySkeletonVisible -> {
                         EmptyChatView(
                             onNavigateToImageGen = {
                                 viewModel.simpleModeManager.setIntendedMode(com.android.everytalk.statecontroller.SimpleModeManager.ModeType.IMAGE)
@@ -486,7 +586,7 @@ fun ChatScreen(
                                     }
                             ) {
                                 ChatMessagesList(
-                                chatItems = chatListItems,
+                                chatItems = visibleChatListItems,
                                 viewModel = viewModel,
                                 listState = listState,
                                 scrollStateManager = scrollStateManager,

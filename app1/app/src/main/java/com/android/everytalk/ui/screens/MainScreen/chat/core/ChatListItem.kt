@@ -3,6 +3,11 @@ package com.android.everytalk.ui.screens.MainScreen.chat.core
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.ui.components.streaming.StreamBlock
 
+enum class PlaceholderRole {
+    User,
+    Assistant,
+}
+
 sealed interface ChatListItem {
     val stableId: String
 
@@ -89,5 +94,14 @@ sealed interface ChatListItem {
         val text: String
     ) : ChatListItem {
         override val stableId: String = "${messageId}_status"
+    }
+
+    data class LoadingBubblePlaceholder(
+        val id: String,
+        val role: PlaceholderRole,
+        val widthFraction: Float,
+        val estimatedHeightDp: Int,
+    ) : ChatListItem {
+        override val stableId: String = id
     }
 }
