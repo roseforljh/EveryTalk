@@ -62,6 +62,30 @@ class AppViewModelFactory(
 private val defaultDrawerWidth = 320.dp
 
 @OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun rememberDrawerSessionKey(drawerState: DrawerState): Int {
+    var drawerSessionKey by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(drawerState) {
+        var wasDrawerActive = drawerState.currentValue != DrawerValue.Closed ||
+            drawerState.targetValue != DrawerValue.Closed
+        var wasDrawerTargetClosed = drawerState.targetValue == DrawerValue.Closed
+
+        snapshotFlow { drawerState.currentValue to drawerState.targetValue }.collect { (currentValue, targetValue) ->
+            val isDrawerActive = currentValue != DrawerValue.Closed || targetValue != DrawerValue.Closed
+            val isDrawerTargetClosed = targetValue == DrawerValue.Closed
+            if ((!wasDrawerActive && isDrawerActive) || (wasDrawerTargetClosed && !isDrawerTargetClosed)) {
+                drawerSessionKey += 1
+            }
+            wasDrawerActive = isDrawerActive
+            wasDrawerTargetClosed = isDrawerTargetClosed
+        }
+    }
+
+    return drawerSessionKey
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
 class MainActivity : ComponentActivity() {
 
     private var fileContentToSave: String? = null
@@ -182,7 +206,8 @@ class MainActivity : ComponentActivity() {
 
                         // 🎯 根据代码块滚动状态动态控制抽屉手势
                         val isCodeBlockScrolling by appViewModel.gestureManager.isCodeBlockScrolling.collectAsState()
-                        
+                        val drawerSessionKey = rememberDrawerSessionKey(appViewModel.drawerState)
+
                         DismissibleNavigationDrawer(
                             drawerState = appViewModel.drawerState,
                             gesturesEnabled = !isCodeBlockScrolling, // 代码块滚动时禁用抽屉手势
@@ -191,6 +216,12 @@ class MainActivity : ComponentActivity() {
                                 val navBackStackEntry by navController.currentBackStackEntryAsState()
                                 val currentRoute = navBackStackEntry?.destination?.route
                                 val isImageGenerationMode = currentRoute == Screen.IMAGE_GENERATION_SCREEN
+
+                                LaunchedEffect(drawerSessionKey, isImageGenerationMode) {
+                                    if (drawerSessionKey > 0 && expandedDrawerItemIndex != null) {
+                                        appViewModel.setExpandedDrawerItemIndex(null)
+                                    }
+                                }
                                 
                                 // 置顶集合状态
                                 val pinnedIds = if (isImageGenerationMode) {
@@ -199,22 +230,23 @@ class MainActivity : ComponentActivity() {
                                     appViewModel.stateHolder.pinnedTextConversationIds.collectAsState().value
                                 }
 
-                                AppDrawerContent(
-                                    historicalConversations = if (isImageGenerationMode) appViewModel.imageGenerationHistoricalConversations.collectAsState().value else appViewModel.historicalConversations.collectAsState().value,
-                                    loadedHistoryIndex = if (isImageGenerationMode) appViewModel.loadedImageGenerationHistoryIndex.collectAsState().value else appViewModel.loadedHistoryIndex.collectAsState().value,
-                                    isSearchActive = isSearchActiveInDrawer,
-                                    currentSearchQuery = searchQueryInDrawer,
-                                    onSearchActiveChange = { isActive ->
-                                        appViewModel.setSearchActiveInDrawer(
-                                            isActive
-                                        )
-                                    },
-                                    onSearchQueryChange = { query ->
-                                        appViewModel.onDrawerSearchQueryChange(
-                                            query
-                                        )
-                                    },
-                                    onImageGenerationConversationClick = { index ->
+                                key(drawerSessionKey, isImageGenerationMode) {
+                                    AppDrawerContent(
+                                        historicalConversations = if (isImageGenerationMode) appViewModel.imageGenerationHistoricalConversations.collectAsState().value else appViewModel.historicalConversations.collectAsState().value,
+                                        loadedHistoryIndex = if (isImageGenerationMode) appViewModel.loadedImageGenerationHistoryIndex.collectAsState().value else appViewModel.loadedHistoryIndex.collectAsState().value,
+                                        isSearchActive = isSearchActiveInDrawer,
+                                        currentSearchQuery = searchQueryInDrawer,
+                                        onSearchActiveChange = { isActive ->
+                                            appViewModel.setSearchActiveInDrawer(
+                                                isActive
+                                            )
+                                        },
+                                        onSearchQueryChange = { query ->
+                                            appViewModel.onDrawerSearchQueryChange(
+                                                query
+                                            )
+                                        },
+                                        onImageGenerationConversationClick = { index ->
                                         // 先声明意图模式，避免因内容/索引造成的误判
                                         // 跨模式点击时显示 Toast 提示
                                         appViewModel.simpleModeManager.setIntendedMode(SimpleModeManager.ModeType.IMAGE, showToast = !isImageGenerationMode)
@@ -309,10 +341,10 @@ class MainActivity : ComponentActivity() {
                                         }
                                     },
                                     onClearAllConversationsRequest = appViewModel::clearAllConversations,
-                                   onClearAllImageGenerationConversationsRequest = appViewModel::clearAllImageGenerationConversations,
-                                   showClearImageHistoryDialog = appViewModel.showClearImageHistoryDialog.collectAsState().value,
-                                   onShowClearImageHistoryDialog = appViewModel::showClearImageHistoryDialog,
-                                   onDismissClearImageHistoryDialog = appViewModel::dismissClearImageHistoryDialog,
+                                    onClearAllImageGenerationConversationsRequest = appViewModel::clearAllImageGenerationConversations,
+                                    showClearImageHistoryDialog = appViewModel.showClearImageHistoryDialog.collectAsState().value,
+                                    onShowClearImageHistoryDialog = appViewModel::showClearImageHistoryDialog,
+                                    onDismissClearImageHistoryDialog = appViewModel::dismissClearImageHistoryDialog,
                                     getPreviewForIndex = { index ->
                                         appViewModel.getConversationPreviewText(
                                             index,
@@ -359,7 +391,8 @@ class MainActivity : ComponentActivity() {
                                     onShareConversation = { index ->
                                         appViewModel.shareConversation(index, isImageGenerationMode)
                                     }
-                                )
+                                    )
+                                }
                             }
                         ) {
                             NavHost(
