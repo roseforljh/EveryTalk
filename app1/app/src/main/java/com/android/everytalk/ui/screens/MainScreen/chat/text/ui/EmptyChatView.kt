@@ -194,14 +194,14 @@ private fun PillCard(
     onClick: () -> Unit
 ) {
     val isDark = isSystemInDarkTheme()
-    val cardColor = if (isDark) Color.White.copy(alpha = 0.08f) else Color.White.copy(alpha = 0.55f)
+    val cardColor = Color.Transparent
     val borderColor = if (isDark) Color.White.copy(alpha = 0.15f) else Color.Black.copy(alpha = 0.08f)
 
     Surface(
         modifier = modifier
             .clip(RoundedCornerShape(50))
             .border(
-                width = 0.8.dp,
+                width = 0.5.dp,
                 color = borderColor,
                 shape = RoundedCornerShape(50)
             )
