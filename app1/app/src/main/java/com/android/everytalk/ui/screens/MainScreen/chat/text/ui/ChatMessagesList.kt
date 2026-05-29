@@ -70,6 +70,8 @@ import com.android.everytalk.ui.theme.chatColors
 import com.android.everytalk.ui.components.EnhancedMarkdownText
 import com.android.everytalk.ui.components.WebPreviewDialog
 import com.android.everytalk.ui.components.scrollFadeEdge
+import com.android.everytalk.ui.components.streaming.StreamBlock
+import com.android.everytalk.ui.components.streaming.StreamBlocksRenderer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
@@ -788,6 +790,11 @@ fun ChatMessagesList(
                                     AiMessageItem(
                                         message = message,
                                         text = text,
+                                        blocks = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage) {
+                                            item.blocks
+                                        } else {
+                                            emptyList()
+                                        },
                                         maxWidth = bubbleMaxWidth,
                                         isStreaming = isStreaming,
                                         messageOutputType = message.outputType,
@@ -1106,6 +1113,7 @@ private fun LoadingStageIndicator(
 fun AiMessageItem(
     message: Message,
     text: String,
+    blocks: List<StreamBlock> = emptyList(),
     maxWidth: Dp,
     modifier: Modifier = Modifier,
     isStreaming: Boolean,
@@ -1196,28 +1204,81 @@ fun AiMessageItem(
                     message.copy(text = effectiveContent)
                 }
 
-                // 流式阶段也始终对累计全文做结构化分块解析，
-                // UI 依靠块级 stable key 复用前面已稳定的 block，
-                // 而不是让单个 MarkdownRenderer 重排整段文本。
-                EnhancedMarkdownText(
-                    message = renderMessage,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface,
-                    isStreaming = shouldPreferStreamingContent,
-                    messageOutputType = messageOutputType,
-                    onImageClick = onImageClick,
-                    onCodePreviewRequested = { lang, code ->
-                        previewLanguage = lang
-                        previewCode = code
-                    },
-                    onCodeCopied = {
-                        viewModel.showSnackbar("已复制代码")
-                    },
-                    viewModel = viewModel,
-                    contentOverride = effectiveContent,
-                    contentKeyOverride = message.id,
-                    disableStreamingSubscription = true
-                )
+                val useStreamingBlocks =
+                    streamingRenderState.content == effectiveContent && streamingRenderState.blocks.isNotEmpty()
+
+                val renderBlocks = when {
+                    messageOutputType == "code" -> emptyList()
+                    useStreamingBlocks -> streamingRenderState.blocks
+                    blocks.isNotEmpty() && (text == effectiveContent || message.text == effectiveContent) -> blocks
+                    else -> emptyList()
+                }
+
+                if (renderBlocks.isNotEmpty()) {
+                    StreamBlocksRenderer(
+                        message = renderMessage,
+                        blocks = renderBlocks,
+                        committedBlocks = if (useStreamingBlocks) streamingRenderState.committedBlocks else emptyList(),
+                        tailBlocks = if (useStreamingBlocks) streamingRenderState.tailBlocks else emptyList(),
+                        committedBlocksHash = if (useStreamingBlocks) streamingRenderState.committedBlocksHash else "",
+                        tailBlocksHash = if (useStreamingBlocks) streamingRenderState.tailBlocksHash else "",
+                        nativeMarkdownBlocks = if (useStreamingBlocks) streamingRenderState.nativeMarkdownBlocks else emptyList(),
+                        committedNativeMarkdownBlocks = if (useStreamingBlocks) {
+                            streamingRenderState.committedNativeMarkdownBlocks
+                        } else {
+                            emptyList()
+                        },
+                        tailNativeMarkdownBlocks = if (useStreamingBlocks) {
+                            streamingRenderState.tailNativeMarkdownBlocks
+                        } else {
+                            emptyList()
+                        },
+                        nativeMarkdownBlocksHash = if (useStreamingBlocks) streamingRenderState.nativeMarkdownBlocksHash else "",
+                        committedNativeMarkdownBlocksHash = if (useStreamingBlocks) {
+                            streamingRenderState.committedNativeMarkdownBlocksHash
+                        } else {
+                            ""
+                        },
+                        tailNativeMarkdownBlocksHash = if (useStreamingBlocks) {
+                            streamingRenderState.tailNativeMarkdownBlocksHash
+                        } else {
+                            ""
+                        },
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        messageOutputType = messageOutputType,
+                        viewModel = viewModel,
+                        onLongPress = {},
+                        onImageClick = onImageClick,
+                        onCodePreviewRequested = { lang, code ->
+                            previewLanguage = lang
+                            previewCode = code
+                        },
+                        onCodeCopied = {
+                            viewModel.showSnackbar("已复制代码")
+                        },
+                    )
+                } else {
+                    EnhancedMarkdownText(
+                        message = renderMessage,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        isStreaming = shouldPreferStreamingContent,
+                        messageOutputType = messageOutputType,
+                        onImageClick = onImageClick,
+                        onCodePreviewRequested = { lang, code ->
+                            previewLanguage = lang
+                            previewCode = code
+                        },
+                        onCodeCopied = {
+                            viewModel.showSnackbar("已复制代码")
+                        },
+                        viewModel = viewModel,
+                        contentOverride = effectiveContent,
+                        contentKeyOverride = message.id,
+                        disableStreamingSubscription = true
+                    )
+                }
             }
         }
     }

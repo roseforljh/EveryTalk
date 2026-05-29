@@ -63,15 +63,16 @@ fun BreakableLatexRenderer(
         preventNumberBreaking(raw)
     }
 
-    remember(context) {
+    val nativeLatexReady = remember(context) {
         NativeLatexSupport.ensureInitialized(context)
+        true
     }
 
     val configuration = androidx.compose.ui.platform.LocalConfiguration.current
     // 扣除常见的边距 (32dp) 以获得有效可用宽度，避免依赖 BoxWithConstraints 引发流式 recompose 闪烁
     val effectiveMaxWidth = with(density) { (configuration.screenWidthDp.dp - 32.dp).toPx() }
 
-    val cacheKey = remember(pureMath, isDark, textSizeSp, effectiveMaxWidth) {
+    val cacheKey = remember(pureMath, isDark, textSizeSp, effectiveMaxWidth, nativeLatexReady) {
         "breakable_${pureMath.hashCode()}_${isDark}_${textSizeSp.toInt()}_${effectiveMaxWidth.toInt()}"
     }
 

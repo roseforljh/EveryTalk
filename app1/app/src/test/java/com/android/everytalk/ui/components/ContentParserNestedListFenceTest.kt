@@ -104,4 +104,36 @@ class ContentParserNestedListFenceTest {
         assertTrue(completeCodeParts.any { it.language == "powershell" && it.content.contains("iex (irm https://qclaw.io/install.ps1)") })
         assertTrue(completeCodeParts.any { it.language == "bash" && it.content.contains("openclaw onboard --install-daemon") })
     }
+
+    @Test
+    fun `top level fenced command should strip indented closing fence`() {
+        val input = """
+            命令：
+            ```bash
+            opencode web
+               ```
+        """.trimIndent()
+
+        val codeParts = ContentParser.parseCompleteContent(input)
+            .filterIsInstance<ContentPart.Code>()
+
+        assertEquals(1, codeParts.size)
+        assertEquals("bash", codeParts.first().language)
+        assertEquals("opencode web", codeParts.first().content.trim())
+    }
+
+    @Test
+    fun `closing fence may be longer than opening fence`() {
+        val input = """
+            ```bash
+            opencode web
+            ``````
+        """.trimIndent()
+
+        val codeParts = ContentParser.parseCompleteContent(input)
+            .filterIsInstance<ContentPart.Code>()
+
+        assertEquals(1, codeParts.size)
+        assertEquals("opencode web", codeParts.first().content.trim())
+    }
 }

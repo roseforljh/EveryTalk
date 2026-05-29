@@ -95,8 +95,8 @@ object StreamBlockParser {
             if (fence != null) {
                 val fenceHeader = fence.language
                 val close = findFenceClose(content, fence)
-                if (close >= 0) {
-                    val end = close + fence.marker.length
+                if (close != null) {
+                    val end = close.endExclusive
                     val fencedText = content.substring(cursor, end)
                     val shouldTreatAsCode = fenceHeader.isEmpty() || fencedBlockLanguageRegex.matches(fenceHeader)
                     blocks.add(
@@ -359,6 +359,12 @@ object StreamBlockParser {
         val marker: String,
         val language: String,
         val headerEnd: Int,
+        val indent: Int,
+    )
+
+    private data class FenceClose(
+        val start: Int,
+        val endExclusive: Int,
     )
 
     private fun findNextFenceStart(content: String, startIndex: Int): Int {
@@ -389,23 +395,52 @@ object StreamBlockParser {
             marker = marker,
             language = language,
             headerEnd = headerEnd,
+            indent = indentPrefix.length,
         )
     }
 
-    private fun findFenceClose(content: String, fence: FenceStart): Int {
+    private fun findFenceClose(content: String, fence: FenceStart): FenceClose? {
         var searchIndex = fence.headerEnd
         while (searchIndex < content.length) {
-            val close = content.indexOf(fence.marker, searchIndex)
-            if (close < 0) return -1
-            val lineStart = content.lastIndexOf('\n', close).let { if (it < 0) 0 else it + 1 }
-            val lineEnd = content.indexOf('\n', close).let { if (it < 0) content.length else it }
-            val beforeFence = content.substring(lineStart, close)
-            val afterFence = content.substring(close + fence.marker.length, lineEnd).trim()
-            if (beforeFence.all { it == ' ' || it == '\t' } && afterFence.isEmpty()) {
-                return close
+            val lineStart = if (searchIndex == fence.headerEnd) {
+                content.indexOf('\n', searchIndex).let { if (it < 0) return null else it + 1 }
+            } else {
+                searchIndex
             }
-            searchIndex = close + fence.marker.length
+            if (lineStart >= content.length) return null
+            val lineEnd = content.indexOf('\n', lineStart).let { if (it < 0) content.length else it }
+            val line = content.substring(lineStart, lineEnd)
+            val closeOffset = findFenceCloseOffsetInLine(line, fence)
+            if (closeOffset >= 0) {
+                val markerLength = countFenceMarkerLength(line.substring(closeOffset), fence.marker.first())
+                return FenceClose(
+                    start = lineStart + closeOffset,
+                    endExclusive = lineStart + closeOffset + markerLength,
+                )
+            }
+            searchIndex = lineEnd + 1
         }
-        return -1
+        return null
+    }
+
+    private fun findFenceCloseOffsetInLine(line: String, fence: FenceStart): Int {
+        val indent = line.indexOfFirst { it != ' ' }.let { if (it < 0) line.length else it }
+        if (fence.indent <= 3 && indent > 3) return -1
+        if (fence.indent > 3 && indent != fence.indent) return -1
+
+        val trimmed = line.trimStart()
+        val markerChar = fence.marker.first()
+        val markerLength = countFenceMarkerLength(trimmed, markerChar)
+        if (markerLength < fence.marker.length) return -1
+        if (trimmed.substring(markerLength).isNotBlank()) return -1
+        return indent
+    }
+
+    private fun countFenceMarkerLength(text: String, markerChar: Char): Int {
+        var markerLength = 0
+        while (markerLength < text.length && text[markerLength] == markerChar) {
+            markerLength++
+        }
+        return markerLength
     }
 }

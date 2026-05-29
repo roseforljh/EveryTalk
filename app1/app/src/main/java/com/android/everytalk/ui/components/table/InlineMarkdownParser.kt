@@ -20,56 +20,6 @@ import androidx.compose.ui.text.style.TextDecoration
  */
 object InlineMarkdownParser {
 
-    // 内联 Markdown 模式（按优先级排序）
-    private val INLINE_PATTERNS = listOf(
-        // 加粗+斜体 ***text*** 或 ___text___
-        InlinePattern(
-            regex = Regex("""\*\*\*(.+?)\*\*\*|___(.+?)___"""),
-            style = SpanStyle(fontWeight = FontWeight.Bold, fontStyle = FontStyle.Italic),
-            groupIndex = listOf(1, 2)
-        ),
-        // 加粗 **text** 或 __text__
-        InlinePattern(
-            regex = Regex("""\*\*(.+?)\*\*|__(.+?)__"""),
-            style = SpanStyle(fontWeight = FontWeight.Bold),
-            groupIndex = listOf(1, 2)
-        ),
-        // 斜体 *text* 或 _text_（注意：不能匹配单词内的下划线）
-        InlinePattern(
-            regex = Regex("""\*([^*]+)\*|(?<!\w)_([^_]+)_(?!\w)"""),
-            style = SpanStyle(fontStyle = FontStyle.Italic),
-            groupIndex = listOf(1, 2)
-        ),
-        // 删除线 ~~text~~
-        InlinePattern(
-            regex = Regex("""~~(.+?)~~"""),
-            style = SpanStyle(textDecoration = TextDecoration.LineThrough),
-            groupIndex = listOf(1)
-        ),
-        // 行内代码 `code`
-        InlinePattern(
-            regex = Regex("""`([^`]+)`"""),
-            style = SpanStyle(
-                fontFamily = FontFamily.Monospace,
-                background = Color(0x20808080)
-            ),
-            groupIndex = listOf(1)
-        )
-    )
-
-    private data class InlinePattern(
-        val regex: Regex,
-        val style: SpanStyle,
-        val groupIndex: List<Int>
-    )
-
-    private data class MatchInfo(
-        val start: Int,
-        val end: Int,
-        val content: String,
-        val style: SpanStyle
-    )
-
     /**
      * 解析内联 Markdown 并返回 AnnotatedString
      *
@@ -85,75 +35,12 @@ object InlineMarkdownParser {
     ): AnnotatedString {
         if (text.isEmpty()) return AnnotatedString("")
 
-        // 收集所有匹配项
-        val allMatches = mutableListOf<MatchInfo>()
-
-        for (pattern in INLINE_PATTERNS) {
-            val effectiveStyle = if (pattern.style.fontFamily == FontFamily.Monospace) {
-                pattern.style.copy(background = codeBackground)
-            } else {
-                pattern.style
-            }
-
-            pattern.regex.findAll(text).forEach { matchResult ->
-                // 找到第一个非空的捕获组
-                val content = pattern.groupIndex
-                    .mapNotNull { idx ->
-                        val group = matchResult.groups
-                        if (idx < group.size) group[idx]?.value else null
-                    }
-                    .firstOrNull() ?: return@forEach
-
-                allMatches.add(
-                    MatchInfo(
-                        start = matchResult.range.first,
-                        end = matchResult.range.last + 1,
-                        content = content,
-                        style = effectiveStyle
-                    )
-                )
-            }
-        }
-
-        // 如果没有任何匹配，直接返回原文本
-        if (allMatches.isEmpty()) {
-            return AnnotatedString(text)
-        }
-
-        // 按位置排序并过滤重叠的匹配（保留先匹配的）
-        val sortedMatches = allMatches.sortedBy { it.start }
-        val nonOverlappingMatches = mutableListOf<MatchInfo>()
-        var lastEnd = 0
-
-        for (match in sortedMatches) {
-            if (match.start >= lastEnd) {
-                nonOverlappingMatches.add(match)
-                lastEnd = match.end
-            }
-        }
-
-        // 构建 AnnotatedString
         return buildAnnotatedString {
-            var currentIndex = 0
-
-            for (match in nonOverlappingMatches) {
-                // 添加匹配前的普通文本
-                if (currentIndex < match.start) {
-                    append(text.substring(currentIndex, match.start))
-                }
-
-                // 添加带样式的匹配内容
-                pushStyle(match.style)
-                append(match.content)
-                pop()
-
-                currentIndex = match.end
-            }
-
-            // 添加剩余的普通文本
-            if (currentIndex < text.length) {
-                append(text.substring(currentIndex))
-            }
+            appendInlineMarkdown(
+                text = text,
+                codeBackground = codeBackground,
+                linkColor = resolveLinkColor(baseColor),
+            )
         }
     }
 
@@ -165,7 +52,8 @@ object InlineMarkdownParser {
         return text.contains('*') ||
                 text.contains('_') ||
                 text.contains('`') ||
-                text.contains('~')
+                text.contains('~') ||
+                text.contains('[')
     }
 
     /**
@@ -185,5 +73,188 @@ object InlineMarkdownParser {
             i++
         }
         return dollarCount >= 2
+    }
+
+    private fun resolveLinkColor(baseColor: Color): Color {
+        return if (baseColor == Color.Unspecified) Color(0xFF2962FF) else baseColor
+    }
+
+    private fun AnnotatedString.Builder.appendInlineMarkdown(
+        text: String,
+        codeBackground: Color,
+        linkColor: Color,
+    ) {
+        var index = 0
+        while (index < text.length) {
+            if (text[index] == '\\' && index + 1 < text.length) {
+                append(text[index + 1])
+                index += 2
+                continue
+            }
+
+            val parsed = parseInlineToken(
+                text = text,
+                start = index,
+                codeBackground = codeBackground,
+                linkColor = linkColor,
+            )
+            if (parsed != null) {
+                index = parsed
+                continue
+            }
+
+            append(text[index])
+            index++
+        }
+    }
+
+    private fun AnnotatedString.Builder.parseInlineToken(
+        text: String,
+        start: Int,
+        codeBackground: Color,
+        linkColor: Color,
+    ): Int? {
+        return parseCode(text, start, codeBackground)
+            ?: parseStyled(text, start, "***", SpanStyle(fontWeight = FontWeight.Bold, fontStyle = FontStyle.Italic), codeBackground, linkColor)
+            ?: parseStyled(text, start, "___", SpanStyle(fontWeight = FontWeight.Bold, fontStyle = FontStyle.Italic), codeBackground, linkColor)
+            ?: parseStyled(text, start, "**", SpanStyle(fontWeight = FontWeight.Bold), codeBackground, linkColor)
+            ?: parseStyled(text, start, "__", SpanStyle(fontWeight = FontWeight.Bold), codeBackground, linkColor)
+            ?: parseStyled(text, start, "~~", SpanStyle(textDecoration = TextDecoration.LineThrough), codeBackground, linkColor)
+            ?: parseLink(text, start, codeBackground, linkColor)
+            ?: parseItalic(text, start, codeBackground, linkColor)
+    }
+
+    private fun AnnotatedString.Builder.parseCode(
+        text: String,
+        start: Int,
+        codeBackground: Color,
+    ): Int? {
+        if (text[start] != '`') return null
+        val end = findClosingMarker(text, start + 1, "`") ?: return null
+        pushStyle(
+            SpanStyle(
+                fontFamily = FontFamily.Monospace,
+                background = codeBackground,
+            )
+        )
+        append(text.substring(start + 1, end))
+        pop()
+        return end + 1
+    }
+
+    private fun AnnotatedString.Builder.parseStyled(
+        text: String,
+        start: Int,
+        marker: String,
+        style: SpanStyle,
+        codeBackground: Color,
+        linkColor: Color,
+    ): Int? {
+        if (!text.startsWith(marker, start)) return null
+        val end = findClosingMarker(text, start + marker.length, marker) ?: return null
+        pushStyle(style)
+        appendInlineMarkdown(
+            text = text.substring(start + marker.length, end),
+            codeBackground = codeBackground,
+            linkColor = linkColor,
+        )
+        pop()
+        return end + marker.length
+    }
+
+    private fun AnnotatedString.Builder.parseItalic(
+        text: String,
+        start: Int,
+        codeBackground: Color,
+        linkColor: Color,
+    ): Int? {
+        val marker = when (text[start]) {
+            '*' -> "*"
+            '_' -> "_"
+            else -> return null
+        }
+        if (marker == "_" && !isUnderscoreOpeningDelimiter(text, start)) return null
+        if (text.startsWith(marker + marker, start)) return null
+
+        val end = findClosingMarker(text, start + 1, marker) ?: return null
+        if (marker == "_" && !isUnderscoreClosingDelimiter(text, end)) return null
+
+        pushStyle(SpanStyle(fontStyle = FontStyle.Italic))
+        appendInlineMarkdown(
+            text = text.substring(start + 1, end),
+            codeBackground = codeBackground,
+            linkColor = linkColor,
+        )
+        pop()
+        return end + 1
+    }
+
+    private fun AnnotatedString.Builder.parseLink(
+        text: String,
+        start: Int,
+        codeBackground: Color,
+        linkColor: Color,
+    ): Int? {
+        if (text[start] != '[') return null
+        val labelEnd = findClosingMarker(text, start + 1, "]") ?: return null
+        if (labelEnd + 1 >= text.length || text[labelEnd + 1] != '(') return null
+        val urlEnd = findClosingMarker(text, labelEnd + 2, ")") ?: return null
+        val url = text.substring(labelEnd + 2, urlEnd).trim()
+        if (url.isEmpty() || url.any { it.isWhitespace() }) return null
+
+        pushStringAnnotation(tag = "URL", annotation = url)
+        pushStyle(
+            SpanStyle(
+                color = linkColor,
+                textDecoration = TextDecoration.Underline,
+            )
+        )
+        appendInlineMarkdown(
+            text = text.substring(start + 1, labelEnd),
+            codeBackground = codeBackground,
+            linkColor = linkColor,
+        )
+        pop()
+        pop()
+        return urlEnd + 1
+    }
+
+    private fun findClosingMarker(text: String, start: Int, marker: String): Int? {
+        var index = start
+        while (index <= text.length - marker.length) {
+            val found = text.indexOf(marker, index)
+            if (found < 0) return null
+            if (!isEscaped(text, found)) return found
+            index = found + marker.length
+        }
+        return null
+    }
+
+    private fun isEscaped(text: String, index: Int): Boolean {
+        var slashCount = 0
+        var cursor = index - 1
+        while (cursor >= 0 && text[cursor] == '\\') {
+            slashCount++
+            cursor--
+        }
+        return slashCount % 2 == 1
+    }
+
+    private fun isUnderscoreOpeningDelimiter(text: String, index: Int): Boolean {
+        val before = text.getOrNull(index - 1)
+        val after = text.getOrNull(index + 1)
+        return before?.isLetterOrDigit() != true &&
+            after != null &&
+            !after.isWhitespace() &&
+            after != '_'
+    }
+
+    private fun isUnderscoreClosingDelimiter(text: String, index: Int): Boolean {
+        val before = text.getOrNull(index - 1)
+        val after = text.getOrNull(index + 1)
+        return before != null &&
+            !before.isWhitespace() &&
+            before != '_' &&
+            after?.isLetterOrDigit() != true
     }
 }

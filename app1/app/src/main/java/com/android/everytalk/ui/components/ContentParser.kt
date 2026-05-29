@@ -24,7 +24,7 @@ object ContentParser {
     private val fencedBlockLanguageRegex = Regex("^[A-Za-z0-9_+\\-#.]+$")
     private val openingFenceRegex = Regex("^([`~]{3,})([^`~]*)$")
     private val listMarkerRegex = Regex("^\\s{0,3}(?:[-*+]\\s+|\\d+[.)]\\s+)")
-    private val inlineFenceRegex = Regex("(?m)(\\S)([ \\t]*)(`{3,}|~{3,})([a-zA-Z0-9_+\\-#.]*)[ \\t]*$")
+    private val inlineFenceRegex = Regex("(?m)([^\\s`~])([ \\t]*)(`{3,}|~{3,})([a-zA-Z0-9_+\\-#.]*)[ \\t]*$")
 
     /**
      * 解析完整内容。
@@ -148,11 +148,19 @@ object ContentParser {
     }
 
     private fun isFenceClosingLine(line: String, openingFence: String, marker: String): Boolean {
-        val trimmed = line.trimStart()
-        if (trimmed != marker) return false
         val currentIndent = line.indexOfFirst { it != ' ' }.let { if (it < 0) line.length else it }
         val openingIndent = openingFence.indexOfFirst { it != ' ' }.let { if (it < 0) openingFence.length else it }
-        return currentIndent == openingIndent
+        if (openingIndent <= 3 && currentIndent > 3) return false
+        if (openingIndent > 3 && currentIndent != openingIndent) return false
+
+        val trimmed = line.trimStart()
+        val markerChar = marker.first()
+        var markerLength = 0
+        while (markerLength < trimmed.length && trimmed[markerLength] == markerChar) {
+            markerLength++
+        }
+        if (markerLength < marker.length) return false
+        return trimmed.substring(markerLength).isBlank()
     }
 
     /**

@@ -19,6 +19,14 @@ import io.noties.markwon.inlineparser.MarkwonInlineParserPlugin
 import io.noties.markwon.ext.tables.TablePlugin
 import org.commonmark.node.Code
 
+internal fun chatGptHeadingRelativeSizeMultiplier(level: Int): Float {
+    return when (level.coerceIn(1, 6)) {
+        1 -> 1.25f
+        2 -> 1.125f
+        else -> 1.0f
+    }
+}
+
 /**
  * Markwon实例全局缓存
  */
@@ -37,7 +45,7 @@ object MarkwonCache {
         imageClickListener: ((String) -> Unit)? = null
     ): Markwon {
         val roundedSize = textSize.toInt()
-        val cacheKey = "v12_dark=${isDark}_size=${roundedSize}"
+        val cacheKey = "v13_dark=${isDark}_size=${roundedSize}"
         
         synchronized(lock) {
             cacheMap[cacheKey]?.let { return it }
@@ -84,17 +92,7 @@ object MarkwonCache {
                             // 加粗
                             spans.add(StyleSpan(Typeface.BOLD))
                             
-                            // 字号调整 (参考 Markwon 默认比例)
-                            val size = when (level) {
-                                1 -> 2.0f
-                                2 -> 1.5f
-                                3 -> 1.17f
-                                4 -> 1.0f
-                                5 -> 0.83f
-                                6 -> 0.67f
-                                else -> 1.0f
-                            }
-                            spans.add(RelativeSizeSpan(size))
+                            spans.add(RelativeSizeSpan(chatGptHeadingRelativeSizeMultiplier(level)))
                             
                             spans.toTypedArray()
                         }

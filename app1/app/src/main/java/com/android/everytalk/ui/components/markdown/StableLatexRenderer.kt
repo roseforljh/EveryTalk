@@ -57,11 +57,12 @@ fun StableLatexRenderer(
         NativeLatexSupport.extractPureMathContent(latex)
     }
 
-    remember(context) {
+    val nativeLatexReady = remember(context) {
         NativeLatexSupport.ensureInitialized(context)
+        true
     }
 
-    val cacheKey = remember(pureMath, isDark, textSizeSp, colorArgb, contentKey) {
+    val cacheKey = remember(pureMath, isDark, textSizeSp, colorArgb, contentKey, nativeLatexReady) {
         "stable_${contentKey}_${pureMath.hashCode()}_${isDark}_${textSizeSp.toInt()}_$colorArgb"
     }
 

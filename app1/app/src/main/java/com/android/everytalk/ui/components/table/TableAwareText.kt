@@ -232,7 +232,9 @@ fun TableAwareText(
         parsedParts = initialParts
     }
 
-    val verticalPaddingDp = 0.dp
+    val verticalPaddingDp = if (sender == Sender.AI) 2.dp else 0.dp
+    val contentPartSpacingDp = if (sender == Sender.AI) 8.dp else 0.dp
+    val disableMarkdownVerticalPadding = sender != Sender.AI
 
     // 流式期间记录已测量的最大高度，防止结构变化（如检测到代码块/表格）时高度坍塌
     var measuredHeightPx by remember { mutableStateOf(0) }
@@ -255,7 +257,8 @@ fun TableAwareText(
                 if (!isStreaming) {
                     measuredHeightPx = size.height
                 }
-            }
+            },
+        verticalArrangement = Arrangement.spacedBy(contentPartSpacingDp),
     ) {
         parsedParts.forEachIndexed { index, part ->
             // 使用类型 + startOffset 作为主 key，尽量贴近“结构块身份”而不是索引身份。
@@ -307,7 +310,7 @@ fun TableAwareText(
                                     onImageClick = onImageClick,
                                     sender = sender,
                                     contentKey = "",
-                                    disableVerticalPadding = true
+                                    disableVerticalPadding = disableMarkdownVerticalPadding
                                 )
                             }
                             shouldUseStableFallback -> {
@@ -336,7 +339,7 @@ fun TableAwareText(
                                             "${contentKey}_part_${index}_${part.content.hashCode()}"
                                         }
                                     } else "",
-                                    disableVerticalPadding = true
+                                    disableVerticalPadding = disableMarkdownVerticalPadding
                                 )
                             }
                         }
