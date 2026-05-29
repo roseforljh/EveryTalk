@@ -304,6 +304,56 @@ object StreamBlockParser {
         )
     }
 
+    /**
+     * 增量解析：对 tailContent（从 globalOffset 开始的子串）执行解析，
+     * 生成的 block 的 start/endExclusive 使用全局偏移量。
+     * blockIndexStart 用于生成不与已提交 blocks 冲突的 stableId。
+     */
+    fun parseWithOffset(
+        tailContent: String,
+        messageId: String,
+        globalOffset: Int,
+        blockIndexStart: Int,
+    ): ParseResult {
+        if (tailContent.isEmpty()) {
+            return ParseResult(emptyList(), hasPendingMath = false, blocksHash = "empty")
+        }
+
+        val fullResult = parse(tailContent, messageId)
+
+        val offsetBlocks = fullResult.blocks.mapIndexed { index, block ->
+            val newId = "$messageId:${block.type.name.lowercase(java.util.Locale.ROOT)}:${blockIndexStart + index}"
+            when (block) {
+                is StreamBlock.PlainText -> block.copy(
+                    stableId = newId,
+                    start = block.start + globalOffset,
+                    endExclusive = block.endExclusive + globalOffset,
+                )
+                is StreamBlock.CodeBlock -> block.copy(
+                    stableId = newId,
+                    start = block.start + globalOffset,
+                    endExclusive = block.endExclusive + globalOffset,
+                )
+                is StreamBlock.MathInline -> block.copy(
+                    stableId = newId,
+                    start = block.start + globalOffset,
+                    endExclusive = block.endExclusive + globalOffset,
+                )
+                is StreamBlock.MathBlock -> block.copy(
+                    stableId = newId,
+                    start = block.start + globalOffset,
+                    endExclusive = block.endExclusive + globalOffset,
+                )
+            }
+        }
+
+        return ParseResult(
+            blocks = offsetBlocks,
+            hasPendingMath = fullResult.hasPendingMath,
+            blocksHash = fullResult.blocksHash,
+        )
+    }
+
     private data class FenceStart(
         val start: Int,
         val marker: String,

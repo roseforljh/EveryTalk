@@ -1,8 +1,10 @@
 package com.android.everytalk.statecontroller
 
 import android.util.Log
+import com.android.everytalk.ui.components.streaming.IncrementalParseCache
 import com.android.everytalk.ui.components.streaming.StreamingRenderState
 import com.android.everytalk.ui.components.streaming.buildStreamingRenderState
+import com.android.everytalk.ui.components.streaming.buildStreamingRenderStateIncremental
 import com.android.everytalk.util.debug.PerformanceMonitor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -69,6 +71,7 @@ class StreamingMessageStateManager {
     private val hasFirstFlushed = ConcurrentHashMap.newKeySet<String>()
 
     private val contentLengthTracker = ConcurrentHashMap<String, Int>()
+    private val incrementalParseCaches = ConcurrentHashMap<String, IncrementalParseCache>()
 
     fun getOrCreateStreamingState(messageId: String): StateFlow<String> {
         return streamingStates.getOrPut(messageId) {
@@ -106,6 +109,7 @@ class StreamingMessageStateManager {
         pendingBuffers.remove(messageId)
         pendingJobs.remove(messageId)?.cancel()
         hasFirstFlushed.remove(messageId)
+        incrementalParseCaches.remove(messageId)
         Log.d("StreamingMessageStateManager", "Started streaming for message: $messageId")
     }
 
@@ -249,6 +253,7 @@ class StreamingMessageStateManager {
         pendingJobs.remove(messageId)?.cancel()
         pendingBuffers.remove(messageId)
         hasFirstFlushed.remove(messageId)
+        incrementalParseCaches.remove(messageId)
         streamingStates.remove(messageId)
         // 不删除 streamingRenderStates：UI 侧仍在 collectAsState 订阅该 Flow，
         // 如果此时 remove，UI 会收到一个全新的空 RenderState，导致一帧内容空白和高度坍塌。
@@ -263,6 +268,7 @@ class StreamingMessageStateManager {
         pendingJobs.clear()
         pendingBuffers.clear()
         hasFirstFlushed.clear()
+        incrementalParseCaches.clear()
         streamingStates.clear()
         streamingRenderStates.clear()
         Log.d("StreamingMessageStateManager", "Cleared all streaming states (count: $count)")
@@ -310,6 +316,7 @@ class StreamingMessageStateManager {
 
         pendingBuffers.clear()
         hasFirstFlushed.clear()
+        incrementalParseCaches.clear()
         activeStreamingMessages.clear()
         streamingStates.clear()
         streamingRenderStates.clear()
@@ -397,12 +404,42 @@ class StreamingMessageStateManager {
     }
 
     private fun updateRenderState(messageId: String, content: String, isComplete: Boolean) {
-        val state = buildStreamingRenderState(
-            messageId = messageId,
-            content = content,
-            isStreaming = activeStreamingMessages.contains(messageId) && !isComplete,
-            isComplete = isComplete,
-        )
+        val isCurrentlyStreaming = activeStreamingMessages.contains(messageId) && !isComplete
+        val cache = incrementalParseCaches[messageId]
+
+        val state: StreamingRenderState
+        if (cache != null && content.length >= cache.committedEndOffset && isCurrentlyStreaming) {
+            val (newState, newCache) = buildStreamingRenderStateIncremental(
+                messageId = messageId,
+                content = content,
+                isStreaming = true,
+                isComplete = false,
+                cache = cache,
+            )
+            state = newState
+            incrementalParseCaches[messageId] = newCache
+        } else {
+            state = buildStreamingRenderState(
+                messageId = messageId,
+                content = content,
+                isStreaming = isCurrentlyStreaming,
+                isComplete = isComplete,
+            )
+            if (isCurrentlyStreaming) {
+                val blocks = state.blocks
+                val committed = if (blocks.size > 1) blocks.dropLast(1) else emptyList()
+                val committedEnd = committed.lastOrNull()?.endExclusive ?: 0
+                incrementalParseCaches[messageId] = IncrementalParseCache(
+                    committedBlocks = committed,
+                    committedEndOffset = committedEnd,
+                    lastContentLength = content.length,
+                    lastBlockIndex = committed.size,
+                )
+            } else {
+                incrementalParseCaches.remove(messageId)
+            }
+        }
+
         streamingRenderStates.getOrPut(messageId) { MutableStateFlow(state) }.value = state
     }
 }

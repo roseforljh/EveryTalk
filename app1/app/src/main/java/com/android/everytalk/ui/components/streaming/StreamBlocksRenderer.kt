@@ -8,6 +8,7 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import com.android.everytalk.data.DataClass.Message
@@ -75,19 +76,27 @@ fun StreamBlocksRenderer(
             key(segment.stableId) {
                 when (segment) {
                     is RenderSegment.InlineText -> {
-                        SegmentMarkdown(
-                            message = message,
-                            segmentId = segment.stableId,
-                            text = segment.text,
-                            style = style,
-                            color = color,
-                            messageOutputType = messageOutputType,
-                            viewModel = viewModel,
-                            onLongPress = onLongPress,
-                            onImageClick = onImageClick,
-                            onCodePreviewRequested = onCodePreviewRequested,
-                            onCodeCopied = onCodeCopied,
-                        )
+                        if (isPlainText(segment.text)) {
+                            PlainTextSegment(
+                                text = segment.text,
+                                style = style,
+                                color = color,
+                            )
+                        } else {
+                            SegmentMarkdown(
+                                message = message,
+                                segmentId = segment.stableId,
+                                text = segment.text,
+                                style = style,
+                                color = color,
+                                messageOutputType = messageOutputType,
+                                viewModel = viewModel,
+                                onLongPress = onLongPress,
+                                onImageClick = onImageClick,
+                                onCodePreviewRequested = onCodePreviewRequested,
+                                onCodeCopied = onCodeCopied,
+                            )
+                        }
                     }
 
                     is RenderSegment.BlockOnly -> {
@@ -194,6 +203,31 @@ private fun SegmentMarkdown(
         contentKeyOverride = "${message.id}:$segmentId",
         disableStreamingSubscription = true,
     )
+}
+
+@Composable
+private fun PlainTextSegment(
+    text: String,
+    style: TextStyle,
+    color: Color,
+) {
+    androidx.compose.material3.Text(
+        text = text,
+        style = style.copy(
+            color = color,
+            platformStyle = PlatformTextStyle(includeFontPadding = false)
+        ),
+    )
+}
+
+private val markdownInlinePattern = Regex(
+    """(\*\*|__|\*(?=[^\s*])|_(?=[^\s_])|~~|`|!\[|\]\(|^#{1,6}\s)""",
+    RegexOption.MULTILINE
+)
+
+private fun isPlainText(text: String): Boolean {
+    if (text.isEmpty()) return true
+    return !markdownInlinePattern.containsMatchIn(text)
 }
 
 private fun buildSegments(blocks: List<StreamBlock>): List<RenderSegment> {
