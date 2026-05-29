@@ -5,6 +5,7 @@ import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.ClickableText
@@ -34,6 +35,11 @@ import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.ui.components.AppTopBar
 import com.android.everytalk.statecontroller.SimpleModeManager
 import com.android.everytalk.data.DataClass.Message
+import com.android.everytalk.ui.components.dialog.AppDialogShape
+import com.android.everytalk.ui.components.dialog.appDialogBorderColor
+import com.android.everytalk.ui.components.dialog.appDialogCancelColor
+import com.android.everytalk.ui.components.dialog.appDialogContainerColor
+import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.screens.MainScreen.chat.text.state.rememberChatScrollStateManager
 import com.android.everytalk.ui.screens.MainScreen.chat.dialog.EditMessageDialog
 import kotlinx.coroutines.launch
@@ -408,17 +414,19 @@ private fun AboutDialog(
     val packageInfo = remember { context.packageManager.getPackageInfo(context.packageName, 0) }
     val versionName = packageInfo.versionName
 
-    val isDarkTheme = isSystemInDarkTheme()
-    val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
-    val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
-    val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
+    val dialogBg = appDialogContainerColor()
+    val contentColor = appDialogContentColor()
+    val cancelButtonColor = appDialogCancelColor()
+    val confirmButtonColor = contentColor
+    val confirmButtonTextColor = dialogBg
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(32.dp),
-        containerColor = MaterialTheme.colorScheme.surface,
-        titleContentColor = MaterialTheme.colorScheme.onSurface,
-        textContentColor = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
+        shape = AppDialogShape,
+        containerColor = dialogBg,
+        titleContentColor = contentColor,
+        textContentColor = contentColor,
         title = { Text("关于 EveryTalk") },
         text = {
             val uriHandler = LocalUriHandler.current
@@ -433,7 +441,7 @@ private fun AboutDialog(
 
             ClickableText(
                 text = annotatedString,
-                style = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
+                style = MaterialTheme.typography.bodyMedium.copy(color = contentColor),
                 onClick = { offset ->
                     annotatedString.getStringAnnotations(tag = "URL", start = offset, end = offset)
                         .firstOrNull()?.let { annotation ->
@@ -455,7 +463,7 @@ private fun AboutDialog(
                         .height(48.dp),
                     shape = RoundedCornerShape(24.dp),
                     colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = MaterialTheme.colorScheme.surface,
+                        containerColor = dialogBg,
                         contentColor = cancelButtonColor
                     ),
                     border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)

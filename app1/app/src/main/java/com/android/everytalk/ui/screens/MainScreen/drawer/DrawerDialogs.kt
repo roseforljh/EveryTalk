@@ -12,6 +12,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -20,6 +21,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.ui.Alignment
+import com.android.everytalk.ui.components.dialog.AppDialogButtonShape
+import com.android.everytalk.ui.components.dialog.AppDialogShape
+import com.android.everytalk.ui.components.dialog.AppDialogTextFieldShape
+import com.android.everytalk.ui.components.dialog.appDialogBorderColor
+import com.android.everytalk.ui.components.dialog.appDialogCancelColor
+import com.android.everytalk.ui.components.dialog.appDialogContainerColor
+import com.android.everytalk.ui.components.dialog.appDialogContentColor
+import com.android.everytalk.ui.components.dialog.appDialogTextFieldColors
 
 /**
  * 删除确认对话框。
@@ -36,13 +45,15 @@ internal fun DeleteConfirmationDialog(
     onConfirm: () -> Unit
 ) {
     if (showDialog) {
-        val isDarkTheme = isSystemInDarkTheme()
-        val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
-        val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
-        val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
+        val dialogBg = appDialogContainerColor()
+        val contentColor = appDialogContentColor()
+        val cancelButtonColor = appDialogCancelColor()
+        val confirmButtonColor = contentColor
+        val confirmButtonTextColor = dialogBg
 
         AlertDialog(
-            shape = RoundedCornerShape(32.dp),
+            modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
+            shape = AppDialogShape,
             onDismissRequest = onDismiss,
             title = {
                 Text(
@@ -64,7 +75,7 @@ internal fun DeleteConfirmationDialog(
                             .height(48.dp),
                         shape = RoundedCornerShape(24.dp),
                         colors = ButtonDefaults.outlinedButtonColors(
-                            containerColor = MaterialTheme.colorScheme.surface,
+                            containerColor = dialogBg,
                             contentColor = cancelButtonColor
                         ),
                         border = BorderStroke(1.dp, cancelButtonColor)
@@ -103,9 +114,9 @@ internal fun DeleteConfirmationDialog(
                 }
             },
             dismissButton = {},
-            containerColor = MaterialTheme.colorScheme.surface,
-            titleContentColor = MaterialTheme.colorScheme.onSurface,
-            textContentColor = MaterialTheme.colorScheme.onSurface
+            containerColor = dialogBg,
+            titleContentColor = contentColor,
+            textContentColor = contentColor
         )
     }
 }
@@ -123,13 +134,15 @@ internal fun ClearAllConfirmationDialog(
     onConfirm: () -> Unit
 ) {
     if (showDialog) {
-        val isDarkTheme = isSystemInDarkTheme()
-        val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
-        val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
-        val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
+        val dialogBg = appDialogContainerColor()
+        val contentColor = appDialogContentColor()
+        val cancelButtonColor = appDialogCancelColor()
+        val confirmButtonColor = contentColor
+        val confirmButtonTextColor = dialogBg
 
         AlertDialog(
-            shape = RoundedCornerShape(32.dp),
+            modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
+            shape = AppDialogShape,
             onDismissRequest = onDismiss,
             title = { Text("确定清空所有聊天记录？") },
             text = { Text("此操作无法撤销，所有聊天记录将被永久删除。") },
@@ -145,7 +158,7 @@ internal fun ClearAllConfirmationDialog(
                             .height(48.dp),
                         shape = RoundedCornerShape(24.dp),
                         colors = ButtonDefaults.outlinedButtonColors(
-                            containerColor = MaterialTheme.colorScheme.surface,
+                            containerColor = dialogBg,
                             contentColor = cancelButtonColor
                         ),
                         border = BorderStroke(1.dp, cancelButtonColor)
@@ -184,9 +197,9 @@ internal fun ClearAllConfirmationDialog(
                 }
             },
             dismissButton = {},
-            containerColor = MaterialTheme.colorScheme.surface,
-            titleContentColor = MaterialTheme.colorScheme.onSurface,
-            textContentColor = MaterialTheme.colorScheme.onSurface
+            containerColor = dialogBg,
+            titleContentColor = contentColor,
+            textContentColor = contentColor
         )
     }
 }
@@ -197,13 +210,15 @@ internal fun ClearImageHistoryConfirmationDialog(
    onConfirm: () -> Unit
 ) {
    if (showDialog) {
-       val isDarkTheme = isSystemInDarkTheme()
-       val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
-       val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
-       val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
+       val dialogBg = appDialogContainerColor()
+       val contentColor = appDialogContentColor()
+       val cancelButtonColor = appDialogCancelColor()
+       val confirmButtonColor = contentColor
+       val confirmButtonTextColor = dialogBg
 
        AlertDialog(
-           shape = RoundedCornerShape(32.dp),
+           modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
+           shape = AppDialogShape,
            onDismissRequest = onDismiss,
            title = { Text("确定清空所有图像生成历史？") },
            text = { Text("此操作无法撤销，所有图像生成历史将被永久删除。") },
@@ -219,7 +234,7 @@ internal fun ClearImageHistoryConfirmationDialog(
                            .height(48.dp),
                        shape = RoundedCornerShape(24.dp),
                        colors = ButtonDefaults.outlinedButtonColors(
-                           containerColor = MaterialTheme.colorScheme.surface,
+                           containerColor = dialogBg,
                            contentColor = cancelButtonColor
                        ),
                        border = BorderStroke(1.dp, cancelButtonColor)
@@ -258,9 +273,9 @@ internal fun ClearImageHistoryConfirmationDialog(
                }
            },
            dismissButton = {},
-           containerColor = MaterialTheme.colorScheme.surface,
-           titleContentColor = MaterialTheme.colorScheme.onSurface,
-           textContentColor = MaterialTheme.colorScheme.onSurface
+           containerColor = dialogBg,
+           titleContentColor = contentColor,
+           textContentColor = contentColor
        )
    }
 }
@@ -271,12 +286,16 @@ internal fun CreateGroupDialog(
     onConfirm: (String) -> Unit
 ) {
     var groupName by remember { mutableStateOf("") }
+    val dialogBg = appDialogContainerColor()
+    val contentColor = appDialogContentColor()
+    val cancelButtonColor = appDialogCancelColor()
     AlertDialog(
         onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(32.dp),
-        containerColor = MaterialTheme.colorScheme.surface,
-        titleContentColor = MaterialTheme.colorScheme.onSurface,
-        textContentColor = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
+        shape = AppDialogShape,
+        containerColor = dialogBg,
+        titleContentColor = contentColor,
+        textContentColor = contentColor,
         title = { Text("创建新分组", style = MaterialTheme.typography.titleLarge) },
         text = {
             OutlinedTextField(
@@ -284,28 +303,25 @@ internal fun CreateGroupDialog(
                 onValueChange = { groupName = it },
                 label = { Text("分组名称") },
                 singleLine = true,
-                shape = RoundedCornerShape(32.dp),
+                shape = AppDialogTextFieldShape,
                 modifier = Modifier.fillMaxWidth(),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = MaterialTheme.colorScheme.primary,
-                    unfocusedBorderColor = Color.Gray.copy(alpha = 0.5f)
-                )
+                colors = appDialogTextFieldColors()
             )
         },
         confirmButton = {
-            FilledTonalButton(
+            Button(
                 onClick = {
                     if (groupName.isNotBlank()) {
                         onConfirm(groupName)
                     }
                     onDismiss()
                 },
-                shape = RoundedCornerShape(20.dp),
-                modifier = Modifier.height(52.dp).padding(horizontal = 4.dp),
+                shape = AppDialogButtonShape,
+                modifier = Modifier.height(48.dp).padding(horizontal = 4.dp),
                 enabled = groupName.isNotBlank(),
-                colors = ButtonDefaults.filledTonalButtonColors(
-                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = contentColor,
+                    contentColor = dialogBg,
                     disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
                     disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                 )
@@ -314,10 +330,15 @@ internal fun CreateGroupDialog(
             }
         },
         dismissButton = {
-            TextButton(
+            OutlinedButton(
                 onClick = onDismiss,
-                shape = RoundedCornerShape(20.dp),
-                modifier = Modifier.height(52.dp).padding(horizontal = 4.dp)
+                shape = AppDialogButtonShape,
+                modifier = Modifier.height(48.dp).padding(horizontal = 4.dp),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = dialogBg,
+                    contentColor = cancelButtonColor
+                ),
+                border = BorderStroke(1.dp, cancelButtonColor)
             ) {
                 Text("取消", fontWeight = FontWeight.Medium)
             }
@@ -332,12 +353,16 @@ internal fun MoveToGroupDialog(
     onDismiss: () -> Unit,
     onConfirm: (String?) -> Unit
 ) {
+    val dialogBg = appDialogContainerColor()
+    val contentColor = appDialogContentColor()
+    val cancelButtonColor = appDialogCancelColor()
     AlertDialog(
         onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(32.dp),
-        containerColor = MaterialTheme.colorScheme.surface,
-        titleContentColor = MaterialTheme.colorScheme.onSurface,
-        textContentColor = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
+        shape = AppDialogShape,
+        containerColor = dialogBg,
+        titleContentColor = contentColor,
+        textContentColor = contentColor,
         title = { Text("移动到分组", style = MaterialTheme.typography.titleLarge) },
         text = {
             if (groups.isEmpty() && !isCurrentlyGrouped) {
@@ -385,10 +410,15 @@ internal fun MoveToGroupDialog(
             }
         },
         dismissButton = {
-            TextButton(
+            OutlinedButton(
                 onClick = onDismiss,
-                shape = RoundedCornerShape(20.dp),
-                modifier = Modifier.height(52.dp).padding(horizontal = 4.dp)
+                shape = AppDialogButtonShape,
+                modifier = Modifier.height(48.dp).padding(horizontal = 4.dp),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = dialogBg,
+                    contentColor = cancelButtonColor
+                ),
+                border = BorderStroke(1.dp, cancelButtonColor)
             ) {
                 Text("取消", fontWeight = FontWeight.Medium)
             }

@@ -39,7 +39,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import com.android.everytalk.data.mcp.*
-import com.android.everytalk.ui.screens.settings.DialogShape
+import com.android.everytalk.ui.components.dialog.AppDialogShape
+import com.android.everytalk.ui.components.dialog.appDialogBorderColor
+import com.android.everytalk.ui.components.dialog.appDialogContainerColor
+import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.screens.settings.DialogTextFieldColors
 
 @Composable
@@ -61,6 +64,7 @@ fun McpServerListContent(
         if (server != null) {
             AlertDialog(
                 onDismissRequest = { serverToDeleteId = null },
+                modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
                 title = { Text("移除服务器") },
                 text = { Text("确定要移除 '${server.config.name}' 吗？此操作无法撤销。") },
                 confirmButton = {
@@ -81,8 +85,10 @@ fun McpServerListContent(
                         Text("取消")
                     }
                 },
-                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                shape = RoundedCornerShape(28.dp)
+                containerColor = appDialogContainerColor(),
+                titleContentColor = appDialogContentColor(),
+                textContentColor = appDialogContentColor(),
+                shape = AppDialogShape
             )
         } else {
             serverToDeleteId = null
@@ -192,13 +198,11 @@ fun McpServerListDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(28.dp),
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-        modifier = Modifier.border(
-            width = 0.5.dp,
-            color = Color.White.copy(alpha = 0.15f),
-            shape = RoundedCornerShape(28.dp)
-        ),
+        shape = AppDialogShape,
+        containerColor = appDialogContainerColor(),
+        titleContentColor = appDialogContentColor(),
+        textContentColor = appDialogContentColor(),
+        modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
         title = null,
         text = {
             McpServerListContent(
@@ -959,8 +963,11 @@ fun McpToolSelectionDialog(
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        shape = DialogShape,
-        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+        modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
+        shape = AppDialogShape,
+        containerColor = appDialogContainerColor(),
+        titleContentColor = appDialogContentColor(),
+        textContentColor = appDialogContentColor(),
         title = {
             Text(
                 text = "选择 MCP 工具",

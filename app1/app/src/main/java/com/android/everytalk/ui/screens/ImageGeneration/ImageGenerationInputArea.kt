@@ -82,6 +82,12 @@ import com.android.everytalk.ui.components.ImageRatioSelector
 import com.android.everytalk.ui.components.ImageGenCapabilities
 import com.android.everytalk.ui.components.ImageGenCapabilities.ModelFamily
 import com.android.everytalk.ui.components.ImageGenCapabilities.QualityTier
+import com.android.everytalk.ui.components.dialog.AppDialogShape
+import com.android.everytalk.ui.components.dialog.AppDialogTextFieldShape
+import com.android.everytalk.ui.components.dialog.appDialogBorderColor
+import com.android.everytalk.ui.components.dialog.appDialogContainerColor
+import com.android.everytalk.ui.components.dialog.appDialogContentColor
+import com.android.everytalk.ui.components.dialog.appDialogTextFieldColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -901,6 +907,11 @@ fun ImageGenerationInputArea(
 
             AlertDialog(
                 onDismissRequest = { showStepsDialog = false },
+                modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
+                shape = AppDialogShape,
+                containerColor = appDialogContainerColor(),
+                titleContentColor = appDialogContentColor(),
+                textContentColor = appDialogContentColor(),
                 title = { Text("调整推理步数") },
                 text = {
                     Column {
@@ -993,7 +1004,11 @@ fun ImageGenerationInputArea(
 
         AlertDialog(
             onDismissRequest = { showParamsDialog = false },
-            containerColor = if (isSystemInDarkTheme()) Color(0xFF2C2C2C) else Color(0xFFF0F0F0),
+            modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
+            shape = AppDialogShape,
+            containerColor = appDialogContainerColor(),
+            titleContentColor = appDialogContentColor(),
+            textContentColor = appDialogContentColor(),
             title = { Text("调整生成参数") },
             text = {
                 Column {
@@ -1013,17 +1028,9 @@ fun ImageGenerationInputArea(
                         },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
-                        shape = RoundedCornerShape(8.dp),
+                        shape = AppDialogTextFieldShape,
                         placeholder = { Text("推荐值: 30") },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = Color.Black,
-                            unfocusedContainerColor = Color.Black,
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White,
-                            focusedBorderColor = MaterialTheme.colorScheme.primary,
-                            unfocusedBorderColor = Color.Black,
-                            cursorColor = Color.White
-                        )
+                        colors = appDialogTextFieldColors()
                     )
                     Text(
                         text = "推荐值: 30 (范围 1-50)",
@@ -1048,17 +1055,9 @@ fun ImageGenerationInputArea(
                         },
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
-                        shape = RoundedCornerShape(8.dp),
+                        shape = AppDialogTextFieldShape,
                         placeholder = { Text("推荐值: 7.5") },
-                        colors = OutlinedTextFieldDefaults.colors(
-                            focusedContainerColor = Color.Black,
-                            unfocusedContainerColor = Color.Black,
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White,
-                            focusedBorderColor = MaterialTheme.colorScheme.primary,
-                            unfocusedBorderColor = Color.Black,
-                            cursorColor = Color.White
-                        )
+                        colors = appDialogTextFieldColors()
                     )
                     Text(
                         text = "推荐值: 7.5 (范围 1.0-10.0)",
@@ -1087,6 +1086,11 @@ fun ImageGenerationInputArea(
     if (showGptQualityDialog && onGptImageQualityChanged != null) {
         AlertDialog(
             onDismissRequest = { showGptQualityDialog = false },
+            modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
+            shape = AppDialogShape,
+            containerColor = appDialogContainerColor(),
+            titleContentColor = appDialogContentColor(),
+            textContentColor = appDialogContentColor(),
             title = { Text("选择图像质量") },
             text = {
                 Column {

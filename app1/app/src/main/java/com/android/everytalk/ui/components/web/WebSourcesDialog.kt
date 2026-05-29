@@ -1,6 +1,7 @@
 package com.android.everytalk.ui.components
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -30,6 +31,11 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.android.everytalk.data.DataClass.WebSearchResult
+import com.android.everytalk.ui.components.dialog.AppDialogShape
+import com.android.everytalk.ui.components.dialog.appDialogBorderColor
+import com.android.everytalk.ui.components.dialog.appDialogContainerColor
+import com.android.everytalk.ui.components.dialog.appDialogContentColor
+import com.android.everytalk.ui.components.dialog.appDialogSubtextColor
 
 @Composable
 fun WebSourcesDialog(
@@ -42,10 +48,11 @@ fun WebSourcesDialog(
         Card(
             modifier = Modifier
                 .fillMaxWidth(0.95f)
-                .fillMaxHeight(0.8f),
-            shape = RoundedCornerShape(16.dp),
+                .fillMaxHeight(0.8f)
+                .border(1.dp, appDialogBorderColor(), AppDialogShape),
+            shape = AppDialogShape,
             colors = CardDefaults.cardColors(
-                containerColor = MaterialTheme.colorScheme.surfaceDim
+                containerColor = appDialogContainerColor()
             ),
             elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
         ) {
@@ -56,7 +63,7 @@ fun WebSourcesDialog(
                 Text(
                     text = "参考来源",
                     style = MaterialTheme.typography.headlineSmall,
-                    color = Color.Black,
+                    color = appDialogContentColor(),
                     modifier = Modifier
                         .align(Alignment.CenterHorizontally)
                         .padding(bottom = 12.dp)
@@ -69,14 +76,14 @@ fun WebSourcesDialog(
                                 text = "${source.index}. ${source.title}",
                                 style = MaterialTheme.typography.titleMedium,
                                 fontWeight = FontWeight.Bold,
-                                color = Color.Black
+                                color = appDialogContentColor()
                             )
                             Spacer(Modifier.height(4.dp))
                             Text(
                                 text = buildAnnotatedString {
                                     withStyle(
                                         style = SpanStyle(
-                                            color = Color.Black,
+                                            color = appDialogContentColor(),
                                             textDecoration = TextDecoration.Underline
                                         )
                                     ) {
@@ -95,14 +102,14 @@ fun WebSourcesDialog(
                             Text(
                                 text = source.snippet,
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = Color.Black.copy(alpha = 0.7f),
+                                color = appDialogSubtextColor(),
                                 modifier = Modifier.padding(top = 2.dp)
                             )
                         }
                         if (sources.last() != source) {
                             HorizontalDivider(
                                 modifier = Modifier.padding(vertical = 8.dp),
-                                color = Color.Black.copy(alpha = 0.12f)
+                                color = appDialogBorderColor()
                             )
                         }
                     }
@@ -114,8 +121,8 @@ fun WebSourcesDialog(
                     onClick = onDismissRequest,
                     modifier = Modifier.align(Alignment.End),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = Color.Black,
-                        contentColor = Color.White
+                        containerColor = appDialogContentColor(),
+                        contentColor = appDialogContainerColor()
                     )
                 ) {
                     Text("关闭")

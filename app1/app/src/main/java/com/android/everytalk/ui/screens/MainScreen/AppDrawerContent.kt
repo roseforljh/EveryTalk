@@ -44,6 +44,14 @@ import com.android.everytalk.ui.screens.MainScreen.drawer.* // 导入抽屉子�
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.foundation.clickable
+import com.android.everytalk.ui.components.dialog.AppDialogButtonShape
+import com.android.everytalk.ui.components.dialog.AppDialogShape
+import com.android.everytalk.ui.components.dialog.AppDialogTextFieldShape
+import com.android.everytalk.ui.components.dialog.appDialogBorderColor
+import com.android.everytalk.ui.components.dialog.appDialogCancelColor
+import com.android.everytalk.ui.components.dialog.appDialogContainerColor
+import com.android.everytalk.ui.components.dialog.appDialogContentColor
+import com.android.everytalk.ui.components.dialog.appDialogTextFieldColors
 
 // Helper data class for processed items
 internal data class ProcessedDrawerItems(
@@ -937,12 +945,14 @@ fun AppDrawerContent(
 
             renamingIndex?.let { index ->
                 var newName by remember(index) { mutableStateOf(getFullTextForIndex(index)) }
-                val isDarkTheme = isSystemInDarkTheme()
-                val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
-                val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
-                val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
+                val dialogBg = appDialogContainerColor()
+                val contentColor = appDialogContentColor()
+                val cancelButtonColor = appDialogCancelColor()
+                val confirmButtonColor = contentColor
+                val confirmButtonTextColor = dialogBg
 
                 AlertDialog(
+                    modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
                     onDismissRequest = { renamingIndex = null },
                     title = { Text("重命名会话") },
                     text = {
@@ -972,8 +982,8 @@ fun AppDrawerContent(
                                     focusedLabelColor = MaterialTheme.colorScheme.primary,
                                     unfocusedLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                                     disabledLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
-                                    focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                    focusedContainerColor = dialogBg,
+                                    unfocusedContainerColor = dialogBg,
                                     disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
                                 )
                             )
@@ -1010,7 +1020,7 @@ fun AppDrawerContent(
                                 .padding(horizontal = 4.dp),
                             shape = RoundedCornerShape(24.dp),
                             colors = ButtonDefaults.outlinedButtonColors(
-                                containerColor = MaterialTheme.colorScheme.surface,
+                                containerColor = dialogBg,
                                 contentColor = cancelButtonColor
                             ),
                             border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
@@ -1023,8 +1033,10 @@ fun AppDrawerContent(
                             )
                         }
                     },
-                    shape = RoundedCornerShape(28.dp),
-                    containerColor = MaterialTheme.colorScheme.surface
+                    shape = AppDialogShape,
+                    containerColor = dialogBg,
+                    titleContentColor = contentColor,
+                    textContentColor = contentColor
                 )
             }
             
@@ -1168,15 +1180,24 @@ fun CollapsibleGroupHeader(
     }
     
     if (showRenameDialog && onRename != null) {
+        val dialogBg = appDialogContainerColor()
+        val contentColor = appDialogContentColor()
+        val cancelButtonColor = appDialogCancelColor()
         AlertDialog(
             onDismissRequest = { showRenameDialog = false },
+            modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
+            shape = AppDialogShape,
+            containerColor = dialogBg,
+            titleContentColor = contentColor,
+            textContentColor = contentColor,
             title = { Text("重命名分组") },
             text = {
                 OutlinedTextField(
                     value = newName,
                     onValueChange = { newName = it },
                     label = { Text("新名称") },
-                    shape = RoundedCornerShape(8.dp)
+                    shape = AppDialogTextFieldShape,
+                    colors = appDialogTextFieldColors()
                 )
             },
             confirmButton = {
@@ -1187,17 +1208,28 @@ fun CollapsibleGroupHeader(
                         }
                         showRenameDialog = false
                     },
-                    shape = RoundedCornerShape(8.dp)
+                    shape = AppDialogButtonShape,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = contentColor,
+                        contentColor = dialogBg
+                    )
                 ) {
                     Text("重命名")
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showRenameDialog = false }) {
+                OutlinedButton(
+                    onClick = { showRenameDialog = false },
+                    shape = AppDialogButtonShape,
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = dialogBg,
+                        contentColor = cancelButtonColor
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
+                ) {
                     Text("取消")
                 }
-            },
-            shape = RoundedCornerShape(16.dp)
+            }
         )
     }
 }

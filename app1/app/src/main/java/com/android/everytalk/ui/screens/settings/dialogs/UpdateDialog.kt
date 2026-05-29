@@ -1,6 +1,7 @@
 package com.android.everytalk.ui.screens.settings.dialogs
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.border
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -23,6 +24,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.android.everytalk.ui.components.dialog.AppDialogShape
+import com.android.everytalk.ui.components.dialog.appDialogBorderColor
+import com.android.everytalk.ui.components.dialog.appDialogCancelColor
+import com.android.everytalk.ui.components.dialog.appDialogContainerColor
+import com.android.everytalk.ui.components.dialog.appDialogContentColor
 
 /**
  * 应用更新对话框（与语音模式设置对话卡样式对齐）
@@ -43,19 +49,21 @@ fun UpdateDialog(
     if (!showDialog) return
 
     val scrollState = rememberScrollState()
-    val isDarkTheme = isSystemInDarkTheme()
-    val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
-    val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
-    val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
+    val dialogBg = appDialogContainerColor()
+    val contentColor = appDialogContentColor()
+    val cancelButtonColor = appDialogCancelColor()
+    val confirmButtonColor = contentColor
+    val confirmButtonTextColor = dialogBg
 
     AlertDialog(
         onDismissRequest = {
             if (!force) onDismiss()
         },
-        shape = RoundedCornerShape(32.dp),
-        containerColor = MaterialTheme.colorScheme.surface,
-        titleContentColor = MaterialTheme.colorScheme.onSurface,
-        textContentColor = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
+        shape = AppDialogShape,
+        containerColor = dialogBg,
+        titleContentColor = contentColor,
+        textContentColor = contentColor,
         title = {
             Column {
                 Text(
@@ -107,7 +115,7 @@ fun UpdateDialog(
                             .height(48.dp),
                         shape = RoundedCornerShape(24.dp),
                         colors = ButtonDefaults.outlinedButtonColors(
-                            containerColor = MaterialTheme.colorScheme.surface,
+                            containerColor = dialogBg,
                             contentColor = cancelButtonColor
                         ),
                         border = BorderStroke(1.dp, cancelButtonColor)

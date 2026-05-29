@@ -28,6 +28,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.android.everytalk.data.DataClass.ImageRatio
+import com.android.everytalk.ui.components.dialog.AppDialogShape
+import com.android.everytalk.ui.components.dialog.appDialogBorderColor
+import com.android.everytalk.ui.components.dialog.appDialogContainerColor
+import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.components.ImageGenCapabilities.ModelFamily
 import com.android.everytalk.ui.components.ImageGenCapabilities.QualityTier
 import kotlinx.coroutines.launch
@@ -142,9 +146,10 @@ fun ImageRatioSelectionDialog(
                     this.alpha = alpha.value
                     this.scaleX = scale.value
                     this.scaleY = scale.value
-                },
-            shape = RoundedCornerShape(28.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                }
+                .border(1.dp, appDialogBorderColor(), AppDialogShape),
+            shape = AppDialogShape,
+            colors = CardDefaults.cardColors(containerColor = appDialogContainerColor()),
             elevation = CardDefaults.cardElevation(defaultElevation = 8.dp)
         ) {
             Column(
@@ -156,7 +161,7 @@ fun ImageRatioSelectionDialog(
                 Text(
                     text = "选择图像比例",
                     style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = appDialogContentColor()
                 )
 
                 Spacer(modifier = Modifier.height(16.dp))

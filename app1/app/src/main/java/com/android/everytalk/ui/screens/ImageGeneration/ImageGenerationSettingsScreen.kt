@@ -28,6 +28,11 @@ import androidx.navigation.NavController
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.ModalityType
 import com.android.everytalk.statecontroller.AppViewModel
+import com.android.everytalk.ui.components.dialog.AppDialogShape
+import com.android.everytalk.ui.components.dialog.appDialogBorderColor
+import com.android.everytalk.ui.components.dialog.appDialogCancelColor
+import com.android.everytalk.ui.components.dialog.appDialogContainerColor
+import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.screens.settings.AddNewFullConfigDialog
 import com.android.everytalk.ui.screens.settings.AddProviderDialog
 import com.android.everytalk.ui.screens.settings.ConfirmDeleteDialog
@@ -488,23 +493,25 @@ private fun AddImageModelToKeyDialog(
 ) {
     var modelName by remember { mutableStateOf("") }
 
-    val isDarkTheme = isSystemInDarkTheme()
-    val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
-    val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
-    val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
+    val dialogBg = appDialogContainerColor()
+    val contentColor = appDialogContentColor()
+    val cancelButtonColor = appDialogCancelColor()
+    val confirmButtonColor = contentColor
+    val confirmButtonTextColor = dialogBg
 
     AlertDialog(
         onDismissRequest = onDismissRequest,
-        shape = RoundedCornerShape(28.dp),
-        containerColor = MaterialTheme.colorScheme.surface,
-        titleContentColor = MaterialTheme.colorScheme.onSurface,
-        textContentColor = MaterialTheme.colorScheme.onSurface,
+        modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
+        shape = AppDialogShape,
+        containerColor = dialogBg,
+        titleContentColor = contentColor,
+        textContentColor = contentColor,
         title = {
             Text(
                 text = "添加图像模型",
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.onSurface
+                color = contentColor
             )
         },
         text = {
@@ -537,7 +544,7 @@ private fun AddImageModelToKeyDialog(
                         .height(48.dp),
                     shape = RoundedCornerShape(24.dp),
                     colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = MaterialTheme.colorScheme.surface,
+                        containerColor = dialogBg,
                         contentColor = cancelButtonColor
                     ),
                     border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)

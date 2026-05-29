@@ -33,6 +33,11 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.android.everytalk.R
+import com.android.everytalk.ui.components.dialog.AppDialogShape
+import com.android.everytalk.ui.components.dialog.appDialogBorderColor
+import com.android.everytalk.ui.components.dialog.appDialogContainerColor
+import com.android.everytalk.ui.components.dialog.appDialogContentColor
+import com.android.everytalk.ui.components.dialog.appDialogSubtextColor
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -267,14 +272,14 @@ private fun DeleteChatDialog(
     onConfirm: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val isDark = isSystemInDarkTheme()
-    val cardBg = if (isDark) Color(0xFF424242) else Color(0xFFFFFFFF)
-    val textColor = if (isDark) Color.White else Color(0xFF0D0D0D)
-    val subtextColor = if (isDark) Color.White.copy(alpha = 0.7f) else Color(0xFF0D0D0D).copy(alpha = 0.7f)
+    val cardBg = appDialogContainerColor()
+    val textColor = appDialogContentColor()
+    val subtextColor = appDialogSubtextColor()
 
     AlertDialog(
         onDismissRequest = onDismiss,
-        shape = RoundedCornerShape(20.dp),
+        modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
+        shape = AppDialogShape,
         containerColor = cardBg,
         title = {
             Text(

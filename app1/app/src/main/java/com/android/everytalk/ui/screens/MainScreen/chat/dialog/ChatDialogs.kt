@@ -48,6 +48,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.foundation.verticalScroll
@@ -58,6 +59,11 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.android.everytalk.config.PerformanceConfig
+import com.android.everytalk.ui.components.dialog.AppDialogShape
+import com.android.everytalk.ui.components.dialog.appDialogBorderColor
+import com.android.everytalk.ui.components.dialog.appDialogCancelColor
+import com.android.everytalk.ui.components.dialog.appDialogContainerColor
+import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -99,10 +105,11 @@ fun EditMessageDialog(
     
     val alpha = remember { Animatable(0f) }
     val scale = remember { Animatable(0.8f) }
-    val isDarkTheme = isSystemInDarkTheme()
-    val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
-    val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
-    val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
+    val dialogBg = appDialogContainerColor()
+    val contentColor = appDialogContentColor()
+    val cancelButtonColor = appDialogCancelColor()
+    val confirmButtonColor = contentColor
+    val confirmButtonTextColor = dialogBg
 
     LaunchedEffect(Unit) {
         launch {
@@ -115,12 +122,16 @@ fun EditMessageDialog(
 
     AlertDialog(
         onDismissRequest = onDismissRequest,
-        containerColor = MaterialTheme.colorScheme.surface,
-        modifier = Modifier.graphicsLayer {
-            this.alpha = alpha.value
-            this.scaleX = scale.value
-            this.scaleY = scale.value
-        },
+        modifier = Modifier
+            .border(1.dp, appDialogBorderColor(), AppDialogShape)
+            .graphicsLayer {
+                this.alpha = alpha.value
+                this.scaleX = scale.value
+                this.scaleY = scale.value
+            },
+        containerColor = dialogBg,
+        titleContentColor = contentColor,
+        textContentColor = contentColor,
         title = { Text("编辑消息", color = MaterialTheme.colorScheme.onSurface) },
         text = {
             SelectionContainer {
@@ -198,7 +209,7 @@ fun EditMessageDialog(
                     .padding(horizontal = 4.dp),
                 shape = RoundedCornerShape(24.dp),
                 colors = ButtonDefaults.outlinedButtonColors(
-                    containerColor = MaterialTheme.colorScheme.surface,
+                    containerColor = dialogBg,
                     contentColor = cancelButtonColor
                 ),
                 border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
@@ -211,7 +222,7 @@ fun EditMessageDialog(
                 )
             }
         },
-        shape = RoundedCornerShape(28.dp)
+        shape = AppDialogShape
     )
 }
 
@@ -232,9 +243,13 @@ fun ConversationParametersDialog(
     val configuration = LocalConfiguration.current
     val screenHeight = configuration.screenHeightDp.dp
     val dialogHeight = screenHeight * 0.67f
+    val dialogBg = appDialogContainerColor()
+    val contentColor = appDialogContentColor()
 
     AlertDialog(
-        modifier = Modifier.height(dialogHeight),
+        modifier = Modifier
+            .height(dialogHeight)
+            .border(1.dp, appDialogBorderColor(), AppDialogShape),
         onDismissRequest = onDismissRequest,
         title = {
             Text(
@@ -459,7 +474,9 @@ fun ConversationParametersDialog(
                 Text("取消") 
             }
         },
-        containerColor = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(20.dp)
+        containerColor = dialogBg,
+        titleContentColor = contentColor,
+        textContentColor = contentColor,
+        shape = AppDialogShape
     )
 }

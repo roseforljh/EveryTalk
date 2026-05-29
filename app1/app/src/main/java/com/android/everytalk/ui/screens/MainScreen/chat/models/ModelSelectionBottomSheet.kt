@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -73,6 +74,11 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.rememberCoroutineScope
 import com.android.everytalk.data.DataClass.ApiConfig
+import com.android.everytalk.ui.components.dialog.AppDialogShape
+import com.android.everytalk.ui.components.dialog.appDialogBorderColor
+import com.android.everytalk.ui.components.dialog.appDialogCancelColor
+import com.android.everytalk.ui.components.dialog.appDialogContainerColor
+import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
@@ -455,10 +461,11 @@ fun PlatformSelectionDialog(
         }
     }
 
-    val isDarkTheme = isSystemInDarkTheme()
-    val cancelButtonColor = if (isDarkTheme) Color(0xFFFF5252) else Color(0xFFD32F2F)
-    val confirmButtonColor = if (isDarkTheme) Color.White else Color(0xFF212121)
-    val confirmButtonTextColor = if (isDarkTheme) Color.Black else Color.White
+    val dialogBg = appDialogContainerColor()
+    val contentColor = appDialogContentColor()
+    val cancelButtonColor = appDialogCancelColor()
+    val confirmButtonColor = contentColor
+    val confirmButtonTextColor = dialogBg
 
     Dialog(
         onDismissRequest = onDismissRequest,
@@ -471,9 +478,10 @@ fun PlatformSelectionDialog(
                     this.alpha = alpha.value
                     this.scaleX = scale.value
                     this.scaleY = scale.value
-                },
-            shape = RoundedCornerShape(28.dp),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+                }
+                .border(1.dp, appDialogBorderColor(), AppDialogShape),
+            shape = AppDialogShape,
+            colors = CardDefaults.cardColors(containerColor = dialogBg)
         ) {
             Column(
                 modifier = Modifier.padding(24.dp),
@@ -482,7 +490,7 @@ fun PlatformSelectionDialog(
                 Text(
                     text = "切换平台",
                     style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
-                    color = MaterialTheme.colorScheme.onSurface,
+                    color = contentColor,
                     modifier = Modifier.align(Alignment.Start)
                 )
                 
@@ -493,7 +501,7 @@ fun PlatformSelectionDialog(
                 ) {
                     items(sortedPlatforms) { platform ->
                         ListItem(
-                            headlineContent = { Text(platform, color = MaterialTheme.colorScheme.onSurface) },
+                            headlineContent = { Text(platform, color = contentColor) },
                             modifier = Modifier.clickable { tempSelectedPlatform = platform },
                             colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                             trailingContent = {
@@ -529,7 +537,7 @@ fun PlatformSelectionDialog(
                             .height(48.dp),
                         shape = RoundedCornerShape(24.dp),
                         colors = ButtonDefaults.outlinedButtonColors(
-                            containerColor = MaterialTheme.colorScheme.surface,
+                            containerColor = dialogBg,
                             contentColor = cancelButtonColor
                         ),
                         border = BorderStroke(1.dp, cancelButtonColor)
