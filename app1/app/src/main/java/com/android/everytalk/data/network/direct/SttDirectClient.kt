@@ -152,7 +152,7 @@ object SttDirectClient {
                 ?.get("parts")?.jsonArray?.firstOrNull()?.jsonObject
                 ?.get("text")?.jsonPrimitive?.contentOrNull?.trim() ?: ""
             
-            Log.i(TAG, "Gemini STT result: ${text.take(100)}...")
+            Log.i(TAG, "Gemini STT result chars=${text.length}")
             return text
             
         } catch (e: Exception) {
@@ -203,7 +203,7 @@ object SttDirectClient {
             val jsonResponse = Json.parseToJsonElement(responseText).jsonObject
             val text = jsonResponse["text"]?.jsonPrimitive?.contentOrNull?.trim() ?: ""
             
-            Log.i(TAG, "OpenAI STT result: ${text.take(100)}...")
+            Log.i(TAG, "OpenAI STT result chars=${text.length}")
             return text
             
         } catch (e: Exception) {
@@ -255,7 +255,7 @@ object SttDirectClient {
             if (text.isEmpty()) {
                 Log.w(TAG, "SiliconFlow STT returned empty text")
             } else {
-                Log.i(TAG, "SiliconFlow STT result: ${text.take(100)}...")
+                Log.i(TAG, "SiliconFlow STT result chars=${text.length}")
             }
             
             return text
@@ -534,7 +534,7 @@ object SttDirectClient {
             
             // 从通道获取结果
             val result = resultChannel.tryReceive().getOrNull() ?: finalTextBuilder.toString()
-            Log.i(TAG, "Aliyun STT final result: ${result.take(100)}...")
+            Log.i(TAG, "Aliyun STT final result chars=${result.length}")
             result
             
         } catch (e: Exception) {

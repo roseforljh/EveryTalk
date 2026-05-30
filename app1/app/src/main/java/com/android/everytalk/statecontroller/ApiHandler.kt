@@ -310,17 +310,17 @@ class ApiHandler(
         preCreatedAiMessageId: String? = null
     ) {
         logger.debug(
-            "streamChatResponse request summary: rawInputText='$userMessageTextForContext', trimmedInputText='${userMessageTextForContext.trim()}', messages.size=${requestBody.messages.size}, conversationId=${requestBody.conversationId}, preCreatedId=$preCreatedAiMessageId"
+            "streamChatResponse request summary: inputChars=${userMessageTextForContext.length}, trimmedChars=${userMessageTextForContext.trim().length}, messages.size=${requestBody.messages.size}, conversationId=${requestBody.conversationId}, preCreatedId=$preCreatedAiMessageId"
         )
         requestBody.messages.forEachIndexed { index, message ->
-            val preview = when (message) {
+            val textChars = when (message) {
                 is com.android.everytalk.data.DataClass.SimpleTextApiMessage -> message.content
                 is com.android.everytalk.data.DataClass.PartsApiMessage -> message.parts
                     .filterIsInstance<ApiContentPart.Text>()
                     .joinToString(" ") { it.text }
                 else -> ""
-            }.replace("\n", "\\n").take(80)
-            logger.debug("requestMessage[$index]: role=${message.role}, preview=$preview")
+            }.length
+            logger.debug("requestMessage[$index]: role=${message.role}, textChars=$textChars")
         }
 
         val contextForLog = when (val lastUserMsg = requestBody.messages.lastOrNull {
@@ -331,7 +331,7 @@ class ApiHandler(
                 .filterIsInstance<ApiContentPart.Text>().joinToString(" ") { it.text }
 
             else -> null
-        }?.take(30) ?: "N/A"
+        }?.let { "chars=${it.length}" } ?: "N/A"
 
         logger.debug("Starting new stream chat response with context: '$contextForLog'")
         
@@ -426,7 +426,7 @@ class ApiHandler(
 
                         logger.debug("[ImageGen] 🖼️ Extracted ${imageUrls.size} image URLs from response")
                         imageUrls.forEachIndexed { idx, url ->
-                            logger.debug("[ImageGen] 🖼️ Image[$idx]: ${url.take(100)}...")
+                            logger.debug("[ImageGen] 🖼️ Image[$idx] urlChars=${url.length}")
                         }
 
                         if (imageUrls.isNotEmpty()) {
@@ -593,10 +593,13 @@ class ApiHandler(
                     updateMessageWithError(aiMessageId, e, isImageGeneration)
                     onRequestFailed(e)
                 } else {
-                    logger.debug("Stream cancelled: ${e.message}")
-
                     // 🎯 判断是正常结束还是用户取消
                     val isNormalFinish = e.message?.contains("Stream finished with event:") == true
+                    if (isNormalFinish) {
+                        logger.debug("Stream finished normally: ${e.message}")
+                    } else {
+                        logger.debug("Stream cancelled: ${e.message}")
+                    }
 
                     // 🎯 Save partial content to history on cancellation (Requirements: 7.5)
                     ensureFinalStreamingSync("stream cancellation")

@@ -21,9 +21,14 @@ internal fun resolveHistoryExpectedStableConversationId(
     isImageGeneration: Boolean,
     loadedHistoryIndex: Int?,
     currentConversationId: String,
-    stableIdFromMessages: String?
+    stableIdFromMessages: String?,
+    currentConversationIdInMessages: Boolean = false,
 ): String? {
-    if (isImageGeneration && loadedHistoryIndex != null && currentConversationId.isNotBlank()) {
+    if (
+        loadedHistoryIndex != null &&
+        currentConversationId.isNotBlank() &&
+        (isImageGeneration || currentConversationIdInMessages)
+    ) {
         return currentConversationId
     }
     return stableIdFromMessages ?: currentConversationId.takeIf { it.isNotBlank() }
@@ -46,6 +51,7 @@ class HistoryManager(
     // 去重稳态：最近一次插入的指纹与时间，用于吸收 forceSave + debounce 双触发
     private var lastInsertFingerprint: String? = null
     private var lastInsertAtMs: Long = 0L
+    private var lastPersistedConversationApiConfigIds: Map<String, String>? = null
 
     // 生成单条消息的稳定指纹（忽略 id/timestamp/动画状态/占位标题）
     private fun messageFingerprint(msg: Message): String {
@@ -77,6 +83,73 @@ class HistoryManager(
 
     private fun stableConversationId(messages: List<Message>): String? =
         ConversationNameHelper.resolveStableId(messages)
+
+    private fun conversationContainsMessageId(messages: List<Message>, messageId: String?): Boolean {
+        if (messageId.isNullOrBlank()) return false
+        return messages.any { it.id == messageId }
+    }
+
+    private suspend fun persistConversationApiConfigIdsIfChanged() {
+        val current = stateHolder.conversationApiConfigIds.value
+        if (lastPersistedConversationApiConfigIds != current) {
+            persistenceManager.saveConversationApiConfigIds(current)
+            lastPersistedConversationApiConfigIds = current.toMap()
+        }
+    }
+
+    private suspend fun pruneOrphanConversationStateMappings() {
+        val retainedIds = buildSet {
+            stateHolder._historicalConversations.value.forEach { conversation ->
+                stableConversationId(conversation)?.let { add(it) }
+            }
+            stateHolder._imageGenerationHistoricalConversations.value.forEach { conversation ->
+                stableConversationId(conversation)?.let { add(it) }
+            }
+            stateHolder._currentConversationId.value.takeIf { it.isNotBlank() }?.let { add(it) }
+            stateHolder._currentImageGenerationConversationId.value.takeIf { it.isNotBlank() }?.let { add(it) }
+        }
+        if (retainedIds.isEmpty()) return
+
+        fun <T> Map<String, T>.retainKnownKeys(): Map<String, T> = filterKeys { it in retainedIds }
+
+        val configIds = stateHolder.conversationApiConfigIds.value
+        val prunedConfigIds = configIds.retainKnownKeys()
+        if (prunedConfigIds.size != configIds.size) {
+            stateHolder.conversationApiConfigIds.value = prunedConfigIds
+            Log.d(TAG_HM, "Pruned ${configIds.size - prunedConfigIds.size} orphan config bindings")
+        }
+
+        val toggleStates = stateHolder.conversationFunctionToggleStates.value
+        val prunedToggleStates = toggleStates.retainKnownKeys()
+        if (prunedToggleStates.size != toggleStates.size) {
+            stateHolder.conversationFunctionToggleStates.value = prunedToggleStates
+            persistenceManager.saveConversationFunctionToggleStates(prunedToggleStates)
+            Log.d(TAG_HM, "Pruned ${toggleStates.size - prunedToggleStates.size} orphan function toggle states")
+        }
+
+        val generationConfigs = stateHolder.conversationGenerationConfigs.value
+        val prunedGenerationConfigs = generationConfigs.retainKnownKeys()
+        if (prunedGenerationConfigs.size != generationConfigs.size) {
+            stateHolder.conversationGenerationConfigs.value = prunedGenerationConfigs
+            persistenceManager.saveConversationParameters(prunedGenerationConfigs)
+            Log.d(TAG_HM, "Pruned ${generationConfigs.size - prunedGenerationConfigs.size} orphan generation configs")
+        }
+
+        val systemPromptKeys = stateHolder.systemPrompts.keys.toList()
+        systemPromptKeys.filterNot { it in retainedIds }.forEach { stateHolder.systemPrompts.remove(it) }
+        val systemPromptEngagedKeys = stateHolder.systemPromptEngagedState.keys.toList()
+        systemPromptEngagedKeys.filterNot { it in retainedIds }.forEach { stateHolder.systemPromptEngagedState.remove(it) }
+        val systemPromptExpandedKeys = stateHolder.systemPromptExpandedState.keys.toList()
+        systemPromptExpandedKeys.filterNot { it in retainedIds }.forEach { stateHolder.systemPromptExpandedState.remove(it) }
+
+        val scrollStateKeys = stateHolder.conversationScrollStates.keys.toList()
+        val removedScrollStates = scrollStateKeys.filterNot { it in retainedIds }
+        removedScrollStates.forEach { stateHolder.conversationScrollStates.remove(it) }
+        if (removedScrollStates.isNotEmpty()) {
+            persistenceManager.saveConversationScrollStates(stateHolder.conversationScrollStates.toMap())
+            Log.d(TAG_HM, "Pruned ${removedScrollStates.size} orphan scroll states")
+        }
+    }
 
     init {
         scope.launch(Dispatchers.IO) {
@@ -295,7 +368,8 @@ class HistoryManager(
                 isImageGeneration = isImageGeneration,
                 loadedHistoryIndex = requestedLoadedIdx,
                 currentConversationId = currentConversationId,
-                stableIdFromMessages = stableIdFromMessages
+                stableIdFromMessages = stableIdFromMessages,
+                currentConversationIdInMessages = messagesToSave.any { it.id == currentConversationId },
             )
             val requestedHistoryFingerprint = requestedLoadedIdx
                 ?.takeIf { it >= 0 && it < mutableHistory.size }
@@ -310,6 +384,7 @@ class HistoryManager(
                 (
                     expectedStableId == null ||
                         stableConversationId(mutableHistory[requestedLoadedIdx]) == expectedStableId ||
+                        conversationContainsMessageId(mutableHistory[requestedLoadedIdx], expectedStableId) ||
                         requestedLooksLikeDraftOfCurrent
                 )
             ) {
@@ -384,8 +459,13 @@ class HistoryManager(
                             finalNewLoadedIndex = preInsertFound
                         } else {
                             // 全量判重：先“无System指纹”快速判重，再回退到深比较
-                            var duplicateIndex = mutableHistory.indexOfFirst { historyChat ->
-                                conversationFingerprint(historyChat) == newConversationFingerprint
+                            var duplicateIndex = stableIdFromMessages?.let { stableId ->
+                                mutableHistory.indexOfFirst { historyChat -> stableConversationId(historyChat) == stableId }
+                            } ?: -1
+                            if (duplicateIndex == -1) {
+                                duplicateIndex = mutableHistory.indexOfFirst { historyChat ->
+                                    conversationFingerprint(historyChat) == newConversationFingerprint
+                                }
                             }
                             if (duplicateIndex == -1) {
                                 duplicateIndex = mutableHistory.indexOfFirst { historyChat ->
@@ -414,9 +494,12 @@ class HistoryManager(
                             } else {
                                 Log.d(
                                     TAG_HM,
-                                    "Current conversation is a duplicate of history index $duplicateIndex. Setting loadedIndex to it."
+                                    "Current conversation matches history index $duplicateIndex. Updating it instead of inserting."
                                 )
+                                mutableHistory[duplicateIndex] = messagesToSave
                                 finalNewLoadedIndex = duplicateIndex
+                                historyListModified = true
+                                needsPersistenceSaveOfHistoryList = true
                             }
                         }
                     }
@@ -429,19 +512,35 @@ class HistoryManager(
                 }
             }
             // 全局去重（按稳定指纹，忽略所有 System），保留首次出现顺序
-            val seen = mutableSetOf<String>()
+            val seenStableIds = mutableSetOf<String>()
+            val seenFingerprints = mutableSetOf<String>()
             val deduped = mutableListOf<List<Message>>()
             var removed = 0
-            for (conv in mutableHistory) {
+            for ((index, conv) in mutableHistory.withIndex()) {
+                val stableId = stableConversationId(conv)
                 val fp = conversationFingerprint(conv)
-                if (fp.isEmpty() || seen.add(fp)) {
+                val duplicateByStableId = stableId != null && !seenStableIds.add(stableId)
+                val duplicateByFingerprint = fp.isNotEmpty() && !seenFingerprints.add(fp)
+                if (!duplicateByStableId && !duplicateByFingerprint) {
                     deduped.add(conv)
                 } else {
+                    if (finalNewLoadedIndex == index) {
+                        val keptIndex = deduped.indexOfFirst { kept ->
+                            (stableId != null && stableConversationId(kept) == stableId) ||
+                                (fp.isNotEmpty() && conversationFingerprint(kept) == fp)
+                        }
+                        finalNewLoadedIndex = keptIndex.takeIf { it >= 0 }
+                        if (keptIndex >= 0) {
+                            deduped[keptIndex] = conv
+                        }
+                    } else if (finalNewLoadedIndex != null && index < finalNewLoadedIndex!!) {
+                        finalNewLoadedIndex = finalNewLoadedIndex!! - 1
+                    }
                     removed++
                 }
             }
             if (removed > 0) {
-                Log.w(TAG_HM, "Global dedup removed $removed duplicate conversations (fingerprint-based)")
+                Log.w(TAG_HM, "Global dedup removed $removed duplicate conversations (stableId/fingerprint-based)")
                 historyListModified = true
                 needsPersistenceSaveOfHistoryList = true
             }
@@ -460,11 +559,6 @@ class HistoryManager(
  
         if (needsPersistenceSaveOfHistoryList) {
             persistenceManager.saveChatHistory(historicalConversations.value, isImageGeneration)
-            
-            // 文本模式下，同步保存会话配置映射
-            if (!isImageGeneration) {
-                persistenceManager.saveConversationApiConfigIds(stateHolder.conversationApiConfigIds.value)
-            }
 
             if (isStillSavingLiveConversation()) {
                 if (isImageGeneration) {
@@ -489,13 +583,15 @@ class HistoryManager(
         } else {
             stateHolder._currentConversationId.value
         }
+        val migrationSourceId = request?.conversationId ?: currentId
         
-        val stableKeyFromMessages = if (isImageGeneration) {
+        val stableKeyFromMessages = if (isImageGeneration || loadedHistoryIndex != null) {
             resolveHistoryExpectedStableConversationId(
-                isImageGeneration = true,
+                isImageGeneration = isImageGeneration,
                 loadedHistoryIndex = loadedHistoryIndex,
-                currentConversationId = currentId,
-                stableIdFromMessages = stableConversationId(messagesToSave)
+                currentConversationId = migrationSourceId,
+                stableIdFromMessages = stableConversationId(messagesToSave),
+                currentConversationIdInMessages = messagesToSave.any { it.id == migrationSourceId },
             )
         } else {
             // 文本模式：优先使用首条用户消息ID，其次系统消息ID
@@ -510,68 +606,67 @@ class HistoryManager(
             // 文本模式：迁移会话生成参数（如果存在）
             if (!isImageGeneration) {
                 val currentConfigs = stateHolder.conversationGenerationConfigs.value
-                val currentConfigForSession = currentConfigs[currentId]
+                val currentConfigForSession = currentConfigs[migrationSourceId]
                 if (currentConfigForSession != null) {
                     val newMap = currentConfigs.toMutableMap()
                     newMap[stableId] = currentConfigForSession
-                    if (currentId != stableId) {
-                        newMap.remove(currentId)
+                    if (migrationSourceId != stableId) {
+                        newMap.remove(migrationSourceId)
                     }
                     stateHolder.conversationGenerationConfigs.value = newMap
                     persistenceManager.saveConversationParameters(newMap)
-                    Log.d(TAG_HM, "Migrated generation parameters from '$currentId' to stable key '$stableId'")
+                    Log.d(TAG_HM, "Migrated generation parameters from '$migrationSourceId' to stable key '$stableId'")
                 }
             }
             
             // 修复：统一迁移会话绑定的配置ID（文本模式和图像模式都适用）
             // 这确保即使用户只选择了模型但没有发送消息，配置ID映射也能被正确迁移
             val currentConfigIds = stateHolder.conversationApiConfigIds.value
-            if (currentConfigIds.containsKey(currentId) && currentId != stableId) {
+            if (currentConfigIds.containsKey(migrationSourceId) && migrationSourceId != stableId) {
                 val newConfigIds = currentConfigIds.toMutableMap()
-                newConfigIds[stableId] = currentConfigIds[currentId]!!
-                newConfigIds.remove(currentId)
+                newConfigIds[stableId] = currentConfigIds[migrationSourceId]!!
+                newConfigIds.remove(migrationSourceId)
                 stateHolder.conversationApiConfigIds.value = newConfigIds
-                persistenceManager.saveConversationApiConfigIds(newConfigIds)
-                Log.d(TAG_HM, "Migrated config binding from '$currentId' to stable key '$stableId' (${if (isImageGeneration) "IMAGE" else "TEXT"} mode)")
+                Log.d(TAG_HM, "Migrated config binding from '$migrationSourceId' to stable key '$stableId' (${if (isImageGeneration) "IMAGE" else "TEXT"} mode)")
             }
 
             val currentToggleStates = stateHolder.conversationFunctionToggleStates.value
-            if (currentToggleStates.containsKey(currentId) && currentId != stableId) {
+            if (currentToggleStates.containsKey(migrationSourceId) && migrationSourceId != stableId) {
                 val newToggleStates = currentToggleStates.toMutableMap()
-                newToggleStates[stableId] = currentToggleStates[currentId]!!
-                newToggleStates.remove(currentId)
+                newToggleStates[stableId] = currentToggleStates[migrationSourceId]!!
+                newToggleStates.remove(migrationSourceId)
                 stateHolder.conversationFunctionToggleStates.value = newToggleStates
                 persistenceManager.saveConversationFunctionToggleStates(newToggleStates)
-                Log.d(TAG_HM, "Migrated function toggles from '$currentId' to stable key '$stableId'")
+                Log.d(TAG_HM, "Migrated function toggles from '$migrationSourceId' to stable key '$stableId'")
             }
 
             // 迁移系统提示及其相关状态
-            if (currentId != stableId) {
-                val currentSysPrompt = stateHolder.systemPrompts[currentId]
+            if (migrationSourceId != stableId) {
+                val currentSysPrompt = stateHolder.systemPrompts[migrationSourceId]
                 if (currentSysPrompt != null) {
                     stateHolder.systemPrompts[stableId] = currentSysPrompt
-                    stateHolder.systemPrompts.remove(currentId)
+                    stateHolder.systemPrompts.remove(migrationSourceId)
                 }
                 
-                val currentEngaged = stateHolder.systemPromptEngagedState[currentId]
+                val currentEngaged = stateHolder.systemPromptEngagedState[migrationSourceId]
                 if (currentEngaged != null) {
                     stateHolder.systemPromptEngagedState[stableId] = currentEngaged
-                    stateHolder.systemPromptEngagedState.remove(currentId)
+                    stateHolder.systemPromptEngagedState.remove(migrationSourceId)
                 }
                 
-                val currentExpanded = stateHolder.systemPromptExpandedState[currentId]
+                val currentExpanded = stateHolder.systemPromptExpandedState[migrationSourceId]
                 if (currentExpanded != null) {
                     stateHolder.systemPromptExpandedState[stableId] = currentExpanded
-                    stateHolder.systemPromptExpandedState.remove(currentId)
+                    stateHolder.systemPromptExpandedState.remove(migrationSourceId)
                 }
             }
 
             // 迁移会话滚动状态
-            val currentScrollState = stateHolder.conversationScrollStates[currentId]
-            if (currentScrollState != null && currentId != stableId) {
+            val currentScrollState = stateHolder.conversationScrollStates[migrationSourceId]
+            if (currentScrollState != null && migrationSourceId != stableId) {
                 stateHolder.conversationScrollStates[stableId] = currentScrollState
-                stateHolder.conversationScrollStates.remove(currentId)
-                Log.d(TAG_HM, "Migrated scroll state from '$currentId' to stable key '$stableId'")
+                stateHolder.conversationScrollStates.remove(migrationSourceId)
+                Log.d(TAG_HM, "Migrated scroll state from '$migrationSourceId' to stable key '$stableId'")
             }
 
             // 切换当前会话ID到稳定key
@@ -590,6 +685,9 @@ class HistoryManager(
         } else {
             Log.d(TAG_HM, "Skip parameter/config migration: no messages to derive a stable key")
         }
+
+        pruneOrphanConversationStateMappings()
+        persistConversationApiConfigIdsIfChanged()
 
         // 使用“本次保存后的最终索引”决策 last-open，避免首次入库与瞬时旧值导致的双源重复
         if (isStillSavingLiveConversation()) {

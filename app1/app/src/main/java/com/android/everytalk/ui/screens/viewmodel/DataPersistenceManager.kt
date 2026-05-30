@@ -10,6 +10,7 @@ import com.android.everytalk.data.database.RoomDataSource
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.statecontroller.ViewModelStateHolder
 import com.android.everytalk.statecontroller.ConversationScrollState
+import com.android.everytalk.statecontroller.safeApiConfigSummary
 import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.DataClass.VoiceBackendConfig
 import kotlinx.coroutines.CoroutineScope
@@ -302,7 +303,7 @@ class DataPersistenceManager(
                 var finalSelectedConfig = selectedConfigFromDataSource
                 if (finalSelectedConfig == null && loadedConfigs.isNotEmpty()) {
                     finalSelectedConfig = loadedConfigs.first()
-                    Log.i(TAG, "loadInitialData: 无有效选中配置或之前未选中，默认选择第一个: ID='${finalSelectedConfig.id}', 模型='${finalSelectedConfig.model}'。将保存此选择。")
+                    Log.i(TAG, "loadInitialData: 无有效选中配置或之前未选中，默认选择第一个: ${safeApiConfigSummary(finalSelectedConfig)}。将保存此选择。")
                     roomDataSource.saveSelectedConfigId(finalSelectedConfig.id)
                 }
 

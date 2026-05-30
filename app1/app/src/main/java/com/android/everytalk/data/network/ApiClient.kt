@@ -361,7 +361,7 @@ object ApiClient {
                             if (chunk.isNotEmpty()) {
                                 android.util.Log.d(
                                     "ApiClient",
-                                    "处理数据块 (长度=${chunk.length}): '${chunk.take(100)}${if (chunk.length > 100) "..." else ""}'"
+                                    "处理数据块 (长度=${chunk.length})"
                                 )
 
                                 if (chunk.equals("[DONE]", ignoreCase = true)) {
@@ -374,9 +374,9 @@ object ApiClient {
                                     if (appEvent != null) {
                                         eventCount++
                                         when (appEvent) {
-                                            is AppStreamEvent.Content -> android.util.Log.i("ApiClientEvent", "Content len=${appEvent.text.length} preview=${appEvent.text.take(120)}")
-                                            is AppStreamEvent.ContentFinal -> android.util.Log.i("ApiClientEvent", "ContentFinal len=${appEvent.text.length} preview=${appEvent.text.take(120)}")
-                                            is AppStreamEvent.Text -> android.util.Log.i("ApiClientEvent", "Text len=${appEvent.text.length} preview=${appEvent.text.take(120)}")
+                                            is AppStreamEvent.Content -> android.util.Log.i("ApiClientEvent", "Content len=${appEvent.text.length}")
+                                            is AppStreamEvent.ContentFinal -> android.util.Log.i("ApiClientEvent", "ContentFinal len=${appEvent.text.length}")
+                                            is AppStreamEvent.Text -> android.util.Log.i("ApiClientEvent", "Text len=${appEvent.text.length}")
                                             is AppStreamEvent.Finish -> android.util.Log.w("ApiClientEvent", "Finish reason=${appEvent.reason}")
                                             is AppStreamEvent.Error -> android.util.Log.e("ApiClientEvent", "Error upstreamStatus=${appEvent.upstreamStatus} msg=${appEvent.message}")
                                             else -> android.util.Log.d("ApiClientEvent", "Other event=${appEvent.javaClass.simpleName}")
@@ -507,7 +507,7 @@ object ApiClient {
             val provider = providerRegistry.getProvider(requestForDirect)
             android.util.Log.i(
                 "ApiClient",
-                "Using provider: ${provider.providerName} (request.provider=${requestForDirect.provider}, channel=${requestForDirect.channel}, model=${requestForDirect.model})"
+                "Using provider: ${provider.providerName} (requestProviderChars=${requestForDirect.provider.length}, channelChars=${requestForDirect.channel.length}, modelChars=${requestForDirect.model.length})"
             )
             
             providerRegistry.streamChat(requestForDirect, attachments, applicationContext)
@@ -828,10 +828,10 @@ object ApiClient {
         }
         
         android.util.Log.i("ApiClient", "🔄 图像生成使用直连模式 ($providerName)")
-        android.util.Log.d("ApiClient", "Image generation request - Model: ${effectiveImgReq.model}")
-        android.util.Log.d("ApiClient", "Image generation request - API Address: ${effectiveImgReq.apiAddress}")
+        android.util.Log.d("ApiClient", "Image generation request - modelChars=${effectiveImgReq.model.length}")
+        android.util.Log.d("ApiClient", "Image generation request - API Address: ${effectiveImgReq.apiAddress.substringBefore("://", missingDelimiterValue = "").takeIf { it.isNotBlank() }?.plus("://***") ?: "***"}")
         android.util.Log.d("ApiClient", "Image generation request - API Key: ${if (effectiveImgReq.apiKey.isNotBlank()) "[CONFIGURED]" else "[EMPTY]"}")
-        android.util.Log.d("ApiClient", "Image generation request - Prompt: ${effectiveImgReq.prompt.take(100)}...")
+        android.util.Log.d("ApiClient", "Image generation request - Prompt chars: ${effectiveImgReq.prompt.length}")
         
         return try {
             when {

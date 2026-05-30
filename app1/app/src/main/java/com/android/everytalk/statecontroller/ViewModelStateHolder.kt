@@ -945,7 +945,7 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
         val index = messageList.indexOfFirst { it.id == messageId }
         AppLogger.debug(
             "SlashCommand",
-            "finishLocalSlashLoading messageId=$messageId index=$index finalText=${finalText.take(120)}"
+            "finishLocalSlashLoading messageId=$messageId index=$index finalTextChars=${finalText.length}"
         )
         if (index != -1) {
             val currentMessage = messageList[index]
@@ -1011,7 +1011,7 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
                 contentStarted = true
             )
             messageList[index] = updatedMessage
-            android.util.Log.d("ViewModelStateHolder", "🎯 Synced message.text = ${finalText.take(100)}...")
+            android.util.Log.d("ViewModelStateHolder", "🎯 Synced message.text chars=${finalText.length}")
 
             if (isImageGeneration) {
                 isImageConversationDirty.value = true

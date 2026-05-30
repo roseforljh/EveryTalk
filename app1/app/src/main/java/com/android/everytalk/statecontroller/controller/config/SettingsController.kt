@@ -7,6 +7,7 @@ import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.VoiceBackendConfig
 import com.android.everytalk.statecontroller.ViewModelStateHolder
+import com.android.everytalk.statecontroller.safeApiConfigSummary
 import com.android.everytalk.statecontroller.viewmodel.ExportManager
 import com.android.everytalk.statecontroller.viewmodel.ProviderManager
 import com.android.everytalk.ui.screens.viewmodel.DataPersistenceManager
@@ -53,6 +54,22 @@ class SettingsController(
         
         // 密钥混淆警告消息
         const val EXPORT_SECURITY_WARNING = "⚠️ 导出文件包含敏感API密钥，请妥善保管，切勿分享给他人！"
+    }
+
+    private fun safeUrlSummary(url: String): String {
+        return url.substringBefore("://", missingDelimiterValue = "")
+            .takeIf { it.isNotBlank() }
+            ?.plus("://***")
+            ?: "***"
+    }
+
+    private fun safeVoiceConfigSummary(config: VoiceBackendConfig?): String {
+        if (config == null) return "null"
+        return "VoiceConfig(id=${config.id}, nameChars=${config.name.length}, providerChars=${config.provider.length}, " +
+            "sttPlatformChars=${config.sttPlatform.length}, sttModelChars=${config.sttModel.length}, sttUrl=${safeUrlSummary(config.sttApiUrl)}, sttKey=***, " +
+            "chatPlatformChars=${config.chatPlatform.length}, chatModelChars=${config.chatModel.length}, chatUrl=${safeUrlSummary(config.chatApiUrl)}, chatKey=***, " +
+            "ttsPlatformChars=${config.ttsPlatform.length}, ttsModelChars=${config.ttsModel.length}, ttsUrl=${safeUrlSummary(config.ttsApiUrl)}, ttsKey=***, " +
+            "voiceChars=${config.voiceName.length}, realtime=${config.useRealtimeStreaming})"
     }
 
     // ==================== 密钥混淆工具方法 ====================
@@ -216,11 +233,11 @@ class SettingsController(
                 Log.i(TAG, "=== 导出配置开始 ===")
                 Log.i(TAG, "文本配置数量: ${mainConfigsToExport.size}")
                 mainConfigsToExport.forEachIndexed { index, config ->
-                    Log.i(TAG, "  文本配置[$index]: id=${config.id}, name=${config.name}, provider=${config.provider}, channel=${config.channel}, model=${config.model}")
+                    Log.i(TAG, "  文本配置[$index]: ${safeApiConfigSummary(config)}")
                 }
                 Log.i(TAG, "图像配置数量: ${imageConfigsToExport.size}")
                 imageConfigsToExport.forEachIndexed { index, config ->
-                    Log.i(TAG, "  图像配置[$index]: id=${config.id}, name=${config.name}, provider=${config.provider}, channel=${config.channel}, model=${config.model}")
+                    Log.i(TAG, "  图像配置[$index]: ${safeApiConfigSummary(config)}")
                 }
                 
                 // 2. 导出会话生成参数 (conversationGenerationConfigs)
@@ -258,12 +275,7 @@ class SettingsController(
                 
                 Log.i(TAG, "语音配置数量: 原始 ${rawVoiceConfigs.size}, 去重后 ${voiceConfigsToExport.size}")
                 voiceConfigsToExport.forEachIndexed { index, config ->
-                    Log.i(TAG, "  语音配置[$index]: id=${config.id}, name=${config.name}, provider=${config.provider}")
-                    Log.i(TAG, "    STT: platform=${config.sttPlatform}, model=${config.sttModel}, url=${config.sttApiUrl}")
-                    Log.i(TAG, "    Chat: platform=${config.chatPlatform}, model=${config.chatModel}, url=${config.chatApiUrl}")
-                    Log.i(TAG, "    Chat API Key 非空: ${config.chatApiKey.isNotBlank()}, 长度: ${config.chatApiKey.length}")
-                    Log.i(TAG, "    TTS: platform=${config.ttsPlatform}, model=${config.ttsModel}, url=${config.ttsApiUrl}, voice=${config.voiceName}")
-                    Log.i(TAG, "    realtime=${config.useRealtimeStreaming}")
+                    Log.i(TAG, "  语音配置[$index]: ${safeVoiceConfigSummary(config)}")
                 }
                 
                 // 4. 导出聊天历史（可选）
@@ -571,7 +583,7 @@ class SettingsController(
         
         // 详细记录每个待导入的配置（不记录密钥）
         settings.apiConfigs.forEachIndexed { index, config ->
-            Log.i(TAG, "  待导入[$index]: id=${config.id}, name=${config.name}, provider=${config.provider}, channel=${config.channel}, model=${config.model}, modalityType=${config.modalityType}")
+            Log.i(TAG, "  待导入[$index]: ${safeApiConfigSummary(config)}, modalityType=${config.modalityType}")
         }
         
         // 1) 还原混淆的密钥并验证导入的配置
@@ -584,7 +596,7 @@ class SettingsController(
                     validationResult.errors.forEach { error ->
                         result.errors.add("配置 '${config.name}': $error")
                     }
-                    Log.w(TAG, "配置验证失败: ${config.name}, 错误: ${validationResult.errors}")
+                    Log.w(TAG, "配置验证失败: ${safeApiConfigSummary(config)}, 错误数量=${validationResult.errors.size}")
                     null
                 }
             }
@@ -632,7 +644,7 @@ class SettingsController(
         
         Log.i(TAG, "合并后文本配置数: ${mergedMainConfigs.size}")
         mergedMainConfigs.forEachIndexed { index, config ->
-            Log.i(TAG, "  合并后文本[$index]: id=${config.id}, name=${config.name}, provider=${config.provider}, channel=${config.channel}")
+            Log.i(TAG, "  合并后文本[$index]: ${safeApiConfigSummary(config)}")
         }
 
         stateHolder._apiConfigs.value = mergedMainConfigs
@@ -673,7 +685,7 @@ class SettingsController(
 
         Log.i(TAG, "合并后图像配置数: ${mergedImageConfigs.size}")
         mergedImageConfigs.forEachIndexed { index, config ->
-            Log.i(TAG, "  合并后图像[$index]: id=${config.id}, name=${config.name}, provider=${config.provider}, channel=${config.channel}")
+            Log.i(TAG, "  合并后图像[$index]: ${safeApiConfigSummary(config)}")
         }
 
         stateHolder._imageGenApiConfigs.value = mergedImageConfigs
@@ -774,8 +786,7 @@ class SettingsController(
             persistenceManager.saveSelectedVoiceConfigId(newSelected?.id)
             
             Log.i(TAG, "语音配置导入完成: 合并后总数 ${mergedConfigs.size}")
-            Log.i(TAG, "  选中的配置: id=${newSelected?.id}, name=${newSelected?.name}")
-            Log.i(TAG, "  选中配置Chat: platform=${newSelected?.chatPlatform}, model=${newSelected?.chatModel}, hasKey=${newSelected?.chatApiKey?.isNotBlank()}")
+            Log.i(TAG, "  选中的配置: ${safeVoiceConfigSummary(newSelected)}")
             
             result.voiceConfigsImported = newConfigs.size
         }

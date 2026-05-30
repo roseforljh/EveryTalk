@@ -85,15 +85,15 @@ class OpenClawGatewayClient(
         val requestId = UUID.randomUUID().toString()
         val idempotencyKey = UUID.randomUUID().toString()
 
-        logDebug("OpenClaw send", "sessionKey=$sessionKey requestId=$requestId messages.size=${request.messages.size} input=${messageText.take(80)}")
+        logDebug("OpenClaw send", "sessionKey=$sessionKey requestId=$requestId messages.size=${request.messages.size} inputChars=${messageText.length}")
         request.messages.forEachIndexed { index, message ->
-            val preview = when (message) {
+            val textChars = when (message) {
                 is com.android.everytalk.data.DataClass.SimpleTextApiMessage -> message.content
                 is com.android.everytalk.data.DataClass.PartsApiMessage -> message.parts
                     .filterIsInstance<com.android.everytalk.data.DataClass.ApiContentPart.Text>()
                     .joinToString(" ") { it.text }
-            }.replace("\n", "\\n").take(80)
-            logDebug("requestMessage[$index]", "role=${message.role} preview=$preview")
+            }.length
+            logDebug("requestMessage[$index]", "role=${message.role} textChars=$textChars")
         }
 
         OpenClawRuntimeState.update(sessionKey = sessionKey, runId = null)

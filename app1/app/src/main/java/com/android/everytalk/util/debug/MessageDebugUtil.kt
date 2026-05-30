@@ -27,13 +27,12 @@ object MessageDebugUtil {
         if (message.text.isNotBlank()) {
             val lines = message.text.lines()
             android.util.Log.d(TAG, "Text Lines: ${lines.size}")
-            android.util.Log.d(TAG, "Text Preview (first 100 chars): ${message.text.take(100)}")
-            android.util.Log.d(TAG, "Text Preview (last 100 chars): ${message.text.takeLast(100)}")
+            android.util.Log.d(TAG, "Text first/last hash: ${message.text.take(100).hashCode()}/${message.text.takeLast(100).hashCode()}")
             
             // 检查是否有异常截断
             val lastLine = lines.lastOrNull()?.trim() ?: ""
             if (lastLine.isNotEmpty() && !lastLine.endsWith("。") && !lastLine.endsWith("！") && !lastLine.endsWith("？") && !lastLine.endsWith(".")) {
-                android.util.Log.w(TAG, "Possible truncation detected - last line doesn't end with punctuation: '$lastLine'")
+                android.util.Log.w(TAG, "Possible truncation detected - lastLineChars=${lastLine.length}, lastLineHash=${lastLine.hashCode()}")
             }
         } else {
             android.util.Log.w(TAG, "Message text is blank!")
@@ -45,7 +44,7 @@ object MessageDebugUtil {
             message.parts.forEachIndexed { index, part ->
                 when (part) {
                     is MarkdownPart.Text -> {
-                        android.util.Log.d(TAG, "  Part $index: Text (${part.content.length} chars) - '${part.content.take(50)}${if (part.content.length > 50) "..." else ""}' ")
+                        android.util.Log.d(TAG, "  Part $index: Text (${part.content.length} chars)")
                     }
                     is MarkdownPart.CodeBlock -> {
                         android.util.Log.d(TAG, "  Part $index: CodeBlock (${part.language}) - ${part.content.length} chars")

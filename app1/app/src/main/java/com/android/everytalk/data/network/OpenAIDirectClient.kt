@@ -570,7 +570,7 @@ object OpenAIDirectClient {
                                 send(AppStreamEvent.ExecutionStatusUpdate(status))
                             }
                         }
-                        Log.i(TAG, "🔧 工具 ${toolInfo.name} 执行成功: ${result.toString().take(100)}")
+                        Log.i(TAG, "🔧 工具 ${toolInfo.name} 执行成功: resultChars=${result.toString().length}")
 
                         val images = (result as? JsonObject)?.get("_images")?.let { it as? JsonArray }
                         if (images != null && images.isNotEmpty()) {

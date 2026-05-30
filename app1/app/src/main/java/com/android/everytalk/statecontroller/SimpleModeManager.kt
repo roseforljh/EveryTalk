@@ -296,7 +296,7 @@ class SimpleModeManager(
             ?: conversationToLoad.firstOrNull()?.id
             ?: "history_${UUID.randomUUID()}"
         val systemPrompt = conversationToLoad.firstOrNull { it.sender == Sender.System && !it.isPlaceholderName }?.text ?: ""
-        Log.d(TAG, "🔥 Stable ID: $stableId, System Prompt: '$systemPrompt'")
+        Log.d(TAG, "🔥 Stable ID: $stableId, System Prompt chars=${systemPrompt.length}")
 
         val processedMessages = withContext(Dispatchers.Default) {
             conversationToLoad.map { msg ->
@@ -369,7 +369,7 @@ class SimpleModeManager(
                 val config = stateHolder._apiConfigs.value.find { it.id == savedConfigId }
                 if (config != null) {
                     stateHolder._selectedApiConfig.value = config
-                    Log.d(TAG, "🔥 Restored selected config: ${config.model}")
+                    Log.d(TAG, "🔥 Restored selected config: ${safeApiConfigSummary(config)}")
                 } else {
                     Log.w(TAG, "🔥 Saved config ID $savedConfigId not found in current configs.")
                 }
@@ -447,7 +447,7 @@ class SimpleModeManager(
             val config = stateHolder._imageGenApiConfigs.value.find { it.id == savedConfigId }
             if (config != null) {
                 stateHolder._selectedImageGenApiConfig.value = config
-                Log.d(TAG, "Restored selected image gen config: ${config.model}")
+                Log.d(TAG, "Restored selected image gen config: ${safeApiConfigSummary(config)}")
             } else {
                 // 如果找不到绑定的配置（可能被删除），则清空当前选择，避免串台
                 stateHolder._selectedImageGenApiConfig.value = null

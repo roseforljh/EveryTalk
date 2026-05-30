@@ -13,6 +13,7 @@ import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.util.storage.FileManager
 import com.android.everytalk.data.DataClass.AbstractApiMessage
 import com.android.everytalk.data.DataClass.ApiContentPart
+import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.PartsApiMessage
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
@@ -386,6 +387,16 @@ internal fun addOrReplaceRegeneratedUserMessage(
     return messageList.lastIndex
 }
 
+internal fun safeApiConfigSummary(config: ApiConfig?): String {
+    if (config == null) return "null"
+    val addressScheme = config.address.substringBefore("://", missingDelimiterValue = "")
+        .takeIf { it.isNotBlank() }
+        ?.plus("://***")
+        ?: "***"
+    return "ApiConfig(id=${config.id}, nameChars=${config.name.length}, providerChars=${config.provider.length}, " +
+        "modelChars=${config.model.length}, channelChars=${config.channel.length}, address=$addressScheme, key=***)"
+}
+
  class MessageSender(
      private val application: Application,
     private val viewModelScope: CoroutineScope,
@@ -421,24 +432,23 @@ internal fun addOrReplaceRegeneratedUserMessage(
     private fun logUiMessages(stage: String, messages: List<UiMessage>) {
         Log.d("MessageSender", "$stage.size=${messages.size}")
         messages.forEachIndexed { index, message ->
-            val preview = message.text.replace("\n", "\\n").take(80)
             Log.d(
                 "MessageSender",
-                "$stage[$index]: role=${message.role} text=$preview attachments=${message.attachments.size} sender=${message.sender}"
+                "$stage[$index]: role=${message.role} textChars=${message.text.length} attachments=${message.attachments.size} sender=${message.sender}"
             )
         }
     }
 
     private fun describeApiMessage(message: AbstractApiMessage): String {
         return when (message) {
-            is SimpleTextApiMessage -> message.content.replace("\n", "\\n").take(80)
+            is SimpleTextApiMessage -> "textChars=${message.content.length}"
             is PartsApiMessage -> message.parts.joinToString(separator = " | ") { part ->
                 when (part) {
-                    is ApiContentPart.Text -> "text=" + part.text.replace("\n", "\\n").take(80)
+                    is ApiContentPart.Text -> "textChars=${part.text.length}"
                     is ApiContentPart.InlineData -> "inlineData(${part.mimeType})"
                     is ApiContentPart.FileUri -> "fileUri(${part.mimeType})"
                 }
-            }.take(160)
+            }
         }
     }
 
@@ -447,7 +457,7 @@ internal fun addOrReplaceRegeneratedUserMessage(
         messages.forEachIndexed { index, message ->
             Log.d(
                 "MessageSender",
-                "$stage[$index]: role=${message.role} preview=${describeApiMessage(message)}"
+                "$stage[$index]: role=${message.role} summary=${describeApiMessage(message)}"
             )
         }
     }
@@ -479,9 +489,9 @@ internal fun addOrReplaceRegeneratedUserMessage(
             message.role == "user" && message.id == currentUserMessage.id
         }
         if (!existingCurrentUserMessage) {
-            Log.w(
+            Log.d(
                 "MessageSender",
-                "current user input missing from request messages, injecting fallback user message preview=${describeApiMessage(currentUserMessage)}"
+                "current user input absent from request snapshot, injected fallback user message summary=${describeApiMessage(currentUserMessage)}"
             )
             messages.add(currentUserMessage)
         }
@@ -712,13 +722,12 @@ internal fun addOrReplaceRegeneratedUserMessage(
         
         // 🔥 关键调试：检查配置状态
         Log.d("MessageSender", "=== SEND MESSAGE DEBUG ===")
-        Log.d("MessageSender", "rawInputText=$messageText")
-        Log.d("MessageSender", "trimmedInputText=$textToActuallySend")
+        Log.d("MessageSender", "inputChars=${messageText.length}, trimmedChars=${textToActuallySend.length}, attachments=${allAttachments.size}")
         Log.d("MessageSender", "textConversationId=${stateHolder._currentConversationId.value}")
         Log.d("MessageSender", "imageConversationId=${stateHolder._currentImageGenerationConversationId.value}")
         Log.d("MessageSender", "isImageGeneration: $isImageGeneration")
-        Log.d("MessageSender", "selectedImageGenApiConfig: ${stateHolder._selectedImageGenApiConfig.value}")
-        Log.d("MessageSender", "selectedApiConfig: ${stateHolder._selectedApiConfig.value}")
+        Log.d("MessageSender", "selectedImageGenApiConfig: ${safeApiConfigSummary(stateHolder._selectedImageGenApiConfig.value)}")
+        Log.d("MessageSender", "selectedApiConfig: ${safeApiConfigSummary(stateHolder._selectedApiConfig.value)}")
         Log.d("MessageSender", "imageGenerationMessages.size: ${stateHolder.imageGenerationMessages.size}")
         Log.d("MessageSender", "messages.size: ${stateHolder.messages.size}")
         
@@ -748,7 +757,7 @@ internal fun addOrReplaceRegeneratedUserMessage(
             }
         }
         
-        Log.d("MessageSender", "✅ Using config: ${currentConfig.model} (${currentConfig.provider})")
+        Log.d("MessageSender", "✅ Using config: ${safeApiConfigSummary(currentConfig)}")
         Log.d("MessageSender", "=== END SEND MESSAGE DEBUG ===")
 
         
@@ -756,11 +765,7 @@ internal fun addOrReplaceRegeneratedUserMessage(
         if (isImageGeneration) {
             Log.d("MessageSender", "=== IMAGE GEN CONFIG DEBUG ===")
             Log.d("MessageSender", "Selected config ID: ${currentConfig.id}")
-            Log.d("MessageSender", "Model: ${currentConfig.model}")
-            Log.d("MessageSender", "Provider: ${currentConfig.provider}")
-            Log.d("MessageSender", "Channel: ${currentConfig.channel}")
-            Log.d("MessageSender", "Address: ${currentConfig.address}")
-            Log.d("MessageSender", "Key: ${currentConfig.key.take(10)}...")
+            Log.d("MessageSender", "ConfigSummary: ${safeApiConfigSummary(currentConfig)}")
             Log.d("MessageSender", "ModalityType: ${currentConfig.modalityType}")
         }
 
@@ -874,7 +879,7 @@ internal fun addOrReplaceRegeneratedUserMessage(
                         if (filteredOut) {
                             Log.d(
                                 "MessageSender",
-                                "filteredOutUiMessage: role=${msg.role} reason=systemPromptPaused text=${msg.text.replace("\n", "\\n").take(80)}"
+                                "filteredOutUiMessage: role=${msg.role} reason=systemPromptPaused textChars=${msg.text.length}"
                             )
                         }
                         !filteredOut
@@ -900,7 +905,7 @@ internal fun addOrReplaceRegeneratedUserMessage(
                 val currentUserApiMessage = newUserMessageForUi.toApiMessage(uriToBase64Encoder, application)
                 Log.d(
                     "MessageSender",
-                    "currentUserApiMessage: role=${currentUserApiMessage.role} preview=${describeApiMessage(currentUserApiMessage)}"
+                    "currentUserApiMessage: role=${currentUserApiMessage.role} summary=${describeApiMessage(currentUserApiMessage)}"
                 )
 
                 val apiMessagesForBackend = ensureUserMessagePresent(historyApiMessages, currentUserApiMessage)
@@ -1054,7 +1059,7 @@ internal fun addOrReplaceRegeneratedUserMessage(
 
                 Log.d(
                     "MessageSender",
-                    "Channel: ${currentConfig.channel}, model: ${currentConfig.model}, supportsNativeWebSearch: $supportsNativeWebSearch, webSearchEnabled: ${stateHolder._isWebSearchEnabled.value}, shouldEnableGoogleSearch: $shouldEnableGoogleSearch, externalProvider=${webSearchRouting.externalProvider?.providerId}"
+                    "config=${safeApiConfigSummary(currentConfig)}, supportsNativeWebSearch: $supportsNativeWebSearch, webSearchEnabled: ${stateHolder._isWebSearchEnabled.value}, shouldEnableGoogleSearch: $shouldEnableGoogleSearch, externalProvider=${webSearchRouting.externalProvider?.providerId}"
                 )
 
                 // 🎯 优化：在开始可能的外部联网搜索之前，预先创建 AI 占位消息。
@@ -1180,7 +1185,7 @@ internal fun addOrReplaceRegeneratedUserMessage(
                     },
                     imageGenRequest = if (isImageGeneration) {
                         // 调试信息：检查发送的配置
-                        Log.d("MessageSender", "Image generation config - model: ${currentConfig.model}, channel: ${currentConfig.channel}, provider: ${currentConfig.provider}")
+                        Log.d("MessageSender", "Image generation config: ${safeApiConfigSummary(currentConfig)}")
                         
                         // 计算上游完整图片生成端点（默认平台交由后端注入，避免相对路径）
                         val upstreamApiForImageGen = if (isDefaultProvider) {

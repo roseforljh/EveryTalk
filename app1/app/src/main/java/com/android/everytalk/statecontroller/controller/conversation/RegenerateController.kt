@@ -103,7 +103,7 @@ class RegenerateController(
                     return@withContext false
                 }
 
-                val messagesToRemove = collectRegenerationBranch(listRef, userMsgIndex)
+                val messagesToRemove = listOf(listRef[userMsgIndex]) + collectRegenerationBranch(listRef, userMsgIndex)
                 val messagesForMediaCleanup = filterRegenerationMediaCleanupMessages(
                     messagesToRemove = messagesToRemove,
                     baseUserMessageId = originalUserMessageId
@@ -167,7 +167,7 @@ class RegenerateController(
                     true,
                     originalAttachments,
                     isImageGeneration,
-                    null
+                    originalUserMessageId
                 )
             }
         }

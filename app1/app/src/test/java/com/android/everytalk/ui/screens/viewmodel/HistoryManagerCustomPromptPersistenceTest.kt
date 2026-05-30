@@ -2,6 +2,8 @@ package com.android.everytalk.ui.screens.viewmodel
 
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.statecontroller.ConversationFunctionToggleState
+import com.android.everytalk.statecontroller.ConversationScrollState
 import com.android.everytalk.statecontroller.ViewModelStateHolder
 import io.mockk.every
 import io.mockk.mockk
@@ -15,6 +17,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -214,6 +217,366 @@ class HistoryManagerCustomPromptPersistenceTest {
 
             assertEquals(1, stateHolder._historicalConversations.value.size)
             assertEquals("你好！请问有什么我可以帮你的吗？", stateHolder._historicalConversations.value[0].last().text)
+            assertEquals(0, stateHolder._loadedHistoryIndex.value)
+            assertEquals("actual-user-message-id", stateHolder._currentConversationId.value)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `force save keeps loaded conversation when regenerated first turn moves to bottom`() = runBlocking {
+        val stateHolder = ViewModelStateHolder()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val historyManager = HistoryManager(
+            stateHolder = stateHolder,
+            persistenceManager = mockk(relaxed = true),
+            compareMessageLists = { left, right -> left == right },
+            onHistoryModified = {},
+            scope = scope
+        )
+
+        val originalConversation = listOf(
+            Message(id = "user-1", text = "question one", sender = Sender.User),
+            Message(id = "ai-1", text = "answer one", sender = Sender.AI),
+            Message(id = "user-2", text = "question two", sender = Sender.User),
+            Message(id = "ai-2", text = "answer two", sender = Sender.AI),
+        )
+        val regeneratedConversation = listOf(
+            Message(id = "user-2", text = "question two", sender = Sender.User),
+            Message(id = "ai-2", text = "answer two", sender = Sender.AI),
+            Message(id = "user-1", text = "question one", sender = Sender.User),
+            Message(id = "ai-1-new", text = "new answer one", sender = Sender.AI),
+        )
+
+        stateHolder._historicalConversations.value = listOf(originalConversation)
+        stateHolder._loadedHistoryIndex.value = 0
+        stateHolder.setCurrentConversationId("user-1")
+        stateHolder.messages.addAll(regeneratedConversation)
+
+        try {
+            historyManager.saveCurrentChatToHistoryNow(forceSave = true)
+
+            assertEquals(1, stateHolder._historicalConversations.value.size)
+            assertEquals(regeneratedConversation, stateHolder._historicalConversations.value[0])
+            assertEquals(0, stateHolder._loadedHistoryIndex.value)
+            assertEquals("user-1", stateHolder._currentConversationId.value)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `force save updates existing history by stable id when content fingerprint changed`() = runBlocking {
+        val stateHolder = ViewModelStateHolder()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val historyManager = HistoryManager(
+            stateHolder = stateHolder,
+            persistenceManager = mockk(relaxed = true),
+            compareMessageLists = { left, right -> left == right },
+            onHistoryModified = {},
+            scope = scope
+        )
+
+        val savedConversation = listOf(
+            Message(id = "user-1", text = "question one", sender = Sender.User),
+            Message(id = "ai-1", text = "answer one", sender = Sender.AI),
+        )
+        val updatedConversation = listOf(
+            Message(id = "user-1", text = "question one edited order", sender = Sender.User),
+            Message(id = "ai-1-new", text = "new answer", sender = Sender.AI),
+            Message(id = "user-2", text = "question two", sender = Sender.User),
+            Message(id = "ai-2", text = "answer two", sender = Sender.AI),
+        )
+
+        stateHolder._historicalConversations.value = listOf(savedConversation)
+        stateHolder._loadedHistoryIndex.value = 0
+        stateHolder.setCurrentConversationId("stale-current-id")
+        stateHolder.messages.addAll(updatedConversation)
+
+        try {
+            historyManager.saveCurrentChatToHistoryNow(forceSave = true)
+
+            assertEquals(1, stateHolder._historicalConversations.value.size)
+            assertEquals(updatedConversation, stateHolder._historicalConversations.value[0])
+            assertEquals(0, stateHolder._loadedHistoryIndex.value)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `force save removes duplicate history entries with same stable id`() = runBlocking {
+        val stateHolder = ViewModelStateHolder()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val historyManager = HistoryManager(
+            stateHolder = stateHolder,
+            persistenceManager = mockk(relaxed = true),
+            compareMessageLists = { left, right -> left == right },
+            onHistoryModified = {},
+            scope = scope
+        )
+
+        val firstVersion = listOf(
+            Message(id = "user-1", text = "question one new", sender = Sender.User),
+            Message(id = "ai-1-new", text = "answer one new", sender = Sender.AI),
+        )
+        val duplicateVersion = listOf(
+            Message(id = "user-1", text = "question one old", sender = Sender.User),
+            Message(id = "ai-1-old", text = "answer one old", sender = Sender.AI),
+        )
+
+        stateHolder._historicalConversations.value = listOf(firstVersion, duplicateVersion)
+        stateHolder._loadedHistoryIndex.value = 0
+        stateHolder.setCurrentConversationId("user-1")
+        stateHolder.messages.addAll(firstVersion)
+
+        try {
+            historyManager.saveCurrentChatToHistoryNow(forceSave = true)
+
+            assertEquals(1, stateHolder._historicalConversations.value.size)
+            assertEquals(firstVersion, stateHolder._historicalConversations.value[0])
+            assertEquals(0, stateHolder._loadedHistoryIndex.value)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `force save keeps updated duplicate when older entry with same stable id appears first`() = runBlocking {
+        val stateHolder = ViewModelStateHolder()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val historyManager = HistoryManager(
+            stateHolder = stateHolder,
+            persistenceManager = mockk(relaxed = true),
+            compareMessageLists = { left, right -> left == right },
+            onHistoryModified = {},
+            scope = scope
+        )
+
+        val olderDuplicate = listOf(
+            Message(id = "user-1", text = "old question", sender = Sender.User),
+            Message(id = "ai-old", text = "old answer", sender = Sender.AI),
+        )
+        val conversationBeingUpdated = listOf(
+            Message(id = "user-1", text = "new question", sender = Sender.User),
+            Message(id = "ai-new", text = "new answer", sender = Sender.AI),
+        )
+
+        stateHolder._historicalConversations.value = listOf(olderDuplicate, conversationBeingUpdated)
+        stateHolder._loadedHistoryIndex.value = 1
+        stateHolder.setCurrentConversationId("user-1")
+        stateHolder.messages.addAll(conversationBeingUpdated)
+
+        try {
+            historyManager.saveCurrentChatToHistoryNow(forceSave = true)
+
+            assertEquals(1, stateHolder._historicalConversations.value.size)
+            assertEquals(conversationBeingUpdated, stateHolder._historicalConversations.value[0])
+            assertEquals(0, stateHolder._loadedHistoryIndex.value)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `force save updates loaded history instead of inserting when stable id changed but loaded draft matches`() = runBlocking {
+        val stateHolder = ViewModelStateHolder()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val historyManager = HistoryManager(
+            stateHolder = stateHolder,
+            persistenceManager = mockk(relaxed = true),
+            compareMessageLists = { left, right -> left == right },
+            onHistoryModified = {},
+            scope = scope
+        )
+
+        val loadedDraft = listOf(
+            Message(id = "session-temp-id", text = "same question", sender = Sender.User),
+        )
+        val completedConversation = listOf(
+            Message(id = "actual-user-id", text = "same question", sender = Sender.User),
+            Message(id = "ai-reply", text = "new answer", sender = Sender.AI),
+        )
+        val olderConversation = listOf(
+            Message(id = "older-user", text = "older question", sender = Sender.User),
+            Message(id = "older-ai", text = "older answer", sender = Sender.AI),
+        )
+
+        stateHolder._historicalConversations.value = listOf(loadedDraft, olderConversation)
+        stateHolder._loadedHistoryIndex.value = 0
+        stateHolder.setCurrentConversationId("stale-live-id")
+        stateHolder.messages.addAll(completedConversation)
+
+        try {
+            historyManager.saveCurrentChatToHistoryNow(forceSave = true)
+
+            assertEquals(2, stateHolder._historicalConversations.value.size)
+            assertEquals(completedConversation, stateHolder._historicalConversations.value[0])
+            assertEquals(olderConversation, stateHolder._historicalConversations.value[1])
+            assertEquals(0, stateHolder._loadedHistoryIndex.value)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `queued force save migrates config binding from request conversation after live switch`() = runBlocking {
+        val stateHolder = ViewModelStateHolder()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val historyManager = HistoryManager(
+            stateHolder = stateHolder,
+            persistenceManager = mockk(relaxed = true),
+            compareMessageLists = { left, right -> left == right },
+            onHistoryModified = {},
+            scope = scope
+        )
+
+        val originalConversation = listOf(
+            Message(id = "temp-conversation-id", text = "question", sender = Sender.User),
+        )
+        val completedConversation = listOf(
+            Message(id = "actual-user-id", text = "question", sender = Sender.User),
+            Message(id = "ai-reply", text = "answer", sender = Sender.AI),
+        )
+        val otherConversation = listOf(
+            Message(id = "user-other", text = "other", sender = Sender.User),
+            Message(id = "ai-other", text = "other answer", sender = Sender.AI),
+        )
+
+        stateHolder._historicalConversations.value = listOf(originalConversation, otherConversation)
+        stateHolder._loadedHistoryIndex.value = 0
+        stateHolder.setCurrentConversationId("temp-conversation-id")
+        stateHolder.messages.addAll(completedConversation)
+        stateHolder.conversationApiConfigIds.value = mapOf(
+            "temp-conversation-id" to "config-a",
+            "user-other" to "config-b",
+        )
+
+        try {
+            historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true)
+
+            stateHolder.messages.clear()
+            stateHolder.messages.addAll(otherConversation)
+            stateHolder._loadedHistoryIndex.value = 1
+            stateHolder.setCurrentConversationId("user-other")
+
+            withTimeout(1_000) {
+                while (
+                    stateHolder._historicalConversations.value[0].last().text != "answer" ||
+                    stateHolder.conversationApiConfigIds.value["actual-user-id"] != "config-a"
+                ) {
+                    kotlinx.coroutines.delay(10)
+                }
+            }
+
+            assertEquals("config-a", stateHolder.conversationApiConfigIds.value["actual-user-id"])
+            assertEquals("config-b", stateHolder.conversationApiConfigIds.value["user-other"])
+            assertFalse(stateHolder.conversationApiConfigIds.value.containsKey("temp-conversation-id"))
+            assertEquals("user-other", stateHolder._currentConversationId.value)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `force save prunes orphan conversation state mappings`() = runBlocking {
+        val stateHolder = ViewModelStateHolder()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val historyManager = HistoryManager(
+            stateHolder = stateHolder,
+            persistenceManager = mockk(relaxed = true),
+            compareMessageLists = { left, right -> left == right },
+            onHistoryModified = {},
+            scope = scope
+        )
+
+        val conversation = listOf(
+            Message(id = "user-keep", text = "question", sender = Sender.User),
+            Message(id = "ai-keep", text = "answer", sender = Sender.AI),
+        )
+        stateHolder._historicalConversations.value = listOf(conversation)
+        stateHolder._loadedHistoryIndex.value = 0
+        stateHolder.setCurrentConversationId("user-keep")
+        stateHolder.messages.addAll(conversation)
+        stateHolder.conversationApiConfigIds.value = mapOf(
+            "user-keep" to "config-keep",
+            "orphan-api" to "config-old",
+        )
+        stateHolder.conversationFunctionToggleStates.value = mapOf(
+            "user-keep" to ConversationFunctionToggleState(webSearchEnabled = true),
+            "orphan-toggle" to ConversationFunctionToggleState(codeExecutionEnabled = true),
+        )
+        stateHolder.systemPrompts["user-keep"] = "keep"
+        stateHolder.systemPrompts["orphan-system"] = "old"
+        stateHolder.conversationScrollStates["user-keep"] = ConversationScrollState(firstVisibleItemIndex = 1)
+        stateHolder.conversationScrollStates["orphan-scroll"] = ConversationScrollState(firstVisibleItemIndex = 9)
+
+        try {
+            historyManager.saveCurrentChatToHistoryNow(forceSave = true)
+
+            assertEquals(setOf("user-keep"), stateHolder.conversationApiConfigIds.value.keys)
+            assertEquals(setOf("user-keep"), stateHolder.conversationFunctionToggleStates.value.keys)
+            assertEquals(setOf("user-keep"), stateHolder.systemPrompts.keys)
+            assertEquals(setOf("user-keep"), stateHolder.conversationScrollStates.keys)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `successive regenerations keep one history entry and append regenerated turns`() = runBlocking {
+        val stateHolder = ViewModelStateHolder()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val historyManager = HistoryManager(
+            stateHolder = stateHolder,
+            persistenceManager = mockk(relaxed = true),
+            compareMessageLists = { left, right -> left == right },
+            onHistoryModified = {},
+            scope = scope
+        )
+
+        val originalConversation = listOf(
+            Message(id = "user-1", text = "question one", sender = Sender.User),
+            Message(id = "ai-1", text = "answer one", sender = Sender.AI),
+            Message(id = "user-2", text = "question two", sender = Sender.User),
+            Message(id = "ai-2", text = "answer two", sender = Sender.AI),
+            Message(id = "user-3", text = "question three", sender = Sender.User),
+            Message(id = "ai-3", text = "answer three", sender = Sender.AI),
+        )
+        val afterFirstRegeneration = listOf(
+            Message(id = "user-2", text = "question two", sender = Sender.User),
+            Message(id = "ai-2", text = "answer two", sender = Sender.AI),
+            Message(id = "user-3", text = "question three", sender = Sender.User),
+            Message(id = "ai-3", text = "answer three", sender = Sender.AI),
+            Message(id = "user-1", text = "question one", sender = Sender.User),
+            Message(id = "ai-1-new", text = "new answer one", sender = Sender.AI),
+        )
+        val afterSecondRegenerationAndNewQuestion = listOf(
+            Message(id = "user-3", text = "question three", sender = Sender.User),
+            Message(id = "ai-3", text = "answer three", sender = Sender.AI),
+            Message(id = "user-1", text = "question one", sender = Sender.User),
+            Message(id = "ai-1-new", text = "new answer one", sender = Sender.AI),
+            Message(id = "user-2", text = "question two", sender = Sender.User),
+            Message(id = "ai-2-new", text = "new answer two", sender = Sender.AI),
+            Message(id = "user-4", text = "question four", sender = Sender.User),
+            Message(id = "ai-4", text = "answer four", sender = Sender.AI),
+        )
+
+        stateHolder._historicalConversations.value = listOf(originalConversation)
+        stateHolder._loadedHistoryIndex.value = 0
+        stateHolder.setCurrentConversationId("user-1")
+
+        try {
+            stateHolder.messages.addAll(afterFirstRegeneration)
+            historyManager.saveCurrentChatToHistoryNow(forceSave = true)
+
+            stateHolder.messages.clear()
+            stateHolder.messages.addAll(afterSecondRegenerationAndNewQuestion)
+            historyManager.saveCurrentChatToHistoryNow(forceSave = true)
+
+            assertEquals(1, stateHolder._historicalConversations.value.size)
+            assertEquals(afterSecondRegenerationAndNewQuestion, stateHolder._historicalConversations.value[0])
             assertEquals(0, stateHolder._loadedHistoryIndex.value)
         } finally {
             scope.cancel()

@@ -4,6 +4,7 @@ import android.util.Log
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.statecontroller.ApiHandler
 import com.android.everytalk.statecontroller.ViewModelStateHolder
+import com.android.everytalk.statecontroller.safeApiConfigSummary
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.update
@@ -30,7 +31,7 @@ class ConfigManager(
         }
 
         if (isDuplicate) {
-            Log.d(TAG_CM, "Skipping duplicate config: '${configToAdd.model}'")
+            Log.d(TAG_CM, "Skipping duplicate config: ${safeApiConfigSummary(configToAdd)}")
             return
         }
 
@@ -42,11 +43,11 @@ class ConfigManager(
         } else {
             stateHolder._apiConfigs.update { it + finalConfig }
         }
-        Log.d(TAG_CM, "Added new config '${finalConfig.model}' to in-memory list.")
+        Log.d(TAG_CM, "Added new config to in-memory list: ${safeApiConfigSummary(finalConfig)}")
 
         viewModelScope.launch {
             persistenceManager.saveApiConfigs(if (isImageGen) stateHolder._imageGenApiConfigs.value else stateHolder._apiConfigs.value, isImageGen)
-            Log.d(TAG_CM, "Saved API configs to persistence after adding '${finalConfig.model}'")
+            Log.d(TAG_CM, "Saved API configs to persistence after adding config ID ${finalConfig.id}")
 
             val selectedConfig = if (isImageGen) stateHolder._selectedImageGenApiConfig.value else stateHolder._selectedApiConfig.value
             val configList = if (isImageGen) stateHolder._imageGenApiConfigs.value else stateHolder._apiConfigs.value
@@ -76,7 +77,7 @@ class ConfigManager(
 
                 Log.d(
                     TAG_CM,
-                    "Added and selected new config: ${finalConfig.model}. Selection saved and bound to session."
+                    "Added and selected new config: ${safeApiConfigSummary(finalConfig)}. Selection saved and bound to session."
                 )
             }
         }
@@ -96,12 +97,12 @@ class ConfigManager(
                     val mutableConfigs = currentConfigs.toMutableList()
                     mutableConfigs[index] = configToUpdate
                     listActuallyUpdated = true
-                    Log.d(TAG_CM, "Config '${configToUpdate.model}' updated in memory.")
+                    Log.d(TAG_CM, "Config updated in memory: ${safeApiConfigSummary(configToUpdate)}")
                     mutableConfigs
                 } else {
                     Log.d(
                         TAG_CM,
-                        "Config '${configToUpdate.model}' content identical, no in-memory update."
+                        "Config content identical, no in-memory update: ${safeApiConfigSummary(configToUpdate)}"
                     )
                     currentConfigs
                 }
@@ -126,7 +127,7 @@ class ConfigManager(
                             "Updated selected config's ID also changed and was saved: ${configToUpdate.id}"
                         )
                     }
-                    Log.d(TAG_CM, "Updated config was the selected one: ${configToUpdate.model}")
+                    Log.d(TAG_CM, "Updated config was the selected one: ${safeApiConfigSummary(configToUpdate)}")
                 }
             }
         }
@@ -151,16 +152,16 @@ class ConfigManager(
         }.toList()
 
         configsFlow.value = updatedConfigs
-        Log.d(TAG_CM, "Config with ID ${configToDelete.id} ('${configToDelete.model}') removed from memory list.")
+        Log.d(TAG_CM, "Config removed from memory list: ${safeApiConfigSummary(configToDelete)}")
 
         if (wasCurrentlySelected) {
             if (!isImageGen) {
-                apiHandler.cancelCurrentApiJob("Selected config '${configToDelete.model}' was deleted")
+                apiHandler.cancelCurrentApiJob("Selected config ID ${configToDelete.id} was deleted")
             }
             
             val newSelectedConfig = updatedConfigs.firstOrNull()
             selectedConfigFlow.value = newSelectedConfig
-            Log.d(TAG_CM, "Deleted config was selected. New in-memory selection: ${newSelectedConfig?.model ?: "None"}")
+            Log.d(TAG_CM, "Deleted config was selected. New in-memory selection: ${safeApiConfigSummary(newSelectedConfig)}")
 
             viewModelScope.launch {
                 persistenceManager.saveApiConfigs(updatedConfigs, isImageGen)
@@ -214,20 +215,16 @@ class ConfigManager(
 
         if (selectedConfigFlow.value?.id != config.id) {
             if (!isImageGen) {
-                apiHandler.cancelCurrentApiJob("Switching selected config to '${config.model}'")
+                apiHandler.cancelCurrentApiJob("Switching selected config to ID ${config.id}")
             }
             selectedConfigFlow.value = config
             
             if (isImageGen) {
                 Log.d(TAG_CM, "=== IMAGE GEN CONFIG SELECTED ===")
-                Log.d(TAG_CM, "Config ID: ${config.id}")
-                Log.d(TAG_CM, "Model: ${config.model}")
-                Log.d(TAG_CM, "Provider: ${config.provider}")
-                Log.d(TAG_CM, "Channel: ${config.channel}")
-                Log.d(TAG_CM, "Address: ${config.address}")
+                Log.d(TAG_CM, "ConfigSummary: ${safeApiConfigSummary(config)}")
                 Log.d(TAG_CM, "ModalityType: ${config.modalityType}")
             } else {
-                Log.d(TAG_CM, "Selected config in memory: ${config.model} (${config.provider}).")
+                Log.d(TAG_CM, "Selected config in memory: ${safeApiConfigSummary(config)}")
             }
 
             viewModelScope.launch {

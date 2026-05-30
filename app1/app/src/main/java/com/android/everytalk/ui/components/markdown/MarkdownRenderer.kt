@@ -1140,7 +1140,7 @@ fun MarkdownRenderer(
                     }
                 } else {
                     if (processed.contains("$")) {
-                        android.util.Log.d("MarkdownRenderer", "检测到数学公式标记: ${processed.take(100)}")
+                        android.util.Log.d("MarkdownRenderer", "检测到数学公式标记: chars=${processed.length}")
                     }
 
                     val parseStartNs = SystemClock.elapsedRealtimeNanos()

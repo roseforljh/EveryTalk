@@ -13,12 +13,12 @@ sealed interface SlashCommand {
 }
 
 fun parseSlashCommand(input: String): SlashCommand? {
-    runCatching { Log.d("SlashCommand", "input=$input") }
+    runCatching { Log.d("SlashCommand", "inputChars=${input.length}") }
     val normalized = input.trim()
     if (!normalized.startsWith("/")) return null
     val commandToken = normalized.substringBefore(" ").lowercase()
     val args = normalized.substringAfter(" ", "").trim()
-    runCatching { Log.d("SlashCommand", "commandToken=$commandToken args=$args") }
+    runCatching { Log.d("SlashCommand", "commandToken=$commandToken argsChars=${args.length}") }
 
     val resolved = when (commandToken) {
         "/model" -> SlashCommand.Model(args)

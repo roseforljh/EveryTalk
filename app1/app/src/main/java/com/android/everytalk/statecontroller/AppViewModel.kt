@@ -1300,7 +1300,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             } catch (t: Throwable) {
                 t.message ?: "命令执行失败"
             }
-            Log.d("SlashCommand", "addLocalSlashReplyWithLoading finalText=${finalText.take(160)}")
+            Log.d("SlashCommand", "addLocalSlashReplyWithLoading finalTextChars=${finalText.length}")
             stateHolder.finishLocalSlashLoading(placeholderId, finalText)
             triggerScrollToBottom()
             saveCurrentChatToHistory(forceSave = true, isImageGeneration = false)

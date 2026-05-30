@@ -65,8 +65,14 @@ class RegenerateControllerTest {
         )
 
         var sentManualId: String? = null
+        val cleanupIds = mutableListOf<String>()
         val sentLatch = CountDownLatch(1)
-        val controller = createController(stateHolder) { text, _, _, isImageGeneration, manualMessageId ->
+        val controller = createController(
+            stateHolder,
+            onDeleteMediaFor = { groups ->
+                cleanupIds.addAll(groups.flatten().map { it.id })
+            }
+        ) { text, _, _, isImageGeneration, manualMessageId ->
             sentManualId = manualMessageId
             val target = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
             val userMessage = Message(id = manualMessageId ?: "user-new", text = text, sender = Sender.User)
@@ -79,9 +85,11 @@ class RegenerateControllerTest {
         assertTrue(sentLatch.await(1, TimeUnit.SECONDS))
         advanceUntilIdle()
 
-        assertEquals(null, sentManualId)
+        assertEquals("user-1", sentManualId)
         assertEquals("user-1", stateHolder._currentConversationId.value)
-        assertEquals(listOf("user-1", "user-new"), stateHolder.messages.map { it.id })
+        assertEquals(listOf("user-1"), stateHolder.messages.map { it.id })
+        assertFalse(cleanupIds.contains("user-1"))
+        assertTrue(cleanupIds.contains("ai-1"))
     }
 
     @Test
@@ -112,7 +120,7 @@ class RegenerateControllerTest {
         assertTrue(sentLatch.await(1, TimeUnit.SECONDS))
         advanceUntilIdle()
 
-        assertEquals(listOf("user-1", "user-2", "ai-2", "user-new", "new-ai-1"), stateHolder.messages.map { it.id })
+        assertEquals(listOf("user-2", "ai-2", "user-1", "new-ai-1"), stateHolder.messages.map { it.id })
     }
 
     @Test
@@ -185,9 +193,9 @@ class RegenerateControllerTest {
         assertTrue(sentLatch.await(1, TimeUnit.SECONDS))
         advanceUntilIdle()
 
-        assertEquals(null, sentManualId)
+        assertEquals("image-user-1", sentManualId)
         assertEquals("image-user-1", stateHolder._currentImageGenerationConversationId.value)
-        assertEquals(listOf("image-user-1", "image-user-new"), stateHolder.imageGenerationMessages.map { it.id })
+        assertEquals(listOf("image-user-1"), stateHolder.imageGenerationMessages.map { it.id })
     }
 
     private fun stateHolderWithTextConfig(): ViewModelStateHolder {

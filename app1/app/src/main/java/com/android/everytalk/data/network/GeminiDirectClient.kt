@@ -124,7 +124,7 @@ object GeminiDirectClient {
                                 send(AppStreamEvent.ExecutionStatusUpdate(status))
                             }
                         }
-                        Log.i(TAG, "🔧 工具 $toolName 执行成功: ${result.toString().take(100)}")
+                        Log.i(TAG, "🔧 工具 $toolName 执行成功: resultChars=${result.toString().length}")
                         val images = (result as? JsonObject)?.get("_images")?.let { it as? JsonArray }
                         val textResult = if (images != null) {
                             buildJsonObject {
@@ -743,7 +743,7 @@ object GeminiDirectClient {
                 lineCount++
                 
                 if (lineCount <= 10) {
-                    Log.d(TAG, "读取行 #$lineCount: '${line.take(100)}'")
+                    Log.d(TAG, "读取行 #$lineCount: chars=${line.length}")
                 }
                 
                 when {
@@ -751,7 +751,7 @@ object GeminiDirectClient {
                         // 空行表示一个 SSE 事件结束，解析累积的 data
                         val chunk = lineBuffer.toString().trim()
                         if (chunk.isNotEmpty()) {
-                            Log.d(TAG, "处理数据块 (长度=${chunk.length}): '${chunk.take(100)}'")
+                            Log.d(TAG, "处理数据块 (长度=${chunk.length})")
                             
                             if (chunk.equals("[DONE]", ignoreCase = true)) {
                                 Log.d(TAG, "收到 [DONE] 标记")

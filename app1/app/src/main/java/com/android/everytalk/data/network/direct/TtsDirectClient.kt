@@ -944,7 +944,7 @@ object TtsDirectClient {
                         } catch (e: Exception) {
                             if (e.message?.startsWith("Aliyun TTS Error") == true) throw e
                             // 忽略解析错误，继续处理下一行
-                            Log.w(TAG, "Failed to parse Aliyun stream line: ${jsonStr.take(100)}...", e)
+                            Log.w(TAG, "Failed to parse Aliyun stream line: chars=${jsonStr.length}", e)
                         }
                     } else if (line.startsWith("id:") || line.startsWith("event:")) {
                         // 忽略 SSE 元数据

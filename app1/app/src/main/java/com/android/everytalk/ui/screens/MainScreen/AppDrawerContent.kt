@@ -692,7 +692,7 @@ fun AppDrawerContent(
                                         val groupItems = processedItems.custom[groupName] ?: emptyList()
                                         if (groupItems.isNotEmpty()) {
                                             groupItems.forEach { itemData ->
-                                                key(itemData.stableId) {
+                                                key("custom_${itemData.originalIndex}_${itemData.stableId}") {
                                                     androidx.compose.animation.AnimatedVisibility(
                                                         visible = !deletingItems.contains(itemData.stableId),
                                                         exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
@@ -814,7 +814,7 @@ fun AppDrawerContent(
                                     ) {
                                         Column {
                                             processedItems.pinned.forEach { itemData ->
-                                                key(itemData.stableId) {
+                                                key("pinned_${itemData.originalIndex}_${itemData.stableId}") {
                                                     androidx.compose.animation.AnimatedVisibility(
                                                         visible = !deletingItems.contains(itemData.stableId),
                                                         exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
@@ -834,7 +834,7 @@ fun AppDrawerContent(
                             if (processedItems.ungrouped.isNotEmpty()) {
                                 items(
                                     items = processedItems.ungrouped,
-                                    key = { item -> "ungrouped_${item.stableId}_${isImageGenerationMode}" }
+                                    key = { item -> "ungrouped_${item.originalIndex}_${item.stableId}_${isImageGenerationMode}" }
                                 ) { itemData ->
                                     androidx.compose.animation.AnimatedVisibility(
                                         visible = !deletingItems.contains(itemData.stableId),

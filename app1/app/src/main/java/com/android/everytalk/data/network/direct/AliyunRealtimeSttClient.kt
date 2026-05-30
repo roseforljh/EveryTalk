@@ -339,7 +339,7 @@ class AliyunRealtimeSttClient(
                     }
                 }
                 "task-finished" -> {
-                    Log.i(TAG, "Task finished, final text: ${finalTextBuilder.toString().take(100)}...")
+                    Log.i(TAG, "Task finished, finalTextChars=${finalTextBuilder.length}")
                     // 任务完成，发送最终结果
                     withContext(Dispatchers.Main) {
                         onFinalResult?.invoke(finalTextBuilder.toString())
