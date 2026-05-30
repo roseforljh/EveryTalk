@@ -69,7 +69,13 @@ class RegenerateControllerTest {
         val controller = createController(stateHolder) { text, _, _, isImageGeneration, manualMessageId ->
             sentManualId = manualMessageId
             val target = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
-            target.add(Message(id = manualMessageId ?: "missing", text = text, sender = Sender.User))
+            val existingIndex = target.indexOfFirst { it.id == manualMessageId }
+            val userMessage = Message(id = manualMessageId ?: "missing", text = text, sender = Sender.User)
+            if (existingIndex >= 0) {
+                target[existingIndex] = userMessage
+            } else {
+                target.add(userMessage)
+            }
             sentLatch.countDown()
         }
 
@@ -84,7 +90,7 @@ class RegenerateControllerTest {
     }
 
     @Test
-    fun `text regenerate truncates entire branch after base user message`() = scope.runTest {
+    fun `text regenerate preserves later turns when regenerating earlier answer`() = scope.runTest {
         val stateHolder = stateHolderWithTextConfig()
         stateHolder.setCurrentConversationId("user-1")
         stateHolder._loadedHistoryIndex.value = 0
@@ -100,7 +106,14 @@ class RegenerateControllerTest {
         val sentLatch = CountDownLatch(1)
         val controller = createController(stateHolder) { text, _, _, isImageGeneration, manualMessageId ->
             val target = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
-            target.add(Message(id = manualMessageId ?: "missing", text = text, sender = Sender.User))
+            val existingIndex = target.indexOfFirst { it.id == manualMessageId }
+            val userMessage = Message(id = manualMessageId ?: "missing", text = text, sender = Sender.User)
+            if (existingIndex >= 0) {
+                target[existingIndex] = userMessage
+                target.add(existingIndex + 1, Message(id = "new-ai-1", text = "new answer one", sender = Sender.AI))
+            } else {
+                target.add(userMessage)
+            }
             sentLatch.countDown()
         }
 
@@ -109,8 +122,35 @@ class RegenerateControllerTest {
         assertTrue(sentLatch.await(1, TimeUnit.SECONDS))
         advanceUntilIdle()
 
-        assertEquals(listOf("user-1"), stateHolder.messages.map { it.id })
-        assertFalse(stateHolder.messages.any { it.id == "user-2" || it.id == "ai-2" })
+        assertEquals(listOf("user-1", "new-ai-1", "user-2", "ai-2"), stateHolder.messages.map { it.id })
+    }
+
+    @Test
+    fun `collect regeneration branch removes only answers before next user message`() {
+        val messages = listOf(
+            Message(id = "user-1", text = "question one", sender = Sender.User),
+            Message(id = "ai-1", text = "answer one", sender = Sender.AI),
+            Message(id = "user-2", text = "question two", sender = Sender.User),
+            Message(id = "ai-2", text = "answer two", sender = Sender.AI),
+        )
+
+        val branch = collectRegenerationBranch(messages, userMessageIndex = 0)
+
+        assertEquals(listOf("ai-1"), branch.map { it.id })
+    }
+
+    @Test
+    fun `text regenerate latest answer keeps previous turns`() {
+        val messages = listOf(
+            Message(id = "user-1", text = "question one", sender = Sender.User),
+            Message(id = "ai-1", text = "answer one", sender = Sender.AI),
+            Message(id = "user-2", text = "question two", sender = Sender.User),
+            Message(id = "ai-2", text = "answer two", sender = Sender.AI),
+        )
+
+        val branch = collectRegenerationBranch(messages, userMessageIndex = 2)
+
+        assertEquals(listOf("ai-2"), branch.map { it.id })
     }
 
     @Test
@@ -145,7 +185,13 @@ class RegenerateControllerTest {
         val controller = createController(stateHolder) { text, _, _, isImageGeneration, manualMessageId ->
             sentManualId = manualMessageId
             val target = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
-            target.add(Message(id = manualMessageId ?: "missing", text = text, sender = Sender.User))
+            val existingIndex = target.indexOfFirst { it.id == manualMessageId }
+            val userMessage = Message(id = manualMessageId ?: "missing", text = text, sender = Sender.User)
+            if (existingIndex >= 0) {
+                target[existingIndex] = userMessage
+            } else {
+                target.add(userMessage)
+            }
             sentLatch.countDown()
         }
 

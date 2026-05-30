@@ -80,6 +80,25 @@ internal fun applyReasoningChunk(currentMessage: Message, reasoningChunk: String
     }
 }
 
+internal fun addAiMessageAfterUserMessage(
+    messageList: MutableList<Message>,
+    newAiMessage: Message,
+    afterUserMessageId: String?,
+): Int {
+    val insertIndex = afterUserMessageId
+        ?.let { id -> messageList.indexOfFirst { it.id == id } }
+        ?.takeIf { it >= 0 }
+        ?.plus(1)
+
+    return if (insertIndex != null && insertIndex <= messageList.size) {
+        messageList.add(insertIndex, newAiMessage)
+        insertIndex
+    } else {
+        messageList.add(newAiMessage)
+        messageList.lastIndex
+    }
+}
+
 class ApiHandler(
     private val stateHolder: ViewModelStateHolder,
     private val viewModelScope: CoroutineScope,
@@ -116,7 +135,8 @@ class ApiHandler(
         modelName: String,
         providerName: String,
         isImageGeneration: Boolean = false,
-        onNewAiMessageAdded: () -> Unit = {}
+        onNewAiMessageAdded: () -> Unit = {},
+        afterUserMessageId: String? = null,
     ): String {
         val aiMessageId = UUID.randomUUID().toString()
         logger.debug("Preparing streaming AI message: $aiMessageId, model=$modelName, isImageGeneration=$isImageGeneration")
@@ -151,7 +171,7 @@ class ApiHandler(
 
         viewModelScope.launch(Dispatchers.Main.immediate) {
             val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
-            messageList.add(newAiMessage)
+            addAiMessageAfterUserMessage(messageList, newAiMessage, afterUserMessageId)
             onNewAiMessageAdded()
             logger.debug("🔧 Pre-created AI message added to list: $aiMessageId")
         }
@@ -356,7 +376,7 @@ class ApiHandler(
             
             val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
             viewModelScope.launch(Dispatchers.Main.immediate) {
-                messageList.add(newAiMessage)
+                addAiMessageAfterUserMessage(messageList, newAiMessage, afterUserMessageId)
                 onNewAiMessageAdded()
                 logger.debug("🔧 AI message added to list: $aiMessageId")
             }

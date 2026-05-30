@@ -376,6 +376,25 @@ internal fun prepareMcpDispatch(
     )
 }
 
+internal fun addOrReplaceRegeneratedUserMessage(
+    messageList: MutableList<UiMessage>,
+    newUserMessage: UiMessage,
+    isFromRegeneration: Boolean,
+    manualMessageId: String?,
+): Int {
+    val existingRegenerationIndex = if (isFromRegeneration && manualMessageId != null) {
+        messageList.indexOfFirst { it.id == manualMessageId }
+    } else {
+        -1
+    }
+    if (existingRegenerationIndex >= 0) {
+        messageList[existingRegenerationIndex] = newUserMessage
+        return existingRegenerationIndex
+    }
+    messageList.add(newUserMessage)
+    return messageList.lastIndex
+}
+
  class MessageSender(
      private val application: Application,
     private val viewModelScope: CoroutineScope,
@@ -814,11 +833,16 @@ internal fun prepareMcpDispatch(
             withContext(Dispatchers.Main.immediate) {
                 val animationMap = if (isImageGeneration) stateHolder.imageMessageAnimationStates else stateHolder.textMessageAnimationStates
                 animationMap[newUserMessageForUi.id] = true
+                val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
+                addOrReplaceRegeneratedUserMessage(
+                    messageList = messageList,
+                    newUserMessage = newUserMessageForUi,
+                    isFromRegeneration = isFromRegeneration,
+                    manualMessageId = manualMessageId,
+                )
                 if (isImageGeneration) {
-                    stateHolder.imageGenerationMessages.add(newUserMessageForUi)
                     stateHolder._lastSentImageUserMessageId.value = newUserMessageForUi.id
                 } else {
-                    stateHolder.messages.add(newUserMessageForUi)
                     stateHolder._lastSentUserMessageId.value = newUserMessageForUi.id
                     stateHolder.persistPendingParamsIfNeeded(isImageGeneration = false)
                 }
@@ -1049,7 +1073,8 @@ internal fun prepareMcpDispatch(
                     apiHandler.prepareStreamingAiMessage(
                         modelName = currentConfig.model,
                         providerName = currentConfig.provider,
-                        isImageGeneration = false
+                        isImageGeneration = false,
+                        afterUserMessageId = newUserMessageForUi.id,
                     )
                 } else null
 

@@ -14,8 +14,12 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.UUID
 
-internal fun collectRegenerationBranch(messages: List<Message>, userMessageIndex: Int): List<Message> =
-    if (userMessageIndex in messages.indices) messages.drop(userMessageIndex) else emptyList()
+internal fun collectRegenerationBranch(messages: List<Message>, userMessageIndex: Int): List<Message> {
+    if (userMessageIndex !in messages.indices) return emptyList()
+    return messages
+        .drop(userMessageIndex + 1)
+        .takeWhile { it.sender != Sender.User }
+}
 
 internal fun filterRegenerationMediaCleanupMessages(
     messagesToRemove: List<Message>,
