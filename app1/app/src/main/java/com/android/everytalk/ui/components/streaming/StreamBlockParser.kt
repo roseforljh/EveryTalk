@@ -5,6 +5,8 @@ import java.util.Locale
 object StreamBlockParser {
     private val fencedBlockLanguageRegex = Regex("^[A-Za-z0-9_+\\-#.]+$")
     private val openingFenceRegex = Regex("^([`~]{3,})([^`~]*)$")
+    private val latexCommandRegex = Regex("""\\[A-Za-z]+""")
+    private val proseWordRegex = Regex("""[A-Za-z]{2,}""")
 
     private data class DelimiterMatch(
         val start: Int,
@@ -30,6 +32,68 @@ object StreamBlockParser {
             body.contains("\\cases")
 
         return body.length >= 36 || hasComplexToken
+    }
+
+    private fun findNextInlineMathStart(content: String, startIndex: Int): Int {
+        var index = content.indexOf('$', startIndex)
+        while (index >= 0) {
+            val escaped = index > 0 && content[index - 1] == '\\'
+            val isDoubleDollar = index + 1 < content.length && content[index + 1] == '$'
+            if (!escaped && !isDoubleDollar && !isCurrencyDollar(content, index)) {
+                return index
+            }
+            index = content.indexOf('$', index + 1)
+        }
+        return -1
+    }
+
+    private fun isCurrencyDollar(content: String, index: Int): Boolean {
+        if (index + 1 >= content.length || !content[index + 1].isDigit()) return false
+
+        val closingIndex = findNextUnescapedSingleDollarOnLine(content, index + 1)
+        if (closingIndex == -1) return true
+        if (closingIndex + 1 < content.length && content[closingIndex + 1].isDigit()) return true
+
+        val body = content.substring(index + 1, closingIndex)
+        return !isDigitStartedMathBody(body)
+    }
+
+    private fun isDigitStartedMathBody(body: String): Boolean {
+        val trimmed = body.trim()
+        if (latexCommandRegex.containsMatchIn(trimmed)) return true
+        val normalized = latexCommandRegex.replace(trimmed, "")
+        if (normalized.isEmpty()) return false
+        val hasCjk = normalized.any { it.code in 0x4E00..0x9FFF }
+        val hasProseWord = proseWordRegex.containsMatchIn(normalized)
+        return !hasCjk && !hasProseWord
+    }
+
+    private fun findNextUnescapedSingleDollarOnLine(content: String, startIndex: Int): Int {
+        var index = startIndex
+        while (index < content.length) {
+            val ch = content[index]
+            if (ch == '\n' || ch == '\r') return -1
+            if (ch == '`') {
+                index++
+                while (index < content.length && content[index] != '`') {
+                    if (content[index] == '\n' || content[index] == '\r') return -1
+                    index++
+                }
+                if (index < content.length) index++
+                continue
+            }
+
+            val escaped = index > 0 && content[index - 1] == '\\'
+            if (ch == '$' && !escaped) {
+                if (index + 1 < content.length && content[index + 1] == '$') {
+                    index += 2
+                    continue
+                }
+                return index
+            }
+            index++
+        }
+        return -1
     }
 
     data class ParseResult(
@@ -69,7 +133,7 @@ object StreamBlockParser {
         while (cursor < content.length) {
             val codeStart = findNextFenceStart(content, cursor)
             val mathBlockStart = content.indexOf("$$", cursor)
-            val inlineStart = content.indexOf('$', cursor)
+            val inlineStart = findNextInlineMathStart(content, cursor)
             val escapedInlineStart = content.indexOf("\\(", cursor)
             val escapedBlockStart = content.indexOf("\\[", cursor)
 

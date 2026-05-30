@@ -14,6 +14,8 @@ import androidx.compose.ui.unit.dp
  */
 object TableUtils {
 
+    private val HTML_LINE_BREAK_REGEX = Regex("(?i)<br\\s*/?>")
+
     // 表格分隔行正则：匹配 | :---: | --- | :--- | 等格式
     // 支持左对齐(:---)、右对齐(---:)、居中对齐(:---:)，容错多余冒号(::---:)
     private val TABLE_SEPARATOR_REGEX = Regex("^\\s*\\|?\\s*:*-{2,}:*\\s*(\\|\\s*:*-{2,}:*\\s*)+\\|?\\s*$")
@@ -88,7 +90,11 @@ object TableUtils {
             .removePrefix("|")
             .removeSuffix("|")
             .split("|")
-            .map { it.trim() }
+            .map { normalizeTableCell(it.trim()) }
+    }
+
+    private fun normalizeTableCell(cell: String): String {
+        return HTML_LINE_BREAK_REGEX.replace(cell, "\n")
     }
 
     /**
@@ -111,8 +117,10 @@ object TableUtils {
         // 验证列数一致性
         val headerCells = parseTableRow(headerLine)
         val separatorCells = parseTableRow(separatorLine)
+        val columnsMatch = headerCells.size == separatorCells.size
+        val aiOmittedLastAlignmentCell = headerCells.size >= 4 && separatorCells.size == headerCells.size - 1
 
-        return headerCells.size == separatorCells.size && headerCells.size >= 2
+        return headerCells.size >= 2 && (columnsMatch || aiOmittedLastAlignmentCell)
     }
 
     /**

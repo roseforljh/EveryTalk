@@ -49,6 +49,62 @@ class StreamBlockParserTest {
     }
 
     @Test
+    fun `closed single dollar math remains inline math while streaming`() {
+        val result = StreamBlockParser.parse(
+            "formula ${'$'}x+1${'$'} and ${'$'}1+2=3${'$'} stay math",
+            "msg-single-dollar",
+        )
+
+        assertEquals(5, result.blocks.size)
+        assertTrue(result.blocks[1] is StreamBlock.MathInline)
+        assertEquals("${'$'}x+1${'$'}", result.blocks[1].text)
+        assertTrue(result.blocks[3] is StreamBlock.MathInline)
+        assertEquals("${'$'}1+2=3${'$'}", result.blocks[3].text)
+        assertFalse(result.hasPendingMath)
+    }
+
+    @Test
+    fun `double dollar math remains block math while streaming`() {
+        val result = StreamBlockParser.parse(
+            "formula\n${'$'}${'$'}\\frac{a}{b}${'$'}${'$'}\ndone",
+            "msg-double-dollar",
+        )
+
+        assertEquals(3, result.blocks.size)
+        assertTrue(result.blocks[1] is StreamBlock.MathBlock)
+        assertEquals("${'$'}${'$'}\\frac{a}{b}${'$'}${'$'}", result.blocks[1].text)
+        assertFalse(result.hasPendingMath)
+    }
+
+    @Test
+    fun `currency before single dollar math does not consume the formula opener`() {
+        val result = StreamBlockParser.parse(
+            "price ${'$'}12 then formula ${'$'}x+1${'$'}",
+            "msg-currency-before-math",
+        )
+
+        assertEquals(2, result.blocks.size)
+        assertTrue(result.blocks[0] is StreamBlock.PlainText)
+        assertEquals("price ${'$'}12 then formula ", result.blocks[0].text)
+        assertTrue(result.blocks[1] is StreamBlock.MathInline)
+        assertEquals("${'$'}x+1${'$'}", result.blocks[1].text)
+        assertFalse(result.hasPendingMath)
+    }
+
+    @Test
+    fun `digit started latex command remains inline math while streaming`() {
+        val result = StreamBlockParser.parse(
+            "formula ${'$'}2\\pi${'$'}",
+            "msg-digit-latex",
+        )
+
+        assertEquals(2, result.blocks.size)
+        assertTrue(result.blocks[1] is StreamBlock.MathInline)
+        assertEquals("${'$'}2\\pi${'$'}", result.blocks[1].text)
+        assertFalse(result.hasPendingMath)
+    }
+
+    @Test
     fun `streaming render state keeps only tail mutable while streaming`() {
         val state = buildStreamingRenderState(
             messageId = "msg-5",
@@ -141,5 +197,60 @@ class StreamBlockParserTest {
         assertEquals(1, result.blocks.size)
         assertTrue(result.blocks.first() is StreamBlock.CodeBlock)
         assertEquals("opencode web", extractFencedCodeBlockContent(result.blocks.first().text).code.trim())
+    }
+
+    @Test
+    fun `pricing table currency should not split streaming blocks as math`() {
+        val result = StreamBlockParser.parse(pioneerPricingMarkdown, "msg-pricing")
+
+        assertFalse(result.hasPendingMath)
+        assertEquals(1, result.blocks.size)
+        assertTrue(result.blocks.single() is StreamBlock.PlainText)
+        assertEquals(pioneerPricingMarkdown, result.blocks.single().text)
+    }
+
+    @Test
+    fun `pricing table streaming state keeps table text out of native markdown shortcut`() {
+        val state = buildStreamingRenderState(
+            messageId = "msg-pricing-state",
+            content = pioneerPricingMarkdown,
+            isStreaming = false,
+            isComplete = true,
+        )
+
+        assertFalse(state.hasPendingMath)
+        assertEquals(1, state.blocks.size)
+        assertTrue(state.blocks.single() is StreamBlock.PlainText)
+        assertTrue(state.nativeMarkdownBlocks.isEmpty())
+    }
+
+    @Test
+    fun `detailed pricing table currency should not split streaming blocks as math`() {
+        val result = StreamBlockParser.parse(pioneerDetailedPricingMarkdown, "msg-detailed-pricing")
+
+        assertFalse(result.hasPendingMath)
+        assertEquals(1, result.blocks.size)
+        assertTrue(result.blocks.single() is StreamBlock.PlainText)
+        assertEquals(pioneerDetailedPricingMarkdown, result.blocks.single().text)
+    }
+
+    private companion object {
+        private val pioneerDetailedPricingMarkdown = """
+            | 套餐名称 | 价格 | 适用人群 | 核心功能与权益 |
+            |:---|:---:|:---|:---|
+            | **Free (免费版)** | **${'$'}0** / 月 | 个人开发者 | • 赠送 **${'$'}30** 的推理额度<br>• 基础推理 API |
+            | **Pro (专业版)** | **${'$'}20** / 用户/月 | 团队 | 包含 Free 版所有功能<br>• **限时免费推理** |
+            | **Enterprise (企业版)** | **自定义** | 企业 | BYO cloud / private VPC |
+        """.trimIndent()
+
+        private val pioneerPricingMarkdown = """
+            我查了 pioneer.ai 官网 Pricing 页和文档页，目前它有 **Free、Pro、Enterprise** 三档：
+
+            | 套餐 | 价格 | 适合对象 | 包含内容 / 特点 |
+            |:---|:---:|:---|
+            | **Free** | **${'$'}0/月** | 试用、个人探索 | 含 **${'$'}30 inference credit**；Inference API；Continuous model optimization；Agent mode；Adaptive Inference |
+            | **Pro** | **${'$'}20/用户/月** | 扩展中的团队 | 包含 Free 全部功能；**2026 年 8 月 1 日前免费 inference**（受 rate limits 限制）；更高 rate limits；可下载模型权重；Deep Research mode；可邀请团队成员 |
+            | **Enterprise** | **定制报价** | 大团队、复杂工作流、企业部署 | BYO cloud / private VPC；Dedicated H100 fleet；SOC2 / HIPAA 合规；24/7 SLA；专属 SE/解决方案工程师；定制价格 |
+        """.trimIndent()
     }
 }
