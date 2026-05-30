@@ -382,15 +382,6 @@ internal fun addOrReplaceRegeneratedUserMessage(
     isFromRegeneration: Boolean,
     manualMessageId: String?,
 ): Int {
-    val existingRegenerationIndex = if (isFromRegeneration && manualMessageId != null) {
-        messageList.indexOfFirst { it.id == manualMessageId }
-    } else {
-        -1
-    }
-    if (existingRegenerationIndex >= 0) {
-        messageList[existingRegenerationIndex] = newUserMessage
-        return existingRegenerationIndex
-    }
     messageList.add(newUserMessage)
     return messageList.lastIndex
 }

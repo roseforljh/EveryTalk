@@ -167,7 +167,7 @@ class RegenerateController(
                     true,
                     originalAttachments,
                     isImageGeneration,
-                    originalUserMessageId
+                    null
                 )
             }
         }

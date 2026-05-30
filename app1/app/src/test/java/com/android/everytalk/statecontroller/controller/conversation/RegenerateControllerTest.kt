@@ -53,7 +53,7 @@ class RegenerateControllerTest {
     }
 
     @Test
-    fun `text regenerate reuses original user id and keeps conversation identity`() = scope.runTest {
+    fun `text regenerate appends new user message and keeps conversation identity`() = scope.runTest {
         val stateHolder = stateHolderWithTextConfig()
         stateHolder.setCurrentConversationId("user-1")
         stateHolder._loadedHistoryIndex.value = 0
@@ -69,13 +69,8 @@ class RegenerateControllerTest {
         val controller = createController(stateHolder) { text, _, _, isImageGeneration, manualMessageId ->
             sentManualId = manualMessageId
             val target = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
-            val existingIndex = target.indexOfFirst { it.id == manualMessageId }
-            val userMessage = Message(id = manualMessageId ?: "missing", text = text, sender = Sender.User)
-            if (existingIndex >= 0) {
-                target[existingIndex] = userMessage
-            } else {
-                target.add(userMessage)
-            }
+            val userMessage = Message(id = manualMessageId ?: "user-new", text = text, sender = Sender.User)
+            target.add(userMessage)
             sentLatch.countDown()
         }
 
@@ -84,9 +79,9 @@ class RegenerateControllerTest {
         assertTrue(sentLatch.await(1, TimeUnit.SECONDS))
         advanceUntilIdle()
 
-        assertEquals("user-1", sentManualId)
+        assertEquals(null, sentManualId)
         assertEquals("user-1", stateHolder._currentConversationId.value)
-        assertEquals(listOf("user-1"), stateHolder.messages.map { it.id })
+        assertEquals(listOf("user-1", "user-new"), stateHolder.messages.map { it.id })
     }
 
     @Test
@@ -106,14 +101,9 @@ class RegenerateControllerTest {
         val sentLatch = CountDownLatch(1)
         val controller = createController(stateHolder) { text, _, _, isImageGeneration, manualMessageId ->
             val target = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
-            val existingIndex = target.indexOfFirst { it.id == manualMessageId }
-            val userMessage = Message(id = manualMessageId ?: "missing", text = text, sender = Sender.User)
-            if (existingIndex >= 0) {
-                target[existingIndex] = userMessage
-                target.add(existingIndex + 1, Message(id = "new-ai-1", text = "new answer one", sender = Sender.AI))
-            } else {
-                target.add(userMessage)
-            }
+            val userMessage = Message(id = manualMessageId ?: "user-new", text = text, sender = Sender.User)
+            target.add(userMessage)
+            target.add(Message(id = "new-ai-1", text = "new answer one", sender = Sender.AI))
             sentLatch.countDown()
         }
 
@@ -122,7 +112,7 @@ class RegenerateControllerTest {
         assertTrue(sentLatch.await(1, TimeUnit.SECONDS))
         advanceUntilIdle()
 
-        assertEquals(listOf("user-1", "new-ai-1", "user-2", "ai-2"), stateHolder.messages.map { it.id })
+        assertEquals(listOf("user-1", "user-2", "ai-2", "user-new", "new-ai-1"), stateHolder.messages.map { it.id })
     }
 
     @Test
@@ -170,7 +160,7 @@ class RegenerateControllerTest {
     }
 
     @Test
-    fun `image regenerate from error reuses original user id and keeps conversation identity`() = scope.runTest {
+    fun `image regenerate from error appends new user message and keeps conversation identity`() = scope.runTest {
         val stateHolder = stateHolderWithImageConfig()
         stateHolder._currentImageGenerationConversationId.value = "image-user-1"
         stateHolder.imageGenerationMessages.addAll(
@@ -185,13 +175,8 @@ class RegenerateControllerTest {
         val controller = createController(stateHolder) { text, _, _, isImageGeneration, manualMessageId ->
             sentManualId = manualMessageId
             val target = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
-            val existingIndex = target.indexOfFirst { it.id == manualMessageId }
-            val userMessage = Message(id = manualMessageId ?: "missing", text = text, sender = Sender.User)
-            if (existingIndex >= 0) {
-                target[existingIndex] = userMessage
-            } else {
-                target.add(userMessage)
-            }
+            val userMessage = Message(id = manualMessageId ?: "image-user-new", text = text, sender = Sender.User)
+            target.add(userMessage)
             sentLatch.countDown()
         }
 
@@ -200,9 +185,9 @@ class RegenerateControllerTest {
         assertTrue(sentLatch.await(1, TimeUnit.SECONDS))
         advanceUntilIdle()
 
-        assertEquals("image-user-1", sentManualId)
+        assertEquals(null, sentManualId)
         assertEquals("image-user-1", stateHolder._currentImageGenerationConversationId.value)
-        assertEquals(listOf("image-user-1"), stateHolder.imageGenerationMessages.map { it.id })
+        assertEquals(listOf("image-user-1", "image-user-new"), stateHolder.imageGenerationMessages.map { it.id })
     }
 
     private fun stateHolderWithTextConfig(): ViewModelStateHolder {

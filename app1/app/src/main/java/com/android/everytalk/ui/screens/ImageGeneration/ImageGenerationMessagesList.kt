@@ -1625,14 +1625,15 @@ fun ImageGenerationMessagesList(
                                     model = currentUrl,
                                     contentDescription = "预览图片 ${page + 1}/${imagePreviewModels.size}",
                                     modifier = Modifier
-                                        .fillMaxWidth()
+                                        .fillMaxSize()
+                                        .padding(horizontal = 12.dp, vertical = 72.dp)
                                         .graphicsLayer {
                                             scaleX = animatedScale.value
                                             scaleY = animatedScale.value
                                             translationX = pageOffsetX
                                             translationY = pageOffsetY
                                         },
-                                    contentScale = ContentScale.FillWidth
+                                    contentScale = ContentScale.Fit
                                 )
                             }
                         }
