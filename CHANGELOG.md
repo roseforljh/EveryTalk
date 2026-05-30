@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.19.5](https://github.com/roseforljh/EveryTalk/compare/v1.19.4...v1.19.5) (2026-05-30)
+
+
+### Bug Fixes
+
+* append regenerated turns and constrain image preview ([c9d235e](https://github.com/roseforljh/EveryTalk/commit/c9d235e4c2ca9de8d40e322c9f64b648613597b7))
+* optimize dialog and image preview controls ([ae88b9d](https://github.com/roseforljh/EveryTalk/commit/ae88b9d2f221cb98e8129a7d90814a83a3baee26))
+* preserve follow-up turns on regenerate ([e2bb3ab](https://github.com/roseforljh/EveryTalk/commit/e2bb3aba453423b9979e393c872fd7de3ec82516))
+* refine markdown tables and model styling ([25bcbf0](https://github.com/roseforljh/EveryTalk/commit/25bcbf09095fff08b92542da0adee0dfb65f7007))
+* 修复价格表格流式渲染 ([93ae4e6](https://github.com/roseforljh/EveryTalk/commit/93ae4e6a3c51d92d179da8be1bc2f743f0f64cf6))
+
 ## [1.19.4](https://github.com/roseforljh/EveryTalk/compare/v1.19.3...v1.19.4) (2026-05-29)
 
 
