@@ -21,6 +21,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.painterResource
@@ -84,14 +86,15 @@ fun AppTopBar(
     val modelDisplayInfo = remember(selectedConfigName) {
         val lower = selectedConfigName.lowercase()
         when {
-            lower.contains("gemini") -> "Gemini" to Color(0xFFFF6B6B)       // 红
-            lower.contains("gpt") -> "GPT" to Color(0xFFFFAB5E)             // 橙
-            lower.contains("claude") -> "Claude" to Color(0xFFFFE66B)       // 黄
-            lower.contains("deepseek") -> "DeepSeek" to Color(0xFF5EE6A0)   // 绿
-            lower.contains("kimi") -> "Kimi" to Color(0xFF5ED8E6)           // 青
-            lower.contains("minimax") -> "MiniMax" to Color(0xFF66B5FF)     // 蓝
-            lower.contains("glm") -> "GLM" to Color(0xFFB388FF)            // 紫
-            else -> "Other" to Color.White
+            lower.contains("grok") -> "Grok" to Color(0xFF000000)
+            lower.contains("gemini") -> "Gemini" to Color(0xFF10B981)
+            lower.contains("gpt") -> "GPT" to Color(0xFFFFFFFF)
+            lower.contains("claude") -> "Claude" to Color(0xFFF97316)
+            lower.contains("deepseek") -> "DeepSeek" to Color(0xFF3B82F6)
+            lower.contains("kimi") -> "Kimi" to Color(0xFF06B6D4)
+            lower.contains("minimax") -> "MiniMax" to Color(0xFFEF4444)
+            lower.contains("glm") -> "GLM" to Color(0xFF8B5CF6)
+            else -> "Other" to Color(0xFF9E9E9E)
         }
     }
 
@@ -153,14 +156,35 @@ fun AppTopBar(
                             .padding(horizontal = 16.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(
-                            text = modelDisplayInfo.first,
-                            color = modelDisplayInfo.second,
-                            fontSize = titleFontSize,
-                            fontWeight = FontWeight.Medium,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                        if (modelDisplayInfo.first == "Gemini") {
+                            val geminiGradient = Brush.linearGradient(
+                                colors = listOf(
+                                    Color(0xFFEA4335),
+                                    Color(0xFFFBBC05),
+                                    Color(0xFF34A853),
+                                    Color(0xFF4285F4),
+                                )
+                            )
+                            Text(
+                                text = modelDisplayInfo.first,
+                                style = TextStyle(
+                                    brush = geminiGradient,
+                                    fontSize = titleFontSize,
+                                    fontWeight = FontWeight.Medium
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        } else {
+                            Text(
+                                text = modelDisplayInfo.first,
+                                color = modelDisplayInfo.second,
+                                fontSize = titleFontSize,
+                                fontWeight = FontWeight.Medium,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
 
                     if (showModelSelection) {

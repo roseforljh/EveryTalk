@@ -112,6 +112,22 @@ object MarkwonCache {
                                 ForegroundColorSpan(codeColor)
                             )
                         }
+
+                        // 自定义无序列表项样式：缩小列表小圆点与文本的缩进距离
+                        val customBlockMargin = (14f * density).toInt()
+                        builder.setFactory(org.commonmark.node.ListItem::class.java) { configuration, props ->
+                            val isOrdered = CoreProps.LIST_ITEM_TYPE.get(props) === CoreProps.ListItemType.ORDERED
+                            if (isOrdered) {
+                                val numberStr = CoreProps.ORDERED_LIST_ITEM_NUMBER.get(props)?.toString() ?: "1"
+                                io.noties.markwon.core.spans.OrderedListItemSpan(
+                                    configuration.theme(),
+                                    "$numberStr.\u00a0"
+                                )
+                            } else {
+                                val level = CoreProps.BULLET_LIST_ITEM_LEVEL.get(props) ?: 0
+                                CustomBulletListItemSpan(configuration.theme(), level, customBlockMargin)
+                            }
+                        }
                     }
                 })
                 .build()

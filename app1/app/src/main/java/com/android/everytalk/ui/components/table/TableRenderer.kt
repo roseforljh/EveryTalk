@@ -9,6 +9,8 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.requiredWidthIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -26,6 +28,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.android.everytalk.ui.components.markdown.MarkdownRenderer
@@ -56,12 +59,26 @@ fun TableRenderer(
     if (lines.size < 2) return
 
     // 使用 remember 缓存解析结果，避免重复解析
-    val (headers, dataRows, columnWidths) = remember(lines) {
+    val parsedTableData = remember(lines) {
         val parsedHeaders = TableUtils.parseTableRow(lines[0])
+        val parsedAlignments = if (lines.size > 1) TableUtils.parseAlignments(lines[1]) else emptyList()
+        val paddedAlignments = List(parsedHeaders.size) { index ->
+            parsedAlignments.getOrElse(index) { TableUtils.TableAlignment.CENTER }
+        }
         val parsedDataRows = lines.drop(2).map { TableUtils.parseTableRow(it) }
         val parsedColumnWidths = TableUtils.calculateColumnWidths(parsedHeaders, parsedDataRows)
-        Triple(parsedHeaders, parsedDataRows, parsedColumnWidths)
+        object {
+            val headers = parsedHeaders
+            val alignments = paddedAlignments
+            val dataRows = parsedDataRows
+            val columnWidths = parsedColumnWidths
+        }
     }
+
+    val headers = parsedTableData.headers
+    val dataRows = parsedTableData.dataRows
+    val columnWidths = parsedTableData.columnWidths
+    val alignments = parsedTableData.alignments
 
     // 根据表格规模决定渲染策略：大表格默认降级为纯文本，但若检测到 Markdown 语法仍保留解析
     // 避免出现 **bold**、`code` 等在单元格中原样显示的问题
@@ -110,19 +127,22 @@ fun TableRenderer(
                 modifier = Modifier
                     .wrapContentWidth()
                     .background(headerBackgroundColor)
-                    .padding(vertical = 8.dp)
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
                 headers.forEachIndexed { index, header ->
                     key("header_$index") {
                         TableCell(
                             content = header.trim(),
                             width = columnWidths.getOrElse(index) { 100.dp },
+                            alignment = alignments[index],
                             style = headerStyle,
                             usePlainText = false,
                             contentKey = if (contentKey.isNotBlank()) "${contentKey}_th_$index" else "",
                             backgroundColor = headerBackgroundColor,
                             drawRightSeparator = index < headers.lastIndex,
-                            separatorColor = columnDividerColor
+                            separatorColor = columnDividerColor,
+                            isHeader = true
                         )
                     }
                 }
@@ -144,7 +164,8 @@ fun TableRenderer(
                                     strokeWidth = strokeWidth
                                 )
                             }
-                            .padding(vertical = 8.dp)
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
                         row.forEachIndexed { colIndex, cell ->
                             if (colIndex < columnWidths.size) {
@@ -152,6 +173,7 @@ fun TableRenderer(
                                     TableCell(
                                         content = cell.trim(),
                                         width = columnWidths[colIndex],
+                                        alignment = alignments[colIndex],
                                         style = cellStyle,
                                         usePlainText = usePlainTextCells,
                                         contentKey = if (contentKey.isNotBlank()) "${contentKey}_tr_${rowIndex}_td_$colIndex" else "",
@@ -182,12 +204,14 @@ fun TableRenderer(
 private fun TableCell(
     content: String,
     width: androidx.compose.ui.unit.Dp,
+    alignment: TableUtils.TableAlignment,
     style: TextStyle,
     usePlainText: Boolean,
     contentKey: String,
     backgroundColor: Color,
     drawRightSeparator: Boolean = false,
-    separatorColor: Color = Color.Transparent
+    separatorColor: Color = Color.Transparent,
+    isHeader: Boolean = false
 ) {
     val textColor = MaterialTheme.colorScheme.onSurface
     // 内联代码不使用背景色
@@ -198,9 +222,23 @@ private fun TableCell(
         InlineMarkdownParser.containsMath(content)
     }
 
+    val boxAlignment = when (alignment) {
+        TableUtils.TableAlignment.LEFT -> Alignment.CenterStart
+        TableUtils.TableAlignment.CENTER -> Alignment.Center
+        TableUtils.TableAlignment.RIGHT -> Alignment.CenterEnd
+        TableUtils.TableAlignment.START -> Alignment.CenterStart
+    }
+
+    val textAlign = when (alignment) {
+        TableUtils.TableAlignment.LEFT -> TextAlign.Left
+        TableUtils.TableAlignment.CENTER -> TextAlign.Center
+        TableUtils.TableAlignment.RIGHT -> TextAlign.Right
+        TableUtils.TableAlignment.START -> TextAlign.Start
+    }
+
     Box(
         modifier = Modifier
-            .requiredWidthIn(min = width)
+            .width(width)
             .drawBehind {
                 drawRect(backgroundColor)
                 if (drawRightSeparator) {
@@ -214,13 +252,13 @@ private fun TableCell(
                 }
             }
             .padding(horizontal = 12.dp),
-        contentAlignment = Alignment.CenterStart
+        contentAlignment = boxAlignment
     ) {
         if (containsMath && !usePlainText) {
             // 包含数学公式：使用 MarkdownRenderer 渲染（支持 LaTeX）
             MarkdownRenderer(
                 markdown = content,
-                style = style,
+                style = style.copy(textAlign = textAlign),
                 color = textColor,
                 contentKey = contentKey,
                 disableVerticalPadding = true
@@ -243,6 +281,9 @@ private fun TableCell(
                 text = annotatedText,
                 style = style,
                 color = textColor,
+                textAlign = textAlign,
+                modifier = Modifier.fillMaxWidth(), // 关键：填充以响应 TextAlign
+                softWrap = !isHeader, // 强制表头不换行，而普通单元格允许换行
                 overflow = TextOverflow.Clip
             )
         }

@@ -174,6 +174,28 @@ object TableUtils {
         return parseCells(normalized)
     }
 
+    enum class TableAlignment {
+        LEFT, CENTER, RIGHT, START
+    }
+
+    /**
+     * 解析对齐方式
+     */
+    fun parseAlignments(separatorLine: String): List<TableAlignment> {
+        val cells = parseTableRow(separatorLine)
+        return cells.map { cell ->
+            val trimmed = cell.trim()
+            val leftColon = trimmed.startsWith(":")
+            val rightColon = trimmed.endsWith(":")
+            when {
+                leftColon && rightColon -> TableAlignment.CENTER
+                rightColon -> TableAlignment.RIGHT
+                leftColon -> TableAlignment.LEFT
+                else -> TableAlignment.CENTER // 默认使用居中，满足用户要求
+            }
+        }
+    }
+
     /**
      * 计算每列的宽度
      */
@@ -186,16 +208,40 @@ object TableUtils {
 
         // 基于内容长度计算宽度
         headers.forEachIndexed { index, header ->
-            var maxLength = header.length
+            // 确保表头始终能单行完全容纳，标题字数多的时候，列宽自动扩展，不强制换行
+            val headerLength = getDisplayLength(header)
+            var maxLength = headerLength
+
             dataRows.forEach { row ->
                 if (index < row.size) {
-                    maxLength = maxOf(maxLength, row[index].length)
+                    maxLength = maxOf(maxLength, getDisplayLength(row[index]))
                 }
             }
-            // 每个字符约8dp，最小100dp，最大300dp
-            widths[index] = (maxLength * 8).dp.coerceIn(100.dp, 300.dp)
+
+            // 计算出的基本宽度：每个英文字符约 8dp，中文字符约 16dp
+            // 表头单独做个最小宽度确保：(表头字数 * 11) dp，给表头两边内边距留足空间，防止强制换行
+            val minHeaderWidth = (headerLength * 11).dp
+            val calculatedWidth = (maxLength * 8.5f).dp
+
+            // 取最大值，且限制在 [80dp, 300dp] 区间内
+            widths[index] = maxOf(minHeaderWidth, calculatedWidth).coerceIn(80.dp, 320.dp)
         }
 
         return widths
+    }
+
+    /**
+     * 计算显示长度：将中日韩等全角字符记为 2，ASCII 记为 1
+     */
+    private fun getDisplayLength(text: String): Float {
+        var length = 0f
+        for (char in text) {
+            if (char.code in 0..127) {
+                length += 1f
+            } else {
+                length += 2f
+            }
+        }
+        return length
     }
 }
