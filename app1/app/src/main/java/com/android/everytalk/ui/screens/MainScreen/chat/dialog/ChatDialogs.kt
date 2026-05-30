@@ -64,6 +64,8 @@ import com.android.everytalk.ui.components.dialog.appDialogBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogCancelColor
 import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
+import com.android.everytalk.ui.components.dialog.appDialogTextFieldDefaultBorderColor
+import com.android.everytalk.ui.components.dialog.appDialogTextFieldBorderColor
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -107,6 +109,8 @@ fun EditMessageDialog(
     val scale = remember { Animatable(0.8f) }
     val dialogBg = appDialogContainerColor()
     val contentColor = appDialogContentColor()
+    val textFieldBorderColor = appDialogTextFieldBorderColor()
+    val textFieldDefaultBorderColor = appDialogTextFieldDefaultBorderColor()
     val cancelButtonColor = appDialogCancelColor()
     val confirmButtonColor = contentColor
     val confirmButtonTextColor = dialogBg
@@ -156,11 +160,11 @@ fun EditMessageDialog(
                             focusedTextColor = MaterialTheme.colorScheme.onSurface,
                             unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
                             disabledTextColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                            cursorColor = MaterialTheme.colorScheme.primary,
-                            focusedBorderColor = MaterialTheme.colorScheme.primary,
-                            unfocusedBorderColor = MaterialTheme.colorScheme.outline,
-                            disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
-                            focusedLabelColor = MaterialTheme.colorScheme.primary,
+                            cursorColor = textFieldBorderColor,
+                            focusedBorderColor = textFieldBorderColor,
+                            unfocusedBorderColor = textFieldDefaultBorderColor,
+                            disabledBorderColor = textFieldDefaultBorderColor.copy(alpha = 0.5f),
+                            focusedLabelColor = textFieldBorderColor,
                             unfocusedLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                             disabledLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
                             focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant,
@@ -245,6 +249,8 @@ fun ConversationParametersDialog(
     val dialogHeight = screenHeight * 0.67f
     val dialogBg = appDialogContainerColor()
     val contentColor = appDialogContentColor()
+    val textFieldBorderColor = appDialogTextFieldBorderColor()
+    val textFieldDefaultBorderColor = appDialogTextFieldDefaultBorderColor()
 
     AlertDialog(
         modifier = Modifier
@@ -439,11 +445,12 @@ fun ConversationParametersDialog(
                         singleLine = true,
                         shape = RoundedCornerShape(24.dp),
                         colors = OutlinedTextFieldDefaults.colors(
-                            focusedBorderColor = MaterialTheme.colorScheme.primary,
-                            unfocusedBorderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
-                            focusedLabelColor = MaterialTheme.colorScheme.primary,
+                            focusedBorderColor = textFieldBorderColor,
+                            unfocusedBorderColor = textFieldDefaultBorderColor,
+                            disabledBorderColor = textFieldDefaultBorderColor.copy(alpha = 0.5f),
+                            focusedLabelColor = textFieldBorderColor,
                             unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            cursorColor = MaterialTheme.colorScheme.primary,
+                            cursorColor = textFieldBorderColor,
                             focusedTextColor = MaterialTheme.colorScheme.onSurface,
                             unfocusedTextColor = MaterialTheme.colorScheme.onSurface
                         )

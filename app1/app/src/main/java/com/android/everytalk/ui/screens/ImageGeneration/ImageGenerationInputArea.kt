@@ -87,6 +87,8 @@ import com.android.everytalk.ui.components.dialog.AppDialogTextFieldShape
 import com.android.everytalk.ui.components.dialog.appDialogBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
+import com.android.everytalk.ui.components.dialog.appDialogTextFieldDefaultBorderColor
+import com.android.everytalk.ui.components.dialog.appDialogTextFieldBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -203,7 +205,6 @@ fun SelectedItemPreview(
     onRemoveClicked: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val context = LocalContext.current
     Box(
         modifier = modifier
             .size(width = 100.dp, height = 80.dp)
@@ -226,24 +227,23 @@ fun SelectedItemPreview(
             )
             else -> {}
         }
-        IconButton(
-            onClick = onRemoveClicked,
+        Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(1.dp)
-                .size(16.dp)
+                .offset(x = (-2).dp, y = 2.dp)
+                .size(22.dp)
                 .background(
-                    color = Color.Black.copy(alpha = 0.32f),
+                    color = Color(0xFF616161),
                     shape = CircleShape
-                ),
-            colors = IconButtonDefaults.iconButtonColors(
-                containerColor = Color.Transparent,
-                contentColor = Color.White
-            )
+                )
+                .clip(CircleShape)
+                .clickable(onClick = onRemoveClicked),
+            contentAlignment = Alignment.Center
         ) {
             Icon(
-                painter = painterResource(R.drawable.ic_close),
+                painter = painterResource(R.drawable.ic_close_bold),
                 contentDescription = "Remove item",
+                tint = Color.White,
                 modifier = Modifier.size(12.dp)
             )
         }
@@ -904,6 +904,8 @@ fun ImageGenerationInputArea(
     if (showStepsDialog && onChangeImageSteps != null) {
             var stepsValue by remember(currentImageSteps) { mutableFloatStateOf((currentImageSteps ?: 4).toFloat()) }
             var stepsText by remember(currentImageSteps) { mutableStateOf((currentImageSteps ?: 4).toString()) }
+            val textFieldBorderColor = appDialogTextFieldBorderColor()
+            val textFieldDefaultBorderColor = appDialogTextFieldDefaultBorderColor()
 
             AlertDialog(
                 onDismissRequest = { showStepsDialog = false },
@@ -968,8 +970,10 @@ fun ImageGenerationInputArea(
                                 colors = OutlinedTextFieldDefaults.colors(
                                     focusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
                                     unfocusedContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-                                    focusedBorderColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
-                                    unfocusedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                                    focusedBorderColor = textFieldBorderColor,
+                                    unfocusedBorderColor = textFieldDefaultBorderColor,
+                                    disabledBorderColor = textFieldDefaultBorderColor.copy(alpha = 0.5f),
+                                    cursorColor = textFieldBorderColor,
                                 )
                             )
                         }

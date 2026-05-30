@@ -31,6 +31,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.painterResource
 import com.android.everytalk.R
+import com.android.everytalk.ui.components.dialog.appDialogTextFieldDefaultBorderColor
+import com.android.everytalk.ui.components.dialog.appDialogTextFieldBorderColor
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
@@ -68,18 +70,17 @@ import com.android.everytalk.data.network.ExternalWebSearchProvider
 
 val DialogTextFieldColors
     @Composable get() = run {
-        val isDark = isSystemInDarkTheme()
-        val highlightColor = if (isDark) Color.White else MaterialTheme.colorScheme.primary
-        val borderColor = if (isDark) Color(0xFF414141) else Color(0xFFF3F3F3)
+        val borderColor = appDialogTextFieldBorderColor()
+        val defaultBorderColor = appDialogTextFieldDefaultBorderColor()
         OutlinedTextFieldDefaults.colors(
             focusedTextColor = MaterialTheme.colorScheme.onSurface,
             unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
             disabledTextColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-            cursorColor = highlightColor,
-            focusedBorderColor = highlightColor,
-            unfocusedBorderColor = borderColor,
-            disabledBorderColor = borderColor.copy(alpha = 0.5f),
-            focusedLabelColor = highlightColor,
+            cursorColor = borderColor,
+            focusedBorderColor = borderColor,
+            unfocusedBorderColor = defaultBorderColor,
+            disabledBorderColor = defaultBorderColor.copy(alpha = 0.5f),
+            focusedLabelColor = borderColor,
             unfocusedLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
             disabledLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
             focusedContainerColor = Color.Transparent,

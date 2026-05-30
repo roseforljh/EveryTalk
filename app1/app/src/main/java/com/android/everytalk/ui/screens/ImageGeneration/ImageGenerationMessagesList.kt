@@ -21,6 +21,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.LocalIndication
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.shape.CircleShape
@@ -74,7 +75,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import android.net.Uri
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -941,6 +942,9 @@ fun ImageGenerationMessagesList(
         if (isImagePreviewVisible && imagePreviewModels.isNotEmpty()) {
             val context = LocalContext.current
             val scope = rememberCoroutineScope()
+            val controlBackgroundColor = Color.Gray.copy(alpha = 0.42f)
+            val controlBorderColor = Color.White.copy(alpha = 0.75f)
+            val bottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
             // 当前选中的图像生成配置（用于附加鉴权/来源头）
             val selectedImageConfig by viewModel.selectedImageGenApiConfig.collectAsState()
             val authToken = remember(selectedImageConfig) { selectedImageConfig?.key?.takeIf { it.isNotBlank() } }
@@ -1493,49 +1497,60 @@ fun ImageGenerationMessagesList(
                 )
             ) {
                 Surface(
-                    color = Color.Black,
+                    color = Color.Transparent,
                     contentColor = Color.White,
                     tonalElevation = 0.dp,
                     modifier = Modifier.fillMaxSize()
                 ) {
                     Box(modifier = Modifier.fillMaxSize()) {
-                        // 顶部工具栏：左关 + 居中页码
-                        Row(
+                        // 顶部工具栏：居中页码 + 右上关闭
+                        Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(horizontal = 12.dp, vertical = 8.dp)
-                                .align(Alignment.TopCenter),
-                            verticalAlignment = Alignment.CenterVertically
+                                .align(Alignment.TopCenter)
+                                .zIndex(2f)
                         ) {
-                            IconButton(onClick = { isImagePreviewVisible = false }) {
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_close),
-                                    contentDescription = "关闭预览",
-                                    tint = Color.White,
-                                    modifier = Modifier.size(24.dp)
-                                )
-                            }
-                            if (imagePreviewModels.size > 1) {
-                                Text(
-                                    text = "${pagerState.currentPage + 1} / ${imagePreviewModels.size}",
-                                    color = Color.White.copy(alpha = 0.8f),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.Medium,
-                                    modifier = Modifier.weight(1f),
-                                    textAlign = TextAlign.Center
-                                )
-                                Spacer(modifier = Modifier.size(48.dp))
-                            } else {
-                                Spacer(modifier = Modifier.weight(1f))
+                            Spacer(modifier = Modifier.height(12.dp))
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (imagePreviewModels.size > 1) {
+                                    Spacer(modifier = Modifier.size(40.dp))
+                                    Text(
+                                        text = "${pagerState.currentPage + 1} / ${imagePreviewModels.size}",
+                                        color = Color.White.copy(alpha = 0.8f),
+                                        style = MaterialTheme.typography.bodyMedium,
+                                        fontWeight = FontWeight.Medium,
+                                        modifier = Modifier.weight(1f),
+                                        textAlign = TextAlign.Center
+                                    )
+                                } else {
+                                    Spacer(modifier = Modifier.weight(1f))
+                                }
+                                IconButton(
+                                    onClick = { isImagePreviewVisible = false },
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .background(controlBackgroundColor, CircleShape)
+                                        .border(1.dp, controlBorderColor, CircleShape)
+                                ) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_gpt_close_lg),
+                                        contentDescription = "关闭预览",
+                                        tint = Color.White,
+                                        modifier = Modifier.size(20.dp)
+                                    )
+                                }
                             }
                         }
 
                         // 左右滑动切换图片 + 双指缩放
                         HorizontalPager(
                             state = pagerState,
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(vertical = 56.dp),
+                            modifier = Modifier.fillMaxSize(),
                             userScrollEnabled = imagePreviewModels.size > 1 && scale == 1f,
                             beyondViewportPageCount = 1
                         ) { page ->
@@ -1623,33 +1638,34 @@ fun ImageGenerationMessagesList(
                         }
 
 
-                        // 底部操作栏（编辑 / 选择 / 保存 / 共享）- 图标+小号加粗文字，增大间隔，定制按压动画
+                        // 底部操作栏（编辑 / 选择 / 保存 / 分享）：纯图标圆按钮
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .align(Alignment.BottomCenter)
-                                .padding(bottom = 4.dp, start = 24.dp, end = 24.dp),
+                                .padding(bottom = bottomInset + 12.dp, start = 24.dp, end = 24.dp)
+                                .zIndex(2f),
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             BottomActionButton(
-                                icon = painterResource(R.drawable.ic_pencil),
-                                label = "编辑",
+                                icon = painterResource(R.drawable.ic_gpt_edit),
+                                contentDescription = "编辑图片",
                                 onClick = { editCurrentImage() }
                             )
                             BottomActionButton(
-                                icon = painterResource(R.drawable.ic_pencil),
-                                label = "选择",
+                                icon = painterResource(R.drawable.ic_gpt_select_image_area),
+                                contentDescription = "选择图片",
                                 onClick = { openBrushEditor() }
                             )
                             BottomActionButton(
-                                icon = painterResource(R.drawable.ic_download),
-                                label = "保存",
+                                icon = painterResource(R.drawable.ic_gpt_download),
+                                contentDescription = "保存图片",
                                 onClick = { saveToAlbum() }
                             )
                             BottomActionButton(
-                                icon = painterResource(R.drawable.ic_share),
-                                label = "共享",
+                                icon = painterResource(R.drawable.ic_gpt_share),
+                                contentDescription = "分享图片",
                                 onClick = { shareImage() }
                             )
                         }
@@ -1980,15 +1996,17 @@ private fun BrushEditorOverlay(
 @Composable
 private fun BottomActionButton(
     icon: androidx.compose.ui.graphics.painter.Painter,
-    label: String,
+    contentDescription: String,
     onClick: () -> Unit
 ) {
     val interaction = remember { MutableInteractionSource() }
-    // 单一圆形容器，图标+文字都放在同一个圆里，点击仅在圆形范围产生涟漪
+    // 单一圆形容器，点击仅在圆形范围产生涟漪
     Box(
         modifier = Modifier
-            .size(68.dp) // 同一大圆，容纳图标+文字
+            .size(52.dp)
             .clip(androidx.compose.foundation.shape.CircleShape)
+            .background(Color.Gray.copy(alpha = 0.42f), CircleShape)
+            .border(1.dp, Color.White.copy(alpha = 0.75f), CircleShape)
             .clickable(
                 interactionSource = interaction,
                 indication = LocalIndication.current,
@@ -1996,20 +2014,12 @@ private fun BottomActionButton(
             ),
         contentAlignment = Alignment.Center
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(
-                painter = icon,
-                contentDescription = label,
-                tint = Color.White
-            )
-            Spacer(modifier = Modifier.height(2.dp))
-            Text(
-                text = label,
-                color = Color.White,
-                fontWeight = FontWeight.Bold,
-                fontSize = 12.sp
-            )
-        }
+        Icon(
+            painter = icon,
+            contentDescription = contentDescription,
+            tint = Color.White,
+            modifier = Modifier.size(22.dp)
+        )
     }
 }
 

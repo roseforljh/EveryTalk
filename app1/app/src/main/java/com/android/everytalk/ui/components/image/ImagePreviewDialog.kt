@@ -15,13 +15,11 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.calculatePan
 import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Download
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -31,12 +29,14 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.zIndex
+import com.android.everytalk.R
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -86,49 +86,63 @@ fun ImagePreviewDialog(
             dismissOnClickOutside = true
         )
     ) {
+        val controlBackgroundColor = Color.Gray.copy(alpha = 0.42f)
+        val controlBorderColor = Color.White.copy(alpha = 0.75f)
+        val bottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+
         Surface(
-            color = Color.Black,
+            color = Color.Transparent,
             contentColor = Color.White,
             tonalElevation = 0.dp,
             modifier = Modifier.fillMaxSize()
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
-                Row(
+                Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
                         .align(Alignment.TopCenter)
-                        .zIndex(2f),
-                    verticalAlignment = Alignment.CenterVertically
+                        .zIndex(2f)
                 ) {
-                    IconButton(onClick = onDismiss) {
-                        Icon(
-                            imageVector = Icons.Filled.Close,
-                            contentDescription = "关闭预览",
-                            tint = Color.White,
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
-                    if (urls.size > 1) {
-                        Text(
-                            text = "${pagerState.currentPage + 1} / ${urls.size}",
-                            color = Color.White.copy(alpha = 0.8f),
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium,
-                            modifier = Modifier.weight(1f),
-                            textAlign = TextAlign.Center
-                        )
-                        Spacer(modifier = Modifier.size(48.dp))
-                    } else {
-                        Spacer(modifier = Modifier.weight(1f))
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (urls.size > 1) {
+                            Spacer(modifier = Modifier.size(40.dp))
+                            Text(
+                                text = "${pagerState.currentPage + 1} / ${urls.size}",
+                                color = Color.White.copy(alpha = 0.8f),
+                                style = MaterialTheme.typography.bodyMedium,
+                                fontWeight = FontWeight.Medium,
+                                modifier = Modifier.weight(1f),
+                                textAlign = TextAlign.Center
+                            )
+                        } else {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
+                        IconButton(
+                            onClick = onDismiss,
+                            modifier = Modifier
+                                .size(40.dp)
+                                .background(controlBackgroundColor, CircleShape)
+                                .border(1.dp, controlBorderColor, CircleShape)
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_gpt_close_lg),
+                                contentDescription = "关闭预览",
+                                tint = Color.White,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
                     }
                 }
 
                 HorizontalPager(
                     state = pagerState,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(vertical = 56.dp),
+                    modifier = Modifier.fillMaxSize(),
                     userScrollEnabled = urls.size > 1 && scale == 1f,
                     beyondViewportPageCount = 1
                 ) { page ->
@@ -218,13 +232,11 @@ fun ImagePreviewDialog(
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
-                        .padding(end = 16.dp, bottom = 16.dp)
+                        .padding(end = 16.dp, bottom = bottomInset + 16.dp)
                         .size(48.dp)
                         .zIndex(2f)
-                        .background(
-                            color = Color.Black.copy(alpha = 0.35f),
-                            shape = CircleShape
-                        )
+                        .background(controlBackgroundColor, CircleShape)
+                        .border(1.dp, controlBorderColor, CircleShape)
                 ) {
                     IconButton(
                         onClick = {
@@ -236,9 +248,10 @@ fun ImagePreviewDialog(
                         modifier = Modifier.fillMaxSize()
                     ) {
                         Icon(
-                            imageVector = Icons.Default.Download,
+                            painter = painterResource(R.drawable.ic_gpt_download),
                             contentDescription = "下载图片",
-                            tint = Color.White
+                            tint = Color.White,
+                            modifier = Modifier.size(22.dp)
                         )
                     }
                 }

@@ -23,6 +23,12 @@ fun appDialogBorderColor(): Color = if (isSystemInDarkTheme()) Color(0xFF414141)
 fun appDialogContentColor(): Color = if (isSystemInDarkTheme()) Color.White else Color(0xFF0D0D0D)
 
 @Composable
+fun appDialogTextFieldBorderColor(): Color = if (isSystemInDarkTheme()) Color.White else Color.Black
+
+@Composable
+fun appDialogTextFieldDefaultBorderColor(): Color = appDialogTextFieldBorderColor().copy(alpha = 0.55f)
+
+@Composable
 fun appDialogSubtextColor(alpha: Float = 0.7f): Color = appDialogContentColor().copy(alpha = alpha)
 
 @Composable
@@ -37,9 +43,9 @@ fun appDialogTextFieldColors() = OutlinedTextFieldDefaults.colors(
     unfocusedTextColor = appDialogContentColor(),
     disabledTextColor = appDialogContentColor().copy(alpha = 0.6f),
     cursorColor = appDialogContentColor(),
-    focusedBorderColor = appDialogContentColor(),
-    unfocusedBorderColor = appDialogBorderColor(),
-    disabledBorderColor = appDialogBorderColor().copy(alpha = 0.5f),
+    focusedBorderColor = appDialogTextFieldBorderColor(),
+    unfocusedBorderColor = appDialogTextFieldDefaultBorderColor(),
+    disabledBorderColor = appDialogTextFieldDefaultBorderColor().copy(alpha = 0.5f),
     focusedLabelColor = appDialogContentColor(),
     unfocusedLabelColor = appDialogSubtextColor(0.6f),
     disabledLabelColor = appDialogSubtextColor(0.4f),

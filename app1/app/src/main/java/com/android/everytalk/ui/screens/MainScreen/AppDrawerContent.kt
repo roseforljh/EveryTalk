@@ -971,21 +971,7 @@ fun AppDrawerContent(
                                 modifier = Modifier.fillMaxWidth(),
                                 placeholder = { Text("请输入会话名称") },
                                 shape = RoundedCornerShape(12.dp),
-                                colors = OutlinedTextFieldDefaults.colors(
-                                    focusedTextColor = MaterialTheme.colorScheme.onSurface,
-                                    unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
-                                    disabledTextColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                                    cursorColor = MaterialTheme.colorScheme.primary,
-                                    focusedBorderColor = MaterialTheme.colorScheme.primary,
-                                    unfocusedBorderColor = MaterialTheme.colorScheme.outline,
-                                    disabledBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
-                                    focusedLabelColor = MaterialTheme.colorScheme.primary,
-                                    unfocusedLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                                    disabledLabelColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
-                                    focusedContainerColor = dialogBg,
-                                    unfocusedContainerColor = dialogBg,
-                                    disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-                                )
+                                colors = appDialogTextFieldColors()
                             )
                         }
                     },
