@@ -178,6 +178,11 @@ fun StreamBlocksRenderer(
         }
     }
     val segments = if (hasSplitBlocks) committedSegments + tailSegments else fallbackSegments
+    val renderPhaseKey = if (hasSplitBlocks) {
+        "$committedBlocksHash:$tailBlocksHash"
+    } else {
+        blocks.hashCode().toString()
+    }
 
     if (segments.isEmpty()) {
         EnhancedMarkdownText(
@@ -244,6 +249,7 @@ fun StreamBlocksRenderer(
                                             viewModel = viewModel,
                                             onLongPress = onLongPress,
                                             onImageClick = onImageClick,
+                                            renderPhaseKey = renderPhaseKey,
                                             onCodePreviewRequested = onCodePreviewRequested,
                                             onCodeCopied = onCodeCopied,
                                         )
@@ -271,6 +277,7 @@ fun StreamBlocksRenderer(
                                             viewModel = viewModel,
                                             onLongPress = onLongPress,
                                             onImageClick = onImageClick,
+                                            renderPhaseKey = renderPhaseKey,
                                             onCodePreviewRequested = onCodePreviewRequested,
                                             onCodeCopied = onCodeCopied,
                                         )
@@ -294,6 +301,7 @@ fun StreamBlocksRenderer(
                                             viewModel = viewModel,
                                             onLongPress = onLongPress,
                                             onImageClick = onImageClick,
+                                            renderPhaseKey = renderPhaseKey,
                                             onCodePreviewRequested = onCodePreviewRequested,
                                             onCodeCopied = onCodeCopied,
                                         )
@@ -319,6 +327,7 @@ fun StreamBlocksRenderer(
                                         viewModel = viewModel,
                                         onLongPress = onLongPress,
                                         onImageClick = onImageClick,
+                                        renderPhaseKey = renderPhaseKey,
                                         onCodePreviewRequested = onCodePreviewRequested,
                                         onCodeCopied = onCodeCopied,
                                     )
@@ -576,6 +585,7 @@ private fun SegmentMarkdown(
     viewModel: AppViewModel,
     onLongPress: (() -> Unit)?,
     onImageClick: ((String) -> Unit)?,
+    renderPhaseKey: String,
     onCodePreviewRequested: ((String, String) -> Unit)?,
     onCodeCopied: (() -> Unit)?,
 ) {
@@ -595,7 +605,7 @@ private fun SegmentMarkdown(
         onCodeCopied = onCodeCopied,
         viewModel = viewModel,
         contentOverride = text,
-        contentKeyOverride = "${message.id}:$segmentId",
+        contentKeyOverride = "${message.id}:$segmentId:$renderPhaseKey",
         disableStreamingSubscription = true,
     )
 }

@@ -97,7 +97,15 @@ private fun isSupportedImageSource(raw: String?): Boolean {
 private data class MarkdownRenderSignature(
     val processed: String, // 预处理后的文本，包含转义逻辑的结果
     val isDark: Boolean,
-    val textSizeSp: Float
+    val textSizeSp: Float,
+    val contentKey: String,
+    val isStreaming: Boolean,
+    val sender: Sender,
+    val colorArgb: Int,
+    val pureMathBlockMessage: Boolean,
+    val allowSystemTextSelection: Boolean,
+    val disableVerticalPadding: Boolean,
+    val enablePureMathHorizontalScroll: Boolean
 )
 
 private data class MarkdownRenderViewState(
@@ -1020,10 +1028,19 @@ fun MarkdownRenderer(
             val pureMathBlockMessage =
                 PURE_BLOCK_DOLLAR_MATH_REGEX.matches(normalizedProcessed) ||
                     PURE_BLOCK_BRACKET_MATH_REGEX.matches(normalizedProcessed)
+            val allowSystemTextSelection = sender == Sender.AI && onLongPress == null
             val signature = MarkdownRenderSignature(
                 processed = processed,
                 isDark = isDark,
-                textSizeSp = textSizeSp
+                textSizeSp = textSizeSp,
+                contentKey = contentKey,
+                isStreaming = isStreaming,
+                sender = sender,
+                colorArgb = finalColor.toArgb(),
+                pureMathBlockMessage = pureMathBlockMessage,
+                allowSystemTextSelection = allowSystemTextSelection,
+                disableVerticalPadding = disableVerticalPadding,
+                enablePureMathHorizontalScroll = enablePureMathHorizontalScroll
             )
 
             val previousState = tv.tag as? MarkdownRenderViewState
@@ -1042,7 +1059,6 @@ fun MarkdownRenderer(
             tv.overScrollMode = View.OVER_SCROLL_NEVER
             tv.movementMethod = null
 
-            val allowSystemTextSelection = sender == Sender.AI && onLongPress == null
             tv.setTextIsSelectable(allowSystemTextSelection)
             if (allowSystemTextSelection) {
                 tv.isFocusable = true
