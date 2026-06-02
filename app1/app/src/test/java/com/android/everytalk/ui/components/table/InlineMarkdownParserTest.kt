@@ -23,7 +23,7 @@ class InlineMarkdownParserTest {
     fun `bold can contain link annotation`() {
         val parsed = InlineMarkdownParser.parse("**粗体里的 [链接](https://example.com)**")
 
-        assertEquals("粗体里的 链接", parsed.text)
+        assertEquals("粗体里的 链接 ↗", parsed.text)
         assertTrue(parsed.spanStyles.any { it.item.fontWeight == FontWeight.Bold })
         assertEquals(
             "https://example.com",

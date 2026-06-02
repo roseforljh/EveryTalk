@@ -100,7 +100,8 @@ internal fun chatGptHeadingTextSpecForLevel(level: Int): ChatGptHeadingTextSpec 
     return when (level.coerceIn(1, 6)) {
         1 -> ChatGptHeadingTextSpec(fontSize = 20.sp, lineHeight = 28.sp, fontWeight = FontWeight.SemiBold)
         2 -> ChatGptHeadingTextSpec(fontSize = 18.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold)
-        else -> ChatGptHeadingTextSpec(fontSize = 16.sp, lineHeight = 20.sp, fontWeight = FontWeight.Medium)
+        3 -> ChatGptHeadingTextSpec(fontSize = 17.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold)
+        else -> ChatGptHeadingTextSpec(fontSize = 16.sp, lineHeight = 22.sp, fontWeight = FontWeight.Medium)
     }
 }
 

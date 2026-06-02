@@ -9,6 +9,8 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 
+private const val INLINE_EXTERNAL_LINK_SUFFIX = " ↗"
+
 /**
  * 轻量级内联 Markdown 解析器
  *
@@ -76,7 +78,7 @@ object InlineMarkdownParser {
     }
 
     private fun resolveLinkColor(baseColor: Color): Color {
-        return if (baseColor == Color.Unspecified) Color(0xFF2962FF) else baseColor
+        return baseColor
     }
 
     private fun AnnotatedString.Builder.appendInlineMarkdown(
@@ -214,6 +216,7 @@ object InlineMarkdownParser {
             codeBackground = codeBackground,
             linkColor = linkColor,
         )
+        append(INLINE_EXTERNAL_LINK_SUFFIX)
         pop()
         pop()
         return urlEnd + 1

@@ -10,19 +10,20 @@ import android.graphics.Typeface
 import io.noties.markwon.AbstractMarkwonPlugin
 import io.noties.markwon.Markwon
 import io.noties.markwon.MarkwonSpansFactory
-import io.noties.markwon.core.CorePlugin
 import io.noties.markwon.core.CoreProps
 import io.noties.markwon.core.MarkwonTheme
 import io.noties.markwon.ext.latex.JLatexMathPlugin
 import io.noties.markwon.image.ImagesPlugin
 import io.noties.markwon.inlineparser.MarkwonInlineParserPlugin
 import io.noties.markwon.ext.tables.TablePlugin
+import io.noties.markwon.movement.MovementMethodPlugin
 import org.commonmark.node.Code
 
 internal fun chatGptHeadingRelativeSizeMultiplier(level: Int): Float {
     return when (level.coerceIn(1, 6)) {
-        1 -> 1.25f
-        2 -> 1.125f
+        1 -> 1.22f
+        2 -> 1.14f
+        3 -> 1.07f
         else -> 1.0f
     }
 }
@@ -45,7 +46,7 @@ object MarkwonCache {
         imageClickListener: ((String) -> Unit)? = null
     ): Markwon {
         val roundedSize = textSize.toInt()
-        val cacheKey = "v13_dark=${isDark}_size=${roundedSize}"
+        val cacheKey = "v15_dark=${isDark}_size=${roundedSize}"
         
         synchronized(lock) {
             cacheMap[cacheKey]?.let { return it }
@@ -54,7 +55,7 @@ object MarkwonCache {
             val mathTextSize = textSize * density
             
             val markwon = Markwon.builder(context)
-                .usePlugin(CorePlugin.create())
+                .usePlugin(MovementMethodPlugin.none())
                 .usePlugin(ImagesPlugin.create { plugin ->
                      plugin.addSchemeHandler(io.noties.markwon.image.data.DataUriSchemeHandler.create())
                 })

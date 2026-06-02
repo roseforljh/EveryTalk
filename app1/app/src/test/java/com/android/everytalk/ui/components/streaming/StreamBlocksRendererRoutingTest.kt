@@ -210,10 +210,12 @@ class StreamBlocksRendererRoutingTest {
         assertEquals(18.sp, h2.fontSize)
         assertEquals(24.sp, h2.lineHeight)
         assertEquals(FontWeight.SemiBold, h2.fontWeight)
-        assertEquals(16.sp, h3.fontSize)
-        assertEquals(20.sp, h3.lineHeight)
-        assertEquals(FontWeight.Medium, h3.fontWeight)
-        assertEquals(h3, h6)
+        assertEquals(17.sp, h3.fontSize)
+        assertEquals(24.sp, h3.lineHeight)
+        assertEquals(FontWeight.SemiBold, h3.fontWeight)
+        assertEquals(16.sp, h6.fontSize)
+        assertEquals(22.sp, h6.lineHeight)
+        assertEquals(FontWeight.Medium, h6.fontWeight)
     }
 
     @Test

@@ -1,6 +1,9 @@
 ﻿package com.android.everytalk.ui.components.markdown
 
 import android.util.TypedValue
+import android.graphics.Canvas
+import android.graphics.DashPathEffect
+import android.graphics.Paint
 import android.os.SystemClock
 import android.view.MotionEvent
 import android.view.GestureDetector
@@ -35,15 +38,28 @@ import android.text.style.ClickableSpan
 import android.view.View
 import android.text.Spannable
 import android.text.SpannableStringBuilder
+import android.text.Selection
+import android.text.Spanned
+import android.text.TextPaint
+import android.text.method.ArrowKeyMovementMethod
+import android.text.style.LeadingMarginSpan
 import io.noties.markwon.image.AsyncDrawable 
 import io.noties.markwon.image.AsyncDrawableSpan
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.ui.components.MathStreamingPolicy
 import com.android.everytalk.ui.components.markdown.MarkdownSpansCache
+import android.text.style.LineBackgroundSpan
+import android.text.style.URLSpan
+import android.text.style.UnderlineSpan
+import kotlin.math.max
+import kotlin.math.min
 
 private val MULTIPLE_SPACES_REGEX = Regex(" {2,}")
 private val ENUM_ITEM_REGEX = Regex("(?<!\\n)\\s+([A-D])[\\.)]\\s")
 private val WINDOWS_PATH_REGEX = Regex("^[A-Za-z]:\\\\")
+private const val EXTERNAL_LINK_SUFFIX = " ↗"
+private const val LINK_DOTTED_UNDERLINE_LIGHT = 0x8A000000.toInt()
+private const val LINK_DOTTED_UNDERLINE_DARK = 0xA6FFFFFF.toInt()
 
 // 预编译 preprocessAiMarkdown 中的正则，避免每帧重复编译
 private val BASE64_IMAGE_PATTERN = Regex(
@@ -113,6 +129,364 @@ private data class MarkdownRenderViewState(
     val processed: String,
     val pureMathBlockMessage: Boolean
 )
+
+private class ChatLinkUrlSpan(
+    url: String,
+    private val colorArgb: Int,
+) : URLSpan(url) {
+    override fun updateDrawState(ds: TextPaint) {
+        ds.color = colorArgb
+        ds.typeface = Typeface.create(Typeface.DEFAULT, Typeface.NORMAL)
+        ds.isUnderlineText = false
+    }
+}
+
+private class DottedLinkUnderlineSpan(
+    private val linkStart: Int,
+    private val linkEnd: Int,
+    private val colorArgb: Int,
+) : LineBackgroundSpan {
+    override fun drawBackground(
+        canvas: Canvas,
+        paint: Paint,
+        left: Int,
+        right: Int,
+        top: Int,
+        baseline: Int,
+        bottom: Int,
+        text: CharSequence,
+        start: Int,
+        end: Int,
+        lineNumber: Int,
+    ) {
+        val drawStart = max(linkStart, start)
+        val drawEnd = min(linkEnd, end)
+        if (drawStart >= drawEnd) return
+
+        val originalColor = paint.color
+        val originalStyle = paint.style
+        val originalStrokeWidth = paint.strokeWidth
+        val originalPathEffect = paint.pathEffect
+        val originalStrokeCap = paint.strokeCap
+
+        val strokeWidth = max(1.8f, paint.textSize / 15f)
+        val lineLeft = left + continuationLeadingMargin(text, start, end)
+        val xStart = lineLeft + paint.measureText(text, start, drawStart)
+        val xEnd = xStart + paint.measureText(text, drawStart, drawEnd)
+        val y = min(bottom - strokeWidth, baseline + max(5f, paint.textSize / 5f))
+
+        paint.color = colorArgb
+        paint.style = Paint.Style.STROKE
+        paint.strokeWidth = strokeWidth
+        paint.strokeCap = Paint.Cap.ROUND
+        paint.pathEffect = DashPathEffect(floatArrayOf(0.1f, strokeWidth * 2.25f), 0f)
+        canvas.drawLine(xStart, y, xEnd, y, paint)
+
+        paint.color = originalColor
+        paint.style = originalStyle
+        paint.strokeWidth = originalStrokeWidth
+        paint.pathEffect = originalPathEffect
+        paint.strokeCap = originalStrokeCap
+    }
+
+    private fun continuationLeadingMargin(text: CharSequence, start: Int, end: Int): Int {
+        if (text !is Spanned) return 0
+        val paragraphStart = text.lastIndexOf('\n', (start - 1).coerceAtLeast(0)) + 1
+        if (start <= paragraphStart) return 0
+        return text.getSpans(start, end, LeadingMarginSpan::class.java)
+            .sumOf { it.getLeadingMargin(false) }
+    }
+}
+
+private fun styleMarkdownLinks(
+    source: Spanned,
+    linkTextColorArgb: Int,
+    dottedUnderlineColorArgb: Int,
+): Spanned {
+    val builder = SpannableStringBuilder(source)
+    val links = builder.getSpans(0, builder.length, URLSpan::class.java)
+        .mapNotNull { span ->
+            val start = builder.getSpanStart(span)
+            val end = builder.getSpanEnd(span)
+            if (start < 0 || end <= start) {
+                null
+            } else {
+                LinkRange(
+                    span = span,
+                    start = start,
+                    end = end,
+                    url = span.url,
+                )
+            }
+        }
+        .sortedByDescending { it.start }
+
+    links.forEach { link ->
+        val suffixAlreadyPresent = builder.subSequence(
+            link.end,
+            min(builder.length, link.end + EXTERNAL_LINK_SUFFIX.length)
+        ).toString() == EXTERNAL_LINK_SUFFIX
+        val linkEndWithSuffix = if (suffixAlreadyPresent) {
+            link.end + EXTERNAL_LINK_SUFFIX.length
+        } else {
+            builder.insert(link.end, EXTERNAL_LINK_SUFFIX)
+            link.end + EXTERNAL_LINK_SUFFIX.length
+        }
+
+        builder.removeSpan(link.span)
+        builder.removeContainedSpans(link.start, linkEndWithSuffix, ForegroundColorSpan::class.java)
+        builder.removeContainedSpans(link.start, linkEndWithSuffix, UnderlineSpan::class.java)
+        builder.setSpan(
+            ChatLinkUrlSpan(link.url, linkTextColorArgb),
+            link.start,
+            linkEndWithSuffix,
+            Spannable.SPAN_EXCLUSIVE_EXCLUSIVE,
+        )
+        builder.setSpan(
+            DottedLinkUnderlineSpan(
+                linkStart = link.start,
+                linkEnd = link.end,
+                colorArgb = dottedUnderlineColorArgb,
+            ),
+            link.start,
+            link.end,
+            Spannable.SPAN_EXCLUSIVE_EXCLUSIVE,
+        )
+    }
+
+    return builder
+}
+
+private data class LinkRange(
+    val span: URLSpan,
+    val start: Int,
+    val end: Int,
+    val url: String,
+)
+
+private fun <T> SpannableStringBuilder.removeContainedSpans(
+    start: Int,
+    end: Int,
+    spanClass: Class<T>,
+) {
+    getSpans(start, end, spanClass).forEach { span ->
+        val spanStart = getSpanStart(span)
+        val spanEnd = getSpanEnd(span)
+        if (spanStart >= start && spanEnd <= end) {
+            removeSpan(span)
+        }
+    }
+}
+
+private fun TextView.findUrlSpanAt(event: MotionEvent): URLSpan? {
+    val currentText = text as? Spanned ?: return null
+    val currentLayout = layout ?: return null
+
+    var x = event.x.toInt()
+    var y = event.y.toInt()
+    x -= totalPaddingLeft
+    y -= totalPaddingTop
+    x += scrollX
+    y += scrollY
+
+    if (y < 0 || y > currentLayout.height) return null
+
+    val line = currentLayout.getLineForVertical(y)
+    val lineLeft = currentLayout.getLineLeft(line)
+    val lineRight = currentLayout.getLineRight(line)
+    if (x < lineLeft || x > lineRight) return null
+
+    val offset = currentLayout.getOffsetForHorizontal(line, x.toFloat())
+    return currentText.getSpans(offset, offset, URLSpan::class.java).firstOrNull()
+}
+
+private fun openUrlFromTextView(textView: TextView, url: String) {
+    try {
+        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
+        textView.context.startActivity(intent)
+    } catch (_: Exception) {
+    }
+}
+
+private fun TextView.applyMarkdownTextSelectionState(allowSystemTextSelection: Boolean) {
+    setTextIsSelectable(allowSystemTextSelection)
+    if (allowSystemTextSelection) {
+        movementMethod = ArrowKeyMovementMethod.getInstance()
+        isFocusable = true
+        isFocusableInTouchMode = true
+        isClickable = true
+        isLongClickable = true
+    } else {
+        movementMethod = null
+        highlightColor = android.graphics.Color.TRANSPARENT
+        isFocusable = false
+        isFocusableInTouchMode = false
+    }
+}
+
+private fun TextView.configureMarkdownTouchHandling(
+    allowSystemTextSelection: Boolean,
+    onLongPress: ((androidx.compose.ui.geometry.Offset) -> Unit)?,
+    onImageClick: ((String) -> Unit)?,
+) {
+    linksClickable = false
+
+    if (onImageClick == null && onLongPress == null) {
+        if (!allowSystemTextSelection) {
+            movementMethod = null
+        }
+        setOnTouchListener(null)
+        isClickable = allowSystemTextSelection
+        isLongClickable = allowSystemTextSelection
+        setOnLongClickListener(null)
+        return
+    }
+
+    if (!allowSystemTextSelection) {
+        movementMethod = null
+    }
+    isClickable = true
+    isLongClickable = true
+
+    var lastTouchRawX = 0f
+    var lastTouchRawY = 0f
+    var pressedUrl: String? = null
+    var linkTouchActive = false
+
+    setOnTouchListener { v, event ->
+        val tvLocal = v as TextView
+        val isPureMathBlock = (tvLocal.tag as? MarkdownRenderViewState)?.pureMathBlockMessage == true
+
+        if (isPureMathBlock) {
+            if (event.action == MotionEvent.ACTION_DOWN) {
+                lastTouchRawX = event.rawX
+                lastTouchRawY = event.rawY
+            }
+            return@setOnTouchListener false
+        }
+
+        if (event.action == MotionEvent.ACTION_DOWN) {
+            lastTouchRawX = event.rawX
+            lastTouchRawY = event.rawY
+            pressedUrl = tvLocal.findUrlSpanAt(event)?.url
+            if (pressedUrl != null) {
+                linkTouchActive = true
+                if (!allowSystemTextSelection) {
+                    tvLocal.cancelLongPress()
+                    return@setOnTouchListener true
+                }
+                return@setOnTouchListener false
+            }
+        }
+
+        if (linkTouchActive) {
+            val isLongPressGesture =
+                event.eventTime - event.downTime >= android.view.ViewConfiguration.getLongPressTimeout()
+            when (event.action) {
+                MotionEvent.ACTION_UP -> {
+                    val url = pressedUrl
+                    linkTouchActive = false
+                    pressedUrl = null
+                    if (isLongPressGesture) {
+                        return@setOnTouchListener true
+                    }
+                    if (url != null && tvLocal.findUrlSpanAt(event)?.url == url) {
+                        (tvLocal.text as? Spannable)?.let { Selection.removeSelection(it) }
+                        openUrlFromTextView(tvLocal, url)
+                        return@setOnTouchListener true
+                    }
+                    return@setOnTouchListener !allowSystemTextSelection
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    linkTouchActive = false
+                    pressedUrl = null
+                    return@setOnTouchListener !allowSystemTextSelection
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    if (tvLocal.findUrlSpanAt(event)?.url != pressedUrl) {
+                        pressedUrl = null
+                    }
+                    return@setOnTouchListener !allowSystemTextSelection
+                }
+            }
+        }
+
+        if (event.action == MotionEvent.ACTION_UP) {
+            val spannable = tvLocal.text as? Spannable
+            val layout = tvLocal.layout
+            if (spannable != null && layout != null) {
+                var x = event.x.toInt()
+                var y = event.y.toInt()
+                x -= tvLocal.totalPaddingLeft
+                y -= tvLocal.totalPaddingTop
+                x += tvLocal.scrollX
+                y += tvLocal.scrollY
+
+                val line = layout.getLineForVertical(y)
+                val lineStart = layout.getLineStart(line)
+                val lineEnd = layout.getLineEnd(line)
+
+                if (onImageClick != null) {
+                    val imageSpans = spannable.getSpans(lineStart, lineEnd, AsyncDrawableSpan::class.java)
+                    for (imageSpan in imageSpans) {
+                        val spanStart = spannable.getSpanStart(imageSpan)
+                        val xStart = layout.getPrimaryHorizontal(spanStart)
+                        val drawable = imageSpan.drawable
+                        val bounds = drawable.bounds
+                        val width = bounds.width()
+
+                        val touchSlop = 20
+                        if (x >= (xStart - touchSlop) && x <= (xStart + width + touchSlop)) {
+                            val source = drawable.destination?.trim().orEmpty()
+                            if (isSupportedImageSource(source)) {
+                                onImageClick(source)
+                                return@setOnTouchListener true
+                            }
+                        }
+                    }
+
+                    val standardImageSpans =
+                        spannable.getSpans(lineStart, lineEnd, android.text.style.ImageSpan::class.java)
+                    for (imageSpan in standardImageSpans) {
+                        val spanStart = spannable.getSpanStart(imageSpan)
+                        val xStart = layout.getPrimaryHorizontal(spanStart)
+                        val drawable = imageSpan.drawable
+                        val width = drawable.bounds.width()
+
+                        if (x >= xStart && x <= (xStart + width)) {
+                            val source = imageSpan.source?.trim().orEmpty()
+                            if (isSupportedImageSource(source)) {
+                                onImageClick(source)
+                                return@setOnTouchListener true
+                            }
+                        }
+                    }
+                }
+
+                val offset = layout.getOffsetForHorizontal(
+                    line,
+                    event.x - tvLocal.totalPaddingLeft + tvLocal.scrollX.toFloat()
+                )
+                val urlSpans = spannable.getSpans(offset, offset, URLSpan::class.java)
+                if (urlSpans.isNotEmpty()) {
+                    openUrlFromTextView(tvLocal, urlSpans[0].url)
+                    return@setOnTouchListener true
+                }
+            }
+        }
+
+        false
+    }
+
+    if (onLongPress != null) {
+        setOnLongClickListener {
+            onLongPress.invoke(androidx.compose.ui.geometry.Offset(lastTouchRawX, lastTouchRawY))
+            true
+        }
+    } else {
+        setOnLongClickListener(null)
+    }
+}
 
 private data class MarkdownRenderSession(
     val contentKey: String,
@@ -779,7 +1153,7 @@ fun MarkdownRenderer(
     
     val baseTextSizeSp = if (style.fontSize.value > 0f) style.fontSize.value else 16f
     // 统一气泡内文本字号：用户与 AI 一样，整体略小于之前的 AI 放大效果
-    val textSizeSp = baseTextSizeSp * 1.05f
+    val textSizeSp = baseTextSizeSp
     val markwon = remember(isDark, textSizeSp) {
         MarkwonCache.getOrCreate(
             context = context,
@@ -825,7 +1199,7 @@ fun MarkdownRenderer(
                 // 统一文本样式（字号）
                 val baseSp = if (style.fontSize.value > 0f) style.fontSize.value else 16f
                 // 用户与 AI 使用相同字号，整体略小于之前的 AI 放大效果
-                val sp = baseSp * 1.05f
+                val sp = baseSp
                 setTextSize(TypedValue.COMPLEX_UNIT_SP, sp)
                 setTextColor(finalColor.toArgb())
                 // 稳定基线，减少跳动
@@ -864,7 +1238,7 @@ fun MarkdownRenderer(
                 // 行间距：用户与 AI 区分设置
                 // 用户保持略紧凑，AI 适度增大上下行距
                 // 根据反馈“稍微减小文本之间的距离”，将 AI 行间距从 6f 调整为 5f
-                val lineSpacingDp = if (sender == Sender.User) 2f else 5f
+                val lineSpacingDp = if (sender == Sender.User) 2f else 4f
                 setLineSpacing(
                     TypedValue.applyDimension(
                         TypedValue.COMPLEX_UNIT_DIP,
@@ -882,141 +1256,12 @@ fun MarkdownRenderer(
                 
                 // AI 正文无自定义长按菜单时，交给系统 TextView 处理长按选中文本。
                 val allowSystemTextSelection = sender == Sender.AI && onLongPress == null
-                setTextIsSelectable(allowSystemTextSelection)
-                if (!allowSystemTextSelection) {
-                    highlightColor = android.graphics.Color.TRANSPARENT
-                }
-                
-                if (allowSystemTextSelection) {
-                    isFocusable = true
-                    isFocusableInTouchMode = true
-                } else {
-                    isFocusable = false
-                    isFocusableInTouchMode = false
-                }
-                
-                // 统一处理触摸事件：图片点击 + 长按坐标捕获
-                if (onImageClick != null || onLongPress != null) {
-                    if (!allowSystemTextSelection) {
-                        movementMethod = null
-                    }
-                    linksClickable = false
-                    isClickable = true
-                    isLongClickable = true
-                    
-                    var lastTouchRawX = 0f
-                    var lastTouchRawY = 0f
-
-                    setOnTouchListener { v, event ->
-                        val tvLocal = v as TextView
-                        val isPureMathBlock = (tvLocal.tag as? MarkdownRenderViewState)?.pureMathBlockMessage == true
-
-                        if (isPureMathBlock) {
-                            if (event.action == MotionEvent.ACTION_DOWN) {
-                                lastTouchRawX = event.rawX
-                                lastTouchRawY = event.rawY
-                            }
-                            // 纯块数学的横向滚动由 Compose 外层容器处理，这里不拦截触摸链
-                            return@setOnTouchListener false
-                        }
-
-                        if (event.action == MotionEvent.ACTION_DOWN) {
-                            lastTouchRawX = event.rawX
-                            lastTouchRawY = event.rawY
-                        }
-                        
-                        // 仅在 ACTION_UP 时检测图片点击和链接点击
-                        if (event.action == MotionEvent.ACTION_UP) {
-                            val text = tvLocal.text
-                            if (text is android.text.Spannable) {
-                                var x = event.x.toInt()
-                                var y = event.y.toInt()
-
-                                x -= tvLocal.totalPaddingLeft
-                                y -= tvLocal.totalPaddingTop
-                                x += tvLocal.scrollX
-                                y += tvLocal.scrollY
-
-                                val layout = tvLocal.layout
-                                if (layout != null) {
-                                    val line = layout.getLineForVertical(y)
-                                
-                                    // 几何命中测试：直接检查触摸点是否落在 ImageSpan 的 bounds 内
-                                    val lineStart = layout.getLineStart(line)
-                                    val lineEnd = layout.getLineEnd(line)
-                                
-                                    if (onImageClick != null) {
-                                        val imageSpans = text.getSpans(lineStart, lineEnd, AsyncDrawableSpan::class.java)
-                                        for (imageSpan in imageSpans) {
-                                            val spanStart = text.getSpanStart(imageSpan)
-                                            val xStart = layout.getPrimaryHorizontal(spanStart)
-                                            val drawable = imageSpan.drawable
-                                            val bounds = drawable.bounds
-                                            val width = bounds.width()
-
-                                            val touchSlop = 20
-                                            if (x >= (xStart - touchSlop) && x <= (xStart + width + touchSlop)) {
-                                                val sourceRaw = drawable.destination
-                                                val source = sourceRaw?.trim().orEmpty()
-                                                if (isSupportedImageSource(source)) {
-                                                    onImageClick(source)
-                                                    return@setOnTouchListener true
-                                                }
-                                            }
-                                        }
-
-                                        val standardImageSpans = text.getSpans(lineStart, lineEnd, android.text.style.ImageSpan::class.java)
-                                        for (imageSpan in standardImageSpans) {
-                                            val spanStart = text.getSpanStart(imageSpan)
-                                            val xStart = layout.getPrimaryHorizontal(spanStart)
-                                            val drawable = imageSpan.drawable
-                                            val width = drawable.bounds.width()
-
-                                            if (x >= xStart && x <= (xStart + width)) {
-                                                val sourceRaw = imageSpan.source
-                                                val source = sourceRaw?.trim().orEmpty()
-                                                if (isSupportedImageSource(source)) {
-                                                    onImageClick(source)
-                                                    return@setOnTouchListener true
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    // 链接点击检测
-                                    val offset = layout.getOffsetForHorizontal(line, event.x - tvLocal.totalPaddingLeft + tvLocal.scrollX.toFloat())
-                                    val urlSpans = text.getSpans(offset, offset, android.text.style.URLSpan::class.java)
-                                    if (urlSpans.isNotEmpty()) {
-                                        val url = urlSpans[0].url
-                                        try {
-                                            val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
-                                            tvLocal.context.startActivity(intent)
-                                        } catch (_: Exception) {}
-                                        return@setOnTouchListener true
-                                    }
-                                }
-                            }
-                        }
-                        // 返回 false，让 View 继续处理长按等其他事件
-                        false
-                    }
-
-                    if (onLongPress != null) {
-                        setOnLongClickListener {
-                            onLongPress.invoke(androidx.compose.ui.geometry.Offset(lastTouchRawX, lastTouchRawY))
-                            true
-                        }
-                    } else {
-                        setOnLongClickListener(null)
-                    }
-                } else {
-                    movementMethod = null
-                    linksClickable = false
-                    setOnTouchListener(null)
-                    isClickable = allowSystemTextSelection
-                    isLongClickable = allowSystemTextSelection
-                    setOnLongClickListener(null)
-                }
+                applyMarkdownTextSelectionState(allowSystemTextSelection)
+                configureMarkdownTouchHandling(
+                    allowSystemTextSelection = allowSystemTextSelection,
+                    onLongPress = onLongPress,
+                    onImageClick = onImageClick,
+                )
             }
         },
         update = { tv ->
@@ -1029,6 +1274,11 @@ fun MarkdownRenderer(
                 PURE_BLOCK_DOLLAR_MATH_REGEX.matches(normalizedProcessed) ||
                     PURE_BLOCK_BRACKET_MATH_REGEX.matches(normalizedProcessed)
             val allowSystemTextSelection = sender == Sender.AI && onLongPress == null
+            val linkDottedUnderlineColor = if (isDark) {
+                LINK_DOTTED_UNDERLINE_DARK
+            } else {
+                LINK_DOTTED_UNDERLINE_LIGHT
+            }
             val signature = MarkdownRenderSignature(
                 processed = processed,
                 isDark = isDark,
@@ -1044,6 +1294,12 @@ fun MarkdownRenderer(
             )
 
             val previousState = tv.tag as? MarkdownRenderViewState
+            tv.applyMarkdownTextSelectionState(allowSystemTextSelection)
+            tv.configureMarkdownTouchHandling(
+                allowSystemTextSelection = allowSystemTextSelection,
+                onLongPress = onLongPress,
+                onImageClick = onImageClick,
+            )
             if (previousState?.signature == signature) {
                 return@AndroidView
             }
@@ -1057,15 +1313,7 @@ fun MarkdownRenderer(
             tv.setHorizontallyScrolling(pureMathBlockMessage)
             tv.isHorizontalScrollBarEnabled = false
             tv.overScrollMode = View.OVER_SCROLL_NEVER
-            tv.movementMethod = null
-
-            tv.setTextIsSelectable(allowSystemTextSelection)
-            if (allowSystemTextSelection) {
-                tv.isFocusable = true
-                tv.isFocusableInTouchMode = true
-                tv.isClickable = true
-                tv.isLongClickable = true
-            }
+            tv.applyMarkdownTextSelectionState(allowSystemTextSelection)
 
             // 缓存优化：尝试从缓存获取 Spanned 对象
             // 流式期间：上游 TableAwareText 只对已稳定的 part 提供 contentKey
@@ -1075,7 +1323,7 @@ fun MarkdownRenderer(
                 // 核心修复：在缓存 Key 中包含处理后文本的哈希值
                 // 这样当流式结束（isStreaming=false）导致预处理结果变化时，
                 // 或者消息内容被修改时，缓存会自动失效并重新渲染，避免显示旧的转义结果。
-                MarkdownSpansCache.generateKey("${contentKey}_${processed.hashCode()}_v46", isDark, sp)
+                MarkdownSpansCache.generateKey("${contentKey}_${processed.hashCode()}_v48", isDark, sp)
             } else ""
 
             val cachedSpanned = if (cacheKey.isNotBlank()) MarkdownSpansCache.get(cacheKey) else null
@@ -1103,7 +1351,7 @@ fun MarkdownRenderer(
 
                     val headKey = if (contentKey.isNotBlank()) {
                         MarkdownSpansCache.generateKey(
-                            "${contentKey}_seg_head_${headText.hashCode()}_v42",
+                            "${contentKey}_seg_head_${headText.hashCode()}_v44",
                             isDark,
                             sp
                         )
@@ -1111,7 +1359,7 @@ fun MarkdownRenderer(
 
                     val tailKey = if (contentKey.isNotBlank()) {
                         MarkdownSpansCache.generateKey(
-                            "${contentKey}_seg_tail_${tailText.hashCode()}_v42",
+                            "${contentKey}_seg_tail_${tailText.hashCode()}_v44",
                             isDark,
                             sp
                         )
@@ -1121,23 +1369,39 @@ fun MarkdownRenderer(
                     val headSpanned = if (headKey.isNotBlank()) {
                         MarkdownSpansCache.get(headKey) ?: run {
                             val node = markwon.parse(headText)
-                            val spanned = markwon.render(node)
+                            val spanned = styleMarkdownLinks(
+                                source = markwon.render(node),
+                                linkTextColorArgb = finalColor.toArgb(),
+                                dottedUnderlineColorArgb = linkDottedUnderlineColor,
+                            )
                             MarkdownSpansCache.put(headKey, spanned)
                             spanned
                         }
                     } else {
-                        markwon.render(markwon.parse(headText))
+                        styleMarkdownLinks(
+                            source = markwon.render(markwon.parse(headText)),
+                            linkTextColorArgb = finalColor.toArgb(),
+                            dottedUnderlineColorArgb = linkDottedUnderlineColor,
+                        )
                     }
 
                     val tailSpanned = if (tailKey.isNotBlank()) {
                         MarkdownSpansCache.get(tailKey) ?: run {
                             val node = markwon.parse(tailText)
-                            val spanned = markwon.render(node)
+                            val spanned = styleMarkdownLinks(
+                                source = markwon.render(node),
+                                linkTextColorArgb = finalColor.toArgb(),
+                                dottedUnderlineColorArgb = linkDottedUnderlineColor,
+                            )
                             MarkdownSpansCache.put(tailKey, spanned)
                             spanned
                         }
                     } else {
-                        markwon.render(markwon.parse(tailText))
+                        styleMarkdownLinks(
+                            source = markwon.render(markwon.parse(tailText)),
+                            linkTextColorArgb = finalColor.toArgb(),
+                            dottedUnderlineColorArgb = linkDottedUnderlineColor,
+                        )
                     }
 
                     parseMs = (SystemClock.elapsedRealtimeNanos() - parseStartNs) / 1_000_000L
@@ -1164,7 +1428,11 @@ fun MarkdownRenderer(
                     parseMs = (SystemClock.elapsedRealtimeNanos() - parseStartNs) / 1_000_000L
 
                     val renderStartNs = SystemClock.elapsedRealtimeNanos()
-                    val spanned = markwon.render(node)
+                    val spanned = styleMarkdownLinks(
+                        source = markwon.render(node),
+                        linkTextColorArgb = finalColor.toArgb(),
+                        dottedUnderlineColorArgb = linkDottedUnderlineColor,
+                    )
                     renderMs = (SystemClock.elapsedRealtimeNanos() - renderStartNs) / 1_000_000L
 
                     if (cacheKey.isNotBlank()) {
@@ -1188,7 +1456,11 @@ fun MarkdownRenderer(
                 if (fallbackApplied) {
                     try {
                         val fallbackNode = markwon.parse(fallbackMarkdown)
-                        val fallbackSpanned = markwon.render(fallbackNode)
+                        val fallbackSpanned = styleMarkdownLinks(
+                            source = markwon.render(fallbackNode),
+                            linkTextColorArgb = finalColor.toArgb(),
+                            dottedUnderlineColorArgb = linkDottedUnderlineColor,
+                        )
                         markwon.setParsedMarkdown(tv, fallbackSpanned)
                     } catch (fallbackError: Throwable) {
                         android.util.Log.e(
@@ -1202,6 +1474,12 @@ fun MarkdownRenderer(
                     tv.text = processed
                 }
             }
+            tv.applyMarkdownTextSelectionState(allowSystemTextSelection)
+            tv.configureMarkdownTouchHandling(
+                allowSystemTextSelection = allowSystemTextSelection,
+                onLongPress = onLongPress,
+                onImageClick = onImageClick,
+            )
 
             val totalMs = (SystemClock.elapsedRealtimeNanos() - updateStartNs) / 1_000_000L
             logMarkdownRenderSession(
