@@ -1,9 +1,11 @@
 package com.android.everytalk.ui.components.table
 
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.unit.sp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -17,6 +19,27 @@ class InlineMarkdownParserTest {
         assertEquals("粗体里的 code", parsed.text)
         assertTrue(parsed.spanStyles.any { it.item.fontWeight == FontWeight.Bold })
         assertTrue(parsed.spanStyles.any { it.item.fontFamily == FontFamily.Monospace })
+    }
+
+    @Test
+    fun `inline code is gray bold compact without background`() {
+        val codeColor = Color(0xFF4F5661)
+        val codeFontSize = 14.72.sp
+        val parsed = InlineMarkdownParser.parse(
+            text = "Use `http2` now",
+            codeColor = codeColor,
+            codeFontSize = codeFontSize,
+        )
+
+        val codeStyle = parsed.spanStyles.single {
+            it.item.fontFamily == FontFamily.Monospace
+        }.item
+
+        assertEquals("Use http2 now", parsed.text)
+        assertEquals(Color.Unspecified, codeStyle.background)
+        assertEquals(FontWeight.Bold, codeStyle.fontWeight)
+        assertEquals(codeColor, codeStyle.color)
+        assertEquals(codeFontSize, codeStyle.fontSize)
     }
 
     @Test

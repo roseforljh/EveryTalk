@@ -86,11 +86,94 @@ object TableUtils {
      * 解析单元格内容
      */
     private fun parseCells(normalized: String): List<String> {
-        return normalized
-            .removePrefix("|")
-            .removeSuffix("|")
-            .split("|")
-            .map { normalizeTableCell(it.trim()) }
+        val body = stripOptionalEdgeDelimiters(normalized)
+        val cells = mutableListOf<String>()
+        val cell = StringBuilder()
+        var codeFenceLength = 0
+        var index = 0
+
+        fun flushCell() {
+            cells.add(normalizeTableCell(cell.toString().trim()))
+            cell.setLength(0)
+        }
+
+        while (index < body.length) {
+            val ch = body[index]
+
+            if (ch == '`') {
+                var runLength = 1
+                while (index + runLength < body.length && body[index + runLength] == '`') {
+                    runLength++
+                }
+                if (codeFenceLength == 0) {
+                    codeFenceLength = runLength
+                } else if (codeFenceLength == runLength) {
+                    codeFenceLength = 0
+                }
+                repeat(runLength) { cell.append('`') }
+                index += runLength
+                continue
+            }
+
+            if (codeFenceLength == 0 && ch == '\\' && index + 1 < body.length && body[index + 1] == '|') {
+                cell.append('|')
+                index += 2
+                continue
+            }
+
+            if (codeFenceLength == 0 && ch == '|') {
+                flushCell()
+            } else {
+                cell.append(ch)
+            }
+            index++
+        }
+
+        flushCell()
+        return cells
+    }
+
+    private fun stripOptionalEdgeDelimiters(normalized: String): String {
+        var body = if (normalized.startsWith("|")) normalized.drop(1) else normalized
+        if (body.endsWith("|") && isDelimiterPipe(body, body.lastIndex)) {
+            body = body.dropLast(1)
+        }
+        return body
+    }
+
+    private fun isDelimiterPipe(text: String, pipeIndex: Int): Boolean {
+        if (pipeIndex !in text.indices || text[pipeIndex] != '|') return false
+        if (isEscapedPipe(text, pipeIndex)) return false
+
+        var codeFenceLength = 0
+        var index = 0
+        while (index < pipeIndex) {
+            if (text[index] == '`') {
+                var runLength = 1
+                while (index + runLength < pipeIndex && text[index + runLength] == '`') {
+                    runLength++
+                }
+                if (codeFenceLength == 0) {
+                    codeFenceLength = runLength
+                } else if (codeFenceLength == runLength) {
+                    codeFenceLength = 0
+                }
+                index += runLength
+            } else {
+                index++
+            }
+        }
+        return codeFenceLength == 0
+    }
+
+    private fun isEscapedPipe(text: String, pipeIndex: Int): Boolean {
+        var backslashCount = 0
+        var index = pipeIndex - 1
+        while (index >= 0 && text[index] == '\\') {
+            backslashCount++
+            index--
+        }
+        return backslashCount % 2 == 1
     }
 
     private fun normalizeTableCell(cell: String): String {
@@ -172,6 +255,15 @@ object TableUtils {
     fun parseTableRow(line: String): List<String> {
         val normalized = normalizeTableChars(line.replace("\uFEFF", "")).trim()
         return parseCells(normalized)
+    }
+
+    fun padRowCells(cells: List<String>, columnCount: Int): List<String> {
+        if (columnCount <= 0) return emptyList()
+        return when {
+            cells.size == columnCount -> cells
+            cells.size > columnCount -> cells.take(columnCount)
+            else -> cells + List(columnCount - cells.size) { "" }
+        }
     }
 
     enum class TableAlignment {

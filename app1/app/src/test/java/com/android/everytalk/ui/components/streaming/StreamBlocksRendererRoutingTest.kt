@@ -1,10 +1,12 @@
 package com.android.everytalk.ui.components.streaming
 
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.ui.components.ChatMarkdownTextStyle
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -37,42 +39,42 @@ class StreamBlocksRendererRoutingTest {
 
     @Test
     fun `plain text uses compose text path`() {
-        val path = resolveStreamingMarkdownRenderPath("普通文本 without markdown")
+        val path = resolveStreamingMarkdownRenderPath("plain text without markdown")
 
         assertEquals(StreamingMarkdownRenderPath.PlainText, path)
     }
 
     @Test
     fun `simple bold uses compose inline markdown path`() {
-        val path = resolveStreamingMarkdownRenderPath("这是 **重点** 内容")
+        val path = resolveStreamingMarkdownRenderPath("This is **important** content")
 
         assertEquals(StreamingMarkdownRenderPath.ComposeInlineMarkdown, path)
     }
 
     @Test
     fun `heading falls back to full markdown path`() {
-        val path = resolveStreamingMarkdownRenderPath("# 一级标题")
+        val path = resolveStreamingMarkdownRenderPath("# Heading")
 
         assertEquals(StreamingMarkdownRenderPath.FullMarkdown, path)
     }
 
     @Test
     fun `horizontal rule falls back to full markdown path`() {
-        val path = resolveStreamingMarkdownRenderPath("前文\n---\n后文")
+        val path = resolveStreamingMarkdownRenderPath("before\n---\nafter")
 
         assertEquals(StreamingMarkdownRenderPath.FullMarkdown, path)
     }
 
     @Test
     fun `list falls back to full markdown path`() {
-        val path = resolveStreamingMarkdownRenderPath("- 第一项\n- 第二项")
+        val path = resolveStreamingMarkdownRenderPath("- first\n- second")
 
         assertEquals(StreamingMarkdownRenderPath.FullMarkdown, path)
     }
 
     @Test
     fun `quote falls back to full markdown path`() {
-        val path = resolveStreamingMarkdownRenderPath("> 引用内容")
+        val path = resolveStreamingMarkdownRenderPath("> quote")
 
         assertEquals(StreamingMarkdownRenderPath.FullMarkdown, path)
     }
@@ -85,22 +87,41 @@ class StreamBlocksRendererRoutingTest {
     }
 
     @Test
+    fun `stream renderer keeps promoted complex math embedded in table row`() {
+        val input = """
+            | Metric | LaTeX | Edge |
+            | :--- | :---: | :--- |
+            | **Set A** | ${'$'}\sum_{i=1}^{n} x_i^2 \ge \frac{(\sum x_i)^2}{n}${'$'} | `\|` pipe escape |
+        """.trimIndent()
+
+        val result = StreamBlockParser.parse(input, "msg-table")
+        val mathBlockIndex = result.blocks.indexOfFirst { it is StreamBlock.MathBlock }
+
+        assertTrue(mathBlockIndex >= 0)
+        assertEquals(
+            "${'$'}${'$'}\\sum_{i=1}^{n} x_i^2 \\ge \\frac{(\\sum x_i)^2}{n}${'$'}${'$'}",
+            result.blocks[mathBlockIndex].text
+        )
+        assertTrue(isTableCellEmbeddedMathBlock(result.blocks, mathBlockIndex))
+    }
+
+    @Test
     fun `setext heading falls back to full markdown path`() {
-        val path = resolveStreamingMarkdownRenderPath("标题\n===")
+        val path = resolveStreamingMarkdownRenderPath("Heading\n===")
 
         assertEquals(StreamingMarkdownRenderPath.FullMarkdown, path)
     }
 
     @Test
     fun `ordered list with parenthesis falls back to full markdown path`() {
-        val path = resolveStreamingMarkdownRenderPath("1) 第一项")
+        val path = resolveStreamingMarkdownRenderPath("1) first")
 
         assertEquals(StreamingMarkdownRenderPath.FullMarkdown, path)
     }
 
     @Test
     fun `html falls back to full markdown path`() {
-        val path = resolveStreamingMarkdownRenderPath("<span>内容</span>")
+        val path = resolveStreamingMarkdownRenderPath("<span>content</span>")
 
         assertEquals(StreamingMarkdownRenderPath.FullMarkdown, path)
     }
@@ -114,7 +135,7 @@ class StreamBlocksRendererRoutingTest {
 
     @Test
     fun `reference link falls back to full markdown path`() {
-        val path = resolveStreamingMarkdownRenderPath("[文档][doc]\n[doc]: https://example.com")
+        val path = resolveStreamingMarkdownRenderPath("[docs][doc]\n[doc]: https://example.com")
 
         assertEquals(StreamingMarkdownRenderPath.FullMarkdown, path)
     }
@@ -134,31 +155,51 @@ class StreamBlocksRendererRoutingTest {
     }
 
     @Test
-    fun `native parser handles common block markdown`() {
+    fun `native parser handles common non heading block markdown`() {
         val blocks = parseNativeStreamingMarkdownBlocks(
-            text = "# 标题\n\n---\n\n- 第一项\n- **第二项**\n\n> 引用",
+            text = "---\n\n- first\n- **second**\n\n> quote",
             segmentId = "msg-1",
         )
 
         requireNotNull(blocks)
         assertEquals(
             listOf(
-                NativeStreamingMarkdownBlockType.Heading,
                 NativeStreamingMarkdownBlockType.HorizontalRule,
                 NativeStreamingMarkdownBlockType.ListBlock,
                 NativeStreamingMarkdownBlockType.BlockQuote,
             ),
             blocks.map { it.type },
         )
-        assertEquals(listOf("第一项", "**第二项**"), blocks[2].items)
+        assertEquals(listOf("first", "**second**"), blocks[1].items)
         assertEquals(0, blocks.first().start)
         assertTrue(blocks.first().endExclusive > blocks.first().start)
     }
 
     @Test
+    fun `native parser keeps list continuations and nested bullets`() {
+        val blocks = parseNativeStreamingMarkdownBlocks(
+            text = "- **first**\n    continuation\n- **second**\n    - child one\n    - child two",
+            segmentId = "msg-list",
+        )
+
+        requireNotNull(blocks)
+        assertEquals(1, blocks.size)
+        assertEquals(NativeStreamingMarkdownBlockType.ListBlock, blocks.single().type)
+        assertEquals(
+            listOf(
+                NativeStreamingListItem(text = "**first** continuation"),
+                NativeStreamingListItem(text = "**second**"),
+                NativeStreamingListItem(text = "child one", level = 1),
+                NativeStreamingListItem(text = "child two", level = 1),
+            ),
+            blocks.single().listItems,
+        )
+    }
+
+    @Test
     fun `native parser splits paragraphs by blank lines`() {
         val blocks = parseNativeStreamingMarkdownBlocks(
-            text = "第一段\n\n第二段\n\n# 标题\n\n第三段",
+            text = "first paragraph\n\nsecond paragraph\n\nthird paragraph",
             segmentId = "msg-paragraphs",
         )
 
@@ -167,7 +208,6 @@ class StreamBlocksRendererRoutingTest {
             listOf(
                 NativeStreamingMarkdownBlockType.Paragraph,
                 NativeStreamingMarkdownBlockType.Paragraph,
-                NativeStreamingMarkdownBlockType.Heading,
                 NativeStreamingMarkdownBlockType.Paragraph,
             ),
             blocks.map { it.type },
@@ -179,12 +219,12 @@ class StreamBlocksRendererRoutingTest {
         val paragraph = NativeStreamingMarkdownBlock(
             stableId = "p",
             type = NativeStreamingMarkdownBlockType.Paragraph,
-            text = "段落",
+            text = "paragraph",
         )
         val heading = NativeStreamingMarkdownBlock(
             stableId = "h",
             type = NativeStreamingMarkdownBlockType.Heading,
-            text = "标题",
+            text = "heading",
             level = 1,
         )
         val rule = NativeStreamingMarkdownBlock(
@@ -192,8 +232,9 @@ class StreamBlocksRendererRoutingTest {
             type = NativeStreamingMarkdownBlockType.HorizontalRule,
         )
 
-        assertEquals(8.dp, nativeMarkdownBlockSpacingAfter(paragraph, paragraph))
-        assertEquals(12.dp, nativeMarkdownBlockSpacingAfter(paragraph, heading))
+        assertEquals(12.dp, nativeMarkdownBlockSpacingAfter(paragraph, paragraph))
+        assertEquals(16.dp, nativeMarkdownBlockSpacingAfter(paragraph, heading))
+        assertEquals(8.dp, nativeMarkdownBlockSpacingAfter(heading, paragraph))
         assertEquals(12.dp, nativeMarkdownBlockSpacingAfter(rule, paragraph))
     }
 
@@ -204,18 +245,67 @@ class StreamBlocksRendererRoutingTest {
         val h3 = chatGptHeadingTextSpecForLevel(3)
         val h6 = chatGptHeadingTextSpecForLevel(6)
 
-        assertEquals(20.sp, h1.fontSize)
-        assertEquals(28.sp, h1.lineHeight)
+        assertEquals(24.sp, h1.fontSize)
+        assertEquals(32.sp, h1.lineHeight)
         assertEquals(FontWeight.SemiBold, h1.fontWeight)
-        assertEquals(18.sp, h2.fontSize)
-        assertEquals(24.sp, h2.lineHeight)
+        assertEquals(22.sp, h2.fontSize)
+        assertEquals(28.sp, h2.lineHeight)
         assertEquals(FontWeight.SemiBold, h2.fontWeight)
-        assertEquals(17.sp, h3.fontSize)
+        assertEquals(16.sp, h3.fontSize)
         assertEquals(24.sp, h3.lineHeight)
         assertEquals(FontWeight.SemiBold, h3.fontWeight)
-        assertEquals(16.sp, h6.fontSize)
-        assertEquals(22.sp, h6.lineHeight)
-        assertEquals(FontWeight.Medium, h6.fontWeight)
+        assertEquals(14.sp, h6.fontSize)
+        assertEquals(20.sp, h6.lineHeight)
+        assertEquals(FontWeight.SemiBold, h6.fontWeight)
+    }
+
+    @Test
+    fun `inline code uses gray bold compact style without background in streaming renderer`() {
+        val surfaceVariant = Color(0xFF888888)
+
+        assertEquals(
+            ChatMarkdownTextStyle.INLINE_CODE_BACKGROUND_LIGHT_ALPHA,
+            chatInlineCodeBackgroundColor(surfaceVariant, isDark = false).alpha,
+            0.001f,
+        )
+        assertEquals(
+            ChatMarkdownTextStyle.INLINE_CODE_BACKGROUND_DARK_ALPHA,
+            chatInlineCodeBackgroundColor(surfaceVariant, isDark = true).alpha,
+            0.001f,
+        )
+        assertEquals(Color(0xFF4F5661), chatInlineCodeTextColor(isDark = false))
+        assertEquals(Color(0xFFD1D5DB), chatInlineCodeTextColor(isDark = true))
+        assertEquals(14.72.sp, chatInlineCodeFontSize(16.sp))
+    }
+
+    @Test
+    fun `native heading falls back to textview markdown path`() {
+        val markdown = "# Heading with `pmatrix` and `\\partial`"
+        val blocks = parseNativeStreamingMarkdownBlocks(
+            text = markdown,
+            segmentId = "heading-inline-code",
+        )
+
+        assertEquals(null, blocks)
+        assertEquals(
+            StreamingMarkdownRenderPath.FullMarkdown,
+            resolveStreamingMarkdownRenderPath(markdown),
+        )
+    }
+
+    @Test
+    fun `native setext heading falls back to textview markdown path`() {
+        val markdown = "Heading with `cases`\n---"
+        val blocks = parseNativeStreamingMarkdownBlocks(
+            text = markdown,
+            segmentId = "setext-heading-inline-code",
+        )
+
+        assertEquals(null, blocks)
+        assertEquals(
+            StreamingMarkdownRenderPath.FullMarkdown,
+            resolveStreamingMarkdownRenderPath(markdown),
+        )
     }
 
     @Test
@@ -231,18 +321,17 @@ class StreamBlocksRendererRoutingTest {
     @Test
     fun `native parser keeps stable ids for unchanged prefix blocks`() {
         val first = parseNativeStreamingMarkdownBlocks(
-            text = "# 标题\n\n- 第一项",
+            text = "- first",
             segmentId = "msg-3",
         )
         val second = parseNativeStreamingMarkdownBlocks(
-            text = "# 标题\n\n- 第一项\n- 第二项",
+            text = "- first\n- second",
             segmentId = "msg-3",
         )
 
         requireNotNull(first)
         requireNotNull(second)
         assertEquals(first[0].stableId, second[0].stableId)
-        assertEquals(first[1].stableId, second[1].stableId)
     }
 
     @Test

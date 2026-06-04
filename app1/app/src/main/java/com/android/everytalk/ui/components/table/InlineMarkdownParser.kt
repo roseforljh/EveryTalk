@@ -8,6 +8,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.unit.TextUnit
 
 private const val INLINE_EXTERNAL_LINK_SUFFIX = " ↗"
 
@@ -33,7 +34,9 @@ object InlineMarkdownParser {
     fun parse(
         text: String,
         baseColor: Color = Color.Unspecified,
-        codeBackground: Color = Color(0x20808080)
+        codeBackground: Color = Color.Transparent,
+        codeColor: Color = Color.Unspecified,
+        codeFontSize: TextUnit = TextUnit.Unspecified,
     ): AnnotatedString {
         if (text.isEmpty()) return AnnotatedString("")
 
@@ -41,6 +44,8 @@ object InlineMarkdownParser {
             appendInlineMarkdown(
                 text = text,
                 codeBackground = codeBackground,
+                codeColor = codeColor,
+                codeFontSize = codeFontSize,
                 linkColor = resolveLinkColor(baseColor),
             )
         }
@@ -84,6 +89,8 @@ object InlineMarkdownParser {
     private fun AnnotatedString.Builder.appendInlineMarkdown(
         text: String,
         codeBackground: Color,
+        codeColor: Color,
+        codeFontSize: TextUnit,
         linkColor: Color,
     ) {
         var index = 0
@@ -98,6 +105,8 @@ object InlineMarkdownParser {
                 text = text,
                 start = index,
                 codeBackground = codeBackground,
+                codeColor = codeColor,
+                codeFontSize = codeFontSize,
                 linkColor = linkColor,
             )
             if (parsed != null) {
@@ -114,29 +123,34 @@ object InlineMarkdownParser {
         text: String,
         start: Int,
         codeBackground: Color,
+        codeColor: Color,
+        codeFontSize: TextUnit,
         linkColor: Color,
     ): Int? {
-        return parseCode(text, start, codeBackground)
-            ?: parseStyled(text, start, "***", SpanStyle(fontWeight = FontWeight.Bold, fontStyle = FontStyle.Italic), codeBackground, linkColor)
-            ?: parseStyled(text, start, "___", SpanStyle(fontWeight = FontWeight.Bold, fontStyle = FontStyle.Italic), codeBackground, linkColor)
-            ?: parseStyled(text, start, "**", SpanStyle(fontWeight = FontWeight.Bold), codeBackground, linkColor)
-            ?: parseStyled(text, start, "__", SpanStyle(fontWeight = FontWeight.Bold), codeBackground, linkColor)
-            ?: parseStyled(text, start, "~~", SpanStyle(textDecoration = TextDecoration.LineThrough), codeBackground, linkColor)
-            ?: parseLink(text, start, codeBackground, linkColor)
-            ?: parseItalic(text, start, codeBackground, linkColor)
+        return parseCode(text, start, codeColor, codeFontSize)
+            ?: parseStyled(text, start, "***", SpanStyle(fontWeight = FontWeight.Bold, fontStyle = FontStyle.Italic), codeBackground, codeColor, codeFontSize, linkColor)
+            ?: parseStyled(text, start, "___", SpanStyle(fontWeight = FontWeight.Bold, fontStyle = FontStyle.Italic), codeBackground, codeColor, codeFontSize, linkColor)
+            ?: parseStyled(text, start, "**", SpanStyle(fontWeight = FontWeight.Bold), codeBackground, codeColor, codeFontSize, linkColor)
+            ?: parseStyled(text, start, "__", SpanStyle(fontWeight = FontWeight.Bold), codeBackground, codeColor, codeFontSize, linkColor)
+            ?: parseStyled(text, start, "~~", SpanStyle(textDecoration = TextDecoration.LineThrough), codeBackground, codeColor, codeFontSize, linkColor)
+            ?: parseLink(text, start, codeBackground, codeColor, codeFontSize, linkColor)
+            ?: parseItalic(text, start, codeBackground, codeColor, codeFontSize, linkColor)
     }
 
     private fun AnnotatedString.Builder.parseCode(
         text: String,
         start: Int,
-        codeBackground: Color,
+        codeColor: Color,
+        codeFontSize: TextUnit,
     ): Int? {
         if (text[start] != '`') return null
         val end = findClosingMarker(text, start + 1, "`") ?: return null
         pushStyle(
             SpanStyle(
                 fontFamily = FontFamily.Monospace,
-                background = codeBackground,
+                fontWeight = FontWeight.Bold,
+                color = codeColor,
+                fontSize = codeFontSize,
             )
         )
         append(text.substring(start + 1, end))
@@ -150,6 +164,8 @@ object InlineMarkdownParser {
         marker: String,
         style: SpanStyle,
         codeBackground: Color,
+        codeColor: Color,
+        codeFontSize: TextUnit,
         linkColor: Color,
     ): Int? {
         if (!text.startsWith(marker, start)) return null
@@ -158,6 +174,8 @@ object InlineMarkdownParser {
         appendInlineMarkdown(
             text = text.substring(start + marker.length, end),
             codeBackground = codeBackground,
+            codeColor = codeColor,
+            codeFontSize = codeFontSize,
             linkColor = linkColor,
         )
         pop()
@@ -168,6 +186,8 @@ object InlineMarkdownParser {
         text: String,
         start: Int,
         codeBackground: Color,
+        codeColor: Color,
+        codeFontSize: TextUnit,
         linkColor: Color,
     ): Int? {
         val marker = when (text[start]) {
@@ -185,6 +205,8 @@ object InlineMarkdownParser {
         appendInlineMarkdown(
             text = text.substring(start + 1, end),
             codeBackground = codeBackground,
+            codeColor = codeColor,
+            codeFontSize = codeFontSize,
             linkColor = linkColor,
         )
         pop()
@@ -195,6 +217,8 @@ object InlineMarkdownParser {
         text: String,
         start: Int,
         codeBackground: Color,
+        codeColor: Color,
+        codeFontSize: TextUnit,
         linkColor: Color,
     ): Int? {
         if (text[start] != '[') return null
@@ -214,6 +238,8 @@ object InlineMarkdownParser {
         appendInlineMarkdown(
             text = text.substring(start + 1, labelEnd),
             codeBackground = codeBackground,
+            codeColor = codeColor,
+            codeFontSize = codeFontSize,
             linkColor = linkColor,
         )
         append(INLINE_EXTERNAL_LINK_SUFFIX)

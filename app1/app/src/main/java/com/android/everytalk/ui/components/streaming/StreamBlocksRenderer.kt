@@ -1,6 +1,8 @@
 package com.android.everytalk.ui.components.streaming
 
 import android.content.ClipData
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.background
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -22,6 +25,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.text.PlatformTextStyle
@@ -34,10 +38,12 @@ import androidx.compose.ui.unit.sp
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.statecontroller.AppViewModel
+import com.android.everytalk.ui.components.ChatMarkdownTextStyle
 import com.android.everytalk.ui.components.EnhancedMarkdownText
 import com.android.everytalk.ui.components.StableMarkdownText
 import com.android.everytalk.ui.components.content.CodeBlockCard
 import com.android.everytalk.ui.components.table.InlineMarkdownParser
+import com.android.everytalk.ui.components.table.TableUtils
 import java.util.Locale
 import kotlinx.coroutines.launch
 
@@ -88,6 +94,14 @@ data class NativeStreamingMarkdownBlock(
     val level: Int = 0,
     val ordered: Boolean = false,
     val items: List<String> = emptyList(),
+    val listItems: List<NativeStreamingListItem> = emptyList(),
+)
+
+data class NativeStreamingListItem(
+    val text: String,
+    val level: Int = 0,
+    val ordered: Boolean = false,
+    val number: Int = 1,
 )
 
 internal data class ChatGptHeadingTextSpec(
@@ -97,11 +111,36 @@ internal data class ChatGptHeadingTextSpec(
 )
 
 internal fun chatGptHeadingTextSpecForLevel(level: Int): ChatGptHeadingTextSpec {
-    return when (level.coerceIn(1, 6)) {
-        1 -> ChatGptHeadingTextSpec(fontSize = 20.sp, lineHeight = 28.sp, fontWeight = FontWeight.SemiBold)
-        2 -> ChatGptHeadingTextSpec(fontSize = 18.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold)
-        3 -> ChatGptHeadingTextSpec(fontSize = 17.sp, lineHeight = 24.sp, fontWeight = FontWeight.SemiBold)
-        else -> ChatGptHeadingTextSpec(fontSize = 16.sp, lineHeight = 22.sp, fontWeight = FontWeight.Medium)
+    return ChatGptHeadingTextSpec(
+        fontSize = ChatMarkdownTextStyle.headingFontSizeSp(level).sp,
+        lineHeight = ChatMarkdownTextStyle.headingLineHeightSp(level).sp,
+        fontWeight = FontWeight.SemiBold,
+    )
+}
+
+internal fun chatInlineCodeBackgroundColor(surfaceVariant: Color, isDark: Boolean): Color {
+    return surfaceVariant.copy(
+        alpha = if (isDark) {
+            ChatMarkdownTextStyle.INLINE_CODE_BACKGROUND_DARK_ALPHA
+        } else {
+            ChatMarkdownTextStyle.INLINE_CODE_BACKGROUND_LIGHT_ALPHA
+        },
+    )
+}
+
+internal fun chatInlineCodeTextColor(isDark: Boolean): Color {
+    return if (isDark) {
+        Color(0xFFD1D5DB)
+    } else {
+        Color(0xFF4F5661)
+    }
+}
+
+internal fun chatInlineCodeFontSize(baseFontSize: TextUnit): TextUnit {
+    return if (baseFontSize == TextUnit.Unspecified) {
+        TextUnit.Unspecified
+    } else {
+        baseFontSize * ChatMarkdownTextStyle.INLINE_CODE_RELATIVE_SIZE
     }
 }
 
@@ -438,6 +477,7 @@ private fun NativeMarkdownBlocksSegment(
                     NativeStreamingMarkdownBlockType.ListBlock -> {
                         NativeListBlock(
                             items = block.items,
+                            listItems = block.listItems,
                             ordered = block.ordered,
                             style = style,
                             color = color,
@@ -512,29 +552,85 @@ private fun NativeBlockQuote(
 @Composable
 private fun NativeListBlock(
     items: List<String>,
+    listItems: List<NativeStreamingListItem>,
     ordered: Boolean,
     style: TextStyle,
     color: Color,
 ) {
+    val rows = remember(items, listItems, ordered) {
+        listItems.ifEmpty {
+            items.mapIndexed { index, item ->
+                NativeStreamingListItem(
+                    text = item,
+                    ordered = ordered,
+                    number = index + 1,
+                )
+            }
+        }
+    }
     Column(
         modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(4.dp),
+        verticalArrangement = Arrangement.spacedBy(ChatMarkdownTextStyle.LIST_ITEM_SPACING_DP.dp),
     ) {
-        items.forEachIndexed { index, item ->
-            Row(modifier = Modifier.fillMaxWidth()) {
-                androidx.compose.material3.Text(
-                    text = if (ordered) "${index + 1}." else "•",
-                    style = style.copy(
-                        color = color,
-                        platformStyle = PlatformTextStyle(includeFontPadding = false),
-                    ),
-                    modifier = Modifier.width(24.dp),
-                )
-                NativeInlineText(
-                    text = item,
+        rows.forEach { item ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(
+                        start = (ChatMarkdownTextStyle.LIST_NESTED_INDENT_DP *
+                            item.level.coerceAtLeast(0)).dp
+                    )
+            ) {
+                NativeListMarker(
+                    item = item,
                     style = style,
                     color = color,
                 )
+                NativeInlineText(
+                    text = item.text,
+                    style = style,
+                    color = color,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun NativeListMarker(
+    item: NativeStreamingListItem,
+    style: TextStyle,
+    color: Color,
+) {
+    val markerWidth = ChatMarkdownTextStyle.LIST_MARKER_WIDTH_DP.dp
+    if (item.ordered) {
+        androidx.compose.material3.Text(
+            text = "${item.number}.",
+            style = style.copy(
+                color = color,
+                platformStyle = PlatformTextStyle(includeFontPadding = false),
+            ),
+            modifier = Modifier.width(markerWidth),
+        )
+    } else {
+        val bulletSize = ChatMarkdownTextStyle.LIST_BULLET_SIZE_DP.dp
+        Box(modifier = Modifier.width(markerWidth)) {
+            Canvas(
+                modifier = Modifier
+                    .padding(
+                        start = ChatMarkdownTextStyle.LIST_BULLET_START_PADDING_DP.dp,
+                        top = ChatMarkdownTextStyle.LIST_BULLET_TOP_PADDING_DP.dp,
+                    )
+                    .size(bulletSize)
+            ) {
+                if (item.level <= 0) {
+                    drawCircle(color = color)
+                } else {
+                    drawCircle(
+                        color = color,
+                        style = Stroke(width = 1.4.dp.toPx()),
+                    )
+                }
             }
         }
     }
@@ -545,12 +641,19 @@ internal fun nativeMarkdownBlockSpacingAfter(
     next: NativeStreamingMarkdownBlock,
 ): Dp {
     return when {
-        next.type == NativeStreamingMarkdownBlockType.Heading -> 12.dp
-        current.type == NativeStreamingMarkdownBlockType.HorizontalRule -> 12.dp
-        current.type == NativeStreamingMarkdownBlockType.Heading -> 8.dp
-        current.type == NativeStreamingMarkdownBlockType.ListBlock -> 8.dp
-        current.type == NativeStreamingMarkdownBlockType.BlockQuote -> 8.dp
-        else -> 8.dp
+        next.type == NativeStreamingMarkdownBlockType.Heading ->
+            ChatMarkdownTextStyle.SPACING_BEFORE_HEADING_DP.dp
+        current.type == NativeStreamingMarkdownBlockType.HorizontalRule ->
+            ChatMarkdownTextStyle.SPACING_AFTER_DIVIDER_DP.dp
+        current.type == NativeStreamingMarkdownBlockType.Heading ->
+            ChatMarkdownTextStyle.SPACING_AFTER_HEADING_DP.dp
+        current.type == NativeStreamingMarkdownBlockType.Paragraph ->
+            ChatMarkdownTextStyle.SPACING_PARAGRAPH_DP.dp
+        current.type == NativeStreamingMarkdownBlockType.ListBlock ->
+            ChatMarkdownTextStyle.SPACING_AFTER_LIST_DP.dp
+        current.type == NativeStreamingMarkdownBlockType.BlockQuote ->
+            ChatMarkdownTextStyle.SPACING_AFTER_QUOTE_DP.dp
+        else -> ChatMarkdownTextStyle.SPACING_PARAGRAPH_DP.dp
     }
 }
 
@@ -632,12 +735,17 @@ private fun ComposeInlineMarkdownSegment(
     style: TextStyle,
     color: Color,
 ) {
-    val codeBackground = MaterialTheme.colorScheme.surfaceVariant
-    val annotatedString = remember(text, color, codeBackground) {
+    val isDark = isSystemInDarkTheme()
+    val codeBackground = chatInlineCodeBackgroundColor(MaterialTheme.colorScheme.surfaceVariant, isDark)
+    val codeColor = chatInlineCodeTextColor(isDark)
+    val codeFontSize = chatInlineCodeFontSize(style.fontSize)
+    val annotatedString = remember(text, color, codeBackground, codeColor, codeFontSize) {
         InlineMarkdownParser.parse(
             text = text,
             baseColor = color,
             codeBackground = codeBackground,
+            codeColor = codeColor,
+            codeFontSize = codeFontSize,
         )
     }
     androidx.compose.material3.Text(
@@ -671,13 +779,20 @@ private val atxHeadingLinePattern = Regex("""^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$""
 private val setextUnderlineLinePattern = Regex("""^\s{0,3}(={3,}|-{3,})\s*$""")
 private val horizontalRuleLinePattern = Regex("""^\s{0,3}(-{3,}|\*{3,}|_{3,})\s*$""")
 private val blockQuoteLinePattern = Regex("""^\s{0,3}>\s?(.*)$""")
-private val unorderedListLinePattern = Regex("""^\s{0,3}[-*+]\s+(.+)$""")
-private val orderedListLinePattern = Regex("""^\s{0,3}\d+[.)]\s+(.+)$""")
+private val unorderedListLinePattern = Regex("""^(\s{0,12})[-*+]\s+(.+)$""")
+private val orderedListLinePattern = Regex("""^(\s{0,12})(\d+)[.)]\s+(.+)$""")
 private val fencedCodeOpeningLinePattern = Regex("""^\s*([`~]{3,})([^\n`~]*)$""")
 
 internal data class FencedCodeBlockContent(
     val language: String?,
     val code: String,
+)
+
+private data class NativeListLine(
+    val level: Int,
+    val ordered: Boolean,
+    val number: Int,
+    val text: String,
 )
 
 internal fun resolveStreamingMarkdownRenderPath(text: String): StreamingMarkdownRenderPath {
@@ -751,6 +866,57 @@ private fun isFenceClosingLineForMarker(line: String, marker: String): Boolean {
         markerLength++
     }
     return markerLength >= marker.length && trimmed.substring(markerLength).isBlank()
+}
+
+private fun matchNativeListLine(line: String): NativeListLine? {
+    val ordered = orderedListLinePattern.matchEntire(line)
+    if (ordered != null) {
+        return NativeListLine(
+            level = markdownIndentLevel(ordered.groupValues[1]),
+            ordered = true,
+            number = ordered.groupValues[2].toIntOrNull() ?: 1,
+            text = ordered.groupValues[3].trim(),
+        )
+    }
+
+    val unordered = unorderedListLinePattern.matchEntire(line) ?: return null
+    return NativeListLine(
+        level = markdownIndentLevel(unordered.groupValues[1]),
+        ordered = false,
+        number = 1,
+        text = unordered.groupValues[2].trim(),
+    )
+}
+
+private fun markdownIndentLevel(indent: String): Int {
+    val columns = indent.sumOf { char -> if (char == '\t') 4 else 1 }
+    return (columns / 4).coerceAtLeast(0)
+}
+
+private fun isNativeListContinuation(line: String, itemLevel: Int): Boolean {
+    if (line.isBlank()) return false
+    val indentColumns = line.takeWhile { it == ' ' || it == '\t' }
+        .sumOf { char -> if (char == '\t') 4 else 1 }
+    return indentColumns >= (itemLevel + 1) * 4
+}
+
+private fun stripNativeListContinuation(line: String, itemLevel: Int): String {
+    val columnsToDrop = (itemLevel + 1) * 4
+    var index = 0
+    var columns = 0
+    while (index < line.length && columns < columnsToDrop) {
+        val char = line[index]
+        if (char != ' ' && char != '\t') break
+        columns += if (char == '\t') 4 else 1
+        index++
+    }
+    return line.drop(index).trim()
+}
+
+private fun appendNativeListContinuation(text: String, continuation: String): String {
+    if (continuation.isBlank()) return text
+    if (text.isBlank()) return continuation
+    return "$text $continuation"
 }
 
 internal fun parseNativeStreamingMarkdownBlocks(
@@ -868,21 +1034,46 @@ internal fun parseNativeStreamingMarkdownBlocks(
             continue
         }
 
-        val unorderedItem = unorderedListLinePattern.matchEntire(line)
-        val orderedItem = orderedListLinePattern.matchEntire(line)
-        if (unorderedItem != null || orderedItem != null) {
-            val ordered = orderedItem != null
+        val listLine = matchNativeListLine(line)
+        if (listLine != null) {
             val startIndex = index
-            val items = mutableListOf((orderedItem ?: unorderedItem)!!.groupValues[1])
+            val listItems = mutableListOf(
+                NativeStreamingListItem(
+                    text = listLine.text,
+                    level = listLine.level,
+                    ordered = listLine.ordered,
+                    number = listLine.number,
+                )
+            )
             index++
             while (index < lines.size) {
-                val next = if (ordered) {
-                    orderedListLinePattern.matchEntire(lines[index])
-                } else {
-                    unorderedListLinePattern.matchEntire(lines[index])
-                } ?: break
-                items.add(next.groupValues[1])
-                index++
+                val nextLine = lines[index]
+                val next = matchNativeListLine(nextLine)
+                if (next != null) {
+                    listItems.add(
+                        NativeStreamingListItem(
+                            text = next.text,
+                            level = next.level,
+                            ordered = next.ordered,
+                            number = next.number,
+                        )
+                    )
+                    index++
+                    continue
+                }
+
+                val last = listItems.lastOrNull()
+                if (last != null && isNativeListContinuation(nextLine, last.level)) {
+                    val continuation = stripNativeListContinuation(nextLine, last.level)
+                    listItems[listItems.lastIndex] = last.copy(
+                        text = appendNativeListContinuation(last.text, continuation)
+                    )
+                    index++
+                    continue
+                }
+
+                if (startsNativeMarkdownBlock(nextLine)) break
+                break
             }
             blocks.add(
                 NativeStreamingMarkdownBlock(
@@ -890,8 +1081,9 @@ internal fun parseNativeStreamingMarkdownBlocks(
                     type = NativeStreamingMarkdownBlockType.ListBlock,
                     start = lineStarts[startIndex],
                     endExclusive = lineEnd(index - 1),
-                    ordered = ordered,
-                    items = items,
+                    ordered = listLine.ordered,
+                    items = listItems.map { it.text },
+                    listItems = listItems,
                 )
             )
             continue
@@ -923,12 +1115,63 @@ private fun startsNativeMarkdownBlock(line: String): Boolean {
 private fun hasUnsupportedNativeMarkdownForCompose(text: String): Boolean {
     return hasMarkdownTable(text) ||
         hasInlineMathSyntax(text) ||
+        hasNativeHeadingSyntax(text) ||
         fencedCodeStartPattern.containsMatchIn(text) ||
         referenceLinkPattern.containsMatchIn(text) ||
         autolinkPattern.containsMatchIn(text) ||
         htmlTagPattern.containsMatchIn(text) ||
         htmlEntityPattern.containsMatchIn(text) ||
         markdownLinkPattern.containsMatchIn(text)
+}
+
+private fun hasNativeHeadingSyntax(text: String): Boolean {
+    val lines = text.replace("\r\n", "\n").replace('\r', '\n').lines()
+    return lines.indices.any { index ->
+        atxHeadingLinePattern.matches(lines[index]) ||
+            (
+                index + 1 < lines.size &&
+                    lines[index].isNotBlank() &&
+                    setextUnderlineLinePattern.matches(lines[index + 1])
+            )
+    }
+}
+
+internal fun isTableCellEmbeddedMathBlock(blocks: List<StreamBlock>, index: Int): Boolean {
+    val block = blocks.getOrNull(index) as? StreamBlock.MathBlock ?: return false
+    val before = collectSameLineBeforeBlock(blocks, index)
+    val after = collectSameLineAfterBlock(blocks, index)
+    if (!before.contains('|') || !after.contains('|')) return false
+
+    val line = before + block.text + after
+    return TableUtils.isTableDataRow(line)
+}
+
+private fun collectSameLineBeforeBlock(blocks: List<StreamBlock>, index: Int): String {
+    val out = StringBuilder()
+    for (cursor in index - 1 downTo 0) {
+        val text = blocks[cursor].text
+        val lineBreak = text.lastIndexOf('\n')
+        if (lineBreak >= 0) {
+            out.insert(0, text.substring(lineBreak + 1))
+            break
+        }
+        out.insert(0, text)
+    }
+    return out.toString()
+}
+
+private fun collectSameLineAfterBlock(blocks: List<StreamBlock>, index: Int): String {
+    val out = StringBuilder()
+    for (cursor in index + 1 until blocks.size) {
+        val text = blocks[cursor].text
+        val lineBreak = text.indexOf('\n')
+        if (lineBreak >= 0) {
+            out.append(text.substring(0, lineBreak))
+            break
+        }
+        out.append(text)
+    }
+    return out.toString()
 }
 
 private fun buildSegments(blocks: List<StreamBlock>): List<RenderSegment> {
@@ -950,13 +1193,24 @@ private fun buildSegments(blocks: List<StreamBlock>): List<RenderSegment> {
         inlineEndId = null
     }
 
-    blocks.forEach { block ->
+    blocks.forEachIndexed { index, block ->
         when (block) {
             is StreamBlock.PlainText,
             is StreamBlock.MathInline -> {
                 if (inlineStartId == null) inlineStartId = block.stableId
                 inlineEndId = block.stableId
                 inlineBuffer.append(block.text)
+            }
+
+            is StreamBlock.MathBlock -> {
+                if (isTableCellEmbeddedMathBlock(blocks, index)) {
+                    if (inlineStartId == null) inlineStartId = block.stableId
+                    inlineEndId = block.stableId
+                    inlineBuffer.append(block.text)
+                } else {
+                    flushInline()
+                    result.add(RenderSegment.BlockOnly(stableId = block.stableId, block = block))
+                }
             }
 
             else -> {

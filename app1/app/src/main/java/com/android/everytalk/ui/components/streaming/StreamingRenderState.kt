@@ -196,6 +196,7 @@ private fun hashNativeBlocks(blocks: List<NativeStreamingMarkdownBlock>): String
             append(it.type.name); append('|')
             append(it.text.hashCode()); append('|')
             append(it.items.hashCode()); append('|')
+            append(it.listItems.hashCode()); append('|')
             append(it.start); append('|')
             append(it.endExclusive); append(';')
         }

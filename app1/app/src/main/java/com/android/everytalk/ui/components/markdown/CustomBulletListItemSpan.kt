@@ -2,7 +2,6 @@ package com.android.everytalk.ui.components.markdown
 
 import android.graphics.Canvas
 import android.graphics.Paint
-import android.graphics.Rect
 import android.graphics.RectF
 import android.os.Build
 import android.text.Layout
@@ -22,7 +21,6 @@ class CustomBulletListItemSpan(
 
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val circle = RectF()
-    private val rectangle = Rect()
 
     override fun getLeadingMargin(first: Boolean): Int {
         // 使用自定义的缩小间距，而不是主题中全局的 blockMargin
@@ -75,16 +73,9 @@ class CustomBulletListItemSpan(
             val t = baseline + ((paint.descent() + paint.ascent()) / 2f + .5f).toInt() - (side / 2)
             val b = t + side
 
-            if (level == 0 || level == 1) {
-                circle.set(l.toFloat(), t.toFloat(), r.toFloat(), b.toFloat())
-                val style = if (level == 0) Paint.Style.FILL else Paint.Style.STROKE
-                paint.style = style
-                c.drawOval(circle, paint)
-            } else {
-                rectangle.set(l, t, r, b)
-                paint.style = Paint.Style.FILL
-                c.drawRect(rectangle, paint)
-            }
+            circle.set(l.toFloat(), t.toFloat(), r.toFloat(), b.toFloat())
+            paint.style = if (level == 0) Paint.Style.FILL else Paint.Style.STROKE
+            c.drawOval(circle, paint)
         } finally {
             c.restoreToCount(save)
         }

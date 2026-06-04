@@ -2,6 +2,7 @@ package com.android.everytalk.ui.components.table
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
@@ -31,6 +32,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.TextUnit
+import com.android.everytalk.ui.components.ChatMarkdownTextStyle
 import com.android.everytalk.ui.components.markdown.MarkdownRenderer
 
 /**
@@ -65,7 +68,9 @@ fun TableRenderer(
         val paddedAlignments = List(parsedHeaders.size) { index ->
             parsedAlignments.getOrElse(index) { TableUtils.TableAlignment.CENTER }
         }
-        val parsedDataRows = lines.drop(2).map { TableUtils.parseTableRow(it) }
+        val parsedDataRows = lines.drop(2).map {
+            TableUtils.padRowCells(TableUtils.parseTableRow(it), parsedHeaders.size)
+        }
         val parsedColumnWidths = TableUtils.calculateColumnWidths(parsedHeaders, parsedDataRows)
         object {
             val headers = parsedHeaders
@@ -128,7 +133,7 @@ fun TableRenderer(
                     .wrapContentWidth()
                     .background(headerBackgroundColor)
                     .padding(vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
+                verticalAlignment = Alignment.Top
             ) {
                 headers.forEachIndexed { index, header ->
                     key("header_$index") {
@@ -165,7 +170,7 @@ fun TableRenderer(
                                 )
                             }
                             .padding(vertical = 8.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                        verticalAlignment = Alignment.Top
                     ) {
                         row.forEachIndexed { colIndex, cell ->
                             if (colIndex < columnWidths.size) {
@@ -178,7 +183,7 @@ fun TableRenderer(
                                         usePlainText = usePlainTextCells,
                                         contentKey = if (contentKey.isNotBlank()) "${contentKey}_tr_${rowIndex}_td_$colIndex" else "",
                                         backgroundColor = rowBackgroundColor,
-                                        drawRightSeparator = colIndex < row.lastIndex,
+                                        drawRightSeparator = colIndex < headers.lastIndex,
                                         separatorColor = columnDividerColor
                                     )
                                 }
@@ -216,6 +221,13 @@ private fun TableCell(
     val textColor = MaterialTheme.colorScheme.onSurface
     // 内联代码不使用背景色
     val codeBackground = Color.Transparent
+    val isDark = isSystemInDarkTheme()
+    val codeColor = if (isDark) Color(0xFFD1D5DB) else Color(0xFF4F5661)
+    val codeFontSize = if (style.fontSize == TextUnit.Unspecified) {
+        TextUnit.Unspecified
+    } else {
+        style.fontSize * ChatMarkdownTextStyle.INLINE_CODE_RELATIVE_SIZE
+    }
 
     // 检测是否包含数学公式
     val containsMath = remember(content) {
@@ -223,10 +235,10 @@ private fun TableCell(
     }
 
     val boxAlignment = when (alignment) {
-        TableUtils.TableAlignment.LEFT -> Alignment.CenterStart
-        TableUtils.TableAlignment.CENTER -> Alignment.Center
-        TableUtils.TableAlignment.RIGHT -> Alignment.CenterEnd
-        TableUtils.TableAlignment.START -> Alignment.CenterStart
+        TableUtils.TableAlignment.LEFT -> Alignment.TopStart
+        TableUtils.TableAlignment.CENTER -> Alignment.TopCenter
+        TableUtils.TableAlignment.RIGHT -> Alignment.TopEnd
+        TableUtils.TableAlignment.START -> Alignment.TopStart
     }
 
     val textAlign = when (alignment) {
@@ -265,14 +277,16 @@ private fun TableCell(
             )
         } else {
             // 普通文本或纯文本模式：使用 AnnotatedString 渲染
-            val annotatedText = remember(content, usePlainText) {
+            val annotatedText = remember(content, usePlainText, codeColor, codeFontSize) {
                 if (usePlainText || !InlineMarkdownParser.containsInlineMarkdown(content)) {
                     androidx.compose.ui.text.AnnotatedString(content)
                 } else {
                     InlineMarkdownParser.parse(
                         text = content,
                         baseColor = Color.Unspecified,
-                        codeBackground = codeBackground
+                        codeBackground = codeBackground,
+                        codeColor = codeColor,
+                        codeFontSize = codeFontSize,
                     )
                 }
             }

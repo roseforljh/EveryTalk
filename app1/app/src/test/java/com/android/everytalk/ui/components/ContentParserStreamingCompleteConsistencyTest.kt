@@ -124,4 +124,43 @@ class ContentParserStreamingCompleteConsistencyTest {
         assertTrue(completeCodeParts.any { it.content.contains("wget https://github.com/router-for-me/CLIProxyAPI/releases/download") })
         assertTrue(completeCodeParts.any { it.content.contains("./CLIProxyAPI") })
     }
+
+    @Test
+    fun `streaming and complete parsing should keep ragged escaped pipe table structurally consistent`() {
+        val input = """
+            | A | B | C | D |
+            | :--- | :--- | :---: | :--- |
+            | row A | escaped \| pipe | `x | y` | tail |
+            | row B | only two cells |
+        """.trimIndent()
+
+        val streamingParts = ContentParser.parseCompleteContent(input, isStreaming = true)
+        val completeParts = ContentParser.parseCompleteContent(input, isStreaming = false)
+        val streamingTables = streamingParts.filterIsInstance<ContentPart.Table>()
+        val completeTables = completeParts.filterIsInstance<ContentPart.Table>()
+
+        assertEquals(
+            streamingParts.map { it.javaClass.simpleName },
+            completeParts.map { it.javaClass.simpleName }
+        )
+        assertEquals(1, streamingTables.size)
+        assertEquals(1, completeTables.size)
+        assertEquals(4, completeTables.single().lines.size)
+    }
+
+    @Test
+    fun `table cell with promoted math should stay table`() {
+        val input = """
+            | Dimension | LaTeX | Edge |
+            | :--- | :---: | :--- |
+            | A | ${'$'}${'$'}\sum_{i=1}^{n} x_i^2 \ge \frac{(\sum x_i)^2}{n}${'$'}${'$'} | tail |
+        """.trimIndent()
+
+        val parts = ContentParser.parseCompleteContent(input, isStreaming = true)
+        val tables = parts.filterIsInstance<ContentPart.Table>()
+
+        assertEquals(1, tables.size)
+        assertEquals(3, tables.single().lines.size)
+        assertTrue(tables.single().lines[2].contains("${'$'}${'$'}\\sum"))
+    }
 }

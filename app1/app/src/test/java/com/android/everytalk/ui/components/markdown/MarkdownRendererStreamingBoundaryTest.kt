@@ -6,6 +6,7 @@ import android.view.MotionEvent
 import android.view.ViewConfiguration
 import android.text.Selection
 import android.text.Spanned
+import android.text.style.LineBackgroundSpan
 import android.text.style.URLSpan
 import android.widget.TextView
 import androidx.activity.ComponentActivity
@@ -95,6 +96,8 @@ class MarkdownRendererStreamingBoundaryTest {
         }
         val spanned = composeRule.runOnIdle { textView.text as Spanned }
         val renderedText = spanned.toString()
+        val labelStart = renderedText.indexOf("淘宝/天猫选购入口")
+        val labelEnd = labelStart + "淘宝/天猫选购入口".length
         val linkStart = renderedText.indexOf("淘宝网 - 蜜丝婷泰版防晒")
         val linkEnd = linkStart + "淘宝网 - 蜜丝婷泰版防晒".length
         val markerEnd = linkEnd + " ↗".length
@@ -105,9 +108,16 @@ class MarkdownRendererStreamingBoundaryTest {
         assertEquals("https://example.com/item", urlSpans.single().url)
         assertEquals(linkStart, spanned.getSpanStart(urlSpans.single()))
         assertEquals(markerEnd, spanned.getSpanEnd(urlSpans.single()))
+        val dottedUnderlineSpan = spanned.getSpans(linkStart, linkEnd, Any::class.java)
+            .single { it.javaClass.simpleName == "DottedLinkUnderlineSpan" }
+        assertTrue(dottedUnderlineSpan is LineBackgroundSpan)
+        assertEquals(linkStart, spanned.getSpanStart(dottedUnderlineSpan))
+        assertEquals(linkEnd, spanned.getSpanEnd(dottedUnderlineSpan))
+        assertTrue(labelStart >= 0)
+        assertTrue(labelEnd > labelStart)
         assertTrue(
-            spanned.getSpans(linkStart, linkEnd, Any::class.java)
-                .any { it.javaClass.simpleName == "DottedLinkUnderlineSpan" }
+            spanned.getSpans(labelStart, labelEnd, Any::class.java)
+                .none { it.javaClass.simpleName == "DottedLinkUnderlineSpan" }
         )
     }
 
@@ -309,4 +319,5 @@ class MarkdownRendererStreamingBoundaryTest {
         }
         return null
     }
+
 }

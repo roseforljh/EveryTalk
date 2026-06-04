@@ -43,12 +43,13 @@ import android.text.Spanned
 import android.text.TextPaint
 import android.text.method.ArrowKeyMovementMethod
 import android.text.style.LeadingMarginSpan
+import android.text.style.LineBackgroundSpan
 import io.noties.markwon.image.AsyncDrawable 
 import io.noties.markwon.image.AsyncDrawableSpan
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.ui.components.ChatMarkdownTextStyle
 import com.android.everytalk.ui.components.MathStreamingPolicy
 import com.android.everytalk.ui.components.markdown.MarkdownSpansCache
-import android.text.style.LineBackgroundSpan
 import android.text.style.URLSpan
 import android.text.style.UnderlineSpan
 import kotlin.math.max
@@ -58,8 +59,8 @@ private val MULTIPLE_SPACES_REGEX = Regex(" {2,}")
 private val ENUM_ITEM_REGEX = Regex("(?<!\\n)\\s+([A-D])[\\.)]\\s")
 private val WINDOWS_PATH_REGEX = Regex("^[A-Za-z]:\\\\")
 private const val EXTERNAL_LINK_SUFFIX = " ↗"
-private const val LINK_DOTTED_UNDERLINE_LIGHT = 0x8A000000.toInt()
-private const val LINK_DOTTED_UNDERLINE_DARK = 0xA6FFFFFF.toInt()
+private const val LINK_DOTTED_UNDERLINE_LIGHT = 0xCC000000.toInt()
+private const val LINK_DOTTED_UNDERLINE_DARK = 0xFFFFFFFF.toInt()
 
 // 预编译 preprocessAiMarkdown 中的正则，避免每帧重复编译
 private val BASE64_IMAGE_PATTERN = Regex(
@@ -322,6 +323,51 @@ private fun TextView.applyMarkdownTextSelectionState(allowSystemTextSelection: B
         isFocusable = false
         isFocusableInTouchMode = false
     }
+}
+
+private fun TextView.applyMarkdownLayoutMode(pureMathBlockMessage: Boolean) {
+    setHorizontallyScrolling(pureMathBlockMessage)
+    isHorizontalScrollBarEnabled = false
+    overScrollMode = View.OVER_SCROLL_NEVER
+    if (!pureMathBlockMessage) {
+        isSingleLine = false
+        maxLines = Int.MAX_VALUE
+        ellipsize = null
+    }
+}
+
+private fun TextView.applyMarkdownTextMetrics(sender: Sender, textSizeSp: Float) {
+    if (sender == Sender.User) {
+        setLineSpacing(
+            TypedValue.applyDimension(
+                TypedValue.COMPLEX_UNIT_DIP,
+                2f,
+                resources.displayMetrics
+            ),
+            1.0f
+        )
+    } else {
+        val targetLineHeightSp =
+            textSizeSp * (ChatMarkdownTextStyle.BODY_LINE_HEIGHT_SP / ChatMarkdownTextStyle.BODY_FONT_SIZE_SP)
+        val targetLineHeightPx = TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_SP,
+            targetLineHeightSp,
+            resources.displayMetrics
+        )
+        val naturalLineHeightPx = paint.fontMetricsInt.descent - paint.fontMetricsInt.ascent
+        setLineSpacing(max(0f, targetLineHeightPx - naturalLineHeightPx), 1.0f)
+    }
+    letterSpacing = 0f
+}
+
+private fun TextView.setMeasuredMarkdownText(markdown: CharSequence) {
+    CustomOrderedListItemSpan.measure(this, markdown)
+    text = markdown
+}
+
+private fun Markwon.setMeasuredParsedMarkdown(textView: TextView, markdown: Spanned) {
+    CustomOrderedListItemSpan.measure(textView, markdown)
+    setParsedMarkdown(textView, markdown)
 }
 
 private fun TextView.configureMarkdownTouchHandling(
@@ -1235,21 +1281,7 @@ fun MarkdownRenderer(
                     setPadding(paddingPx, verticalPaddingPx, paddingPx, verticalPaddingPx)
                 }
                 
-                // 行间距：用户与 AI 区分设置
-                // 用户保持略紧凑，AI 适度增大上下行距
-                // 根据反馈“稍微减小文本之间的距离”，将 AI 行间距从 6f 调整为 5f
-                val lineSpacingDp = if (sender == Sender.User) 2f else 4f
-                setLineSpacing(
-                    TypedValue.applyDimension(
-                        TypedValue.COMPLEX_UNIT_DIP,
-                        lineSpacingDp,
-                        resources.displayMetrics
-                    ),
-                    1.0f
-                )
-                
-                // 字符间距：统一略微减小左右间距，使 AI 气泡内文本更紧凑，同时保持用户与 AI 一致
-                letterSpacing = 0.02f
+                applyMarkdownTextMetrics(sender, sp)
                 
                 // 设置居中对齐 - 对多行文本有效
                 // gravity = Gravity.CENTER_VERTICAL // 移除垂直居中，避免长文本/图片显示异常
@@ -1262,6 +1294,7 @@ fun MarkdownRenderer(
                     onLongPress = onLongPress,
                     onImageClick = onImageClick,
                 )
+                applyMarkdownLayoutMode(pureMathBlockLayout)
             }
         },
         update = { tv ->
@@ -1294,12 +1327,14 @@ fun MarkdownRenderer(
             )
 
             val previousState = tv.tag as? MarkdownRenderViewState
+            tv.applyMarkdownTextMetrics(sender, textSizeSp)
             tv.applyMarkdownTextSelectionState(allowSystemTextSelection)
             tv.configureMarkdownTouchHandling(
                 allowSystemTextSelection = allowSystemTextSelection,
                 onLongPress = onLongPress,
                 onImageClick = onImageClick,
             )
+            tv.applyMarkdownLayoutMode(pureMathBlockMessage)
             if (previousState?.signature == signature) {
                 return@AndroidView
             }
@@ -1310,10 +1345,8 @@ fun MarkdownRenderer(
             )
 
             // 纯数学块：内容保持单行（不自动折行），由 Compose 外层承载横向滚动
-            tv.setHorizontallyScrolling(pureMathBlockMessage)
-            tv.isHorizontalScrollBarEnabled = false
-            tv.overScrollMode = View.OVER_SCROLL_NEVER
             tv.applyMarkdownTextSelectionState(allowSystemTextSelection)
+            tv.applyMarkdownLayoutMode(pureMathBlockMessage)
 
             // 缓存优化：尝试从缓存获取 Spanned 对象
             // 流式期间：上游 TableAwareText 只对已稳定的 part 提供 contentKey
@@ -1341,7 +1374,7 @@ fun MarkdownRenderer(
             try {
                 if (cachedSpanned != null) {
                     cacheHit = true
-                    tv.text = cachedSpanned
+                    tv.setMeasuredMarkdownText(cachedSpanned)
                     if (com.android.everytalk.config.PerformanceConfig.ENABLE_PERFORMANCE_LOGGING) {
                         android.util.Log.d("MarkdownRenderer", "Spans Cache HIT: $cacheKey")
                     }
@@ -1411,7 +1444,7 @@ fun MarkdownRenderer(
                         append(headSpanned)
                         append(tailSpanned)
                     }
-                    tv.text = merged
+                    tv.setMeasuredMarkdownText(merged)
                     if (com.android.everytalk.config.PerformanceConfig.ENABLE_PERFORMANCE_LOGGING) {
                         android.util.Log.d(
                             "MarkdownRenderer",
@@ -1442,7 +1475,7 @@ fun MarkdownRenderer(
                         }
                     }
 
-                    markwon.setParsedMarkdown(tv, spanned)
+                    markwon.setMeasuredParsedMarkdown(tv, spanned)
                 }
             } catch (error: Throwable) {
                 errorCode = classifyMarkdownRenderError(error)
@@ -1461,7 +1494,7 @@ fun MarkdownRenderer(
                             linkTextColorArgb = finalColor.toArgb(),
                             dottedUnderlineColorArgb = linkDottedUnderlineColor,
                         )
-                        markwon.setParsedMarkdown(tv, fallbackSpanned)
+                        markwon.setMeasuredParsedMarkdown(tv, fallbackSpanned)
                     } catch (fallbackError: Throwable) {
                         android.util.Log.e(
                             "MarkdownRenderer",
@@ -1480,6 +1513,7 @@ fun MarkdownRenderer(
                 onLongPress = onLongPress,
                 onImageClick = onImageClick,
             )
+            tv.applyMarkdownLayoutMode(pureMathBlockMessage)
 
             val totalMs = (SystemClock.elapsedRealtimeNanos() - updateStartNs) / 1_000_000L
             logMarkdownRenderSession(

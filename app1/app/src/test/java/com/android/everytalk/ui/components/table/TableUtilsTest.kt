@@ -126,6 +126,50 @@ class TableUtilsTest {
     }
 
     @Test
+    fun `parseTableRow should not split escaped or code span pipes`() {
+        assertEquals(
+            listOf("A", "escaped | pipe", "`x | y`", "D"),
+            TableUtils.parseTableRow("| A | escaped \\| pipe | `x | y` | D |")
+        )
+    }
+
+    @Test
+    fun `parseTableRow should keep escaped trailing pipe without closing delimiter`() {
+        assertEquals(
+            listOf("A", "escaped |"),
+            TableUtils.parseTableRow("| A | escaped \\|")
+        )
+    }
+
+    @Test
+    fun `extractTableLines should keep rows with escaped pipes and missing cells`() {
+        val lines = listOf(
+            "| A | B | C | D |",
+            "| :--- | :--- | :---: | :--- |",
+            "| row A | escaped \\| pipe | `x | y` | tail |",
+            "| row B | only two cells |",
+            "after"
+        )
+
+        val (tableLines, nextIndex) = TableUtils.extractTableLines(lines, 0)
+
+        assertEquals(4, tableLines.size)
+        assertEquals(4, nextIndex)
+    }
+
+    @Test
+    fun `padRowCells should align ragged rows to header column count`() {
+        assertEquals(
+            listOf("A", "B", "", ""),
+            TableUtils.padRowCells(listOf("A", "B"), 4)
+        )
+        assertEquals(
+            listOf("A", "B"),
+            TableUtils.padRowCells(listOf("A", "B", "C"), 2)
+        )
+    }
+
+    @Test
     fun `parseTableRow should handle Chinese content`() {
         val cells = TableUtils.parseTableRow("| 特性 | Apache 2.0 | MIT |")
         assertEquals(3, cells.size)

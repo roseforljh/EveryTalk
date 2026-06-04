@@ -1,18 +1,19 @@
 package com.android.everytalk.ui.components.markdown
 
 import android.content.Context
+import android.graphics.Typeface
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
 import android.text.style.TypefaceSpan
 import android.text.style.RelativeSizeSpan
-import android.text.style.AbsoluteSizeSpan
-import android.graphics.Typeface
+import com.android.everytalk.ui.components.ChatMarkdownTextStyle
 import io.noties.markwon.AbstractMarkwonPlugin
 import io.noties.markwon.Markwon
 import io.noties.markwon.MarkwonSpansFactory
 import io.noties.markwon.core.CoreProps
 import io.noties.markwon.core.MarkwonTheme
 import io.noties.markwon.ext.latex.JLatexMathPlugin
+import io.noties.markwon.ext.strikethrough.StrikethroughPlugin
 import io.noties.markwon.image.ImagesPlugin
 import io.noties.markwon.inlineparser.MarkwonInlineParserPlugin
 import io.noties.markwon.ext.tables.TablePlugin
@@ -20,12 +21,17 @@ import io.noties.markwon.movement.MovementMethodPlugin
 import org.commonmark.node.Code
 
 internal fun chatGptHeadingRelativeSizeMultiplier(level: Int): Float {
-    return when (level.coerceIn(1, 6)) {
-        1 -> 1.22f
-        2 -> 1.14f
-        3 -> 1.07f
-        else -> 1.0f
-    }
+    return ChatMarkdownTextStyle.headingRelativeSizeMultiplier(level)
+}
+
+internal fun chatInlineCodeTextColorArgb(isDark: Boolean): Int {
+    return android.graphics.Color.parseColor(
+        if (isDark) {
+            ChatMarkdownTextStyle.INLINE_CODE_TEXT_COLOR_DARK_HEX
+        } else {
+            ChatMarkdownTextStyle.INLINE_CODE_TEXT_COLOR_LIGHT_HEX
+        }
+    )
 }
 
 /**
@@ -46,7 +52,7 @@ object MarkwonCache {
         imageClickListener: ((String) -> Unit)? = null
     ): Markwon {
         val roundedSize = textSize.toInt()
-        val cacheKey = "v15_dark=${isDark}_size=${roundedSize}"
+        val cacheKey = "v21_dark=${isDark}_size=${roundedSize}"
         
         synchronized(lock) {
             cacheMap[cacheKey]?.let { return it }
@@ -60,6 +66,7 @@ object MarkwonCache {
                      plugin.addSchemeHandler(io.noties.markwon.image.data.DataUriSchemeHandler.create())
                 })
                 .usePlugin(TablePlugin.create(context))
+                .usePlugin(StrikethroughPlugin.create())
                 // JLatexMathPlugin 必须在 MarkwonInlineParserPlugin 之前，
                 // 这样它才能正确配置 InlineParserPlugin 来处理 $$...$$ 语法
                 .usePlugin(JLatexMathPlugin.create(mathTextSize) { builder ->
@@ -75,13 +82,14 @@ object MarkwonCache {
                         builder.codeBlockMargin(0)
                         
                         // 缩小无序/有序列表前面的点和圈（当前 Markwon 版本仅支持像素 Int 宽度）
-                        val smallBulletPx = (4f * density).toInt()   // 比默认更小的圆点
+                        val smallBulletPx =
+                            (ChatMarkdownTextStyle.LIST_BULLET_SIZE_DP * density).toInt().coerceAtLeast(2)
                         builder.bulletWidth(smallBulletPx)
 
                         // 移除 headingBreakHeight(0) 恢复默认标题样式
                         // 重新添加 headingBreakHeight(0) 以消除气泡顶部的额外空白
                         // 标题间的间距由预处理中的换行符控制
-                        builder.headingBreakHeight(0)
+                        builder.headingBreakHeight((8f * density).toInt())
                     }
                     override fun configureSpansFactory(builder: MarkwonSpansFactory.Builder) {
                         // 自定义标题样式：使用纯文本样式模拟，彻底消除 HeadingSpan 可能带来的顶部间距
@@ -106,23 +114,27 @@ object MarkwonCache {
                             } else {
                                 android.graphics.Color.parseColor("#24292f") // 亮色模式：深灰 (GitHub 风格)
                             }
+                            val codeTextColor = chatInlineCodeTextColorArgb(isDark)
                             
                             arrayOf<Any>(
                                 TypefaceSpan("monospace"),
-                                RelativeSizeSpan(0.85f),
-                                ForegroundColorSpan(codeColor)
+                                StyleSpan(Typeface.BOLD),
+                                RelativeSizeSpan(ChatMarkdownTextStyle.INLINE_CODE_RELATIVE_SIZE),
+                                ForegroundColorSpan(codeTextColor)
                             )
                         }
 
                         // 自定义无序列表项样式：缩小列表小圆点与文本的缩进距离
-                        val customBlockMargin = (14f * density).toInt()
+                        val customBlockMargin =
+                            (ChatMarkdownTextStyle.LIST_MARKER_WIDTH_DP * density).toInt()
                         builder.setFactory(org.commonmark.node.ListItem::class.java) { configuration, props ->
                             val isOrdered = CoreProps.LIST_ITEM_TYPE.get(props) === CoreProps.ListItemType.ORDERED
                             if (isOrdered) {
                                 val numberStr = CoreProps.ORDERED_LIST_ITEM_NUMBER.get(props)?.toString() ?: "1"
-                                io.noties.markwon.core.spans.OrderedListItemSpan(
+                                CustomOrderedListItemSpan(
                                     configuration.theme(),
-                                    "$numberStr.\u00a0"
+                                    "$numberStr.\u00a0",
+                                    customBlockMargin
                                 )
                             } else {
                                 val level = CoreProps.BULLET_LIST_ITEM_LEVEL.get(props) ?: 0

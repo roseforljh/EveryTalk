@@ -44,6 +44,35 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+internal data class TopBarModelDisplayInfo(
+    val label: String,
+    val textColor: Color
+)
+
+internal fun resolveTopBarModelDisplayInfo(
+    selectedConfigName: String,
+    isDark: Boolean
+): TopBarModelDisplayInfo {
+    val lower = selectedConfigName.lowercase()
+    return when {
+        lower.contains("grok") -> TopBarModelDisplayInfo(
+            label = "Grok",
+            textColor = if (isDark) Color.White else Color.Black
+        )
+        lower.contains("gemini") -> TopBarModelDisplayInfo("Gemini", Color(0xFF10B981))
+        lower.contains("gpt") -> TopBarModelDisplayInfo(
+            label = "GPT",
+            textColor = if (isDark) Color.White else Color.Black
+        )
+        lower.contains("claude") -> TopBarModelDisplayInfo("Claude", Color(0xFFF97316))
+        lower.contains("deepseek") -> TopBarModelDisplayInfo("DeepSeek", Color(0xFF3B82F6))
+        lower.contains("kimi") -> TopBarModelDisplayInfo("Kimi", Color(0xFF06B6D4))
+        lower.contains("minimax") -> TopBarModelDisplayInfo("MiniMax", Color(0xFFEF4444))
+        lower.contains("glm") -> TopBarModelDisplayInfo("GLM", Color(0xFF8B5CF6))
+        else -> TopBarModelDisplayInfo("Other", Color(0xFF9E9E9E))
+    }
+}
+
 @Composable
 fun AppTopBar(
     selectedConfigName: String,
@@ -80,22 +109,10 @@ fun AppTopBar(
     val buttonBg = if (isDark) Color(0xFF303030) else Color(0xFFEDEDED)
     val borderColor = if (isDark) Color(0xFF414141) else Color(0xFFF3F3F3)
     val contentColor = if (isDark) Color.White else Color(0xFF0D0D0D)
-    val modelTextColor = if (isDark) Color(0xFF6EB5FF) else Color(0xFF3B82F6)
 
     // 模型名称提取与彩虹色映射
-    val modelDisplayInfo = remember(selectedConfigName) {
-        val lower = selectedConfigName.lowercase()
-        when {
-            lower.contains("grok") -> "Grok" to Color(0xFF000000)
-            lower.contains("gemini") -> "Gemini" to Color(0xFF10B981)
-            lower.contains("gpt") -> "GPT" to Color(0xFFFFFFFF)
-            lower.contains("claude") -> "Claude" to Color(0xFFF97316)
-            lower.contains("deepseek") -> "DeepSeek" to Color(0xFF3B82F6)
-            lower.contains("kimi") -> "Kimi" to Color(0xFF06B6D4)
-            lower.contains("minimax") -> "MiniMax" to Color(0xFFEF4444)
-            lower.contains("glm") -> "GLM" to Color(0xFF8B5CF6)
-            else -> "Other" to Color(0xFF9E9E9E)
-        }
+    val modelDisplayInfo = remember(selectedConfigName, isDark) {
+        resolveTopBarModelDisplayInfo(selectedConfigName, isDark)
     }
 
     Box(
@@ -156,7 +173,7 @@ fun AppTopBar(
                             .padding(horizontal = 16.dp),
                         contentAlignment = Alignment.Center
                     ) {
-                        if (modelDisplayInfo.first == "Gemini") {
+                        if (modelDisplayInfo.label == "Gemini") {
                             val geminiGradient = Brush.linearGradient(
                                 colors = listOf(
                                     Color(0xFFEA4335),
@@ -166,7 +183,7 @@ fun AppTopBar(
                                 )
                             )
                             Text(
-                                text = modelDisplayInfo.first,
+                                text = modelDisplayInfo.label,
                                 style = TextStyle(
                                     brush = geminiGradient,
                                     fontSize = titleFontSize,
@@ -177,8 +194,8 @@ fun AppTopBar(
                             )
                         } else {
                             Text(
-                                text = modelDisplayInfo.first,
-                                color = modelDisplayInfo.second,
+                                text = modelDisplayInfo.label,
+                                color = modelDisplayInfo.textColor,
                                 fontSize = titleFontSize,
                                 fontWeight = FontWeight.Medium,
                                 maxLines = 1,
