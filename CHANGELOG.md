@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.19.6](https://github.com/roseforljh/EveryTalk/compare/v1.19.5...v1.19.6) (2026-06-04)
+
+
+### Bug Fixes
+
+* optimize chat markdown rendering ([cc8575d](https://github.com/roseforljh/EveryTalk/commit/cc8575df3a352e6adbccc48cb3f5be3f932253ac))
+* refresh markdown layout on stream completion ([3b74248](https://github.com/roseforljh/EveryTalk/commit/3b742482156c187e7703fea24281d544278ee2cb))
+* stabilize markdown link touch handling ([9eac34a](https://github.com/roseforljh/EveryTalk/commit/9eac34a9b647bc08151e5fda4cbd565c80cb3000))
+* 修复重答定位与日志脱敏 ([81c7481](https://github.com/roseforljh/EveryTalk/commit/81c7481de079c038e384131e0531f1328d91b6da))
+
 ## [1.19.5](https://github.com/roseforljh/EveryTalk/compare/v1.19.4...v1.19.5) (2026-05-30)
 
 
