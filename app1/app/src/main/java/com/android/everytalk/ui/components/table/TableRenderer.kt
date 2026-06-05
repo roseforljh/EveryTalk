@@ -101,7 +101,7 @@ fun TableRenderer(
     val columnDividerColor = outlineColor.copy(alpha = 0.2f)
     Box(
         modifier = modifier
-            .fillMaxWidth(0.9f)
+            .fillMaxWidth()
             .pointerInput(onLongPress) {
                 if (onLongPress != null) {
                     detectTapGestures(

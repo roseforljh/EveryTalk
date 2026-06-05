@@ -35,9 +35,9 @@ class MarkwonCacheTest {
 
     @Test
     fun `heading relative sizes follow chatgpt title scale`() {
-        assertEquals(1.375f, chatGptHeadingRelativeSizeMultiplier(1), 0.001f)
-        assertEquals(1.25f, chatGptHeadingRelativeSizeMultiplier(2), 0.001f)
-        assertEquals(1.125f, chatGptHeadingRelativeSizeMultiplier(3), 0.001f)
+        assertEquals(20f / 14f, chatGptHeadingRelativeSizeMultiplier(1), 0.001f)
+        assertEquals(18f / 14f, chatGptHeadingRelativeSizeMultiplier(2), 0.001f)
+        assertEquals(16f / 14f, chatGptHeadingRelativeSizeMultiplier(3), 0.001f)
         assertEquals(1.0f, chatGptHeadingRelativeSizeMultiplier(6), 0.001f)
     }
 
@@ -56,8 +56,8 @@ class MarkwonCacheTest {
 
     @Test
     fun `body line height stays compact inside wrapped chinese list items`() {
-        assertEquals(16f, ChatMarkdownTextStyle.BODY_FONT_SIZE_SP, 0.001f)
-        assertEquals(24f, ChatMarkdownTextStyle.BODY_LINE_HEIGHT_SP, 0.001f)
+        assertEquals(14f, ChatMarkdownTextStyle.BODY_FONT_SIZE_SP, 0.001f)
+        assertEquals(22f, ChatMarkdownTextStyle.BODY_LINE_HEIGHT_SP, 0.001f)
     }
 
     @Test

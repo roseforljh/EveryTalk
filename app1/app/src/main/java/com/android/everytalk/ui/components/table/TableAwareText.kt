@@ -435,7 +435,7 @@ fun TableAwareText(
                         TableRenderer(
                             lines = part.lines,
                             modifier = Modifier
-                                .wrapContentWidth()
+                                .fillMaxWidth()
                                 .padding(vertical = 8.dp),
                             isStreaming = false,
                             contentKey = if (contentKey.isNotBlank() && !isStreaming) {

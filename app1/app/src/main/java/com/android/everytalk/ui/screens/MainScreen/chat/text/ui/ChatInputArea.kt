@@ -898,7 +898,7 @@ fun ChatInputArea(
                     label = "SendButtonIcon"
                 )
 
-                val inputBackground = if (isDarkTheme) Color(0xFF1F1F1F) else Color(0xFFE8E8E8)
+                val inputBackground = if (isDarkTheme) Color(0xFF1F1F1F) else Color.White
 
                 // 输入区域
                 BoxWithConstraints(
@@ -929,11 +929,22 @@ fun ChatInputArea(
                     val plusBg = inputBackground
                     val borderColor = if (isDarkTheme) Color(0xFF48474C) else Color(0xFFD6D6D6)
                     val separatedBorderAlpha = ((layoutProgress - 0.15f) / 0.35f).coerceIn(0f, 1f)
-                    val plusBorderAlpha = if (separationTarget > 0.5f) separatedBorderAlpha else 0f
+                    val plusBorderAlpha = if (!isDarkTheme) {
+                        0f
+                    } else if (separationTarget > 0.5f) {
+                        separatedBorderAlpha
+                    } else {
+                        0f
+                    }
                     val collapsedInputBorderAlpha = ((0.35f - layoutProgress) / 0.35f).coerceIn(0f, 1f)
-                    val inputBorderAlpha = kotlin.math.max(separatedBorderAlpha, collapsedInputBorderAlpha)
+                    val inputBorderAlpha = if (isDarkTheme) {
+                        kotlin.math.max(separatedBorderAlpha, collapsedInputBorderAlpha)
+                    } else {
+                        0f
+                    }
 
                     val inputShape = RoundedCornerShape(inputMinHeight / 2)
+                    val inputShadowElevation = if (isDarkTheme) 0.dp else 8.dp
                     val textStartPadding = 48.dp - (48.dp - 16.dp) * textPaddingProgress
 
                     Box(
@@ -959,6 +970,11 @@ fun ChatInputArea(
                                         .offset(x = plusOffset)
                                         .width(plusWidth)
                                         .height(plusHeight)
+                                        .shadow(
+                                            elevation = inputShadowElevation,
+                                            shape = plusShape,
+                                            clip = false
+                                        )
                                         .background(plusBg, plusShape)
                                         .border(1.dp, borderColor.copy(alpha = plusBorderAlpha), plusShape),
                                     contentAlignment = Alignment.CenterStart
@@ -1137,6 +1153,11 @@ fun ChatInputArea(
                                     modifier = Modifier
                                         .heightIn(min = inputMinHeight)
                                         .animateContentSize(animationSpec = spring(stiffness = Spring.StiffnessMediumLow))
+                                        .shadow(
+                                            elevation = inputShadowElevation,
+                                            shape = inputShape,
+                                            clip = false
+                                        )
                                         .background(inputBackground, inputShape)
                                         .border(1.dp, borderColor.copy(alpha = inputBorderAlpha), inputShape)
                                         .padding(start = textStartPadding, end = 5.dp, top = safeVerticalPadding, bottom = safeVerticalPadding)

@@ -56,6 +56,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
@@ -1034,6 +1035,12 @@ internal fun loadingStageMaskHeightDp(): Float = 10f
 
 internal fun loadingStageBreathingDotSizeDp(): Float = 6f
 
+internal fun loadingStageDotColor(isLightTheme: Boolean): Color {
+    return if (isLightTheme) Color.Black else Color.White
+}
+
+internal fun loadingStageBackgroundColor(): Color = Color.Transparent
+
 @Composable
 private fun LoadingStageIndicator(
     text: String,
@@ -1042,6 +1049,7 @@ private fun LoadingStageIndicator(
     val viewportHeight = loadingStageViewportHeightDp().dp
     val maskHeight = loadingStageMaskHeightDp().dp
     val breathingDotSize = loadingStageBreathingDotSizeDp().dp
+    val dotColor = loadingStageDotColor(isLightTheme = !isSystemInDarkTheme())
     val infiniteTransition = rememberInfiniteTransition(label = "loadingStage")
     val lineAlpha by infiniteTransition.animateFloat(
         initialValue = 0.18f,
@@ -1052,43 +1060,19 @@ private fun LoadingStageIndicator(
         ),
         label = "loadingStageLineAlpha",
     )
-    val glowAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.06f,
-        targetValue = 0.14f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 2200, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "loadingStageGlowAlpha",
-    )
-
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .height(viewportHeight),
+            .height(viewportHeight)
+            .background(loadingStageBackgroundColor()),
         contentAlignment = Alignment.CenterStart,
     ) {
-        Box(
-            modifier = Modifier
-                .matchParentSize()
-                .background(
-                    brush = androidx.compose.ui.graphics.Brush.radialGradient(
-                        colors = listOf(
-                            MaterialTheme.colorScheme.primary.copy(alpha = glowAlpha),
-                            Color.Transparent,
-                        ),
-                        radius = 220f,
-                        center = Offset(120f, viewportHeight.value * 1.6f),
-                    )
-                )
-        )
-
         Box(
             modifier = Modifier
                 .padding(start = 6.dp)
                 .size(breathingDotSize)
                 .background(
-                    color = Color.White.copy(alpha = lineAlpha),
+                    color = dotColor.copy(alpha = lineAlpha),
                     shape = CircleShape
                 )
         )
@@ -1103,20 +1087,8 @@ private fun LoadingStageIndicator(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(viewportHeight)
+                    .clipToBounds()
             ) {
-                Box(
-                    modifier = Modifier
-                        .matchParentSize()
-                        .background(
-                            brush = androidx.compose.ui.graphics.Brush.verticalGradient(
-                                colors = listOf(
-                                    MaterialTheme.colorScheme.background,
-                                    MaterialTheme.colorScheme.background.copy(alpha = 0f),
-                                )
-                            )
-                        )
-                )
-
                 Box(
                     modifier = Modifier
                         .align(Alignment.CenterStart)
@@ -1141,36 +1113,6 @@ private fun LoadingStageIndicator(
                         )
                     }
                 }
-
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .fillMaxWidth()
-                        .height(maskHeight)
-                        .background(
-                            brush = androidx.compose.ui.graphics.Brush.verticalGradient(
-                                colors = listOf(
-                                    MaterialTheme.colorScheme.background,
-                                    MaterialTheme.colorScheme.background.copy(alpha = 0f),
-                                )
-                            )
-                        )
-                )
-
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .height(maskHeight)
-                        .background(
-                            brush = androidx.compose.ui.graphics.Brush.verticalGradient(
-                                colors = listOf(
-                                    MaterialTheme.colorScheme.background.copy(alpha = 0f),
-                                    MaterialTheme.colorScheme.background,
-                                )
-                            )
-                        )
-                )
             }
         }
     }

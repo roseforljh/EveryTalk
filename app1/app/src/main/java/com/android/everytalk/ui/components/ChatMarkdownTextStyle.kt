@@ -1,8 +1,8 @@
 package com.android.everytalk.ui.components
 
 internal object ChatMarkdownTextStyle {
-    const val BODY_FONT_SIZE_SP = 16f
-    const val BODY_LINE_HEIGHT_SP = 24f
+    const val BODY_FONT_SIZE_SP = 14f
+    const val BODY_LINE_HEIGHT_SP = 22f
 
     const val INLINE_CODE_RELATIVE_SIZE = 0.92f
     const val INLINE_CODE_TEXT_COLOR_LIGHT_HEX = "#4F5661"
@@ -31,19 +31,19 @@ internal object ChatMarkdownTextStyle {
 
     fun headingFontSizeSp(level: Int): Float {
         return when (level.coerceIn(1, 6)) {
-            1 -> 22f
-            2 -> 20f
-            3 -> 18f
-            else -> 16f
+            1 -> 20f
+            2 -> 18f
+            3 -> 16f
+            else -> 14f
         }
     }
 
     fun headingLineHeightSp(level: Int): Float {
         return when (level.coerceIn(1, 6)) {
-            1 -> 30f
-            2 -> 28f
-            3 -> 26f
-            else -> 24f
+            1 -> 28f
+            2 -> 26f
+            3 -> 24f
+            else -> 22f
         }
     }
 
