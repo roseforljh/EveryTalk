@@ -138,6 +138,55 @@ class LauncherIconResourceTest {
         }
     }
 
+    @Test
+    fun `splash logo colors match light and dark themes`() {
+        val resDir = findResDir()
+        val lightSplash = resDir.resolve("drawable/splash_logo.xml")
+        val darkSplash = resDir.resolve("drawable-night/splash_logo.xml")
+        val lightColors = resDir.resolve("values/colors.xml")
+        val darkColors = resDir.resolve("values-night/colors.xml")
+        val v31Theme = resDir.resolve("values-v31/themes.xml")
+
+        assertTrue("Missing light splash logo", lightSplash.isFile)
+        assertTrue("Missing dark splash logo", darkSplash.isFile)
+        assertFalse("Light splash frames must be removed", resDir.resolve("drawable").listFiles().orEmpty().any { it.name.startsWith("splash_logo_frame_") })
+        assertFalse("Dark splash frames must be removed", resDir.resolve("drawable-night").listFiles().orEmpty().any { it.name.startsWith("splash_logo_frame_") })
+        listOf(lightSplash, darkSplash).forEach { file ->
+            val text = file.readText()
+            assertTrue("${file.path} must use a static bitmap", text.contains("<bitmap"))
+            assertFalse("${file.path} must not use frame animation", text.contains("animation-list"))
+            assertFalse("${file.path} must not use vector animation", text.contains("animated-vector"))
+            assertFalse("${file.path} must not use rotate animation", text.contains("animated-rotate"))
+        }
+        assertTrue(
+            "Light splash must use black logo asset",
+            lightSplash.readText().contains("@drawable/splash_logo_black_asset"),
+        )
+        assertTrue(
+            "Dark splash must use white logo asset",
+            darkSplash.readText().contains("@drawable/splash_logo_white_asset"),
+        )
+        assertFalse("Malformed black splash vector must be removed", resDir.resolve("drawable/splash_logo_vector_black.xml").exists())
+        assertFalse("Malformed white splash vector must be removed", resDir.resolve("drawable/splash_logo_vector_white.xml").exists())
+        assertTrue(
+            "Light splash background must be white",
+            lightColors.readText().contains("<color name=\"splash_screen_background\">#FFFFFFFF</color>"),
+        )
+        assertTrue(
+            "Dark splash background must be black",
+            darkColors.readText().contains("<color name=\"splash_screen_background\">#FF000000</color>"),
+        )
+        assertTrue(
+            "Android 12 splash theme must use theme-qualified splash logo",
+            v31Theme.readText().contains("android:windowSplashScreenAnimatedIcon") &&
+                v31Theme.readText().contains("@drawable/splash_logo"),
+        )
+        assertFalse(
+            "Android 12 splash theme must not define animation duration",
+            v31Theme.readText().contains("windowSplashScreenAnimationDuration"),
+        )
+    }
+
     private fun findResDir(): File {
         generateSequence(File(requireNotNull(System.getProperty("user.dir")))) { it.parentFile }
             .forEach { dir ->
