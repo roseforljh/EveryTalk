@@ -87,6 +87,7 @@ import com.android.everytalk.models.ImageSourceOption
 import com.android.everytalk.models.MoreOptionsType
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.util.audio.AudioRecorderHelper
+import com.android.everytalk.ui.components.modifier.diffuseShadow
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -898,13 +899,14 @@ fun ChatInputArea(
                     label = "SendButtonIcon"
                 )
 
-                val inputBackground = if (isDarkTheme) Color(0xFF1F1F1F) else Color(0xFFE8E8E8)
+                val inputBackground = if (isDarkTheme) Color(0xFF1F1F1F) else Color.White
 
                 // 输入区域
                 BoxWithConstraints(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .align(Alignment.CenterHorizontally),
+                        .align(Alignment.CenterHorizontally)
+                        .graphicsLayer { clip = false },
                     contentAlignment = Alignment.Center
                 ) {
                     val sep = separationProgress.coerceIn(0f, 1f)
@@ -928,9 +930,9 @@ fun ChatInputArea(
                     val plusShape = RoundedCornerShape(plusCorner)
                     val plusBg = inputBackground
                     val borderColor = if (isDarkTheme) Color(0xFF48474C) else Color(0xFFD6D6D6)
-                    val separatedBorderAlpha = ((layoutProgress - 0.15f) / 0.35f).coerceIn(0f, 1f)
+                    val separatedBorderAlpha = if (isDarkTheme) (((layoutProgress - 0.15f) / 0.35f).coerceIn(0f, 1f)) else 0f
                     val plusBorderAlpha = if (separationTarget > 0.5f) separatedBorderAlpha else 0f
-                    val collapsedInputBorderAlpha = ((0.35f - layoutProgress) / 0.35f).coerceIn(0f, 1f)
+                    val collapsedInputBorderAlpha = if (isDarkTheme) (((0.35f - layoutProgress) / 0.35f).coerceIn(0f, 1f)) else 0f
                     val inputBorderAlpha = kotlin.math.max(separatedBorderAlpha, collapsedInputBorderAlpha)
 
                     val inputShape = RoundedCornerShape(inputMinHeight / 2)
@@ -939,7 +941,10 @@ fun ChatInputArea(
                     Box(
                         modifier = Modifier
                             .width(groupWidth)
-                            .wrapContentHeight(),
+                            .wrapContentHeight()
+                            // Add padding to prevent custom shadow from being clipped
+                            .padding(bottom = 24.dp)
+                            .graphicsLayer { clip = false },
                         contentAlignment = Alignment.CenterStart
                     ) {
                         // 加号按钮
@@ -947,18 +952,28 @@ fun ChatInputArea(
                             modifier = Modifier
                                 .offset(x = -groupLeft)
                                 .zIndex(2f)
+                                .graphicsLayer { clip = false }
                         ) {
                             Box(
                                 modifier = Modifier
                                     .width(plusBoxWidth)
                                     .height(plusHeight)
                                     .wrapContentWidth(Alignment.Start)
+                                    .graphicsLayer { clip = false }
                             ) {
                                 Box(
                                     modifier = Modifier
                                         .offset(x = plusOffset)
                                         .width(plusWidth)
                                         .height(plusHeight)
+                                        .diffuseShadow(
+                                            color = Color.Black,
+                                            alpha = 0.12f * layoutProgress,
+                                            borderRadius = plusCorner,
+                                            shadowRadius = 24.dp,
+                                            offsetY = 0.dp,
+                                            offsetX = 0.dp
+                                        )
                                         .background(plusBg, plusShape)
                                         .border(1.dp, borderColor.copy(alpha = plusBorderAlpha), plusShape),
                                     contentAlignment = Alignment.CenterStart
@@ -1111,14 +1126,30 @@ fun ChatInputArea(
                         }
 
                         // 输入框
+                        val inputModifier = Modifier
+                            .offset(x = -groupLeft)
+                            .width(inputFieldWidth)
+                            .align(Alignment.CenterStart)
+                            .zIndex(1f)
+                            .graphicsLayer { clip = false }
+                        
+                        val shadowedInputModifier = if (!isDarkTheme) {
+                            inputModifier.diffuseShadow(
+                                color = Color.Black,
+                                alpha = 0.12f,
+                                borderRadius = inputMinHeight / 2,
+                                shadowRadius = 24.dp,
+                                offsetY = 0.dp,
+                                offsetX = 0.dp
+                            )
+                        } else {
+                            inputModifier
+                        }
+
                         BasicTextField(
                             value = localTextFieldValue,
                             onValueChange = { newValue -> localTextFieldValue = newValue },
-                            modifier = Modifier
-                                .offset(x = -groupLeft)
-                                .width(inputFieldWidth)
-                                .align(Alignment.CenterStart)
-                                .zIndex(1f)
+                            modifier = shadowedInputModifier
                                 .focusRequester(focusRequester)
                                 .onFocusChanged { focusState ->
                                     isFocused = focusState.isFocused
