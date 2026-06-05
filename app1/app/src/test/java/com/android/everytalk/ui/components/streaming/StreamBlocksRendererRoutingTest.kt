@@ -243,20 +243,24 @@ class StreamBlocksRendererRoutingTest {
         val h1 = chatGptHeadingTextSpecForLevel(1)
         val h2 = chatGptHeadingTextSpecForLevel(2)
         val h3 = chatGptHeadingTextSpecForLevel(3)
+        val h4 = chatGptHeadingTextSpecForLevel(4)
         val h6 = chatGptHeadingTextSpecForLevel(6)
 
-        assertEquals(24.sp, h1.fontSize)
-        assertEquals(32.sp, h1.lineHeight)
+        assertEquals(22.sp, h1.fontSize)
+        assertEquals(30.sp, h1.lineHeight)
         assertEquals(FontWeight.SemiBold, h1.fontWeight)
-        assertEquals(22.sp, h2.fontSize)
+        assertEquals(20.sp, h2.fontSize)
         assertEquals(28.sp, h2.lineHeight)
         assertEquals(FontWeight.SemiBold, h2.fontWeight)
-        assertEquals(16.sp, h3.fontSize)
-        assertEquals(24.sp, h3.lineHeight)
+        assertEquals(18.sp, h3.fontSize)
+        assertEquals(26.sp, h3.lineHeight)
         assertEquals(FontWeight.SemiBold, h3.fontWeight)
-        assertEquals(14.sp, h6.fontSize)
-        assertEquals(20.sp, h6.lineHeight)
-        assertEquals(FontWeight.SemiBold, h6.fontWeight)
+        assertEquals(16.sp, h4.fontSize)
+        assertEquals(24.sp, h4.lineHeight)
+        assertEquals(FontWeight.Normal, h4.fontWeight)
+        assertEquals(16.sp, h6.fontSize)
+        assertEquals(24.sp, h6.lineHeight)
+        assertEquals(FontWeight.Normal, h6.fontWeight)
     }
 
     @Test
@@ -276,6 +280,33 @@ class StreamBlocksRendererRoutingTest {
         assertEquals(Color(0xFF4F5661), chatInlineCodeTextColor(isDark = false))
         assertEquals(Color(0xFFD1D5DB), chatInlineCodeTextColor(isDark = true))
         assertEquals(14.72.sp, chatInlineCodeFontSize(16.sp))
+    }
+
+    @Test
+    fun `nested list uses hollow marker deeper indent and clearer spacing`() {
+        assertEquals(16f, ChatMarkdownTextStyle.LIST_MARKER_WIDTH_DP, 0.001f)
+        assertEquals(5f, ChatMarkdownTextStyle.listBulletSizeDp(level = 0), 0.001f)
+        assertEquals(4f, ChatMarkdownTextStyle.listBulletSizeDp(level = 1), 0.001f)
+        assertEquals(24f, ChatMarkdownTextStyle.LIST_NESTED_INDENT_DP, 0.001f)
+        assertEquals(8f, ChatMarkdownTextStyle.LIST_TOP_LEVEL_ITEM_SPACING_DP, 0.001f)
+        assertEquals(6f, ChatMarkdownTextStyle.LIST_NESTED_TOP_SPACING_DP, 0.001f)
+        assertTrue(ChatMarkdownTextStyle.listBulletFilled(level = 0))
+        assertFalse(ChatMarkdownTextStyle.listBulletFilled(level = 1))
+    }
+
+    @Test
+    fun `native list spacing applies between items by level only`() {
+        val rows = listOf(
+            NativeStreamingListItem(text = "first wraps naturally"),
+            NativeStreamingListItem(text = "second"),
+            NativeStreamingListItem(text = "child one", level = 1),
+            NativeStreamingListItem(text = "child two", level = 1),
+        )
+
+        assertEquals(0.dp, nativeListItemTopSpacing(rows, 0))
+        assertEquals(8.dp, nativeListItemTopSpacing(rows, 1))
+        assertEquals(6.dp, nativeListItemTopSpacing(rows, 2))
+        assertEquals(6.dp, nativeListItemTopSpacing(rows, 3))
     }
 
     @Test

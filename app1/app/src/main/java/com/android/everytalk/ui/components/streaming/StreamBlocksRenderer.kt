@@ -111,10 +111,11 @@ internal data class ChatGptHeadingTextSpec(
 )
 
 internal fun chatGptHeadingTextSpecForLevel(level: Int): ChatGptHeadingTextSpec {
+    val headingLevel = level.coerceIn(1, 6)
     return ChatGptHeadingTextSpec(
-        fontSize = ChatMarkdownTextStyle.headingFontSizeSp(level).sp,
-        lineHeight = ChatMarkdownTextStyle.headingLineHeightSp(level).sp,
-        fontWeight = FontWeight.SemiBold,
+        fontSize = ChatMarkdownTextStyle.headingFontSizeSp(headingLevel).sp,
+        lineHeight = ChatMarkdownTextStyle.headingLineHeightSp(headingLevel).sp,
+        fontWeight = if (headingLevel <= 3) FontWeight.SemiBold else FontWeight.Normal,
     )
 }
 
@@ -570,9 +571,12 @@ private fun NativeListBlock(
     }
     Column(
         modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(ChatMarkdownTextStyle.LIST_ITEM_SPACING_DP.dp),
     ) {
-        rows.forEach { item ->
+        rows.forEachIndexed { index, item ->
+            val topSpacing = nativeListItemTopSpacing(rows, index)
+            if (topSpacing > 0.dp) {
+                Spacer(modifier = Modifier.height(topSpacing))
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -596,6 +600,19 @@ private fun NativeListBlock(
     }
 }
 
+internal fun nativeListItemTopSpacing(
+    rows: List<NativeStreamingListItem>,
+    index: Int,
+): Dp {
+    if (index <= 0 || index >= rows.size) return 0.dp
+    val current = rows[index]
+    return if (current.level <= 0) {
+        ChatMarkdownTextStyle.LIST_TOP_LEVEL_ITEM_SPACING_DP.dp
+    } else {
+        ChatMarkdownTextStyle.LIST_NESTED_TOP_SPACING_DP.dp
+    }
+}
+
 @Composable
 private fun NativeListMarker(
     item: NativeStreamingListItem,
@@ -613,7 +630,7 @@ private fun NativeListMarker(
             modifier = Modifier.width(markerWidth),
         )
     } else {
-        val bulletSize = ChatMarkdownTextStyle.LIST_BULLET_SIZE_DP.dp
+        val bulletSize = ChatMarkdownTextStyle.listBulletSizeDp(item.level).dp
         Box(modifier = Modifier.width(markerWidth)) {
             Canvas(
                 modifier = Modifier
@@ -623,7 +640,7 @@ private fun NativeListMarker(
                     )
                     .size(bulletSize)
             ) {
-                if (item.level <= 0) {
+                if (ChatMarkdownTextStyle.listBulletFilled(item.level)) {
                     drawCircle(color = color)
                 } else {
                     drawCircle(

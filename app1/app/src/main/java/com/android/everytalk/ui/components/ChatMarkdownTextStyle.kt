@@ -12,12 +12,15 @@ internal object ChatMarkdownTextStyle {
     const val INLINE_CODE_BACKGROUND_RADIUS_DP = 3f
     const val INLINE_CODE_BACKGROUND_HORIZONTAL_PADDING_DP = 2f
 
-    const val LIST_MARKER_WIDTH_DP = 12f
+    const val LIST_MARKER_WIDTH_DP = 16f
     const val LIST_BULLET_SIZE_DP = 5f
+    const val LIST_NESTED_BULLET_SIZE_DP = 4f
     const val LIST_BULLET_START_PADDING_DP = 2f
     const val LIST_BULLET_TOP_PADDING_DP = 9.5f
-    const val LIST_NESTED_INDENT_DP = 16f
-    const val LIST_ITEM_SPACING_DP = 4f
+    const val LIST_NESTED_INDENT_DP = 24f
+    const val LIST_ITEM_SPACING_DP = 16f
+    const val LIST_TOP_LEVEL_ITEM_SPACING_DP = 8f
+    const val LIST_NESTED_TOP_SPACING_DP = 6f
 
     const val SPACING_PARAGRAPH_DP = 12f
     const val SPACING_BEFORE_HEADING_DP = 16f
@@ -28,23 +31,29 @@ internal object ChatMarkdownTextStyle {
 
     fun headingFontSizeSp(level: Int): Float {
         return when (level.coerceIn(1, 6)) {
-            1 -> 24f
-            2 -> 22f
-            3 -> 16f
-            else -> 14f
+            1 -> 22f
+            2 -> 20f
+            3 -> 18f
+            else -> 16f
         }
     }
 
     fun headingLineHeightSp(level: Int): Float {
         return when (level.coerceIn(1, 6)) {
-            1 -> 32f
+            1 -> 30f
             2 -> 28f
-            3 -> 24f
-            else -> 20f
+            3 -> 26f
+            else -> 24f
         }
     }
 
     fun headingRelativeSizeMultiplier(level: Int): Float {
         return headingFontSizeSp(level) / BODY_FONT_SIZE_SP
     }
+
+    fun listBulletSizeDp(level: Int): Float {
+        return if (level <= 0) LIST_BULLET_SIZE_DP else LIST_NESTED_BULLET_SIZE_DP
+    }
+
+    fun listBulletFilled(level: Int): Boolean = level <= 0
 }

@@ -1,20 +1,17 @@
 package com.android.everytalk.ui.components.table
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.requiredWidthIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -23,7 +20,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.TextStyle
@@ -97,8 +93,6 @@ fun TableRenderer(
     }
     val usePlainTextCells = !renderMarkdownInCells || (totalCells > 40 && !hasMarkdownSyntaxInCells)
 
-    val cornerRadius = 12.dp
-    val tableShape = RoundedCornerShape(cornerRadius)
     val scrollState = rememberScrollState()
     val outlineColor = MaterialTheme.colorScheme.outline
     val headerBackgroundColor = MaterialTheme.colorScheme.surfaceVariant
@@ -107,8 +101,7 @@ fun TableRenderer(
     val columnDividerColor = outlineColor.copy(alpha = 0.2f)
     Box(
         modifier = modifier
-            .wrapContentWidth()
-            .clip(tableShape)
+            .fillMaxWidth(0.9f)
             .pointerInput(onLongPress) {
                 if (onLongPress != null) {
                     detectTapGestures(
@@ -120,7 +113,6 @@ fun TableRenderer(
                 }
             }
             .background(headerBackgroundColor)
-            .border(1.dp, outlineColor, tableShape)
     ) {
         Column(
             modifier = Modifier

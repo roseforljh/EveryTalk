@@ -40,6 +40,7 @@ import android.text.Spannable
 import android.text.SpannableStringBuilder
 import android.text.Selection
 import android.text.Spanned
+import android.text.Layout
 import android.text.TextPaint
 import android.text.method.ArrowKeyMovementMethod
 import android.text.style.LeadingMarginSpan
@@ -71,7 +72,6 @@ private val FULL_WIDTH_PAREN_BOLD_REGEX = Regex("""（\*\*""")
 private val QUOTED_BOLD_PATTERN =
     Regex("""\*\*["“”'‘’「」『』](.+?)["“”'‘’「」『』]\*\*""")
 private val HEADER_SPACE_REGEX = Regex("(?<=^|\\n)(#{1,6})(?=[^#\\s])")
-private val LONG_HEADER_REGEX = Regex("^(#{1,6})(?=\\s.{50,})", RegexOption.MULTILINE)
 private val MULTILINE_BLOCK_DOLLAR_PATTERN = Regex(
     "\\[double dollar]\\s*\\n([\\s\\S]*?)\\n\\s*\\[double dollar]",
     RegexOption.MULTILINE
@@ -333,6 +333,8 @@ private fun TextView.applyMarkdownLayoutMode(pureMathBlockMessage: Boolean) {
         isSingleLine = false
         maxLines = Int.MAX_VALUE
         ellipsize = null
+        breakStrategy = Layout.BREAK_STRATEGY_HIGH_QUALITY
+        hyphenationFrequency = Layout.HYPHENATION_FREQUENCY_NONE
     }
 }
 
@@ -1079,9 +1081,6 @@ internal fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): 
 
     // 6. Headers: 确保 # 后有空格
     s = s.replace(HEADER_SPACE_REGEX, "$1 ")
-    s = s.replace(LONG_HEADER_REGEX) { mr ->
-        "\\" + mr.groupValues[1]
-    }
 
     // 6.5 防误判缩进代码块：把数学/中文说明的 4 空格缩进恢复为普通文本
     s = normalizeAccidentalIndentedNonCode(s)

@@ -53,4 +53,14 @@ class MarkdownPreprocessTest {
         assertFalse(output.contains("${'$'}1:0${'$'}"))
         assertFalse(output.contains("${'$'}3：2${'$'}"))
     }
+
+    @Test
+    fun `long heading keeps markdown marker renderable instead of escaping hashes`() {
+        val input = "#### 3. 左图：2026年5/6月合刊 —— 《如何（不）打一场经济战》（How (Not) to Fight an Economic War）"
+
+        val output = preprocessAiMarkdown(input, isStreaming = false)
+
+        assertTrue(output, output.startsWith("#### 3. 左图"))
+        assertFalse(output, output.startsWith("\\####"))
+    }
 }

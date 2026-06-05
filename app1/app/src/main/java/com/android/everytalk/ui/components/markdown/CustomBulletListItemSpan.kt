@@ -5,7 +5,10 @@ import android.graphics.Paint
 import android.graphics.RectF
 import android.os.Build
 import android.text.Layout
+import android.text.Spanned
 import android.text.style.LeadingMarginSpan
+import android.text.style.LineHeightSpan
+import com.android.everytalk.ui.components.ChatMarkdownTextStyle
 import io.noties.markwon.core.MarkwonTheme
 import io.noties.markwon.utils.LeadingMarginUtils
 
@@ -16,8 +19,11 @@ import io.noties.markwon.utils.LeadingMarginUtils
 class CustomBulletListItemSpan(
     private val theme: MarkwonTheme,
     private val level: Int,
-    private val customBlockMargin: Int
-) : LeadingMarginSpan {
+    private val customBlockMargin: Int,
+    private val bulletWidth: Int,
+    private val topLevelItemSpacing: Int,
+    private val nestedTopSpacing: Int
+) : LeadingMarginSpan, LineHeightSpan {
 
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val circle = RectF()
@@ -44,7 +50,7 @@ class CustomBulletListItemSpan(
         try {
             val width = customBlockMargin
             val textLineHeight = (paint.descent() - paint.ascent() + .5f).toInt()
-            val side = theme.getBulletWidth(textLineHeight)
+            val side = bulletWidth.takeIf { it > 0 } ?: theme.getBulletWidth(textLineHeight)
             val marginLeft = (width - side) / 2
 
             val l: Int
@@ -74,10 +80,49 @@ class CustomBulletListItemSpan(
             val b = t + side
 
             circle.set(l.toFloat(), t.toFloat(), r.toFloat(), b.toFloat())
-            paint.style = if (level == 0) Paint.Style.FILL else Paint.Style.STROKE
+            val filled = ChatMarkdownTextStyle.listBulletFilled(level)
+            paint.style = if (filled) {
+                Paint.Style.FILL
+            } else {
+                Paint.Style.STROKE
+            }
+            if (!filled) {
+                paint.strokeWidth = maxOf(1.5f, side * 0.28f)
+            }
             c.drawOval(circle, paint)
         } finally {
             c.restoreToCount(save)
         }
+    }
+
+    override fun chooseHeight(
+        text: CharSequence,
+        start: Int,
+        end: Int,
+        spanstartv: Int,
+        lineHeight: Int,
+        fm: Paint.FontMetricsInt,
+    ) {
+        val spanned = text as? Spanned ?: return
+        val spanStart = spanned.getSpanStart(this)
+        if (start > spanStart) return
+
+        val extraTop = when {
+            level == 0 && hasPreviousSibling(spanned, spanStart) -> topLevelItemSpacing
+            level > 0 -> nestedTopSpacing
+            else -> 0
+        }
+        if (extraTop > 0) {
+            fm.ascent -= extraTop
+            fm.top -= extraTop
+        }
+    }
+
+    private fun hasPreviousSibling(spanned: Spanned, spanStart: Int): Boolean {
+        val previous = spanned.getSpans(0, spanStart, CustomBulletListItemSpan::class.java)
+            .filter { span -> span !== this && spanned.getSpanEnd(span) <= spanStart }
+            .maxByOrNull { span -> spanned.getSpanEnd(span) }
+
+        return previous?.level == level
     }
 }
