@@ -61,6 +61,14 @@ class LauncherIconResourceTest {
             resDir.resolve("drawable/beetle_logo_white.xml").isFile,
         )
         assertTrue(
+            "Light launcher foreground must be vector to avoid bitmap scaling blur",
+            resDir.resolve("drawable/beetle_logo_black.xml").readText().contains("<vector"),
+        )
+        assertTrue(
+            "Dark launcher foreground must be vector to avoid bitmap scaling blur",
+            resDir.resolve("drawable/beetle_logo_white.xml").readText().contains("<vector"),
+        )
+        assertTrue(
             "Missing transparent black beetle source PNG",
             resDir.resolve("drawable-nodpi/beetle_logo_black.png").isFile,
         )
@@ -188,12 +196,16 @@ class LauncherIconResourceTest {
             themeText.contains("windowSplashScreenAnimationDuration"),
         )
         assertTrue(
-            "Light splash logo must be black",
-            lightSplash.readText().contains("#FF000000"),
+            "Light splash logo must be a black/red vector",
+            lightSplash.readText().contains("<vector") &&
+                lightSplash.readText().contains("#FF000000") &&
+                lightSplash.readText().contains("#FF5B0202"),
         )
         assertTrue(
-            "Dark splash logo must be white",
-            darkSplash.readText().contains("#FFFFFFFF"),
+            "Dark splash logo must be a white/red vector",
+            darkSplash.readText().contains("<vector") &&
+                darkSplash.readText().contains("#FFFFFFFF") &&
+                darkSplash.readText().contains("#FF5B0202"),
         )
         assertTrue(
             "Light splash background must be white",

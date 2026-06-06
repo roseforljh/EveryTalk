@@ -1,7 +1,7 @@
 # EveryTalk - 新一代智能对话平台
 
 <p align="center">
-  <img src="app1/app/src/main/res/mipmap-xxxhdpi/ic_launcher.webp" alt="EveryTalk Logo" width="200"/>
+  <img src="app1/app/src/main/res/drawable/launcher_logo_asset.png" alt="EveryTalk Logo" width="200"/>
 </p>
 
 <p align="center">
