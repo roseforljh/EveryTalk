@@ -9,6 +9,8 @@ import android.view.MotionEvent
 import android.view.GestureDetector
 import android.view.Gravity
 import android.widget.TextView
+import android.graphics.text.LineBreaker
+import android.os.Build
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.wrapContentWidth
@@ -335,6 +337,9 @@ private fun TextView.applyMarkdownLayoutMode(pureMathBlockMessage: Boolean) {
         ellipsize = null
         breakStrategy = Layout.BREAK_STRATEGY_SIMPLE
         hyphenationFrequency = Layout.HYPHENATION_FREQUENCY_NONE
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            justificationMode = LineBreaker.JUSTIFICATION_MODE_INTER_WORD
+        }
     }
 }
 

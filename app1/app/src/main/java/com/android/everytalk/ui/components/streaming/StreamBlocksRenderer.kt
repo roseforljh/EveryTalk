@@ -33,6 +33,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.Hyphens
 import androidx.compose.ui.text.style.LineBreak
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -750,6 +751,7 @@ private fun PlainTextSegment(
     androidx.compose.material3.Text(
         text = text,
         style = compactBodyTextStyle(style, color, lineHeightSp),
+        textAlign = TextAlign.Justify,
     )
 }
 
@@ -776,6 +778,7 @@ private fun ComposeInlineMarkdownSegment(
     androidx.compose.material3.Text(
         text = annotatedString,
         style = compactBodyTextStyle(style, color, lineHeightSp),
+        textAlign = TextAlign.Justify,
     )
 }
 
@@ -790,6 +793,7 @@ internal fun compactBodyTextStyle(
         lineBreak = LineBreak.Simple,
         hyphens = Hyphens.None,
         platformStyle = PlatformTextStyle(includeFontPadding = false),
+        textAlign = TextAlign.Justify,
     )
 }
 
