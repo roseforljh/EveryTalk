@@ -363,7 +363,7 @@ private fun TextView.applyMarkdownTextMetrics(sender: Sender, textSizeSp: Float)
             targetLineHeightSp,
             resources.displayMetrics
         )
-        val naturalLineHeightPx = paint.fontMetricsInt.bottom - paint.fontMetricsInt.top
+        val naturalLineHeightPx = paint.fontMetricsInt.descent - paint.fontMetricsInt.ascent
         setLineSpacing(max(0f, targetLineHeightPx - naturalLineHeightPx), 1.0f)
     }
     letterSpacing = 0f
