@@ -612,10 +612,10 @@ internal fun nativeListItemTopSpacing(
     if (index <= 0 || index >= rows.size) return 0.dp
     val current = rows[index]
     val previous = rows[index - 1]
-    return if (current.level == previous.level) {
-        ChatMarkdownTextStyle.LIST_ITEM_SPACING_DP.dp
-    } else {
+    return if (current.level > previous.level) {
         ChatMarkdownTextStyle.LIST_NESTED_TOP_SPACING_DP.dp
+    } else {
+        ChatMarkdownTextStyle.LIST_ITEM_SPACING_DP.dp
     }
 }
 
@@ -829,7 +829,7 @@ internal data class FencedCodeBlockContent(
 )
 
 private data class NativeListLine(
-    val level: Int,
+    val indentColumns: Int,
     val ordered: Boolean,
     val number: Int,
     val text: String,
@@ -911,8 +911,9 @@ private fun isFenceClosingLineForMarker(line: String, marker: String): Boolean {
 private fun matchNativeListLine(line: String): NativeListLine? {
     val ordered = orderedListLinePattern.matchEntire(line)
     if (ordered != null) {
+        val indent = ordered.groupValues[1]
         return NativeListLine(
-            level = markdownIndentLevel(ordered.groupValues[1]),
+            indentColumns = markdownIndentColumns(indent),
             ordered = true,
             number = ordered.groupValues[2].toIntOrNull() ?: 1,
             text = ordered.groupValues[3].trim(),
@@ -920,17 +921,57 @@ private fun matchNativeListLine(line: String): NativeListLine? {
     }
 
     val unordered = unorderedListLinePattern.matchEntire(line) ?: return null
+    val indent = unordered.groupValues[1]
     return NativeListLine(
-        level = markdownIndentLevel(unordered.groupValues[1]),
+        indentColumns = markdownIndentColumns(indent),
         ordered = false,
         number = 1,
         text = unordered.groupValues[2].trim(),
     )
 }
 
-private fun markdownIndentLevel(indent: String): Int {
-    val columns = indent.sumOf { char -> if (char == '\t') 4 else 1 }
-    return (columns / 4).coerceAtLeast(0)
+private fun markdownIndentColumns(indent: String): Int {
+    return indent.sumOf { char -> if (char == '\t') 4 else 1 }
+}
+
+private fun resolveNativeListLineLevel(
+    indentColumns: Int,
+    indentStack: MutableList<Int>,
+    previousLevel: Int,
+): Int {
+    val existingLevel = indentStack.indexOf(indentColumns)
+    if (existingLevel >= 0) {
+        while (indentStack.size > existingLevel + 1) {
+            indentStack.removeAt(indentStack.lastIndex)
+        }
+        return existingLevel
+    }
+
+    val previousIndent = indentStack.getOrNull(previousLevel) ?: indentStack.lastOrNull() ?: 0
+    if (indentColumns > previousIndent) {
+        val level = previousLevel + 1
+        while (indentStack.size > level) {
+            indentStack.removeAt(indentStack.lastIndex)
+        }
+        indentStack.add(indentColumns)
+        return level
+    }
+
+    val parentLevel = indentStack.indexOfLast { it < indentColumns }
+    val level = if (parentLevel >= 0) parentLevel + 1 else 0
+    while (indentStack.size > level) {
+        indentStack.removeAt(indentStack.lastIndex)
+    }
+    if (level == 0) {
+        if (indentStack.isEmpty()) {
+            indentStack.add(indentColumns)
+        } else {
+            indentStack[0] = indentColumns
+        }
+    } else {
+        indentStack.add(indentColumns)
+    }
+    return level
 }
 
 private fun isNativeListContinuation(line: String, itemLevel: Int): Boolean {
@@ -1077,10 +1118,11 @@ internal fun parseNativeStreamingMarkdownBlocks(
         val listLine = matchNativeListLine(line)
         if (listLine != null) {
             val startIndex = index
+            val listIndentColumns = mutableListOf(listLine.indentColumns)
             val listItems = mutableListOf(
                 NativeStreamingListItem(
                     text = listLine.text,
-                    level = listLine.level,
+                    level = 0,
                     ordered = listLine.ordered,
                     number = listLine.number,
                 )
@@ -1088,12 +1130,22 @@ internal fun parseNativeStreamingMarkdownBlocks(
             index++
             while (index < lines.size) {
                 val nextLine = lines[index]
+                if (nextLine.isBlank()) {
+                    index++
+                    continue
+                }
+                
                 val next = matchNativeListLine(nextLine)
                 if (next != null) {
+                    val level = resolveNativeListLineLevel(
+                        indentColumns = next.indentColumns,
+                        indentStack = listIndentColumns,
+                        previousLevel = listItems.lastOrNull()?.level ?: 0,
+                    )
                     listItems.add(
                         NativeStreamingListItem(
                             text = next.text,
-                            level = next.level,
+                            level = level,
                             ordered = next.ordered,
                             number = next.number,
                         )

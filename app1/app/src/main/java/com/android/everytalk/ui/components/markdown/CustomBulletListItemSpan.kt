@@ -112,9 +112,9 @@ class CustomBulletListItemSpan(
         val lineEndsBeforeNextItem = next != null && start < next.start && end >= next.start - 1
         val extraBottom = when {
             next == null -> 0
-            lineEndsBeforeNextItem && next.level == level -> topLevelItemSpacing
-            lineEndsBeforeNextItem -> nestedTopSpacing
-            else -> 0
+            !lineEndsBeforeNextItem -> 0
+            next.level > level -> nestedTopSpacing
+            else -> topLevelItemSpacing
         }
         if (extraBottom > 0) {
             fm.descent += extraBottom

@@ -74,6 +74,8 @@ private val FULL_WIDTH_PAREN_BOLD_REGEX = Regex("""（\*\*""")
 private val QUOTED_BOLD_PATTERN =
     Regex("""\*\*["“”'‘’「」『』](.+?)["“”'‘’「」『』]\*\*""")
 private val HEADER_SPACE_REGEX = Regex("(?<=^|\\n)(#{1,6})(?=[^#\\s])")
+private val LIST_ITEM_TO_LIST_ITEM_BLANK_LINE_REGEX =
+    Regex("""(?m)^([ \t]{0,12}(?:[-*+]|\d+[.)])\s+.*\S)[ \t]*\n(?:[ \t]*\n)+([ \t]{0,12}(?:[-*+]|\d+[.)])\s+)""")
 private val MULTILINE_BLOCK_DOLLAR_PATTERN = Regex(
     "\\[double dollar]\\s*\\n([\\s\\S]*?)\\n\\s*\\[double dollar]",
     RegexOption.MULTILINE
@@ -1092,6 +1094,10 @@ internal fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): 
     // 6.5 防误判缩进代码块：把数学/中文说明的 4 空格缩进恢复为普通文本
     s = normalizeAccidentalIndentedNonCode(s)
 
+    // 6.6 收紧列表项之间的原始空行，避免 Markwon 把整段列表提升为 loose list 后产生段落级大留白。
+    // 顶级列表项之间的呼吸感由自定义 ListItemSpan 统一负责。
+    s = s.replace(LIST_ITEM_TO_LIST_ITEM_BLANK_LINE_REGEX, "$1\n$2")
+
     // 7. Hard Break Enforcement
     val lines = s.lines()
     val lastIndex = lines.size - 1
@@ -1367,7 +1373,7 @@ fun MarkdownRenderer(
                 // 核心修复：在缓存 Key 中包含处理后文本的哈希值
                 // 这样当流式结束（isStreaming=false）导致预处理结果变化时，
                 // 或者消息内容被修改时，缓存会自动失效并重新渲染，避免显示旧的转义结果。
-                MarkdownSpansCache.generateKey("${contentKey}_${processed.hashCode()}_v49", isDark, sp)
+                MarkdownSpansCache.generateKey("${contentKey}_${processed.hashCode()}_v53", isDark, sp)
             } else ""
 
             val cachedSpanned = if (cacheKey.isNotBlank()) MarkdownSpansCache.get(cacheKey) else null

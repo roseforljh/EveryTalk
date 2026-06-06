@@ -200,6 +200,25 @@ class StreamBlocksRendererRoutingTest {
     }
 
     @Test
+    fun `native parser treats common indented child bullets as nested`() {
+        val blocks = parseNativeStreamingMarkdownBlocks(
+            text = "1. parent\n   * child with three spaces\n2. another\n  - child with two spaces",
+            segmentId = "msg-common-list",
+        )
+
+        requireNotNull(blocks)
+        assertEquals(
+            listOf(
+                NativeStreamingListItem(text = "parent", ordered = true, number = 1),
+                NativeStreamingListItem(text = "child with three spaces", level = 1),
+                NativeStreamingListItem(text = "another", ordered = true, number = 2),
+                NativeStreamingListItem(text = "child with two spaces", level = 1),
+            ),
+            blocks.single().listItems,
+        )
+    }
+
+    @Test
     fun `native parser splits paragraphs by blank lines`() {
         val blocks = parseNativeStreamingMarkdownBlocks(
             text = "first paragraph\n\nsecond paragraph\n\nthird paragraph",
@@ -304,7 +323,7 @@ class StreamBlocksRendererRoutingTest {
         assertEquals(4f, ChatMarkdownTextStyle.listBulletSizeDp(level = 1), 0.001f)
         assertEquals(24f, ChatMarkdownTextStyle.LIST_NESTED_INDENT_DP, 0.001f)
         assertEquals(12f, ChatMarkdownTextStyle.LIST_TOP_LEVEL_ITEM_SPACING_DP, 0.001f)
-        assertEquals(6f, ChatMarkdownTextStyle.LIST_NESTED_TOP_SPACING_DP, 0.001f)
+        assertEquals(0f, ChatMarkdownTextStyle.LIST_NESTED_TOP_SPACING_DP, 0.001f)
         assertEquals(22f, ChatMarkdownTextStyle.LIST_ITEM_LINE_HEIGHT_SP, 0.001f)
         assertTrue(ChatMarkdownTextStyle.listBulletFilled(level = 0))
         assertFalse(ChatMarkdownTextStyle.listBulletFilled(level = 1))
@@ -317,12 +336,41 @@ class StreamBlocksRendererRoutingTest {
             NativeStreamingListItem(text = "second"),
             NativeStreamingListItem(text = "child one", level = 1),
             NativeStreamingListItem(text = "child two", level = 1),
+            NativeStreamingListItem(text = "third"),
         )
 
         assertEquals(0.dp, nativeListItemTopSpacing(rows, 0))
         assertEquals(12.dp, nativeListItemTopSpacing(rows, 1))
-        assertEquals(6.dp, nativeListItemTopSpacing(rows, 2))
+        assertEquals(0.dp, nativeListItemTopSpacing(rows, 2))
         assertEquals(12.dp, nativeListItemTopSpacing(rows, 3))
+        assertEquals(12.dp, nativeListItemTopSpacing(rows, 4))
+    }
+
+    @Test
+    fun `native emergency list keeps parent child tight and next parent separated`() {
+        val blocks = parseNativeStreamingMarkdownBlocks(
+            text = """
+                1. 调整呼吸（最重要）：
+                   * 面罩式呼吸：这样可以快速提高体内的二氧化碳浓度，几分钟内就能缓解浑身瘫软和发麻的症状。
+
+                2. 改变体位：
+                   * 找个沙发或地板坐下来或平躺，解开衣领和皮带，保证呼吸顺畅。
+                   * 不要强撑着站立，防止因瘫软摔倒受伤。
+
+                3. 心理暗示：
+                   * 在心里反复对自己说：“这只是惊恐发作。”
+            """.trimIndent(),
+            segmentId = "emergency-list",
+        )
+
+        requireNotNull(blocks)
+        val rows = blocks.single().listItems
+        assertEquals("改变体位：", rows[2].text)
+        assertEquals(0, rows[2].level)
+        assertEquals(12.dp, nativeListItemTopSpacing(rows, 2))
+        assertEquals("找个沙发或地板坐下来或平躺，解开衣领和皮带，保证呼吸顺畅。", rows[3].text)
+        assertEquals(1, rows[3].level)
+        assertEquals(0.dp, nativeListItemTopSpacing(rows, 3))
     }
 
     @Test

@@ -77,7 +77,7 @@ object MarkwonCache {
         imageClickListener: ((String) -> Unit)? = null
     ): Markwon {
         val roundedSize = textSize.toInt()
-        val cacheKey = "v36_dark=${isDark}_size=${roundedSize}"
+        val cacheKey = "v39_dark=${isDark}_size=${roundedSize}"
 
         synchronized(lock) {
             cacheMap[cacheKey]?.let { return it }
@@ -153,7 +153,8 @@ object MarkwonCache {
                             if (isOrdered) {
                                 val numberStr =
                                     CoreProps.ORDERED_LIST_ITEM_NUMBER.get(props)?.toString() ?: "1"
-                                val level = CoreProps.BULLET_LIST_ITEM_LEVEL.get(props) ?: 0
+                                val level = ((CoreProps.BULLET_LIST_ITEM_LEVEL.get(props) ?: 0) - 1)
+                                    .coerceAtLeast(0)
                                 CustomOrderedListItemSpan(
                                     configuration.theme(),
                                     "$numberStr.\u00a0",
