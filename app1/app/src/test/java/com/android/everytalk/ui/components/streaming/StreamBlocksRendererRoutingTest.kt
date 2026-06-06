@@ -237,7 +237,7 @@ class StreamBlocksRendererRoutingTest {
 
         assertEquals(12.dp, nativeMarkdownBlockSpacingAfter(paragraph, paragraph))
         assertEquals(16.dp, nativeMarkdownBlockSpacingAfter(paragraph, heading))
-        assertEquals(8.dp, nativeMarkdownBlockSpacingAfter(heading, paragraph))
+        assertEquals(4.dp, nativeMarkdownBlockSpacingAfter(heading, paragraph))
         assertEquals(12.dp, nativeMarkdownBlockSpacingAfter(rule, paragraph))
         assertEquals(0.5f, ChatMarkdownTextStyle.HORIZONTAL_RULE_THICKNESS_DP, 0.001f)
     }
@@ -304,7 +304,7 @@ class StreamBlocksRendererRoutingTest {
         assertEquals(4f, ChatMarkdownTextStyle.listBulletSizeDp(level = 1), 0.001f)
         assertEquals(24f, ChatMarkdownTextStyle.LIST_NESTED_INDENT_DP, 0.001f)
         assertEquals(12f, ChatMarkdownTextStyle.LIST_TOP_LEVEL_ITEM_SPACING_DP, 0.001f)
-        assertEquals(12f, ChatMarkdownTextStyle.LIST_NESTED_TOP_SPACING_DP, 0.001f)
+        assertEquals(6f, ChatMarkdownTextStyle.LIST_NESTED_TOP_SPACING_DP, 0.001f)
         assertEquals(22f, ChatMarkdownTextStyle.LIST_ITEM_LINE_HEIGHT_SP, 0.001f)
         assertTrue(ChatMarkdownTextStyle.listBulletFilled(level = 0))
         assertFalse(ChatMarkdownTextStyle.listBulletFilled(level = 1))
@@ -321,7 +321,7 @@ class StreamBlocksRendererRoutingTest {
 
         assertEquals(0.dp, nativeListItemTopSpacing(rows, 0))
         assertEquals(12.dp, nativeListItemTopSpacing(rows, 1))
-        assertEquals(12.dp, nativeListItemTopSpacing(rows, 2))
+        assertEquals(6.dp, nativeListItemTopSpacing(rows, 2))
         assertEquals(12.dp, nativeListItemTopSpacing(rows, 3))
     }
 
