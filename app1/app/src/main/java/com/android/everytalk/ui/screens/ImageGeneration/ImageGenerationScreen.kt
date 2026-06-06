@@ -4,8 +4,10 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.ClickableText
@@ -40,8 +42,14 @@ import com.android.everytalk.ui.components.dialog.appDialogBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogCancelColor
 import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
+import com.android.everytalk.ui.screens.MainScreen.buildHistoryLoadingBubblePlaceholders
+import com.android.everytalk.ui.screens.MainScreen.shouldHideHistoryLoadingSkeleton
+import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
 import com.android.everytalk.ui.screens.MainScreen.chat.text.state.rememberChatScrollStateManager
+import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.HistoryLoadingBubblePlaceholderItem
 import com.android.everytalk.ui.screens.MainScreen.chat.dialog.EditMessageDialog
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import com.android.everytalk.ui.components.ScrollToBottomButton
 import androidx.compose.ui.text.font.FontWeight
@@ -63,11 +71,11 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
     var inputAreaHeightPx by remember { mutableIntStateOf(0) }
     val inputAreaHeightDp = with(density) { inputAreaHeightPx.toDp() }
     val keyboardController = LocalSoftwareKeyboardController.current
-    val listState = remember { androidx.compose.foundation.lazy.LazyListState() }
-    val scrollStateManager = rememberChatScrollStateManager(listState, coroutineScope)
     val imageGenerationChatListItems by viewModel.imageGenerationChatListItems.collectAsState()
     // 当前图像会话ID：用于切换历史项时的过渡动画 key
     val currentImageConvId by viewModel.currentImageGenerationConversationId.collectAsState()
+    val listState = remember(currentImageConvId) { androidx.compose.foundation.lazy.LazyListState() }
+    val scrollStateManager = rememberChatScrollStateManager(listState, coroutineScope)
     val configuration = LocalConfiguration.current
     val screenWidth = configuration.screenWidthDp.dp
     val bubbleMaxWidth = remember(screenWidth) { screenWidth.coerceAtMost(600.dp) }
@@ -96,6 +104,63 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
         }
     }
     val loadedImageHistoryIndex by viewModel.loadedImageGenerationHistoryIndex.collectAsState()
+    val isLoadingHistory by viewModel.isLoadingHistory.collectAsState()
+    var historySkeletonKey by remember { mutableStateOf<String?>(null) }
+    var isHistorySkeletonReadyToReveal by remember { mutableStateOf(false) }
+    var previousConversationIdForSkeleton by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(isLoadingHistory, currentImageConvId) {
+        if (isLoadingHistory) {
+            historySkeletonKey = currentImageConvId.ifBlank { "image_history" }
+            isHistorySkeletonReadyToReveal = false
+        } else if (previousConversationIdForSkeleton != null &&
+            previousConversationIdForSkeleton != currentImageConvId
+        ) {
+            historySkeletonKey = null
+            isHistorySkeletonReadyToReveal = false
+        }
+        previousConversationIdForSkeleton = currentImageConvId
+    }
+
+    LaunchedEffect(isLoadingHistory, historySkeletonKey, imageGenerationChatListItems) {
+        if (!isLoadingHistory && historySkeletonKey != null) {
+            if (shouldHideHistoryLoadingSkeleton(imageGenerationChatListItems)) {
+                isHistorySkeletonReadyToReveal = true
+            }
+        }
+    }
+
+    LaunchedEffect(historySkeletonKey) {
+        if (historySkeletonKey != null) {
+            delay(5_000L)
+            if (historySkeletonKey != null) {
+                historySkeletonKey = null
+                isHistorySkeletonReadyToReveal = false
+            }
+        }
+    }
+
+    val historySkeletonRenderKey = historySkeletonKey ?: currentImageConvId.ifBlank { "image_history" }
+    val shouldRenderHistorySkeletonItems = isLoadingHistory ||
+        (historySkeletonKey != null && !isHistorySkeletonReadyToReveal)
+    val shouldShowHistorySkeletonOverlay = historySkeletonKey != null && isHistorySkeletonReadyToReveal
+    val isHistorySkeletonVisible = shouldRenderHistorySkeletonItems || shouldShowHistorySkeletonOverlay
+    val isLoadingHistoryState = rememberUpdatedState(isLoadingHistory)
+    val isHistorySkeletonVisibleState = rememberUpdatedState(isHistorySkeletonVisible)
+    val isHistorySkeletonItemListVisibleState = rememberUpdatedState(shouldRenderHistorySkeletonItems)
+    val historySkeletonKeyState = rememberUpdatedState(historySkeletonKey)
+    val imageGenerationChatListItemsState = rememberUpdatedState(imageGenerationChatListItems)
+    val visibleImageGenerationChatListItems = remember(
+        shouldRenderHistorySkeletonItems,
+        historySkeletonRenderKey,
+        imageGenerationChatListItems
+    ) {
+        if (shouldRenderHistorySkeletonItems) {
+            buildHistoryLoadingBubblePlaceholders(historySkeletonRenderKey)
+        } else {
+            imageGenerationChatListItems
+        }
+    }
     
     // 图像比例状态（使用全局StateHolder，便于下游请求读取）
     val selectedImageRatio by viewModel.stateHolder._selectedImageRatio.collectAsState()
@@ -186,6 +251,35 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
         }
     }
 
+    var initialScrollHandled by remember(currentImageConvId) { mutableStateOf(false) }
+
+    LaunchedEffect(currentImageConvId, listState) {
+        if (initialScrollHandled) return@LaunchedEffect
+
+        snapshotFlow {
+            val noSkeleton = historySkeletonKeyState.value == null
+            if (noSkeleton) return@snapshotFlow true
+            val realItemCount = imageGenerationChatListItemsState.value.size
+            !isLoadingHistoryState.value &&
+                !isHistorySkeletonItemListVisibleState.value &&
+                realItemCount > 0 &&
+                listState.layoutInfo.totalItemsCount >= realItemCount
+        }
+            .first { it }
+
+        withFrameNanos { }
+        val targetIndex = imageGenerationChatListItemsState.value.lastIndex
+        if (targetIndex >= 0) {
+            listState.scrollToItem(targetIndex)
+            listState.scrollBy(Float.MAX_VALUE)
+        }
+        if (historySkeletonKeyState.value != null) {
+            historySkeletonKey = null
+            isHistorySkeletonReadyToReveal = false
+        }
+        initialScrollHandled = true
+    }
+
     if (showAboutDialog) {
         AboutDialog(
             viewModel = viewModel,
@@ -214,7 +308,7 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                 .padding(paddingValues)
         ) {
             ImageGenerationMessagesList(
-                chatItems = imageGenerationChatListItems,
+                chatItems = visibleImageGenerationChatListItems,
                 viewModel = viewModel,
                 listState = listState,
                 scrollStateManager = scrollStateManager,
@@ -232,6 +326,37 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                 },
                 additionalBottomPadding = inputAreaHeightDp
             )
+
+            if (shouldShowHistorySkeletonOverlay) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.background)
+                        .padding(
+                            start = 6.dp,
+                            top = 8.dp,
+                            end = 16.dp,
+                            bottom = inputAreaHeightDp + 12.dp,
+                        ),
+                    contentAlignment = Alignment.BottomCenter,
+                ) {
+                    Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        buildHistoryLoadingBubblePlaceholders(historySkeletonRenderKey)
+                            .forEach { placeholder ->
+                                if (placeholder is ChatListItem.LoadingBubblePlaceholder) {
+                                    HistoryLoadingBubblePlaceholderItem(
+                                        role = placeholder.role,
+                                        widthFraction = placeholder.widthFraction,
+                                        estimatedHeight = placeholder.estimatedHeightDp.dp,
+                                    )
+                                }
+                            }
+                    }
+                }
+            }
 
             ScrollToBottomButton(
                 scrollStateManager = scrollStateManager,

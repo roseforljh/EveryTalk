@@ -199,6 +199,23 @@ private fun safeDeleteTempFile(context: Context, uri: Uri?) {
     }
 }
 
+internal fun resolveImageFunctionPanelMaxHeightDp(imeVisible: Boolean): Int =
+    if (imeVisible) 300 else 370
+
+internal fun resolveImageFunctionPanelPopupY(
+    windowHeightPx: Int,
+    anchorTopPx: Int,
+    inputContentHeightPx: Int,
+    popupHeightPx: Int,
+    marginPx: Int
+): Int {
+    val maxY = (windowHeightPx - popupHeightPx).coerceAtLeast(0)
+    val anchorBasedY = anchorTopPx - marginPx - popupHeightPx
+    val fallbackY = windowHeightPx - inputContentHeightPx - marginPx - popupHeightPx
+    val rawY = if (anchorTopPx > 0) anchorBasedY else fallbackY
+    return rawY.coerceIn(0, maxY)
+}
+
 @Composable
 fun SelectedItemPreview(
     mediaItem: SelectedMediaItem,
@@ -544,7 +561,8 @@ fun ImageGenerationInputArea(
     val sizeProgress = separationProgress
     val inputMinHeight = ((48f - 4f * sizeProgress).coerceIn(44f, 48f)).dp
 
-    val functionPanelPositionProvider = remember(chatInputContentHeightPx, density) {
+    val functionPanelMaxHeight = resolveImageFunctionPanelMaxHeightDp(isImeVisible).dp
+    val functionPanelPositionProvider = remember(chatInputContentHeightPx, density, isImeVisible) {
         object : PopupPositionProvider {
             override fun calculatePosition(
                 anchorBounds: IntRect,
@@ -555,8 +573,13 @@ fun ImageGenerationInputArea(
                 val marginPx = with(density) { 8.dp.roundToPx() }
                 val x = ((windowSize.width - popupContentSize.width) / 2)
                     .coerceIn(0, (windowSize.width - popupContentSize.width).coerceAtLeast(0))
-                val y = (windowSize.height - chatInputContentHeightPx - marginPx - popupContentSize.height)
-                    .coerceIn(0, (windowSize.height - popupContentSize.height).coerceAtLeast(0))
+                val y = resolveImageFunctionPanelPopupY(
+                    windowHeightPx = windowSize.height,
+                    anchorTopPx = anchorBounds.top,
+                    inputContentHeightPx = chatInputContentHeightPx,
+                    popupHeightPx = popupContentSize.height,
+                    marginPx = marginPx
+                )
                 return IntOffset(x, y)
             }
         }
@@ -786,6 +809,7 @@ fun ImageGenerationInputArea(
                                             },
                                             currentImageSteps = currentImageSteps,
                                             selectedImageRatio = selectedImageRatio,
+                                            maxHeight = functionPanelMaxHeight,
                                             isGptImage = detectedFamily == ImageGenCapabilities.ModelFamily.GPT_IMAGE,
                                             currentGptImageQuality = currentGptImageQuality,
                                             onShowQualityDialog = {
@@ -1176,6 +1200,7 @@ private fun ImageFunctionPanelContent(
     onClearContent: () -> Unit,
     currentImageSteps: Int?,
     selectedImageRatio: ImageRatio,
+    maxHeight: androidx.compose.ui.unit.Dp = 370.dp,
     isGptImage: Boolean = false,
     currentGptImageQuality: ImageGenCapabilities.GptImageQuality = ImageGenCapabilities.GptImageQuality.AUTO,
     onShowQualityDialog: () -> Unit = {}
@@ -1190,7 +1215,7 @@ private fun ImageFunctionPanelContent(
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .heightIn(max = 370.dp)
+            .heightIn(max = maxHeight)
             .shadow(8.dp, RoundedCornerShape(28.dp))
             .border(1.dp, borderColor, RoundedCornerShape(28.dp)),
         shape = RoundedCornerShape(28.dp),

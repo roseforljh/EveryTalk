@@ -112,6 +112,7 @@ import com.android.everytalk.ui.screens.BubbleMain.Main.ImageContextMenu
 import com.android.everytalk.ui.screens.BubbleMain.Main.UserOrErrorMessageContent
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.pinnedAnchorLayoutVersion
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.resolveDynamicBottomReserveForVisibleGap
+import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.HistoryLoadingBubblePlaceholderItem
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.restorePinnedBubbleAnchorForSession
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.shouldClearTransientBottomReserveOnStreamChange
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.shouldDispatchImageLoadedToBottomScroller
@@ -130,6 +131,16 @@ import kotlin.math.min
 
 private const val MAX_PREVIEW_BITMAP_DIMENSION = 2048
 private const val MAX_BASE64_LENGTH_FOR_PREVIEW = 40 * 1024 * 1024
+
+internal fun imageContextEditUsesPreview(): Boolean = false
+
+private fun mimeFromImagePath(path: String): String {
+    return when (path.substringAfterLast('.', "").lowercase()) {
+        "jpg", "jpeg" -> "image/jpeg"
+        "webp" -> "image/webp"
+        else -> "image/png"
+    }
+}
 
 @Composable
 fun ImageGenerationLoadingView() {
@@ -333,6 +344,89 @@ fun ImageGenerationMessagesList(
         }
     }
     var currentImageIndex by remember { mutableStateOf(0) }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val selectedImageConfig by viewModel.selectedImageGenApiConfig.collectAsState()
+    val authToken = remember(selectedImageConfig) { selectedImageConfig?.key?.takeIf { it.isNotBlank() } }
+    val refererHeader = remember(selectedImageConfig) { selectedImageConfig?.address?.takeIf { it.isNotBlank() } }
+
+    suspend fun cacheImageModelForEditing(model: Any): Uri? = withContext(Dispatchers.IO) {
+        try {
+            val bytesAndMime = when (model) {
+                is String -> {
+                    if (model.startsWith("data:", ignoreCase = true) && model.contains(";base64,", ignoreCase = true)) {
+                        val mime = model.substringAfter("data:", "").substringBefore(";")
+                            .takeIf { it.contains("image", ignoreCase = true) } ?: "image/png"
+                        val bytes = android.util.Base64.decode(model.substringAfter(";base64,", ""), android.util.Base64.DEFAULT)
+                        bytes to mime
+                    } else {
+                        val uri = runCatching { Uri.parse(model) }.getOrNull()
+                        when (uri?.scheme?.lowercase()) {
+                            "http", "https" -> {
+                                val builder = Request.Builder()
+                                    .url(model)
+                                    .header("User-Agent", "EveryTalk/1.0 (Android)")
+                                    .header("Accept", "image/*")
+                                authToken?.let { builder.header("Authorization", "Bearer $it") }
+                                refererHeader?.let { builder.header("Referer", it) }
+                                OkHttpClient.Builder()
+                                    .followRedirects(true)
+                                    .followSslRedirects(true)
+                                    .build()
+                                    .newCall(builder.build())
+                                    .execute()
+                                    .use { resp ->
+                                        val bodyBytes = resp.body?.bytes()
+                                        if (!resp.isSuccessful || bodyBytes == null || bodyBytes.isEmpty()) {
+                                            null
+                                        } else {
+                                            bodyBytes to (resp.header("Content-Type") ?: "image/png")
+                                        }
+                                    }
+                            }
+                            "content" -> context.contentResolver.openInputStream(uri)?.use { input ->
+                                input.readBytes() to (context.contentResolver.getType(uri) ?: "image/png")
+                            }
+                            "file" -> uri.path?.let { path ->
+                                File(path).takeIf { it.exists() }?.let { it.readBytes() to mimeFromImagePath(path) }
+                            }
+                            null -> File(model).takeIf { it.exists() }?.let { it.readBytes() to mimeFromImagePath(model) }
+                            else -> null
+                        }
+                    }
+                }
+                is Uri -> when (model.scheme?.lowercase()) {
+                    "content" -> context.contentResolver.openInputStream(model)?.use { input ->
+                        input.readBytes() to (context.contentResolver.getType(model) ?: "image/png")
+                    }
+                    "file" -> model.path?.let { path ->
+                        File(path).takeIf { it.exists() }?.let { it.readBytes() to mimeFromImagePath(path) }
+                    }
+                    "http", "https" -> cacheImageModelForEditing(model.toString())?.let { uri ->
+                        context.contentResolver.openInputStream(uri)?.use { input ->
+                            input.readBytes() to (context.contentResolver.getType(uri) ?: "image/png")
+                        }
+                    }
+                    else -> null
+                }
+                else -> null
+            } ?: return@withContext null
+
+            val (bytes, mime) = bytesAndMime
+            val ext = when (mime.lowercase().substringBefore(";")) {
+                "image/jpeg", "image/jpg" -> "jpg"
+                "image/webp" -> "webp"
+                else -> "png"
+            }
+            val cacheDir = File(context.cacheDir, "preview_cache").apply { mkdirs() }
+            val file = File(cacheDir, "img_${System.currentTimeMillis()}.$ext")
+            FileOutputStream(file).use { it.write(bytes) }
+            FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
+        } catch (e: Exception) {
+            android.util.Log.e("ImagePreview", "cacheImageModelForEditing failed: ${e.message}", e)
+            null
+        }
+    }
 
     fun openImagePreview(model: Any) {
         imagePreviewModel = model
@@ -871,6 +965,13 @@ fun ImageGenerationMessagesList(
                                 ImageGenLoadingIndicator()
                             }
                         }
+                        is ChatListItem.LoadingBubblePlaceholder -> {
+                            HistoryLoadingBubblePlaceholderItem(
+                                role = item.role,
+                                widthFraction = item.widthFraction,
+                                estimatedHeight = item.estimatedHeightDp.dp,
+                            )
+                        }
                         else -> {}
                     }
                 }
@@ -934,21 +1035,37 @@ fun ImageGenerationMessagesList(
                 onDownload = { msg ->
                     viewModel.downloadImageFromMessage(msg)
                     isImageMenuVisible = false
+                },
+                onEdit = { msg ->
+                    val firstUrl = msg.imageUrls?.firstOrNull()
+                    if (!firstUrl.isNullOrBlank()) {
+                        scope.launch {
+                            val uri = cacheImageModelForEditing(firstUrl)
+                            if (uri == null) {
+                                viewModel.showSnackbar("加载失败")
+                                return@launch
+                            }
+                            viewModel.addMediaItem(
+                                SelectedMediaItem.ImageFromUri(
+                                    uri = uri,
+                                    id = UUID.randomUUID().toString(),
+                                    filePath = null
+                                )
+                            )
+                            viewModel.showSnackbar("已选择")
+                        }
+                    }
+                    isImageMenuVisible = false
                 }
             )
         }
 
         // 全屏黑底图片预览（图1风格）+ 手势缩放 + 保存/分享 + 左右滑动切换
         if (isImagePreviewVisible && imagePreviewModels.isNotEmpty()) {
-            val context = LocalContext.current
-            val scope = rememberCoroutineScope()
             val controlBackgroundColor = Color.Gray.copy(alpha = 0.42f)
             val controlBorderColor = Color.White.copy(alpha = 0.75f)
             val bottomInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
             // 当前选中的图像生成配置（用于附加鉴权/来源头）
-            val selectedImageConfig by viewModel.selectedImageGenApiConfig.collectAsState()
-            val authToken = remember(selectedImageConfig) { selectedImageConfig?.key?.takeIf { it.isNotBlank() } }
-            val refererHeader = remember(selectedImageConfig) { selectedImageConfig?.address?.takeIf { it.isNotBlank() } }
 
             // HorizontalPager 状态
             val pagerState = rememberPagerState(

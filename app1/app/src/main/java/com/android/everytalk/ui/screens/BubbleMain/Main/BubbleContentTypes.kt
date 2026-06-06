@@ -695,6 +695,7 @@ fun ImageContextMenu(
    onDismiss: () -> Unit,
    onView: (Message) -> Unit,
    onDownload: (Message) -> Unit,
+   onEdit: ((Message) -> Unit)? = null,
    pressOffset: Offset = Offset.Zero
 ) {
    if (isVisible) {
@@ -706,7 +707,7 @@ fun ImageContextMenu(
        val menuWidthPx = with(density) { menuWidth.toPx() }
        val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
        val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
-       val estimatedMenuHeightPx = with(density) { (56.dp * 2 + 16.dp).toPx() }
+       val estimatedMenuHeightPx = with(density) { (56.dp * imageContextMenuItemCount(onEdit != null) + 16.dp).toPx() }
 
        val fingerVerticalOffsetPx = with(density) { 20.dp.toPx() }
        val rawX = pressOffset.x
@@ -762,6 +763,16 @@ fun ImageContextMenu(
                        textColor = textColor,
                        onClick = { onView(message) }
                    )
+                   if (onEdit != null) {
+                       ContextMenuRow(
+                           icon = Icons.Filled.Edit,
+                           label = imageContextMenuEditLabel(),
+                           iconBg = iconBg,
+                           iconTint = iconTint,
+                           textColor = textColor,
+                           onClick = { onEdit(message) }
+                       )
+                   }
                    ContextMenuRow(
                        icon = Icons.Outlined.Download,
                        label = "下载图片",
@@ -775,6 +786,11 @@ fun ImageContextMenu(
        }
    }
 }
+
+internal fun imageContextMenuItemCount(showEditAction: Boolean): Int =
+    if (showEditAction) 3 else 2
+
+internal fun imageContextMenuEditLabel(): String = "编辑图像"
 
 @Composable
 private fun ContextMenuRow(
