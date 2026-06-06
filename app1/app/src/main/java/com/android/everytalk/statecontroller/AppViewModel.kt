@@ -108,6 +108,14 @@ import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 
+internal fun shouldSkipReloadingLoadedHistory(
+    requestedIndex: Int,
+    loadedIndex: Int?,
+    hasLoadedMessages: Boolean,
+): Boolean {
+    return requestedIndex == loadedIndex && hasLoadedMessages
+}
+
 internal suspend fun executeSharedToolCall(
     toolName: String,
     arguments: JsonObject,
@@ -1705,6 +1713,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadConversationFromHistory(index: Int) {
+        if (shouldSkipReloadingLoadedHistory(
+                requestedIndex = index,
+                loadedIndex = stateHolder._loadedHistoryIndex.value,
+                hasLoadedMessages = stateHolder.messages.isNotEmpty(),
+            )
+        ) {
+            if (isSearchActiveInDrawer.value) setSearchActiveInDrawer(false)
+            return
+        }
         dismissEditDialog()
         dismissSourcesDialog()
         apiHandler.cancelCurrentApiJob("加载文本模式历史索引 $index", isNewMessageSend = false, isImageGeneration = false)
@@ -1733,6 +1750,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadImageGenerationConversationFromHistory(index: Int) {
+        if (shouldSkipReloadingLoadedHistory(
+                requestedIndex = index,
+                loadedIndex = stateHolder._loadedImageGenerationHistoryIndex.value,
+                hasLoadedMessages = stateHolder.imageGenerationMessages.isNotEmpty(),
+            )
+        ) {
+            if (isSearchActiveInDrawer.value) setSearchActiveInDrawer(false)
+            return
+        }
         dismissEditDialog()
         dismissSourcesDialog()
         apiHandler.cancelCurrentApiJob("加载图像模式历史索引 $index", isNewMessageSend = false, isImageGeneration = true)
