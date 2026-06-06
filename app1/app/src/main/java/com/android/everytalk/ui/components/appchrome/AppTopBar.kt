@@ -106,9 +106,9 @@ fun AppTopBar(
     iconSize: Dp = 24.dp
 ) {
     val isDark = isSystemInDarkTheme()
-    val buttonBg = if (isDark) Color(0xFF303030) else Color(0xFFEDEDED)
-    val borderColor = if (isDark) Color(0xFF414141) else Color(0xFFF3F3F3)
+    val buttonBg = if (isDark) Color(0xFF303030) else Color.White
     val contentColor = if (isDark) Color.White else Color(0xFF0D0D0D)
+    val topButtonSize = iconButtonSize + 2.dp
 
     // 模型名称提取与彩虹色映射
     val modelDisplayInfo = remember(selectedConfigName, isDark) {
@@ -134,10 +134,10 @@ fun AppTopBar(
                 // 菜单按钮 - 圆形
                 Box(
                     modifier = Modifier
-                        .size(iconButtonSize)
+                        .size(topButtonSize)
+                        .shadow(3.dp, CircleShape, clip = false)
                         .clip(CircleShape)
                         .background(buttonBg)
-                        .border(1.dp, borderColor, CircleShape)
                         .clickable(onClick = onMenuClick),
                     contentAlignment = Alignment.Center
                 ) {
@@ -155,11 +155,11 @@ fun AppTopBar(
                     @OptIn(ExperimentalFoundationApi::class)
                     Box(
                         modifier = Modifier
-                            .height(iconButtonSize)
+                            .height(topButtonSize)
                             .widthIn(max = 130.dp)
+                            .shadow(3.dp, RoundedCornerShape(percent = 50), clip = false)
                             .clip(RoundedCornerShape(percent = 50))
                             .background(buttonBg)
-                            .border(1.dp, borderColor, RoundedCornerShape(percent = 50))
                             .combinedClickable(
                                 onClick = onTitleClick,
                                 onLongClick = {
@@ -233,15 +233,15 @@ fun AppTopBar(
                 Box {
                     Row(
                         modifier = Modifier
-                            .height(iconButtonSize)
+                            .height(topButtonSize)
+                            .shadow(3.dp, RoundedCornerShape(percent = 50), clip = false)
                             .clip(RoundedCornerShape(percent = 50))
-                            .background(buttonBg)
-                            .border(1.dp, borderColor, RoundedCornerShape(percent = 50)),
+                            .background(buttonBg),
                         verticalAlignment = Alignment.CenterVertically
                     ) {
                         Box(
                             modifier = Modifier
-                                .size(iconButtonSize)
+                                .size(topButtonSize)
                                 .clip(CircleShape)
                                 .clickable(onClick = onNewChat),
                             contentAlignment = Alignment.Center
@@ -255,7 +255,7 @@ fun AppTopBar(
                         }
                         Box(
                             modifier = Modifier
-                                .size(iconButtonSize)
+                                .size(topButtonSize)
                                 .clip(CircleShape)
                                 .clickable(onClick = { showMoreMenu = true }),
                             contentAlignment = Alignment.Center
@@ -289,10 +289,10 @@ fun AppTopBar(
                 // 空会话: 圆形设置按钮
                 Box(
                     modifier = Modifier
-                        .size(iconButtonSize)
+                        .size(topButtonSize)
+                        .shadow(3.dp, CircleShape, clip = false)
                         .clip(CircleShape)
                         .background(buttonBg)
-                        .border(1.dp, borderColor, CircleShape)
                         .clickable(onClick = onSettingsClick),
                     contentAlignment = Alignment.Center
                 ) {

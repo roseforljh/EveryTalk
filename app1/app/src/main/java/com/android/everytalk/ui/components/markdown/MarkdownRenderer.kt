@@ -333,7 +333,7 @@ private fun TextView.applyMarkdownLayoutMode(pureMathBlockMessage: Boolean) {
         isSingleLine = false
         maxLines = Int.MAX_VALUE
         ellipsize = null
-        breakStrategy = Layout.BREAK_STRATEGY_HIGH_QUALITY
+        breakStrategy = Layout.BREAK_STRATEGY_SIMPLE
         hyphenationFrequency = Layout.HYPHENATION_FREQUENCY_NONE
     }
 }
@@ -349,14 +349,16 @@ private fun TextView.applyMarkdownTextMetrics(sender: Sender, textSizeSp: Float)
             1.0f
         )
     } else {
-        val targetLineHeightSp =
-            textSizeSp * (ChatMarkdownTextStyle.BODY_LINE_HEIGHT_SP / ChatMarkdownTextStyle.BODY_FONT_SIZE_SP)
+        val targetLineHeightSp = max(
+            textSizeSp + 2f,
+            ChatMarkdownTextStyle.BODY_LINE_HEIGHT_SP
+        )
         val targetLineHeightPx = TypedValue.applyDimension(
             TypedValue.COMPLEX_UNIT_SP,
             targetLineHeightSp,
             resources.displayMetrics
         )
-        val naturalLineHeightPx = paint.fontMetricsInt.descent - paint.fontMetricsInt.ascent
+        val naturalLineHeightPx = paint.fontMetricsInt.bottom - paint.fontMetricsInt.top
         setLineSpacing(max(0f, targetLineHeightPx - naturalLineHeightPx), 1.0f)
     }
     letterSpacing = 0f
@@ -1097,13 +1099,18 @@ internal fun preprocessAiMarkdown(input: String, isStreaming: Boolean = false): 
                 trimmedLine.startsWith("##### ") ||
                 trimmedLine.startsWith("###### ")
 
+        val isListLine = trimmedLine.startsWith("- ") ||
+                trimmedLine.startsWith("* ") ||
+                trimmedLine.startsWith("+ ") ||
+                trimmedLine.matches(Regex("""^\d+\.\s.*"""))
+
         val isEmptyLine = line.isBlank()
         val isTableLine = line.contains("|")
         val hasUnbalancedBold = line.split("**").size % 2 == 0
         val trimmedEnd = line.trimEnd()
         val endsWithMathDelimiter = trimmedEnd.endsWith("$$") || trimmedEnd.endsWith("$")
         // 无论是否流式渲染，有未闭合的 ** 都跳过硬换行，避免破坏加粗语法
-        val shouldSkipHardBreak = isTableLine || hasUnbalancedBold || endsWithMathDelimiter
+        val shouldSkipHardBreak = isTableLine || hasUnbalancedBold || endsWithMathDelimiter || isListLine
 
         when {
             index == lastIndex -> line
@@ -1355,7 +1362,7 @@ fun MarkdownRenderer(
                 // 核心修复：在缓存 Key 中包含处理后文本的哈希值
                 // 这样当流式结束（isStreaming=false）导致预处理结果变化时，
                 // 或者消息内容被修改时，缓存会自动失效并重新渲染，避免显示旧的转义结果。
-                MarkdownSpansCache.generateKey("${contentKey}_${processed.hashCode()}_v48", isDark, sp)
+                MarkdownSpansCache.generateKey("${contentKey}_${processed.hashCode()}_v49", isDark, sp)
             } else ""
 
             val cachedSpanned = if (cacheKey.isNotBlank()) MarkdownSpansCache.get(cacheKey) else null
@@ -1383,7 +1390,7 @@ fun MarkdownRenderer(
 
                     val headKey = if (contentKey.isNotBlank()) {
                         MarkdownSpansCache.generateKey(
-                            "${contentKey}_seg_head_${headText.hashCode()}_v44",
+                            "${contentKey}_seg_head_${headText.hashCode()}_v45",
                             isDark,
                             sp
                         )
@@ -1391,7 +1398,7 @@ fun MarkdownRenderer(
 
                     val tailKey = if (contentKey.isNotBlank()) {
                         MarkdownSpansCache.generateKey(
-                            "${contentKey}_seg_tail_${tailText.hashCode()}_v44",
+                            "${contentKey}_seg_tail_${tailText.hashCode()}_v45",
                             isDark,
                             sp
                         )

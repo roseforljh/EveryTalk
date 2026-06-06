@@ -159,12 +159,12 @@ class LauncherIconResourceTest {
             assertFalse("${file.path} must not use rotate animation", text.contains("animated-rotate"))
         }
         assertTrue(
-            "Light splash must use black logo asset",
-            lightSplash.readText().contains("@drawable/splash_logo_black_asset"),
+            "Light splash must use clear black logo asset",
+            lightSplash.readText().contains("@drawable/ic_foreground_logo"),
         )
         assertTrue(
-            "Dark splash must use white logo asset",
-            darkSplash.readText().contains("@drawable/splash_logo_white_asset"),
+            "Dark splash must use clear white logo asset",
+            darkSplash.readText().contains("@drawable/logo2"),
         )
         assertFalse("Malformed black splash vector must be removed", resDir.resolve("drawable/splash_logo_vector_black.xml").exists())
         assertFalse("Malformed white splash vector must be removed", resDir.resolve("drawable/splash_logo_vector_white.xml").exists())

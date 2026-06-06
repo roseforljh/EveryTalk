@@ -73,6 +73,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.ui.components.ChatMarkdownTextStyle
 import com.android.everytalk.ui.components.ContentParser
 import com.android.everytalk.ui.components.ContentPart
 import com.android.everytalk.ui.components.WebPreviewDialog
@@ -152,6 +153,17 @@ private fun countFenceMarkers(content: String, marker: String): Int {
 internal data class TableAwareParseRequest(
     val text: String,
 )
+
+internal fun tableBlockVerticalPaddingDp(
+    previousIsTable: Boolean,
+    nextIsTable: Boolean,
+): androidx.compose.ui.unit.Dp {
+    return if (previousIsTable || nextIsTable) {
+        ChatMarkdownTextStyle.TABLE_BETWEEN_TABLES_VERTICAL_PADDING_DP.dp
+    } else {
+        ChatMarkdownTextStyle.TABLE_BLOCK_VERTICAL_PADDING_DP.dp
+    }
+}
 
 internal fun shouldRenderStableNativeMathPart(
     isBlockMath: Boolean,
@@ -432,11 +444,15 @@ fun TableAwareText(
                         }
                     }
                     is ContentPart.Table -> {
+                        val tableVerticalPadding = tableBlockVerticalPaddingDp(
+                            previousIsTable = parsedParts.getOrNull(index - 1) is ContentPart.Table,
+                            nextIsTable = parsedParts.getOrNull(index + 1) is ContentPart.Table,
+                        )
                         TableRenderer(
                             lines = part.lines,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(vertical = 8.dp),
+                                .padding(vertical = tableVerticalPadding),
                             isStreaming = false,
                             contentKey = if (contentKey.isNotBlank() && !isStreaming) {
                                 "${contentKey}_table_${index}_${part.lines.size}"

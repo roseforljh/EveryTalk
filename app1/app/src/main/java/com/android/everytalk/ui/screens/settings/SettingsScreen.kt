@@ -250,10 +250,10 @@ fun SettingsScreen(
 
 
     val isDark = isSystemInDarkTheme()
-    val buttonBg = if (isDark) Color(0xFF303030) else Color(0xFFEDEDED)
-    val borderColor = if (isDark) Color(0xFF414141) else Color(0xFFF3F3F3)
+    val buttonBg = if (isDark) Color(0xFF303030) else Color.White
     val contentColor = if (isDark) Color.White else Color(0xFF0D0D0D)
     val iconButtonSize = 44.dp
+    val topButtonSize = iconButtonSize + 2.dp
 
     // Tab 状态：0=平台配置, 1=联网搜索, 2=MCP
     val tabs = listOf("平台配置", "联网搜索", "MCP")
@@ -261,7 +261,7 @@ fun SettingsScreen(
     var showTabMenu by remember { mutableStateOf(false) }
     var showMcpAddDialog by remember { mutableStateOf(false) }
 
-    val topContentPadding = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + iconButtonSize + 24.dp
+    val topContentPadding = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + topButtonSize + 24.dp
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -438,11 +438,10 @@ fun SettingsScreen(
                     // 左侧返回按钮
                     Box(
                         modifier = Modifier
-                            .size(iconButtonSize)
-                            .shadow(6.dp, CircleShape, clip = false)
+                            .size(topButtonSize)
+                            .shadow(3.dp, CircleShape, clip = false)
                             .clip(CircleShape)
                             .background(buttonBg)
-                            .border(1.dp, borderColor, CircleShape)
                             .clickable(enabled = backButtonEnabled) {
                                 backButtonEnabled = false
                                 navController.popBackStack()
@@ -463,7 +462,7 @@ fun SettingsScreen(
                     if (!isInImageMode) {
                         val showAddButton = currentTabIndex != 1
                         val rightButtonWidth by animateDpAsState(
-                            targetValue = if (showAddButton) iconButtonSize * 2 else iconButtonSize,
+                            targetValue = if (showAddButton) topButtonSize * 2 else topButtonSize,
                             animationSpec = tween(durationMillis = 180),
                             label = "settingsRightButtonWidth"
                         )
@@ -471,18 +470,17 @@ fun SettingsScreen(
                             Row(
                                 modifier = Modifier
                                     .width(rightButtonWidth)
-                                    .height(iconButtonSize)
-                                    .shadow(6.dp, RoundedCornerShape(percent = 50), clip = false)
+                                    .height(topButtonSize)
+                                    .shadow(3.dp, RoundedCornerShape(percent = 50), clip = false)
                                     .clip(RoundedCornerShape(percent = 50))
-                                    .background(buttonBg)
-                                    .border(1.dp, borderColor, RoundedCornerShape(percent = 50)),
+                                    .background(buttonBg),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.End
                             ) {
                                 if (showAddButton) {
                                     Box(
                                         modifier = Modifier
-                                            .size(iconButtonSize)
+                                            .size(topButtonSize)
                                             .clip(CircleShape)
                                             .clickable {
                                                 if (currentTabIndex == 0) {
@@ -506,7 +504,7 @@ fun SettingsScreen(
                                 }
                                 Box(
                                     modifier = Modifier
-                                        .size(iconButtonSize)
+                                        .size(topButtonSize)
                                         .clip(CircleShape)
                                         .clickable { showTabMenu = true },
                                     contentAlignment = Alignment.Center
@@ -536,18 +534,17 @@ fun SettingsScreen(
                         Box {
                             Row(
                                 modifier = Modifier
-                                    .width(iconButtonSize * 2)
-                                    .height(iconButtonSize)
-                                    .shadow(6.dp, RoundedCornerShape(percent = 50), clip = false)
+                                    .width(topButtonSize * 2)
+                                    .height(topButtonSize)
+                                    .shadow(3.dp, RoundedCornerShape(percent = 50), clip = false)
                                     .clip(RoundedCornerShape(percent = 50))
-                                    .background(buttonBg)
-                                    .border(1.dp, borderColor, RoundedCornerShape(percent = 50)),
+                                    .background(buttonBg),
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.End
                             ) {
                                 Box(
                                     modifier = Modifier
-                                        .size(iconButtonSize)
+                                        .size(topButtonSize)
                                         .clip(CircleShape)
                                         .clickable {
                                             newFullConfigProvider = ""
@@ -566,7 +563,7 @@ fun SettingsScreen(
                                 }
                                 Box(
                                     modifier = Modifier
-                                        .size(iconButtonSize)
+                                        .size(topButtonSize)
                                         .clip(CircleShape)
                                         .clickable { showTabMenu = true },
                                     contentAlignment = Alignment.Center

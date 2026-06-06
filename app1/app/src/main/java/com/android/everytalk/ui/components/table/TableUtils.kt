@@ -235,6 +235,8 @@ object TableUtils {
         while (currentIndex < lines.size) {
             val line = lines[currentIndex]
 
+            if (currentIndex + 1 < lines.size && isValidTableStart(lines, currentIndex)) break
+
             // 检查是否为有效的数据行
             if (!isTableDataRow(line)) break
 

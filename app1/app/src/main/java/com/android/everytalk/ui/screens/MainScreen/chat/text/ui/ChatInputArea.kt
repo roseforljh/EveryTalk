@@ -703,7 +703,7 @@ fun ChatInputArea(
     
     // 使用 WindowInsets 组合逻辑来统一处理底部间距，消除手动计算带来的动画抖动
     val navInsets = WindowInsets.navigationBarsIgnoringVisibility
-    val baseInsets = navInsets.add(WindowInsets(bottom = 24.dp))
+    val baseInsets = navInsets.add(WindowInsets(bottom = 12.dp))
     val targetInsets = WindowInsets.ime.union(baseInsets)
 
     Box(modifier = Modifier
@@ -942,8 +942,6 @@ fun ChatInputArea(
                         modifier = Modifier
                             .width(groupWidth)
                             .wrapContentHeight()
-                            // Add padding to prevent custom shadow from being clipped
-                            .padding(bottom = 24.dp)
                             .graphicsLayer { clip = false },
                         contentAlignment = Alignment.CenterStart
                     ) {

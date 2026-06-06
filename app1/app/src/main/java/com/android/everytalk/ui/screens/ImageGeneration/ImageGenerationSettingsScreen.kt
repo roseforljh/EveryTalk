@@ -140,11 +140,11 @@ fun ImageGenerationSettingsScreen(
     }
 
     val isDark = isSystemInDarkTheme()
-    val buttonBg = if (isDark) Color(0xFF303030) else Color(0xFFEDEDED)
-    val borderColor = if (isDark) Color(0xFF414141) else Color(0xFFF3F3F3)
+    val buttonBg = if (isDark) Color(0xFF303030) else Color.White
     val contentColor = if (isDark) Color.White else Color(0xFF0D0D0D)
     val iconButtonSize = 44.dp
-    val topContentPadding = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + iconButtonSize + 24.dp
+    val topButtonSize = iconButtonSize + 2.dp
+    val topContentPadding = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + topButtonSize + 24.dp
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
@@ -214,11 +214,10 @@ fun ImageGenerationSettingsScreen(
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(iconButtonSize)
-                            .shadow(6.dp, CircleShape, clip = false)
+                            .size(topButtonSize)
+                            .shadow(3.dp, CircleShape, clip = false)
                             .clip(CircleShape)
                             .background(buttonBg)
-                            .border(1.dp, borderColor, CircleShape)
                             .clickable(enabled = backButtonEnabled) {
                                 backButtonEnabled = false
                                 navController.popBackStack()
@@ -237,11 +236,10 @@ fun ImageGenerationSettingsScreen(
 
                     Box(
                         modifier = Modifier
-                            .size(iconButtonSize)
-                            .shadow(6.dp, CircleShape, clip = false)
+                            .size(topButtonSize)
+                            .shadow(3.dp, CircleShape, clip = false)
                             .clip(CircleShape)
                             .background(buttonBg)
-                            .border(1.dp, borderColor, CircleShape)
                             .clickable {
                                 val initialProvider = "默认"
                                 newFullConfigProvider = initialProvider

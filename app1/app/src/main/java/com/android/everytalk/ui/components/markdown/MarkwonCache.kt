@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Typeface
 import android.os.Build
 import android.text.TextPaint
+import android.util.TypedValue
 import android.text.style.ForegroundColorSpan
 import android.text.style.MetricAffectingSpan
 import android.text.style.RelativeSizeSpan
@@ -76,7 +77,7 @@ object MarkwonCache {
         imageClickListener: ((String) -> Unit)? = null
     ): Markwon {
         val roundedSize = textSize.toInt()
-        val cacheKey = "v29_dark=${isDark}_size=${roundedSize}"
+        val cacheKey = "v36_dark=${isDark}_size=${roundedSize}"
 
         synchronized(lock) {
             cacheMap[cacheKey]?.let { return it }
@@ -103,8 +104,12 @@ object MarkwonCache {
                         val smallBulletPx =
                             (ChatMarkdownTextStyle.LIST_BULLET_SIZE_DP * density).toInt()
                                 .coerceAtLeast(2)
+                        val horizontalRuleHeightPx =
+                            (ChatMarkdownTextStyle.HORIZONTAL_RULE_THICKNESS_DP * density).toInt()
+                                .coerceAtLeast(1)
                         builder.bulletWidth(smallBulletPx)
                         builder.headingBreakHeight((8f * density).toInt())
+                        builder.thematicBreakHeight(horizontalRuleHeightPx)
                     }
 
                     override fun configureSpansFactory(builder: MarkwonSpansFactory.Builder) {
@@ -136,16 +141,27 @@ object MarkwonCache {
                             (ChatMarkdownTextStyle.LIST_TOP_LEVEL_ITEM_SPACING_DP * density).toInt()
                         val nestedTopSpacing =
                             (ChatMarkdownTextStyle.LIST_NESTED_TOP_SPACING_DP * density).toInt()
+                        val listItemLineHeight =
+                            TypedValue.applyDimension(
+                                TypedValue.COMPLEX_UNIT_SP,
+                                ChatMarkdownTextStyle.LIST_ITEM_LINE_HEIGHT_SP,
+                                context.resources.displayMetrics
+                            ).toInt().coerceAtLeast(1)
                         builder.setFactory(org.commonmark.node.ListItem::class.java) { configuration, props ->
                             val isOrdered =
                                 CoreProps.LIST_ITEM_TYPE.get(props) === CoreProps.ListItemType.ORDERED
                             if (isOrdered) {
                                 val numberStr =
                                     CoreProps.ORDERED_LIST_ITEM_NUMBER.get(props)?.toString() ?: "1"
+                                val level = CoreProps.BULLET_LIST_ITEM_LEVEL.get(props) ?: 0
                                 CustomOrderedListItemSpan(
                                     configuration.theme(),
                                     "$numberStr.\u00a0",
-                                    customBlockMargin
+                                    customBlockMargin,
+                                    level,
+                                    topLevelItemSpacing,
+                                    nestedTopSpacing,
+                                    listItemLineHeight
                                 )
                             } else {
                                 val level = CoreProps.BULLET_LIST_ITEM_LEVEL.get(props) ?: 0
@@ -158,7 +174,8 @@ object MarkwonCache {
                                     customBlockMargin,
                                     bulletWidth,
                                     topLevelItemSpacing,
-                                    nestedTopSpacing
+                                    nestedTopSpacing,
+                                    listItemLineHeight
                                 )
                             }
                         }

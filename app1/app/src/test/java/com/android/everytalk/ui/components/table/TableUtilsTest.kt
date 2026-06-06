@@ -104,6 +104,31 @@ class TableUtilsTest {
     }
 
     @Test
+    fun `extractTableLines should split adjacent tables`() {
+        val lines = listOf(
+            "| A | B |",
+            "| --- | --- |",
+            "| 1 | 2 |",
+            "| C | D |",
+            "| --- | --- |",
+            "| 3 | 4 |",
+        )
+
+        val (firstTableLines, nextIndex) = TableUtils.extractTableLines(lines, 0)
+
+        assertEquals(
+            listOf(
+                "| A | B |",
+                "| --- | --- |",
+                "| 1 | 2 |",
+            ),
+            firstTableLines
+        )
+        assertEquals(3, nextIndex)
+        assertTrue(TableUtils.isValidTableStart(lines, nextIndex))
+    }
+
+    @Test
     fun `extractTableLines should return empty for invalid start`() {
         val lines = listOf(
             "| Header1 | Header2 |",

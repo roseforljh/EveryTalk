@@ -450,35 +450,65 @@ internal fun AddNewFullConfigDialog(
         }
     }
 
-    AlertDialog(
-        modifier = Modifier
-            .wrapContentHeight()
-            .border(1.dp, borderColor, RoundedCornerShape(28.dp)),
+    Dialog(
         onDismissRequest = onDismissRequest,
-        shape = RoundedCornerShape(28.dp),
-        containerColor = dialogBg,
-        titleContentColor = contentColor,
-        textContentColor = contentColor,
-        title = {
-            Text(
-                "添加配置",
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Bold,
-                color = contentColor
-            )
-        },
-        text = {
-            val canSubmit = apiKey.isNotBlank()
-                    && apiAddress.isNotBlank()
-                    && provider.isNotBlank()
-                    && provider.trim().lowercase() !in listOf("默认","default","default_text")
+        properties = androidx.compose.ui.window.DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false
+        )
+    ) {
+        val canSubmit = apiKey.isNotBlank()
+                && apiAddress.isNotBlank()
+                && provider.isNotBlank()
+                && provider.trim().lowercase() !in listOf("默认","default","default_text")
+        val dialogWindow = (LocalView.current.parent as? DialogWindowProvider)?.window
+        SideEffect {
+            dialogWindow?.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            dialogWindow?.setDimAmount(0f)
+        }
 
-            Column(
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onDismissRequest
+                )
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .imePadding()
+                .padding(horizontal = 16.dp),
+            contentAlignment = Alignment.TopCenter
+        ) {
+            Surface(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 520.dp)
-                    .verticalScroll(rememberScrollState())
+                    .wrapContentHeight()
+                    .padding(top = 24.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = {}
+                    )
+                    .clip(RoundedCornerShape(28.dp))
+                    .border(1.dp, borderColor, RoundedCornerShape(28.dp)),
+                shape = RoundedCornerShape(28.dp),
+                color = dialogBg
             ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(24.dp)
+                ) {
+                Text(
+                    "添加配置",
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = contentColor
+                )
+                Spacer(modifier = Modifier.height(16.dp))
                 Column(
                     modifier = Modifier.padding(vertical = 8.dp)
                 ) {
@@ -755,11 +785,10 @@ internal fun AddNewFullConfigDialog(
                         )
                     }
                 }
+                }
             }
-        },
-        confirmButton = {},
-        dismissButton = {}
-    )
+        }
+    }
 }
 
 

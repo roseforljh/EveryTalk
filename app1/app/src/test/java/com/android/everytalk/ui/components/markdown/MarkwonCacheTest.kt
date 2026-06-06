@@ -12,6 +12,7 @@ import android.text.style.RelativeSizeSpan
 import android.text.style.StrikethroughSpan
 import android.text.style.StyleSpan
 import android.text.style.TypefaceSpan
+import android.util.TypedValue
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.android.everytalk.ui.components.ChatMarkdownTextStyle
@@ -31,6 +32,14 @@ class MarkwonCacheTest {
     fun setUp() {
         stopKoin()
         MarkwonCache.clear()
+    }
+
+    private fun expectedListItemLineHeightPx(context: Context): Int {
+        return TypedValue.applyDimension(
+            TypedValue.COMPLEX_UNIT_SP,
+            ChatMarkdownTextStyle.LIST_ITEM_LINE_HEIGHT_SP,
+            context.resources.displayMetrics
+        ).toInt()
     }
 
     @Test
@@ -58,6 +67,7 @@ class MarkwonCacheTest {
     fun `body line height stays compact inside wrapped chinese list items`() {
         assertEquals(14f, ChatMarkdownTextStyle.BODY_FONT_SIZE_SP, 0.001f)
         assertEquals(22f, ChatMarkdownTextStyle.BODY_LINE_HEIGHT_SP, 0.001f)
+        assertEquals(22f, ChatMarkdownTextStyle.LIST_ITEM_LINE_HEIGHT_SP, 0.001f)
     }
 
     @Test
@@ -140,40 +150,54 @@ class MarkwonCacheTest {
 
         firstBulletSpan.chooseHeight(rendered, wrappedLineStart, wrappedLineStart + 1, 0, 25, fm)
 
-        assertEquals(-22, fm.top)
-        assertEquals(-20, fm.ascent)
-        assertEquals(5, fm.descent)
-        assertEquals(7, fm.bottom)
+        val expectedLineHeight = expectedListItemLineHeightPx(context)
+        assertEquals(expectedLineHeight, fm.descent - fm.ascent)
+        assertEquals(expectedLineHeight, fm.bottom - fm.top)
     }
 
     @Test
-    fun `markwon nested bullet adds top spacing after parent item`() {
+    fun `markwon nested bullet spacing stays outside child first line`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val markwon = MarkwonCache.getOrCreate(context, isDark = false, textSize = 16f)
         val rendered = markwon.render(markwon.parse("- parent\n  - child")) as Spanned
+        val parentSpan = rendered.getSpans(0, rendered.length, CustomBulletListItemSpan::class.java)
+            .first { span ->
+                span.level == 0
+            } as LineHeightSpan
         val nestedSpan = rendered.getSpans(0, rendered.length, CustomBulletListItemSpan::class.java)
             .first { span ->
-                val levelField = span.javaClass.getDeclaredField("level")
-                levelField.isAccessible = true
-                levelField.getInt(span) == 1
+                span.level == 1
             } as LineHeightSpan
-        val start = rendered.getSpanStart(nestedSpan)
-        val lineEnd = rendered.toString().indexOf('\n', start).let { index ->
+        val parentStart = rendered.getSpanStart(parentSpan)
+        val parentLineEnd = rendered.toString().indexOf('\n', parentStart).let { index ->
             if (index >= 0) index + 1 else rendered.length
         }
-        val fm = Paint.FontMetricsInt().apply {
+        val parentFm = Paint.FontMetricsInt().apply {
             top = -22
             ascent = -20
             descent = 5
             bottom = 7
         }
 
-        nestedSpan.chooseHeight(rendered, start, lineEnd, 0, 25, fm)
+        parentSpan.chooseHeight(rendered, parentStart, parentLineEnd, 0, 25, parentFm)
 
-        assertTrue(fm.top < -22)
-        assertTrue(fm.ascent < -20)
-        assertTrue(fm.descent == 5)
-        assertTrue(fm.bottom == 7)
+        val expectedLineHeight = expectedListItemLineHeightPx(context)
+        val expectedSpacing = (ChatMarkdownTextStyle.LIST_NESTED_TOP_SPACING_DP *
+            context.resources.displayMetrics.density).toInt()
+        assertEquals(expectedLineHeight + expectedSpacing, parentFm.descent - parentFm.ascent)
+        assertEquals(expectedLineHeight + expectedSpacing, parentFm.bottom - parentFm.top)
+
+        val childFm = Paint.FontMetricsInt().apply {
+            top = -22
+            ascent = -20
+            descent = 5
+            bottom = 7
+        }
+        val childStart = rendered.getSpanStart(nestedSpan)
+        nestedSpan.chooseHeight(rendered, childStart, rendered.length, 0, 25, childFm)
+
+        assertEquals(expectedLineHeight, childFm.descent - childFm.ascent)
+        assertEquals(expectedLineHeight, childFm.bottom - childFm.top)
     }
 
     @Test
@@ -188,8 +212,8 @@ class MarkwonCacheTest {
                 levelField.getInt(span) == 0
             }
             .sortedBy { span -> rendered.getSpanStart(span) }
-        val secondTopLevelSpan = topLevelSpans[1] as LineHeightSpan
-        val start = rendered.getSpanStart(secondTopLevelSpan)
+        val firstTopLevelSpan = topLevelSpans[0] as LineHeightSpan
+        val start = rendered.getSpanStart(firstTopLevelSpan)
         val lineEnd = rendered.toString().indexOf('\n', start).let { index ->
             if (index >= 0) index + 1 else rendered.length
         }
@@ -200,12 +224,13 @@ class MarkwonCacheTest {
             bottom = 7
         }
 
-        secondTopLevelSpan.chooseHeight(rendered, start, lineEnd, 0, 25, fm)
+        firstTopLevelSpan.chooseHeight(rendered, start, lineEnd, 0, 25, fm)
 
-        assertTrue(fm.top < -22)
-        assertTrue(fm.ascent < -20)
-        assertTrue(fm.descent == 5)
-        assertTrue(fm.bottom == 7)
+        val expectedLineHeight = expectedListItemLineHeightPx(context)
+        val expectedSpacing = (ChatMarkdownTextStyle.LIST_TOP_LEVEL_ITEM_SPACING_DP *
+            context.resources.displayMetrics.density).toInt()
+        assertEquals(expectedLineHeight + expectedSpacing, fm.descent - fm.ascent)
+        assertEquals(expectedLineHeight + expectedSpacing, fm.bottom - fm.top)
     }
 
     @Test
@@ -220,8 +245,8 @@ class MarkwonCacheTest {
                 levelField.getInt(span) == 1
             }
             .sortedBy { span -> rendered.getSpanStart(span) }
-        val secondNestedSpan = nestedSpans[1] as LineHeightSpan
-        val start = rendered.getSpanStart(secondNestedSpan)
+        val firstNestedSpan = nestedSpans[0] as LineHeightSpan
+        val start = rendered.getSpanStart(firstNestedSpan)
         val lineEnd = rendered.toString().indexOf('\n', start).let { index ->
             if (index >= 0) index + 1 else rendered.length
         }
@@ -232,11 +257,12 @@ class MarkwonCacheTest {
             bottom = 7
         }
 
-        secondNestedSpan.chooseHeight(rendered, start, lineEnd, 0, 25, fm)
+        firstNestedSpan.chooseHeight(rendered, start, lineEnd, 0, 25, fm)
 
-        assertTrue(fm.top < -22)
-        assertTrue(fm.ascent < -20)
-        assertTrue(fm.descent == 5)
-        assertTrue(fm.bottom == 7)
+        val expectedLineHeight = expectedListItemLineHeightPx(context)
+        val expectedSpacing = (ChatMarkdownTextStyle.LIST_TOP_LEVEL_ITEM_SPACING_DP *
+            context.resources.displayMetrics.density).toInt()
+        assertEquals(expectedLineHeight + expectedSpacing, fm.descent - fm.ascent)
+        assertEquals(expectedLineHeight + expectedSpacing, fm.bottom - fm.top)
     }
 }

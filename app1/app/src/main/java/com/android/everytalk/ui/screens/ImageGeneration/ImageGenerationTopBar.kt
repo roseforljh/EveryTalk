@@ -12,6 +12,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -19,6 +20,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.isSystemInDarkTheme
 
 @Composable
 fun ImageGenerationTopBar(
@@ -35,6 +37,7 @@ fun ImageGenerationTopBar(
     iconSize: Dp = 22.dp
 ) {
     val coroutineScope = rememberCoroutineScope()
+    val isDark = isSystemInDarkTheme()
     Surface(
         modifier = modifier
             .fillMaxWidth()
@@ -80,7 +83,7 @@ fun ImageGenerationTopBar(
                      // 胶囊
                      Surface(
                          shape = CircleShape,
-                         color = MaterialTheme.colorScheme.surfaceDim,
+                         color = if (isDark) MaterialTheme.colorScheme.surfaceDim else Color.White,
                          modifier = Modifier
                              .height(28.dp)
                              .wrapContentWidth(unbounded = true)

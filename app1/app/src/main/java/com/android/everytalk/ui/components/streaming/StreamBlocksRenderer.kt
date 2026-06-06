@@ -31,6 +31,8 @@ import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.Hyphens
+import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -463,6 +465,7 @@ private fun NativeMarkdownBlocksSegment(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(vertical = 6.dp),
+                            thickness = ChatMarkdownTextStyle.HORIZONTAL_RULE_THICKNESS_DP.dp,
                             color = color.copy(alpha = 0.22f),
                         )
                     }
@@ -594,6 +597,7 @@ private fun NativeListBlock(
                     text = item.text,
                     style = style,
                     color = color,
+                    lineHeightSp = ChatMarkdownTextStyle.LIST_ITEM_LINE_HEIGHT_SP,
                 )
             }
         }
@@ -606,8 +610,9 @@ internal fun nativeListItemTopSpacing(
 ): Dp {
     if (index <= 0 || index >= rows.size) return 0.dp
     val current = rows[index]
-    return if (current.level <= 0) {
-        ChatMarkdownTextStyle.LIST_TOP_LEVEL_ITEM_SPACING_DP.dp
+    val previous = rows[index - 1]
+    return if (current.level == previous.level) {
+        ChatMarkdownTextStyle.LIST_ITEM_SPACING_DP.dp
     } else {
         ChatMarkdownTextStyle.LIST_NESTED_TOP_SPACING_DP.dp
     }
@@ -625,6 +630,7 @@ private fun NativeListMarker(
             text = "${item.number}.",
             style = style.copy(
                 color = color,
+                lineHeight = ChatMarkdownTextStyle.LIST_ITEM_LINE_HEIGHT_SP.sp,
                 platformStyle = PlatformTextStyle(includeFontPadding = false),
             ),
             modifier = Modifier.width(markerWidth),
@@ -679,18 +685,21 @@ private fun NativeInlineText(
     text: String,
     style: TextStyle,
     color: Color,
+    lineHeightSp: Float = ChatMarkdownTextStyle.BODY_LINE_HEIGHT_SP,
 ) {
     if (supportedInlineMarkdownPattern.containsMatchIn(text)) {
         ComposeInlineMarkdownSegment(
             text = text,
             style = style,
             color = color,
+            lineHeightSp = lineHeightSp,
         )
     } else {
         PlainTextSegment(
             text = text,
             style = style,
             color = color,
+            lineHeightSp = lineHeightSp,
         )
     }
 }
@@ -736,13 +745,11 @@ private fun PlainTextSegment(
     text: String,
     style: TextStyle,
     color: Color,
+    lineHeightSp: Float = ChatMarkdownTextStyle.BODY_LINE_HEIGHT_SP,
 ) {
     androidx.compose.material3.Text(
         text = text,
-        style = style.copy(
-            color = color,
-            platformStyle = PlatformTextStyle(includeFontPadding = false)
-        ),
+        style = compactBodyTextStyle(style, color, lineHeightSp),
     )
 }
 
@@ -751,6 +758,7 @@ private fun ComposeInlineMarkdownSegment(
     text: String,
     style: TextStyle,
     color: Color,
+    lineHeightSp: Float = ChatMarkdownTextStyle.BODY_LINE_HEIGHT_SP,
 ) {
     val isDark = isSystemInDarkTheme()
     val codeBackground = chatInlineCodeBackgroundColor(MaterialTheme.colorScheme.surfaceVariant, isDark)
@@ -767,10 +775,21 @@ private fun ComposeInlineMarkdownSegment(
     }
     androidx.compose.material3.Text(
         text = annotatedString,
-        style = style.copy(
-            color = color,
-            platformStyle = PlatformTextStyle(includeFontPadding = false)
-        ),
+        style = compactBodyTextStyle(style, color, lineHeightSp),
+    )
+}
+
+internal fun compactBodyTextStyle(
+    style: TextStyle,
+    color: Color,
+    lineHeightSp: Float = ChatMarkdownTextStyle.BODY_LINE_HEIGHT_SP,
+): TextStyle {
+    return style.copy(
+        color = color,
+        lineHeight = lineHeightSp.sp,
+        lineBreak = LineBreak.Simple,
+        hyphens = Hyphens.None,
+        platformStyle = PlatformTextStyle(includeFontPadding = false),
     )
 }
 

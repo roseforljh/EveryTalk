@@ -590,7 +590,7 @@ fun ImageGenerationInputArea(
 
     val inputBackgroundColor = MaterialTheme.colorScheme.background
     val navInsets = WindowInsets.navigationBarsIgnoringVisibility
-    val baseInsets = navInsets.add(WindowInsets(bottom = 24.dp))
+    val baseInsets = navInsets.add(WindowInsets(bottom = 12.dp))
     val targetInsets = WindowInsets.ime.union(baseInsets)
 
     Box(modifier = Modifier

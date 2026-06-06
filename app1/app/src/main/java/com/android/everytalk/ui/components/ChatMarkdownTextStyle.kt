@@ -18,16 +18,23 @@ internal object ChatMarkdownTextStyle {
     const val LIST_BULLET_START_PADDING_DP = 2f
     const val LIST_BULLET_TOP_PADDING_DP = 9.5f
     const val LIST_NESTED_INDENT_DP = 24f
-    const val LIST_ITEM_SPACING_DP = 16f
-    const val LIST_TOP_LEVEL_ITEM_SPACING_DP = 8f
-    const val LIST_NESTED_TOP_SPACING_DP = 6f
+    const val LIST_ITEM_SPACING_DP = 12f
+    const val LIST_TOP_LEVEL_ITEM_SPACING_DP = LIST_ITEM_SPACING_DP
+    const val LIST_NESTED_TOP_SPACING_DP = 12f
+    const val LIST_ITEM_LINE_HEIGHT_SP = BODY_LINE_HEIGHT_SP
 
     const val SPACING_PARAGRAPH_DP = 12f
     const val SPACING_BEFORE_HEADING_DP = 16f
     const val SPACING_AFTER_HEADING_DP = 8f
+    const val HORIZONTAL_RULE_THICKNESS_DP = 0.5f
     const val SPACING_AFTER_DIVIDER_DP = 12f
     const val SPACING_AFTER_LIST_DP = 8f
     const val SPACING_AFTER_QUOTE_DP = 8f
+
+    const val TABLE_CELL_LINE_HEIGHT_SP = 18f
+    const val TABLE_ROW_VERTICAL_PADDING_DP = 4f
+    const val TABLE_BLOCK_VERTICAL_PADDING_DP = 8f
+    const val TABLE_BETWEEN_TABLES_VERTICAL_PADDING_DP = 14f
 
     fun headingFontSizeSp(level: Int): Float {
         return when (level.coerceIn(1, 6)) {

@@ -22,6 +22,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -49,9 +50,13 @@ fun TableRenderer(
     isStreaming: Boolean = false,
     headerStyle: TextStyle = MaterialTheme.typography.bodyMedium.copy(
         fontWeight = FontWeight.Bold,
-        fontSize = 14.sp
+        fontSize = 14.sp,
+        lineHeight = ChatMarkdownTextStyle.TABLE_CELL_LINE_HEIGHT_SP.sp
     ),
-    cellStyle: TextStyle = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
+    cellStyle: TextStyle = MaterialTheme.typography.bodySmall.copy(
+        fontSize = 13.sp,
+        lineHeight = ChatMarkdownTextStyle.TABLE_CELL_LINE_HEIGHT_SP.sp
+    ),
     contentKey: String = "",
     onLongPress: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null
 ) {
@@ -124,7 +129,7 @@ fun TableRenderer(
                 modifier = Modifier
                     .wrapContentWidth()
                     .background(headerBackgroundColor)
-                    .padding(vertical = 8.dp),
+                    .padding(vertical = ChatMarkdownTextStyle.TABLE_ROW_VERTICAL_PADDING_DP.dp),
                 verticalAlignment = Alignment.Top
             ) {
                 headers.forEachIndexed { index, header ->
@@ -161,7 +166,7 @@ fun TableRenderer(
                                     strokeWidth = strokeWidth
                                 )
                             }
-                            .padding(vertical = 8.dp),
+                            .padding(vertical = ChatMarkdownTextStyle.TABLE_ROW_VERTICAL_PADDING_DP.dp),
                         verticalAlignment = Alignment.Top
                     ) {
                         row.forEachIndexed { colIndex, cell ->
@@ -186,6 +191,13 @@ fun TableRenderer(
             }
         }
     }
+}
+
+internal fun compactTableCellTextStyle(style: TextStyle): TextStyle {
+    return style.copy(
+        lineHeight = ChatMarkdownTextStyle.TABLE_CELL_LINE_HEIGHT_SP.sp,
+        platformStyle = PlatformTextStyle(includeFontPadding = false)
+    )
 }
 
 /**
@@ -239,6 +251,7 @@ private fun TableCell(
         TableUtils.TableAlignment.RIGHT -> TextAlign.Right
         TableUtils.TableAlignment.START -> TextAlign.Start
     }
+    val compactStyle = compactTableCellTextStyle(style).copy(textAlign = textAlign)
 
     Box(
         modifier = Modifier
@@ -262,7 +275,7 @@ private fun TableCell(
             // 包含数学公式：使用 MarkdownRenderer 渲染（支持 LaTeX）
             MarkdownRenderer(
                 markdown = content,
-                style = style.copy(textAlign = textAlign),
+                style = compactStyle,
                 color = textColor,
                 contentKey = contentKey,
                 disableVerticalPadding = true
@@ -285,7 +298,7 @@ private fun TableCell(
 
             Text(
                 text = annotatedText,
-                style = style,
+                style = compactStyle,
                 color = textColor,
                 textAlign = textAlign,
                 modifier = Modifier.fillMaxWidth(), // 关键：填充以响应 TextAlign

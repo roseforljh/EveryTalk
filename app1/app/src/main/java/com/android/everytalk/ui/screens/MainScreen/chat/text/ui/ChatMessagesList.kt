@@ -633,8 +633,8 @@ fun ChatMessagesList(
                     .fillMaxSize()
                     .nestedScroll(scrollStateManager.nestedScrollConnection),
                 contentPadding = PaddingValues(
-                    start = 6.dp,
-                    end = 16.dp,
+                    start = ChatDimensions.HORIZONTAL_PADDING,
+                    end = ChatDimensions.HORIZONTAL_PADDING,
                     top = topPadding,
                     bottom = additionalBottomPadding + 12.dp
                 ),

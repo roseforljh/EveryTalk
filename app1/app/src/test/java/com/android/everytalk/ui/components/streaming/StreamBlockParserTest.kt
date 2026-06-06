@@ -135,7 +135,7 @@ class StreamBlockParserTest {
     fun `streaming render state splits native markdown blocks`() {
         val state = buildStreamingRenderState(
             messageId = "msg-7",
-            content = "# 标题\n\n- 第一项\n- 第二项\n\n尾段",
+            content = "- 第一项\n- 第二项\n\n> 引用\n\n尾段",
             isStreaming = true,
             isComplete = false,
         )

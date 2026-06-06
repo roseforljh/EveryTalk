@@ -2,7 +2,10 @@ package com.android.everytalk.ui.components.streaming
 
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.Hyphens
+import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.android.everytalk.data.DataClass.Sender
@@ -236,6 +239,7 @@ class StreamBlocksRendererRoutingTest {
         assertEquals(16.dp, nativeMarkdownBlockSpacingAfter(paragraph, heading))
         assertEquals(8.dp, nativeMarkdownBlockSpacingAfter(heading, paragraph))
         assertEquals(12.dp, nativeMarkdownBlockSpacingAfter(rule, paragraph))
+        assertEquals(0.5f, ChatMarkdownTextStyle.HORIZONTAL_RULE_THICKNESS_DP, 0.001f)
     }
 
     @Test
@@ -264,6 +268,17 @@ class StreamBlocksRendererRoutingTest {
     }
 
     @Test
+    fun `native streaming body text uses simple non hyphenating line break strategy`() {
+        val textStyle = compactBodyTextStyle(
+            style = TextStyle(fontSize = 16.sp),
+            color = Color.Black,
+        )
+
+        assertEquals(LineBreak.Simple, textStyle.lineBreak)
+        assertEquals(Hyphens.None, textStyle.hyphens)
+    }
+
+    @Test
     fun `inline code uses gray bold compact style without background in streaming renderer`() {
         val surfaceVariant = Color(0xFF888888)
 
@@ -288,8 +303,9 @@ class StreamBlocksRendererRoutingTest {
         assertEquals(5f, ChatMarkdownTextStyle.listBulletSizeDp(level = 0), 0.001f)
         assertEquals(4f, ChatMarkdownTextStyle.listBulletSizeDp(level = 1), 0.001f)
         assertEquals(24f, ChatMarkdownTextStyle.LIST_NESTED_INDENT_DP, 0.001f)
-        assertEquals(8f, ChatMarkdownTextStyle.LIST_TOP_LEVEL_ITEM_SPACING_DP, 0.001f)
-        assertEquals(6f, ChatMarkdownTextStyle.LIST_NESTED_TOP_SPACING_DP, 0.001f)
+        assertEquals(12f, ChatMarkdownTextStyle.LIST_TOP_LEVEL_ITEM_SPACING_DP, 0.001f)
+        assertEquals(12f, ChatMarkdownTextStyle.LIST_NESTED_TOP_SPACING_DP, 0.001f)
+        assertEquals(22f, ChatMarkdownTextStyle.LIST_ITEM_LINE_HEIGHT_SP, 0.001f)
         assertTrue(ChatMarkdownTextStyle.listBulletFilled(level = 0))
         assertFalse(ChatMarkdownTextStyle.listBulletFilled(level = 1))
     }
@@ -304,9 +320,9 @@ class StreamBlocksRendererRoutingTest {
         )
 
         assertEquals(0.dp, nativeListItemTopSpacing(rows, 0))
-        assertEquals(8.dp, nativeListItemTopSpacing(rows, 1))
-        assertEquals(6.dp, nativeListItemTopSpacing(rows, 2))
-        assertEquals(6.dp, nativeListItemTopSpacing(rows, 3))
+        assertEquals(12.dp, nativeListItemTopSpacing(rows, 1))
+        assertEquals(12.dp, nativeListItemTopSpacing(rows, 2))
+        assertEquals(12.dp, nativeListItemTopSpacing(rows, 3))
     }
 
     @Test

@@ -18,11 +18,12 @@ import io.noties.markwon.utils.LeadingMarginUtils
  */
 class CustomBulletListItemSpan(
     private val theme: MarkwonTheme,
-    private val level: Int,
+    val level: Int,
     private val customBlockMargin: Int,
     private val bulletWidth: Int,
     private val topLevelItemSpacing: Int,
-    private val nestedTopSpacing: Int
+    private val nestedTopSpacing: Int,
+    private val listItemLineHeight: Int
 ) : LeadingMarginSpan, LineHeightSpan {
 
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -105,24 +106,54 @@ class CustomBulletListItemSpan(
     ) {
         val spanned = text as? Spanned ?: return
         val spanStart = spanned.getSpanStart(this)
-        if (start > spanStart) return
+        applyCompactLineHeight(fm)
 
-        val extraTop = when {
-            level == 0 && hasPreviousSibling(spanned, spanStart) -> topLevelItemSpacing
-            level > 0 -> nestedTopSpacing
+        val next = findNextItem(spanned, spanStart)
+        val lineEndsBeforeNextItem = next != null && start < next.start && end >= next.start - 1
+        val extraBottom = when {
+            next == null -> 0
+            lineEndsBeforeNextItem && next.level == level -> topLevelItemSpacing
+            lineEndsBeforeNextItem -> nestedTopSpacing
             else -> 0
         }
-        if (extraTop > 0) {
-            fm.ascent -= extraTop
-            fm.top -= extraTop
+        if (extraBottom > 0) {
+            fm.descent += extraBottom
+            fm.bottom += extraBottom
         }
     }
 
-    private fun hasPreviousSibling(spanned: Spanned, spanStart: Int): Boolean {
-        val previous = spanned.getSpans(0, spanStart, CustomBulletListItemSpan::class.java)
-            .filter { span -> span !== this && spanned.getSpanEnd(span) <= spanStart }
-            .maxByOrNull { span -> spanned.getSpanEnd(span) }
+    private fun applyCompactLineHeight(fm: Paint.FontMetricsInt) {
+        if (listItemLineHeight <= 0) return
+        val currentHeight = fm.descent - fm.ascent
+        if (currentHeight <= 0 || currentHeight == listItemLineHeight) return
 
-        return previous?.level == level
+        val center = fm.ascent + currentHeight / 2
+        fm.ascent = center - listItemLineHeight / 2
+        fm.descent = fm.ascent + listItemLineHeight
+        fm.top = fm.ascent
+        fm.bottom = fm.descent
+    }
+
+    private data class ListItemPosition(
+        val start: Int,
+        val level: Int,
+    )
+
+    private fun findNextItem(spanned: Spanned, spanStart: Int): ListItemPosition? {
+        val bulletSpans = spanned.getSpans(spanStart, spanned.length, CustomBulletListItemSpan::class.java)
+        val orderedSpans = spanned.getSpans(spanStart, spanned.length, CustomOrderedListItemSpan::class.java)
+        return (bulletSpans.toList() + orderedSpans.toList())
+            .filter { it !== this }
+            .mapNotNull { span ->
+                val start = spanned.getSpanStart(span)
+                if (start <= spanStart) return@mapNotNull null
+                val level = when (span) {
+                    is CustomBulletListItemSpan -> span.level
+                    is CustomOrderedListItemSpan -> span.level
+                    else -> return@mapNotNull null
+                }
+                ListItemPosition(start = start, level = level)
+            }
+            .minByOrNull { it.start }
     }
 }

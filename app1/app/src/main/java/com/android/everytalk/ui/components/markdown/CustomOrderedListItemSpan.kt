@@ -4,7 +4,9 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.text.Layout
 import android.text.TextPaint
+import android.text.Spanned
 import android.text.style.LeadingMarginSpan
+import android.text.style.LineHeightSpan
 import android.widget.TextView
 import io.noties.markwon.core.MarkwonTheme
 import io.noties.markwon.utils.LeadingMarginUtils
@@ -12,9 +14,13 @@ import kotlin.math.max
 
 class CustomOrderedListItemSpan(
     private val theme: MarkwonTheme,
-    private val number: String,
-    private val customBlockMargin: Int
-) : LeadingMarginSpan {
+    val number: String,
+    private val customBlockMargin: Int,
+    val level: Int,
+    private val topLevelItemSpacing: Int,
+    private val nestedTopSpacing: Int,
+    private val listItemLineHeight: Int
+) : LeadingMarginSpan, LineHeightSpan {
 
     private val paint = Paint(Paint.ANTI_ALIAS_FLAG)
     private var measuredMargin: Int = 0
@@ -54,6 +60,67 @@ class CustomOrderedListItemSpan(
             x + (width * dir) + (width - numberWidth)
         }
         c.drawText(number, left.toFloat(), baseline.toFloat(), paint)
+    }
+
+    override fun chooseHeight(
+        text: CharSequence,
+        start: Int,
+        end: Int,
+        spanstartv: Int,
+        lineHeight: Int,
+        fm: Paint.FontMetricsInt,
+    ) {
+        val spanned = text as? Spanned ?: return
+        val spanStart = spanned.getSpanStart(this)
+        applyCompactLineHeight(fm)
+
+        val next = findNextItem(spanned, spanStart)
+        val lineEndsBeforeNextItem = next != null && start < next.start && end >= next.start - 1
+        val extraBottom = when {
+            next == null -> 0
+            lineEndsBeforeNextItem && next.level == level -> topLevelItemSpacing
+            lineEndsBeforeNextItem -> nestedTopSpacing
+            else -> 0
+        }
+        if (extraBottom > 0) {
+            fm.descent += extraBottom
+            fm.bottom += extraBottom
+        }
+    }
+
+    private fun applyCompactLineHeight(fm: Paint.FontMetricsInt) {
+        if (listItemLineHeight <= 0) return
+        val currentHeight = fm.descent - fm.ascent
+        if (currentHeight <= 0 || currentHeight == listItemLineHeight) return
+
+        val center = fm.ascent + currentHeight / 2
+        fm.ascent = center - listItemLineHeight / 2
+        fm.descent = fm.ascent + listItemLineHeight
+        fm.top = fm.ascent
+        fm.bottom = fm.descent
+    }
+
+    private data class ListItemPosition(
+        val start: Int,
+        val level: Int,
+    )
+
+    private fun findNextItem(spanned: Spanned, spanStart: Int): ListItemPosition? {
+        val bulletSpans = spanned.getSpans(spanStart, spanned.length, CustomBulletListItemSpan::class.java)
+        val orderedSpans = spanned.getSpans(spanStart, spanned.length, CustomOrderedListItemSpan::class.java)
+        return (bulletSpans.toList() + orderedSpans.toList())
+            .filter { it !== this }
+            .mapNotNull { span ->
+                val start = spanned.getSpanStart(span)
+                if (start <= spanStart) return@mapNotNull null
+                val level = when (span) {
+                    is CustomBulletListItemSpan -> span.level
+                    is CustomOrderedListItemSpan -> span.level
+                    else -> return@mapNotNull null
+                }
+                ListItemPosition(start = start, level = level)
+            }
+            .minByOrNull { it.start }
     }
 
     companion object {

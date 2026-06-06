@@ -1,5 +1,8 @@
 package com.android.everytalk.ui.components.table
 
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -98,6 +101,25 @@ class TableAwareTextRoutingTest {
                 recursionDepth = 3,
             )
         )
+    }
+
+    @Test
+    fun `table cells use compact line height`() {
+        val style = compactTableCellTextStyle(
+            TextStyle(
+                fontSize = 14.sp,
+                lineHeight = 26.sp,
+            )
+        )
+
+        assertEquals(18.sp, style.lineHeight)
+    }
+
+    @Test
+    fun `adjacent tables get stronger outer spacing`() {
+        assertEquals(8.dp, tableBlockVerticalPaddingDp(previousIsTable = false, nextIsTable = false))
+        assertEquals(14.dp, tableBlockVerticalPaddingDp(previousIsTable = true, nextIsTable = false))
+        assertEquals(14.dp, tableBlockVerticalPaddingDp(previousIsTable = false, nextIsTable = true))
     }
 
     @Test

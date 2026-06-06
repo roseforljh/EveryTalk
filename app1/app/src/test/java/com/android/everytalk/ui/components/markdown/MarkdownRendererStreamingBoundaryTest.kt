@@ -4,6 +4,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.MotionEvent
 import android.view.ViewConfiguration
+import android.text.Layout
 import android.text.Selection
 import android.text.Spanned
 import android.text.style.LineBackgroundSpan
@@ -78,6 +79,25 @@ class MarkdownRendererStreamingBoundaryTest {
 
         assertSame(firstTextView, secondTextView)
         assertNotSame(firstTag, secondTag)
+    }
+
+    @Test
+    fun `ai markdown uses simple non hyphenating line break strategy`() {
+        composeRule.setContent {
+            MarkdownRenderer(
+                markdown = "像 Mike Krieger 这种能把一个 13 人的小项目带成 10 亿用户帝国的 CTO，或者像 OpenAI、Google 里的技术掌舵人。",
+                isStreaming = false,
+                sender = Sender.AI,
+                contentKey = "message-wrap-strategy:complete",
+            )
+        }
+
+        val textView = composeRule.runOnIdle {
+            composeRule.activity.contentView().findDescendantTextView()
+        }
+
+        assertEquals(Layout.BREAK_STRATEGY_SIMPLE, textView.breakStrategy)
+        assertEquals(Layout.HYPHENATION_FREQUENCY_NONE, textView.hyphenationFrequency)
     }
 
     @Test
