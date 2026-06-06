@@ -21,6 +21,7 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.scrollBy
@@ -45,6 +46,7 @@ import android.os.SystemClock
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.*
 import androidx.compose.ui.res.stringResource
@@ -62,6 +64,7 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.Message
+import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.ui.screens.BubbleMain.Main.AttachmentsContent
 import com.android.everytalk.ui.screens.BubbleMain.Main.ReasoningToggleAndContent
@@ -74,6 +77,7 @@ import com.android.everytalk.ui.theme.chatColors
 
 import com.android.everytalk.ui.components.EnhancedMarkdownText
 import com.android.everytalk.ui.components.WebPreviewDialog
+import com.android.everytalk.ui.components.WebMarkdownSourcesExtractor
 import com.android.everytalk.ui.components.dialog.AppDialogShape
 import com.android.everytalk.ui.components.dialog.appDialogBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogContainerColor
@@ -85,8 +89,10 @@ import com.android.everytalk.ui.components.streaming.StreamBlocksRenderer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import coil3.compose.AsyncImage
 import androidx.compose.ui.layout.onSizeChanged
 import kotlinx.coroutines.flow.first
+import java.net.URI
 
 internal fun shouldResetTransientBottomReserve(
     previousConversationId: String?,
@@ -1118,6 +1124,120 @@ private fun LoadingStageIndicator(
     }
 }
 
+private fun pageSourceHost(href: String): String {
+    return runCatching {
+        URI(href).host?.removePrefix("www.") ?: ""
+    }.getOrDefault("")
+}
+
+private fun pageSourceFaviconUrl(href: String): String {
+    val host = pageSourceHost(href)
+    return if (host.isBlank()) {
+        ""
+    } else {
+        "https://www.google.com/s2/favicons?domain=$host&sz=64"
+    }
+}
+
+private fun pageSourceInitial(source: WebSearchResult): String {
+    val host = pageSourceHost(source.href)
+    val raw = host.ifBlank { source.title }.trim()
+    return raw.firstOrNull()?.uppercaseChar()?.toString() ?: "?"
+}
+
+@Composable
+private fun PageSourcesButton(
+    pageSources: List<WebSearchResult>,
+    viewModel: AppViewModel,
+    modifier: Modifier = Modifier,
+) {
+    val isDarkTheme = isSystemInDarkTheme()
+    val borderColor = if (isDarkTheme) {
+        MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)
+    } else {
+        MaterialTheme.colorScheme.outline.copy(alpha = 0.38f)
+    }
+    Surface(
+        onClick = {
+            viewModel.showSourcesDialog(pageSources)
+        },
+        modifier = modifier,
+        shape = RoundedCornerShape(24.dp),
+        color = if (isDarkTheme) {
+            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f)
+        } else {
+            MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)
+        },
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        border = BorderStroke(1.dp, borderColor),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            PageSourceIconStack(
+                pageSources = pageSources,
+                borderColor = borderColor
+            )
+            Text(
+                text = "${pageSources.size} 页面",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PageSourceIconStack(
+    pageSources: List<WebSearchResult>,
+    borderColor: Color,
+) {
+    val icons = pageSources.take(3)
+    if (icons.isEmpty()) return
+
+    val iconSize = 28.dp
+    val overlapOffset = 16.dp
+    val stackWidth = (28 + 16 * (icons.size - 1)).dp
+
+    Box(
+        modifier = Modifier
+            .width(stackWidth)
+            .height(iconSize)
+    ) {
+        icons.forEachIndexed { index, source ->
+            Box(
+                modifier = Modifier
+                    .offset(x = overlapOffset * index)
+                    .size(iconSize)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.surface)
+                    .border(1.dp, borderColor, CircleShape),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = pageSourceInitial(source),
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                val faviconUrl = pageSourceFaviconUrl(source.href)
+                if (faviconUrl.isNotBlank()) {
+                    AsyncImage(
+                        model = faviconUrl,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier
+                            .size(iconSize)
+                            .clip(CircleShape)
+                    )
+                }
+            }
+        }
+    }
+}
+
 
 @Composable
 fun AiMessageItem(
@@ -1165,68 +1285,95 @@ fun AiMessageItem(
             contentColor = MaterialTheme.colorScheme.onSurface,
             shadowElevation = 0.dp
         ) {
+            val streamingRenderState by remember(message.id, viewModel) {
+                viewModel.getStreamingRenderState(message.id)
+            }.collectAsState()
+
+            val shouldPreferStreamingContent =
+                isStreaming ||
+                    streamingRenderState.isStreaming
+
+            val effectiveContent = if (shouldPreferStreamingContent) {
+                streamingRenderState.content.ifBlank { message.text }
+            } else {
+                // 流式结束后，优先使用 message.text；但如果 message.text 为空或明显短于
+                // streamingRenderState.content，说明存在同步竞态，使用流式内容兜底防止闪烁
+                if (message.text.isBlank() && streamingRenderState.content.isNotBlank()) {
+                    streamingRenderState.content
+                } else if (message.text.length < streamingRenderState.content.length * 0.8 && streamingRenderState.content.isNotBlank()) {
+                    streamingRenderState.content
+                } else {
+                    message.text
+                }
+            }
+
+            val renderMessage = if (effectiveContent == message.text) {
+                message
+            } else {
+                message.copy(text = effectiveContent)
+            }
+            val sourcesExtraction = remember(effectiveContent) {
+                WebMarkdownSourcesExtractor.extract(effectiveContent)
+            }
+            val pageSources = message.webSearchResults?.takeIf { it.isNotEmpty() } ?: sourcesExtraction.sources
+            val displayContent = sourcesExtraction.displayText
+            val displayMessage = if (displayContent == renderMessage.text) {
+                renderMessage
+            } else {
+                renderMessage.copy(text = displayContent)
+            }
+
             // 流式期间保持 minHeight 只增不减，防止向上跳；流式结束后不再约束
             val minHeightModifier = if (isStreaming && lastMeasuredHeightPx > 0) {
                 Modifier.heightIn(min = with(density) { lastMeasuredHeightPx.toDp() })
             } else {
                 Modifier
             }
-            Box(
-                modifier = minHeightModifier
-                    .padding(
-                        horizontal = ChatDimensions.BUBBLE_INNER_PADDING_HORIZONTAL,
-                        vertical = ChatDimensions.BUBBLE_INNER_PADDING_VERTICAL
+            Column(modifier = Modifier.wrapContentWidth()) {
+                if (pageSources.isNotEmpty()) {
+                    PageSourcesButton(
+                        pageSources = pageSources,
+                        viewModel = viewModel,
+                        modifier = Modifier.padding(
+                            start = ChatDimensions.BUBBLE_INNER_PADDING_HORIZONTAL,
+                            top = ChatDimensions.BUBBLE_INNER_PADDING_VERTICAL,
+                            bottom = 6.dp
+                        )
                     )
-                    .onSizeChanged { size ->
-                        if (isStreaming && size.height > lastMeasuredHeightPx) {
-                            lastMeasuredHeightPx = size.height
-                        }
-                        if (!isStreaming) {
-                            lastMeasuredHeightPx = size.height
-                        }
-                    }
-            ) {
-                val streamingRenderState by remember(message.id, viewModel) {
-                    viewModel.getStreamingRenderState(message.id)
-                }.collectAsState()
-
-                val shouldPreferStreamingContent =
-                    isStreaming ||
-                        streamingRenderState.isStreaming
-
-                val effectiveContent = if (shouldPreferStreamingContent) {
-                    streamingRenderState.content.ifBlank { message.text }
-                } else {
-                    // 流式结束后，优先使用 message.text；但如果 message.text 为空或明显短于
-                    // streamingRenderState.content，说明存在同步竞态，使用流式内容兜底防止闪烁
-                    if (message.text.isBlank() && streamingRenderState.content.isNotBlank()) {
-                        streamingRenderState.content
-                    } else if (message.text.length < streamingRenderState.content.length * 0.8 && streamingRenderState.content.isNotBlank()) {
-                        streamingRenderState.content
-                    } else {
-                        message.text
-                    }
                 }
 
-                val renderMessage = if (effectiveContent == message.text) {
-                    message
-                } else {
-                    message.copy(text = effectiveContent)
-                }
+                Box(
+                    modifier = minHeightModifier
+                        .padding(
+                            horizontal = ChatDimensions.BUBBLE_INNER_PADDING_HORIZONTAL,
+                            vertical = ChatDimensions.BUBBLE_INNER_PADDING_VERTICAL
+                        )
+                        .onSizeChanged { size ->
+                            if (isStreaming && size.height > lastMeasuredHeightPx) {
+                                lastMeasuredHeightPx = size.height
+                            }
+                            if (!isStreaming) {
+                                lastMeasuredHeightPx = size.height
+                            }
+                        }
+                ) {
 
                 val useStreamingBlocks =
-                    streamingRenderState.content == effectiveContent && streamingRenderState.blocks.isNotEmpty()
+                    sourcesExtraction.sources.isEmpty() &&
+                        streamingRenderState.content == effectiveContent &&
+                        streamingRenderState.blocks.isNotEmpty()
 
                 val renderBlocks = when {
                     messageOutputType == "code" -> emptyList()
                     useStreamingBlocks -> streamingRenderState.blocks
+                    sourcesExtraction.sources.isNotEmpty() -> emptyList()
                     blocks.isNotEmpty() && (text == effectiveContent || message.text == effectiveContent) -> blocks
                     else -> emptyList()
                 }
 
                 if (renderBlocks.isNotEmpty()) {
                     StreamBlocksRenderer(
-                        message = renderMessage,
+                        message = displayMessage,
                         blocks = renderBlocks,
                         committedBlocks = if (useStreamingBlocks) streamingRenderState.committedBlocks else emptyList(),
                         tailBlocks = if (useStreamingBlocks) streamingRenderState.tailBlocks else emptyList(),
@@ -1270,7 +1417,7 @@ fun AiMessageItem(
                     )
                 } else {
                     EnhancedMarkdownText(
-                        message = renderMessage,
+                        message = displayMessage,
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurface,
                         isStreaming = shouldPreferStreamingContent,
@@ -1284,10 +1431,11 @@ fun AiMessageItem(
                             viewModel.showSnackbar("已复制代码")
                         },
                         viewModel = viewModel,
-                        contentOverride = effectiveContent,
+                        contentOverride = displayContent,
                         contentKeyOverride = message.id,
                         disableStreamingSubscription = true
                     )
+                }
                 }
             }
         }
@@ -1308,21 +1456,6 @@ fun AiMessageFooterItem(
             .fillMaxWidth()
             .padding(start = ChatDimensions.HORIZONTAL_PADDING)
     ) {
-        if (!message.webSearchResults.isNullOrEmpty()) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.Start
-            ) {
-                TextButton(
-                    onClick = {
-                        viewModel.showSourcesDialog(message.webSearchResults)
-                    },
-                ) {
-                    Text(stringResource(id = R.string.view_sources, message.webSearchResults.size))
-                }
-            }
-        }
-
         Row(
             modifier = Modifier.padding(top = 2.dp),
             horizontalArrangement = Arrangement.Start,

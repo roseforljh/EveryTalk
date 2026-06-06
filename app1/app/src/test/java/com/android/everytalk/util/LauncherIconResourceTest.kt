@@ -8,25 +8,22 @@ import org.junit.Test
 class LauncherIconResourceTest {
 
     @Test
-    fun `launcher resources do not reference theme-qualified logo2`() {
+    fun `launcher resources use release splash foreground assets`() {
         val resDir = findResDir()
-        val launcherFiles = listOf(
+        val lightLauncherFiles = listOf(
             resDir.resolve("mipmap-anydpi-v26/ic_launcher.xml"),
             resDir.resolve("mipmap-anydpi-v26/ic_launcher_round.xml"),
+        )
+        val darkLauncherFiles = listOf(
             resDir.resolve("mipmap-anydpi-v26/ic_launcher_night.xml"),
             resDir.resolve("mipmap-anydpi-v26/ic_launcher_night_round.xml"),
             resDir.resolve("mipmap-night-anydpi-v26/ic_launcher.xml"),
             resDir.resolve("mipmap-night-anydpi-v26/ic_launcher_round.xml"),
-            resDir.resolve("drawable/launcher_logo.xml"),
         )
 
-        launcherFiles.forEach { file ->
+        (lightLauncherFiles + darkLauncherFiles).forEach { file ->
             assertTrue("Missing launcher resource: ${file.path}", file.isFile)
             val text = file.readText()
-            assertFalse(
-                "${file.path} must not use @drawable/logo2 because drawable-night/logo2 overrides it",
-                text.contains("@drawable/logo2"),
-            )
             assertFalse(
                 "${file.path} must not use @drawable/logo_dark because it has an opaque black background",
                 text.contains("@drawable/logo_dark"),
@@ -35,25 +32,31 @@ class LauncherIconResourceTest {
                 "${file.path} must not use old launcher_logo_white resources",
                 text.contains("launcher_logo_white"),
             )
-            if (file.path.contains("mipmap")) {
-                assertTrue(
-                    "${file.path} must use the fixed launcher logo foreground",
-                    text.contains("@drawable/launcher_logo"),
-                )
-                assertFalse(
-                    "${file.path} must not define monochrome because themed icons recolor the fixed launcher icon",
-                    text.contains("<monochrome"),
-                )
-            }
+            assertFalse(
+                "${file.path} must not define monochrome because themed icons recolor the fixed launcher icon",
+                text.contains("<monochrome"),
+            )
+        }
+        lightLauncherFiles.forEach { file ->
+            assertTrue(
+                "${file.path} must use the v1.19.6 light launcher foreground",
+                file.readText().contains("@drawable/ic_foreground_logo"),
+            )
+        }
+        darkLauncherFiles.forEach { file ->
+            assertTrue(
+                "${file.path} must use the v1.19.6 dark launcher foreground",
+                file.readText().contains("@drawable/logo2"),
+            )
         }
 
         assertTrue(
-            "Missing fixed launcher logo asset",
-            resDir.resolve("drawable/launcher_logo_asset.png").isFile,
+            "Missing v1.19.6 light launcher foreground asset",
+            resDir.resolve("drawable/ic_foreground_logo.webp").isFile,
         )
         assertTrue(
-            "Missing fixed launcher foreground asset",
-            resDir.resolve("drawable/launcher_logo_foreground_asset.png").isFile,
+            "Missing v1.19.6 dark launcher foreground asset",
+            resDir.resolve("drawable/logo2.png").isFile,
         )
         assertTrue(
             "Launcher adaptive icon background must be white",
@@ -139,47 +142,22 @@ class LauncherIconResourceTest {
     }
 
     @Test
-    fun `splash logo colors match light and dark themes`() {
+    fun `android 12 splash uses launcher icon resources`() {
         val resDir = findResDir()
-        val lightSplash = resDir.resolve("drawable/splash_logo.xml")
-        val darkSplash = resDir.resolve("drawable-night/splash_logo.xml")
-        val lightColors = resDir.resolve("values/colors.xml")
-        val darkColors = resDir.resolve("values-night/colors.xml")
         val v31Theme = resDir.resolve("values-v31/themes.xml")
+        val launcherIcon = resDir.resolve("mipmap-anydpi-v26/ic_launcher.xml")
+        val launcherIconNight = resDir.resolve("mipmap-night-anydpi-v26/ic_launcher.xml")
 
-        assertTrue("Missing light splash logo", lightSplash.isFile)
-        assertTrue("Missing dark splash logo", darkSplash.isFile)
-        assertFalse("Light splash frames must be removed", resDir.resolve("drawable").listFiles().orEmpty().any { it.name.startsWith("splash_logo_frame_") })
-        assertFalse("Dark splash frames must be removed", resDir.resolve("drawable-night").listFiles().orEmpty().any { it.name.startsWith("splash_logo_frame_") })
-        listOf(lightSplash, darkSplash).forEach { file ->
-            val text = file.readText()
-            assertTrue("${file.path} must use a static bitmap", text.contains("<bitmap"))
-            assertFalse("${file.path} must not use frame animation", text.contains("animation-list"))
-            assertFalse("${file.path} must not use vector animation", text.contains("animated-vector"))
-            assertFalse("${file.path} must not use rotate animation", text.contains("animated-rotate"))
-        }
-        assertTrue(
-            "Light splash must use clear black logo asset",
-            lightSplash.readText().contains("@drawable/ic_foreground_logo"),
-        )
-        assertTrue(
-            "Dark splash must use clear white logo asset",
-            darkSplash.readText().contains("@drawable/logo2"),
-        )
-        assertFalse("Malformed black splash vector must be removed", resDir.resolve("drawable/splash_logo_vector_black.xml").exists())
-        assertFalse("Malformed white splash vector must be removed", resDir.resolve("drawable/splash_logo_vector_white.xml").exists())
-        assertTrue(
-            "Light splash background must be white",
-            lightColors.readText().contains("<color name=\"splash_screen_background\">#FFFFFFFF</color>"),
-        )
-        assertTrue(
-            "Dark splash background must be black",
-            darkColors.readText().contains("<color name=\"splash_screen_background\">#FF000000</color>"),
-        )
-        assertTrue(
-            "Android 12 splash theme must use theme-qualified splash logo",
-            v31Theme.readText().contains("android:windowSplashScreenAnimatedIcon") &&
-                v31Theme.readText().contains("@drawable/splash_logo"),
+        assertTrue("Missing Android 12 theme", v31Theme.isFile)
+        assertTrue("Missing launcher icon resource", launcherIcon.isFile)
+        assertTrue("Missing night launcher icon resource", launcherIconNight.isFile)
+        assertTrue("Launcher icon must use adaptive icon", launcherIcon.readText().contains("<adaptive-icon"))
+        assertTrue("Night launcher icon must use adaptive icon", launcherIconNight.readText().contains("<adaptive-icon"))
+        assertTrue("Launcher icon must use the v1.19.6 light foreground", launcherIcon.readText().contains("@drawable/ic_foreground_logo"))
+        assertTrue("Night launcher icon must use the v1.19.6 dark foreground", launcherIconNight.readText().contains("@drawable/logo2"))
+        assertFalse(
+            "Android 12 splash theme must not override the launcher icon",
+            v31Theme.readText().contains("windowSplashScreenAnimatedIcon"),
         )
         assertFalse(
             "Android 12 splash theme must not define animation duration",
