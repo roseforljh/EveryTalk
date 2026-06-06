@@ -21,7 +21,6 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.scrollBy
@@ -1152,10 +1151,10 @@ private fun PageSourcesButton(
     modifier: Modifier = Modifier,
 ) {
     val isDarkTheme = isSystemInDarkTheme()
-    val borderColor = if (isDarkTheme) {
-        MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)
+    val buttonColor = if (isDarkTheme) {
+        Color(0xFF2B2B2D)
     } else {
-        MaterialTheme.colorScheme.outline.copy(alpha = 0.38f)
+        Color(0xFFF1F1EF)
     }
     Surface(
         onClick = {
@@ -1163,26 +1162,20 @@ private fun PageSourcesButton(
         },
         modifier = modifier,
         shape = RoundedCornerShape(24.dp),
-        color = if (isDarkTheme) {
-            MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f)
-        } else {
-            MaterialTheme.colorScheme.surface.copy(alpha = 0.96f)
-        },
-        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
-        border = BorderStroke(1.dp, borderColor),
+        color = buttonColor,
+        contentColor = MaterialTheme.colorScheme.onSurface,
     ) {
         Row(
-            modifier = Modifier.padding(horizontal = 14.dp, vertical = 9.dp),
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             PageSourceIconStack(
-                pageSources = pageSources,
-                borderColor = borderColor
+                pageSources = pageSources
             )
             Text(
                 text = "${pageSources.size} 页面",
-                style = MaterialTheme.typography.titleMedium,
+                style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold,
             )
         }
@@ -1192,14 +1185,13 @@ private fun PageSourcesButton(
 @Composable
 private fun PageSourceIconStack(
     pageSources: List<WebSearchResult>,
-    borderColor: Color,
 ) {
     val icons = pageSources.take(3)
     if (icons.isEmpty()) return
 
-    val iconSize = 28.dp
-    val overlapOffset = 16.dp
-    val stackWidth = (28 + 16 * (icons.size - 1)).dp
+    val iconSize = 24.dp
+    val overlapOffset = 14.dp
+    val stackWidth = (24 + 14 * (icons.size - 1)).dp
 
     Box(
         modifier = Modifier
@@ -1212,8 +1204,7 @@ private fun PageSourceIconStack(
                     .offset(x = overlapOffset * index)
                     .size(iconSize)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surface)
-                    .border(1.dp, borderColor, CircleShape),
+                    .background(MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
