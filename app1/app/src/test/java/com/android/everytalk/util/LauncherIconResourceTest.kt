@@ -1,6 +1,10 @@
 package com.android.everytalk.util
 
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.util.zip.Inflater
+import kotlin.math.abs
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -8,20 +12,20 @@ import org.junit.Test
 class LauncherIconResourceTest {
 
     @Test
-    fun `launcher resources use beetle foreground assets`() {
+    fun `launcher resources use centered chat logo foreground assets`() {
         val resDir = findResDir()
         val lightLauncherFiles = listOf(
             resDir.resolve("mipmap-anydpi-v26/ic_launcher.xml"),
             resDir.resolve("mipmap-anydpi-v26/ic_launcher_round.xml"),
         )
-        val darkLauncherFiles = listOf(
+        val nightLauncherFiles = listOf(
             resDir.resolve("mipmap-anydpi-v26/ic_launcher_night.xml"),
             resDir.resolve("mipmap-anydpi-v26/ic_launcher_night_round.xml"),
             resDir.resolve("mipmap-night-anydpi-v26/ic_launcher.xml"),
             resDir.resolve("mipmap-night-anydpi-v26/ic_launcher_round.xml"),
         )
 
-        (lightLauncherFiles + darkLauncherFiles).forEach { file ->
+        (lightLauncherFiles + nightLauncherFiles).forEach { file ->
             assertTrue("Missing launcher resource: ${file.path}", file.isFile)
             val text = file.readText()
             assertFalse(
@@ -31,6 +35,10 @@ class LauncherIconResourceTest {
             assertFalse(
                 "${file.path} must not use old launcher_logo_white resources",
                 text.contains("launcher_logo_white"),
+            )
+            assertFalse(
+                "${file.path} must not use old beetle resources",
+                text.contains("beetle_logo"),
             )
             assertFalse(
                 "${file.path} must not use the old ET foreground",
@@ -43,55 +51,54 @@ class LauncherIconResourceTest {
         }
         lightLauncherFiles.forEach { file ->
             val text = file.readText()
-            assertTrue("${file.path} must use the black beetle launcher foreground", text.contains("@drawable/beetle_logo_black"))
+            assertTrue("${file.path} must use the new launcher foreground", text.contains("@drawable/launcher_logo_foreground_asset"))
             assertTrue("${file.path} must use the white launcher background", text.contains("@color/ic_launcher_background"))
         }
-        darkLauncherFiles.forEach { file ->
+        nightLauncherFiles.forEach { file ->
             val text = file.readText()
-            assertTrue("${file.path} must use the white beetle launcher foreground", text.contains("@drawable/beetle_logo_white"))
-            assertTrue("${file.path} must use the black launcher background", text.contains("@color/ic_launcher_background_dark"))
+            assertTrue("${file.path} must use the new launcher foreground", text.contains("@drawable/launcher_logo_foreground_asset"))
+            assertTrue("${file.path} must keep the white launcher background", text.contains("@color/ic_launcher_background"))
+            assertFalse("${file.path} must not switch launcher background by theme", text.contains("@color/ic_launcher_background_dark"))
         }
 
         assertTrue(
-            "Missing black beetle launcher foreground vector",
-            resDir.resolve("drawable/beetle_logo_black.xml").isFile,
+            "Missing transparent launcher foreground PNG",
+            resDir.resolve("drawable/launcher_logo_foreground_asset.png").isFile,
         )
         assertTrue(
-            "Missing white beetle launcher foreground vector",
-            resDir.resolve("drawable/beetle_logo_white.xml").isFile,
+            "Missing fixed launcher preview PNG",
+            resDir.resolve("drawable/launcher_logo_asset.png").isFile,
         )
         assertTrue(
-            "Light launcher foreground must be vector to avoid bitmap scaling blur",
-            resDir.resolve("drawable/beetle_logo_black.xml").readText().contains("<vector"),
+            "Launcher foreground PNG must be valid",
+            resDir.resolve("drawable/launcher_logo_foreground_asset.png")
+                .readBytes()
+                .take(8)
+                .toByteArray()
+                .contentEquals(byteArrayOf(-119, 80, 78, 71, 13, 10, 26, 10)),
         )
-        assertTrue(
-            "Dark launcher foreground must be vector to avoid bitmap scaling blur",
-            resDir.resolve("drawable/beetle_logo_white.xml").readText().contains("<vector"),
-        )
-        assertTrue(
-            "Missing transparent black beetle source PNG",
-            resDir.resolve("drawable-nodpi/beetle_logo_black.png").isFile,
-        )
-        assertTrue(
-            "Missing transparent white beetle source PNG",
-            resDir.resolve("drawable-nodpi/beetle_logo_white.png").isFile,
-        )
+        val foregroundSize = resDir.resolve("drawable/launcher_logo_foreground_asset.png").readPngSize()
+        assertEquals("Launcher foreground width must stay high resolution", 1024, foregroundSize.width)
+        assertEquals("Launcher foreground height must stay high resolution", 1024, foregroundSize.height)
         assertTrue(
             "Launcher adaptive icon background must be white",
             resDir.resolve("values/ic_launcher_background.xml")
                 .readText()
                 .contains("#FFFFFFFF"),
         )
-        assertTrue(
-            "Dark launcher adaptive icon background must be black",
-            resDir.resolve("values/ic_launcher_background.xml")
-                .readText()
-                .contains("#FF000000"),
-        )
         assertFalse("Old drawable launcher foreground XML must be deleted", resDir.resolve("drawable/ic_launcher_foreground.xml").exists())
         assertFalse("Old default green launcher background XML must be deleted", resDir.resolve("drawable/ic_launcher_background.xml").exists())
         assertFalse("Old white launcher XML must be deleted", resDir.resolve("drawable/launcher_logo_white.xml").exists())
         assertFalse("Old white launcher PNG must be deleted", resDir.resolve("drawable/launcher_logo_white_asset.png").exists())
+        assertFalse("Old drawable launcher bitmap XML must be deleted", resDir.resolve("drawable/launcher_logo.xml").exists())
+        assertFalse("Old beetle black XML must be deleted", resDir.resolve("drawable/beetle_logo_black.xml").exists())
+        assertFalse("Old beetle white XML must be deleted", resDir.resolve("drawable/beetle_logo_white.xml").exists())
+        assertFalse("Old beetle black PNG must be deleted", resDir.resolve("drawable-nodpi/beetle_logo_black.png").exists())
+        assertFalse("Old beetle white PNG must be deleted", resDir.resolve("drawable-nodpi/beetle_logo_white.png").exists())
+        assertFalse("Old ET foreground WebP must be deleted", resDir.resolve("drawable/ic_foreground_logo.webp").exists())
+        assertFalse("Old light logo PNG must be deleted", resDir.resolve("drawable/logo2.png").exists())
+        assertFalse("Old dark logo PNG must be deleted", resDir.resolve("drawable/logo_dark.png").exists())
+        assertFalse("Old night logo PNG must be deleted", resDir.resolve("drawable-night/logo2.png").exists())
         assertFalse("Old hdpi foreground WebP must be deleted", resDir.resolve("mipmap-hdpi/ic_launcher_foreground.webp").exists())
         assertFalse("Old xhdpi foreground WebP must be deleted", resDir.resolve("mipmap-xhdpi/ic_launcher_foreground.webp").exists())
         assertFalse("Old xxhdpi foreground WebP must be deleted", resDir.resolve("mipmap-xxhdpi/ic_launcher_foreground.webp").exists())
@@ -110,6 +117,17 @@ class LauncherIconResourceTest {
         assertTrue(
             "Manifest must expose the cache-busting white launcher alias",
             manifestText.contains("android:name=\".LauncherWhite\""),
+        )
+        assertTrue(
+            "Manifest launcher aliases must open MainActivity directly for a single system splash",
+            listOf(".LauncherWhite", ".LauncherLight", ".LauncherDark").all { alias ->
+                manifestText.substringAfter("android:name=\"$alias\"").substringBefore("</activity-alias>")
+                    .contains("android:targetActivity=\"com.android.everytalk.statecontroller.MainActivity\"")
+            },
+        )
+        assertFalse(
+            "Manifest must not declare the old video SplashActivity",
+            manifestText.contains("android:name=\"com.android.everytalk.statecontroller.SplashActivity\""),
         )
         assertTrue(
             "Old light launcher alias must be disabled to clear launcher icon cache",
@@ -133,10 +151,6 @@ class LauncherIconResourceTest {
 
         assertTrue("Launcher asset must be a valid PNG", bytes.take(8).toByteArray().contentEquals(pngSignature))
         assertTrue("Launcher asset PNG must include an IHDR color type byte", bytes.size > 25)
-        assertFalse(
-            "Launcher asset must not be the old opaque black logo asset",
-            bytes.contentEquals(findResDir().resolve("drawable/logo_dark.png").readBytes()),
-        )
     }
 
     @Test
@@ -158,19 +172,15 @@ class LauncherIconResourceTest {
         launcherWebpFiles.forEach { relative ->
             val file = resDir.resolve(relative)
             assertTrue("Missing launcher WebP: ${file.path}", file.isFile)
-            assertFalse(
-                "${file.path} must not be the old opaque black logo asset",
-                file.readBytes().contentEquals(resDir.resolve("drawable/logo_dark.png").readBytes()),
-            )
         }
     }
 
     @Test
-    fun `android 12 splash uses theme specific beetle logo`() {
+    fun `android 12 splash uses theme specific chat logo`() {
         val resDir = findResDir()
         val v31Theme = resDir.resolve("values-v31/themes.xml")
-        val lightSplash = resDir.resolve("drawable/splash_logo.xml")
-        val darkSplash = resDir.resolve("drawable-night/splash_logo.xml")
+        val lightSplash = resDir.resolve("drawable-nodpi/splash_logo.png")
+        val darkSplash = resDir.resolve("drawable-night-nodpi/splash_logo.png")
         val lightColors = resDir.resolve("values/colors.xml")
         val darkColors = resDir.resolve("values-night/colors.xml")
 
@@ -182,7 +192,7 @@ class LauncherIconResourceTest {
 
         val themeText = v31Theme.readText()
         assertTrue(
-            "Android 12 splash theme must use the theme-specific beetle logo",
+            "Android 12 splash theme must use the theme-specific logo",
             themeText.contains("windowSplashScreenAnimatedIcon") &&
                 themeText.contains("@drawable/splash_logo"),
         )
@@ -195,18 +205,40 @@ class LauncherIconResourceTest {
             "Android 12 splash theme must not define animation duration",
             themeText.contains("windowSplashScreenAnimationDuration"),
         )
-        assertTrue(
-            "Light splash logo must be a black/red vector",
-            lightSplash.readText().contains("<vector") &&
-                lightSplash.readText().contains("#FF000000") &&
-                lightSplash.readText().contains("#FF5B0202"),
+        assertFalse(
+            "Android 12 splash theme must not keep the old video splash theme",
+            themeText.contains("Theme.SplashVideo") ||
+                themeText.contains("@drawable/splash_video_empty_icon"),
         )
         assertTrue(
-            "Dark splash logo must be a white/red vector",
-            darkSplash.readText().contains("<vector") &&
-                darkSplash.readText().contains("#FFFFFFFF") &&
-                darkSplash.readText().contains("#FF5B0202"),
+            "Light splash logo must be the centered reduced white-background PNG",
+            lightSplash.readBytes()
+                .take(8)
+                .toByteArray()
+                .contentEquals(byteArrayOf(-119, 80, 78, 71, 13, 10, 26, 10)),
         )
+        assertTrue(
+            "Dark splash logo must be the centered reduced black-background PNG",
+            darkSplash.readBytes()
+                .take(8)
+                .toByteArray()
+                .contentEquals(byteArrayOf(-119, 80, 78, 71, 13, 10, 26, 10)),
+        )
+        assertEquals("Light splash PNG must keep source width", 1254, lightSplash.readPngSize().width)
+        assertEquals("Light splash PNG must keep source height", 1254, lightSplash.readPngSize().height)
+        assertEquals("Dark splash PNG must keep source width", 1254, darkSplash.readPngSize().width)
+        assertEquals("Dark splash PNG must keep source height", 1254, darkSplash.readPngSize().height)
+        listOf(
+            "Light" to lightSplash.readNonBackgroundBounds(OPAQUE_WHITE),
+            "Dark" to darkSplash.readNonBackgroundBounds(OPAQUE_BLACK),
+        ).forEach { (label, bounds) ->
+            assertTrue("$label splash PNG must keep enough empty edge margin", bounds.minMargin >= 200)
+            assertTrue("$label splash PNG must keep the visible image reduced", bounds.width <= 820 && bounds.height <= 820)
+        }
+        assertFalse("Light splash XML wrapper must be deleted", resDir.resolve("drawable/splash_logo.xml").exists())
+        assertFalse("Dark splash XML wrapper must be deleted", resDir.resolve("drawable-night/splash_logo.xml").exists())
+        assertFalse("Old light splash intermediate PNG must be deleted", resDir.resolve("drawable/splash_logo_black_asset.png").exists())
+        assertFalse("Old dark splash intermediate PNG must be deleted", resDir.resolve("drawable/splash_logo_white_asset.png").exists())
         assertTrue(
             "Light splash background must be white",
             lightColors.readText().contains("<color name=\"splash_screen_background\">#FFFFFFFF</color>"),
@@ -214,6 +246,27 @@ class LauncherIconResourceTest {
         assertTrue(
             "Dark splash background must be black",
             darkColors.readText().contains("<color name=\"splash_screen_background\">#FF000000</color>"),
+        )
+    }
+
+    @Test
+    fun `single splash launch chain does not use video activity`() {
+        val mainDir = requireNotNull(findResDir().parentFile)
+        val manifestText = mainDir.resolve("AndroidManifest.xml").readText()
+        val baseTheme = findResDir().resolve("values/themes.xml").readText()
+        val v31Theme = findResDir().resolve("values-v31/themes.xml").readText()
+
+        assertFalse("Launcher manifest must not route through SplashActivity", manifestText.contains("SplashActivity"))
+        assertFalse("Old SplashActivity source must be deleted", mainDir.resolve("java/com/android/everytalk/statecontroller/SplashActivity.kt").exists())
+        assertFalse("Old light splash video must be deleted", findResDir().resolve("raw/light_splash.mp4").exists())
+        assertFalse("Old empty splash icon must be deleted", findResDir().resolve("drawable/splash_video_empty_icon.xml").exists())
+        assertFalse("Base theme must not keep Theme.SplashVideo", baseTheme.contains("Theme.SplashVideo"))
+        assertFalse("Android 12 theme must not keep Theme.SplashVideo", v31Theme.contains("Theme.SplashVideo"))
+        assertTrue(
+            "MainActivity must own the one system splash theme",
+            manifestText.substringAfter("android:name=\"com.android.everytalk.statecontroller.MainActivity\"")
+                .substringBefore("</activity>")
+                .contains("android:theme=\"@style/Theme.App1\""),
         )
     }
 
@@ -227,4 +280,181 @@ class LauncherIconResourceTest {
             }
         error("Unable to locate src/main/res")
     }
+
+    private data class PngSize(val width: Int, val height: Int)
+
+    private data class RgbaPng(
+        val width: Int,
+        val height: Int,
+        val pixels: ByteArray,
+    ) {
+        fun argbAt(x: Int, y: Int): Int {
+            val index = (y * width + x) * 4
+            val red = pixels[index].toInt() and 0xFF
+            val green = pixels[index + 1].toInt() and 0xFF
+            val blue = pixels[index + 2].toInt() and 0xFF
+            val alpha = pixels[index + 3].toInt() and 0xFF
+            return (alpha shl 24) or (red shl 16) or (green shl 8) or blue
+        }
+    }
+
+    private data class PngContentBounds(
+        val left: Int,
+        val top: Int,
+        val right: Int,
+        val bottom: Int,
+        val imageWidth: Int,
+        val imageHeight: Int,
+    ) {
+        val width: Int = right - left + 1
+        val height: Int = bottom - top + 1
+        val minMargin: Int = minOf(left, top, imageWidth - right - 1, imageHeight - bottom - 1)
+    }
+
+    private companion object {
+        const val OPAQUE_WHITE = -1
+        const val OPAQUE_BLACK = -16777216
+    }
+
+    private fun File.readPngSize(): PngSize {
+        val bytes = readBytes()
+        require(bytes.size > 24) { "Invalid PNG: $path" }
+        return PngSize(width = bytes.readPngInt(16), height = bytes.readPngInt(20))
+    }
+
+    private fun File.readNonBackgroundBounds(backgroundArgb: Int): PngContentBounds {
+        val image = readRgbaPng()
+        var left = image.width
+        var top = image.height
+        var right = -1
+        var bottom = -1
+
+        for (y in 0 until image.height) {
+            for (x in 0 until image.width) {
+                if (image.argbAt(x, y) != backgroundArgb) {
+                    left = minOf(left, x)
+                    top = minOf(top, y)
+                    right = maxOf(right, x)
+                    bottom = maxOf(bottom, y)
+                }
+            }
+        }
+
+        require(right >= left && bottom >= top) { "PNG has no visible content: $path" }
+        return PngContentBounds(left, top, right, bottom, image.width, image.height)
+    }
+
+    private fun File.readRgbaPng(): RgbaPng {
+        val bytes = readBytes()
+        require(
+            bytes.take(8).toByteArray()
+                .contentEquals(byteArrayOf(-119, 80, 78, 71, 13, 10, 26, 10)),
+        ) { "Invalid PNG signature: $path" }
+
+        var offset = 8
+        var width = 0
+        var height = 0
+        var bitDepth = -1
+        var colorType = -1
+        val idat = ByteArrayOutputStream()
+
+        while (offset + 8 <= bytes.size) {
+            val length = bytes.readPngInt(offset)
+            offset += 4
+            val chunkType = String(bytes, offset, 4, Charsets.US_ASCII)
+            offset += 4
+
+            when (chunkType) {
+                "IHDR" -> {
+                    width = bytes.readPngInt(offset)
+                    height = bytes.readPngInt(offset + 4)
+                    bitDepth = bytes[offset + 8].toInt() and 0xFF
+                    colorType = bytes[offset + 9].toInt() and 0xFF
+                }
+                "IDAT" -> idat.write(bytes, offset, length)
+                "IEND" -> break
+            }
+            offset += length + 4
+        }
+
+        require(width > 0 && height > 0) { "PNG missing IHDR: $path" }
+        require(bitDepth == 8 && colorType == 6) { "PNG must be 8-bit RGBA: $path" }
+        return RgbaPng(width, height, decodeRgbaRows(inflateZlib(idat.toByteArray()), width, height))
+    }
+
+    private fun decodeRgbaRows(inflated: ByteArray, width: Int, height: Int): ByteArray {
+        val bytesPerPixel = 4
+        val stride = width * bytesPerPixel
+        require(inflated.size >= height * (stride + 1)) { "Invalid PNG row data" }
+
+        val output = ByteArray(width * height * bytesPerPixel)
+        var inputOffset = 0
+        var previous = ByteArray(stride)
+        var row = ByteArray(stride)
+
+        for (y in 0 until height) {
+            val filter = inflated[inputOffset++].toInt() and 0xFF
+            for (x in 0 until stride) {
+                val raw = inflated[inputOffset++].toInt() and 0xFF
+                val left = if (x >= bytesPerPixel) row[x - bytesPerPixel].toInt() and 0xFF else 0
+                val up = previous[x].toInt() and 0xFF
+                val upperLeft = if (x >= bytesPerPixel) previous[x - bytesPerPixel].toInt() and 0xFF else 0
+                val value = when (filter) {
+                    0 -> raw
+                    1 -> raw + left
+                    2 -> raw + up
+                    3 -> raw + ((left + up) / 2)
+                    4 -> raw + paeth(left, up, upperLeft)
+                    else -> error("Unsupported PNG filter: $filter")
+                }
+                row[x] = (value and 0xFF).toByte()
+            }
+
+            System.arraycopy(row, 0, output, y * stride, stride)
+            val reusable = previous
+            previous = row
+            row = reusable
+        }
+
+        return output
+    }
+
+    private fun inflateZlib(data: ByteArray): ByteArray {
+        val inflater = Inflater()
+        return try {
+            inflater.setInput(data)
+            val output = ByteArrayOutputStream()
+            val buffer = ByteArray(8192)
+            while (!inflater.finished()) {
+                val count = inflater.inflate(buffer)
+                if (count > 0) {
+                    output.write(buffer, 0, count)
+                } else {
+                    require(!inflater.needsInput()) { "Truncated PNG zlib data" }
+                    require(!inflater.needsDictionary()) { "Unsupported PNG zlib dictionary" }
+                }
+            }
+            output.toByteArray()
+        } finally {
+            inflater.end()
+        }
+    }
+
+    private fun paeth(left: Int, up: Int, upperLeft: Int): Int {
+        val estimate = left + up - upperLeft
+        val leftDistance = abs(estimate - left)
+        val upDistance = abs(estimate - up)
+        val upperLeftDistance = abs(estimate - upperLeft)
+        return when {
+            leftDistance <= upDistance && leftDistance <= upperLeftDistance -> left
+            upDistance <= upperLeftDistance -> up
+            else -> upperLeft
+        }
+    }
+
+    private fun ByteArray.readPngInt(offset: Int): Int =
+        ((this[offset].toInt() and 0xFF) shl 24) or
+            ((this[offset + 1].toInt() and 0xFF) shl 16) or
+            ((this[offset + 2].toInt() and 0xFF) shl 8) or
+            (this[offset + 3].toInt() and 0xFF)
 }
