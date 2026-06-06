@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.19.7](https://github.com/roseforljh/EveryTalk/compare/v1.19.6...v1.19.7) (2026-06-06)
+
+
+### Bug Fixes
+
+* adjust markdown spacing for nested lists and headings ([0c4d419](https://github.com/roseforljh/EveryTalk/commit/0c4d4197bffcc064ac2c2c68ec17f5bde484a2e9))
+* align chat text edges with justified break strategy ([c3d4f2c](https://github.com/roseforljh/EveryTalk/commit/c3d4f2cfa1368274092cf3ea67f456289b76e2d5))
+* apply text metrics via descent/ascent to restore proper body line height ([606815f](https://github.com/roseforljh/EveryTalk/commit/606815f210e59df2b078b0555c6deecf79fa5b65))
+* customize diffuse shadows for ChatInputArea and plus button in light theme ([2288e37](https://github.com/roseforljh/EveryTalk/commit/2288e379e145a940850c5b3e3b3b6eebf36da6a9))
+* optimize chat markdown rendering ([8a8da0c](https://github.com/roseforljh/EveryTalk/commit/8a8da0c2d2bfe77087f7fd0a1f1fb298ae39e0c7))
+* polish chat rendering and launcher icon ([ef906f3](https://github.com/roseforljh/EveryTalk/commit/ef906f3eaa76444ad5adf0084954806cc7751b31))
+* polish chat rendering and top controls ([4f30c10](https://github.com/roseforljh/EveryTalk/commit/4f30c10500fede0bfd30cdb89373ca2a7e85b035))
+* polish chat sources and launcher resources ([05b9e80](https://github.com/roseforljh/EveryTalk/commit/05b9e80d48325aebc7f56954d9b5a2fb91d5aae3))
+* refine vector launcher and splash logo ([6275dba](https://github.com/roseforljh/EveryTalk/commit/6275dbaa44484be489923890d1e54d576bed96b9))
+* refine web sources dialog ([73ab3d7](https://github.com/roseforljh/EveryTalk/commit/73ab3d7aa217b2a938326d482f53eb1c16b85f88))
+* restore input borders and splash resources ([5b04eb4](https://github.com/roseforljh/EveryTalk/commit/5b04eb49aebb3332c26972e47379431c2f36d0ce))
+* tighten nested markdown list spacing ([53493f5](https://github.com/roseforljh/EveryTalk/commit/53493f5166cfede4c815a9a30b72bd1ac282a79f))
+* update launcher and splash icon ([71703cc](https://github.com/roseforljh/EveryTalk/commit/71703cca628a2e7262bddfdf10d46981d3289862))
+* 避免重复点击历史项卡住加载态 ([324fae7](https://github.com/roseforljh/EveryTalk/commit/324fae73306dccc5b699763d08913511c95e7ada))
+
 ## [1.19.6](https://github.com/roseforljh/EveryTalk/compare/v1.19.5...v1.19.6) (2026-06-04)
 
 
