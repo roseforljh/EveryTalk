@@ -2,6 +2,8 @@
 <resources>
 
     <style name="Theme.App1" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="android:windowSplashScreenBackground">@color/splash_screen_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_logo</item>
         <item name="android:windowBackground">@android:color/transparent</item>
     </style>
 </resources>
