@@ -119,6 +119,11 @@ object OpenAIResponsesClient {
                         }
                         Log.i(TAG, "工具 ${toolInfo.name} 执行成功")
 
+                        val webResults = WebSearchToolResultExtractor.extract(toolInfo.name, result)
+                        if (webResults.isNotEmpty()) {
+                            send(AppStreamEvent.WebSearchResults(webResults))
+                        }
+
                         // Responses API 工具结果格式：function_call_output item
                         conversationInput.add(buildJsonObject {
                             put("type", "function_call_output")

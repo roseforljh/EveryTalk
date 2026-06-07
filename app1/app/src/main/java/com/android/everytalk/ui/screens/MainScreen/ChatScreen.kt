@@ -40,6 +40,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.border
@@ -53,8 +54,9 @@ import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.statecontroller.ConversationScrollState
 import com.android.everytalk.statecontroller.SimpleModeManager
 import com.android.everytalk.ui.components.AppTopBar
+import com.android.everytalk.ui.components.AnimatedWebSourcesDialog
 import com.android.everytalk.ui.components.ScrollToBottomButton
-import com.android.everytalk.ui.components.WebSourcesDialog
+import com.android.everytalk.ui.components.WebSourcesDialogEdgeGap
 import com.android.everytalk.ui.components.ImagePreviewDialog
 import com.android.everytalk.ui.components.dialog.AppDialogShape
 import com.android.everytalk.ui.components.dialog.appDialogBorderColor
@@ -137,8 +139,33 @@ internal fun shouldHideHistoryLoadingSkeleton(
     return chatItems.isNotEmpty()
 }
 
+internal fun calculateSourcesDialogBottomAvoidance(
+    inputAreaHeight: Dp,
+    inputBottomInset: Dp,
+    edgeGap: Dp = WebSourcesDialogEdgeGap
+): Dp {
+    val inputContentHeight = if (inputAreaHeight > inputBottomInset) {
+        inputAreaHeight - inputBottomInset
+    } else {
+        0.dp
+    }
+    return inputContentHeight + edgeGap
+}
 
-@OptIn(ExperimentalMaterial3Api::class)
+internal fun calculateSourcesDialogTopAvoidance(
+    topControlsBottom: Dp,
+    statusBarHeight: Dp,
+    edgeGap: Dp = WebSourcesDialogEdgeGap
+): Dp {
+    val controlsBottomBelowStatusBar = if (topControlsBottom > statusBarHeight) {
+        topControlsBottom - statusBarHeight
+    } else {
+        0.dp
+    }
+    return controlsBottomBelowStatusBar + edgeGap
+}
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ChatScreen(
     viewModel: AppViewModel,
@@ -496,7 +523,26 @@ fun ChatScreen(
     }
 
     var inputAreaHeightPx by remember { mutableIntStateOf(0) }
+    var topControlsBottomPx by remember { mutableIntStateOf(0) }
     val inputAreaHeightDp = with(density) { inputAreaHeightPx.toDp() }
+    val topControlsBottomDp = with(density) { topControlsBottomPx.toDp() }
+    val statusBarHeightDp = with(density) { WindowInsets.statusBars.getTop(density).toDp() }
+    val inputBaseBottomInsetDp = with(density) {
+        WindowInsets.navigationBarsIgnoringVisibility.getBottom(density).toDp() + 12.dp
+    }
+    val inputBottomInsetDp = if (imeHeightDp > inputBaseBottomInsetDp) {
+        imeHeightDp
+    } else {
+        inputBaseBottomInsetDp
+    }
+    val sourcesDialogBottomAvoidance = calculateSourcesDialogBottomAvoidance(
+        inputAreaHeight = inputAreaHeightDp,
+        inputBottomInset = inputBottomInsetDp
+    )
+    val sourcesDialogTopAvoidance = calculateSourcesDialogTopAvoidance(
+        topControlsBottom = topControlsBottomDp,
+        statusBarHeight = statusBarHeightDp
+    )
 
     val audioPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission(),
@@ -791,6 +837,11 @@ fun ChatScreen(
                     if (selectedApiConfig != null) {
                         showEditConfigDialog = true
                     }
+                },
+                onControlsBottomChange = { bottom ->
+                    if (topControlsBottomPx != bottom) {
+                        topControlsBottomPx = bottom
+                    }
                 }
             )
 
@@ -822,12 +873,13 @@ fun ChatScreen(
             )
         }
 
-        if (showSourcesDialog) {
-            WebSourcesDialog(
-                sources = sourcesForDialog,
-                onDismissRequest = { viewModel.dismissSourcesDialog() }
-            )
-        }
+        AnimatedWebSourcesDialog(
+            visible = showSourcesDialog,
+            sources = sourcesForDialog,
+            topAvoidance = sourcesDialogTopAvoidance,
+            bottomAvoidance = sourcesDialogBottomAvoidance,
+            onDismissRequest = { viewModel.dismissSourcesDialog() }
+        )
 
         if (showEditConfigDialog && selectedApiConfig != null) {
             com.android.everytalk.ui.screens.settings.EditConfigDialog(

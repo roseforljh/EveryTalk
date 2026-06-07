@@ -1,6 +1,15 @@
 package com.android.everytalk.ui.components
 
 import android.view.WindowManager
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
@@ -9,7 +18,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -27,8 +35,12 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -40,6 +52,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
@@ -52,6 +65,8 @@ import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.components.dialog.appDialogSubtextColor
 import java.net.URI
+
+internal val WebSourcesDialogEdgeGap = 8.dp
 
 private fun sourceHost(href: String): String {
     return runCatching {
@@ -70,11 +85,54 @@ private fun sourceInitial(source: WebSearchResult): String {
 }
 
 @Composable
-fun WebSourcesDialog(
+fun AnimatedWebSourcesDialog(
+    visible: Boolean,
     sources: List<WebSearchResult>,
+    topAvoidance: Dp = WebSourcesDialogEdgeGap,
+    bottomAvoidance: Dp = WebSourcesDialogEdgeGap,
     onDismissRequest: () -> Unit
 ) {
+    var shouldRender by remember { mutableStateOf(visible) }
+
+    LaunchedEffect(visible) {
+        if (visible) {
+            shouldRender = true
+        }
+    }
+
+    if (shouldRender) {
+        WebSourcesDialog(
+            sources = sources,
+            visible = visible,
+            topAvoidance = topAvoidance,
+            bottomAvoidance = bottomAvoidance,
+            onDismissRequest = onDismissRequest,
+            onExitFinished = { shouldRender = false }
+        )
+    }
+}
+
+@Composable
+fun WebSourcesDialog(
+    sources: List<WebSearchResult>,
+    topAvoidance: Dp = WebSourcesDialogEdgeGap,
+    bottomAvoidance: Dp = WebSourcesDialogEdgeGap,
+    visible: Boolean = true,
+    onDismissRequest: () -> Unit,
+    onExitFinished: () -> Unit = {}
+) {
     val uriHandler = LocalUriHandler.current
+    val transitionState = remember { MutableTransitionState(false) }
+
+    LaunchedEffect(visible) {
+        transitionState.targetState = visible
+    }
+
+    LaunchedEffect(visible, transitionState.currentState, transitionState.targetState) {
+        if (!visible && !transitionState.currentState && !transitionState.targetState) {
+            onExitFinished()
+        }
+    }
 
     Dialog(
         onDismissRequest = onDismissRequest,
@@ -100,45 +158,64 @@ fun WebSourcesDialog(
                 .statusBarsPadding()
                 .navigationBarsPadding()
                 .imePadding()
-                .padding(horizontal = 16.dp),
+                .padding(horizontal = 16.dp)
+                .padding(
+                    top = topAvoidance,
+                    bottom = bottomAvoidance
+                ),
             contentAlignment = Alignment.Center
         ) {
-            Surface(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .fillMaxHeight(0.82f)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = null,
-                        onClick = {}
+            AnimatedVisibility(
+                visibleState = transitionState,
+                enter = fadeIn(animationSpec = tween(180)) +
+                    scaleIn(initialScale = 0.96f, animationSpec = tween(180)) +
+                    slideInVertically(
+                        animationSpec = tween(180),
+                        initialOffsetY = { it / 18 }
+                    ),
+                exit = fadeOut(animationSpec = tween(140)) +
+                    scaleOut(targetScale = 0.97f, animationSpec = tween(140)) +
+                    slideOutVertically(
+                        animationSpec = tween(140),
+                        targetOffsetY = { it / 24 }
                     )
-                    .clip(AppDialogShape)
-                    .border(1.dp, appDialogBorderColor(), AppDialogShape),
-                shape = AppDialogShape,
-                color = appDialogContainerColor(),
-                tonalElevation = 8.dp
             ) {
-                Column(
+                Surface(
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .verticalScroll(rememberScrollState())
-                        .padding(24.dp)
-                ) {
-                    sources.forEachIndexed { index, source ->
-                        SourceItem(
-                            source = source,
-                            onOpen = {
-                                try {
-                                    uriHandler.openUri(source.href)
-                                } catch (_: Exception) {
-                                }
-                            }
+                        .fillMaxSize()
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null,
+                            onClick = {}
                         )
-                        if (index != sources.lastIndex) {
-                            HorizontalDivider(
-                                modifier = Modifier.padding(vertical = 12.dp),
-                                color = appDialogBorderColor()
+                        .clip(AppDialogShape)
+                        .border(1.dp, appDialogBorderColor(), AppDialogShape),
+                    shape = AppDialogShape,
+                    color = appDialogContainerColor(),
+                    tonalElevation = 8.dp
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .verticalScroll(rememberScrollState())
+                            .padding(24.dp)
+                    ) {
+                        sources.forEachIndexed { index, source ->
+                            SourceItem(
+                                source = source,
+                                onOpen = {
+                                    try {
+                                        uriHandler.openUri(source.href)
+                                    } catch (_: Exception) {
+                                    }
+                                }
                             )
+                            if (index != sources.lastIndex) {
+                                HorizontalDivider(
+                                    modifier = Modifier.padding(vertical = 12.dp),
+                                    color = appDialogBorderColor()
+                                )
+                            }
                         }
                     }
                 }

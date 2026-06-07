@@ -67,8 +67,21 @@ internal fun mergeStreamingCompletionMessage(syncedMessage: Message, finalizedMe
         text = if (syncedThinkExtraction.changed) finalizedMessage.text else syncedMessage.text,
         reasoning = finalizedMessage.reasoning ?: syncedMessage.reasoning,
         parts = finalizedMessage.parts.ifEmpty { syncedMessage.parts },
+        webSearchResults = finalizedMessage.webSearchResults
+            ?.takeIf { it.isNotEmpty() }
+            ?: syncedMessage.webSearchResults,
         contentStarted = true,
     )
+}
+
+internal fun mergeWebSearchResults(
+    existing: List<com.android.everytalk.data.DataClass.WebSearchResult>?,
+    incoming: List<com.android.everytalk.data.DataClass.WebSearchResult>,
+): List<com.android.everytalk.data.DataClass.WebSearchResult> {
+    return (existing.orEmpty() + incoming)
+        .filter { it.href.isNotBlank() }
+        .distinctBy { it.href }
+        .mapIndexed { index, result -> result.copy(index = index + 1) }
 }
 
 internal fun applyReasoningChunk(currentMessage: Message, reasoningChunk: String): Message {
@@ -837,7 +850,12 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     updatedMessage = updatedMessage.copy(executionStatus = appEvent.status)
                 }
                 is AppStreamEvent.WebSearchResults -> {
-                    updatedMessage = updatedMessage.copy(webSearchResults = appEvent.results)
+                    updatedMessage = updatedMessage.copy(
+                        webSearchResults = mergeWebSearchResults(
+                            existing = updatedMessage.webSearchResults,
+                            incoming = appEvent.results
+                        )
+                    )
                 }
                 is AppStreamEvent.Finish, is AppStreamEvent.StreamEnd -> {
                     if (processedMessageIds.contains(aiMessageId)) {
@@ -876,7 +894,7 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     // 🎯 强制最终解析：确保parts字段被正确填充
                     logger.debug("Stream finished for message $aiMessageId, forcing final message processing")
                     val currentMessageProcessor = messageProcessorMap[aiMessageId] ?: MessageProcessor()
-                    val finalizedMessage = currentMessageProcessor.finalizeMessageProcessing(currentMessage)
+                    val finalizedMessage = currentMessageProcessor.finalizeMessageProcessing(updatedMessage)
                     updatedMessage = finalizedMessage.copy(
                         contentStarted = true
                     )

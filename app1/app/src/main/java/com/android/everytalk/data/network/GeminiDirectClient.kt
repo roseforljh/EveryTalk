@@ -125,6 +125,12 @@ object GeminiDirectClient {
                             }
                         }
                         Log.i(TAG, "🔧 工具 $toolName 执行成功: resultChars=${result.toString().length}")
+
+                        val webResults = WebSearchToolResultExtractor.extract(toolName, result)
+                        if (webResults.isNotEmpty()) {
+                            send(AppStreamEvent.WebSearchResults(webResults))
+                        }
+
                         val images = (result as? JsonObject)?.get("_images")?.let { it as? JsonArray }
                         val textResult = if (images != null) {
                             buildJsonObject {
@@ -857,12 +863,12 @@ object GeminiDirectClient {
                                         capturedGroundingMetadata = groundingMeta // 捕获元数据供后续处理引用
                                         
                                         groundingMeta["groundingChunks"]?.jsonArray?.let { chunks ->
-                                            val webResults = chunks.mapNotNull { chunkElement ->
+                                            val webResults = chunks.mapIndexedNotNull { index, chunkElement ->
                                                 try {
                                                     val chunkObj = chunkElement.jsonObject
-                                                    val webObj = chunkObj["web"]?.jsonObject ?: return@mapNotNull null
+                                                    val webObj = chunkObj["web"]?.jsonObject ?: return@mapIndexedNotNull null
                                                     com.android.everytalk.data.DataClass.WebSearchResult(
-                                                        index = 0,
+                                                        index = index + 1,
                                                         title = webObj["title"]?.jsonPrimitive?.contentOrNull ?: "Unknown",
                                                         href = webObj["uri"]?.jsonPrimitive?.contentOrNull ?: "#",
                                                         snippet = ""

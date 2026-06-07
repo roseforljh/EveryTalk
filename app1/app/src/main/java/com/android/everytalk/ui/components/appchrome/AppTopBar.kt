@@ -25,6 +25,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -43,6 +45,7 @@ import com.android.everytalk.ui.components.dialog.appDialogSubtextColor
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 internal data class TopBarModelDisplayInfo(
     val label: String,
@@ -97,6 +100,7 @@ fun AppTopBar(
     onTitleLongClick: () -> Unit = {},
     allApiConfigs: List<com.android.everytalk.data.DataClass.ApiConfig> = emptyList(),
     onConfigModelSelected: (com.android.everytalk.data.DataClass.ApiConfig) -> Unit = {},
+    onControlsBottomChange: (Int) -> Unit = {},
     modifier: Modifier = Modifier,
     barHeight: Dp = 85.dp,
     contentPaddingHorizontal: Dp = 12.dp,
@@ -123,7 +127,14 @@ fun AppTopBar(
             .padding(12.dp)
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .onGloballyPositioned { coordinates ->
+                    val bottom = coordinates.positionInWindow().y + coordinates.size.height
+                    if (bottom.isFinite() && bottom >= 0f) {
+                        onControlsBottomChange(bottom.roundToInt())
+                    }
+                },
             verticalAlignment = Alignment.CenterVertically
         ) {
             Row(

@@ -572,6 +572,11 @@ object OpenAIDirectClient {
                         }
                         Log.i(TAG, "🔧 工具 ${toolInfo.name} 执行成功: resultChars=${result.toString().length}")
 
+                        val webResults = WebSearchToolResultExtractor.extract(toolInfo.name, result)
+                        if (webResults.isNotEmpty()) {
+                            send(AppStreamEvent.WebSearchResults(webResults))
+                        }
+
                         val images = (result as? JsonObject)?.get("_images")?.let { it as? JsonArray }
                         if (images != null && images.isNotEmpty()) {
                             val textOnly = buildJsonObject {
