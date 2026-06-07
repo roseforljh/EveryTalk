@@ -59,6 +59,9 @@ class ChatScrollStateManager(
     private val _isAtBottom = mutableStateOf(true)
     val isAtBottom: State<Boolean> = _isAtBottom
 
+    private val _isScrollInProgress = mutableStateOf(false)
+    val isScrollInProgress: State<Boolean> = _isScrollInProgress
+
     private val _showScrollToBottomButton = mutableStateOf(false)
     val showScrollToBottomButton: State<Boolean> = _showScrollToBottomButton
 
@@ -87,9 +90,7 @@ class ChatScrollStateManager(
             if (isCloseToBottom) {
                 _showScrollToBottomButton.value = false
             } else {
-                if (availableY < -1f) { 
-                    _showScrollToBottomButton.value = false
-                } else if (availableY > 1f) {
+                if (abs(availableY) > 1f) {
                     _showScrollToBottomButton.value = true
                 }
             }
@@ -115,6 +116,8 @@ class ChatScrollStateManager(
                     firstVisibleOffset = listState.firstVisibleItemScrollOffset
                 )
         }.collect { snapshot ->
+                _isScrollInProgress.value = snapshot.isScrollInProgress
+
                 val now = System.currentTimeMillis()
                 val inFreezeWindow = now - lastStreamingTransitionTime < STREAMING_TRANSITION_FREEZE_MS
                 

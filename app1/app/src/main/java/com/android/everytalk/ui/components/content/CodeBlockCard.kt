@@ -345,15 +345,15 @@ fun CodeBlockCard(
                     .drawWithContent {
                         drawContent()
                         if (isAtMaxHeight) {
-                            val fadeH = 8.dp.toPx()
+                            val totalH = 24.dp.toPx()
                             drawRect(
                                 brush = Brush.verticalGradient(
                                     colors = listOf(Color.Transparent, bg),
-                                    startY = size.height - fadeH,
+                                    startY = size.height - totalH,
                                     endY = size.height
                                 ),
-                                topLeft = Offset(0f, size.height - fadeH),
-                                size = Size(size.width, fadeH)
+                                topLeft = Offset(0f, size.height - totalH),
+                                size = Size(size.width, totalH)
                             )
                         }
                     }
@@ -404,9 +404,10 @@ fun CodeBlockCard(
                                 fontSize = 13.sp,
                                 lineHeight = 18.sp
                             ),
-                            softWrap = true, // 不再需要内部横向滚动，允许折行
+                            softWrap = true,
                             modifier = Modifier
-                                .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 24.dp) // 留出底部空间避免被文字遮挡过死
+                                .padding(start = 12.dp, end = 12.dp, top = 8.dp)
+                                .padding(bottom = if (isAtMaxHeight) 0.dp else 24.dp)
                         )
                     }
                 }

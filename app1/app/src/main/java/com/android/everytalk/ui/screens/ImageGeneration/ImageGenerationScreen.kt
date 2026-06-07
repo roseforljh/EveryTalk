@@ -360,7 +360,7 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
 
             ScrollToBottomButton(
                 scrollStateManager = scrollStateManager,
-                bottomPadding = inputAreaHeightDp + 24.dp,
+                bottomPadding = inputAreaHeightDp + 12.dp,
                 endPadding = 16.dp
             )
 

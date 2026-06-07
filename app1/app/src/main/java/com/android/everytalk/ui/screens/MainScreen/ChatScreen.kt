@@ -513,13 +513,7 @@ fun ChatScreen(
     Scaffold(
         modifier = modifier.fillMaxSize(),
         containerColor = MaterialTheme.colorScheme.background,
-        contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal),
-        floatingActionButton = {
-            ScrollToBottomButton(
-                scrollStateManager = scrollStateManager
-            )
-        },
-        floatingActionButtonPosition = FabPosition.End
+        contentWindowInsets = WindowInsets.safeDrawing.only(WindowInsetsSides.Horizontal)
     ) { scaffoldPaddingValues ->
         Box(
             modifier = Modifier
@@ -727,6 +721,11 @@ fun ChatScreen(
                 onToggleMcpServer = { id, enabled -> viewModel.toggleMcpServer(id, enabled) }
             )
             }
+
+            ScrollToBottomButton(
+                scrollStateManager = scrollStateManager,
+                bottomPadding = inputAreaHeightDp + 12.dp
+            )
 
             // 浮动顶栏 - 覆盖在内容上方
             AppTopBar(

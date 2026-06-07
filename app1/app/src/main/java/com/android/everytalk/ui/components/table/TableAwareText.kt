@@ -68,6 +68,7 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
@@ -114,6 +115,10 @@ internal fun shouldRenderTrailingStreamingTextWithMarkdown(content: String): Boo
 
 internal fun containsFencedCodeSyntax(content: String): Boolean {
     return content.contains("```") || content.contains("~~~")
+}
+
+internal fun shouldDrawCodeBlockBottomFade(contentHeightPx: Int, maxHeightPx: Float): Boolean {
+    return contentHeightPx >= maxHeightPx - 1f
 }
 
 internal fun shouldRerouteTextPartThroughTableAwareParser(
@@ -596,6 +601,13 @@ private fun StreamingCodeBlockCard(
         MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
     }
     val headerContentColor = if (isDarkTheme) Color.White else Color.Black
+    val codeBlockMaxHeight = 350.dp
+    val density = LocalDensity.current
+    var contentBoxHeightPx by remember { mutableStateOf(0) }
+    val isAtMaxHeight = shouldDrawCodeBlockBottomFade(
+        contentHeightPx = contentBoxHeightPx,
+        maxHeightPx = with(density) { codeBlockMaxHeight.toPx() }
+    )
     val syntaxTheme = remember(isDarkTheme) {
         if (isDarkTheme) SyntaxHighlightTheme.Dark else SyntaxHighlightTheme.Light
     }
@@ -639,23 +651,22 @@ private fun StreamingCodeBlockCard(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .heightIn(max = 350.dp)
+                    .heightIn(max = codeBlockMaxHeight)
+                    .onSizeChanged { contentBoxHeightPx = it.height }
                     .drawWithContent {
                         drawContent()
-                        val gradientHeight = 60.dp.toPx()
-                        drawRect(
-                            brush = androidx.compose.ui.graphics.Brush.verticalGradient(
-                                colors = listOf(
-                                    Color.Transparent,
-                                    bg.copy(alpha = 0.8f),
-                                    bg
+                        if (isAtMaxHeight) {
+                            val gradientHeight = 8.dp.toPx()
+                            drawRect(
+                                brush = Brush.verticalGradient(
+                                    colors = listOf(Color.Transparent, bg),
+                                    startY = size.height - gradientHeight,
+                                    endY = size.height
                                 ),
-                                startY = size.height - gradientHeight,
-                                endY = size.height
-                            ),
-                            topLeft = androidx.compose.ui.geometry.Offset(0f, size.height - gradientHeight),
-                            size = androidx.compose.ui.geometry.Size(size.width, gradientHeight)
-                        )
+                                topLeft = Offset(0f, size.height - gradientHeight),
+                                size = Size(size.width, gradientHeight)
+                            )
+                        }
                     }
             ) {
                 Text(
