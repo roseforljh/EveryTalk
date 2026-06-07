@@ -68,6 +68,7 @@ import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.ui.screens.BubbleMain.Main.AttachmentsContent
 import com.android.everytalk.ui.screens.BubbleMain.Main.ReasoningToggleAndContent
 import com.android.everytalk.ui.screens.BubbleMain.Main.UserOrErrorMessageContent
+import com.android.everytalk.ui.screens.BubbleMain.Main.resolveUserBubbleMaxHeightDp
 import com.android.everytalk.ui.screens.BubbleMain.Main.MessageContextMenu
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
 import com.android.everytalk.ui.screens.MainScreen.chat.core.PlaceholderRole
@@ -138,6 +139,16 @@ internal fun restorePinnedBubbleAnchorForSession(
     savedAnchorY: Int,
     isPinnedRuntimeActive: Boolean
 ): Int = if (isPinnedRuntimeActive && savedAnchorY > 0) savedAnchorY else -1
+
+internal fun resolvePinnedUserBubbleAnchorY(
+    itemTopY: Int,
+    itemHeightPx: Int,
+    maxUserBubbleHeightPx: Int,
+): Int = if (itemHeightPx > maxUserBubbleHeightPx / 2) {
+    itemTopY + itemHeightPx / 2
+} else {
+    itemTopY
+}
 
 internal fun shouldDispatchImageLoadedToBottomScroller(
     isApiCalling: Boolean,
@@ -239,7 +250,14 @@ fun ChatMessagesList(
 
     val isApiCalling by viewModel.isTextApiCalling.collectAsState()
     val currentStreamingId by viewModel.currentTextStreamingAiMessageId.collectAsState()
+    val configuration = LocalConfiguration.current
     val density = LocalDensity.current
+    val pinnedUserBubbleMaxHeightPx = with(density) {
+        resolveUserBubbleMaxHeightDp(
+            screenHeightDp = configuration.screenHeightDp.toFloat(),
+            isExpanded = false,
+        ).dp.toPx().toInt()
+    }
     
     // Performance monitoring: Track recomposition count for ChatMessagesList
     // This helps verify that the overall list recomposition is reduced
@@ -424,8 +442,13 @@ fun ChatMessagesList(
 
             val item = li.visibleItemsInfo.firstOrNull { it.key == pinnedId }
                 ?: continue
-            val currentY = item.offset - li.viewportStartOffset
-            val drift = currentY - targetY
+            val currentTopY = item.offset - li.viewportStartOffset
+            val currentAnchorY = resolvePinnedUserBubbleAnchorY(
+                itemTopY = currentTopY,
+                itemHeightPx = item.size,
+                maxUserBubbleHeightPx = pinnedUserBubbleMaxHeightPx,
+            )
+            val drift = currentAnchorY - targetY
 
             if (kotlin.math.abs(drift) > 1) {
                 stableSinceNanos = 0L
@@ -516,7 +539,12 @@ fun ChatMessagesList(
                             }.first { it != null }
                         }
                     firstBubbleScreenY = if (firstItem != null) {
-                        firstItem.offset - listState.layoutInfo.viewportStartOffset
+                        val itemTopY = firstItem.offset - listState.layoutInfo.viewportStartOffset
+                        resolvePinnedUserBubbleAnchorY(
+                            itemTopY = itemTopY,
+                            itemHeightPx = firstItem.size,
+                            maxUserBubbleHeightPx = pinnedUserBubbleMaxHeightPx,
+                        )
                     } else {
                         topPaddingPx
                     }
@@ -565,8 +593,13 @@ fun ChatMessagesList(
                     val startInfo = listState.layoutInfo
                     val startItem = startInfo.visibleItemsInfo.firstOrNull { it.index == lastUserIndex }
                     if (startItem != null) {
-                        val startY = startItem.offset - startInfo.viewportStartOffset
-                        val distancePx = startY - targetScreenY
+                        val startTopY = startItem.offset - startInfo.viewportStartOffset
+                        val startAnchorY = resolvePinnedUserBubbleAnchorY(
+                            itemTopY = startTopY,
+                            itemHeightPx = startItem.size,
+                            maxUserBubbleHeightPx = pinnedUserBubbleMaxHeightPx,
+                        )
+                        val distancePx = startAnchorY - targetScreenY
                         if (kotlin.math.abs(distancePx) > 4) {
                             val durationMs = (240 + kotlin.math.abs(distancePx) * 0.35f).toInt().coerceIn(260, 520)
                             val easing = CubicBezierEasing(0.25f, 0.1f, 0.25f, 1.0f)
@@ -591,12 +624,17 @@ fun ChatMessagesList(
                     val li2 = listState.layoutInfo
                     val currItem = li2.visibleItemsInfo.firstOrNull { it.index == lastUserIndex }
                     if (currItem != null) {
-                        val actualY = currItem.offset - li2.viewportStartOffset
-                        val correction = actualY - targetScreenY
+                        val actualTopY = currItem.offset - li2.viewportStartOffset
+                        val actualAnchorY = resolvePinnedUserBubbleAnchorY(
+                            itemTopY = actualTopY,
+                            itemHeightPx = currItem.size,
+                            maxUserBubbleHeightPx = pinnedUserBubbleMaxHeightPx,
+                        )
+                        val correction = actualAnchorY - targetScreenY
                         if (kotlin.math.abs(correction) > 4) {
                             listState.scrollBy(correction.toFloat())
                         }
-                        android.util.Log.d("GrokScroll", "Scrolled: targetY=$targetScreenY, actualY=$actualY, correction=$correction")
+                        android.util.Log.d("GrokScroll", "Scrolled: targetY=$targetScreenY, actualY=$actualAnchorY, correction=$correction")
                     } else {
                         android.util.Log.d("GrokScroll", "Item not visible after scrollToItem, fallback")
                     }

@@ -411,7 +411,12 @@ class HistoryManager(
                     )
                     if (messagesToSave.isNotEmpty()) {
                         mutableHistory[currentLoadedIdx] = messagesToSave
-                        finalNewLoadedIndex = currentLoadedIdx
+                        if (currentLoadedIdx > 0) {
+                            mutableHistory.add(0, mutableHistory.removeAt(currentLoadedIdx))
+                            finalNewLoadedIndex = 0
+                        } else {
+                            finalNewLoadedIndex = currentLoadedIdx
+                        }
                         historyListModified = true
                         needsPersistenceSaveOfHistoryList = true
                         Log.d(TAG_HM, "Updated existing history at index=$currentLoadedIdx, fp=${newConversationFingerprint.take(64)}")
@@ -497,7 +502,12 @@ class HistoryManager(
                                     "Current conversation matches history index $duplicateIndex. Updating it instead of inserting."
                                 )
                                 mutableHistory[duplicateIndex] = messagesToSave
-                                finalNewLoadedIndex = duplicateIndex
+                                if (duplicateIndex > 0) {
+                                    mutableHistory.add(0, mutableHistory.removeAt(duplicateIndex))
+                                    finalNewLoadedIndex = 0
+                                } else {
+                                    finalNewLoadedIndex = duplicateIndex
+                                }
                                 historyListModified = true
                                 needsPersistenceSaveOfHistoryList = true
                             }

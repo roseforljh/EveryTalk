@@ -80,7 +80,6 @@ class HistoryManagerCustomPromptPersistenceTest {
 
         try {
             historyManager.saveCurrentChatToHistoryNow(forceSave = true)
-
             val savedConversation = stateHolder._historicalConversations.value.single()
             assertEquals(1, savedConversation.size)
             assertEquals(Sender.User, savedConversation.first().sender)
@@ -179,9 +178,50 @@ class HistoryManagerCustomPromptPersistenceTest {
         try {
             historyManager.saveCurrentChatToHistoryNow(forceSave = true)
 
-            assertEquals("另一个回答", stateHolder._historicalConversations.value[0].last().text)
-            assertEquals("回答 b", stateHolder._historicalConversations.value[1].last().text)
-            assertEquals(1, stateHolder._loadedHistoryIndex.value)
+            assertEquals("回答 b", stateHolder._historicalConversations.value[0].last().text)
+            assertEquals("另一个回答", stateHolder._historicalConversations.value[1].last().text)
+            assertEquals(0, stateHolder._loadedHistoryIndex.value)
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `force save moves updated existing conversation to top immediately`() = runBlocking {
+        val stateHolder = ViewModelStateHolder()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val historyManager = HistoryManager(
+            stateHolder = stateHolder,
+            persistenceManager = mockk(relaxed = true),
+            compareMessageLists = { left, right -> left == right },
+            onHistoryModified = {},
+            scope = scope
+        )
+
+        val newerConversation = listOf(
+            Message(id = "user-newer", text = "newer question", sender = Sender.User),
+            Message(id = "ai-newer", text = "newer answer", sender = Sender.AI),
+        )
+        val oldConversation = listOf(
+            Message(id = "user-old", text = "old question", sender = Sender.User),
+            Message(id = "ai-old", text = "old answer", sender = Sender.AI),
+        )
+        val updatedOldConversation = listOf(
+            Message(id = "user-old", text = "old question", sender = Sender.User),
+            Message(id = "ai-old-updated", text = "updated old answer", sender = Sender.AI),
+        )
+
+        stateHolder._historicalConversations.value = listOf(newerConversation, oldConversation)
+        stateHolder._loadedHistoryIndex.value = 1
+        stateHolder.setCurrentConversationId("user-old")
+        stateHolder.messages.addAll(updatedOldConversation)
+
+        try {
+            historyManager.saveCurrentChatToHistoryNow(forceSave = true)
+
+            assertEquals("updated old answer", stateHolder._historicalConversations.value[0].last().text)
+            assertEquals("newer answer", stateHolder._historicalConversations.value[1].last().text)
+            assertEquals(0, stateHolder._loadedHistoryIndex.value)
         } finally {
             scope.cancel()
         }

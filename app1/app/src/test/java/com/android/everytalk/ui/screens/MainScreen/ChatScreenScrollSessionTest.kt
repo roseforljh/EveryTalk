@@ -5,6 +5,7 @@ import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.pinnedAnchorLayoutVersion
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.resolvePinnedAnchorPreScrollConsumption
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.resolveDynamicBottomReserveForVisibleGap
+import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.resolvePinnedUserBubbleAnchorY
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.restorePinnedBubbleAnchorForSession
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.shouldDispatchImageLoadedToBottomScroller
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.shouldClearTransientBottomReserveOnStreamChange
@@ -214,6 +215,28 @@ class ChatScreenScrollSessionTest {
         )
 
         assertEquals(0, reserve)
+    }
+
+    @Test
+    fun `large pinned user bubble anchors by center instead of top`() {
+        val anchorY = resolvePinnedUserBubbleAnchorY(
+            itemTopY = 120,
+            itemHeightPx = 300,
+            maxUserBubbleHeightPx = 480
+        )
+
+        assertEquals(270, anchorY)
+    }
+
+    @Test
+    fun `normal pinned user bubble still anchors by top`() {
+        val anchorY = resolvePinnedUserBubbleAnchorY(
+            itemTopY = 120,
+            itemHeightPx = 240,
+            maxUserBubbleHeightPx = 480
+        )
+
+        assertEquals(120, anchorY)
     }
 
     @Test

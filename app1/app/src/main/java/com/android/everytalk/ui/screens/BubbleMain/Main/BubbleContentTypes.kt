@@ -85,6 +85,24 @@ private val CONTEXT_MENU_ITEM_ICON_SIZE = 22.dp
 internal fun attachmentStripHorizontalAlignment(sender: Sender): Alignment.Horizontal =
     if (sender == Sender.User) Alignment.End else Alignment.Start
 
+internal const val USER_BUBBLE_COLLAPSED_MAX_HEIGHT_RATIO = 0.32f
+internal const val USER_BUBBLE_EXPANDED_MAX_HEIGHT_RATIO = 0.56f
+
+internal fun resolveUserBubbleMaxHeightDp(
+    screenHeightDp: Float,
+    isExpanded: Boolean,
+): Float = screenHeightDp * if (isExpanded) {
+    USER_BUBBLE_EXPANDED_MAX_HEIGHT_RATIO
+} else {
+    USER_BUBBLE_COLLAPSED_MAX_HEIGHT_RATIO
+}
+
+internal fun shouldConstrainUserBubbleHeight(
+    sender: Sender,
+    hasOverflow: Boolean,
+    isExpanded: Boolean,
+): Boolean = sender == Sender.User && (!isExpanded || hasOverflow)
+
 
 @Composable
 internal fun UserOrErrorMessageContent(
@@ -106,7 +124,12 @@ internal fun UserOrErrorMessageContent(
     // 基于发送者动态计算最大宽度：用户71%，AI80%
     val configuration = LocalConfiguration.current
     val screenDp = configuration.screenWidthDp.dp
-    val screenHeightDp = configuration.screenHeightDp.dp
+    val bubbleShape = RoundedCornerShape(
+        topStart = 18.dp,
+        topEnd = 0.dp,
+        bottomStart = 18.dp,
+        bottomEnd = 18.dp
+    )
     
     // 用户气泡最大约 71% 屏宽，AI 气泡放宽到约 98% 屏宽，尽量贴近屏幕两侧
     val roleMax = if (message.sender == Sender.User) screenDp * 0.71f else screenDp * 0.98f
@@ -152,15 +175,30 @@ internal fun UserOrErrorMessageContent(
             // 展开/收起状态管理
             var isExpanded by remember(message.id) { mutableStateOf(false) }
             var hasOverflow by remember(message.id) { mutableStateOf(false) }
-            val maxCollapsedHeight = screenHeightDp * 0.4f // 默认最大高度为屏幕高度的 40%
+            val contentScrollState = rememberScrollState()
+            val maxUserBubbleHeight = resolveUserBubbleMaxHeightDp(
+                screenHeightDp = configuration.screenHeightDp.toFloat(),
+                isExpanded = isExpanded,
+            ).dp
+            val constrainUserBubbleHeight = shouldConstrainUserBubbleHeight(
+                sender = message.sender,
+                hasOverflow = hasOverflow,
+                isExpanded = isExpanded,
+            )
+
+            LaunchedEffect(isExpanded, message.id) {
+                if (!isExpanded) {
+                    contentScrollState.scrollTo(0)
+                }
+            }
             
             // 使用 Box 作为主容器，让按钮浮动在底部
             Box(
                 modifier = Modifier
                     // 用户保持原来略紧凑，AI 左右仅保留 1dp 安全边距
                     .padding(
-                        horizontal = if (message.sender == Sender.User) 10.dp else 1.dp,
-                        vertical = if (message.sender == Sender.User) 6.dp else 14.dp
+                        horizontal = if (message.sender == Sender.User) 0.dp else 1.dp,
+                        vertical = if (message.sender == Sender.User) 0.dp else 14.dp
                     )
                     .wrapContentWidth()
                     .defaultMinSize(minHeight = 28.dp),
@@ -171,14 +209,21 @@ internal fun UserOrErrorMessageContent(
                         .wrapContentWidth()
                         .animateContentSize() // 🔥 添加流畅的过渡动画
                         .then(
-                            if (message.sender == Sender.User && !isExpanded) {
+                            if (constrainUserBubbleHeight) {
                                 Modifier
-                                    .heightIn(max = maxCollapsedHeight)
+                                    .heightIn(max = maxUserBubbleHeight)
+                                    .then(
+                                        if (isExpanded && hasOverflow) {
+                                            Modifier.verticalScroll(contentScrollState)
+                                        } else {
+                                            Modifier
+                                        }
+                                    )
                                     .drawWithContent {
                                         drawContent()
                                         // 简单检测：如果绘制高度达到了最大限制，认为有溢出
-                                        if (size.height >= maxCollapsedHeight.toPx() - 1f) {
-                                            hasOverflow = true
+                                        if (!isExpanded) {
+                                            hasOverflow = size.height >= maxUserBubbleHeight.toPx() - 1f
                                         }
                                     }
                             } else {
@@ -191,6 +236,10 @@ internal fun UserOrErrorMessageContent(
                         contentAlignment = Alignment.CenterStart,
                         modifier = Modifier
                             .wrapContentWidth()
+                            .padding(
+                                horizontal = if (message.sender == Sender.User) 10.dp else 0.dp,
+                                vertical = if (message.sender == Sender.User) 6.dp else 0.dp,
+                            )
                             // 如果显示按钮，给底部留出空间，防止内容被按钮遮挡
                             .padding(bottom = if (message.sender == Sender.User && (hasOverflow || isExpanded)) 28.dp else 0.dp)
                     ) {
@@ -222,7 +271,7 @@ internal fun UserOrErrorMessageContent(
                             .fillMaxWidth()
                             .align(Alignment.BottomCenter)
                             // 显式裁剪为底部圆角，解决点击波纹直角问题，匹配气泡圆角
-                            .clip(RoundedCornerShape(bottomStart = 18.dp, bottomEnd = 18.dp))
+                            .clip(bubbleShape)
                             .background(
                                 brush = Brush.verticalGradient(
                                     colors = listOf(
