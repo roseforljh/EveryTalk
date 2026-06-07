@@ -113,13 +113,25 @@ fun WebPreviewContent(
 
     val isDarkPreview = previewBackgroundColor.luminance() < 0.5f
     val previewSurfaceColor = if (isDarkPreview) Color(0xFF1E1E1E) else Color.White
+    val previewTextCssColor = previewTextColor.toCssHex()
+    val previewSurfaceCssColor = previewSurfaceColor.toCssHex()
     val darkModeOverrides = if (isDarkPreview) {
         """
         body.everytalk-dark .preview-container table {
-            background-color: ET_SURFACE_COLOR;
+            background-color: $previewSurfaceCssColor;
+        }
+        body.everytalk-dark .preview-container :is(table, tr, td, th) {
+            -webkit-tap-highlight-color: transparent;
         }
         body.everytalk-dark .preview-container :is(td, th):not([style*="color"]) {
-            color: ET_TEXT_COLOR;
+            color: $previewTextCssColor;
+        }
+        body.everytalk-dark .preview-container :is(tr, td, th):is(:hover, :active, :focus, :focus-within) {
+            background-color: rgba(255, 255, 255, 0.08) !important;
+            color: $previewTextCssColor !important;
+        }
+        body.everytalk-dark .preview-container :is(tr, td, th):is(:hover, :active, :focus, :focus-within) *:not([style*="color"]) {
+            color: $previewTextCssColor !important;
         }
         body.everytalk-dark .preview-container :is(table, tr, td, th):not([style*="border"]) {
             border-color: rgba(255, 255, 255, 0.18);
@@ -140,9 +152,8 @@ fun WebPreviewContent(
                 .replace("ET_COLOR_SCHEME", if (isDarkPreview) "dark" else "light")
                 .replace("ET_THEME_CLASS", if (isDarkPreview) "everytalk-dark" else "everytalk-light")
                 .replace("ET_BACKGROUND_COLOR", previewBackgroundColor.toCssHex())
-                .replace("ET_TEXT_COLOR", previewTextColor.toCssHex())
+                .replace("ET_TEXT_COLOR", previewTextCssColor)
                 .replace("ET_DARK_MODE_OVERRIDES", darkModeOverrides)
-                .replace("ET_SURFACE_COLOR", previewSurfaceColor.toCssHex())
                 .replace("<!-- CONTENT_PLACEHOLDER -->", processedCode)
         } catch (e: Exception) {
             e.printStackTrace()
