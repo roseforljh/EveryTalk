@@ -176,7 +176,7 @@ class LauncherIconResourceTest {
     }
 
     @Test
-    fun `android 12 splash uses theme specific chat logo`() {
+    fun `android 12 splash uses provided transparent logo scaled to four times current size`() {
         val resDir = findResDir()
         val v31Theme = resDir.resolve("values-v31/themes.xml")
         val lightSplash = resDir.resolve("drawable-nodpi/splash_logo.png")
@@ -211,30 +211,34 @@ class LauncherIconResourceTest {
                 themeText.contains("@drawable/splash_video_empty_icon"),
         )
         assertTrue(
-            "Light splash logo must be the centered reduced white-background PNG",
+            "Light splash logo must be a transparent pure-logo PNG",
             lightSplash.readBytes()
                 .take(8)
                 .toByteArray()
                 .contentEquals(byteArrayOf(-119, 80, 78, 71, 13, 10, 26, 10)),
         )
         assertTrue(
-            "Dark splash logo must be the centered reduced black-background PNG",
+            "Dark splash logo must be a transparent pure-logo PNG",
             darkSplash.readBytes()
                 .take(8)
                 .toByteArray()
                 .contentEquals(byteArrayOf(-119, 80, 78, 71, 13, 10, 26, 10)),
         )
-        assertEquals("Light splash PNG must keep source width", 1254, lightSplash.readPngSize().width)
-        assertEquals("Light splash PNG must keep source height", 1254, lightSplash.readPngSize().height)
-        assertEquals("Dark splash PNG must keep source width", 1254, darkSplash.readPngSize().width)
-        assertEquals("Dark splash PNG must keep source height", 1254, darkSplash.readPngSize().height)
+        assertEquals("Light splash PNG must use the provided pure-logo width", 718, lightSplash.readPngSize().width)
+        assertEquals("Light splash PNG must use the provided pure-logo height", 730, lightSplash.readPngSize().height)
+        assertEquals("Dark splash PNG must use the provided pure-logo width", 718, darkSplash.readPngSize().width)
+        assertEquals("Dark splash PNG must use the provided pure-logo height", 730, darkSplash.readPngSize().height)
+        assertTrue("Light splash PNG corners must stay transparent", lightSplash.hasTransparentCorners())
+        assertTrue("Dark splash PNG corners must stay transparent", darkSplash.hasTransparentCorners())
         listOf(
-            "Light" to lightSplash.readNonBackgroundBounds(OPAQUE_WHITE),
-            "Dark" to darkSplash.readNonBackgroundBounds(OPAQUE_BLACK),
+            "Light" to lightSplash.readVisibleAlphaBounds(),
+            "Dark" to darkSplash.readVisibleAlphaBounds(),
         ).forEach { (label, bounds) ->
-            assertTrue("$label splash PNG must keep enough empty edge margin", bounds.minMargin >= 200)
-            assertTrue("$label splash PNG must keep the visible image reduced", bounds.width <= 820 && bounds.height <= 820)
+            assertEquals("$label splash visible logo must be four times the previous width", 288, bounds.width)
+            assertEquals("$label splash visible logo must be four times the previous height", 292, bounds.height)
+            assertTrue("$label splash visible logo must stay centered with empty margins", bounds.minMargin >= 215)
         }
+        assertTrue("Light and dark splash must share the same transparent logo asset", lightSplash.readBytes().contentEquals(darkSplash.readBytes()))
         assertFalse("Light splash XML wrapper must be deleted", resDir.resolve("drawable/splash_logo.xml").exists())
         assertFalse("Dark splash XML wrapper must be deleted", resDir.resolve("drawable-night/splash_logo.xml").exists())
         assertFalse("Old light splash intermediate PNG must be deleted", resDir.resolve("drawable/splash_logo_black_asset.png").exists())
@@ -311,18 +315,13 @@ class LauncherIconResourceTest {
         val minMargin: Int = minOf(left, top, imageWidth - right - 1, imageHeight - bottom - 1)
     }
 
-    private companion object {
-        const val OPAQUE_WHITE = -1
-        const val OPAQUE_BLACK = -16777216
-    }
-
     private fun File.readPngSize(): PngSize {
         val bytes = readBytes()
         require(bytes.size > 24) { "Invalid PNG: $path" }
         return PngSize(width = bytes.readPngInt(16), height = bytes.readPngInt(20))
     }
 
-    private fun File.readNonBackgroundBounds(backgroundArgb: Int): PngContentBounds {
+    private fun File.readVisibleAlphaBounds(): PngContentBounds {
         val image = readRgbaPng()
         var left = image.width
         var top = image.height
@@ -331,7 +330,7 @@ class LauncherIconResourceTest {
 
         for (y in 0 until image.height) {
             for (x in 0 until image.width) {
-                if (image.argbAt(x, y) != backgroundArgb) {
+                if (image.argbAt(x, y).ushr(24) > 0) {
                     left = minOf(left, x)
                     top = minOf(top, y)
                     right = maxOf(right, x)
@@ -342,6 +341,14 @@ class LauncherIconResourceTest {
 
         require(right >= left && bottom >= top) { "PNG has no visible content: $path" }
         return PngContentBounds(left, top, right, bottom, image.width, image.height)
+    }
+
+    private fun File.hasTransparentCorners(): Boolean {
+        val image = readRgbaPng()
+        return image.argbAt(0, 0).ushr(24) == 0 &&
+            image.argbAt(image.width - 1, 0).ushr(24) == 0 &&
+            image.argbAt(0, image.height - 1).ushr(24) == 0 &&
+            image.argbAt(image.width - 1, image.height - 1).ushr(24) == 0
     }
 
     private fun File.readRgbaPng(): RgbaPng {
