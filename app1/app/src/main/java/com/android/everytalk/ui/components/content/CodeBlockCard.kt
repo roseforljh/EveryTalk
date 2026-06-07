@@ -58,6 +58,10 @@ import com.android.everytalk.ui.components.syntax.HighlightCache
  */
 val LocalStickyHeaderTop = compositionLocalOf { Float.NaN }
 
+internal fun resolveCodeBlockScrollTarget(isStreaming: Boolean, maxValue: Int): Int {
+    return if (isStreaming) maxValue.coerceAtLeast(0) else 0
+}
+
 /**
  * 代码块卡片组件
  *
@@ -339,9 +343,12 @@ fun CodeBlockCard(
             val codeScrollState = rememberScrollState()
 
             LaunchedEffect(code, isStreaming, codeScrollState.maxValue) {
-                if (isStreaming) {
-                    codeScrollState.scrollTo(codeScrollState.maxValue)
-                }
+                codeScrollState.scrollTo(
+                    resolveCodeBlockScrollTarget(
+                        isStreaming = isStreaming,
+                        maxValue = codeScrollState.maxValue
+                    )
+                )
             }
 
             Box(
