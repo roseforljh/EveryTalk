@@ -67,4 +67,27 @@ class StreamingMessageStateManagerRenderStateTest {
         assertEquals("${'$'}${'$'}x^2${'$'}${'$'}", renderState.content)
         assertFalse(renderState.hasPendingMath)
     }
+
+    @Test
+    fun `未闭合代码块正文不应阻止流式刷新`() {
+        val shouldDelayFlush = StreamingMessageStateManager::class.java.getDeclaredMethod(
+            "shouldDelayFlush",
+            String::class.java,
+            String::class.java,
+            Int::class.javaPrimitiveType,
+        )
+        shouldDelayFlush.isAccessible = true
+
+        val previous = "说明：\n```kotlin\n" + "val cachedLine = 0\n".repeat(16)
+        val current = previous + "    println(\"最新一行\")\n"
+
+        val shouldDelay = shouldDelayFlush.invoke(
+            subject,
+            previous,
+            current,
+            current.length - previous.length,
+        ) as Boolean
+
+        assertFalse(shouldDelay)
+    }
 }

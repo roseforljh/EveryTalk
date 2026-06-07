@@ -10,6 +10,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -334,6 +336,13 @@ fun CodeBlockCard(
             var contentBoxHeightPx by remember { mutableIntStateOf(0) }
             val density = LocalDensity.current
             val isAtMaxHeight = with(density) { contentBoxHeightPx >= 400.dp.toPx() - 1f }
+            val codeScrollState = rememberScrollState()
+
+            LaunchedEffect(code, isStreaming, codeScrollState.maxValue) {
+                if (isStreaming) {
+                    codeScrollState.scrollTo(codeScrollState.maxValue)
+                }
+            }
 
             Box(
                 modifier = Modifier
@@ -395,6 +404,7 @@ fun CodeBlockCard(
                             .fillMaxWidth()
                             .heightIn(max = 400.dp)
                             .clipToBounds()
+                            .verticalScroll(codeScrollState, enabled = false)
                             .onSizeChanged { contentBoxHeightPx = it.height }
                     ) {
                         Text(

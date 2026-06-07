@@ -1,13 +1,7 @@
-package com.android.everytalk.ui.screens.MainScreen.chat.dialog
+﻿package com.android.everytalk.ui.screens.MainScreen.chat.dialog
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -35,7 +29,6 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -49,6 +42,18 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.material3.Surface
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.foundation.verticalScroll
@@ -191,7 +196,7 @@ fun EditMessageDialog(
                 modifier = Modifier
                     .height(48.dp)
                     .padding(horizontal = 4.dp),
-                shape = RoundedCornerShape(24.dp),
+                shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = confirmButtonColor,
                     contentColor = confirmButtonTextColor
@@ -244,195 +249,213 @@ fun ConversationParametersDialog(
     var useCustomMaxTokens by remember(initialMaxTokens) { mutableStateOf(initialMaxTokens != null) }
     var maxTokens by remember(initialMaxTokens) { mutableStateOf(initialMaxTokens?.toString() ?: "64000") }
 
-    val configuration = LocalConfiguration.current
+        val configuration = LocalConfiguration.current
     val screenHeight = configuration.screenHeightDp.dp
     val dialogHeight = screenHeight * 0.67f
     val dialogBg = appDialogContainerColor()
     val contentColor = appDialogContentColor()
     val textFieldBorderColor = appDialogTextFieldBorderColor()
     val textFieldDefaultBorderColor = appDialogTextFieldDefaultBorderColor()
+    val isDark = isSystemInDarkTheme()
+    val sliderColor = if (isDark) Color.White else Color.Black
+    val activeTrackColor = sliderColor
+    val inactiveTrackColor = sliderColor.copy(alpha = 0.24f)
 
-    AlertDialog(
-        modifier = Modifier
-            .height(dialogHeight)
-            .border(1.dp, appDialogBorderColor(), AppDialogShape),
+    Dialog(
         onDismissRequest = onDismissRequest,
-        title = {
-            Text(
-                "会话参数",
-                color = MaterialTheme.colorScheme.onSurface,
-                fontWeight = FontWeight.Bold
-            )
-        },
-        text = {
-            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-                // Temperature Slider
-                Text(
-                    "Temperature: ${String.format("%.2f", temperature)}",
-                    fontSize = 14.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+        properties = androidx.compose.ui.window.DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false
+        )
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = onDismissRequest
                 )
-                Text(
-                    "控制回复的创造性（0=保守，2=创造性）",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                )
-                Slider(
-                    value = temperature,
-                    onValueChange = { temperature = it },
-                    valueRange = 0f..2f,
-                    modifier = Modifier.padding(vertical = 8.dp),
-                    colors = SliderDefaults.colors(
-                        thumbColor = MaterialTheme.colorScheme.primary,
-                        activeTrackColor = Color.Transparent, // 由自定义 track 绘制
-                        inactiveTrackColor = Color.Transparent
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .imePadding()
+                .padding(horizontal = 8.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .wrapContentHeight()
+                    .heightIn(max = dialogHeight)
+                    .border(1.dp, appDialogBorderColor(), AppDialogShape)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = {}
                     ),
-                    track = { _ ->
-                        val trackHeight = 8.dp
-                        val radius = trackHeight / 2
-                        val activeColor = MaterialTheme.colorScheme.primary
-                        val inactiveColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.24f)
-                        val dir = LocalLayoutDirection.current
-                        Box(
-                            Modifier
-                                .fillMaxWidth()
-                                .height(trackHeight)
-                                .clip(RoundedCornerShape(radius))
-                                .background(inactiveColor)
-                        ) {
-                            // valueRange 0f..2f
-                            val fraction = ((temperature - 0f) / 2f).coerceIn(0f, 1f)
-                            Box(
-                                Modifier
-                                    .fillMaxHeight()
-                                    .fillMaxWidth(fraction)
-                                    .align(if (dir == LayoutDirection.Ltr) Alignment.CenterStart else Alignment.CenterEnd)
-                                    .clip(RoundedCornerShape(radius))
-                                    .background(activeColor)
-                            )
-                        }
-                    },
-                    thumb = {
-                        Box(
-                            modifier = Modifier
-                                .size(16.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.primary)
-                        )
-                    }
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // Top-p Slider
-                Text(
-                    "Top-p: ${String.format("%.2f", topP)}",
-                    fontSize = 14.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Text(
-                    "控制采样概率（0.1=严格，1=多样）",
-                    fontSize = 12.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                )
-                Slider(
-                    value = topP,
-                    onValueChange = { topP = it },
-                    valueRange = 0.1f..1f,
-                    modifier = Modifier.padding(vertical = 8.dp),
-                    colors = SliderDefaults.colors(
-                        thumbColor = MaterialTheme.colorScheme.primary,
-                        activeTrackColor = Color.Transparent, // 由自定义 track 绘制
-                        inactiveTrackColor = Color.Transparent
-                    ),
-                    track = { _ ->
-                        val trackHeight = 8.dp
-                        val radius = trackHeight / 2
-                        val activeColor = MaterialTheme.colorScheme.primary
-                        val inactiveColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.24f)
-                        val dir = LocalLayoutDirection.current
-                        Box(
-                            Modifier
-                                .fillMaxWidth()
-                                .height(trackHeight)
-                                .clip(RoundedCornerShape(radius))
-                                .background(inactiveColor)
-                        ) {
-                            // valueRange 0.1f..1f
-                            val fraction = ((topP - 0.1f) / (1f - 0.1f)).coerceIn(0f, 1f)
-                            Box(
-                                Modifier
-                                    .fillMaxHeight()
-                                    .fillMaxWidth(fraction)
-                                    .align(if (dir == LayoutDirection.Ltr) Alignment.CenterStart else Alignment.CenterEnd)
-                                    .clip(RoundedCornerShape(radius))
-                                    .background(activeColor)
-                            )
-                        }
-                    },
-                    thumb = {
-                        Box(
-                            modifier = Modifier
-                                .size(16.dp)
-                                .clip(CircleShape)
-                                .background(MaterialTheme.colorScheme.primary)
-                        )
-                    }
-                )
-
-                Spacer(modifier = Modifier.height(16.dp))
-
-                // Max Tokens Section
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically
+                shape = AppDialogShape,
+                color = dialogBg,
+                tonalElevation = 3.dp,
+                shadowElevation = 8.dp
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(24.dp)
                 ) {
-                    Column(
-                        modifier = Modifier.weight(1f)
+                    Text(
+                        "会话参数",
+                        color = contentColor,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 20.sp,
+                        modifier = Modifier.padding(bottom = 16.dp)
+                    )
+
+                    Text(
+                        "Temperature: ${String.format("%.2f", temperature)}",
+                        fontSize = 14.sp,
+                        color = contentColor,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        "控制回复的创造性（0=保守，2=创造性）",
+                        fontSize = 12.sp,
+                        color = contentColor.copy(alpha = 0.7f)
+                    )
+                    Slider(
+                        value = temperature,
+                        onValueChange = { temperature = it },
+                        valueRange = 0f..2f,
+                        modifier = Modifier.padding(vertical = 8.dp),
+                        colors = SliderDefaults.colors(
+                            thumbColor = sliderColor,
+                            activeTrackColor = Color.Transparent,
+                            inactiveTrackColor = Color.Transparent
+                        ),
+                        track = { _ ->
+                            val trackHeight = 8.dp
+                            val radius = trackHeight / 2
+                            val dir = LocalLayoutDirection.current
+                            Box(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .height(trackHeight)
+                                    .clip(RoundedCornerShape(radius))
+                                    .background(inactiveTrackColor)
+                            ) {
+                                val fraction = ((temperature - 0f) / 2f).coerceIn(0f, 1f)
+                                Box(
+                                    Modifier
+                                        .fillMaxHeight()
+                                        .fillMaxWidth(fraction)
+                                        .align(if (dir == LayoutDirection.Ltr) Alignment.CenterStart else Alignment.CenterEnd)
+                                        .clip(RoundedCornerShape(radius))
+                                        .background(activeTrackColor)
+                                )
+                            }
+                        },
+                        thumb = {
+                            Box(
+                                modifier = Modifier
+                                    .size(16.dp)
+                                    .clip(CircleShape)
+                                    .background(sliderColor)
+                            )
+                        }
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Text(
+                        "Top-p: ${String.format("%.2f", topP)}",
+                        fontSize = 14.sp,
+                        color = contentColor,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        "控制采样概率（0.1=严格，1=多样）",
+                        fontSize = 12.sp,
+                        color = contentColor.copy(alpha = 0.7f)
+                    )
+                    Slider(
+                        value = topP,
+                        onValueChange = { topP = it },
+                        valueRange = 0.1f..1f,
+                        modifier = Modifier.padding(vertical = 8.dp),
+                        colors = SliderDefaults.colors(
+                            thumbColor = sliderColor,
+                            activeTrackColor = Color.Transparent,
+                            inactiveTrackColor = Color.Transparent
+                        ),
+                        track = { _ ->
+                            val trackHeight = 8.dp
+                            val radius = trackHeight / 2
+                            val dir = LocalLayoutDirection.current
+                            Box(
+                                Modifier
+                                    .fillMaxWidth()
+                                    .height(trackHeight)
+                                    .clip(RoundedCornerShape(radius))
+                                    .background(inactiveTrackColor)
+                            ) {
+                                val fraction = ((topP - 0.1f) / (1f - 0.1f)).coerceIn(0f, 1f)
+                                Box(
+                                    Modifier
+                                        .fillMaxHeight()
+                                        .fillMaxWidth(fraction)
+                                        .align(if (dir == LayoutDirection.Ltr) Alignment.CenterStart else Alignment.CenterEnd)
+                                        .clip(RoundedCornerShape(radius))
+                                        .background(activeTrackColor)
+                                )
+                            }
+                        },
+                        thumb = {
+                            Box(
+                                modifier = Modifier
+                                    .size(16.dp)
+                                    .clip(CircleShape)
+                                    .background(sliderColor)
+                            )
+                        }
+                    )
+
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text(
-                            "Max Tokens",
-                            fontSize = 14.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                        Text(
-                            if (useCustomMaxTokens) "自定义最大输出长度" else "使用模型默认值",
-                            fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        Column(
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(
+                                "Max Tokens",
+                                fontSize = 14.sp,
+                                color = contentColor,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Text(
+                                if (useCustomMaxTokens) "自定义最大输出长度" else "使用模型默认值",
+                                fontSize = 12.sp,
+                                color = contentColor.copy(alpha = 0.7f)
+                            )
+                        }
+                        Switch(
+                            checked = useCustomMaxTokens,
+                            onCheckedChange = { useCustomMaxTokens = it },
+                            colors = SwitchDefaults.colors(
+                                checkedThumbColor = sliderColor,
+                                checkedTrackColor = sliderColor.copy(alpha = 0.5f),
+                                uncheckedThumbColor = contentColor.copy(alpha = 0.6f),
+                                uncheckedTrackColor = dialogBg
+                            )
                         )
                     }
-                    Switch(
-                        checked = useCustomMaxTokens,
-                        onCheckedChange = { useCustomMaxTokens = it },
-                        colors = SwitchDefaults.colors(
-                            checkedThumbColor = MaterialTheme.colorScheme.primary,
-                            checkedTrackColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f),
-                            uncheckedThumbColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                            uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant
-                        )
-                    )
-                }
-                
-                // Show input field only when switch is enabled
-                AnimatedVisibility(
-                    visible = useCustomMaxTokens,
-                    enter = expandVertically(
-                        animationSpec = tween(durationMillis = 300, easing = FastOutSlowInEasing)
-                    ) + fadeIn(
-                        // 完全等待高度展开结束后再淡入内容，避免 Window Resize 时的抖动
-                        animationSpec = tween(durationMillis = 200, delayMillis = 300)
-                    ),
-                    exit = fadeOut(
-                        animationSpec = tween(durationMillis = 200)
-                    ) + shrinkVertically(
-                        // 等待淡出完全结束后再收缩高度
-                        animationSpec = tween(durationMillis = 300, delayMillis = 200, easing = FastOutSlowInEasing)
-                    )
-                ) {
+
                     OutlinedTextField(
                         value = maxTokens,
                         onValueChange = { newValue ->
-                            // Only allow numeric input
                             if (newValue.all { it.isDigit() } || newValue.isEmpty()) {
                                 maxTokens = newValue
                             }
@@ -443,47 +466,76 @@ fun ConversationParametersDialog(
                         label = { Text("最大令牌数") },
                         placeholder = { Text("例如: 64000") },
                         singleLine = true,
-                        shape = RoundedCornerShape(24.dp),
+                        enabled = useCustomMaxTokens,
+                        shape = RoundedCornerShape(12.dp),
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedBorderColor = textFieldBorderColor,
                             unfocusedBorderColor = textFieldDefaultBorderColor,
                             disabledBorderColor = textFieldDefaultBorderColor.copy(alpha = 0.5f),
                             focusedLabelColor = textFieldBorderColor,
-                            unfocusedLabelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            unfocusedLabelColor = contentColor.copy(alpha = 0.6f),
                             cursorColor = textFieldBorderColor,
-                            focusedTextColor = MaterialTheme.colorScheme.onSurface,
-                            unfocusedTextColor = MaterialTheme.colorScheme.onSurface
+                            focusedTextColor = contentColor,
+                            unfocusedTextColor = contentColor,
+                            disabledTextColor = contentColor.copy(alpha = 0.4f),
+                            disabledLabelColor = contentColor.copy(alpha = 0.3f)
                         )
                     )
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        OutlinedButton(
+                            onClick = onDismissRequest,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp),
+                            shape = RoundedCornerShape(24.dp),
+                            colors = ButtonDefaults.outlinedButtonColors(
+                                containerColor = dialogBg,
+                                contentColor = appDialogCancelColor()
+                            ),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, appDialogCancelColor())
+                        ) {
+                            Text(
+                                "取消",
+                                style = MaterialTheme.typography.labelLarge.copy(
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            )
+                        }
+
+                        Button(
+                            onClick = {
+                                val maxTokensValue = if (useCustomMaxTokens) {
+                                    maxTokens.toIntOrNull() ?: 64000
+                                } else {
+                                    null
+                                }
+                                onConfirm(temperature, topP, maxTokensValue)
+                            },
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp),
+                            shape = RoundedCornerShape(24.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = contentColor,
+                                contentColor = dialogBg
+                            )
+                        ) {
+                            Text(
+                                "确定",
+                                style = MaterialTheme.typography.labelLarge.copy(
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                            )
+                        }
+                    }
                 }
             }
-        },
-        confirmButton = {
-            TextButton(
-                onClick = {
-                    val maxTokensValue = if (useCustomMaxTokens) {
-                        maxTokens.toIntOrNull() ?: 64000
-                    } else {
-                        null
-                    }
-                    onConfirm(temperature, topP, maxTokensValue)
-                },
-                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.primary)
-            ) { 
-                Text("应用") 
-            }
-        },
-        dismissButton = {
-            TextButton(
-                onClick = onDismissRequest,
-                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant)
-            ) { 
-                Text("取消") 
-            }
-        },
-        containerColor = dialogBg,
-        titleContentColor = contentColor,
-        textContentColor = contentColor,
-        shape = AppDialogShape
-    )
+        }
+    }
 }

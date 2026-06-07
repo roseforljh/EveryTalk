@@ -1181,22 +1181,22 @@ fun ChatInputArea(
                                                     modifier = Modifier
                                                         .background(
                                                             if (isDarkTheme) Color(0xFF2A2A2A) else Color(0xFFD0D0D0),
-                                                            RoundedCornerShape(14.dp)
+                                                            RoundedCornerShape(percent = 50)
                                                         )
                                                         .clickable { onToggleWebSearch() }
-                                                        .padding(horizontal = 8.dp, vertical = 5.dp),
+                                                        .padding(horizontal = 12.dp, vertical = 6.dp),
                                                     verticalAlignment = Alignment.CenterVertically
                                                 ) {
                                                     Icon(
                                                         painter = painterResource(R.drawable.ic_globe),
                                                         contentDescription = null,
                                                         tint = Color(0xFF66B5FF),
-                                                        modifier = Modifier.size(14.dp)
+                                                        modifier = Modifier.size(16.dp)
                                                     )
                                                     Spacer(Modifier.width(4.dp))
                                                     Text(
                                                         "搜索",
-                                                        fontSize = 12.sp,
+                                                        fontSize = 15.sp,
                                                         color = Color(0xFF66B5FF)
                                                     )
                                                     Spacer(Modifier.width(4.dp))
@@ -1204,7 +1204,7 @@ fun ChatInputArea(
                                                         painter = painterResource(R.drawable.ic_close),
                                                         contentDescription = "关闭联网搜索",
                                                         tint = Color(0xFF66B5FF),
-                                                        modifier = Modifier.size(12.dp)
+                                                        modifier = Modifier.size(14.dp)
                                                     )
                                                 }
                                             }
@@ -1212,31 +1212,31 @@ fun ChatInputArea(
                                                 Row(
                                                     modifier = Modifier
                                                         .background(
-                                                            if (isDarkTheme) Color(0xFF2A2A2A) else Color(0xFFD0D0D0),
-                                                            RoundedCornerShape(14.dp)
+                                                            if (isDarkTheme) Color(0xFF2A2A2A) else Color(0xFFFFECE5),
+                                                            RoundedCornerShape(percent = 50)
                                                         )
                                                         .clickable { viewModel.setMcpEnabledForNextRequest(false) }
-                                                        .padding(horizontal = 8.dp, vertical = 5.dp),
+                                                        .padding(horizontal = 12.dp, vertical = 6.dp),
                                                     verticalAlignment = Alignment.CenterVertically
                                                 ) {
                                                     Icon(
                                                         painter = painterResource(R.drawable.ic_hammer),
                                                         contentDescription = null,
-                                                        tint = Color(0xFF66B5FF),
-                                                        modifier = Modifier.size(14.dp)
+                                                        tint = Color(0xFFFF6B00),
+                                                        modifier = Modifier.size(16.dp)
                                                     )
                                                     Spacer(Modifier.width(4.dp))
                                                     Text(
                                                         "MCP",
-                                                        fontSize = 12.sp,
-                                                        color = Color(0xFF66B5FF)
+                                                        fontSize = 15.sp,
+                                                        color = Color(0xFFFF6B00)
                                                     )
                                                     Spacer(Modifier.width(4.dp))
                                                     Icon(
                                                         painter = painterResource(R.drawable.ic_close),
                                                         contentDescription = "关闭MCP",
-                                                        tint = Color(0xFF66B5FF),
-                                                        modifier = Modifier.size(12.dp)
+                                                        tint = Color(0xFFFF6B00),
+                                                        modifier = Modifier.size(14.dp)
                                                     )
                                                 }
                                             }

@@ -330,27 +330,10 @@ class StreamingMessageStateManager {
         if (pendingLength >= MAX_BUFFER_BEFORE_FORCE) return false
         // 短内容不做 markdown 延迟，优先保证响应速度
         if (current.length < SHORT_CONTENT_THRESHOLD) return false
-        if (isInsideUnclosedFence(current)) return true
         if (endsWithDangerousMarkdownPrefix(current)) return true
         if (hasUnclosedInlineMarkers(current)) return true
         if (hasUnstableTrailingTable(previous, current)) return true
         return false
-    }
-
-    private fun isInsideUnclosedFence(text: String): Boolean {
-        return countFenceMarkers(text, "```") % 2 == 1 || countFenceMarkers(text, "~~~") % 2 == 1
-    }
-
-    private fun countFenceMarkers(text: String, marker: String): Int {
-        var idx = 0
-        var count = 0
-        while (true) {
-            val p = text.indexOf(marker, idx)
-            if (p < 0) break
-            count++
-            idx = p + marker.length
-        }
-        return count
     }
 
     private fun endsWithDangerousMarkdownPrefix(text: String): Boolean {

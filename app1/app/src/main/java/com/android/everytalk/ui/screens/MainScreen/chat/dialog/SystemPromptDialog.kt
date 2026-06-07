@@ -6,14 +6,22 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.wrapContentHeight
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.outlined.Delete
@@ -95,6 +103,7 @@ fun SystemPromptDialog(
             dismissOnClickOutside = true,
             dismissOnBackPress = true,
             usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
         ),
     ) {
         val alphaAnim = remember { Animatable(0f) }
@@ -111,24 +120,35 @@ fun SystemPromptDialog(
             scaleAnim.animateTo(1f, animationSpec = tween(durationMillis = 250, easing = FastOutSlowInEasing))
         }
 
-        Card(
-            shape = AppDialogShape,
+        Box(
             modifier = Modifier
-                .fillMaxWidth(0.9f)
-                .height(dialogHeight)
-                .graphicsLayer {
-                    alpha = alphaAnim.value
-                    scaleX = scaleAnim.value
-                    scaleY = scaleAnim.value
-                },
-            colors = CardDefaults.cardColors(containerColor = dialogBg),
-            border = BorderStroke(1.dp, appDialogBorderColor()),
+                .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .imePadding()
+                .padding(horizontal = 8.dp),
+            contentAlignment = Alignment.Center
         ) {
-            Column(
+            Card(
+                shape = AppDialogShape,
                 modifier = Modifier
-                    .fillMaxSize()
-                    .padding(24.dp),
+                    .fillMaxWidth()
+                    .wrapContentHeight()
+                    .heightIn(max = dialogHeight)
+                    .graphicsLayer {
+                        alpha = alphaAnim.value
+                        scaleX = scaleAnim.value
+                        scaleY = scaleAnim.value
+                    },
+                colors = CardDefaults.cardColors(containerColor = dialogBg),
+                border = BorderStroke(1.dp, appDialogBorderColor()),
             ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(24.dp),
+                ) {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -174,7 +194,7 @@ fun SystemPromptDialog(
                     },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .weight(1f),
+                        .heightIn(min = 120.dp),
                     placeholder = {
                         Text(
                             text = "例如：你是一个乐于助人的编程专家，请用简洁的代码回答我的问题...",
@@ -278,6 +298,7 @@ fun SystemPromptDialog(
                     }
                 }
             }
+        }
         }
     }
 }
