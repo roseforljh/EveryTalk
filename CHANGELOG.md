@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.20.1](https://github.com/roseforljh/EveryTalk/compare/v1.20.0...v1.20.1) (2026-06-07)
+
+
+### Bug Fixes
+
+* adjust web sources dialog spacing ([8d42b9d](https://github.com/roseforljh/EveryTalk/commit/8d42b9d10a194961521984a83b0b40accf1b74a7))
+* refine scroll button behavior ([cdb3704](https://github.com/roseforljh/EveryTalk/commit/cdb37045ea020b3217dc62b219cfbfe0bb4e96ef))
+* reset code block scroll after streaming ([80b1c75](https://github.com/roseforljh/EveryTalk/commit/80b1c75fd2543d402a6d155d197c1ac32a1ea47e))
+* 优化MCP/搜索标签胶囊样式、会话参数及系统提示对话框UI与IME滚动 ([5c1530b](https://github.com/roseforljh/EveryTalk/commit/5c1530bbcec22f352a914da998096a8694ed7625))
+* 优化代码块底部渐变逻辑 ([e35a989](https://github.com/roseforljh/EveryTalk/commit/e35a98993c11634c40e152fa8407bdc3e9c14e6d))
+* 优化代码块流式滚动 ([f85f2ed](https://github.com/roseforljh/EveryTalk/commit/f85f2ed663b8dd09b07e1f5b8f9ee1b347a2f4a5))
+* 优化代码预览退出动画 ([c59a425](https://github.com/roseforljh/EveryTalk/commit/c59a4252ab1aca443f38dbe2d97595d979c277c2))
+* 优化回到底部按钮显示 ([74e5430](https://github.com/roseforljh/EveryTalk/commit/74e54304b399e553ef58402afe9d9c55e3e248a9))
+* 优化用户气泡和历史排序 ([e2ab31c](https://github.com/roseforljh/EveryTalk/commit/e2ab31c7f879835aed48b2c73981315c35997c31))
+* 修复暗色预览表格点击态对比度 ([e74955a](https://github.com/roseforljh/EveryTalk/commit/e74955aacf55fa8d5fe12609ca2da63e552388bd))
+* 修复用户气泡滚动锚点 ([5890e18](https://github.com/roseforljh/EveryTalk/commit/5890e1893c5b225e11232eef5e6f27769cd4e467))
+
 ## [1.20.0](https://github.com/roseforljh/EveryTalk/compare/v1.19.7...v1.20.0) (2026-06-07)
 
 
