@@ -57,7 +57,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.onSizeChanged
@@ -76,7 +80,7 @@ import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.ui.components.ChatMarkdownTextStyle
 import com.android.everytalk.ui.components.ContentParser
 import com.android.everytalk.ui.components.ContentPart
-import com.android.everytalk.ui.components.WebPreviewDialog
+import com.android.everytalk.ui.components.FullScreenCodeViewerDialog
 import com.android.everytalk.ui.components.content.CodeBlockCard
 import com.android.everytalk.ui.components.StableMarkdownText
 import com.android.everytalk.ui.components.markdown.BreakableLatexRenderer
@@ -567,7 +571,7 @@ fun TableAwareText(
 
     // 显示预览对话框
     previewState?.let { (code, language) ->
-        WebPreviewDialog(
+        FullScreenCodeViewerDialog(
             code = code,
             language = language,
             onDismiss = { previewState = null }
@@ -606,9 +610,8 @@ private fun StreamingCodeBlockCard(
 
     Surface(
         modifier = modifier
-            .fillMaxWidth()
-            .border(1.5.dp, outline, RoundedCornerShape(8.dp)),
-        shape = RoundedCornerShape(8.dp),
+            .fillMaxWidth(),
+        shape = RoundedCornerShape(24.dp),
         color = bg
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
@@ -633,21 +636,42 @@ private fun StreamingCodeBlockCard(
                 )
             }
 
-            val scrollState = rememberScrollState()
-            Text(
-                text = highlightedCode,
-                style = MaterialTheme.typography.bodyMedium.copy(
-                    fontFamily = FontFamily.Monospace,
-                    fontSize = 13.sp,
-                    lineHeight = 18.sp,
-                    color = MaterialTheme.colorScheme.onSurface
-                ),
-                softWrap = false,
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .horizontalScroll(scrollState)
-                    .padding(horizontal = 12.dp, vertical = 8.dp)
-            )
+                    .heightIn(max = 350.dp)
+                    .drawWithContent {
+                        drawContent()
+                        val gradientHeight = 60.dp.toPx()
+                        drawRect(
+                            brush = androidx.compose.ui.graphics.Brush.verticalGradient(
+                                colors = listOf(
+                                    Color.Transparent,
+                                    bg.copy(alpha = 0.8f),
+                                    bg
+                                ),
+                                startY = size.height - gradientHeight,
+                                endY = size.height
+                            ),
+                            topLeft = androidx.compose.ui.geometry.Offset(0f, size.height - gradientHeight),
+                            size = androidx.compose.ui.geometry.Size(size.width, gradientHeight)
+                        )
+                    }
+            ) {
+                Text(
+                    text = highlightedCode,
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 13.sp,
+                        lineHeight = 18.sp,
+                        color = MaterialTheme.colorScheme.onSurface
+                    ),
+                    softWrap = true,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 24.dp)
+                )
+            }
         }
     }
 }

@@ -9,56 +9,81 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
-import androidx.compose.ui.zIndex
 import androidx.core.view.WindowCompat
+import com.android.everytalk.R
+import com.android.everytalk.ui.components.syntax.HighlightCache
+import com.android.everytalk.ui.components.syntax.SyntaxHighlightTheme
+import com.android.everytalk.ui.components.syntax.SyntaxHighlighter
+import com.android.everytalk.ui.components.content.isPreviewSupported
+import com.android.everytalk.ui.theme.chatColors
 import java.io.BufferedReader
 import java.io.InputStreamReader
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
-fun WebPreviewDialog(
+fun WebPreviewContent(
     code: String,
     language: String,
-    onDismiss: () -> Unit
+    modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
 
-    // 1. 根据语言选择模板并预处理代码
     val (templateFileName, processedCode) = remember(code, language) {
         val normalizedLang = language.trim().lowercase()
         when (normalizedLang) {
             "mermaid" -> "templates/mermaid.html" to escapeHtml(code)
             "echarts" -> "templates/echarts.html" to code.replace("`", "\\`")
             "chartjs" -> "templates/chartjs.html" to code.replace("`", "\\`")
-            // flowchart 模板里使用 JS 模板字符串，需要转义反引号
             "flowchart", "flow" -> "templates/flowchart.html" to code.replace("`", "\\`")
             "vega", "vega-lite" -> "templates/vega.html" to code
             "infographic" -> "templates/html.html" to renderInfographic(code)
-            // html / svg / xml：剥掉外层 html/body，只保留 body 内容，交给居中模板
             "html", "svg", "xml" -> "templates/html.html" to extractHtmlBodyOrSelf(code)
-            else -> "templates/html.html" to code // 其它语言也走通用 html 模板
+            else -> "templates/html.html" to code
         }
     }
 
-    // 2. 从 assets 读取模板并注入内容
     val htmlContent = remember(templateFileName, processedCode) {
         try {
             val assetManager = context.assets
@@ -66,8 +91,6 @@ fun WebPreviewDialog(
             val reader = BufferedReader(InputStreamReader(inputStream))
             val template = reader.readText()
             reader.close()
-
-            // 模板使用 <!-- CONTENT_PLACEHOLDER -->
             template.replace("<!-- CONTENT_PLACEHOLDER -->", processedCode)
         } catch (e: Exception) {
             e.printStackTrace()
@@ -75,13 +98,63 @@ fun WebPreviewDialog(
         }
     }
 
-    // 3. 全屏对话框 + 沉浸式窗口
+    AndroidView(
+        factory = { ctx ->
+            WebView(ctx).apply {
+                settings.javaScriptEnabled = true
+                settings.domStorageEnabled = true
+                settings.allowFileAccess = true
+                settings.allowContentAccess = true
+                settings.useWideViewPort = true
+                settings.loadWithOverviewMode = true
+                settings.builtInZoomControls = true
+                settings.displayZoomControls = false
+                setBackgroundColor(0)
+                webViewClient = WebViewClient()
+                // 禁用 WebView 自身的滚动和点击拦截，让外层能够捕获事件（针对非全屏预览模式）
+                isVerticalScrollBarEnabled = false
+                isHorizontalScrollBarEnabled = false
+                setOnTouchListener { v, event ->
+                    // 返回 false 允许事件冒泡到外层 Compose 点击监听器
+                    false
+                }
+            }
+        },
+        update = { webView ->
+            webView.loadDataWithBaseURL(
+                "file:///android_asset/templates/",
+                htmlContent,
+                "text/html",
+                "UTF-8",
+                null
+            )
+        },
+        modifier = modifier
+    )
+}
+
+@Composable
+fun FullScreenCodeViewerDialog(
+    code: String,
+    language: String,
+    onDismiss: () -> Unit
+) {
+    val clipboard = LocalClipboardManager.current
+    val isDarkTheme = androidx.compose.foundation.isSystemInDarkTheme()
+    val bgColor = if (isDarkTheme) Color(0xFF1E1E1E) else Color(0xFFF5F5F5)
+    val headerColor = if (isDarkTheme) Color.White else Color.Black
+    val capsuleBgColor = if (isDarkTheme) Color(0xFF383838) else Color(0xFFE2E2E2)
+    val capsuleSelectedBgColor = if (isDarkTheme) Color(0xFF505050) else Color.White
+
+    var isPreviewMode by remember { mutableStateOf(false) }
+    val canPreview = isPreviewSupported(language)
+
     Dialog(
         onDismissRequest = onDismiss,
         properties = DialogProperties(
             usePlatformDefaultWidth = false,
             dismissOnBackPress = true,
-            dismissOnClickOutside = true,
+            dismissOnClickOutside = false,
             decorFitsSystemWindows = false
         )
     ) {
@@ -94,61 +167,161 @@ fun WebPreviewDialog(
             }
         }
 
-        Box(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color.White)
+                .background(bgColor)
+                .statusBarsPadding()
+                .navigationBarsPadding() // 增加底部导航栏留白，实现沉浸式并避免底部小白条遮挡
         ) {
-            // 4. 真正承载模板的 WebView
-            AndroidView(
-                factory = { ctx ->
-                    WebView(ctx).apply {
-                        settings.javaScriptEnabled = true
-                        settings.domStorageEnabled = true
-                        settings.allowFileAccess = true
-                        settings.allowContentAccess = true
-                        settings.useWideViewPort = true
-                        settings.loadWithOverviewMode = true
-                        settings.builtInZoomControls = true
-                        settings.displayZoomControls = false
-                        setBackgroundColor(0)
-                        webViewClient = WebViewClient()
-                    }
-                },
-                update = { webView ->
-                    webView.loadDataWithBaseURL(
-                        "file:///android_asset/templates/",
-                        htmlContent,
-                        "text/html",
-                        "UTF-8",
-                        null
-                    )
-                },
-                modifier = Modifier.fillMaxSize()
-            )
-
-            // 5. 右上角关闭按钮
-            Box(
+            // 顶部导航栏
+            Row(
                 modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .statusBarsPadding()
-                    .padding(16.dp)
-                    .size(48.dp)
-                    .zIndex(2f)
-                    .background(
-                        color = Color.Black.copy(alpha = 0.1f),
-                        shape = CircleShape
-                    )
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                IconButton(
-                    onClick = onDismiss,
-                    modifier = Modifier.fillMaxSize()
-                ) {
+                // 左侧：关闭按钮
+                IconButton(onClick = onDismiss, modifier = Modifier.size(48.dp)) {
                     Icon(
                         imageVector = Icons.Default.Close,
-                        contentDescription = "Close",
-                        tint = Color.Black
+                        contentDescription = "关闭",
+                        tint = headerColor
                     )
+                }
+
+                // 中间：胶囊按钮 (代码/预览)
+                if (canPreview) {
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = capsuleBgColor
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(2.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .background(if (!isPreviewMode) capsuleSelectedBgColor else Color.Transparent)
+                                    .clickable { isPreviewMode = false }
+                                    .padding(horizontal = 24.dp, vertical = 8.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "代码",
+                                    color = headerColor,
+                                    style = MaterialTheme.typography.labelLarge
+                                )
+                            }
+
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(50))
+                                    .background(if (isPreviewMode) capsuleSelectedBgColor else Color.Transparent)
+                                    .clickable { isPreviewMode = true }
+                                    .padding(horizontal = 24.dp, vertical = 8.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "预览",
+                                    color = headerColor,
+                                    style = MaterialTheme.typography.labelLarge
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    Spacer(modifier = Modifier.weight(1f))
+                }
+
+                // 右侧：预览模式为分享，代码模式为复制
+                val context = LocalContext.current
+                if (isPreviewMode) {
+                    IconButton(
+                        onClick = {
+                            val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                type = "text/plain"
+                                putExtra(android.content.Intent.EXTRA_TEXT, code)
+                            }
+                            context.startActivity(android.content.Intent.createChooser(shareIntent, "分享代码"))
+                        },
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_gpt_share),
+                            contentDescription = "分享",
+                            tint = headerColor,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                } else {
+                    IconButton(
+                        onClick = { clipboard.setText(AnnotatedString(code)) },
+                        modifier = Modifier.size(48.dp)
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_gpt_copy),
+                            contentDescription = "复制",
+                            tint = headerColor,
+                            modifier = Modifier.size(24.dp)
+                        )
+                    }
+                }
+            }
+
+            // 主体内容
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+            ) {
+                if (isPreviewMode) {
+                    // 全屏预览时，在底部增加圆角和内边距，使其有悬浮感并避免遮挡底部系统导航条
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(bottom = 16.dp),
+                        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+                        color = Color.White
+                    ) {
+                        WebPreviewContent(
+                            code = code,
+                            language = language,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
+                } else {
+                    val syntaxTheme = if (isDarkTheme) SyntaxHighlightTheme.Dark else SyntaxHighlightTheme.Light
+                    val highlightedCode = remember(code, language, isDarkTheme) {
+                        SyntaxHighlighter.highlight(code, language, syntaxTheme)
+                    }
+
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .verticalScroll(rememberScrollState())
+                            .padding(horizontal = 16.dp)
+                    ) {
+                        Text(
+                            text = language.trim().ifBlank { "CODE" }.uppercase(),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = headerColor,
+                            fontFamily = FontFamily.Monospace,
+                            modifier = Modifier.padding(bottom = 16.dp)
+                        )
+                        Text(
+                            text = highlightedCode,
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 13.sp,
+                                lineHeight = 18.sp
+                            ),
+                            softWrap = true
+                        )
+                        Spacer(modifier = Modifier.height(32.dp))
+                    }
                 }
             }
         }

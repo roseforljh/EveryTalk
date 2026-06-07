@@ -2,7 +2,8 @@ package com.android.everytalk.ui.components.content
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
@@ -13,7 +14,12 @@ import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
@@ -34,6 +40,8 @@ import com.android.everytalk.R
 import com.android.everytalk.ui.theme.chatColors
 import com.android.everytalk.ui.components.syntax.SyntaxHighlighter
 import com.android.everytalk.ui.components.syntax.SyntaxHighlightTheme
+import com.android.everytalk.ui.components.FullScreenCodeViewerDialog
+import com.android.everytalk.ui.components.WebPreviewContent
 import com.android.everytalk.ui.components.syntax.HighlightCache
 
 /**
@@ -62,7 +70,7 @@ fun CodeBlockCard(
     onPreviewRequested: (() -> Unit)? = null,
     onLongPress: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null
 ) {
-    val shape = RoundedCornerShape(8.dp)
+    val shape = RoundedCornerShape(24.dp)
     val clipboard = LocalClipboardManager.current
     val isDarkTheme = isSystemInDarkTheme()
     val bg = MaterialTheme.chatColors.codeBlockBackground
@@ -112,37 +120,49 @@ fun CodeBlockCard(
     // 判断是否支持预览
     val canPreview = onPreviewRequested != null && isPreviewSupported(language)
 
+    // 胶囊组件底色与选中颜色
+    // 由于代码块背景现在是深黑(0xFF2A2A2A)，胶囊背景需要稍微亮一点以产生对比，选中的按钮则更亮
+    val capsuleBgColor = if (isDarkTheme) Color(0xFF383838) else Color(0xFFE2E2E2)
+    val capsuleSelectedBgColor = if (isDarkTheme) Color(0xFF505050) else Color.White
+    
+    // 预览模式状态
+    var isPreviewMode by remember { mutableStateOf(false) }
+    var showFullScreenPreview by remember { mutableStateOf(false) }
     // 吸顶逻辑状态
     val stickyTop = LocalStickyHeaderTop.current
     var headerHeightPx by remember { mutableIntStateOf(0) }
     var cardTopPx by remember { mutableFloatStateOf(0f) }
     var cardHeightPx by remember { mutableIntStateOf(0) }
 
+    @OptIn(ExperimentalMaterial3Api::class)
+    val pageBgColor = MaterialTheme.colorScheme.background
+
     Surface(
-    modifier = modifier
-        .fillMaxWidth()
-        .border(1.5.dp, outline, shape)
-        .pointerInput(onLongPress) {
-            if (onLongPress != null) {
-                detectTapGestures(
-                    onLongPress = { offset ->
-                        onLongPress(offset)
-                    },
-                    onTap = { /* Allow click pass-through */ }
-                )
+        modifier = modifier
+            .fillMaxWidth()
+            .pointerInput(onLongPress) {
+                if (onLongPress != null) {
+                    detectTapGestures(
+                        onLongPress = { offset ->
+                            onLongPress(offset)
+                        },
+                        onTap = { /* Allow click pass-through */ }
+                    )
+                }
             }
-        }
-        .onGloballyPositioned { coordinates ->
-            val newTop = coordinates.positionInWindow().y
-            val newHeight = coordinates.size.height
-            // 仅当位置或高度发生显著变化时更新状态，减少不必要的重组
-            if (Math.abs(cardTopPx - newTop) > 1f || cardHeightPx != newHeight) {
-                cardTopPx = newTop
-                cardHeightPx = newHeight
-            }
-        },
-    shape = shape,
-        color = bg  // 整个代码块统一使用灰色背景
+            .onGloballyPositioned { coordinates ->
+                val newTop = coordinates.positionInWindow().y
+                val newHeight = coordinates.size.height
+                // 仅当位置或高度发生显著变化时更新状态，减少不必要的重组
+                if (Math.abs(cardTopPx - newTop) > 1f || cardHeightPx != newHeight) {
+                    cardTopPx = newTop
+                    cardHeightPx = newHeight
+                }
+            },
+        shape = shape,
+        color = if (isPreviewMode) Color.Transparent else bg,  // 代码模式使用代码块背景，预览模式使用透明背景
+        // 注意这里：即使内部也有拦截，表面也需要允许点击以防止穿透到底层列表
+        onClick = { showFullScreenPreview = true } 
     ) {
         // 使用 Column 布局：Header 在上，Content 在下，自然堆叠避免遮挡。
         // 通过 translationY 实现 Header 的视觉吸顶，同时利用 zIndex 确保其在滚动时覆盖 Content。
@@ -151,7 +171,7 @@ fun CodeBlockCard(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(bg)  // Header 也使用相同背景色
+                    .background(Color.Transparent)  // 移除显式背景色，跟随 Surface
                     .zIndex(1f) // 确保在内容之上绘制
                     // 动态吸顶偏移：使用 graphicsLayer 在绘制阶段计算偏移
                     .graphicsLayer {
@@ -167,62 +187,109 @@ fun CodeBlockCard(
                     }
                     .onSizeChanged { headerHeightPx = it.height },
                 horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top // 顶部对齐
+                verticalAlignment = Alignment.CenterVertically // 垂直居中对齐，与右侧按钮对齐
             ) {
                 // 左侧：语言标签
                 // 背景直接透明，只显示文字
                 Box(
                     modifier = Modifier
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                        .padding(horizontal = 16.dp, vertical = 12.dp) // 增加左边距和垂直间距，使其与右侧对称并且显得不那么小
                 ) {
                     Text(
                         text = displayLanguage,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = headerContentColor,
-                        fontFamily = FontFamily.Monospace
+                        style = MaterialTheme.typography.bodyMedium.copy( // 字体进一步增大
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = androidx.compose.ui.text.font.FontWeight.Bold, // 加粗
+                            letterSpacing = 1.sp,
+                            fontSize = 14.sp
+                        ),
+                        color = headerContentColor
                     )
                 }
                 
                 // 右侧：按钮组
-                // 背景直接透明，只显示图标
                 Row(
                     modifier = Modifier
-                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                        .padding(horizontal = 8.dp, vertical = 8.dp), // 增加垂直间距，让头部整体更高
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    horizontalArrangement = Arrangement.spacedBy(8.dp) // 按钮组之间的间距
                 ) {
-                    // 预览按钮
-                    if (canPreview) {
-                        IconButton(
-                            onClick = { onPreviewRequested?.invoke() },
-                            modifier = Modifier.size(24.dp)
-                        ) {
-                            Icon(
-                                imageVector = Icons.Default.Visibility,
-                                contentDescription = "预览",
-                                tint = headerContentColor,
-                                modifier = Modifier.size(16.dp)
-                            )
-                        }
-                    }
-                    
-                    // 复制按钮
-                    IconButton(
-                        onClick = {
-                            if (onCopy != null) {
-                                onCopy()
-                            } else {
-                                clipboard.setText(AnnotatedString(code))
-                            }
-                        },
-                        modifier = Modifier.size(24.dp)
+                    // 复制按钮 (左侧独立)
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(50)) // 只需要 clip 裁剪涟漪即可，不需要显式设置背景色
+                            .clickable {
+                                if (onCopy != null) {
+                                    onCopy()
+                                } else {
+                                    clipboard.setText(AnnotatedString(code))
+                                }
+                            },
+                        contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            painter = painterResource(R.drawable.ic_copy),
+                            painter = painterResource(R.drawable.ic_gpt_copy),
                             contentDescription = "复制",
                             tint = headerContentColor,
-                            modifier = Modifier.size(16.dp)
+                            modifier = Modifier.size(24.dp)
                         )
+                    }
+
+                    // 预览相关按钮组 (如果有预览功能的话，右侧包裹在一个胶囊内)
+                    if (canPreview) {
+                        Surface(
+                            shape = RoundedCornerShape(50),
+                            color = capsuleBgColor // 胶囊底色
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(2.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(2.dp)
+                            ) {
+                                // 代码按钮
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .background(
+                                            color = if (!isPreviewMode) capsuleSelectedBgColor else Color.Transparent,
+                                            shape = RoundedCornerShape(50)
+                                        )
+                                        .clip(RoundedCornerShape(50))
+                                        .clickable { isPreviewMode = false },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_gpt_terminal),
+                                        contentDescription = "代码",
+                                        tint = headerContentColor,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+                                
+                                // 预览按钮
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .background(
+                                            color = if (isPreviewMode) capsuleSelectedBgColor else Color.Transparent,
+                                            shape = RoundedCornerShape(50)
+                                        )
+                                        .clip(RoundedCornerShape(50))
+                                        .clickable { 
+                                            isPreviewMode = true
+                                        },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_gpt_play),
+                                        contentDescription = "预览",
+                                        tint = headerContentColor,
+                                        modifier = Modifier.size(24.dp)
+                                    )
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -230,21 +297,79 @@ fun CodeBlockCard(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(bg)
+                    // 仅当非预览模式才限制高度，预览模式下允许更大高度以展示内容
+                    .then(
+                        if (isPreviewMode) Modifier.height(450.dp) 
+                        else Modifier.heightIn(max = 400.dp)
+                    )
+                    .background(Color.Transparent)
+                    .drawWithContent {
+                        drawContent()
+                        if (!isPreviewMode) {
+                            // 绘制底部融合渐变遮罩，使底部更模糊
+                            val gradientHeight = 60.dp.toPx()
+                            drawRect(
+                                brush = Brush.verticalGradient(
+                                    colors = listOf(
+                                        Color.Transparent,
+                                        bg.copy(alpha = 0.8f),
+                                        bg
+                                    ),
+                                    startY = size.height - gradientHeight,
+                                    endY = size.height
+                                ),
+                                topLeft = Offset(0f, size.height - gradientHeight),
+                                size = Size(size.width, gradientHeight)
+                            )
+                        }
+                    }
             ) {
-                val scrollState = rememberScrollState()
-                
-                Text(
-                    text = highlightedCode,
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 13.sp,
-                        lineHeight = 18.sp
-                    ),
-                    softWrap = false,
-                    modifier = Modifier
-                        .horizontalScroll(scrollState)
-                        .padding(horizontal = 12.dp, vertical = 8.dp)
+                if (isPreviewMode) {
+                    // 内联渲染网页
+                    Surface(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .fillMaxHeight() // 撑满父布局 Box 给定的高度
+                            .padding(horizontal = 0.dp, vertical = 0.dp),
+                        shape = RoundedCornerShape(24.dp), // 修改为四角均为 24.dp 以符合直觉
+                        color = Color.White // 网页预览通常底色为白
+                    ) {
+                        // 在此表面叠加一个透明遮罩，用于统一捕获点击事件
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            WebPreviewContent(
+                                code = code,
+                                language = language ?: "",
+                                modifier = Modifier.fillMaxSize()
+                            )
+                            // 拦截层，位于 WebView 之上
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(Color.Transparent)
+                                    .clickable { showFullScreenPreview = true }
+                            )
+                        }
+                    }
+                } else {
+                    Text(
+                        text = highlightedCode,
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontSize = 13.sp,
+                            lineHeight = 18.sp
+                        ),
+                        softWrap = true, // 不再需要内部横向滚动，允许折行
+                        modifier = Modifier
+                            .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 24.dp) // 留出底部空间避免被文字遮挡过死
+                    )
+                }
+            }
+            
+            if (showFullScreenPreview) {
+                FullScreenCodeViewerDialog(
+                    code = code,
+                    language = language ?: "",
+                    onDismiss = { showFullScreenPreview = false }
                 )
             }
         }
@@ -254,7 +379,7 @@ fun CodeBlockCard(
 /**
  * 检查语言是否支持 Web 预览
  */
-private fun isPreviewSupported(language: String?): Boolean {
+fun isPreviewSupported(language: String?): Boolean {
     val lang = language?.trim()?.lowercase() ?: return false
     return when (lang) {
         "html", "svg", "xml", 

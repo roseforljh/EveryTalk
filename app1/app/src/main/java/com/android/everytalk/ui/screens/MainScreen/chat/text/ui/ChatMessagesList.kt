@@ -75,7 +75,7 @@ import com.android.everytalk.ui.theme.ChatDimensions
 import com.android.everytalk.ui.theme.chatColors
 
 import com.android.everytalk.ui.components.EnhancedMarkdownText
-import com.android.everytalk.ui.components.WebPreviewDialog
+import com.android.everytalk.ui.components.FullScreenCodeViewerDialog
 import com.android.everytalk.ui.components.WebMarkdownSourcesExtractor
 import com.android.everytalk.ui.components.dialog.AppDialogShape
 import com.android.everytalk.ui.components.dialog.appDialogBorderColor
@@ -1249,7 +1249,7 @@ fun AiMessageItem(
     var previewLanguage by remember { mutableStateOf("text") }
 
     if (previewCode != null) {
-        WebPreviewDialog(
+        FullScreenCodeViewerDialog(
             code = previewCode!!,
             language = previewLanguage,
             onDismiss = {
