@@ -331,11 +331,9 @@ fun CodeBlockCard(
                 }
             }
 
-            val gradientAlpha by animateFloatAsState(
-                targetValue = if (isPreviewMode) 0f else 0.8f,
-                animationSpec = tween(durationMillis = 180),
-                label = "gradientAlpha"
-            )
+            var contentBoxHeightPx by remember { mutableIntStateOf(0) }
+            val density = LocalDensity.current
+            val isAtMaxHeight = with(density) { contentBoxHeightPx >= 400.dp.toPx() - 1f }
 
             Box(
                 modifier = Modifier
@@ -346,21 +344,16 @@ fun CodeBlockCard(
                     .background(Color.Transparent)
                     .drawWithContent {
                         drawContent()
-                        if (gradientAlpha > 0f) {
-                            // 绘制底部融合渐变遮罩，使底部更模糊
-                            val gradientHeight = 60.dp.toPx()
+                        if (isAtMaxHeight) {
+                            val fadeH = 8.dp.toPx()
                             drawRect(
                                 brush = Brush.verticalGradient(
-                                    colors = listOf(
-                                        Color.Transparent,
-                                        bg.copy(alpha = gradientAlpha),
-                                        bg.copy(alpha = if (isPreviewMode) 0f else 1f)
-                                    ),
-                                    startY = size.height - gradientHeight,
+                                    colors = listOf(Color.Transparent, bg),
+                                    startY = size.height - fadeH,
                                     endY = size.height
                                 ),
-                                topLeft = Offset(0f, size.height - gradientHeight),
-                                size = Size(size.width, gradientHeight)
+                                topLeft = Offset(0f, size.height - fadeH),
+                                size = Size(size.width, fadeH)
                             )
                         }
                     }
@@ -402,6 +395,7 @@ fun CodeBlockCard(
                             .fillMaxWidth()
                             .heightIn(max = 400.dp)
                             .clipToBounds()
+                            .onSizeChanged { contentBoxHeightPx = it.height }
                     ) {
                         Text(
                             text = highlightedCode,

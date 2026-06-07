@@ -103,6 +103,11 @@ internal fun shouldConstrainUserBubbleHeight(
     isExpanded: Boolean,
 ): Boolean = sender == Sender.User && (!isExpanded || hasOverflow)
 
+internal fun resolveUserBubbleContentBottomPaddingDp(
+    sender: Sender,
+    isExpanded: Boolean,
+): Float = if (sender == Sender.User && isExpanded) 28f else 0f
+
 
 @Composable
 internal fun UserOrErrorMessageContent(
@@ -241,7 +246,12 @@ internal fun UserOrErrorMessageContent(
                                 vertical = if (message.sender == Sender.User) 6.dp else 0.dp,
                             )
                             // 如果显示按钮，给底部留出空间，防止内容被按钮遮挡
-                            .padding(bottom = if (message.sender == Sender.User && (hasOverflow || isExpanded)) 28.dp else 0.dp)
+                            .padding(
+                                bottom = resolveUserBubbleContentBottomPaddingDp(
+                                    sender = message.sender,
+                                    isExpanded = isExpanded,
+                                ).dp
+                            )
                     ) {
                         if (showLoadingDots && !isError) {
                             ThreeDotsLoadingAnimation(

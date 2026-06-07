@@ -47,6 +47,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.input.nestedscroll.nestedScroll
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.platform.*
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -159,8 +161,26 @@ internal fun shouldDispatchImageLoadedToBottomScroller(
 
 internal fun shouldShrinkDynamicBottomReserveForVisibleGap(
     hasPinnedUserMessage: Boolean,
-    preservePinnedReserve: Boolean
-): Boolean = !preservePinnedReserve || !hasPinnedUserMessage
+    preservePinnedReserve: Boolean,
+    isTrailingContentVisible: Boolean = true
+): Boolean = isTrailingContentVisible && (!preservePinnedReserve || !hasPinnedUserMessage)
+
+internal fun shouldPreservePinnedReserveAfterScroll(
+    hasPinnedUserMessage: Boolean,
+    hasDynamicBottomReserve: Boolean,
+    isApiCalling: Boolean,
+    isUserInputScroll: Boolean,
+): Boolean = hasPinnedUserMessage && hasDynamicBottomReserve && isApiCalling && isUserInputScroll
+
+internal fun shouldRunPinnedAnchorCorrection(
+    isApiCalling: Boolean,
+    grokScrollCompleted: Boolean,
+    hasPinnedUserMessage: Boolean,
+    hasDynamicBottomReserve: Boolean,
+): Boolean = isApiCalling &&
+    grokScrollCompleted &&
+    hasPinnedUserMessage &&
+    hasDynamicBottomReserve
 
 internal fun resolveDynamicBottomReserveForVisibleGap(
     currentReservePx: Int,
@@ -301,18 +321,41 @@ fun ChatMessagesList(
     var dynamicBottomPaddingImmediate by remember(scrollSessionKey) { mutableStateOf(0.dp) }
     var grokScrollCompleted by remember(scrollSessionKey) { mutableStateOf(true) }
     var pinnedUserMessageId by remember(scrollSessionKey) { mutableStateOf<String?>(null) }
+    var preservePinnedReserveAfterUserScroll by remember(scrollSessionKey) { mutableStateOf(false) }
     var firstBubbleScreenY by remember(scrollSessionKey) {
         mutableStateOf(-1)
     }
     var previousConversationIdForReserve by remember { mutableStateOf<String?>(null) }
 
     var skipAnimation by remember(scrollSessionKey) { mutableStateOf(true) }
+    val trailingChatItemIndex by rememberUpdatedState(chatItems.lastIndex)
+    val hasPinnedUserMessageForScroll by rememberUpdatedState(pinnedUserMessageId != null)
+    val hasDynamicBottomReserveForScroll by rememberUpdatedState(dynamicBottomPaddingTarget > 0.dp)
+    val isApiCallingForScroll by rememberUpdatedState(isApiCalling)
 
     fun clearTransientBottomReserve() {
         skipAnimation = true
         pinnedUserMessageId = null
+        preservePinnedReserveAfterUserScroll = false
         dynamicBottomPaddingTarget = 0.dp
         dynamicBottomPaddingImmediate = 0.dp
+    }
+
+    val pinnedReserveUserScrollConnection = remember(scrollSessionKey) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (shouldPreservePinnedReserveAfterScroll(
+                        hasPinnedUserMessage = hasPinnedUserMessageForScroll,
+                        hasDynamicBottomReserve = hasDynamicBottomReserveForScroll,
+                        isApiCalling = isApiCallingForScroll,
+                        isUserInputScroll = source == NestedScrollSource.UserInput,
+                    )
+                ) {
+                    preservePinnedReserveAfterUserScroll = true
+                }
+                return Offset.Zero
+            }
+        }
     }
 
     // 流式期间用快速动画，结束归零用慢动画
@@ -361,27 +404,36 @@ fun ChatMessagesList(
     }
     
     LaunchedEffect(isApiCalling) {
+        if (!isApiCalling) {
+            preservePinnedReserveAfterUserScroll = false
+        }
         if (shouldClearTransientBottomReserveOnStreamChange(isApiCalling)) {
             clearTransientBottomReserve()
         }
     }
 
-    // 流式输出期间，动态缩小底部 padding，避免出现多余空白
-    // GrokScroll 结束时已做初始 shrink，此处只负责 AI 内容增长时持续缩减
-    LaunchedEffect(isApiCalling) {
-        if (!isApiCalling) return@LaunchedEffect
-
-        snapshotFlow { grokScrollCompleted }.first { it }
-
-        if (dynamicBottomPaddingTarget <= 0.dp) return@LaunchedEffect
-
+    // 只用列表尾部真实内容计算 gap，避免用户上滑时用历史可见 item 误缩 spacer。
+    LaunchedEffect(scrollSessionKey) {
         snapshotFlow {
+            if (!grokScrollCompleted || dynamicBottomPaddingTarget <= 0.dp) return@snapshotFlow -1
             val li = listState.layoutInfo
             val viewportHeight = li.viewportEndOffset - li.viewportStartOffset
             if (viewportHeight <= 0) return@snapshotFlow -1
 
-            val lastRealItem = li.visibleItemsInfo.lastOrNull { it.key != "dynamic_padding_spacer" }
+            val lastRealIndex = trailingChatItemIndex
+            if (lastRealIndex < 0) return@snapshotFlow -1
+            val lastRealItem = li.visibleItemsInfo.firstOrNull {
+                it.index == lastRealIndex && it.key != "dynamic_padding_spacer"
+            }
                 ?: return@snapshotFlow -1
+            if (!shouldShrinkDynamicBottomReserveForVisibleGap(
+                    hasPinnedUserMessage = pinnedUserMessageId != null,
+                    preservePinnedReserve = preservePinnedReserveAfterUserScroll,
+                    isTrailingContentVisible = true,
+                )
+            ) {
+                return@snapshotFlow -1
+            }
 
             val contentBottomInViewport = lastRealItem.offset + lastRealItem.size
             val gap = li.viewportEndOffset - contentBottomInViewport - li.afterContentPadding
@@ -389,7 +441,14 @@ fun ChatMessagesList(
         }.collect { gapPx ->
             if (gapPx < 0) return@collect
             val newPadding = with(density) { gapPx.toDp() }
-            if (newPadding < dynamicBottomPaddingTarget) {
+            if (
+                newPadding < dynamicBottomPaddingTarget &&
+                shouldShrinkDynamicBottomReserveForVisibleGap(
+                    hasPinnedUserMessage = pinnedUserMessageId != null,
+                    preservePinnedReserve = preservePinnedReserveAfterUserScroll,
+                    isTrailingContentVisible = true,
+                )
+            ) {
                 dynamicBottomPaddingImmediate = newPadding
                 dynamicBottomPaddingTarget = newPadding
             }
@@ -412,7 +471,15 @@ fun ChatMessagesList(
 
     LaunchedEffect(pinnedUserMessageId, isApiCalling, grokScrollCompleted, firstBubbleScreenY) {
         val pinnedId = pinnedUserMessageId ?: return@LaunchedEffect
-        if (!grokScrollCompleted) return@LaunchedEffect
+        if (!shouldRunPinnedAnchorCorrection(
+                isApiCalling = isApiCalling,
+                grokScrollCompleted = grokScrollCompleted,
+                hasPinnedUserMessage = true,
+                hasDynamicBottomReserve = dynamicBottomPaddingTarget > 0.dp,
+            )
+        ) {
+            return@LaunchedEffect
+        }
         val targetY = firstBubbleScreenY
         if (targetY <= 0) return@LaunchedEffect
 
@@ -465,13 +532,22 @@ fun ChatMessagesList(
                 }
                 val stableDurationNanos = frameNanos - stableSinceNanos
                 if (stableDurationNanos >= stableWindowNanos && dynamicBottomPaddingTarget > 0.dp) {
-                    val lastRealItem = li.visibleItemsInfo.lastOrNull { it.key != "dynamic_padding_spacer" }
+                    val lastRealItem = li.visibleItemsInfo.firstOrNull {
+                        it.index == trailingChatItemIndex && it.key != "dynamic_padding_spacer"
+                    }
                     if (lastRealItem != null) {
                         val contentBottom = lastRealItem.offset + lastRealItem.size
                         val gapPx = (li.viewportEndOffset - contentBottom - li.afterContentPadding)
                             .coerceAtLeast(0)
                         val gapDp = with(density) { gapPx.toDp() }
-                        if (gapDp < dynamicBottomPaddingTarget) {
+                        if (
+                            gapDp < dynamicBottomPaddingTarget &&
+                            shouldShrinkDynamicBottomReserveForVisibleGap(
+                                hasPinnedUserMessage = pinnedUserMessageId != null,
+                                preservePinnedReserve = preservePinnedReserveAfterUserScroll,
+                                isTrailingContentVisible = true,
+                            )
+                        ) {
                             dynamicBottomPaddingImmediate = gapDp
                             dynamicBottomPaddingTarget = gapDp
                         }
@@ -674,6 +750,7 @@ fun ChatMessagesList(
                 ),
                 modifier = Modifier
                     .fillMaxSize()
+                    .nestedScroll(pinnedReserveUserScrollConnection)
                     .nestedScroll(scrollStateManager.nestedScrollConnection),
                 contentPadding = PaddingValues(
                     start = ChatDimensions.HORIZONTAL_PADDING,

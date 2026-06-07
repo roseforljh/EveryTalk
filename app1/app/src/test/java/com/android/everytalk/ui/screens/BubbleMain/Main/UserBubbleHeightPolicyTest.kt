@@ -37,4 +37,24 @@ class UserBubbleHeightPolicyTest {
 
         assertEquals(560f, maxHeight, 0.0001f)
     }
+
+    @Test
+    fun `collapsed user bubble content does not reserve bottom space so gradient covers content`() {
+        val bottomPadding = resolveUserBubbleContentBottomPaddingDp(
+            sender = Sender.User,
+            isExpanded = false,
+        )
+
+        assertEquals(0f, bottomPadding, 0.0001f)
+    }
+
+    @Test
+    fun `expanded user bubble content reserves bottom space for collapse control`() {
+        val bottomPadding = resolveUserBubbleContentBottomPaddingDp(
+            sender = Sender.User,
+            isExpanded = true,
+        )
+
+        assertEquals(28f, bottomPadding, 0.0001f)
+    }
 }

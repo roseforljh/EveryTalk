@@ -10,7 +10,10 @@ import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.restorePinnedBub
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.shouldDispatchImageLoadedToBottomScroller
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.shouldClearTransientBottomReserveOnStreamChange
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.shouldEnableUserScrollForPinnedUserBubble
+import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.shouldPreservePinnedReserveAfterScroll
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.shouldResetTransientBottomReserve
+import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.shouldRunPinnedAnchorCorrection
+import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.shouldShrinkDynamicBottomReserveForVisibleGap
 import com.android.everytalk.ui.screens.viewmodel.resolveHistoryExpectedStableConversationId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -137,6 +140,88 @@ class ChatScreenScrollSessionTest {
         )
 
         assertEquals(0f, consumed)
+    }
+
+    @Test
+    fun `user scroll preserves pinned bottom reserve`() {
+        val shouldPreserve = shouldPreservePinnedReserveAfterScroll(
+            hasPinnedUserMessage = true,
+            hasDynamicBottomReserve = true,
+            isApiCalling = true,
+            isUserInputScroll = true
+        )
+
+        assertTrue(shouldPreserve)
+    }
+
+    @Test
+    fun `programmatic scroll does not lock pinned bottom reserve`() {
+        val shouldPreserve = shouldPreservePinnedReserveAfterScroll(
+            hasPinnedUserMessage = true,
+            hasDynamicBottomReserve = true,
+            isApiCalling = true,
+            isUserInputScroll = false
+        )
+
+        assertFalse(shouldPreserve)
+    }
+
+    @Test
+    fun `user scroll does not lock pinned bottom reserve after api finishes`() {
+        val shouldPreserve = shouldPreservePinnedReserveAfterScroll(
+            hasPinnedUserMessage = true,
+            hasDynamicBottomReserve = true,
+            isApiCalling = false,
+            isUserInputScroll = true
+        )
+
+        assertFalse(shouldPreserve)
+    }
+
+    @Test
+    fun `does not shrink dynamic reserve from non trailing visible item`() {
+        val shouldShrink = shouldShrinkDynamicBottomReserveForVisibleGap(
+            hasPinnedUserMessage = true,
+            preservePinnedReserve = false,
+            isTrailingContentVisible = false
+        )
+
+        assertFalse(shouldShrink)
+    }
+
+    @Test
+    fun `shrinks dynamic reserve when trailing content is visible after preserve releases`() {
+        val shouldShrink = shouldShrinkDynamicBottomReserveForVisibleGap(
+            hasPinnedUserMessage = true,
+            preservePinnedReserve = false,
+            isTrailingContentVisible = true
+        )
+
+        assertTrue(shouldShrink)
+    }
+
+    @Test
+    fun `pinned anchor correction stops after api finishes even when reserve remains`() {
+        val shouldRun = shouldRunPinnedAnchorCorrection(
+            isApiCalling = false,
+            grokScrollCompleted = true,
+            hasPinnedUserMessage = true,
+            hasDynamicBottomReserve = true
+        )
+
+        assertFalse(shouldRun)
+    }
+
+    @Test
+    fun `pinned anchor correction runs while api is streaming with active reserve`() {
+        val shouldRun = shouldRunPinnedAnchorCorrection(
+            isApiCalling = true,
+            grokScrollCompleted = true,
+            hasPinnedUserMessage = true,
+            hasDynamicBottomReserve = true
+        )
+
+        assertTrue(shouldRun)
     }
 
     @Test
