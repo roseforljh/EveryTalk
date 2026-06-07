@@ -369,6 +369,7 @@ fun CodeBlockCard(
                 FullScreenCodeViewerDialog(
                     code = code,
                     language = language ?: "",
+                    initialPreviewMode = isPreviewMode,
                     onDismiss = { showFullScreenPreview = false }
                 )
             }

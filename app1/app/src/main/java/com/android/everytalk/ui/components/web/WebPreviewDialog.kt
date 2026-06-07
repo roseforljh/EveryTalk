@@ -137,6 +137,7 @@ fun WebPreviewContent(
 fun FullScreenCodeViewerDialog(
     code: String,
     language: String,
+    initialPreviewMode: Boolean = false,
     onDismiss: () -> Unit
 ) {
     val clipboard = LocalClipboardManager.current
@@ -146,8 +147,9 @@ fun FullScreenCodeViewerDialog(
     val capsuleBgColor = if (isDarkTheme) Color(0xFF383838) else Color(0xFFE2E2E2)
     val capsuleSelectedBgColor = if (isDarkTheme) Color(0xFF505050) else Color.White
 
-    var isPreviewMode by remember { mutableStateOf(false) }
     val canPreview = isPreviewSupported(language)
+    // 初始状态考虑外部传递的参数（只有在支持预览时才能进入预览模式）
+    var isPreviewMode by remember { mutableStateOf(canPreview && initialPreviewMode) }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -172,7 +174,6 @@ fun FullScreenCodeViewerDialog(
                 .fillMaxSize()
                 .background(bgColor)
                 .statusBarsPadding()
-                .navigationBarsPadding() // 增加底部导航栏留白，实现沉浸式并避免底部小白条遮挡
         ) {
             // 顶部导航栏
             Row(
@@ -282,6 +283,7 @@ fun FullScreenCodeViewerDialog(
                     Surface(
                         modifier = Modifier
                             .fillMaxSize()
+                            .navigationBarsPadding()
                             .padding(bottom = 16.dp),
                         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
                         color = Color.White
@@ -301,6 +303,7 @@ fun FullScreenCodeViewerDialog(
                     Column(
                         modifier = Modifier
                             .fillMaxSize()
+                            .navigationBarsPadding()
                             .verticalScroll(rememberScrollState())
                             .padding(horizontal = 16.dp)
                     ) {
