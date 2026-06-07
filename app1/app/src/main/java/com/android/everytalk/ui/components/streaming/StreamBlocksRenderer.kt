@@ -166,6 +166,7 @@ fun StreamBlocksRenderer(
     color: Color,
     messageOutputType: String,
     viewModel: AppViewModel,
+    isStreaming: Boolean = false,
     onLongPress: (() -> Unit)? = null,
     onImageClick: ((String) -> Unit)? = null,
     onCodePreviewRequested: ((String, String) -> Unit)? = null,
@@ -355,6 +356,7 @@ fun StreamBlocksRenderer(
                                 is StreamBlock.CodeBlock -> {
                                     CodeBlockSegment(
                                         block = block,
+                                        isStreaming = isStreaming,
                                         onCodePreviewRequested = onCodePreviewRequested,
                                         onCodeCopied = onCodeCopied,
                                     )
@@ -402,6 +404,7 @@ private fun StreamTextSelectionContainer(
 @Composable
 private fun CodeBlockSegment(
     block: StreamBlock.CodeBlock,
+    isStreaming: Boolean,
     onCodePreviewRequested: ((String, String) -> Unit)?,
     onCodeCopied: (() -> Unit)?,
 ) {
@@ -414,7 +417,7 @@ private fun CodeBlockSegment(
         language = codeBlock.language,
         code = codeBlock.code,
         modifier = Modifier.padding(vertical = 4.dp),
-        isStreaming = false,
+        isStreaming = isStreaming,
         onPreviewRequested = if (onCodePreviewRequested != null) {
             { onCodePreviewRequested(codeBlock.language.orEmpty(), codeBlock.code) }
         } else {

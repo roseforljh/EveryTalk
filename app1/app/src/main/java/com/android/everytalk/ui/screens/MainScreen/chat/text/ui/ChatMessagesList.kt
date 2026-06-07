@@ -1396,6 +1396,7 @@ fun AiMessageItem(
                         color = MaterialTheme.colorScheme.onSurface,
                         messageOutputType = messageOutputType,
                         viewModel = viewModel,
+                        isStreaming = shouldPreferStreamingContent,
                         onLongPress = {},
                         onImageClick = onImageClick,
                         onCodePreviewRequested = { lang, code ->
