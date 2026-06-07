@@ -1,7 +1,6 @@
 package com.android.everytalk.ui.components.content
 
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -131,6 +130,9 @@ fun CodeBlockCard(
     // 由于代码块背景现在是深黑(0xFF2A2A2A)，胶囊背景需要稍微亮一点以产生对比，选中的按钮则更亮
     val capsuleBgColor = if (isDarkTheme) Color(0xFF383838) else Color(0xFFE2E2E2)
     val capsuleSelectedBgColor = if (isDarkTheme) Color(0xFF505050) else Color.White
+    val pageBgColor = MaterialTheme.colorScheme.background
+    val previewBgColor = pageBgColor
+    val previewTextColor = if (isDarkTheme) Color(0xFFEAEAEA) else Color.Black
     
     // 预览模式状态
     var isPreviewMode by remember { mutableStateOf(false) }
@@ -142,15 +144,11 @@ fun CodeBlockCard(
     var cardTopPx by remember { mutableFloatStateOf(0f) }
     var cardHeightPx by remember { mutableIntStateOf(0) }
 
-    // 代码块背景色的过渡动画
-    val animatedBgColor by animateColorAsState(
-        targetValue = if (isPreviewMode) Color.White else bg,
-        animationSpec = tween(durationMillis = 220),
-        label = "animatedBgColor"
+    val previewRevealAlpha by animateFloatAsState(
+        targetValue = if (isPreviewMode) 1f else 0f,
+        animationSpec = tween(durationMillis = 180),
+        label = "previewRevealAlpha"
     )
-
-    @OptIn(ExperimentalMaterial3Api::class)
-    val pageBgColor = MaterialTheme.colorScheme.background
 
     Surface(
         modifier = modifier
@@ -176,13 +174,20 @@ fun CodeBlockCard(
                 }
             },
         shape = shape,
-        color = animatedBgColor,  // 使用带过渡动画的背景色
+        color = bg,
         // 注意这里：即使内部也有拦截，表面也需要允许点击以防止穿透到底层列表
         onClick = { showFullScreenPreview = true } 
     ) {
-        // 使用 Column 布局：Header 在上，Content 在下，自然堆叠避免遮挡。
-        // 通过 translationY 实现 Header 的视觉吸顶，同时利用 zIndex 确保其在滚动时覆盖 Content。
-        Column {
+        Box {
+            Box(
+                modifier = Modifier
+                    .matchParentSize()
+                    .background(previewBgColor.copy(alpha = previewRevealAlpha))
+            )
+
+            // 使用 Column 布局：Header 在上，Content 在下，自然堆叠避免遮挡。
+            // 通过 translationY 实现 Header 的视觉吸顶，同时利用 zIndex 确保其在滚动时覆盖 Content。
+            Column {
             // 顶部操作栏 (Header)
             Row(
                 modifier = Modifier
@@ -366,15 +371,20 @@ fun CodeBlockCard(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(450.dp)
-                            .padding(horizontal = 0.dp, vertical = 0.dp),
+                            .padding(horizontal = 0.dp, vertical = 0.dp)
+                            .graphicsLayer {
+                                alpha = previewRevealAlpha
+                            },
                         shape = RoundedCornerShape(24.dp), // 修改为四角均为 24.dp 以符合直觉
-                        color = Color.White // 网页预览通常底色为白
+                        color = previewBgColor
                     ) {
                         // 在此表面叠加一个透明遮罩，用于统一捕获点击事件
                         Box(modifier = Modifier.fillMaxSize()) {
                             WebPreviewContent(
                                 code = code,
                                 language = language ?: "",
+                                previewBackgroundColor = previewBgColor,
+                                previewTextColor = previewTextColor,
                                 modifier = Modifier.fillMaxSize()
                             )
                             // 拦截层，位于 WebView 之上
@@ -417,6 +427,7 @@ fun CodeBlockCard(
                 )
             }
         }
+    }
     }
 }
 

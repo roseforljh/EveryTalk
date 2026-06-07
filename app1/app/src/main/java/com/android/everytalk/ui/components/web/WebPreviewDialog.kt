@@ -5,8 +5,14 @@ import android.os.Build
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -52,6 +58,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -83,6 +91,8 @@ import kotlinx.coroutines.launch
 fun WebPreviewContent(
     code: String,
     language: String,
+    previewBackgroundColor: Color = Color.White,
+    previewTextColor: Color = Color.Black,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -101,14 +111,39 @@ fun WebPreviewContent(
         }
     }
 
-    val htmlContent = remember(templateFileName, processedCode) {
+    val isDarkPreview = previewBackgroundColor.luminance() < 0.5f
+    val previewSurfaceColor = if (isDarkPreview) Color(0xFF1E1E1E) else Color.White
+    val darkModeOverrides = if (isDarkPreview) {
+        """
+        body.everytalk-dark .preview-container table {
+            background-color: ET_SURFACE_COLOR;
+        }
+        body.everytalk-dark .preview-container :is(td, th):not([style*="color"]) {
+            color: ET_TEXT_COLOR;
+        }
+        body.everytalk-dark .preview-container :is(table, tr, td, th):not([style*="border"]) {
+            border-color: rgba(255, 255, 255, 0.18);
+        }
+        """.trimIndent()
+    } else {
+        ""
+    }
+
+    val htmlContent = remember(templateFileName, processedCode, previewBackgroundColor, previewTextColor) {
         try {
             val assetManager = context.assets
             val inputStream = assetManager.open(templateFileName)
             val reader = BufferedReader(InputStreamReader(inputStream))
             val template = reader.readText()
             reader.close()
-            template.replace("<!-- CONTENT_PLACEHOLDER -->", processedCode)
+            template
+                .replace("ET_COLOR_SCHEME", if (isDarkPreview) "dark" else "light")
+                .replace("ET_THEME_CLASS", if (isDarkPreview) "everytalk-dark" else "everytalk-light")
+                .replace("ET_BACKGROUND_COLOR", previewBackgroundColor.toCssHex())
+                .replace("ET_TEXT_COLOR", previewTextColor.toCssHex())
+                .replace("ET_DARK_MODE_OVERRIDES", darkModeOverrides)
+                .replace("ET_SURFACE_COLOR", previewSurfaceColor.toCssHex())
+                .replace("<!-- CONTENT_PLACEHOLDER -->", processedCode)
         } catch (e: Exception) {
             e.printStackTrace()
             "<html><body>Error loading template: ${e.message}</body></html>"
@@ -132,7 +167,7 @@ fun WebPreviewContent(
                     @Suppress("DEPRECATION")
                     settings.forceDark = WebSettings.FORCE_DARK_OFF
                 }
-                setBackgroundColor(0)
+                setBackgroundColor(previewBackgroundColor.toArgb())
                 webViewClient = WebViewClient()
                 // 禁用 WebView 自身的滚动和点击拦截，让外层能够捕获事件（针对非全屏预览模式）
                 isVerticalScrollBarEnabled = false
@@ -172,7 +207,9 @@ fun FullScreenCodeViewerDialog(
     val configuration = LocalConfiguration.current
     val scope = rememberCoroutineScope()
     val isDarkTheme = androidx.compose.foundation.isSystemInDarkTheme()
-    val bgColor = if (isDarkTheme) Color(0xFF1E1E1E) else Color(0xFFF5F5F5)
+    val bgColor = MaterialTheme.colorScheme.background
+    val previewBgColor = bgColor
+    val previewTextColor = if (isDarkTheme) Color(0xFFEAEAEA) else Color.Black
     val headerColor = if (isDarkTheme) Color.White else Color.Black
     val capsuleBgColor = if (isDarkTheme) Color(0xFF383838) else Color(0xFFE2E2E2)
     val capsuleSelectedBgColor = if (isDarkTheme) Color(0xFF505050) else Color.White
@@ -230,7 +267,7 @@ fun FullScreenCodeViewerDialog(
                 }
                 WindowInsetsControllerCompat(window, window.decorView).apply {
                     isAppearanceLightStatusBars = !isDarkTheme
-                    isAppearanceLightNavigationBars = isPreviewMode || !isDarkTheme
+                    isAppearanceLightNavigationBars = !isDarkTheme
                 }
             }
         }
@@ -340,35 +377,51 @@ fun FullScreenCodeViewerDialog(
 
                 // 右侧：预览模式为分享，代码模式为复制
                 val context = LocalContext.current
-                if (isPreviewMode) {
-                    IconButton(
-                        onClick = {
-                            val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-                                type = "text/plain"
-                                putExtra(android.content.Intent.EXTRA_TEXT, code)
-                            }
-                            context.startActivity(android.content.Intent.createChooser(shareIntent, "分享代码"))
-                        },
-                        modifier = Modifier.size(48.dp)
-                    ) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_gpt_share),
-                            contentDescription = "分享",
-                            tint = headerColor,
-                            modifier = Modifier.size(24.dp)
+                AnimatedContent(
+                    targetState = isPreviewMode,
+                    transitionSpec = {
+                        (fadeIn(tween(220)) + scaleIn(
+                            tween(220),
+                            initialScale = 0.8f
+                        )).togetherWith(
+                            fadeOut(tween(150)) + scaleOut(
+                                tween(150),
+                                targetScale = 0.6f
+                            )
                         )
-                    }
-                } else {
-                    IconButton(
-                        onClick = { clipboard.setText(AnnotatedString(code)) },
-                        modifier = Modifier.size(48.dp)
-                    ) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_gpt_copy),
-                            contentDescription = "复制",
-                            tint = headerColor,
-                            modifier = Modifier.size(24.dp)
-                        )
+                    },
+                    label = "PreviewHeaderActionButton"
+                ) { previewMode ->
+                    if (previewMode) {
+                        IconButton(
+                            onClick = {
+                                val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                    type = "text/plain"
+                                    putExtra(android.content.Intent.EXTRA_TEXT, code)
+                                }
+                                context.startActivity(android.content.Intent.createChooser(shareIntent, "分享代码"))
+                            },
+                            modifier = Modifier.size(48.dp)
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_gpt_share),
+                                contentDescription = "分享",
+                                tint = headerColor,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                    } else {
+                        IconButton(
+                            onClick = { clipboard.setText(AnnotatedString(code)) },
+                            modifier = Modifier.size(48.dp)
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_gpt_copy),
+                                contentDescription = "复制",
+                                tint = headerColor,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
                     }
                 }
             }
@@ -382,7 +435,7 @@ fun FullScreenCodeViewerDialog(
                 HorizontalPager(
                     state = pagerState,
                     modifier = Modifier.fillMaxSize(),
-                    userScrollEnabled = canPreview
+                    userScrollEnabled = false
                 ) { page ->
                     if (page == 1) {
                         // 全屏预览时，在底部增加圆角和内边距，使其有悬浮感并避免遮挡底部系统导航条
@@ -390,11 +443,13 @@ fun FullScreenCodeViewerDialog(
                             modifier = Modifier
                                 .fillMaxSize(),
                             shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-                            color = Color.White
+                            color = previewBgColor
                         ) {
                             WebPreviewContent(
                                 code = code,
                                 language = language,
+                                previewBackgroundColor = previewBgColor,
+                                previewTextColor = previewTextColor,
                                 modifier = Modifier.fillMaxSize()
                             )
                         }
@@ -407,7 +462,6 @@ fun FullScreenCodeViewerDialog(
                         Column(
                             modifier = Modifier
                                 .fillMaxSize()
-                                .navigationBarsPadding()
                                 .verticalScroll(rememberScrollState())
                                 .padding(horizontal = 16.dp)
                         ) {
@@ -427,7 +481,7 @@ fun FullScreenCodeViewerDialog(
                                 ),
                                 softWrap = true
                             )
-                            Spacer(modifier = Modifier.height(32.dp))
+                            Spacer(modifier = Modifier.height(64.dp))
                         }
                     }
                 }
@@ -445,6 +499,10 @@ private fun escapeHtml(text: String): String {
         .replace(">", "&gt;")
         .replace("\"", "&quot;")
         .replace("'", "&#039;")
+}
+
+private fun Color.toCssHex(): String {
+    return String.format("#%06X", 0xFFFFFF and toArgb())
 }
 
 private fun renderInfographic(raw: String): String {

@@ -10,15 +10,15 @@
             padding: 0;
             width: 100%;
             height: 100%;
-            color-scheme: light;
+            color-scheme: ET_COLOR_SCHEME;
         }
         body {
             padding: 56px 12px 24px 12px;
             display: flex;
             align-items: safe center;
             justify-content: safe center;
-            background-color: #ffffff;
-            color: #000000;
+            background-color: ET_BACKGROUND_COLOR;
+            color: ET_TEXT_COLOR;
             overflow: auto;
             -webkit-overflow-scrolling: touch;
         }
@@ -41,7 +41,7 @@
         }
     </style>
 </head>
-<body>
+<body class="ET_THEME_CLASS">
     <div class="preview-container">
         <!-- CONTENT_PLACEHOLDER -->
     </div>
@@ -56,6 +56,8 @@
             align-items: safe center !important;
             justify-content: safe center !important;
             padding: 56px 12px 24px 12px !important;
+            background-color: ET_BACKGROUND_COLOR !important;
+            color: ET_TEXT_COLOR !important;
             overflow: auto !important;
         }
         .preview-container {
@@ -80,6 +82,7 @@
         .preview-container svg {
             height: auto !important;
         }
+        ET_DARK_MODE_OVERRIDES
     </style>
 </body>
 </html>
