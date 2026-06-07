@@ -1,11 +1,17 @@
 package com.android.everytalk.ui.components
 
 import android.annotation.SuppressLint
+import android.os.Build
+import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -13,6 +19,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -52,6 +59,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
 import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import com.android.everytalk.R
 import com.android.everytalk.ui.components.syntax.HighlightCache
 import com.android.everytalk.ui.components.syntax.SyntaxHighlightTheme
@@ -109,6 +117,12 @@ fun WebPreviewContent(
                 settings.loadWithOverviewMode = true
                 settings.builtInZoomControls = true
                 settings.displayZoomControls = false
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    settings.isAlgorithmicDarkeningAllowed = false
+                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    @Suppress("DEPRECATION")
+                    settings.forceDark = WebSettings.FORCE_DARK_OFF
+                }
                 setBackgroundColor(0)
                 webViewClient = WebViewClient()
                 // 禁用 WebView 自身的滚动和点击拦截，让外层能够捕获事件（针对非全屏预览模式）
@@ -166,6 +180,13 @@ fun FullScreenCodeViewerDialog(
                 WindowCompat.setDecorFitsSystemWindows(window, false)
                 window.statusBarColor = android.graphics.Color.TRANSPARENT
                 window.navigationBarColor = android.graphics.Color.TRANSPARENT
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    window.isNavigationBarContrastEnforced = false
+                }
+                WindowInsetsControllerCompat(window, window.decorView).apply {
+                    isAppearanceLightStatusBars = !isDarkTheme
+                    isAppearanceLightNavigationBars = isPreviewMode || !isDarkTheme
+                }
             }
         }
 
@@ -194,42 +215,69 @@ fun FullScreenCodeViewerDialog(
 
                 // 中间：胶囊按钮 (代码/预览)
                 if (canPreview) {
+                    val capsuleWidth = 140.dp
+                    val indicatorWidth = 70.dp
+                    val indicatorOffset by animateDpAsState(
+                        targetValue = if (isPreviewMode) indicatorWidth else 0.dp,
+                        animationSpec = tween(durationMillis = 300),
+                        label = "indicatorOffset"
+                    )
+
                     Surface(
                         shape = RoundedCornerShape(50),
-                        color = capsuleBgColor
+                        color = capsuleBgColor,
+                        modifier = Modifier.size(width = capsuleWidth, height = 36.dp)
                     ) {
-                        Row(
-                            modifier = Modifier.padding(2.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            // 滑块指示器
                             Box(
                                 modifier = Modifier
-                                    .clip(RoundedCornerShape(50))
-                                    .background(if (!isPreviewMode) capsuleSelectedBgColor else Color.Transparent)
-                                    .clickable { isPreviewMode = false }
-                                    .padding(horizontal = 24.dp, vertical = 8.dp),
-                                contentAlignment = Alignment.Center
-                            ) {
-                                Text(
-                                    text = "代码",
-                                    color = headerColor,
-                                    style = MaterialTheme.typography.labelLarge
-                                )
-                            }
+                                    .padding(2.dp)
+                                    .offset(x = indicatorOffset)
+                                    .size(width = indicatorWidth - 4.dp, height = 32.dp)
+                                    .background(capsuleSelectedBgColor, RoundedCornerShape(50))
+                            )
 
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(50))
-                                    .background(if (isPreviewMode) capsuleSelectedBgColor else Color.Transparent)
-                                    .clickable { isPreviewMode = true }
-                                    .padding(horizontal = 24.dp, vertical = 8.dp),
-                                contentAlignment = Alignment.Center
+                            // 按钮文本层
+                            Row(
+                                modifier = Modifier.fillMaxSize(),
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
-                                Text(
-                                    text = "预览",
-                                    color = headerColor,
-                                    style = MaterialTheme.typography.labelLarge
-                                )
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight()
+                                        .clip(RoundedCornerShape(50))
+                                        .clickable(
+                                            interactionSource = remember { MutableInteractionSource() },
+                                            indication = null
+                                        ) { isPreviewMode = false },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "代码",
+                                        color = headerColor,
+                                        style = MaterialTheme.typography.labelLarge
+                                    )
+                                }
+
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .fillMaxHeight()
+                                        .clip(RoundedCornerShape(50))
+                                        .clickable(
+                                            interactionSource = remember { MutableInteractionSource() },
+                                            indication = null
+                                        ) { isPreviewMode = true },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "预览",
+                                        color = headerColor,
+                                        style = MaterialTheme.typography.labelLarge
+                                    )
+                                }
                             }
                         }
                     }
@@ -282,9 +330,7 @@ fun FullScreenCodeViewerDialog(
                     // 全屏预览时，在底部增加圆角和内边距，使其有悬浮感并避免遮挡底部系统导航条
                     Surface(
                         modifier = Modifier
-                            .fillMaxSize()
-                            .navigationBarsPadding()
-                            .padding(bottom = 16.dp),
+                            .fillMaxSize(),
                         shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
                         color = Color.White
                     ) {

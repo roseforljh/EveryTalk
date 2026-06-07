@@ -1,8 +1,13 @@
 package com.android.everytalk.ui.components.content
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.rememberScrollState
@@ -134,6 +139,13 @@ fun CodeBlockCard(
     var cardTopPx by remember { mutableFloatStateOf(0f) }
     var cardHeightPx by remember { mutableIntStateOf(0) }
 
+    // 代码块背景色的过渡动画
+    val animatedBgColor by animateColorAsState(
+        targetValue = if (isPreviewMode) Color.Transparent else bg,
+        animationSpec = tween(durationMillis = 300),
+        label = "animatedBgColor"
+    )
+
     @OptIn(ExperimentalMaterial3Api::class)
     val pageBgColor = MaterialTheme.colorScheme.background
 
@@ -160,7 +172,7 @@ fun CodeBlockCard(
                 }
             },
         shape = shape,
-        color = if (isPreviewMode) Color.Transparent else bg,  // 代码模式使用代码块背景，预览模式使用透明背景
+        color = animatedBgColor,  // 使用带过渡动画的背景色
         // 注意这里：即使内部也有拦截，表面也需要允许点击以防止穿透到底层列表
         onClick = { showFullScreenPreview = true } 
     ) {
@@ -238,61 +250,83 @@ fun CodeBlockCard(
 
                     // 预览相关按钮组 (如果有预览功能的话，右侧包裹在一个胶囊内)
                     if (canPreview) {
+                        val indicatorWidth = 36.dp
+                        val capsuleWidth = 72.dp + 4.dp // 2 buttons + 4dp padding total (2dp each side)
+                        val indicatorOffset by animateDpAsState(
+                            targetValue = if (isPreviewMode) indicatorWidth else 0.dp,
+                            animationSpec = tween(durationMillis = 300),
+                            label = "indicatorOffset"
+                        )
+
                         Surface(
                             shape = RoundedCornerShape(50),
-                            color = capsuleBgColor // 胶囊底色
+                            color = capsuleBgColor, // 胶囊底色
+                            modifier = Modifier.size(width = capsuleWidth, height = 40.dp) // 36dp button + 4dp total padding
                         ) {
-                            Row(
-                                modifier = Modifier.padding(2.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(2.dp)
-                            ) {
-                                // 代码按钮
+                            Box(modifier = Modifier.fillMaxSize()) {
+                                // 滑块指示器
                                 Box(
                                     modifier = Modifier
+                                        .padding(2.dp)
+                                        .offset(x = indicatorOffset)
                                         .size(36.dp)
-                                        .background(
-                                            color = if (!isPreviewMode) capsuleSelectedBgColor else Color.Transparent,
-                                            shape = RoundedCornerShape(50)
-                                        )
-                                        .clip(RoundedCornerShape(50))
-                                        .clickable { isPreviewMode = false },
-                                    contentAlignment = Alignment.Center
+                                        .background(capsuleSelectedBgColor, RoundedCornerShape(50))
+                                )
+
+                                // 按钮图标层
+                                Row(
+                                    modifier = Modifier.fillMaxSize().padding(2.dp),
+                                    verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Icon(
-                                        painter = painterResource(R.drawable.ic_gpt_terminal),
-                                        contentDescription = "代码",
-                                        tint = headerContentColor,
-                                        modifier = Modifier.size(24.dp)
-                                    )
-                                }
-                                
-                                // 预览按钮
-                                Box(
-                                    modifier = Modifier
-                                        .size(36.dp)
-                                        .background(
-                                            color = if (isPreviewMode) capsuleSelectedBgColor else Color.Transparent,
-                                            shape = RoundedCornerShape(50)
+                                    // 代码按钮
+                                    Box(
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .clip(RoundedCornerShape(50))
+                                            .clickable(
+                                                interactionSource = remember { MutableInteractionSource() },
+                                                indication = null
+                                            ) { isPreviewMode = false },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            painter = painterResource(R.drawable.ic_gpt_terminal),
+                                            contentDescription = "代码",
+                                            tint = headerContentColor,
+                                            modifier = Modifier.size(24.dp)
                                         )
-                                        .clip(RoundedCornerShape(50))
-                                        .clickable { 
-                                            isPreviewMode = true
-                                        },
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(
-                                        painter = painterResource(R.drawable.ic_gpt_play),
-                                        contentDescription = "预览",
-                                        tint = headerContentColor,
-                                        modifier = Modifier.size(24.dp)
-                                    )
+                                    }
+
+                                    // 预览按钮
+                                    Box(
+                                        modifier = Modifier
+                                            .size(36.dp)
+                                            .clip(RoundedCornerShape(50))
+                                            .clickable(
+                                                interactionSource = remember { MutableInteractionSource() },
+                                                indication = null
+                                            ) { isPreviewMode = true },
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Icon(
+                                            painter = painterResource(R.drawable.ic_gpt_play),
+                                            contentDescription = "预览",
+                                            tint = headerContentColor,
+                                            modifier = Modifier.size(24.dp)
+                                        )
+                                    }
                                 }
                             }
                         }
                     }
                 }
             }
+
+            val gradientAlpha by animateFloatAsState(
+                targetValue = if (isPreviewMode) 0f else 0.8f,
+                animationSpec = tween(durationMillis = 300),
+                label = "gradientAlpha"
+            )
 
             Box(
                 modifier = Modifier
@@ -305,15 +339,15 @@ fun CodeBlockCard(
                     .background(Color.Transparent)
                     .drawWithContent {
                         drawContent()
-                        if (!isPreviewMode) {
+                        if (gradientAlpha > 0f) {
                             // 绘制底部融合渐变遮罩，使底部更模糊
                             val gradientHeight = 60.dp.toPx()
                             drawRect(
                                 brush = Brush.verticalGradient(
                                     colors = listOf(
                                         Color.Transparent,
-                                        bg.copy(alpha = 0.8f),
-                                        bg
+                                        bg.copy(alpha = gradientAlpha),
+                                        bg.copy(alpha = if (isPreviewMode) 0f else 1f)
                                     ),
                                     startY = size.height - gradientHeight,
                                     endY = size.height
