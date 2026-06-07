@@ -40,4 +40,10 @@ class ScrollToBottomButtonVisibilityTest {
         assertEquals(Color.White.copy(alpha = 0.42f), scrollToBottomButtonDarkBorderColor())
         assertNull(scrollToBottomButtonBorder(isDarkTheme = false))
     }
+
+    @Test
+    fun `button waits after scroll stops and fades in slower`() {
+        assertEquals(1000L, scrollToBottomButtonAppearDelayMillis())
+        assertEquals(360, scrollToBottomButtonFadeInMillis())
+    }
 }

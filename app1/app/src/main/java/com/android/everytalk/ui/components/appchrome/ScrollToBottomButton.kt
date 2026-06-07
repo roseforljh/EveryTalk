@@ -37,6 +37,8 @@ import com.android.everytalk.ui.screens.MainScreen.chat.text.state.ChatScrollSta
 import kotlinx.coroutines.delay
 
 private const val ScrollToBottomIdleVisibleMillis = 3000L
+private const val ScrollToBottomAppearDelayMillis = 1000L
+private const val ScrollToBottomFadeInMillis = 360
 
 internal fun shouldShowScrollToBottomButtonForFrame(
     baseVisible: Boolean,
@@ -44,6 +46,14 @@ internal fun shouldShowScrollToBottomButtonForFrame(
     idleHoldVisible: Boolean
 ): Boolean {
     return baseVisible && !isScrollInProgress && idleHoldVisible
+}
+
+internal fun scrollToBottomButtonAppearDelayMillis(): Long {
+    return ScrollToBottomAppearDelayMillis
+}
+
+internal fun scrollToBottomButtonFadeInMillis(): Int {
+    return ScrollToBottomFadeInMillis
 }
 
 internal fun scrollToBottomButtonDarkBorderColor(): Color {
@@ -83,6 +93,12 @@ fun ScrollToBottomButton(
             return@LaunchedEffect
         }
 
+        delay(scrollToBottomButtonAppearDelayMillis())
+        if (!baseVisible || isScrollInProgress) {
+            idleHoldVisible = false
+            return@LaunchedEffect
+        }
+
         idleHoldVisible = true
         delay(ScrollToBottomIdleVisibleMillis)
         idleHoldVisible = false
@@ -93,7 +109,7 @@ fun ScrollToBottomButton(
         modifier = modifier.fillMaxSize(),
         enter = fadeIn(
             animationSpec = tween(
-                durationMillis = 180,
+                durationMillis = scrollToBottomButtonFadeInMillis(),
                 easing = LinearOutSlowInEasing
             )
         ),
