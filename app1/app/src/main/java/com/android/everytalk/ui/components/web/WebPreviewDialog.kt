@@ -5,7 +5,7 @@ import android.os.Build
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
-import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -27,6 +27,8 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -37,17 +39,23 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
@@ -68,6 +76,7 @@ import com.android.everytalk.ui.components.content.isPreviewSupported
 import com.android.everytalk.ui.theme.chatColors
 import java.io.BufferedReader
 import java.io.InputStreamReader
+import kotlinx.coroutines.launch
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -135,13 +144,16 @@ fun WebPreviewContent(
             }
         },
         update = { webView ->
-            webView.loadDataWithBaseURL(
-                "file:///android_asset/templates/",
-                htmlContent,
-                "text/html",
-                "UTF-8",
-                null
-            )
+            if (webView.tag != htmlContent) {
+                webView.tag = htmlContent
+                webView.loadDataWithBaseURL(
+                    "file:///android_asset/templates/",
+                    htmlContent,
+                    "text/html",
+                    "UTF-8",
+                    null
+                )
+            }
         },
         modifier = modifier
     )
@@ -152,9 +164,13 @@ fun FullScreenCodeViewerDialog(
     code: String,
     language: String,
     initialPreviewMode: Boolean = false,
+    sourceBounds: androidx.compose.ui.geometry.Rect = androidx.compose.ui.geometry.Rect.Zero,
     onDismiss: () -> Unit
 ) {
     val clipboard = LocalClipboardManager.current
+    val density = LocalDensity.current
+    val configuration = LocalConfiguration.current
+    val scope = rememberCoroutineScope()
     val isDarkTheme = androidx.compose.foundation.isSystemInDarkTheme()
     val bgColor = if (isDarkTheme) Color(0xFF1E1E1E) else Color(0xFFF5F5F5)
     val headerColor = if (isDarkTheme) Color.White else Color.Black
@@ -162,8 +178,37 @@ fun FullScreenCodeViewerDialog(
     val capsuleSelectedBgColor = if (isDarkTheme) Color(0xFF505050) else Color.White
 
     val canPreview = isPreviewSupported(language)
-    // 初始状态考虑外部传递的参数（只有在支持预览时才能进入预览模式）
-    var isPreviewMode by remember { mutableStateOf(canPreview && initialPreviewMode) }
+    val pagerState = rememberPagerState(
+        initialPage = if (canPreview && initialPreviewMode) 1 else 0,
+        pageCount = { if (canPreview) 2 else 1 }
+    )
+    val isPreviewMode = canPreview && pagerState.currentPage == 1
+    var hasEntered by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        hasEntered = true
+    }
+    val entryScale by animateFloatAsState(
+        targetValue = if (hasEntered) 1f else 0.72f,
+        animationSpec = tween(durationMillis = 260),
+        label = "dialogEntryScale"
+    )
+    val entryAlpha by animateFloatAsState(
+        targetValue = if (hasEntered) 1f else 0f,
+        animationSpec = tween(durationMillis = 180),
+        label = "dialogEntryAlpha"
+    )
+    val transformOrigin = remember(sourceBounds, configuration.screenWidthDp, configuration.screenHeightDp) {
+        if (sourceBounds == androidx.compose.ui.geometry.Rect.Zero) {
+            TransformOrigin.Center
+        } else {
+            val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
+            val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
+            TransformOrigin(
+                pivotFractionX = ((sourceBounds.left + sourceBounds.width / 2f) / screenWidthPx).coerceIn(0f, 1f),
+                pivotFractionY = ((sourceBounds.top + sourceBounds.height / 2f) / screenHeightPx).coerceIn(0f, 1f)
+            )
+        }
+    }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -193,6 +238,12 @@ fun FullScreenCodeViewerDialog(
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .graphicsLayer {
+                    alpha = entryAlpha
+                    scaleX = entryScale
+                    scaleY = entryScale
+                    this.transformOrigin = transformOrigin
+                }
                 .background(bgColor)
                 .statusBarsPadding()
         ) {
@@ -217,11 +268,9 @@ fun FullScreenCodeViewerDialog(
                 if (canPreview) {
                     val capsuleWidth = 140.dp
                     val indicatorWidth = 70.dp
-                    val indicatorOffset by animateDpAsState(
-                        targetValue = if (isPreviewMode) indicatorWidth else 0.dp,
-                        animationSpec = tween(durationMillis = 300),
-                        label = "indicatorOffset"
-                    )
+                    val indicatorProgress =
+                        (pagerState.currentPage + pagerState.currentPageOffsetFraction).coerceIn(0f, 1f)
+                    val indicatorOffset = indicatorWidth * indicatorProgress
 
                     Surface(
                         shape = RoundedCornerShape(50),
@@ -251,7 +300,9 @@ fun FullScreenCodeViewerDialog(
                                         .clickable(
                                             interactionSource = remember { MutableInteractionSource() },
                                             indication = null
-                                        ) { isPreviewMode = false },
+                                        ) {
+                                            scope.launch { pagerState.animateScrollToPage(0) }
+                                        },
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Text(
@@ -269,7 +320,9 @@ fun FullScreenCodeViewerDialog(
                                         .clickable(
                                             interactionSource = remember { MutableInteractionSource() },
                                             indication = null
-                                        ) { isPreviewMode = true },
+                                        ) {
+                                            scope.launch { pagerState.animateScrollToPage(1) }
+                                        },
                                     contentAlignment = Alignment.Center
                                 ) {
                                     Text(
@@ -326,50 +379,56 @@ fun FullScreenCodeViewerDialog(
                     .fillMaxWidth()
                     .weight(1f)
             ) {
-                if (isPreviewMode) {
-                    // 全屏预览时，在底部增加圆角和内边距，使其有悬浮感并避免遮挡底部系统导航条
-                    Surface(
-                        modifier = Modifier
-                            .fillMaxSize(),
-                        shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-                        color = Color.White
-                    ) {
-                        WebPreviewContent(
-                            code = code,
-                            language = language,
-                            modifier = Modifier.fillMaxSize()
-                        )
-                    }
-                } else {
-                    val syntaxTheme = if (isDarkTheme) SyntaxHighlightTheme.Dark else SyntaxHighlightTheme.Light
-                    val highlightedCode = remember(code, language, isDarkTheme) {
-                        SyntaxHighlighter.highlight(code, language, syntaxTheme)
-                    }
+                HorizontalPager(
+                    state = pagerState,
+                    modifier = Modifier.fillMaxSize(),
+                    userScrollEnabled = canPreview
+                ) { page ->
+                    if (page == 1) {
+                        // 全屏预览时，在底部增加圆角和内边距，使其有悬浮感并避免遮挡底部系统导航条
+                        Surface(
+                            modifier = Modifier
+                                .fillMaxSize(),
+                            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+                            color = Color.White
+                        ) {
+                            WebPreviewContent(
+                                code = code,
+                                language = language,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    } else {
+                        val syntaxTheme = if (isDarkTheme) SyntaxHighlightTheme.Dark else SyntaxHighlightTheme.Light
+                        val highlightedCode = remember(code, language, isDarkTheme) {
+                            SyntaxHighlighter.highlight(code, language, syntaxTheme)
+                        }
 
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .navigationBarsPadding()
-                            .verticalScroll(rememberScrollState())
-                            .padding(horizontal = 16.dp)
-                    ) {
-                        Text(
-                            text = language.trim().ifBlank { "CODE" }.uppercase(),
-                            style = MaterialTheme.typography.labelSmall,
-                            color = headerColor,
-                            fontFamily = FontFamily.Monospace,
-                            modifier = Modifier.padding(bottom = 16.dp)
-                        )
-                        Text(
-                            text = highlightedCode,
-                            style = MaterialTheme.typography.bodyMedium.copy(
+                        Column(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .navigationBarsPadding()
+                                .verticalScroll(rememberScrollState())
+                                .padding(horizontal = 16.dp)
+                        ) {
+                            Text(
+                                text = language.trim().ifBlank { "CODE" }.uppercase(),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = headerColor,
                                 fontFamily = FontFamily.Monospace,
-                                fontSize = 13.sp,
-                                lineHeight = 18.sp
-                            ),
-                            softWrap = true
-                        )
-                        Spacer(modifier = Modifier.height(32.dp))
+                                modifier = Modifier.padding(bottom = 16.dp)
+                            )
+                            Text(
+                                text = highlightedCode,
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    fontSize = 13.sp,
+                                    lineHeight = 18.sp
+                                ),
+                                softWrap = true
+                            )
+                            Spacer(modifier = Modifier.height(32.dp))
+                        }
                     }
                 }
             }

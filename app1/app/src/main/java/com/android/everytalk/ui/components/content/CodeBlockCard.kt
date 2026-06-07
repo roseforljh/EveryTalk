@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.components.content
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -28,6 +29,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
@@ -133,6 +135,7 @@ fun CodeBlockCard(
     // 预览模式状态
     var isPreviewMode by remember { mutableStateOf(false) }
     var showFullScreenPreview by remember { mutableStateOf(false) }
+    var cardBoundsInWindow by remember { mutableStateOf(androidx.compose.ui.geometry.Rect.Zero) }
     // 吸顶逻辑状态
     val stickyTop = LocalStickyHeaderTop.current
     var headerHeightPx by remember { mutableIntStateOf(0) }
@@ -141,8 +144,8 @@ fun CodeBlockCard(
 
     // 代码块背景色的过渡动画
     val animatedBgColor by animateColorAsState(
-        targetValue = if (isPreviewMode) Color.Transparent else bg,
-        animationSpec = tween(durationMillis = 300),
+        targetValue = if (isPreviewMode) Color.White else bg,
+        animationSpec = tween(durationMillis = 220),
         label = "animatedBgColor"
     )
 
@@ -163,6 +166,7 @@ fun CodeBlockCard(
                 }
             }
             .onGloballyPositioned { coordinates ->
+                cardBoundsInWindow = coordinates.boundsInWindow()
                 val newTop = coordinates.positionInWindow().y
                 val newHeight = coordinates.size.height
                 // 仅当位置或高度发生显著变化时更新状态，减少不必要的重组
@@ -324,17 +328,15 @@ fun CodeBlockCard(
 
             val gradientAlpha by animateFloatAsState(
                 targetValue = if (isPreviewMode) 0f else 0.8f,
-                animationSpec = tween(durationMillis = 300),
+                animationSpec = tween(durationMillis = 180),
                 label = "gradientAlpha"
             )
 
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    // 仅当非预览模式才限制高度，预览模式下允许更大高度以展示内容
-                    .then(
-                        if (isPreviewMode) Modifier.height(450.dp) 
-                        else Modifier.heightIn(max = 400.dp)
+                    .animateContentSize(
+                        animationSpec = tween(durationMillis = 220)
                     )
                     .background(Color.Transparent)
                     .drawWithContent {
@@ -363,7 +365,7 @@ fun CodeBlockCard(
                     Surface(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .fillMaxHeight() // 撑满父布局 Box 给定的高度
+                            .height(450.dp)
                             .padding(horizontal = 0.dp, vertical = 0.dp),
                         shape = RoundedCornerShape(24.dp), // 修改为四角均为 24.dp 以符合直觉
                         color = Color.White // 网页预览通常底色为白
@@ -385,17 +387,23 @@ fun CodeBlockCard(
                         }
                     }
                 } else {
-                    Text(
-                        text = highlightedCode,
-                        style = MaterialTheme.typography.bodyMedium.copy(
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 13.sp,
-                            lineHeight = 18.sp
-                        ),
-                        softWrap = true, // 不再需要内部横向滚动，允许折行
+                    Box(
                         modifier = Modifier
-                            .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 24.dp) // 留出底部空间避免被文字遮挡过死
-                    )
+                            .fillMaxWidth()
+                            .heightIn(max = 400.dp)
+                    ) {
+                        Text(
+                            text = highlightedCode,
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontFamily = FontFamily.Monospace,
+                                fontSize = 13.sp,
+                                lineHeight = 18.sp
+                            ),
+                            softWrap = true, // 不再需要内部横向滚动，允许折行
+                            modifier = Modifier
+                                .padding(start = 12.dp, end = 12.dp, top = 8.dp, bottom = 24.dp) // 留出底部空间避免被文字遮挡过死
+                        )
+                    }
                 }
             }
             
@@ -404,6 +412,7 @@ fun CodeBlockCard(
                     code = code,
                     language = language ?: "",
                     initialPreviewMode = isPreviewMode,
+                    sourceBounds = cardBoundsInWindow,
                     onDismiss = { showFullScreenPreview = false }
                 )
             }
