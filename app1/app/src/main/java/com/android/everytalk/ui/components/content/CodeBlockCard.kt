@@ -10,7 +10,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -20,6 +19,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -42,7 +42,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.verticalScroll
 import com.android.everytalk.R
 import com.android.everytalk.ui.theme.chatColors
 import com.android.everytalk.ui.components.syntax.SyntaxHighlighter
@@ -56,12 +55,6 @@ import com.android.everytalk.ui.components.syntax.HighlightCache
  * 单位：px
  */
 val LocalStickyHeaderTop = compositionLocalOf { Float.NaN }
-
-internal fun shouldAutoScrollCodeBlockContent(
-    isStreaming: Boolean,
-    isPreviewMode: Boolean,
-    maxScrollValue: Int,
-): Boolean = isStreaming && !isPreviewMode && maxScrollValue > 0
 
 /**
  * 代码块卡片组件
@@ -145,8 +138,6 @@ fun CodeBlockCard(
     var isPreviewMode by remember { mutableStateOf(false) }
     var showFullScreenPreview by remember { mutableStateOf(false) }
     var cardBoundsInWindow by remember { mutableStateOf(androidx.compose.ui.geometry.Rect.Zero) }
-    val codeScrollState = rememberScrollState()
-    var lastAutoScrollCodeLength by remember { mutableIntStateOf(code.length) }
     // 吸顶逻辑状态
     val stickyTop = LocalStickyHeaderTop.current
     var headerHeightPx by remember { mutableIntStateOf(0) }
@@ -158,25 +149,6 @@ fun CodeBlockCard(
         animationSpec = tween(durationMillis = 180),
         label = "previewRevealAlpha"
     )
-
-    LaunchedEffect(code.length, isStreaming, isPreviewMode) {
-        val currentCodeLength = code.length
-        val contentGrew = currentCodeLength > lastAutoScrollCodeLength
-        if (contentGrew) {
-            withFrameNanos { }
-            val maxScrollValue = codeScrollState.maxValue
-            if (
-                shouldAutoScrollCodeBlockContent(
-                    isStreaming = isStreaming,
-                    isPreviewMode = isPreviewMode,
-                    maxScrollValue = maxScrollValue,
-                )
-            ) {
-                codeScrollState.scrollTo(maxScrollValue)
-            }
-        }
-        lastAutoScrollCodeLength = currentCodeLength
-    }
 
     Surface(
         modifier = modifier
@@ -429,7 +401,7 @@ fun CodeBlockCard(
                         modifier = Modifier
                             .fillMaxWidth()
                             .heightIn(max = 400.dp)
-                            .verticalScroll(codeScrollState)
+                            .clipToBounds()
                     ) {
                         Text(
                             text = highlightedCode,

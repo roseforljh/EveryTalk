@@ -2,6 +2,7 @@ package com.android.everytalk.ui.components
 
 import android.annotation.SuppressLint
 import android.os.Build
+import android.view.WindowManager
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -84,7 +85,38 @@ import com.android.everytalk.ui.components.content.isPreviewSupported
 import com.android.everytalk.ui.theme.chatColors
 import java.io.BufferedReader
 import java.io.InputStreamReader
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+
+internal const val CODE_VIEWER_DIALOG_EDGE_SCALE = 0.72f
+internal const val CODE_VIEWER_DIALOG_TRANSITION_MILLIS = 260
+internal const val CODE_VIEWER_DIALOG_ALPHA_MILLIS = CODE_VIEWER_DIALOG_TRANSITION_MILLIS
+internal const val CODE_VIEWER_DIALOG_WINDOW_DIM_AMOUNT = 0f
+
+internal data class CodeViewerDialogAnimationTarget(
+    val scale: Float,
+    val alpha: Float,
+)
+
+internal fun resolveCodeViewerDialogAnimationTarget(
+    hasEntered: Boolean,
+    isClosing: Boolean,
+): CodeViewerDialogAnimationTarget {
+    return when {
+        isClosing -> CodeViewerDialogAnimationTarget(
+            scale = CODE_VIEWER_DIALOG_EDGE_SCALE,
+            alpha = 0f,
+        )
+        hasEntered -> CodeViewerDialogAnimationTarget(
+            scale = 1f,
+            alpha = 1f,
+        )
+        else -> CodeViewerDialogAnimationTarget(
+            scale = CODE_VIEWER_DIALOG_EDGE_SCALE,
+            alpha = 0f,
+        )
+    }
+}
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
@@ -232,17 +264,28 @@ fun FullScreenCodeViewerDialog(
     )
     val isPreviewMode = canPreview && pagerState.currentPage == 1
     var hasEntered by remember { mutableStateOf(false) }
+    var isClosing by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) {
         hasEntered = true
     }
+    LaunchedEffect(isClosing) {
+        if (isClosing) {
+            delay(CODE_VIEWER_DIALOG_TRANSITION_MILLIS.toLong())
+            onDismiss()
+        }
+    }
+    val animationTarget = resolveCodeViewerDialogAnimationTarget(
+        hasEntered = hasEntered,
+        isClosing = isClosing,
+    )
     val entryScale by animateFloatAsState(
-        targetValue = if (hasEntered) 1f else 0.72f,
-        animationSpec = tween(durationMillis = 260),
+        targetValue = animationTarget.scale,
+        animationSpec = tween(durationMillis = CODE_VIEWER_DIALOG_TRANSITION_MILLIS),
         label = "dialogEntryScale"
     )
     val entryAlpha by animateFloatAsState(
-        targetValue = if (hasEntered) 1f else 0f,
-        animationSpec = tween(durationMillis = 180),
+        targetValue = animationTarget.alpha,
+        animationSpec = tween(durationMillis = CODE_VIEWER_DIALOG_ALPHA_MILLIS),
         label = "dialogEntryAlpha"
     )
     val transformOrigin = remember(sourceBounds, configuration.screenWidthDp, configuration.screenHeightDp) {
@@ -258,8 +301,14 @@ fun FullScreenCodeViewerDialog(
         }
     }
 
+    fun requestDismiss() {
+        if (!isClosing) {
+            isClosing = true
+        }
+    }
+
     Dialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { requestDismiss() },
         properties = DialogProperties(
             usePlatformDefaultWidth = false,
             dismissOnBackPress = true,
@@ -271,6 +320,8 @@ fun FullScreenCodeViewerDialog(
         SideEffect {
             dialogWindowProvider?.window?.let { window ->
                 WindowCompat.setDecorFitsSystemWindows(window, false)
+                window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+                window.setDimAmount(CODE_VIEWER_DIALOG_WINDOW_DIM_AMOUNT)
                 window.statusBarColor = android.graphics.Color.TRANSPARENT
                 window.navigationBarColor = android.graphics.Color.TRANSPARENT
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -304,7 +355,7 @@ fun FullScreenCodeViewerDialog(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 // 左侧：关闭按钮
-                IconButton(onClick = onDismiss, modifier = Modifier.size(48.dp)) {
+                IconButton(onClick = { requestDismiss() }, modifier = Modifier.size(48.dp)) {
                     Icon(
                         imageVector = Icons.Default.Close,
                         contentDescription = "关闭",
