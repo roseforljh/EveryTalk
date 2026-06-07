@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.20.0](https://github.com/roseforljh/EveryTalk/compare/v1.19.7...v1.20.0) (2026-06-07)
+
+
+### Features
+
+* add swipeable code preview transitions ([38dac4d](https://github.com/roseforljh/EveryTalk/commit/38dac4d0e4ad6f09d433f20ff0de565c7fa92885))
+* refine ChatGPT style code block UI and fullscreen preview ([8c7d2e7](https://github.com/roseforljh/EveryTalk/commit/8c7d2e762ada6d9e6ea0076d9f755c03e371bbd6))
+
+
+### Bug Fixes
+
+* optimize image mode interactions ([10e42dc](https://github.com/roseforljh/EveryTalk/commit/10e42dca5724c103ff3203f95f8a445995334a6e))
+* pass current preview mode state to FullScreenCodeViewerDialog ([39f478c](https://github.com/roseforljh/EveryTalk/commit/39f478c78ed0dd8a7a66064ae19fdbc7db040a73))
+* polish code preview tab interactions ([c37f5e2](https://github.com/roseforljh/EveryTalk/commit/c37f5e29c97780027a7026b322748555fd2ac03c))
+* refine code preview theming and transitions ([0187fdb](https://github.com/roseforljh/EveryTalk/commit/0187fdb618595e9ccc6458fc9d71689f9b94a8a7))
+* resize splash logo ([5de1baf](https://github.com/roseforljh/EveryTalk/commit/5de1baf4bf29a6573a5429799e7e6c90421c5364))
+* use system splash logo ([5e173ac](https://github.com/roseforljh/EveryTalk/commit/5e173ac1da6fb23c2aeaed7e4ec3fa1ea77ea286))
+
 ## [1.19.7](https://github.com/roseforljh/EveryTalk/compare/v1.19.6...v1.19.7) (2026-06-06)
 
 
