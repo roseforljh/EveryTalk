@@ -31,6 +31,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.ExperimentalSerializationApi
 import okhttp3.OkHttpClient
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
@@ -318,6 +319,7 @@ class McpClientManager(
     }
 }
 
+@OptIn(ExperimentalSerializationApi::class)
 internal val McpJson: Json by lazy {
     Json {
         ignoreUnknownKeys = true

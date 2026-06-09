@@ -14,6 +14,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -39,6 +44,42 @@ class HistoryManagerCustomPromptPersistenceTest {
     @After
     fun tearDown() {
         unmockkAll()
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    @Test
+    fun `queued force saves persist text and image conversations independently`() = runTest {
+        val stateHolder = ViewModelStateHolder()
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val scope = TestScope(SupervisorJob() + dispatcher)
+        val historyManager = HistoryManager(
+            stateHolder = stateHolder,
+            persistenceManager = mockk(relaxed = true),
+            compareMessageLists = { left, right -> left == right },
+            onHistoryModified = {},
+            scope = scope
+        )
+
+        stateHolder.setCurrentConversationId("text-user")
+        stateHolder._currentImageGenerationConversationId.value = "image-user"
+        stateHolder.messages.add(Message(id = "text-user", text = "文本问题", sender = Sender.User))
+        stateHolder.messages.add(Message(id = "text-ai", text = "文本回答", sender = Sender.AI))
+        stateHolder.imageGenerationMessages.add(Message(id = "image-user", text = "画一张图", sender = Sender.User))
+        stateHolder.imageGenerationMessages.add(Message(id = "image-ai", text = "图片完成", sender = Sender.AI))
+        stateHolder.isTextConversationDirty.value = true
+        stateHolder.isImageConversationDirty.value = true
+
+        try {
+            historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = false)
+            historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = true)
+
+            scope.advanceUntilIdle()
+
+            assertEquals("文本回答", stateHolder._historicalConversations.value.single().last().text)
+            assertEquals("图片完成", stateHolder._imageGenerationHistoricalConversations.value.single().last().text)
+        } finally {
+            scope.cancel()
+        }
     }
 
     @Test

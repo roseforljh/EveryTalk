@@ -2,6 +2,7 @@ package com.android.everytalk.util.share
 
 import android.content.Context
 import android.content.Intent
+import android.content.ClipData
 import android.util.Log
 import androidx.core.content.FileProvider
 import com.android.everytalk.data.DataClass.Message
@@ -10,6 +11,8 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
  * 会话导出工具类，负责将会话导出为 Markdown 格式并分享
@@ -127,39 +130,42 @@ object ConversationExporter {
     /**
      * 导出会话为 Markdown 文件并分享
      */
-    fun shareConversation(
+    suspend fun shareConversation(
         context: Context,
         messages: List<Message>,
         title: String? = null
     ) {
         try {
-            val markdown = convertToMarkdown(messages, title)
-            val effectiveTitle = title ?: generateTitle(messages)
+            val (uri, effectiveTitle) = withContext(Dispatchers.IO) {
+                val markdown = convertToMarkdown(messages, title)
+                val effectiveTitle = title ?: generateTitle(messages)
 
-            // 创建临时文件
-            val cacheDir = File(context.cacheDir, "shared_conversations")
-            if (!cacheDir.exists()) {
-                cacheDir.mkdirs()
+                // 创建临时文件
+                val cacheDir = File(context.cacheDir, "shared_conversations")
+                if (!cacheDir.exists()) {
+                    cacheDir.mkdirs()
+                }
+
+                // 清理文件名中的非法字符
+                val safeFileName = effectiveTitle
+                    .replace(Regex("[\\\\/:*?\"<>|]"), "_")
+                    .take(50)
+                val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
+                val fileName = "${safeFileName}_$timestamp.md"
+
+                val file = File(cacheDir, fileName)
+                file.writeText(markdown, Charsets.UTF_8)
+
+                Log.d(TAG, "Markdown file created: ${file.absolutePath}, size: ${file.length()}")
+
+                // 使用 FileProvider 获取 URI
+                val uri = FileProvider.getUriForFile(
+                    context,
+                    "${context.packageName}.provider",
+                    file
+                )
+                uri to effectiveTitle
             }
-
-            // 清理文件名中的非法字符
-            val safeFileName = effectiveTitle
-                .replace(Regex("[\\\\/:*?\"<>|]"), "_")
-                .take(50)
-            val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-            val fileName = "${safeFileName}_$timestamp.md"
-
-            val file = File(cacheDir, fileName)
-            file.writeText(markdown, Charsets.UTF_8)
-
-            Log.d(TAG, "Markdown file created: ${file.absolutePath}, size: ${file.length()}")
-
-            // 使用 FileProvider 获取 URI
-            val uri = FileProvider.getUriForFile(
-                context,
-                "${context.packageName}.provider",
-                file
-            )
 
             // 创建分享 Intent
             val shareIntent = Intent(Intent.ACTION_SEND).apply {
@@ -167,12 +173,15 @@ object ConversationExporter {
                 putExtra(Intent.EXTRA_STREAM, uri)
                 putExtra(Intent.EXTRA_SUBJECT, effectiveTitle)
                 putExtra(Intent.EXTRA_TEXT, "分享自 EveryTalk: $effectiveTitle")
+                clipData = ClipData.newUri(context.contentResolver, effectiveTitle, uri)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
 
             val chooserIntent = Intent.createChooser(shareIntent, "分享会话")
-            chooserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(chooserIntent)
+            withContext(Dispatchers.Main) {
+                chooserIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(chooserIntent)
+            }
 
             Log.d(TAG, "Share intent launched for conversation: $effectiveTitle")
         } catch (e: Exception) {

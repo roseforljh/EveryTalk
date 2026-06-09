@@ -39,6 +39,7 @@ class StableLatexDrawable(
 
     override fun setAlpha(alpha: Int) {}
     override fun setColorFilter(colorFilter: ColorFilter?) {}
+    @Deprecated("Deprecated in Drawable")
     override fun getOpacity(): Int = PixelFormat.TRANSLUCENT
     override fun getIntrinsicWidth(): Int = iconWidth
     override fun getIntrinsicHeight(): Int = iconHeight

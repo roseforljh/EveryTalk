@@ -184,7 +184,6 @@ object OpenAIResponsesClient {
                     is SimpleTextApiMessage -> systemMsg.content
                     is PartsApiMessage -> systemMsg.parts.filterIsInstance<ApiContentPart.Text>()
                         .joinToString("\n") { it.text }
-                    else -> ""
                 }
                 if (systemText.isNotBlank()) {
                     put("instructions", systemText)
@@ -229,9 +228,7 @@ object OpenAIResponsesClient {
                                                     val dataUri = "data:${part.mimeType};base64,${part.base64Data}"
                                                     addJsonObject {
                                                         put("type", "input_image")
-                                                        putJsonObject("image_url") {
-                                                            put("url", dataUri)
-                                                        }
+                                                        put("image_url", dataUri)
                                                     }
                                                 }
                                                 is ApiContentPart.FileUri -> {
@@ -244,12 +241,6 @@ object OpenAIResponsesClient {
                                         }
                                     }
                                 }
-                            }
-                        }
-                        else -> {
-                            addJsonObject {
-                                put("role", message.role)
-                                put("content", "")
                             }
                         }
                     }
@@ -318,7 +309,7 @@ object OpenAIResponsesClient {
 
         try {
             while (!channel.isClosedForRead) {
-                val line = channel.readUTF8Line() ?: break
+                val line = channel.readLine() ?: break
 
                 when {
                     line.isEmpty() -> {

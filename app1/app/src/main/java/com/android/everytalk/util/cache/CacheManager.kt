@@ -41,7 +41,19 @@ class CacheManager private constructor(private val context: Context) {
     
     // 异步缓存刷新队列
     private val refreshQueue = ConcurrentHashMap<String, Job>()
-    private val cacheScope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    private val scopeLock = Any()
+    private var cacheScope = newCacheScope()
+
+    private fun newCacheScope(): CoroutineScope {
+        return CoroutineScope(Dispatchers.Default + SupervisorJob())
+    }
+
+    private fun activeCacheScope(): CoroutineScope = synchronized(scopeLock) {
+        if (!cacheScope.isActive) {
+            cacheScope = newCacheScope()
+        }
+        cacheScope
+    }
     
     data class ImageMetadata(
         val width: Int,
@@ -125,7 +137,7 @@ class CacheManager private constructor(private val context: Context) {
             
             // 设置自动过期
             refreshQueue[requestKey]?.cancel()
-            refreshQueue[requestKey] = cacheScope.launch {
+            refreshQueue[requestKey] = activeCacheScope().launch {
                 delay(ttlMs)
                 apiResponseCache.remove(requestKey)
                 refreshQueue.remove(requestKey)
@@ -158,7 +170,7 @@ class CacheManager private constructor(private val context: Context) {
      * 预热缓存 - 异步加载常用数据
      */
     fun warmupCache(conversations: List<List<Message>>) {
-        cacheScope.launch {
+        activeCacheScope().launch {
             logger.info("Starting cache warmup for ${conversations.size} conversations")
             
             conversations.forEachIndexed { index, messages ->
@@ -298,7 +310,9 @@ class CacheManager private constructor(private val context: Context) {
     }
     
     fun cleanup() {
-        cacheScope.cancel()
+        synchronized(scopeLock) {
+            cacheScope.cancel()
+        }
         refreshQueue.values.forEach { it.cancel() }
         refreshQueue.clear()
     }

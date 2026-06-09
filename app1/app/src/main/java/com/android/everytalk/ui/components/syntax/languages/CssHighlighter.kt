@@ -55,7 +55,7 @@ object CssHighlighter : LanguageHighlighter {
             val start = propMatcher.start(1)
             val end = propMatcher.end(1)
             if (!processed[start]) {
-                tokens.add(Token(TokenType.CSS_PROPERTY, start, end, propMatcher.group(1)))
+                tokens.add(Token(TokenType.CSS_PROPERTY, start, end, propMatcher.groupText(1)))
                 for (i in start until end) {
                     processed[i] = true
                 }
@@ -68,7 +68,7 @@ object CssHighlighter : LanguageHighlighter {
             val start = funcMatcher.start()
             val end = funcMatcher.end()
             if (!processed[start]) {
-                val funcName = funcMatcher.group()
+                val funcName = funcMatcher.groupText()
                 val tokenType = if (cssFunctions.contains(funcName.lowercase())) {
                     TokenType.FUNCTION
                 } else {
@@ -90,10 +90,10 @@ object CssHighlighter : LanguageHighlighter {
             val start = numMatcher.start()
             val end = numMatcher.end()
             if (!processed[start]) {
-                val matched = numMatcher.group()
-                val unit = numMatcher.group(1)
+                val matched = numMatcher.groupText()
+                val unit = numMatcher.groupText(1)
                 
-                if (unit != null && unit.isNotEmpty()) {
+                if (unit.isNotEmpty()) {
                     // 有单位：分别标记数字和单位
                     val numEnd = end - unit.length
                     tokens.add(Token(TokenType.NUMBER, start, numEnd, matched.substring(0, matched.length - unit.length)))
@@ -132,7 +132,7 @@ object CssHighlighter : LanguageHighlighter {
             // 检查是否已处理
             if (processed[start]) continue
             
-            tokens.add(Token(tokenType, start, end, matcher.group()))
+            tokens.add(Token(tokenType, start, end, matcher.groupText()))
             for (i in start until end) {
                 processed[i] = true
             }

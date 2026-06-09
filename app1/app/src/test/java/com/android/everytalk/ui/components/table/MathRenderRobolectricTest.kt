@@ -3,7 +3,7 @@ package com.android.everytalk.ui.components.table
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.platform.LocalContext

@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.delay
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -36,6 +37,7 @@ class MessageItemsControllerStatusTest {
 
     @After
     fun tearDown() {
+        MessageItemsControllerTestAccess.closeAll()
         unmockkAll()
     }
 
@@ -131,25 +133,25 @@ class MessageItemsControllerStatusTest {
     }
 
     @Test
-    fun `connecting stage text changes based on elapsed time`() {
+    fun `connecting stage text uses factual runtime fallback until backend reports progress`() {
         val controller = MessageItemsControllerTestAccess.newController()
-        
-        // Test different elapsed times
-        val text1 = controller.resolveStreamingStageTextForTest(Message(id = "test", text = "", sender = Sender.AI), 500L)
-        val text2 = controller.resolveStreamingStageTextForTest(Message(id = "test", text = "", sender = Sender.AI), 1500L)
-        val text3 = controller.resolveStreamingStageTextForTest(Message(id = "test", text = "", sender = Sender.AI), 3000L)
-        val text4 = controller.resolveStreamingStageTextForTest(Message(id = "test", text = "", sender = Sender.AI), 4500L)
-        val text5 = controller.resolveStreamingStageTextForTest(Message(id = "test", text = "", sender = Sender.AI), 6000L)
-        
-        assertEquals("我先想想怎么回答…", text1)
-        assertEquals("我在整理思路…", text2)
-        assertEquals("我在整理思路…", text3)
-        assertEquals("我来组织一下答案…", text4)
-        assertEquals("我正在把结果写出来…", text5)
+
+        val text = controller.resolveStreamingStageTextForTest(
+            Message(
+                id = "test",
+                text = "",
+                sender = Sender.AI,
+                providerName = "OpenAI",
+                modelName = "gpt-4o"
+            ),
+            6000L
+        )
+
+        assertEquals("等待首个响应 · OpenAI · gpt-4o · 6s", text)
     }
 
     @Test
-    fun `webfetch and search stages use natural copy`() {
+    fun `legacy webfetch and search stage codes fall back to factual runtime text`() {
         val controller = MessageItemsControllerTestAccess.newController()
 
         val webfetchText = controller.resolveStreamingStageTextForTest(
@@ -171,8 +173,73 @@ class MessageItemsControllerStatusTest {
             0L
         )
 
-        assertEquals("我正在读网页里的内容…", webfetchText)
-        assertEquals("我先上网查一下…", searchText)
+        assertEquals("等待首个响应 · 0s", webfetchText)
+        assertEquals("等待首个响应 · 0s", searchText)
+    }
+
+    @Test
+    fun `internal protocol status codes fall back to factual runtime text`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+
+        val statuses = listOf(
+            "chat_run:run-123",
+            "agent_run:run-456",
+            "history_loaded:2",
+            "pairing_pending:device-1",
+            "health:ok",
+            "CHAT_RUN:run-789",
+            "connected",
+            "subscribed",
+            "done"
+        )
+
+        statuses.forEach { status ->
+            val text = controller.resolveStreamingStageTextForTest(
+                Message(
+                    id = "ai-$status",
+                    text = "",
+                    sender = Sender.AI,
+                    currentWebSearchStage = status
+                ),
+                0L
+            )
+            assertEquals("status=$status", "等待首个响应 · 0s", text)
+        }
+    }
+
+    @Test
+    fun `reasoning loading stage uses factual reasoning state`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+
+        val text = controller.resolveStreamingStageTextForTest(
+            Message(
+                id = "ai-reasoning",
+                text = "",
+                sender = Sender.AI,
+                reasoning = "先分析问题",
+                providerName = "Gemini"
+            ),
+            2500L
+        )
+
+        assertEquals("正在接收思考 · Gemini · 2s", text)
+    }
+
+    @Test
+    fun `streaming stage text uses backend progress verbatim`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+
+        val text = controller.resolveStreamingStageTextForTest(
+            Message(
+                id = "ai-real-progress",
+                text = "",
+                sender = Sender.AI,
+                currentWebSearchStage = "搜索网页 2/5：正在读取 example.com"
+            ),
+            0L
+        )
+
+        assertEquals("搜索网页 2/5：正在读取 example.com", text)
     }
 
     @Test
@@ -216,7 +283,7 @@ class MessageItemsControllerStatusTest {
     }
 
     @Test
-    fun `chat list keeps status indicator while streaming content is already visible`() {
+    fun `chat list hides status indicator while streaming content is already visible`() {
         val controller = MessageItemsControllerTestAccess.newController()
         controller.stateHolder.messages.add(
             Message(
@@ -233,7 +300,7 @@ class MessageItemsControllerStatusTest {
         val items = controller.chatListItemsForTest()
 
         assertTrue(items.any { it is ChatListItem.AiMessage })
-        assertTrue(items.any { it is ChatListItem.StatusIndicator })
+        assertFalse(items.any { it is ChatListItem.StatusIndicator })
     }
 
     @Test
@@ -274,7 +341,7 @@ class MessageItemsControllerStatusTest {
     }
 
     @Test
-    fun `terminal writing stage text is hidden when no tool or search stage remains`() {
+    fun `stage text falls back to runtime state when no backend progress remains`() {
         val controller = MessageItemsControllerTestAccess.newController()
 
         val text = controller.resolveStreamingStageTextForTest(
@@ -283,14 +350,96 @@ class MessageItemsControllerStatusTest {
                 text = "",
                 sender = Sender.AI,
                 contentStarted = false,
-                executionStatus = "我正在把结果写出来…",
+                executionStatus = null,
                 currentWebSearchStage = null,
                 reasoning = null
             ),
             6000L
         )
 
-        assertNull(text)
+        assertEquals("等待首个响应 · 6s", text)
+    }
+
+    @Test
+    fun `text loading indicator includes factual runtime text before first content`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.stateHolder.messages.add(
+            Message(
+                id = "ai-loading-text",
+                text = "",
+                sender = Sender.AI,
+                providerName = "OpenAI",
+                modelName = "gpt-4o"
+            )
+        )
+        controller.stateHolder._isTextApiCalling.value = true
+        controller.stateHolder._currentTextStreamingAiMessageId.value = "ai-loading-text"
+
+        val items = controller.chatListItemsForTest()
+        val loading = items.filterIsInstance<ChatListItem.LoadingIndicator>().single()
+
+        assertTrue(loading.text.orEmpty().startsWith("等待首个响应 · OpenAI · gpt-4o ·"))
+    }
+
+    @Test
+    fun `image loading indicator includes factual runtime text before first content`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.stateHolder.imageGenerationMessages.add(
+            Message(
+                id = "ai-loading-image",
+                text = "",
+                sender = Sender.AI,
+                providerName = "Gemini",
+                modelName = "imagen-3"
+            )
+        )
+        controller.stateHolder._isImageApiCalling.value = true
+        controller.stateHolder._currentImageStreamingAiMessageId.value = "ai-loading-image"
+
+        val items = runBlocking {
+            controller.imageGenerationChatListItems.first { chatItems ->
+                chatItems.any { it is ChatListItem.LoadingIndicator }
+            }
+        }
+        val loading = items.filterIsInstance<ChatListItem.LoadingIndicator>().single()
+
+        assertTrue(loading.text.orEmpty().startsWith("等待首个响应 · Gemini · imagen-3 ·"))
+    }
+
+    @Test
+    fun `image loading indicator runtime text advances while waiting for first content`() = runBlocking {
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.stateHolder.imageGenerationMessages.add(
+            Message(
+                id = "ai-loading-image-timer",
+                text = "",
+                sender = Sender.AI,
+                providerName = "Gemini",
+                modelName = "imagen-3"
+            )
+        )
+        controller.stateHolder._isImageApiCalling.value = true
+        controller.stateHolder._currentImageStreamingAiMessageId.value = "ai-loading-image-timer"
+
+        val firstItems = withTimeout(2_000) {
+            controller.imageGenerationChatListItems.first { chatItems ->
+                chatItems.any { it is ChatListItem.LoadingIndicator }
+            }
+        }
+        val firstText = firstItems.filterIsInstance<ChatListItem.LoadingIndicator>().single().text
+        delay(1_100)
+
+        val secondItems = withTimeout(2_000) {
+            controller.imageGenerationChatListItems.first { chatItems ->
+                chatItems.filterIsInstance<ChatListItem.LoadingIndicator>()
+                    .singleOrNull()
+                    ?.text != firstText
+            }
+        }
+        val secondText = secondItems.filterIsInstance<ChatListItem.LoadingIndicator>().single().text
+
+        assertTrue(secondText.orEmpty().startsWith("等待首个响应 · Gemini · imagen-3 ·"))
+        assertTrue(secondText.orEmpty() != firstText.orEmpty())
     }
 
     @Test

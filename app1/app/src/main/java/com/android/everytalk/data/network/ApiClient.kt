@@ -38,6 +38,74 @@ import android.graphics.Bitmap.CompressFormat
 import android.util.Base64
 import kotlinx.coroutines.CancellationException as CoroutineCancellationException
 
+private const val MAX_INLINE_ATTACHMENT_BYTES = 10L * 1024L * 1024L
+
+private class AttachmentTooLargeException(message: String) : IllegalStateException(message)
+
+private fun formatInlineAttachmentSize(size: Long): String {
+    return when {
+        size < 1024L -> "${size}B"
+        size < 1024L * 1024L -> "${size / 1024L}KB"
+        else -> "${size / (1024L * 1024L)}MB"
+    }
+}
+
+private fun ContentResolver.getDeclaredLength(uri: Uri): Long? {
+    query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
+        if (cursor.moveToFirst()) {
+            val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+            if (sizeIndex != -1) {
+                val size = cursor.getLong(sizeIndex)
+                if (size > 0L) return size
+            }
+        }
+    }
+    return runCatching {
+        openFileDescriptor(uri, "r")?.use { descriptor ->
+            descriptor.statSize.takeIf { it > 0L }
+        }
+    }.getOrNull()
+}
+
+private fun throwInlineAttachmentTooLarge(displayName: String, size: Long): Nothing {
+    throw AttachmentTooLargeException(
+        "附件 \"$displayName\" 过大 (${formatInlineAttachmentSize(size)})，直连内联发送最大支持10MB"
+    )
+}
+
+private suspend fun readInlineAttachmentBytes(
+    context: Context,
+    uri: Uri,
+    displayName: String
+): ByteArray? = withContext(Dispatchers.IO) {
+    context.contentResolver.getDeclaredLength(uri)?.let { declaredSize ->
+        if (declaredSize > MAX_INLINE_ATTACHMENT_BYTES) {
+            throwInlineAttachmentTooLarge(displayName, declaredSize)
+        }
+    }
+    context.contentResolver.openInputStream(uri)?.use { input ->
+        val output = java.io.ByteArrayOutputStream()
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        var total = 0L
+        while (true) {
+            val read = input.read(buffer)
+            if (read == -1) break
+            total += read
+            if (total > MAX_INLINE_ATTACHMENT_BYTES) {
+                throwInlineAttachmentTooLarge(displayName, total)
+            }
+            output.write(buffer, 0, read)
+        }
+        output.toByteArray()
+    }
+}
+
+private fun ensureInlineAttachmentSize(displayName: String, rawSize: Long) {
+    if (rawSize > MAX_INLINE_ATTACHMENT_BYTES) {
+        throwInlineAttachmentTooLarge(displayName, rawSize)
+    }
+}
+
 @Serializable
 data class ModelInfo(val id: String)
 
@@ -119,8 +187,22 @@ object ApiClient {
                     AppStreamEvent.WebSearchResults(results)
                 }
                 "status_update" -> {
-                    val stage = jsonObject["stage"]?.jsonPrimitive?.content ?: ""
+                    val stage = listOf("statusText", "progressText", "displayText", "message", "status", "stage", "text")
+                        .firstNotNullOfOrNull { key ->
+                            runCatching {
+                                jsonObject[key]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                            }.getOrNull()
+                        }.orEmpty()
                     AppStreamEvent.StatusUpdate(stage)
+                }
+                "execution_status_update" -> {
+                    val status = listOf("statusText", "progressText", "displayText", "message", "status", "stage", "text")
+                        .firstNotNullOfOrNull { key ->
+                            runCatching {
+                                jsonObject[key]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                            }.getOrNull()
+                        }
+                    AppStreamEvent.ExecutionStatusUpdate(status)
                 }
                 "tool_call" -> {
                     val id = jsonObject["id"]?.jsonPrimitive?.content ?: ""
@@ -131,7 +213,19 @@ object ApiClient {
                         buildJsonObject { }
                     }
                     val isReasoningStep = jsonObject["isReasoningStep"]?.jsonPrimitive?.booleanOrNull
-                    AppStreamEvent.ToolCall(id, name, argumentsObj, isReasoningStep)
+                    val status = listOf("statusText", "progressText", "displayText", "message", "status", "stage", "text")
+                        .firstNotNullOfOrNull { key ->
+                            runCatching {
+                                jsonObject[key]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+                            }.getOrNull()
+                        }
+                    AppStreamEvent.ToolCall(
+                        id = id,
+                        name = name,
+                        argumentsObj = argumentsObj,
+                        isReasoningStep = isReasoningStep,
+                        status = status
+                    )
                 }
                 "error" -> {
                     val message = jsonObject["message"]?.jsonPrimitive?.content ?: ""
@@ -189,6 +283,7 @@ object ApiClient {
                     subclass(AppStreamEvent.WebSearchStatus::class)
                     subclass(AppStreamEvent.WebSearchResults::class)
                     subclass(AppStreamEvent.StatusUpdate::class)
+                    subclass(AppStreamEvent.ExecutionStatusUpdate::class)
                     subclass(AppStreamEvent.ToolCall::class)
                     subclass(AppStreamEvent.Error::class)
                     subclass(AppStreamEvent.Finish::class)
@@ -334,7 +429,7 @@ object ApiClient {
         try {
             android.util.Log.d("ApiClient", "开始读取流数据通道")
             while (!channel.isClosedForRead) {
-                val raw = channel.readUTF8Line()
+                val raw = channel.readLine()
                 lineCount++
 
                 if (lineCount <= 10) {
@@ -497,6 +592,11 @@ object ApiClient {
         // 构建多模态请求（注入图片附件）
         val requestForDirect = try {
             buildDirectMultimodalRequest(request, attachments, applicationContext)
+        } catch (e: AttachmentTooLargeException) {
+            android.util.Log.w("ApiClient", "Inline attachment rejected: ${e.message}")
+            send(AppStreamEvent.Error(e.message ?: "附件过大", null))
+            send(AppStreamEvent.Finish("attachment_too_large"))
+            return@channelFlow
         } catch (e: Exception) {
             android.util.Log.w("ApiClient", "Failed to build multimodal request, using original: ${e.message}")
             request
@@ -998,9 +1098,7 @@ private suspend fun buildDirectMultimodalRequest(
         when (item) {
             is com.android.everytalk.models.SelectedMediaItem.ImageFromUri -> {
                 val mime = context.contentResolver.getType(item.uri) ?: "image/jpeg"
-                val bytes = runCatching {
-                    context.contentResolver.openInputStream(item.uri)?.use { it.readBytes() }
-                }.getOrNull()
+                val bytes = readInlineAttachmentBytes(context, item.uri, "图片")
                 if (bytes != null && isImageMime(mime)) {
                     val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
                     inlineParts.add(
@@ -1022,6 +1120,7 @@ private suspend fun buildDirectMultimodalRequest(
                 ) == true
                 if (ok) {
                     val bytes = baos.toByteArray()
+                    ensureInlineAttachmentSize("图片", bytes.size.toLong())
                     val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
                     inlineParts.add(
                         com.android.everytalk.data.DataClass.ApiContentPart.InlineData(
@@ -1034,6 +1133,7 @@ private suspend fun buildDirectMultimodalRequest(
             is com.android.everytalk.models.SelectedMediaItem.Audio -> {
                 // Audio item already contains base64 data
                 val mime = item.mimeType ?: "audio/3gpp"
+                ensureInlineAttachmentSize("音频", item.data.length * 3L / 4L)
                 inlineParts.add(
                     com.android.everytalk.data.DataClass.ApiContentPart.InlineData(
                         base64Data = item.data,
@@ -1044,9 +1144,7 @@ private suspend fun buildDirectMultimodalRequest(
             is com.android.everytalk.models.SelectedMediaItem.GenericFile -> {
                 val mime = item.mimeType ?: "application/octet-stream"
                 if (isImageMime(mime) || isAudioMime(mime) || isVideoMime(mime)) {
-                    val bytes = runCatching {
-                        context.contentResolver.openInputStream(item.uri)?.use { it.readBytes() }
-                    }.getOrNull()
+                    val bytes = readInlineAttachmentBytes(context, item.uri, item.displayName)
                     if (bytes != null) {
                         val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
                         inlineParts.add(
@@ -1064,11 +1162,9 @@ private suspend fun buildDirectMultimodalRequest(
                     val isPdf = mime == "application/pdf"
 
                     if (isQwen) {
-                        val fileName = item.displayName ?: "Document"
+                        val fileName = item.displayName
                         // 读取文件字节并转为 Base64，以便 OpenAIDirectClient 上传
-                        val bytes = runCatching {
-                            context.contentResolver.openInputStream(item.uri)?.use { it.readBytes() }
-                        }.getOrNull()
+                        val bytes = readInlineAttachmentBytes(context, item.uri, fileName)
 
                         if (bytes != null) {
                             val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
@@ -1081,9 +1177,7 @@ private suspend fun buildDirectMultimodalRequest(
                         }
                     } else if (isGemini && isPdf) {
                         // Gemini 原生支持 PDF，直接通过 inlineData 传递
-                        val bytes = runCatching {
-                            context.contentResolver.openInputStream(item.uri)?.use { it.readBytes() }
-                        }.getOrNull()
+                        val bytes = readInlineAttachmentBytes(context, item.uri, item.displayName)
 
                         if (bytes != null) {
                             val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
@@ -1097,13 +1191,12 @@ private suspend fun buildDirectMultimodalRequest(
                     } else {
                         val text = DocumentProcessor.extractText(context, item.uri, mime)
                         if (!text.isNullOrBlank()) {
-                            val fileName = item.displayName ?: "Document"
+                            val fileName = item.displayName
                             documentTexts.add("--- Begin of document: $fileName ---\n$text\n--- End of document ---")
                         }
                     }
                 }
             }
-            else -> { /* ignore */ }
         }
     }
 
@@ -1134,12 +1227,6 @@ private suspend fun buildDirectMultimodalRequest(
             if (lastMsg.content.isNotBlank()) {
                 list.add(com.android.everytalk.data.DataClass.ApiContentPart.Text(lastMsg.content))
             }
-            list.addAll(inlineParts)
-            list.toList()
-        }
-        else -> {
-            val list = mutableListOf<com.android.everytalk.data.DataClass.ApiContentPart>()
-            list.addAll(documentContentParts)
             list.addAll(inlineParts)
             list.toList()
         }

@@ -105,7 +105,7 @@ object SwiftHighlighter : LanguageHighlighter {
             val start = funcMatcher.start(1)
             val end = funcMatcher.end(1)
             if (!processed[start]) {
-                tokens.add(Token(TokenType.FUNCTION, start, end, funcMatcher.group(1)))
+                tokens.add(Token(TokenType.FUNCTION, start, end, funcMatcher.groupText(1)))
                 for (i in start until end) processed[i] = true
             }
         }
@@ -116,7 +116,7 @@ object SwiftHighlighter : LanguageHighlighter {
             val start = identMatcher.start()
             val end = identMatcher.end()
             if (!processed[start]) {
-                val word = identMatcher.group()
+                val word = identMatcher.groupText()
                 val tokenType = when {
                     keywords.contains(word) -> when (word) {
                         "true", "false" -> TokenType.BOOLEAN
@@ -153,7 +153,7 @@ object SwiftHighlighter : LanguageHighlighter {
             val start = matcher.start()
             val end = matcher.end()
             if (!processed[start]) {
-                tokens.add(Token(tokenType, start, end, matcher.group()))
+                tokens.add(Token(tokenType, start, end, matcher.groupText()))
                 for (i in start until end) processed[i] = true
             }
         }

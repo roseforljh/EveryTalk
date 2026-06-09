@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.components.content
 
+import android.content.ClipData
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -16,12 +17,14 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.unit.dp
 import com.android.everytalk.ui.theme.chatColors
+import kotlinx.coroutines.launch
 
 /**
  * Commands/QnA/Risks 三类结构化卡片组件（移动端友好）
@@ -37,7 +40,8 @@ fun CommandListCard(
     title: String = "Commands"
 ) {
     val shape = RoundedCornerShape(10.dp)
-    val clipboard = LocalClipboardManager.current
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
     val bg = MaterialTheme.chatColors.codeBlockBackground
     val outline = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f)
 
@@ -59,7 +63,16 @@ fun CommandListCard(
                 )
                 TextButton(
                     onClick = {
-                        clipboard.setText(AnnotatedString(extractCopyPayloadForCommands(content)))
+                        scope.launch {
+                            clipboard.setClipEntry(
+                                ClipEntry(
+                                    ClipData.newPlainText(
+                                        "commands",
+                                        extractCopyPayloadForCommands(content)
+                                    )
+                                )
+                            )
+                        }
                     }
                 ) {
                     Text(text = "复制")

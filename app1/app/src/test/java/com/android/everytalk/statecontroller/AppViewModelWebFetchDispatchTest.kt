@@ -81,7 +81,7 @@ class AppViewModelWebFetchDispatchTest {
 
         assertSame(localResult, result)
         assertTrue(!fallbackCalled)
-        assertEquals(listOf("正在分析链接", null), statusUpdates)
+        assertEquals(listOf<String?>(null), statusUpdates)
     }
 
     @Test
@@ -138,6 +138,6 @@ class AppViewModelWebFetchDispatchTest {
 
         assertSame(localResult, result)
         assertTrue(!fallbackCalled)
-        assertEquals(listOf("正在获取当前时间", null), statusUpdates)
+        assertEquals(listOf<String?>(null), statusUpdates)
     }
 }

@@ -1070,8 +1070,7 @@ fun ChatMessagesList(
                                 verticalAlignment = Alignment.Bottom,
                                 horizontalArrangement = Arrangement.Start
                             ) {
-                                val defaultText = stringResource(id = R.string.connecting_to_model)
-                                val displayText = resolveLoadingStageDisplayText(item.text, defaultText)
+                                val displayText = resolveLoadingStageDisplayText(item.text)
                                 LoadingStageIndicator(text = displayText)
                             }
                         }
@@ -1145,8 +1144,8 @@ fun detectContentTypeForPadding(text: String): ContentType {
     return ContentType.SIMPLE
 }
 
-internal fun resolveLoadingStageDisplayText(text: String?, defaultText: String): String {
-    return text?.takeIf { it.isNotBlank() } ?: defaultText
+internal fun resolveLoadingStageDisplayText(text: String?): String {
+    return text?.takeIf { it.isNotBlank() }.orEmpty()
 }
 
 internal fun loadingStageViewportHeightDp(): Float = 34f

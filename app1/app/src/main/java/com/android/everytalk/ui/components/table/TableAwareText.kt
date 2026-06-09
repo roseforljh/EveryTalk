@@ -473,6 +473,7 @@ fun TableAwareText(
                     }
                     is ContentPart.Math -> {
                         val localContext = LocalContext.current
+                        val density = LocalDensity.current
                         val onSurfaceColor = MaterialTheme.colorScheme.onSurface
                         val isBlockMath = remember(part.content) {
                             val trimmed = part.content.trim()
@@ -488,12 +489,11 @@ fun TableAwareText(
                         val preferStableNativeRenderer = remember(part.content) {
                             MathRenderStrategy.shouldPreferStableNativeMathRenderer(part.content)
                         }
-                        val canRenderNatively = remember(part.content, color, style, onSurfaceColor, localContext) {
+                        val canRenderNatively = remember(part.content, color, style, onSurfaceColor, localContext, density) {
                             NativeLatexSupport.ensureInitialized(localContext)
                             val baseSp = if (style.fontSize.value > 0f) style.fontSize.value else 16f
                             val textSizeSp = baseSp * 1.05f
-                            val density = localContext.resources.displayMetrics.scaledDensity
-                            val textSizePx = textSizeSp * density
+                            val textSizePx = textSizeSp * density.density * density.fontScale
                             val colorArgb = when {
                                 color != Color.Unspecified -> color.toArgb()
                                 style.color != Color.Unspecified -> style.color.toArgb()

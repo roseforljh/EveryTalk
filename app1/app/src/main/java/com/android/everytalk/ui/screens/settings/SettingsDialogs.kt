@@ -528,7 +528,7 @@ internal fun AddNewFullConfigDialog(
                             readOnly = true,
                             placeholder = { Text("请选择平台") },
                             modifier = Modifier
-                                .menuAnchor()
+                                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable, enabled = true)
                                 .fillMaxWidth()
                                 .onGloballyPositioned { coordinates -> 
                                     textFieldAnchorBounds = coordinates.boundsInWindow()
@@ -624,7 +624,7 @@ internal fun AddNewFullConfigDialog(
                                 readOnly = true,
                                 enabled = !isGoogleProvider, // Google 平台时禁用手动切换
                                 modifier = Modifier
-                                    .menuAnchor()
+                                    .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable, enabled = !isGoogleProvider)
                                     .fillMaxWidth()
                                     .onGloballyPositioned { coordinates -> 
                                         channelTextFieldAnchorBounds = coordinates.boundsInWindow()
@@ -939,7 +939,7 @@ internal fun EditConfigDialog(
                             onValueChange = {},
                             readOnly = true,
                             modifier = Modifier
-                                .menuAnchor()
+                                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable, enabled = true)
                                 .fillMaxWidth()
                                 .onGloballyPositioned { coordinates -> 
                                     channelTextFieldAnchorBounds = coordinates.boundsInWindow()

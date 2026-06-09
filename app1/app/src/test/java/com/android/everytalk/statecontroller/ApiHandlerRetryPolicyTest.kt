@@ -57,7 +57,7 @@ class ApiHandlerRetryPolicyTest {
             sender = Sender.AI,
             contentStarted = true,
             currentWebSearchStage = "searching_web",
-            executionStatus = "我正在把结果写出来…",
+            executionStatus = "后端进度：正在汇总结果",
         )
         val clearedMessage = staleUpdatedMessage.copy(
             currentWebSearchStage = null,

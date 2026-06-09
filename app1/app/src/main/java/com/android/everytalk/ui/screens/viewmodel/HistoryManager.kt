@@ -44,8 +44,9 @@ class HistoryManager(
     private val TAG_HM = "HistoryManager"
 
     // -------- 新增：持久化防抖与串行化 --------
-    private val saveRequestChannel = Channel<SaveRequest>(Channel.CONFLATED)
-    private var debouncedSaveJob: Job? = null
+    private val saveRequestChannel = Channel<SaveRequest>(Channel.BUFFERED)
+    private var debouncedTextSaveJob: Job? = null
+    private var debouncedImageSaveJob: Job? = null
     private val DEBOUNCE_SAVE_MS = 1800L
 
     // 去重稳态：最近一次插入的指纹与时间，用于吸收 forceSave + debounce 双触发
@@ -152,7 +153,7 @@ class HistoryManager(
     }
 
     init {
-        scope.launch(Dispatchers.IO) {
+        scope.launch {
             for (req in saveRequestChannel) {
                 if (!isActive) break
                 performSave(req)
@@ -269,13 +270,29 @@ class HistoryManager(
     }
 
     suspend fun saveCurrentChatToHistoryIfNeeded(forceSave: Boolean = false, isImageGeneration: Boolean = false) {
-        debouncedSaveJob?.cancel()
+        fun cancelDebouncedJob() {
+            if (isImageGeneration) {
+                debouncedImageSaveJob?.cancel()
+                debouncedImageSaveJob = null
+            } else {
+                debouncedTextSaveJob?.cancel()
+                debouncedTextSaveJob = null
+            }
+        }
+
         if (forceSave) {
+            cancelDebouncedJob()
             saveRequestChannel.send(buildSaveRequest(force = true, isImageGeneration = isImageGeneration))
         } else {
-            debouncedSaveJob = scope.launch {
+            cancelDebouncedJob()
+            val job = scope.launch {
                 delay(DEBOUNCE_SAVE_MS)
                 saveRequestChannel.send(buildSaveRequest(force = false, isImageGeneration = isImageGeneration))
+            }
+            if (isImageGeneration) {
+                debouncedImageSaveJob = job
+            } else {
+                debouncedTextSaveJob = job
             }
         }
     }

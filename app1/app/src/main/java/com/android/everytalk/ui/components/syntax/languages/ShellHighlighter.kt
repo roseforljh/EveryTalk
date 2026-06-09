@@ -53,7 +53,7 @@ object ShellHighlighter : LanguageHighlighter {
             val end = identMatcher.end()
             if (processed[start]) continue
 
-            val word = identMatcher.group()
+            val word = identMatcher.groupText()
             when {
                 commandKeywords.contains(word) -> addToken(TokenType.FUNCTION, start, end, word, tokens, processed)
                 propertyKeywords.contains(word) -> addToken(TokenType.PROPERTY, start, end, word, tokens, processed)
@@ -75,7 +75,7 @@ object ShellHighlighter : LanguageHighlighter {
             val start = matcher.start(2)
             val end = matcher.end(2)
             if (!processed[start]) {
-                addToken(TokenType.FUNCTION, start, end, matcher.group(2), tokens, processed)
+                addToken(TokenType.FUNCTION, start, end, matcher.groupText(2), tokens, processed)
             }
         }
     }
@@ -92,7 +92,7 @@ object ShellHighlighter : LanguageHighlighter {
             val start = matcher.start()
             val end = matcher.end()
             if (!processed[start]) {
-                addToken(type, start, end, matcher.group(), tokens, processed)
+                addToken(type, start, end, matcher.groupText(), tokens, processed)
             }
         }
     }

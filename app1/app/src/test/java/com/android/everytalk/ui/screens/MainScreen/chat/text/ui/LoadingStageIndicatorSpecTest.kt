@@ -8,14 +8,14 @@ import org.junit.Test
 class LoadingStageIndicatorSpecTest {
 
     @Test
-    fun `loading stage falls back to default text when item text is blank`() {
-        assertEquals("连接中", resolveLoadingStageDisplayText(null, "连接中"))
-        assertEquals("连接中", resolveLoadingStageDisplayText("", "连接中"))
+    fun `loading stage stays textless when backend progress is blank`() {
+        assertEquals("", resolveLoadingStageDisplayText(null))
+        assertEquals("", resolveLoadingStageDisplayText(""))
     }
 
     @Test
     fun `loading stage keeps explicit text when present`() {
-        assertEquals("我在整理思路…", resolveLoadingStageDisplayText("我在整理思路…", "连接中"))
+        assertEquals("后端进度：正在准备结果", resolveLoadingStageDisplayText("后端进度：正在准备结果"))
     }
 
     @Test

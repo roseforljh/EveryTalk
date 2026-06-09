@@ -6,23 +6,32 @@ import com.android.everytalk.statecontroller.ViewModelStateHolder
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 
 internal object MessageItemsControllerTestAccess {
+    private val controllers = mutableListOf<MessageItemsControllerForTest>()
+
     fun newController(): MessageItemsControllerForTest {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
         return MessageItemsControllerForTest(
             stateHolder = ViewModelStateHolder(),
             streamingMessageStateManager = StreamingMessageStateManager(),
-            scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
-        )
+            scope = scope
+        ).also { controllers += it }
+    }
+
+    fun closeAll() {
+        controllers.forEach { it.close() }
+        controllers.clear()
     }
 }
 
 internal class MessageItemsControllerForTest(
     val stateHolder: ViewModelStateHolder,
     streamingMessageStateManager: StreamingMessageStateManager,
-    scope: CoroutineScope
+    private val scope: CoroutineScope
 ) : MessageItemsController(stateHolder, streamingMessageStateManager, scope) {
     fun normalizeStatusTextForTest(message: Message): String = normalizeStatusText(message)
     fun resolveStreamingStageTextForTest(message: Message, elapsedMs: Long): String? =
@@ -43,5 +52,9 @@ internal class MessageItemsControllerForTest(
 
     fun chatListItemsForTest(): List<com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem> = runBlocking {
         chatListItems.first { it.isNotEmpty() }
+    }
+
+    fun close() {
+        scope.cancel()
     }
 }

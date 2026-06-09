@@ -210,13 +210,13 @@ object SqlHighlighter : LanguageHighlighter {
             val start = funcMatcher.start(1)
             val end = funcMatcher.end(1)
             if (!processed[start]) {
-                val funcName = funcMatcher.group(1).lowercase()
+                val funcName = funcMatcher.groupText(1).lowercase()
                 val tokenType = when {
                     builtinFunctions.contains(funcName) -> TokenType.FUNCTION
                     allKeywords.contains(funcName) -> TokenType.KEYWORD
                     else -> TokenType.FUNCTION
                 }
-                tokens.add(Token(tokenType, start, end, funcMatcher.group(1)))
+                tokens.add(Token(tokenType, start, end, funcMatcher.groupText(1)))
                 for (i in start until end) processed[i] = true
             }
         }
@@ -227,7 +227,7 @@ object SqlHighlighter : LanguageHighlighter {
             val start = identMatcher.start()
             val end = identMatcher.end()
             if (!processed[start]) {
-                val word = identMatcher.group()
+                val word = identMatcher.groupText()
                 val wordLower = word.lowercase()
                 
                 val tokenType = when {
@@ -265,7 +265,7 @@ object SqlHighlighter : LanguageHighlighter {
             val start = matcher.start()
             val end = matcher.end()
             if (!processed[start]) {
-                tokens.add(Token(type, start, end, matcher.group()))
+                tokens.add(Token(type, start, end, matcher.groupText()))
                 for (i in start until end) processed[i] = true
             }
         }

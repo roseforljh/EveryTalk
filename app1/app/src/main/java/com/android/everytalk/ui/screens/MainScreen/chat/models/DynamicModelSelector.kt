@@ -151,7 +151,7 @@ fun DynamicModelSelector(
                         readOnly = true,
                         modifier = Modifier
                             .weight(1f)
-                            .menuAnchor(),
+                            .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable, enabled = true),
                         placeholder = { Text("选择模型") },
                         trailingIcon = {
                             ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)

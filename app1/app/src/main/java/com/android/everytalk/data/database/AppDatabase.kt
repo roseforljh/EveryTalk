@@ -37,7 +37,7 @@ import com.android.everytalk.data.database.entities.VoiceBackendConfigEntity
         McpServerConfigEntity::class
     ],
     version = 6,
-    exportSchema = false
+    exportSchema = true
 )
 @TypeConverters(Converters::class)
 abstract class AppDatabase : RoomDatabase() {

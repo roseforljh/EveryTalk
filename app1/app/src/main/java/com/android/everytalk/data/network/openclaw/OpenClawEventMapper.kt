@@ -4,6 +4,7 @@ import com.android.everytalk.data.network.AppStreamEvent
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -103,11 +104,16 @@ object OpenClawEventMapper {
                     val toolId = data["id"]?.jsonPrimitive?.content
                         ?: data["toolCallId"]?.jsonPrimitive?.content
                         ?: toolName
+                    val status = data["status"]?.jsonPrimitive?.contentOrNull
+                        ?: data["message"]?.jsonPrimitive?.contentOrNull
+                        ?: data["text"]?.jsonPrimitive?.contentOrNull
+                        ?: data["summary"]?.jsonPrimitive?.contentOrNull
                     AppStreamEvent.ToolCall(
                         id = toolId,
                         name = toolName,
                         argumentsObj = arguments,
-                        isReasoningStep = false
+                        isReasoningStep = false,
+                        status = status
                     )
                 }
                 type in setOf("tool.result", "tool.output", "tool.completed") -> {

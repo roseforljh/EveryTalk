@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import com.android.everytalk.data.database.entities.ConversationGroupEntity
 import com.android.everytalk.data.database.entities.ConversationParamsEntity
 import com.android.everytalk.data.database.entities.ExpandedGroupEntity
@@ -58,4 +59,15 @@ interface SettingsDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertConversationParams(params: List<ConversationParamsEntity>)
+
+    @Query("DELETE FROM conversation_params")
+    suspend fun clearConversationParams()
+
+    @Transaction
+    suspend fun replaceConversationParams(params: List<ConversationParamsEntity>) {
+        clearConversationParams()
+        if (params.isNotEmpty()) {
+            insertConversationParams(params)
+        }
+    }
 }

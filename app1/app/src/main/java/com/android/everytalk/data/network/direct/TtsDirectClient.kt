@@ -603,7 +603,7 @@ object TtsDirectClient {
                 throw Exception("OpenAI TTS failed: ${response.status}")
             }
             
-            val audioData = response.readBytes()
+            val audioData = response.readRawBytes()
             Log.i(TAG, "OpenAI TTS completed: ${audioData.size} bytes")
             return audioData
             
@@ -657,7 +657,7 @@ object TtsDirectClient {
                 throw Exception("SiliconFlow TTS failed: ${response.status}")
             }
             
-            val audioData = response.readBytes()
+            val audioData = response.readRawBytes()
             Log.i(TAG, "SiliconFlow TTS completed: ${audioData.size} bytes")
             return audioData
             
@@ -901,7 +901,7 @@ object TtsDirectClient {
                 var totalBytes = 0
                 
                 while (!channel.isClosedForRead) {
-                    val line = channel.readUTF8Line() ?: break
+                    val line = channel.readLine() ?: break
                     
                     if (line.startsWith("data:")) {
                         val jsonStr = line.substring(5).trim()

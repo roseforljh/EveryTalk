@@ -107,7 +107,7 @@ cat > package.json <<'EOF'
     "start": "node src/server.js"
   },
   "dependencies": {
-    "ws": "^8.19.0"
+    "ws": "^8.21.0"
   }
 }
 EOF

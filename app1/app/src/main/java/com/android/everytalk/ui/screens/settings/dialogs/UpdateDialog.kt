@@ -54,6 +54,7 @@ fun UpdateDialog(
     val cancelButtonColor = appDialogCancelColor()
     val confirmButtonColor = contentColor
     val confirmButtonTextColor = dialogBg
+    val displayVersion = latestVersion.removePrefix("v")
 
     AlertDialog(
         onDismissRequest = {
@@ -72,7 +73,7 @@ fun UpdateDialog(
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "v$latestVersion",
+                    text = "v$displayVersion",
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )

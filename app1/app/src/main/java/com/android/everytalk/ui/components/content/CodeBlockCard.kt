@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.components.content
 
+import android.content.ClipData
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -37,7 +38,8 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.zIndex
 import java.lang.Float.max
 import java.lang.Float.min
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -51,6 +53,7 @@ import com.android.everytalk.ui.components.syntax.SyntaxHighlightTheme
 import com.android.everytalk.ui.components.FullScreenCodeViewerDialog
 import com.android.everytalk.ui.components.WebPreviewContent
 import com.android.everytalk.ui.components.syntax.HighlightCache
+import kotlinx.coroutines.launch
 
 /**
  * 提供列表顶部位置的 CompositionLocal，用于代码块吸顶计算
@@ -83,7 +86,8 @@ fun CodeBlockCard(
     onLongPress: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null
 ) {
     val shape = RoundedCornerShape(24.dp)
-    val clipboard = LocalClipboardManager.current
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
     val isDarkTheme = isSystemInDarkTheme()
     val bg = MaterialTheme.chatColors.codeBlockBackground
     // 夜间模式使用白色边框，白天模式使用 outline 颜色
@@ -250,7 +254,9 @@ fun CodeBlockCard(
                                 if (onCopy != null) {
                                     onCopy()
                                 } else {
-                                    clipboard.setText(AnnotatedString(code))
+                                    scope.launch {
+                                        clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("code", code)))
+                                    }
                                 }
                             },
                         contentAlignment = Alignment.Center

@@ -224,7 +224,6 @@ object GeminiDirectClient {
                 is SimpleTextApiMessage -> msg.content.takeIf { it.isNotBlank() }
                 is PartsApiMessage -> msg.parts.filterIsInstance<com.android.everytalk.data.DataClass.ApiContentPart.Text>()
                     .joinToString("\n") { it.text }.takeIf { it.isNotBlank() }
-                else -> null
             }
         }.joinToString("\n\n")
         
@@ -436,7 +435,6 @@ object GeminiDirectClient {
                 lastUserMessage.parts.filterIsInstance<com.android.everytalk.data.DataClass.ApiContentPart.Text>()
                     .firstOrNull()?.text
             }
-            else -> null
         }
     }
     
@@ -609,7 +607,7 @@ object GeminiDirectClient {
             Log.d(TAG, "开始解析 SSE 流（支持工具捕获）...")
             
             while (!channel.isClosedForRead) {
-                val line = channel.readUTF8Line() ?: break
+                val line = channel.readLine() ?: break
                 lineCount++
                 
                 when {
@@ -745,7 +743,7 @@ object GeminiDirectClient {
             Log.d(TAG, "开始解析 SSE 流（支持思考过程）...")
             
             while (!channel.isClosedForRead) {
-                val line = channel.readUTF8Line() ?: break
+                val line = channel.readLine() ?: break
                 lineCount++
                 
                 if (lineCount <= 10) {

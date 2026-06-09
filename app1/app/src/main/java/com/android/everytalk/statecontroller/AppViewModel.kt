@@ -94,6 +94,7 @@ import com.android.everytalk.data.network.OpenAIResponsesClient
 import com.android.everytalk.data.network.WebSearchSupport
 import com.android.everytalk.data.network.WebFetchToolExecutor
 import com.android.everytalk.util.storage.IncrementalBackupManager
+import com.android.everytalk.util.storage.readAtMost
 import com.android.everytalk.util.ConversationNameHelper
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -107,6 +108,8 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+
+private const val MAX_URI_BASE64_BYTES = 10L * 1024L * 1024L
 
 internal fun shouldSkipReloadingLoadedHistory(
     requestedIndex: Int,
@@ -155,13 +158,11 @@ internal suspend fun executeSharedToolCall(
     fallbackExecutor: suspend (String, JsonObject) -> JsonElement,
 ): JsonElement {
     if (toolName.equals(BUILT_IN_WEBFETCH_TOOL_NAME, ignoreCase = true)) {
-        updateStatus("正在分析链接")
         val result = localWebFetchExecutor(arguments)
         val resultObj = result as? JsonObject
         val isSuccess = resultObj?.get("ok")?.jsonPrimitive?.booleanOrNull == true
         if (!isSuccess && mcpWebFetchFallback != null) {
             Log.d("ToolCall", "Jina Reader 失败，尝试 MCP webfetch fallback")
-            updateStatus("正在通过 MCP 工具抓取")
             val mcpResult = mcpWebFetchFallback(arguments)
             updateStatus(null)
             return mcpResult
@@ -170,7 +171,6 @@ internal suspend fun executeSharedToolCall(
         return result
     }
     if (toolName.equals(BUILT_IN_CURRENT_TIME_TOOL_NAME, ignoreCase = true)) {
-        updateStatus("正在获取当前时间")
         val result = localCurrentTimeExecutor()
         updateStatus(null)
         return result
@@ -180,7 +180,6 @@ internal suspend fun executeSharedToolCall(
         if (query.isBlank()) {
             return buildJsonObject { put("error", JsonPrimitive("query is required")) }
         }
-        updateStatus("正在联网搜索")
         val result = localWebSearchExecutor(query)
         updateStatus(null)
         return result
@@ -2211,7 +2210,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         return try {
             val inputStream = getApplication<Application>().contentResolver.openInputStream(uri)
             inputStream?.use { stream ->
-                val bytes = stream.readBytes()
+                val bytes = readAtMost(stream, MAX_URI_BASE64_BYTES)
                 android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
             }
         } catch (e: Exception) {

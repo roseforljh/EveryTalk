@@ -187,10 +187,13 @@ fun AppDrawerContent(
 
             val custom = mutableMapOf<String, MutableList<FilteredConversationItem>>()
             val ungrouped = mutableListOf<FilteredConversationItem>()
+            val groupByConversationId = conversationGroups.entries
+                .flatMap { (groupName, ids) -> ids.map { id -> id to groupName } }
+                .toMap()
 
             baseItems.forEach { item ->
                 val stableId = resolveStableId(item.conversation)
-                val groupName = conversationGroups.entries.find { it.value.contains(stableId) }?.key
+                val groupName = stableId?.let { groupByConversationId[it] }
                 
                 if (groupName != null) {
                     custom.getOrPut(groupName) { mutableListOf() }.add(item)
@@ -647,7 +650,6 @@ fun AppDrawerContent(
                             .heightIn(max = 200.dp), // 限制分组区域的最大高度
                         contentPadding = PaddingValues(vertical = 4.dp)
                     ) {
-                        // 显示所有分组(包括空分组)
                         conversationGroups.keys.forEach { groupName ->
                             stickyHeader(key = "group_header_$groupName") {
                                 Box(
@@ -679,48 +681,37 @@ fun AppDrawerContent(
                                 }
                             }
 
-                            item(key = "group_content_$groupName") {
-                                androidx.compose.animation.AnimatedVisibility(
-                                    visible = expandedGroups.contains(groupName) && !deletingGroups.contains(groupName),
-                                    enter = expandVertically(animationSpec = tween(300)) + fadeIn(animationSpec = tween(300)),
-                                    exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
-                                    modifier = if (deletingGroups.contains(groupName)) Modifier else Modifier.animateItem(placementSpec = tween(300))
-                                ) {
-                                    Column(
-                                        modifier = Modifier.animateContentSize(animationSpec = tween(300))
+                            val isExpanded = expandedGroups.contains(groupName) && !deletingGroups.contains(groupName)
+                            val groupItems = processedItems.custom[groupName] ?: emptyList()
+                            if (isExpanded && groupItems.isNotEmpty()) {
+                                items(
+                                    items = groupItems,
+                                    key = { itemData -> "custom_${itemData.originalIndex}_${itemData.stableId}_${isImageGenerationMode}" }
+                                ) { itemData ->
+                                    androidx.compose.animation.AnimatedVisibility(
+                                        visible = !deletingItems.contains(itemData.stableId),
+                                        exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
+                                        enter = expandVertically(animationSpec = tween(300)) + fadeIn(animationSpec = tween(300)),
+                                        modifier = if (deletingItems.contains(itemData.stableId)) Modifier else Modifier.animateItem(placementSpec = tween(300))
                                     ) {
-                                        val groupItems = processedItems.custom[groupName] ?: emptyList()
-                                        if (groupItems.isNotEmpty()) {
-                                            groupItems.forEach { itemData ->
-                                                key("custom_${itemData.originalIndex}_${itemData.stableId}") {
-                                                    androidx.compose.animation.AnimatedVisibility(
-                                                        visible = !deletingItems.contains(itemData.stableId),
-                                                        exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
-                                                        enter = expandVertically(animationSpec = tween(300)) + fadeIn(animationSpec = tween(300))
-                                                    ) {
-                                                        ConversationItem(
-                                                            itemData = itemData,
-                                                            modifier = Modifier
-                                                        )
-                                                    }
-                                                }
-                                            }
-                                        } else {
-                                            // 空分组显示提示
-                                            Box(
-                                                modifier = Modifier
-                                                    .fillMaxWidth()
-                                                    .padding(vertical = 12.dp),
-                                                contentAlignment = Alignment.Center
-                                            ) {
-                                                Text(
-                                                    "暂无分组",
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    fontWeight = FontWeight.Bold
-                                                )
-                                            }
-                                        }
+                                        ConversationItem(itemData)
+                                    }
+                                }
+                            } else if (isExpanded) {
+                                item(key = "group_empty_$groupName") {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(vertical = 12.dp)
+                                            .animateItem(placementSpec = tween(300)),
+                                        contentAlignment = Alignment.Center
+                                    ) {
+                                        Text(
+                                            "暂无分组",
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            fontWeight = FontWeight.Bold
+                                        )
                                     }
                                 }
                             }
@@ -805,26 +796,18 @@ fun AppDrawerContent(
                                     )
                                 }
                                 
-                                item(key = "pinned_content") {
-                                    androidx.compose.animation.AnimatedVisibility(
-                                        visible = expandedGroups.contains("pinned"),
-                                        enter = expandVertically(animationSpec = tween(300)) + fadeIn(animationSpec = tween(300)),
-                                        exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
-                                        modifier = Modifier.animateItem(placementSpec = tween(300))
-                                    ) {
-                                        Column {
-                                            processedItems.pinned.forEach { itemData ->
-                                                key("pinned_${itemData.originalIndex}_${itemData.stableId}") {
-                                                    androidx.compose.animation.AnimatedVisibility(
-                                                        visible = !deletingItems.contains(itemData.stableId),
-                                                        exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
-                                                        enter = expandVertically(animationSpec = tween(300)) + fadeIn(animationSpec = tween(300)),
-                                                        modifier = if (deletingItems.contains(itemData.stableId)) Modifier else Modifier.animateItem(placementSpec = tween(300))
-                                                    ) {
-                                                        ConversationItem(itemData)
-                                                    }
-                                                }
-                                            }
+                                if (expandedGroups.contains("pinned")) {
+                                    items(
+                                        items = processedItems.pinned,
+                                        key = { itemData -> "pinned_${itemData.originalIndex}_${itemData.stableId}_${isImageGenerationMode}" }
+                                    ) { itemData ->
+                                        androidx.compose.animation.AnimatedVisibility(
+                                            visible = !deletingItems.contains(itemData.stableId),
+                                            exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
+                                            enter = expandVertically(animationSpec = tween(300)) + fadeIn(animationSpec = tween(300)),
+                                            modifier = if (deletingItems.contains(itemData.stableId)) Modifier else Modifier.animateItem(placementSpec = tween(300))
+                                        ) {
+                                            ConversationItem(itemData)
                                         }
                                     }
                                 }

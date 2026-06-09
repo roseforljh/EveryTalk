@@ -133,7 +133,7 @@ object RubyHighlighter : LanguageHighlighter {
             val start = identMatcher.start()
             val end = identMatcher.end()
             if (!processed[start]) {
-                val word = identMatcher.group()
+                val word = identMatcher.groupText()
                 val tokenType = when {
                     keywords.contains(word) -> TokenType.KEYWORD
                     builtinConstants.contains(word) -> when (word) {
@@ -170,7 +170,7 @@ object RubyHighlighter : LanguageHighlighter {
             val start = matcher.start()
             val end = matcher.end()
             if (!processed[start]) {
-                tokens.add(Token(tokenType, start, end, matcher.group()))
+                tokens.add(Token(tokenType, start, end, matcher.groupText()))
                 for (i in start until end) processed[i] = true
             }
         }

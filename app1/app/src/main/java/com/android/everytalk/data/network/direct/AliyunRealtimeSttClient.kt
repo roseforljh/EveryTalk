@@ -40,6 +40,7 @@ class AliyunRealtimeSttClient(
     // 会话状态
     private var webSocketSession: DefaultClientWebSocketSession? = null
     private var receiveJob: Job? = null
+    private val closeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var taskId: String = ""
     private val isConnected = AtomicBoolean(false)
     private val isTaskStarted = AtomicBoolean(false)
@@ -261,15 +262,17 @@ class AliyunRealtimeSttClient(
         try {
             // 不阻塞地关闭 WebSocket
             webSocketSession?.let { session ->
-                kotlinx.coroutines.GlobalScope.launch(Dispatchers.IO) {
+                closeScope.launch {
                     try {
                         session.close(CloseReason(CloseReason.Codes.NORMAL, "Cancelled"))
                     } catch (_: Exception) {}
+                    finally {
+                        cleanup()
+                    }
                 }
-            }
+            } ?: cleanup()
         } catch (_: Exception) {}
-        
-        cleanup()
+
         Log.i(TAG, "Session cancelled")
     }
     

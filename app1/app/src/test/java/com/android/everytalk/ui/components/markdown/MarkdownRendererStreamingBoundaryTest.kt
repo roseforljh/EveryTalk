@@ -14,7 +14,7 @@ import androidx.activity.ComponentActivity
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import com.android.everytalk.data.DataClass.Sender
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull

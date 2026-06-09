@@ -53,13 +53,12 @@ open class MessageItemsController(
 
     // 采用轻量状态机统一驱动"连接中/思考/流式/完成/错误"的展示
     private val bubbleStateMachines = mutableMapOf<String, com.android.everytalk.ui.state.AiBubbleStateMachine>()
-    private val webFetchToolNames = setOf("webfetch")
     
     // 🔧 修复Loading不显示问题：记录每个消息开始流式传输的时间戳
     // 用于确保Loading状态至少显示一段时间（防止后端响应过快时跳过Connecting状态）
     private val streamingStartTimestamps = ConcurrentHashMap<String, Long>()
     
-    // Loading状态最小显示时间（毫秒）- 确保用户能看到"正在连接"提示
+    // Loading状态最小显示时间（毫秒）- 确保用户能看到连接状态
     private val MIN_CONNECTING_DISPLAY_TIME_MS = 300L
 
     private val tickerFlow = kotlinx.coroutines.flow.MutableStateFlow(0L)
@@ -75,22 +74,6 @@ open class MessageItemsController(
         }
     }
 
-    private fun getConnectingStageText(elapsedMs: Long): String {
-        return when {
-            elapsedMs < 1200 -> "我先想想怎么回答…"
-            elapsedMs < 3200 -> "我在整理思路…"
-            elapsedMs < 5200 -> "我来组织一下答案…"
-            else -> "我正在把结果写出来…"
-        }
-    }
-
-    private fun getToolDisplayText(toolName: String): String {
-        return when (toolName.lowercase()) {
-            in webFetchToolNames -> "我先帮你读一下网页内容…"
-            else -> "我先调用一下 $toolName 看看…"
-        }
-    }
-
     private fun buildEffectiveMessage(message: Message, isCurrentStreaming: Boolean): Message {
         if (!isCurrentStreaming) return message
         val renderState = streamingMessageStateManager.getCurrentRenderState(message.id)
@@ -100,22 +83,49 @@ open class MessageItemsController(
     }
 
     private fun resolveStreamingStageText(message: Message, elapsedMs: Long, reasoningComplete: Boolean = false): String? {
-        val looksTerminalWritingStage =
-            message.executionStatus == getConnectingStageText(elapsedMs) &&
-                message.currentWebSearchStage.isNullOrBlank() &&
-                message.reasoning.isNullOrBlank()
-        if (message.contentStarted || message.text.isNotBlank() || looksTerminalWritingStage) {
+        if (message.contentStarted || message.text.isNotBlank()) {
             return null
         }
         message.executionStatus?.takeIf { it.isNotBlank() }?.let { return it }
         message.currentWebSearchStage?.takeIf { it.isNotBlank() }?.let { stage ->
-            return getNaturalWebSearchStageText(stage, message)
+            normalizeStatusText(message).takeIf(::isDisplayableBackendStatus)?.let { return it }
         }
-        if (!message.reasoning.isNullOrBlank()) {
-            // 只有当推理已完成（但内容未开始）时，才返回“整理中”，让用户感知到正在处理搜索/工具结果
-            return if (reasoningComplete) "正在整理工具结果…" else null
+        return buildRuntimeLoadingStatus(message, elapsedMs, reasoningComplete)
+    }
+
+    private fun buildRuntimeLoadingStatus(message: Message, elapsedMs: Long, reasoningComplete: Boolean): String {
+        val phase = when {
+            !message.reasoning.isNullOrBlank() && reasoningComplete -> "已收到思考，等待正文"
+            !message.reasoning.isNullOrBlank() -> "正在接收思考"
+            else -> "等待首个响应"
         }
-        return getConnectingStageText(elapsedMs)
+        val runtimeParts = listOfNotNull(
+            message.providerName?.takeIf { it.isNotBlank() },
+            message.modelName?.takeIf { it.isNotBlank() }
+        )
+        val elapsedSeconds = (elapsedMs / 1000L).coerceAtLeast(0L)
+        return (listOf(phase) + runtimeParts + "${elapsedSeconds}s").joinToString(" · ")
+    }
+
+    private fun isDisplayableBackendStatus(status: String): Boolean {
+        val normalized = status.trim().lowercase()
+        if (normalized.isBlank()) return false
+        val hiddenExactStatuses = setOf(
+            "webfetch_reading",
+            "searching_web",
+            "connected",
+            "subscribed",
+            "done"
+        )
+        if (normalized in hiddenExactStatuses) return false
+        val hiddenPrefixes = listOf(
+            "chat_run:",
+            "agent_run:",
+            "history_loaded:",
+            "pairing_pending:",
+            "health:"
+        )
+        return hiddenPrefixes.none { normalized.startsWith(it) }
     }
 
     internal fun debugResolveStreamingStageText(message: Message, elapsedMs: Long, reasoningComplete: Boolean = false): String? {
@@ -265,8 +275,9 @@ open class MessageItemsController(
         combine(
             snapshotFlow { stateHolder.imageGenerationMessages.toList() },
             stateHolder._isImageApiCalling,
-            stateHolder._currentImageStreamingAiMessageId
-        ) { messages, isApiCalling, currentStreamingAiMessageId ->
+            stateHolder._currentImageStreamingAiMessageId,
+            tickerFlow
+        ) { messages, isApiCalling, currentStreamingAiMessageId, _ ->
             android.util.Log.d(
                 "MessageItemsController",
                 "[IMAGE FLOW] Triggered - messages.size=${messages.size}, isApiCalling=$isApiCalling"
@@ -283,6 +294,15 @@ open class MessageItemsController(
                                 message = effectiveMessage,
                                 preferStreamingState = isCurrentlyStreaming,
                             )
+                            val reasoningComplete = stateHolder.imageReasoningCompleteMap[message.id] ?: false
+                            val expectedStageText = if (isCurrentlyStreaming && !effectiveMessage.contentStarted) {
+                                val elapsedMs = streamingStartTimestamps[message.id]?.let { System.currentTimeMillis() - it } ?: 0L
+                                resolveStreamingStageText(effectiveMessage, elapsedMs, reasoningComplete)
+                            } else null
+                            val hasLoadingIndicator = cached?.items?.any { it is ChatListItem.LoadingIndicator } ?: false
+                            val loadingTextMatches = if (hasLoadingIndicator && expectedStageText != null) {
+                                cached?.items?.any { it is ChatListItem.LoadingIndicator && it.text == expectedStageText } ?: false
+                            } else true
 
                             val cacheValid = cached != null &&
                                 cached.text == message.text &&
@@ -293,6 +313,9 @@ open class MessageItemsController(
                                 cached.hasPendingMath == parseResult.hasPendingMath &&
                                 cached.imageUrls == message.imageUrls &&
                                 cached.contentStarted == effectiveMessage.contentStarted &&
+                                cached.executionStatus == message.executionStatus &&
+                                cached.currentWebSearchStage == message.currentWebSearchStage &&
+                                loadingTextMatches &&
                                 (isCurrentlyStreaming == (cached.items.any { it is ChatListItem.LoadingIndicator }))
 
                             android.util.Log.d(
@@ -411,7 +434,7 @@ open class MessageItemsController(
                     isComplete = reasoningComplete
                 )
             }
-            // 仅在正文尚未开始前允许保留 Connecting，避免流式输出中途回退到“正在连接大模型...”
+            // 仅在正文尚未开始前允许保留 Connecting，避免流式输出中途回退到默认连接态
             isCurrentStreaming && !hasVisibleContent && isWithinMinDisplayTime -> {
                 com.android.everytalk.ui.state.AiBubbleState.Connecting()
             }
@@ -526,16 +549,6 @@ open class MessageItemsController(
                 }
                 items.add(streamingItem)
                 
-                // 添加执行状态指示器
-                val statusText = when {
-                    !message.executionStatus.isNullOrBlank() -> message.executionStatus
-                    !message.currentWebSearchStage.isNullOrBlank() -> normalizeStatusText(message)
-                    else -> null
-                }
-                if (!statusText.isNullOrBlank()) {
-                    items.add(ChatListItem.StatusIndicator(message.id, statusText))
-                }
-
                 // 提前显示 Footer（如果有搜索结果），减少 Finish 时的结构突变
                 if (!message.webSearchResults.isNullOrEmpty()) {
                     items.add(ChatListItem.AiMessageFooter(message))
@@ -602,25 +615,6 @@ open class MessageItemsController(
             "工具结果 · " + message.text.removePrefix(toolResultPrefix)
         } else {
             status
-        }
-    }
-
-    private fun getNaturalWebSearchStageText(stage: String, message: Message): String {
-        val normalized = normalizeStatusText(message)
-        if (normalized.startsWith("远程控制中")) return normalized
-        if (normalized.startsWith("工具结果 ·")) return normalized
-
-        val lowerStage = stage.lowercase()
-        return when {
-            "webfetch" in lowerStage && ("read" in lowerStage || "fetch" in lowerStage || "crawl" in lowerStage) ->
-                "我正在读网页里的内容…"
-            "search" in lowerStage || "搜索" in stage ->
-                "我先上网查一下…"
-            "result" in lowerStage || "结果" in stage ->
-                "我在筛选有用的信息…"
-            "总结" in stage || "summary" in lowerStage || "answer" in lowerStage ->
-                "我来整理一下查到的内容…"
-            else -> normalized
         }
     }
 

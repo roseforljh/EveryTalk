@@ -21,12 +21,14 @@ object AnySerializer : KSerializer<Any> {
             is Number -> JsonPrimitive(value)
             is Boolean -> JsonPrimitive(value)
             is Map<*, *> -> {
-                val map = value as Map<String, Any?>
-                JsonObject(map.mapValues { serializeAny(it.value) })
+                JsonObject(
+                    value.mapKeys { (key, _) ->
+                        key as? String ?: throw IllegalArgumentException("Unsupported map key type: ${key?.let { it::class }}")
+                    }.mapValues { serializeAny(it.value) }
+                )
             }
             is List<*> -> {
-                val list = value as List<Any?>
-                JsonArray(list.map { serializeAny(it) })
+                JsonArray(value.map { serializeAny(it) })
             }
             else -> throw IllegalArgumentException("Unsupported type: ${value::class}")
         }

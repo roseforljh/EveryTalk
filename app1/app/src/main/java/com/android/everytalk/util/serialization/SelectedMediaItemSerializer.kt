@@ -48,9 +48,7 @@ object SelectedMediaItemSerializer : KSerializer<SelectedMediaItem> {
                     encodeStringElement(buildClassSerialDescriptor("uri"), 0, value.uri.toString())
                     encodeStringElement(buildClassSerialDescriptor("id"), 1, value.id)
                     encodeStringElement(buildClassSerialDescriptor("displayName"), 2, value.displayName)
-                    if (value.mimeType != null) {
-                        encodeStringElement(buildClassSerialDescriptor("mimeType"), 3, value.mimeType)
-                    }
+                    encodeStringElement(buildClassSerialDescriptor("mimeType"), 3, value.mimeType)
                     if (value.filePath != null) {
                         encodeStringElement(buildClassSerialDescriptor("filePath"), 4, value.filePath)
                     }

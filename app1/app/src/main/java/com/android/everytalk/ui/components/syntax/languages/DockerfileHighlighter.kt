@@ -98,7 +98,7 @@ object DockerfileHighlighter : LanguageHighlighter {
             val start = instrMatcher.start(1)
             val end = instrMatcher.end(1)
             if (!processed[start]) {
-                val word = instrMatcher.group(1)
+                val word = instrMatcher.groupText(1)
                 if (instructions.contains(word.uppercase())) {
                     tokens.add(Token(TokenType.KEYWORD, start, end, word))
                     for (i in start until end) processed[i] = true
@@ -113,7 +113,7 @@ object DockerfileHighlighter : LanguageHighlighter {
             val imageStart = imageMatcher.start(1)
             val imageEnd = imageMatcher.end(1)
             if (!processed[imageStart]) {
-                tokens.add(Token(TokenType.CLASS_NAME, imageStart, imageEnd, imageMatcher.group(1)))
+                tokens.add(Token(TokenType.CLASS_NAME, imageStart, imageEnd, imageMatcher.groupText(1)))
                 for (i in imageStart until imageEnd) processed[i] = true
             }
             // 标签
@@ -121,7 +121,7 @@ object DockerfileHighlighter : LanguageHighlighter {
                 val tagStart = imageMatcher.start(2)
                 val tagEnd = imageMatcher.end(2)
                 if (!processed[tagStart]) {
-                    tokens.add(Token(TokenType.STRING, tagStart, tagEnd, imageMatcher.group(2)))
+                    tokens.add(Token(TokenType.STRING, tagStart, tagEnd, imageMatcher.groupText(2)))
                     for (i in tagStart until tagEnd) processed[i] = true
                 }
             }
@@ -130,7 +130,7 @@ object DockerfileHighlighter : LanguageHighlighter {
                 val aliasStart = imageMatcher.start(3)
                 val aliasEnd = imageMatcher.end(3)
                 if (!processed[aliasStart]) {
-                    tokens.add(Token(TokenType.VARIABLE, aliasStart, aliasEnd, imageMatcher.group(3)))
+                    tokens.add(Token(TokenType.VARIABLE, aliasStart, aliasEnd, imageMatcher.groupText(3)))
                     for (i in aliasStart until aliasEnd) processed[i] = true
                 }
             }
@@ -163,7 +163,7 @@ object DockerfileHighlighter : LanguageHighlighter {
             val start = envDefMatcher.start(1)
             val end = envDefMatcher.end(1)
             if (!processed[start]) {
-                tokens.add(Token(TokenType.PROPERTY, start, end, envDefMatcher.group(1)))
+                tokens.add(Token(TokenType.PROPERTY, start, end, envDefMatcher.groupText(1)))
                 for (i in start until end) processed[i] = true
             }
         }
@@ -183,7 +183,7 @@ object DockerfileHighlighter : LanguageHighlighter {
             val start = pathMatcher.start(1)
             val end = pathMatcher.end(1)
             if (!processed[start]) {
-                tokens.add(Token(TokenType.STRING, start, end, pathMatcher.group(1)))
+                tokens.add(Token(TokenType.STRING, start, end, pathMatcher.groupText(1)))
                 for (i in start until end) processed[i] = true
             }
         }
@@ -194,7 +194,7 @@ object DockerfileHighlighter : LanguageHighlighter {
             val start = optionMatcher.start(1)
             val end = optionMatcher.end(1)
             if (!processed[start]) {
-                tokens.add(Token(TokenType.ATTRIBUTE, start, end, optionMatcher.group(1)))
+                tokens.add(Token(TokenType.ATTRIBUTE, start, end, optionMatcher.groupText(1)))
                 for (i in start until end) processed[i] = true
             }
         }
@@ -205,7 +205,7 @@ object DockerfileHighlighter : LanguageHighlighter {
             val start = cmdMatcher.start(1)
             val end = cmdMatcher.end(1)
             if (!processed[start]) {
-                val cmd = cmdMatcher.group(1)
+                val cmd = cmdMatcher.groupText(1)
                 if (shellCommands.contains(cmd)) {
                     tokens.add(Token(TokenType.FUNCTION, start, end, cmd))
                     for (i in start until end) processed[i] = true
@@ -231,7 +231,7 @@ object DockerfileHighlighter : LanguageHighlighter {
             val start = matcher.start()
             val end = matcher.end()
             if (!processed[start]) {
-                tokens.add(Token(type, start, end, matcher.group()))
+                tokens.add(Token(type, start, end, matcher.groupText()))
                 for (i in start until end) processed[i] = true
             }
         }

@@ -336,7 +336,7 @@ object ImageGenerationDirectClient {
                 }
                 
                 // 获取 JPEG 字节流
-                val jpegBytes = response.readBytes()
+                val jpegBytes = response.readRawBytes()
                 if (jpegBytes.isEmpty()) {
                     Log.w(TAG, "Modal URL ${idx + 1} 返回空内容")
                     lastError = Exception("Empty response body")

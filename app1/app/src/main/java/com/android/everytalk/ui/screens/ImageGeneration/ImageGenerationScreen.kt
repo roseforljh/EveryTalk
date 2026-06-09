@@ -10,7 +10,6 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.clickable
 import androidx.compose.material3.*
 import androidx.compose.ui.res.painterResource
@@ -26,10 +25,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.android.everytalk.navigation.Screen
@@ -554,25 +554,21 @@ private fun AboutDialog(
         textContentColor = contentColor,
         title = { Text("关于 EveryTalk") },
         text = {
-            val uriHandler = LocalUriHandler.current
             val annotatedString = buildAnnotatedString {
                 append("版本: $versionName\n\n一个开源的、可高度定制的 AI 聊天客户端。\n\nGitHub: ")
-                pushStringAnnotation(tag = "URL", annotation = "https://github.com/roseforljh/KunTalkwithAi")
-                withStyle(style = SpanStyle(color = Color(0xFF007eff))) {
+                withLink(
+                    LinkAnnotation.Url(
+                        url = "https://github.com/roseforljh/KunTalkwithAi",
+                        styles = TextLinkStyles(style = SpanStyle(color = Color(0xFF007eff)))
+                    )
+                ) {
                     append("EveryTalk")
                 }
-                pop()
             }
 
-            ClickableText(
+            Text(
                 text = annotatedString,
-                style = MaterialTheme.typography.bodyMedium.copy(color = contentColor),
-                onClick = { offset ->
-                    annotatedString.getStringAnnotations(tag = "URL", start = offset, end = offset)
-                        .firstOrNull()?.let { annotation ->
-                            uriHandler.openUri(annotation.item)
-                        }
-                }
+                style = MaterialTheme.typography.bodyMedium.copy(color = contentColor)
             )
         },
         confirmButton = {

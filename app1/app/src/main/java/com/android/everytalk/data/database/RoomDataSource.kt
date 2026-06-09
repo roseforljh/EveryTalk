@@ -320,18 +320,8 @@ class RoomDataSource(context: Context) {
     }
 
     suspend fun saveConversationParameters(parameters: Map<String, GenerationConfig>) {
-        // Since we don't have a clean "clear all" for this without potentially nuking needed ones,
-        // and usually this grows, REPLACE strategy in Insert covers updates.
-        // But to remove deleted ones... maybe we assume it only grows or we implement sync?
-        // Let's implement full sync (replace all) to match SP behavior.
-        // First delete all? No, Dao doesn't have clearAll for this yet.
-        // I should add clearAll to SettingsDao for this table if I want full sync.
-        // Or just upsert. SP implementation overwrites the whole map.
-        // So I should clear and insert.
-        // Note: I missed adding clearConversationParams to SettingsDao. I'll rely on upsert for now,
-        // or quickly add it if strictly needed. Upsert is safer for now.
         val entities = parameters.map { ConversationParamsEntity(it.key, it.value) }
-        settingsDao.insertConversationParams(entities)
+        settingsDao.replaceConversationParams(entities)
     }
 
     // --- Conversation Api Config Mapping ---

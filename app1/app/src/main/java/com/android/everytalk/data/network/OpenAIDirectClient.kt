@@ -406,9 +406,7 @@ object OpenAIDirectClient {
             var effectiveRequest = request
 
             if (request.model.contains("qwen-long", ignoreCase = true)) {
-                effectiveRequest = handleQwenUploads(client, effectiveRequest) { status ->
-                    send(AppStreamEvent.StatusUpdate(status))
-                }
+                effectiveRequest = handleQwenUploads(client, effectiveRequest)
             }
 
             var baseUrl = effectiveRequest.apiAddress?.trimEnd('/')?.takeIf { it.isNotBlank() }
@@ -507,7 +505,6 @@ object OpenAIDirectClient {
                 }
 
                 if (shouldFallbackResponses) {
-                    send(AppStreamEvent.StatusUpdate("切换到 Responses API..."))
                     OpenAIResponsesClient.streamChatResponses(client, request).collect { event ->
                         send(event)
                     }
@@ -841,12 +838,6 @@ object OpenAIDirectClient {
                                 qwenFileIds.clear()
                             }
                         }
-                        else -> {
-                            addJsonObject {
-                                put("role", message.role)
-                                put("content", "")
-                            }
-                        }
                     }
                 }
                 
@@ -977,21 +968,17 @@ object OpenAIDirectClient {
      */
     private suspend fun handleQwenUploads(
         client: HttpClient,
-        request: ChatRequest,
-        onStatus: suspend (String) -> Unit
+        request: ChatRequest
     ): ChatRequest {
-        var hasUploads = false
         val newMessages = request.messages.map { msg ->
             if (msg is PartsApiMessage) {
                 val newParts = msg.parts.map { part ->
                     if (part is ApiContentPart.InlineData && part.mimeType.startsWith("file_upload_marker|")) {
-                        hasUploads = true
                         // Format: file_upload_marker|mime|filename
                         val segments = part.mimeType.split("|")
                         val fileName = segments.getOrNull(2) ?: "unknown_file"
                         
                         try {
-                            onStatus("Uploading $fileName to DashScope...")
                             val bytes = Base64.decode(part.base64Data, Base64.NO_WRAP)
                             val fileId = uploadFileToDashScope(client, request.apiKey, fileName, bytes)
                             Log.i(TAG, "Uploaded $fileName, id=$fileId")
@@ -1009,10 +996,6 @@ object OpenAIDirectClient {
             } else {
                 msg
             }
-        }
-        
-        if (hasUploads) {
-            onStatus("File upload complete, starting generation...")
         }
         
         return request.copy(messages = newMessages)
@@ -1072,7 +1055,7 @@ object OpenAIDirectClient {
 
         try {
             while (!channel.isClosedForRead) {
-                val line = channel.readUTF8Line() ?: break
+                val line = channel.readLine() ?: break
 
                 when {
                     line.isEmpty() -> {
@@ -1289,12 +1272,6 @@ object OpenAIDirectClient {
                                 }
                             }
                         }
-                        else -> {
-                            addJsonObject {
-                                put("role", message.role)
-                                put("content", "")
-                            }
-                        }
                     }
                 }
 
@@ -1357,7 +1334,7 @@ object OpenAIDirectClient {
 
         try {
             while (!channel.isClosedForRead) {
-                val line = channel.readUTF8Line() ?: break
+                val line = channel.readLine() ?: break
 
                 when {
                     line.isEmpty() -> {

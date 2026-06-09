@@ -5,8 +5,11 @@ import android.media.MediaRecorder
 import android.os.Build
 import android.util.Base64
 import android.util.Log
+import com.android.everytalk.util.storage.readAtMost
 import java.io.File
 import java.io.IOException
+
+private const val MAX_AUDIO_BASE64_BYTES = 10L * 1024L * 1024L
 
 class AudioRecorderHelper(private val context: Context) {
 
@@ -55,9 +58,9 @@ class AudioRecorderHelper(private val context: Context) {
     fun encodeAudioToBase64(filePath: String): String? {
         return try {
             val file = File(filePath)
-            val bytes = file.readBytes()
+            val bytes = file.readAtMost(MAX_AUDIO_BASE64_BYTES)
             Base64.encodeToString(bytes, Base64.NO_WRAP)
-        } catch (e: IOException) {
+        } catch (e: Exception) {
             Log.e("AudioRecorderHelper", "Failed to encode audio file", e)
             null
         }

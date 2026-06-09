@@ -57,7 +57,6 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
@@ -612,8 +611,8 @@ private fun ThreeDotsLoadingAnimation(
                 animationSpec = infiniteRepeatable(
                     animation = keyframes {
                         durationMillis =
-                            1200; 0.3f at 0 with LinearEasing; 1.0f at 200 with LinearEasing
-                        0.3f at 400 with LinearEasing; 0.3f at 1200 with LinearEasing
+                            1200; 0.3f at 0 using LinearEasing; 1.0f at 200 using LinearEasing
+                        0.3f at 400 using LinearEasing; 0.3f at 1200 using LinearEasing
                     },
                     repeatMode = RepeatMode.Restart, initialStartOffset = StartOffset(index * 150)
                 ), label = "dot_alpha_$index"

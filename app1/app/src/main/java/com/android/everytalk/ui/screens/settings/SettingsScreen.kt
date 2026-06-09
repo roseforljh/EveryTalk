@@ -9,6 +9,8 @@ import androidx.compose.runtime.*
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.ui.text.font.FontWeight
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -48,6 +50,27 @@ import com.android.everytalk.data.network.ExternalWebSearchProvider
 import com.android.everytalk.ui.screens.settings.dialogs.AutoFetchModelsConfirmDialog
 import com.android.everytalk.ui.screens.settings.dialogs.ModelSelectionDialog
 import java.util.UUID
+
+private const val MAX_SETTINGS_IMPORT_BYTES = 50L * 1024L * 1024L
+private const val SETTINGS_IMPORT_TOO_LARGE_MESSAGE = "导入文件过大（最大支持50MB）"
+
+private fun readSettingsImportText(inputStream: java.io.InputStream): String {
+    val output = java.io.ByteArrayOutputStream()
+    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+    var totalBytes = 0L
+
+    while (true) {
+        val read = inputStream.read(buffer)
+        if (read == -1) break
+        totalBytes += read
+        if (totalBytes > MAX_SETTINGS_IMPORT_BYTES) {
+            throw IllegalStateException(SETTINGS_IMPORT_TOO_LARGE_MESSAGE)
+        }
+        output.write(buffer, 0, read)
+    }
+
+    return output.toByteArray().toString(Charsets.UTF_8)
+}
 
 // 平台默认地址映射
 object SettingsDefaults {
@@ -174,13 +197,23 @@ fun SettingsScreen(
     val exportSettingsLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json"),
         onResult = { uri ->
-            uri?.let { fileUri ->
-                exportData?.second?.let { jsonContent ->
+            if (uri == null) {
+                exportData = null
+            } else {
+                val jsonContent = exportData?.second
+                if (jsonContent == null) {
+                    exportData = null
+                } else {
+                    scope.launch {
                     try {
-                        context.contentResolver.openFileDescriptor(fileUri, "w")?.use { pfd ->
-                            java.io.FileOutputStream(pfd.fileDescriptor).use { outputStream ->
-                                outputStream.channel.truncate(0) // 强制清空文件
-                                outputStream.write(jsonContent.toByteArray())
+                        withContext(Dispatchers.IO) {
+                            context.contentResolver.openFileDescriptor(uri, "w")?.use { pfd ->
+                                java.io.FileOutputStream(pfd.fileDescriptor).use { outputStream ->
+                                    outputStream.channel.truncate(0)
+                                    outputStream.bufferedWriter(Charsets.UTF_8).use { writer ->
+                                        writer.write(jsonContent)
+                                    }
+                                }
                             }
                         }
                         viewModel.showToast("配置已导出")
@@ -192,6 +225,7 @@ fun SettingsScreen(
                     }
                 }
             }
+            }
         }
     )
 
@@ -199,13 +233,27 @@ fun SettingsScreen(
         contract = ActivityResultContracts.GetContent(),
         onResult = { uri ->
             uri?.let {
+                scope.launch {
                 try {
-                    context.contentResolver.openInputStream(it)?.use { inputStream ->
-                        val jsonContent = inputStream.bufferedReader().use { reader -> reader.readText() }
+                    val jsonContent = withContext(Dispatchers.IO) {
+                        context.contentResolver.openAssetFileDescriptor(it, "r")?.use { descriptor ->
+                            val declaredLength = descriptor.length
+                            if (declaredLength > MAX_SETTINGS_IMPORT_BYTES) {
+                                throw IllegalStateException(SETTINGS_IMPORT_TOO_LARGE_MESSAGE)
+                            }
+                        }
+                        context.contentResolver.openInputStream(it)?.use { inputStream ->
+                            readSettingsImportText(inputStream)
+                        }
+                    }
+                    if (jsonContent == null) {
+                        viewModel.showToast("导入失败: 无法读取文件")
+                    } else {
                         viewModel.importSettings(jsonContent)
                     }
                 } catch (e: Exception) {
                     viewModel.showToast("导入失败: ${e.message}")
+                }
                 }
             }
         }

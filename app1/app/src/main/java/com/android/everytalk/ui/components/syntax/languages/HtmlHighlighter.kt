@@ -61,7 +61,7 @@ object HtmlHighlighter : LanguageHighlighter {
                 if (matcher.find(i) && matcher.start() == i) {
                     val tagStart = matcher.start()
                     val tagEnd = matcher.end()
-                    val tagName = matcher.group(1)
+                    val tagName = matcher.groupText(1)
                     
                     // 标记 < 或 </
                     val bracketLen = if (code[i + 1] == '/') 2 else 1
@@ -84,7 +84,7 @@ object HtmlHighlighter : LanguageHighlighter {
                         if (endMatcher.find(i) && endMatcher.start() == i) {
                             val endTagStart = endMatcher.start()
                             val endTagEnd = endMatcher.end()
-                            tokens.add(Token(TokenType.PUNCTUATION, endTagStart, endTagEnd, endMatcher.group()))
+                            tokens.add(Token(TokenType.PUNCTUATION, endTagStart, endTagEnd, endMatcher.groupText()))
                             for (j in endTagStart until endTagEnd) processed[j] = true
                             i = endTagEnd
                             break
@@ -95,7 +95,7 @@ object HtmlHighlighter : LanguageHighlighter {
                         if (attrMatcher.find(i) && attrMatcher.start() == i) { // 也就是从当前位置开始的空白+属性名
                             val attrStart = attrMatcher.start(1) // 组1是属性名
                             val attrEnd = attrMatcher.end(1)
-                            val attrName = attrMatcher.group(1)
+                            val attrName = attrMatcher.groupText(1)
                             
                             // 区分普通属性和 Vue/Angular 指令
                             val tokenType = if (attrName.startsWith("v-") ||
@@ -181,14 +181,14 @@ object HtmlHighlighter : LanguageHighlighter {
             if (processed[fullStart]) continue
             
             // 处理开始标签 <style...>
-            val startTag = matcher.group(1)
+            val startTag = matcher.groupText(1)
             val startTagEnd = fullStart + startTag.length
             // 简单的将开始标签作为 TAG 处理（这里不细分属性了，简单处理）
             tokens.add(Token(TokenType.TAG, fullStart, startTagEnd, startTag))
             for (i in fullStart until startTagEnd) processed[i] = true
             
             // 处理内容
-            val content = matcher.group(2)
+            val content = matcher.groupText(2)
             val contentStart = matcher.start(2)
             if (content.isNotBlank()) {
                 val embeddedTokens = highlighter.tokenize(content)
@@ -204,7 +204,7 @@ object HtmlHighlighter : LanguageHighlighter {
             }
             
             // 处理结束标签 </style>
-            val endTag = matcher.group(3)
+            val endTag = matcher.groupText(3)
             val endTagStart = matcher.start(3)
             tokens.add(Token(TokenType.TAG, endTagStart, fullEnd, endTag))
             for (i in endTagStart until fullEnd) processed[i] = true
@@ -225,7 +225,7 @@ object HtmlHighlighter : LanguageHighlighter {
             
             if (processed[start]) continue
             
-            tokens.add(Token(tokenType, start, end, matcher.group()))
+            tokens.add(Token(tokenType, start, end, matcher.groupText()))
             for (i in start until end) {
                 processed[i] = true
             }

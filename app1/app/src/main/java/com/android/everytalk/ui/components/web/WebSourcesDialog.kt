@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
@@ -51,6 +52,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -67,6 +69,10 @@ import com.android.everytalk.ui.components.dialog.appDialogSubtextColor
 import java.net.URI
 
 internal val WebSourcesDialogEdgeGap = 8.dp
+internal val WebSourcesDialogUrlMaxWidth = 360.dp
+internal val WebSourcesDialogPreviewMaxWidth = WebSourcesDialogUrlMaxWidth
+internal const val WebSourcesDialogUrlMaxLines = 1
+internal const val WebSourcesDialogSnippetMaxLines = 2
 
 private fun sourceHost(href: String): String {
     return runCatching {
@@ -256,14 +262,20 @@ private fun SourceItem(
                         append(source.href)
                     }
                 },
+                modifier = Modifier.widthIn(max = WebSourcesDialogUrlMaxWidth),
                 style = MaterialTheme.typography.bodySmall,
+                maxLines = WebSourcesDialogUrlMaxLines,
+                overflow = TextOverflow.Ellipsis
             )
             if (source.snippet.isNotBlank()) {
                 Spacer(Modifier.height(6.dp))
                 Text(
                     text = source.snippet,
+                    modifier = Modifier.widthIn(max = WebSourcesDialogPreviewMaxWidth),
                     style = MaterialTheme.typography.bodyMedium,
-                    color = appDialogSubtextColor()
+                    color = appDialogSubtextColor(),
+                    maxLines = WebSourcesDialogSnippetMaxLines,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
         }

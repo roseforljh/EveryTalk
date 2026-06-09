@@ -1,6 +1,7 @@
 package com.android.everytalk.ui.components
 
 import android.annotation.SuppressLint
+import android.content.ClipData
 import android.os.Build
 import android.view.WindowManager
 import android.webkit.WebSettings
@@ -46,6 +47,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
@@ -61,13 +63,13 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -92,6 +94,18 @@ internal const val CODE_VIEWER_DIALOG_EDGE_SCALE = 0.72f
 internal const val CODE_VIEWER_DIALOG_TRANSITION_MILLIS = 260
 internal const val CODE_VIEWER_DIALOG_ALPHA_MILLIS = CODE_VIEWER_DIALOG_TRANSITION_MILLIS
 internal const val CODE_VIEWER_DIALOG_WINDOW_DIM_AMOUNT = 0f
+
+@Suppress("DEPRECATION")
+private fun android.view.Window.setTransparentSystemBars() {
+    statusBarColor = android.graphics.Color.TRANSPARENT
+    navigationBarColor = android.graphics.Color.TRANSPARENT
+}
+
+@Suppress("DEPRECATION")
+private fun WebSettings.disableFileUrlCrossOriginAccess() {
+    allowFileAccessFromFileURLs = false
+    allowUniversalAccessFromFileURLs = false
+}
 
 internal data class CodeViewerDialogAnimationTarget(
     val scale: Float,
@@ -193,13 +207,29 @@ fun WebPreviewContent(
         }
     }
 
+    var previewWebView by remember { mutableStateOf<WebView?>(null) }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            previewWebView?.apply {
+                stopLoading()
+                loadUrl("about:blank")
+                removeAllViews()
+                destroy()
+            }
+            previewWebView = null
+        }
+    }
+
     AndroidView(
         factory = { ctx ->
             WebView(ctx).apply {
+                previewWebView = this
                 settings.javaScriptEnabled = true
                 settings.domStorageEnabled = true
                 settings.allowFileAccess = true
-                settings.allowContentAccess = true
+                settings.allowContentAccess = false
+                settings.disableFileUrlCrossOriginAccess()
                 settings.useWideViewPort = true
                 settings.loadWithOverviewMode = true
                 settings.builtInZoomControls = true
@@ -245,7 +275,7 @@ fun FullScreenCodeViewerDialog(
     sourceBounds: androidx.compose.ui.geometry.Rect = androidx.compose.ui.geometry.Rect.Zero,
     onDismiss: () -> Unit
 ) {
-    val clipboard = LocalClipboardManager.current
+    val clipboard = LocalClipboard.current
     val density = LocalDensity.current
     val configuration = LocalConfiguration.current
     val scope = rememberCoroutineScope()
@@ -322,8 +352,7 @@ fun FullScreenCodeViewerDialog(
                 WindowCompat.setDecorFitsSystemWindows(window, false)
                 window.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
                 window.setDimAmount(CODE_VIEWER_DIALOG_WINDOW_DIM_AMOUNT)
-                window.statusBarColor = android.graphics.Color.TRANSPARENT
-                window.navigationBarColor = android.graphics.Color.TRANSPARENT
+                window.setTransparentSystemBars()
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                     window.isNavigationBarContrastEnforced = false
                 }
@@ -474,7 +503,11 @@ fun FullScreenCodeViewerDialog(
                         }
                     } else {
                         IconButton(
-                            onClick = { clipboard.setText(AnnotatedString(code)) },
+                            onClick = {
+                                scope.launch {
+                                    clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("code", code)))
+                                }
+                            },
                             modifier = Modifier.size(48.dp)
                         ) {
                             Icon(

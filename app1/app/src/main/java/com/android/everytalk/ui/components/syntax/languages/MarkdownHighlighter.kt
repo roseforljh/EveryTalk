@@ -147,7 +147,7 @@ object MarkdownHighlighter : LanguageHighlighter {
             val start = matcher.start()
             val end = matcher.end()
             if (!processed[start]) {
-                tokens.add(Token(tokenType, start, end, matcher.group()))
+                tokens.add(Token(tokenType, start, end, matcher.groupText()))
                 for (i in start until end) processed[i] = true
             }
         }

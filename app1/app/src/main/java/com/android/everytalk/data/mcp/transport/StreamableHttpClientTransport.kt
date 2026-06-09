@@ -20,7 +20,7 @@ import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
-import io.ktor.utils.io.readUTF8Line
+import io.ktor.utils.io.readLine
 import io.modelcontextprotocol.kotlin.sdk.shared.AbstractTransport
 import io.modelcontextprotocol.kotlin.sdk.shared.TransportSendOptions
 import io.modelcontextprotocol.kotlin.sdk.types.JSONRPCMessage
@@ -212,7 +212,7 @@ class StreamableHttpClientTransport(
             ) {
                 method = HttpMethod.Get
                 applyCommonHeaders(this)
-                accept(ContentType.Application.Json)
+                accept(ContentType.Text.EventStream)
                 (resumptionToken ?: lastEventId)?.let { headers.append(MCP_RESUMPTION_TOKEN_HEADER, it) }
                 requestBuilder()
             }
@@ -319,7 +319,7 @@ class StreamableHttpClientTransport(
         }
 
         while (!channel.isClosedForRead) {
-            val line = channel.readUTF8Line() ?: break
+            val line = channel.readLine() ?: break
             if (line.isEmpty()) {
                 dispatch(id = id, eventName = eventName, data = sb.toString())
                 id = null

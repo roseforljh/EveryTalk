@@ -18,6 +18,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.MenuBook
+import androidx.compose.material.icons.automirrored.outlined.Label
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -229,7 +231,7 @@ private fun getServerIcon(name: String): androidx.compose.ui.graphics.vector.Ima
         lowerName.contains("context7") -> Icons.Filled.AutoAwesome
         lowerName.contains("exa") -> Icons.Filled.Search
         lowerName.contains("firecrawl") || lowerName.contains("crawl") -> Icons.Filled.Language
-        lowerName.contains("wiki") -> Icons.Filled.MenuBook
+        lowerName.contains("wiki") -> Icons.AutoMirrored.Filled.MenuBook
         lowerName.contains("news") -> Icons.Filled.Newspaper
         lowerName.contains("tavily") -> Icons.Filled.TravelExplore
         lowerName.contains("search") -> Icons.Filled.Search
@@ -774,7 +776,7 @@ fun AddMcpServerDialog(
                         shape = textFieldShape,
                         colors = DialogTextFieldColors,
                         leadingIcon = {
-                             Icon(Icons.Outlined.Label, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                             Icon(Icons.AutoMirrored.Outlined.Label, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     )
 

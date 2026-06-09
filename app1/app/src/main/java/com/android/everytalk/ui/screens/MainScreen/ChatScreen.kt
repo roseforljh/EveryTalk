@@ -14,7 +14,6 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.foundation.text.ClickableText
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ContentCopy
@@ -36,10 +35,12 @@ import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -1005,25 +1006,21 @@ private fun AboutDialog(
         textContentColor = contentColor,
         title = { Text("关于 EveryTalk") },
         text = {
-            val uriHandler = LocalUriHandler.current
             val annotatedString = buildAnnotatedString {
                 append("版本: $versionName\n\n一个开源的、可高度定制的 AI 聊天客户端。\n\nGitHub: ")
-                pushStringAnnotation(tag = "URL", annotation = "https://github.com/roseforljh/KunTalkwithAi")
-                withStyle(style = SpanStyle(color = Color(0xFF007eff))) {
+                withLink(
+                    LinkAnnotation.Url(
+                        url = "https://github.com/roseforljh/KunTalkwithAi",
+                        styles = TextLinkStyles(style = SpanStyle(color = Color(0xFF007eff)))
+                    )
+                ) {
                     append("EveryTalk")
                 }
-                pop()
             }
 
-            ClickableText(
+            Text(
                 text = annotatedString,
-                style = MaterialTheme.typography.bodyMedium.copy(color = contentColor),
-                onClick = { offset ->
-                    annotatedString.getStringAnnotations(tag = "URL", start = offset, end = offset)
-                        .firstOrNull()?.let { annotation ->
-                            uriHandler.openUri(annotation.item)
-                        }
-                }
+                style = MaterialTheme.typography.bodyMedium.copy(color = contentColor)
             )
         },
         confirmButton = {

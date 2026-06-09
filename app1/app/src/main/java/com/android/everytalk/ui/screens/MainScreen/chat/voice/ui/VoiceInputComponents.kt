@@ -309,7 +309,7 @@ private fun ConversationTextCard(
         
         if (assistantText.isNotEmpty()) {
             if (userText.isNotEmpty()) {
-                Divider(
+                HorizontalDivider(
                     color = contentColor.copy(alpha = 0.2f),
                     thickness = 1.dp
                 )

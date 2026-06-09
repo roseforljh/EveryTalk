@@ -83,12 +83,13 @@ data class VersionUpdateInfo(
             
             val parts1 = version1.split(".").map { it.toIntOrNull() ?: 0 }
             val parts2 = version2.split(".").map { it.toIntOrNull() ?: 0 }
-            
-            // 计算次版本号的差距（第二位）
+
+            val major1 = parts1.getOrNull(0) ?: 0
+            val major2 = parts2.getOrNull(0) ?: 0
             val minor1 = parts1.getOrNull(1) ?: 0
             val minor2 = parts2.getOrNull(1) ?: 0
-            
-            return kotlin.math.abs(minor2 - minor1)
+
+            return kotlin.math.abs(major2 - major1) * 100 + kotlin.math.abs(minor2 - minor1)
         }
         
         /**
@@ -96,7 +97,8 @@ data class VersionUpdateInfo(
          * 如果版本差距 >= 3，则需要强制更新
          */
         fun shouldForceUpdate(currentVersion: String, latestVersion: String): Boolean {
-            return getVersionGap(currentVersion, latestVersion) >= 3
+            return compareVersions(currentVersion, latestVersion) < 0 &&
+                getVersionGap(currentVersion, latestVersion) >= 3
         }
     }
 }

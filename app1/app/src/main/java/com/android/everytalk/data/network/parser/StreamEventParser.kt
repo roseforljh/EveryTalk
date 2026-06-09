@@ -30,6 +30,7 @@ object StreamEventParser {
                 "web_search_status" -> parseWebSearchStatusEvent(jsonObject)
                 "web_search_results" -> parseWebSearchResultsEvent(jsonObject)
                 "status_update" -> parseStatusUpdateEvent(jsonObject)
+                "execution_status_update" -> parseExecutionStatusUpdateEvent(jsonObject)
                 "tool_call" -> parseToolCallEvent(jsonObject)
                 "error" -> parseErrorEvent(jsonObject)
                 "finish" -> parseFinishEvent(jsonObject)
@@ -109,8 +110,13 @@ object StreamEventParser {
     }
     
     private fun parseStatusUpdateEvent(jsonObject: JsonObject): AppStreamEvent.StatusUpdate {
-        val stage = jsonObject["stage"]?.jsonPrimitive?.content ?: ""
+        val stage = parseStatusText(jsonObject).orEmpty()
         return AppStreamEvent.StatusUpdate(stage)
+    }
+
+    private fun parseExecutionStatusUpdateEvent(jsonObject: JsonObject): AppStreamEvent.ExecutionStatusUpdate {
+        val status = parseStatusText(jsonObject)
+        return AppStreamEvent.ExecutionStatusUpdate(status)
     }
     
     private fun parseToolCallEvent(jsonObject: JsonObject): AppStreamEvent.ToolCall {
@@ -122,7 +128,23 @@ object StreamEventParser {
             buildJsonObject { }
         }
         val isReasoningStep = jsonObject["isReasoningStep"]?.jsonPrimitive?.booleanOrNull
-        return AppStreamEvent.ToolCall(id, name, argumentsObj, isReasoningStep)
+        val status = parseStatusText(jsonObject)
+        return AppStreamEvent.ToolCall(
+            id = id,
+            name = name,
+            argumentsObj = argumentsObj,
+            isReasoningStep = isReasoningStep,
+            status = status
+        )
+    }
+
+    private fun parseStatusText(jsonObject: JsonObject): String? {
+        val keys = listOf("statusText", "progressText", "displayText", "message", "status", "stage", "text")
+        return keys.firstNotNullOfOrNull { key ->
+            runCatching {
+                jsonObject[key]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+            }.getOrNull()
+        }
     }
     
     private fun parseErrorEvent(jsonObject: JsonObject): AppStreamEvent.Error {

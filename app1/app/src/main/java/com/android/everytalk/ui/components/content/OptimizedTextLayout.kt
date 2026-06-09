@@ -1,5 +1,7 @@
 package com.android.everytalk.ui.components.content
 
+import android.content.ClipData
+import android.widget.Toast
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -21,16 +23,16 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.ClipEntry
+import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.draw.clip
 import androidx.compose.foundation.shape.RoundedCornerShape
-import android.widget.Toast
+import kotlinx.coroutines.launch
 
 /**
  * 代码块组件（自定义样式）
@@ -59,7 +61,8 @@ fun CodeBlock(
 
     val vScroll = rememberScrollState()
     val hScroll = rememberScrollState()
-    val clipboard = LocalClipboardManager.current
+    val clipboard = LocalClipboard.current
+    val scope = rememberCoroutineScope()
     val ctx = LocalContext.current
     
     // 🎯 手势冲突解决：检测水平滚动状态
@@ -196,8 +199,10 @@ fun CodeBlock(
                 
                 IconButton(
                     onClick = {
-                        clipboard.setText(AnnotatedString(code))
-                        Toast.makeText(ctx, "代码已复制", Toast.LENGTH_SHORT).show()
+                        scope.launch {
+                            clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("code", code)))
+                            Toast.makeText(ctx, "代码已复制", Toast.LENGTH_SHORT).show()
+                        }
                     },
                     modifier = Modifier.size(32.dp)
                 ) {

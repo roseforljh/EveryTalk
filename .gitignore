@@ -39,6 +39,7 @@ app1/captures/
 app1/.externalNativeBuild/
 app1/.cxx/
 app1/graphify-out/cache/
+app1/app/src/main/java/**/graphify-out/
 
 # ===== 允许的 Android 源代码和资源 =====
 # 源代码

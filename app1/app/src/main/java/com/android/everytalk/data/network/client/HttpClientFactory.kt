@@ -50,6 +50,7 @@ object HttpClientFactory {
                 subclass(AppStreamEvent.WebSearchStatus::class)
                 subclass(AppStreamEvent.WebSearchResults::class)
                 subclass(AppStreamEvent.StatusUpdate::class)
+                subclass(AppStreamEvent.ExecutionStatusUpdate::class)
                 subclass(AppStreamEvent.ToolCall::class)
                 subclass(AppStreamEvent.Error::class)
                 subclass(AppStreamEvent.Finish::class)

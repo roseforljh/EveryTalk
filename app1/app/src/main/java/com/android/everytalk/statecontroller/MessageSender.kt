@@ -1366,7 +1366,6 @@ private suspend fun readTextFromUri(context: Context, uri: Uri): String? {
                     element.booleanOrNull ?: element.longOrNull ?: element.doubleOrNull ?: element.contentOrNull
                 }
             }
-            else -> null
         }
     }
 }

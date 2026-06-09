@@ -797,14 +797,14 @@ class FileManager(private val context: Context) {
             fun readAllBytesFromContent(u: Uri): Pair<ByteArray, String>? {
                 val cr = context.contentResolver
                 val mime = cr.getType(u) ?: "application/octet-stream"
-                val bytes = cr.openInputStream(u)?.use { it.readBytes() } ?: return null
+                val bytes = cr.openInputStream(u)?.use { readAtMost(it, MAX_FILE_SIZE_BYTES.toLong()) } ?: return null
                 return bytes to mime
             }
 
             fun readAllBytesFromFile(path: String): Pair<ByteArray, String>? {
                 val f = File(path)
                 if (!f.exists()) return null
-                val bytes = f.readBytes()
+                val bytes = f.readAtMost(MAX_FILE_SIZE_BYTES.toLong())
                 val mime = when {
                     path.endsWith(".png", true) -> "image/png"
                     path.endsWith(".jpg", true) || path.endsWith(".jpeg", true) -> "image/jpeg"
@@ -825,7 +825,9 @@ class FileManager(private val context: Context) {
                 conn.connect()
                 if (conn.responseCode !in 200..299) return@withContext null
                 val mime = conn.contentType ?: "application/octet-stream"
-                val bytes = conn.inputStream.use { it.readBytes() }
+                val declaredLength = conn.contentLengthLong
+                if (declaredLength > MAX_FILE_SIZE_BYTES) return@withContext null
+                val bytes = conn.inputStream.use { readAtMost(it, MAX_FILE_SIZE_BYTES.toLong()) }
                 return@withContext bytes to mime
             } else if (scheme == "content") {
                 return@withContext readAllBytesFromContent(uri!!)

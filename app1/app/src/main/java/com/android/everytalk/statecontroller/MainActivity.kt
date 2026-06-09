@@ -13,6 +13,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.IntentCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.compose.animation.ExitTransition
@@ -45,6 +46,9 @@ import com.android.everytalk.ui.screens.ImageGeneration.ImageGenerationScreen
 import com.android.everytalk.ui.screens.settings.SettingsScreen
 import com.android.everytalk.ui.theme.App1Theme
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 
 class AppViewModelFactory(
     private val application: Application
@@ -59,6 +63,8 @@ class AppViewModelFactory(
 }
 
 private val defaultDrawerWidth = 320.dp
+private const val NAVIGATION_ROUTE_WAIT_TIMEOUT_MS = 1_000L
+private const val TRIM_MEMORY_RUNNING_LOW_LEVEL = 10
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -118,10 +124,6 @@ class MainActivity : ComponentActivity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         ApiClient.initialize(this)
         enableEdgeToEdge()
-        
-        // 设置透明的状态栏和导航栏
-        window.statusBarColor = android.graphics.Color.TRANSPARENT
-        window.navigationBarColor = android.graphics.Color.TRANSPARENT
         
         // 强制设置导航栏完全透明
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
@@ -212,9 +214,17 @@ class MainActivity : ComponentActivity() {
                             gesturesEnabled = !isCodeBlockScrolling, // 代码块滚动时禁用抽屉手势
                             modifier = Modifier.fillMaxSize(),
                             drawerContent = {
-                                val navBackStackEntry by navController.currentBackStackEntryAsState()
-                                val currentRoute = navBackStackEntry?.destination?.route
+                                val navBackStackEntryState = navController.currentBackStackEntryAsState()
+                                val currentRoute = navBackStackEntryState.value?.destination?.route
                                 val isImageGenerationMode = currentRoute == Screen.IMAGE_GENERATION_SCREEN
+
+                                suspend fun waitForRoute(route: String) {
+                                    withTimeoutOrNull(NAVIGATION_ROUTE_WAIT_TIMEOUT_MS) {
+                                        snapshotFlow { navBackStackEntryState.value?.destination?.route }
+                                            .filter { it == route }
+                                            .first()
+                                    }
+                                }
 
                                 LaunchedEffect(drawerSessionKey, isImageGenerationMode) {
                                     if (drawerSessionKey > 0 && expandedDrawerItemIndex != null) {
@@ -258,10 +268,9 @@ class MainActivity : ComponentActivity() {
                                                 launchSingleTop = true
                                                 restoreState = true
                                             }
-                                            // 等待页面过渡完成后再加载历史会话
                                             coroutineScope.launch {
-                                                // 等待导航和动画完成 - 400ms确保300ms过渡动画完全结束 + 额外缓冲时间
-                                                kotlinx.coroutines.delay(400) // 稍微超过动画时间，确保过渡流畅
+                                                // 等待目标 route 生效，超时后仍加载以避免操作卡住。
+                                                waitForRoute(Screen.IMAGE_GENERATION_SCREEN)
                                                 // 🔥 修复：不清除文本模式索引，保持两个模式独立
                                                 // appViewModel.stateHolder._loadedHistoryIndex.value = null
                                                 appViewModel.loadImageGenerationConversationFromHistory(index)
@@ -288,10 +297,9 @@ class MainActivity : ComponentActivity() {
                                                 launchSingleTop = true
                                                 restoreState = true
                                             }
-                                            // 等待页面过渡完成后再加载历史会话
                                             coroutineScope.launch {
-                                                // 等待导航和动画完成 - 400ms确保300ms过渡动画完全结束 + 额外缓冲时间
-                                                kotlinx.coroutines.delay(400) // 稍微超过动画时间，确保过渡流畅
+                                                // 等待目标 route 生效，超时后仍加载以避免操作卡住。
+                                                waitForRoute(Screen.CHAT_SCREEN)
                                                 // 🔥 修复：不清除图像模式索引，保持两个模式独立
                                                 // appViewModel.stateHolder._loadedImageGenerationHistoryIndex.value = null
                                                 appViewModel.loadConversationFromHistory(index)
@@ -594,8 +602,14 @@ class MainActivity : ComponentActivity() {
      */
     private fun handleIncomingShareIntent(intent: Intent?) {
         if (intent?.action != Intent.ACTION_SEND) return
-        
+
+        val streamUri: Uri? = IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)
         when {
+            streamUri != null && intent.type?.startsWith("text/") == true -> {
+                lifecycleScope.launch(Dispatchers.IO) {
+                    readSharedTextFile(streamUri)
+                }
+            }
             // 处理直接分享的文本
             intent.type == "text/plain" -> {
                 intent.getStringExtra(Intent.EXTRA_TEXT)?.let { sharedText ->
@@ -613,31 +627,30 @@ class MainActivity : ComponentActivity() {
             }
             // 处理分享的文本文件
             intent.type?.startsWith("text/") == true -> {
-                val uri: Uri? = intent.getParcelableExtra(Intent.EXTRA_STREAM)
-                uri?.let { fileUri ->
-                    lifecycleScope.launch(Dispatchers.IO) {
-                        try {
-                            val content = contentResolver.openInputStream(fileUri)?.use { inputStream ->
-                                inputStream.bufferedReader().readText()
-                            }
-                            if (!content.isNullOrBlank()) {
-                                kotlinx.coroutines.withContext(Dispatchers.Main) {
-                                    while (!::appViewModel.isInitialized) {
-                                        kotlinx.coroutines.delay(50)
-                                    }
-                                    appViewModel.onTextChange(content)
-                                    appViewModel.showSnackbar("已接收分享文件内容")
-                                }
-                            }
-                        } catch (e: Exception) {
-                            android.util.Log.e("MainActivity", "读取分享文件失败", e)
-                            kotlinx.coroutines.withContext(Dispatchers.Main) {
-                                if (::appViewModel.isInitialized) {
-                                    appViewModel.showSnackbar("读取文件失败: ${e.message}")
-                                }
-                            }
-                        }
+                // 兼容只声明 text/* 但没有正文/文件流的分享 Intent。
+            }
+        }
+    }
+
+    private suspend fun readSharedTextFile(fileUri: Uri) {
+        try {
+            val content = contentResolver.openInputStream(fileUri)?.use { inputStream ->
+                inputStream.bufferedReader().readText()
+            }
+            if (!content.isNullOrBlank()) {
+                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                    while (!::appViewModel.isInitialized) {
+                        kotlinx.coroutines.delay(50)
                     }
+                    appViewModel.onTextChange(content)
+                    appViewModel.showSnackbar("已接收分享文件内容")
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "读取分享文件失败", e)
+            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                if (::appViewModel.isInitialized) {
+                    appViewModel.showSnackbar("读取文件失败: ${e.message}")
                 }
             }
         }
@@ -665,7 +678,7 @@ class MainActivity : ComponentActivity() {
        super.onTrimMemory(level)
        
        // 中等及以上内存压力时清理缓存
-       if (level >= android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE) {
+       if (level >= TRIM_MEMORY_RUNNING_LOW_LEVEL) {
            if (this::appViewModel.isInitialized) {
                appViewModel.onLowMemory()
            }

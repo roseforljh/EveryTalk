@@ -57,7 +57,7 @@ object JsonHighlighter : LanguageHighlighter {
             val end = stringValueMatcher.end(1)
             
             if (!processed[start]) {
-                tokens.add(Token(TokenType.STRING, start, end, stringValueMatcher.group(1)))
+                tokens.add(Token(TokenType.STRING, start, end, stringValueMatcher.groupText(1)))
                 for (i in start until end) {
                     processed[i] = true
                 }
@@ -96,7 +96,7 @@ object JsonHighlighter : LanguageHighlighter {
             
             if (processed[start]) continue
             
-            tokens.add(Token(tokenType, start, end, matcher.group()))
+            tokens.add(Token(tokenType, start, end, matcher.groupText()))
             for (i in start until end) {
                 processed[i] = true
             }

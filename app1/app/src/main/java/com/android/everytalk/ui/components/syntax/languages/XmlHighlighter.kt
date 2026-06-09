@@ -70,7 +70,7 @@ object XmlHighlighter : LanguageHighlighter {
             
             if (processed[start]) continue
             
-            val content = matcher.group()
+            val content = matcher.groupText()
             
             // <?xml 部分
             tokens.add(Token(TokenType.KEYWORD, start, start + 5, "<?xml"))
@@ -106,7 +106,7 @@ object XmlHighlighter : LanguageHighlighter {
                 if (matcher.find(i) && matcher.start() == i) {
                     val tagStart = matcher.start()
                     val tagEnd = matcher.end()
-                    val tagName = matcher.group(1)
+                    val tagName = matcher.groupText(1)
                     
                     // 标记 < 或 </
                     val bracketLen = if (i + 1 < code.length && code[i + 1] == '/') 2 else 1
@@ -161,7 +161,7 @@ object XmlHighlighter : LanguageHighlighter {
             if (endMatcher.find(i) && endMatcher.start() == i) {
                 val endTagStart = endMatcher.start()
                 val endTagEnd = endMatcher.end()
-                tokens.add(Token(TokenType.PUNCTUATION, endTagStart, endTagEnd, endMatcher.group()))
+                tokens.add(Token(TokenType.PUNCTUATION, endTagStart, endTagEnd, endMatcher.groupText()))
                 for (j in endTagStart until endTagEnd) processed[j] = true
                 return endTagEnd
             }
@@ -369,7 +369,7 @@ object XmlHighlighter : LanguageHighlighter {
             val start = matcher.start()
             val end = matcher.end()
             if (!processed[start]) {
-                tokens.add(Token(tokenType, start, end, matcher.group()))
+                tokens.add(Token(tokenType, start, end, matcher.groupText()))
                 for (i in start until end) processed[i] = true
             }
         }

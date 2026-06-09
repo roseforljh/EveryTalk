@@ -31,6 +31,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.android.everytalk.config.PerformanceConfig
 
+@Suppress("DEPRECATION")
+private fun WebSettings.disableFileUrlCrossOriginAccess() {
+    allowFileAccessFromFileURLs = false
+    allowUniversalAccessFromFileURLs = false
+}
+
 /**
  * MathRenderer
  *
@@ -141,7 +147,8 @@ private fun MathRenderContainer(
                 settings.javaScriptEnabled = true
                 settings.cacheMode = WebSettings.LOAD_NO_CACHE
                 settings.allowFileAccess = true
-                settings.allowContentAccess = true
+                settings.allowContentAccess = false
+                settings.disableFileUrlCrossOriginAccess()
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     settings.safeBrowsingEnabled = true
                 }

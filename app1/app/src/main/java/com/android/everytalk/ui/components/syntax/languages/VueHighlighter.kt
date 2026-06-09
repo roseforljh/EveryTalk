@@ -119,7 +119,7 @@ object VueHighlighter : LanguageHighlighter {
                 if (matcher.find(i) && matcher.start() == i) {
                     val tagStart = matcher.start()
                     val tagEnd = matcher.end()
-                    val tagName = matcher.group(1)
+                    val tagName = matcher.groupText(1)
                     
                     // 标记 < 或 </
                     val bracketLen = if (i + 1 < code.length && code[i + 1] == '/') 2 else 1
@@ -164,7 +164,7 @@ object VueHighlighter : LanguageHighlighter {
             if (endMatcher.find(i) && endMatcher.start() == i) {
                 val endTagStart = endMatcher.start()
                 val endTagEnd = endMatcher.end()
-                tokens.add(Token(TokenType.PUNCTUATION, endTagStart, endTagEnd, endMatcher.group()))
+                tokens.add(Token(TokenType.PUNCTUATION, endTagStart, endTagEnd, endMatcher.groupText()))
                 for (j in endTagStart until endTagEnd) processed[j] = true
                 return endTagEnd
             }
@@ -408,7 +408,7 @@ object VueHighlighter : LanguageHighlighter {
             if (processed[fullStart]) continue
             
             // 处理开始标签（如 <style scoped> 或 <script setup>）
-            val startTag = matcher.group(1)
+            val startTag = matcher.groupText(1)
             val startTagStart = fullStart
             val startTagEnd = fullStart + startTag.length
             
@@ -435,7 +435,7 @@ object VueHighlighter : LanguageHighlighter {
             for (i in startTagStart until startTagEnd) processed[i] = true
             
             // 处理嵌入内容
-            val content = matcher.group(2)
+            val content = matcher.groupText(2)
             val contentStart = matcher.start(2)
             if (content.isNotBlank()) {
                 val embeddedTokens = highlighter.tokenize(content)
@@ -451,7 +451,7 @@ object VueHighlighter : LanguageHighlighter {
             }
             
             // 处理结束标签（如 </style> 或 </script>）
-            val endTag = matcher.group(3)
+            val endTag = matcher.groupText(3)
             val endTagStart = matcher.start(3)
             // </ 符号
             tokens.add(Token(TokenType.PUNCTUATION, endTagStart, endTagStart + 2, "</"))
@@ -482,7 +482,7 @@ object VueHighlighter : LanguageHighlighter {
             
             if (processed[start]) continue
             
-            tokens.add(Token(tokenType, start, end, matcher.group()))
+            tokens.add(Token(tokenType, start, end, matcher.groupText()))
             for (i in start until end) {
                 processed[i] = true
             }

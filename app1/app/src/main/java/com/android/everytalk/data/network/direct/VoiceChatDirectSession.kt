@@ -321,7 +321,7 @@ class VoiceChatDirectSession(
             val lineBuffer = StringBuilder()
             
             while (!channel.isClosedForRead && !isCancelled) {
-                val line = channel.readUTF8Line() ?: break
+                val line = channel.readLine() ?: break
                 
                 when {
                     line.isEmpty() -> {
@@ -410,7 +410,7 @@ class VoiceChatDirectSession(
             val lineBuffer = StringBuilder()
             
             while (!channel.isClosedForRead && !isCancelled) {
-                val line = channel.readUTF8Line() ?: break
+                val line = channel.readLine() ?: break
                 
                 when {
                     line.isEmpty() -> {

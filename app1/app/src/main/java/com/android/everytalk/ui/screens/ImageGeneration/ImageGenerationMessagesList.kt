@@ -62,6 +62,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.input.pointer.pointerInput
@@ -121,6 +122,7 @@ import com.android.everytalk.ui.theme.ChatDimensions
 import com.android.everytalk.ui.theme.chatColors
 import com.android.everytalk.ui.components.EnhancedMarkdownText
 import com.android.everytalk.ui.components.scrollFadeEdge
+import com.android.everytalk.util.storage.readAtMost
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
@@ -131,6 +133,60 @@ import kotlin.math.min
 
 private const val MAX_PREVIEW_BITMAP_DIMENSION = 2048
 private const val MAX_BASE64_LENGTH_FOR_PREVIEW = 40 * 1024 * 1024
+private const val MAX_IMAGE_RAW_BYTES = 50L * 1024L * 1024L
+
+private fun calculateBitmapSampleSize(width: Int, height: Int): Int {
+    var sampleSize = 1
+    while (width / sampleSize > MAX_PREVIEW_BITMAP_DIMENSION || height / sampleSize > MAX_PREVIEW_BITMAP_DIMENSION) {
+        sampleSize *= 2
+    }
+    return sampleSize
+}
+
+private fun decodePreviewByteArray(bytes: ByteArray): Bitmap? {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+    val options = BitmapFactory.Options().apply {
+        inSampleSize = calculateBitmapSampleSize(bounds.outWidth, bounds.outHeight)
+        inPreferredConfig = Bitmap.Config.ARGB_8888
+    }
+    return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+}
+
+private fun decodePreviewFile(path: String?): Bitmap? {
+    if (path.isNullOrBlank()) return null
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    BitmapFactory.decodeFile(path, bounds)
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+    val options = BitmapFactory.Options().apply {
+        inSampleSize = calculateBitmapSampleSize(bounds.outWidth, bounds.outHeight)
+        inPreferredConfig = Bitmap.Config.ARGB_8888
+    }
+    return BitmapFactory.decodeFile(path, options)
+}
+
+private fun decodePreviewStream(openStream: () -> java.io.InputStream?): Bitmap? {
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    openStream()?.use { BitmapFactory.decodeStream(it, null, bounds) }
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+    val options = BitmapFactory.Options().apply {
+        inSampleSize = calculateBitmapSampleSize(bounds.outWidth, bounds.outHeight)
+        inPreferredConfig = Bitmap.Config.ARGB_8888
+    }
+    return openStream()?.use { BitmapFactory.decodeStream(it, null, options) }
+}
+
+private fun Bitmap.scaledToPreviewLimit(): Bitmap {
+    if (width <= MAX_PREVIEW_BITMAP_DIMENSION && height <= MAX_PREVIEW_BITMAP_DIMENSION) return this
+    val scale = min(
+        MAX_PREVIEW_BITMAP_DIMENSION.toFloat() / width.toFloat(),
+        MAX_PREVIEW_BITMAP_DIMENSION.toFloat() / height.toFloat()
+    )
+    val targetW = (width * scale).toInt().coerceAtLeast(1)
+    val targetH = (height * scale).toInt().coerceAtLeast(1)
+    return Bitmap.createScaledBitmap(this, targetW, targetH, true)
+}
 
 internal fun imageContextEditUsesPreview(): Boolean = false
 
@@ -142,31 +198,34 @@ private fun mimeFromImagePath(path: String): String {
     }
 }
 
+private fun File.readImageBytesAtMost(): ByteArray = readAtMost(MAX_IMAGE_RAW_BYTES)
+
+private fun okhttp3.ResponseBody.readImageBytesAtMost(): ByteArray {
+    val declaredLength = contentLength()
+    if (declaredLength > MAX_IMAGE_RAW_BYTES) {
+        throw IllegalArgumentException("Image exceeds maximum size: $MAX_IMAGE_RAW_BYTES bytes")
+    }
+    return byteStream().use { readAtMost(it, MAX_IMAGE_RAW_BYTES) }
+}
+
 @Composable
 fun ImageGenerationLoadingView() {
     Box(
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.CenterStart
     ) {
-        ImageGenLoadingIndicator()
+        ImageGenLoadingIndicator(text = "等待首个响应")
     }
 }
 
 @Composable
 private fun ImageGenLoadingIndicator(
+    text: String? = null,
     modifier: Modifier = Modifier,
 ) {
-    val stages = remember {
-        listOf("正在生成图像", "正在处理请求", "正在渲染画面", "即将完成")
-    }
-    var stageIndex by remember { mutableStateOf(0) }
-    LaunchedEffect(Unit) {
-        while (true) {
-            kotlinx.coroutines.delay(2500)
-            stageIndex = (stageIndex + 1) % stages.size
-        }
-    }
-    val displayText = stages[stageIndex]
+    val displayText = com.android.everytalk.ui.screens.MainScreen.chat.text.ui.resolveLoadingStageDisplayText(
+        text
+    )
     val viewportHeight = 34.dp
     val maskHeight = 10.dp
     val breathingDotSize = 6.dp
@@ -376,7 +435,7 @@ fun ImageGenerationMessagesList(
                                     .newCall(builder.build())
                                     .execute()
                                     .use { resp ->
-                                        val bodyBytes = resp.body?.bytes()
+                                        val bodyBytes = resp.body?.readImageBytesAtMost()
                                         if (!resp.isSuccessful || bodyBytes == null || bodyBytes.isEmpty()) {
                                             null
                                         } else {
@@ -385,26 +444,26 @@ fun ImageGenerationMessagesList(
                                     }
                             }
                             "content" -> context.contentResolver.openInputStream(uri)?.use { input ->
-                                input.readBytes() to (context.contentResolver.getType(uri) ?: "image/png")
+                                readAtMost(input, MAX_IMAGE_RAW_BYTES) to (context.contentResolver.getType(uri) ?: "image/png")
                             }
                             "file" -> uri.path?.let { path ->
-                                File(path).takeIf { it.exists() }?.let { it.readBytes() to mimeFromImagePath(path) }
+                                File(path).takeIf { it.exists() }?.let { it.readImageBytesAtMost() to mimeFromImagePath(path) }
                             }
-                            null -> File(model).takeIf { it.exists() }?.let { it.readBytes() to mimeFromImagePath(model) }
+                            null -> File(model).takeIf { it.exists() }?.let { it.readImageBytesAtMost() to mimeFromImagePath(model) }
                             else -> null
                         }
                     }
                 }
                 is Uri -> when (model.scheme?.lowercase()) {
                     "content" -> context.contentResolver.openInputStream(model)?.use { input ->
-                        input.readBytes() to (context.contentResolver.getType(model) ?: "image/png")
+                        readAtMost(input, MAX_IMAGE_RAW_BYTES) to (context.contentResolver.getType(model) ?: "image/png")
                     }
                     "file" -> model.path?.let { path ->
-                        File(path).takeIf { it.exists() }?.let { it.readBytes() to mimeFromImagePath(path) }
+                        File(path).takeIf { it.exists() }?.let { it.readImageBytesAtMost() to mimeFromImagePath(path) }
                     }
                     "http", "https" -> cacheImageModelForEditing(model.toString())?.let { uri ->
                         context.contentResolver.openInputStream(uri)?.use { input ->
-                            input.readBytes() to (context.contentResolver.getType(uri) ?: "image/png")
+                            readAtMost(input, MAX_IMAGE_RAW_BYTES) to (context.contentResolver.getType(uri) ?: "image/png")
                         }
                     }
                     else -> null
@@ -962,7 +1021,7 @@ fun ImageGenerationMessagesList(
                                     .padding(vertical = 16.dp),
                                 contentAlignment = Alignment.CenterStart
                             ) {
-                                ImageGenLoadingIndicator()
+                                ImageGenLoadingIndicator(text = item.text)
                             }
                         }
                         is ChatListItem.LoadingBubblePlaceholder -> {
@@ -1097,6 +1156,11 @@ fun ImageGenerationMessagesList(
             var isBrushing by remember { mutableStateOf(false) }
             var brushBaseBitmap by remember { mutableStateOf<Bitmap?>(null) }
 
+            fun closeBrushEditor() {
+                isBrushing = false
+                brushBaseBitmap = null
+            }
+
             fun resetTransform() {
                 scale = 1f; offsetX = 0f; offsetY = 0f
             }
@@ -1165,9 +1229,9 @@ fun ImageGenerationMessagesList(
                             android.util.Log.w("ImagePreview", "HTTP code=${resp.code} for $urlStr")
                             return@use null
                         }
-                        val bytes = resp.body?.bytes()
+                        val bytes = resp.body?.readImageBytesAtMost()
                         if (bytes != null && bytes.isNotEmpty()) {
-                            return@use BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                            return@use decodePreviewByteArray(bytes)
                         }
                         null
                     }
@@ -1182,7 +1246,7 @@ fun ImageGenerationMessagesList(
                 try {
                     android.util.Log.d("ImagePreview", "loadBitmapFromModel type=${model::class.java.name} value=$model")
                     when (model) {
-                        is Bitmap -> return@withContext model
+                        is Bitmap -> return@withContext model.scaledToPreviewLimit()
                         is Uri -> {
                             val scheme = model.scheme?.lowercase()
                             return@withContext when (scheme) {
@@ -1192,21 +1256,17 @@ fun ImageGenerationMessagesList(
                                 }
                                 "content" -> {
                                     try {
-                                        context.contentResolver.openInputStream(model)?.use { input ->
-                                            BitmapFactory.decodeStream(input)
-                                        }
+                                        decodePreviewStream { context.contentResolver.openInputStream(model) }
                                     } catch (e: Exception) {
                                         android.util.Log.w("ImagePreview", "Content read failed: ${e.message}")
                                         null
                                     }
                                 }
-                                "file" -> BitmapFactory.decodeFile(model.path)
+                                "file" -> decodePreviewFile(model.path)
                                 else -> {
-                                    val byFile = BitmapFactory.decodeFile(model.path)
+                                    val byFile = decodePreviewFile(model.path)
                                     if (byFile != null) byFile else try {
-                                        context.contentResolver.openInputStream(model)?.use { input ->
-                                            BitmapFactory.decodeStream(input)
-                                        }
+                                        decodePreviewStream { context.contentResolver.openInputStream(model) }
                                     } catch (_: Exception) { null }
                                 }
                             }
@@ -1219,7 +1279,7 @@ fun ImageGenerationMessagesList(
                                     val base64 = s.substringAfter(";base64,", "")
                                     if (base64.isNotBlank() && base64.length <= MAX_BASE64_LENGTH_FOR_PREVIEW) {
                                         val bytes = android.util.Base64.decode(base64, android.util.Base64.DEFAULT)
-                                        return@withContext BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                                        return@withContext decodePreviewByteArray(bytes)
                                     }
                                 }
                             }
@@ -1233,18 +1293,16 @@ fun ImageGenerationMessagesList(
                                 }
                                 "content" -> {
                                     try {
-                                        context.contentResolver.openInputStream(uri!!)?.use {
-                                            BitmapFactory.decodeStream(it)
-                                        }
+                                        decodePreviewStream { context.contentResolver.openInputStream(uri!!) }
                                     } catch (e: Exception) {
                                         android.util.Log.w("ImagePreview", "Content read failed: ${e.message}")
                                         null
                                     }
                                 }
-                                "file" -> BitmapFactory.decodeFile(uri?.path)
-                                null -> BitmapFactory.decodeFile(s)
+                                "file" -> decodePreviewFile(uri?.path)
+                                null -> decodePreviewFile(s)
                                 else -> {
-                                    val bmp = BitmapFactory.decodeFile(s)
+                                    val bmp = decodePreviewFile(s)
                                     if (bmp == null) {
                                         android.util.Log.w("ImagePreview", "Decode by file path failed for: $s (scheme=$scheme)")
                                     }
@@ -1260,21 +1318,17 @@ fun ImageGenerationMessagesList(
                                 "http", "https" -> {
                                     httpGetBitmap(s) ?: run {
                                         try {
-                                            java.net.URL(s).openStream().use { input ->
-                                                BitmapFactory.decodeStream(input)
-                                            }
+                                            decodePreviewStream { java.net.URL(s).openStream() }
                                         } catch (_: Exception) { null }
                                     }
                                 }
                                 "content" -> {
                                     try {
-                                        context.contentResolver.openInputStream(uri!!)?.use {
-                                            BitmapFactory.decodeStream(it)
-                                        }
+                                        decodePreviewStream { context.contentResolver.openInputStream(uri!!) }
                                     } catch (e: Exception) { null }
                                 }
-                                "file" -> BitmapFactory.decodeFile(uri?.path)
-                                else -> BitmapFactory.decodeFile(s)
+                                "file" -> decodePreviewFile(uri?.path)
+                                else -> decodePreviewFile(s)
                             }
                         }
                     }
@@ -1337,7 +1391,7 @@ fun ImageGenerationMessagesList(
                                     refererHeader?.let { builder.header("Referer", it) }
                                     client.newCall(builder.build()).execute().use { resp ->
                                         if (!resp.isSuccessful) return@use null
-                                        val bytes = resp.body?.bytes() ?: return@use null
+                                        val bytes = resp.body?.readImageBytesAtMost() ?: return@use null
                                         val mime = resp.header("Content-Type") ?: "image/png"
                                         bytes to mime
                                     }
@@ -1346,7 +1400,7 @@ fun ImageGenerationMessagesList(
                                     val mime = context.contentResolver.getType(uri!!)
                                         ?: "image/png"
                                     context.contentResolver.openInputStream(uri)?.use { input ->
-                                        input.readBytes() to mime
+                                        readAtMost(input, MAX_IMAGE_RAW_BYTES) to mime
                                     }
                                 }
                                 "file" -> {
@@ -1359,7 +1413,7 @@ fun ImageGenerationMessagesList(
                                         "webp" -> "image/webp"
                                         else -> "application/octet-stream"
                                     }
-                                    file.readBytes() to mime
+                                    file.readImageBytesAtMost() to mime
                                 }
                                 null -> {
                                     val file = File(s)
@@ -1370,7 +1424,7 @@ fun ImageGenerationMessagesList(
                                         "webp" -> "image/webp"
                                         else -> "application/octet-stream"
                                     }
-                                    file.readBytes() to mime
+                                    file.readImageBytesAtMost() to mime
                                 }
                                 else -> null
                             }
@@ -1390,7 +1444,7 @@ fun ImageGenerationMessagesList(
                                     refererHeader?.let { builder.header("Referer", it) }
                                     client.newCall(builder.build()).execute().use { resp ->
                                         if (!resp.isSuccessful) return@use null
-                                        val bytes = resp.body?.bytes() ?: return@use null
+                                        val bytes = resp.body?.readImageBytesAtMost() ?: return@use null
                                         val mime = resp.header("Content-Type") ?: "image/png"
                                         bytes to mime
                                     }
@@ -1399,7 +1453,7 @@ fun ImageGenerationMessagesList(
                                     val mime = context.contentResolver.getType(model)
                                         ?: "image/png"
                                     context.contentResolver.openInputStream(model)?.use { input ->
-                                        input.readBytes() to mime
+                                        readAtMost(input, MAX_IMAGE_RAW_BYTES) to mime
                                     }
                                 }
                                 "file" -> {
@@ -1412,7 +1466,7 @@ fun ImageGenerationMessagesList(
                                         "webp" -> "image/webp"
                                         else -> "application/octet-stream"
                                     }
-                                    file.readBytes() to mime
+                                    file.readImageBytesAtMost() to mime
                                 }
                                 else -> null
                             }
@@ -1794,7 +1848,7 @@ fun ImageGenerationMessagesList(
             // 内置画笔编辑器覆盖层（使用全屏 Dialog 以保证位于预览之上）
             if (isBrushing && brushBaseBitmap != null) {
                 Dialog(
-                    onDismissRequest = { isBrushing = false },
+                    onDismissRequest = { closeBrushEditor() },
                     properties = DialogProperties(
                         dismissOnBackPress = true,
                         dismissOnClickOutside = false,
@@ -1803,7 +1857,7 @@ fun ImageGenerationMessagesList(
                 ) {
                     BrushEditorOverlay(
                         baseBitmap = brushBaseBitmap!!,
-                        onCancel = { isBrushing = false },
+                        onCancel = { closeBrushEditor() },
                         onDone = { edited ->
                             // 将编辑后的图片加入"已选择媒体"，并返回（关闭画笔和预览）
                             scope.launch {
@@ -1822,7 +1876,7 @@ fun ImageGenerationMessagesList(
                                         )
                                     )
                                     viewModel.showSnackbar("已编辑")
-                                    isBrushing = false
+                                    closeBrushEditor()
                                     isImagePreviewVisible = false
                                 } catch (e: Exception) {
                                     viewModel.showSnackbar("保存失败")
@@ -1844,7 +1898,7 @@ private fun BrushEditorOverlay(
     onDone: (Bitmap) -> Unit
 ) {
     // 数据与状态
-    val imageBitmap = remember(baseBitmap) { baseBitmap.copy(Bitmap.Config.ARGB_8888, true).asImageBitmap() }
+    val imageBitmap = remember(baseBitmap) { baseBitmap.asImageBitmap() }
     val strokes = remember { mutableStateListOf<List<Offset>>() }
     val undoneStrokes = remember { mutableStateListOf<List<Offset>>() }
     val currentStroke = remember { mutableStateListOf<Offset>() } // 使用可观察列表，支持实时绘制
@@ -1928,7 +1982,7 @@ private fun BrushEditorOverlay(
                                             (prev.x + cur.x) / 2f,
                                             (prev.y + cur.y) / 2f
                                         )
-                                        quadraticBezierTo(prev.x, prev.y, mid.x, mid.y)
+                                        quadraticTo(prev.x, prev.y, mid.x, mid.y)
                                     }
                                     // 收尾：最后一段到最终点
                                     val last = pts.last()
@@ -1957,7 +2011,7 @@ private fun BrushEditorOverlay(
                                         (prev.x + cur.x) / 2f,
                                         (prev.y + cur.y) / 2f
                                     )
-                                    quadraticBezierTo(prev.x, prev.y, mid.x, mid.y)
+                                        quadraticTo(prev.x, prev.y, mid.x, mid.y)
                                 }
                                 val last = pts.last()
                                 lineTo(last.x, last.y)
@@ -2070,7 +2124,7 @@ private fun BrushEditorOverlay(
                                         val c = Canvas(out)
                                         c.drawBitmap(baseBitmap, 0f, 0f, null)
                                         val paint = android.graphics.Paint().apply {
-                                            color = android.graphics.Color.RED
+                                            color = strokeColor.toArgb()
                                             isAntiAlias = true
                                             strokeWidth = strokeWidthPx / scale
                                             style = android.graphics.Paint.Style.STROKE

@@ -8,7 +8,9 @@ fun loadProperties(project: Project): Properties {
     val properties = Properties()
     val localPropertiesFile = project.rootProject.file("local.properties")
     if (localPropertiesFile.exists()) {
-        properties.load(FileInputStream(localPropertiesFile))
+        FileInputStream(localPropertiesFile).use { input ->
+            properties.load(input)
+        }
     }
     return properties
 }
@@ -70,7 +72,6 @@ configurations.all {
 
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     // Kotlin Serialization 插件
     id("org.jetbrains.kotlin.plugin.serialization") version libs.versions.kotlin.get()
@@ -85,9 +86,7 @@ android {
     compileSdk = 36
 
     lint {
-        // 禁用 Release 构建的 Lint 检查，以绕过 Kotlin 2.1.0 与 Android Lint 的兼容性问题
-        // 当 Android Gradle Plugin 更新并修复此问题后，可以移除此配置
-        checkReleaseBuilds = false
+        checkReleaseBuilds = true
     }
     // 建议与 targetSdk 和 Compose BOM 推荐的 SDK 版本对齐
 
@@ -98,7 +97,7 @@ android {
         targetSdk = 36 // 通常与 compileSdk 一致
         versionCode = 6000
         // 优先从环境变量获取版本号(CI环境)，否则使用默认值
-        val baseVersionName = "1.7.5"
+        val baseVersionName = "1.20.0"
         val envVersionName = System.getenv("VERSION_NAME")
         versionName = if (!envVersionName.isNullOrBlank()) envVersionName else baseVersionName
 
@@ -243,25 +242,26 @@ android {
         }
     }
 
+}
 
-    applicationVariants.all {
-        if (buildType.name == "debug") {
-            outputs.all {
-                // Override version code for debug builds to avoid update prompts
-                if (this is com.android.build.gradle.api.ApkVariantOutput) {
-                    this.versionCodeOverride = 9999
-                    this.versionNameOverride = "9999"
-                }
-            }
+androidComponents {
+    onVariants(selector().withBuildType("debug")) { variant ->
+        variant.outputs.forEach { output ->
+            output.versionCode.set(9999)
+            output.versionName.set("9999")
         }
     }
+}
+
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
 }
 
 
     dependencies {
         // ===== Compose Core =====
-        implementation(platform("androidx.compose:compose-bom:2024.12.01"))
-        androidTestImplementation(platform("androidx.compose:compose-bom:2024.12.01"))
+        implementation(platform(libs.androidx.compose.bom))
+        androidTestImplementation(platform(libs.androidx.compose.bom))
 
         implementation(libs.androidx.ui)
         implementation(libs.androidx.ui.tooling.preview)
@@ -292,12 +292,12 @@ android {
         implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 
         // ===== Ktor Client (网络请求) =====
-        implementation("io.ktor:ktor-client-core:3.3.2")
-        implementation("io.ktor:ktor-client-okhttp:3.3.2")
-        implementation("io.ktor:ktor-client-content-negotiation:3.3.2")
-        implementation("io.ktor:ktor-serialization-kotlinx-json:3.3.2")
-        implementation("io.ktor:ktor-client-logging:3.3.2")
-        implementation("io.ktor:ktor-client-websockets:3.3.2")  // WebSocket 支持，用于阿里云实时语音识别
+        implementation(libs.ktor.client.core)
+        implementation(libs.ktor.client.okhttp)
+        implementation(libs.ktor.client.content.negotiation)
+        implementation(libs.ktor.serialization.kotlinx.json)
+        implementation(libs.ktor.client.logging)
+        implementation(libs.ktor.client.websockets)  // WebSocket 支持，用于阿里云实时语音识别
 
         // SLF4J - Ktor logging 的间接依赖,必须保留
         implementation("org.slf4j:slf4j-nop:2.0.17")
@@ -311,6 +311,7 @@ android {
         testImplementation("io.mockk:mockk:1.13.8")
         testImplementation("app.cash.turbine:turbine:1.0.0")
         testImplementation("org.robolectric:robolectric:4.11.1")
+        testImplementation(libs.room.testing)
         testImplementation("androidx.compose.ui:ui-test-junit4")
         androidTestImplementation(libs.androidx.junit)
         androidTestImplementation(libs.androidx.espresso.core)
@@ -334,7 +335,7 @@ android {
         implementation("io.coil-kt.coil3:coil-video:3.2.0")
 
         // ===== 网络 - OkHttp =====
-        implementation("com.squareup.okhttp3:okhttp:5.3.0")
+        implementation(libs.okhttp)
 
         // ===== Markdown AST Parser =====
         implementation(libs.intellij.markdown)

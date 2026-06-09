@@ -330,7 +330,7 @@ object SttDirectClient {
         }
         
         // WebSocket URL
-        val wsUrl = if (apiUrl != null && (apiUrl.startsWith("wss://") || apiUrl.startsWith("ws://"))) {
+        val wsUrl = if (apiUrl.startsWith("wss://") || apiUrl.startsWith("ws://")) {
             apiUrl
         } else {
             "wss://dashscope.aliyuncs.com/api-ws/v1/inference"

@@ -50,10 +50,19 @@ jobs:
           echo "Resolved app directory: $APP_DIR"
           echo "APP_DIR=$APP_DIR" >> $GITHUB_ENV
           ROOT_PROJECT_NAME=$(basename "$APP_DIR")
-          ARTIFACT_GLOB="$HOME/.everytalk-gradle-build/$ROOT_PROJECT_NAME/app/outputs/apk/release/*.apk"
-          ARTIFACT_DIR="$HOME/.everytalk-gradle-build/$ROOT_PROJECT_NAME/app/outputs/apk/release"
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            BUILD_VARIANT="release"
+            GRADLE_TASK=":app:assembleRelease"
+          else
+            BUILD_VARIANT="debug"
+            GRADLE_TASK=":app:assembleDebug"
+          fi
+          ARTIFACT_GLOB="$HOME/.everytalk-gradle-build/$ROOT_PROJECT_NAME/app/outputs/apk/$BUILD_VARIANT/*.apk"
+          ARTIFACT_DIR="$HOME/.everytalk-gradle-build/$ROOT_PROJECT_NAME/app/outputs/apk/$BUILD_VARIANT"
           echo "Resolved artifact dir: $ARTIFACT_DIR"
           echo "ROOT_PROJECT_NAME=$ROOT_PROJECT_NAME" >> $GITHUB_ENV
+          echo "BUILD_VARIANT=$BUILD_VARIANT" >> $GITHUB_ENV
+          echo "GRADLE_TASK=$GRADLE_TASK" >> $GITHUB_ENV
           echo "ARTIFACT_GLOB=$ARTIFACT_GLOB" >> $GITHUB_ENV
           echo "ARTIFACT_DIR=$ARTIFACT_DIR" >> $GITHUB_ENV
 
@@ -64,7 +73,7 @@ jobs:
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PATH: ${{ secrets.ANDROID_KEYSTORE_PATH }}
-        if: ${{ env.ANDROID_KEYSTORE_BASE64 != '' }}
+        if: ${{ startsWith(github.ref, 'refs/tags/') && env.ANDROID_KEYSTORE_BASE64 != '' }}
         run: |
           echo "Secrets ANDROID_KEYSTORE_PATH='${ANDROID_KEYSTORE_PATH}'"
           # Default to ${APP_DIR}/everytalk-release.jks if not specified
@@ -129,7 +138,7 @@ jobs:
           EOF
           echo "local.properties created."
 
-      - name: Build Release APK
+      - name: Build Android APK
         working-directory: ${{ env.APP_DIR }}
         env:
           # 签名配置
@@ -138,7 +147,7 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
           VERSION_NAME: ${{ env.VERSION_NAME }}
         run: |
-          ./gradlew :app:assembleRelease --parallel --build-cache --stacktrace
+          ./gradlew "$GRADLE_TASK" --parallel --build-cache --stacktrace
 
       - name: Upload Android artifacts to Release
         if: startsWith(github.ref, 'refs/tags/')
@@ -182,6 +191,6 @@ jobs:
         if: ${{ !startsWith(github.ref, 'refs/tags/') }}
         uses: actions/upload-artifact@v4
         with:
-          name: android-release-apk
+          name: android-${{ env.BUILD_VARIANT }}-apk
           path: |
             ${{ env.ARTIFACT_GLOB }}

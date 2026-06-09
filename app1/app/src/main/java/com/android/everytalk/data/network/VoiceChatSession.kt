@@ -711,95 +711,83 @@ class VoiceChatSession(
 
         Log.i(TAG, "Recorded ${pcmData.size} bytes of PCM data for direct mode")
 
-        // 创建 WAV 文件用于 STT
-        val tempWavFile = File.createTempFile("voice_chat_direct_", ".wav")
-        try {
-            tempWavFile.outputStream().use { out ->
-                writeWavHeader(out, pcmData.size, sampleRate, 1, 16)
-                out.write(pcmData)
-            }
-            
-            val wavData = tempWavFile.readBytes()
-            Log.i(TAG, "Created WAV file: ${wavData.size} bytes")
-            
-            // 创建直连会话
-            val audioChunks = mutableListOf<ByteArray>()
-            var userText = ""
-            var assistantText = ""
-            
-            directSession = VoiceChatDirectSession(
-                httpClient = ktorClient,
-                sttConfig = SttDirectClient.SttConfig(
-                    platform = sttPlatform,
-                    apiKey = sttApiKey,
-                    apiUrl = sttApiUrl.ifBlank { null },
-                    model = sttModel
-                ),
-                chatPlatform = chatPlatform,
-                chatApiKey = chatApiKey,
-                chatApiUrl = chatApiUrl.ifBlank { null },
-                chatModel = chatModel,
-                systemPrompt = systemPrompt,
-                chatHistory = chatHistory,
-                ttsConfig = TtsDirectClient.TtsConfig(
-                    platform = ttsPlatform,
-                    apiKey = ttsApiKey,
-                    apiUrl = ttsApiUrl.ifBlank { null },
-                    model = ttsModel,
-                    voiceName = voiceName
-                ),
-                onTranscription = { text ->
-                    userText = text
-                    onTranscriptionReceived?.invoke(text)
-                },
-                onResponseDelta = { _, full ->
-                    assistantText = full
-                    onResponseReceived?.invoke(full)
-                },
-                onAudioChunk = { chunk ->
-                    audioChunks.add(chunk)
-                    // 实时播放音频块
-                    if (streamAudioPlayer == null) {
-                        val audioFormat = TtsDirectClient.getAudioFormat(ttsPlatform)
-                        streamAudioPlayer = StreamAudioPlayer(audioFormat.sampleRate)
-                        streamAudioPlayer?.start()
-                    }
-                    // onAudioChunk 现在是 suspend 函数，直接调用即可，无需 runBlocking
-                    streamAudioPlayer?.write(chunk)
-                },
-                onError = { error ->
-                    Log.e(TAG, "Direct mode error: $error")
-                },
-                onComplete = { user, assistant ->
-                    Log.i(TAG, "Direct mode completed: user='${user.take(50)}...', assistant='${assistant.take(50)}...'")
+        val wavData = ByteArrayOutputStream(44 + pcmData.size).apply {
+            writeWavHeader(this, pcmData.size, sampleRate, 1, 16)
+            write(pcmData)
+        }.toByteArray()
+        Log.i(TAG, "Created WAV payload: ${wavData.size} bytes")
+
+        // 创建直连会话
+        val audioChunks = mutableListOf<ByteArray>()
+        var userText = ""
+        var assistantText = ""
+
+        directSession = VoiceChatDirectSession(
+            httpClient = ktorClient,
+            sttConfig = SttDirectClient.SttConfig(
+                platform = sttPlatform,
+                apiKey = sttApiKey,
+                apiUrl = sttApiUrl.ifBlank { null },
+                model = sttModel
+            ),
+            chatPlatform = chatPlatform,
+            chatApiKey = chatApiKey,
+            chatApiUrl = chatApiUrl.ifBlank { null },
+            chatModel = chatModel,
+            systemPrompt = systemPrompt,
+            chatHistory = chatHistory,
+            ttsConfig = TtsDirectClient.TtsConfig(
+                platform = ttsPlatform,
+                apiKey = ttsApiKey,
+                apiUrl = ttsApiUrl.ifBlank { null },
+                model = ttsModel,
+                voiceName = voiceName
+            ),
+            onTranscription = { text ->
+                userText = text
+                onTranscriptionReceived?.invoke(text)
+            },
+            onResponseDelta = { _, full ->
+                assistantText = full
+                onResponseReceived?.invoke(full)
+            },
+            onAudioChunk = { chunk ->
+                audioChunks.add(chunk)
+                // 实时播放音频块
+                if (streamAudioPlayer == null) {
+                    val audioFormat = TtsDirectClient.getAudioFormat(ttsPlatform)
+                    streamAudioPlayer = StreamAudioPlayer(audioFormat.sampleRate)
+                    streamAudioPlayer?.start()
                 }
-            )
-            
-            // 执行直连处理
-            val result = directSession?.process(wavData, "audio/wav")
-                ?: throw Exception("Direct session process failed")
-            
-            // 等待播放完成
-            streamAudioPlayer?.close()
-            streamAudioPlayer = null
-            
-            directSession = null
-            
-            return VoiceChatResult(
-                userText = result.userText,
-                assistantText = result.assistantText,
-                audioData = result.audioData,
-                audioFormat = result.audioFormat,
-                sampleRate = result.sampleRate,
-                isRealtimeMode = false
-            )
-            
-        } finally {
-            // 清理临时文件
-            try {
-                tempWavFile.delete()
-            } catch (_: Throwable) {}
-        }
+                // onAudioChunk 现在是 suspend 函数，直接调用即可，无需 runBlocking
+                streamAudioPlayer?.write(chunk)
+            },
+            onError = { error ->
+                Log.e(TAG, "Direct mode error: $error")
+            },
+            onComplete = { user, assistant ->
+                Log.i(TAG, "Direct mode completed: user='${user.take(50)}...', assistant='${assistant.take(50)}...'")
+            }
+        )
+
+        // 执行直连处理
+        val result = directSession?.process(wavData, "audio/wav")
+            ?: throw Exception("Direct session process failed")
+
+        // 等待播放完成
+        streamAudioPlayer?.close()
+        streamAudioPlayer = null
+
+        directSession = null
+
+        return VoiceChatResult(
+            userText = result.userText,
+            assistantText = result.assistantText,
+            audioData = result.audioData,
+            audioFormat = result.audioFormat,
+            sampleRate = result.sampleRate,
+            isRealtimeMode = false
+        )
     }
 
     /**

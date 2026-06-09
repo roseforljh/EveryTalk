@@ -64,7 +64,8 @@ sealed class AppStreamEvent {
         val id: String,
         val name: String,
         val argumentsObj: JsonObject,
-        val isReasoningStep: Boolean? = null
+        val isReasoningStep: Boolean? = null,
+        val status: String? = null
     ) : AppStreamEvent()
 
     @Serializable

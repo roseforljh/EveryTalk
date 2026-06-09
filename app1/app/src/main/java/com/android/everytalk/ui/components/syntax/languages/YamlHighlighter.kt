@@ -77,7 +77,7 @@ object YamlHighlighter : LanguageHighlighter {
             val keyStart = quotedKeyMatcher.start(2)
             val keyEnd = quotedKeyMatcher.end(2)
             if (!processed[keyStart]) {
-                tokens.add(Token(TokenType.PROPERTY, keyStart, keyEnd, quotedKeyMatcher.group(2)))
+                tokens.add(Token(TokenType.PROPERTY, keyStart, keyEnd, quotedKeyMatcher.groupText(2)))
                 for (i in keyStart until keyEnd) processed[i] = true
             }
         }
@@ -88,7 +88,7 @@ object YamlHighlighter : LanguageHighlighter {
             val keyStart = keyMatcher.start(2)
             val keyEnd = keyMatcher.end(2)
             if (!processed[keyStart]) {
-                tokens.add(Token(TokenType.PROPERTY, keyStart, keyEnd, keyMatcher.group(2)))
+                tokens.add(Token(TokenType.PROPERTY, keyStart, keyEnd, keyMatcher.groupText(2)))
                 for (i in keyStart until keyEnd) processed[i] = true
             }
         }
@@ -150,7 +150,7 @@ object YamlHighlighter : LanguageHighlighter {
             val start = matcher.start()
             val end = matcher.end()
             if (!processed[start]) {
-                tokens.add(Token(type, start, end, matcher.group()))
+                tokens.add(Token(type, start, end, matcher.groupText()))
                 for (i in start until end) processed[i] = true
             }
         }

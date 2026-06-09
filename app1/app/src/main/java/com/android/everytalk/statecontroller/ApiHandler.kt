@@ -23,6 +23,7 @@ import com.android.everytalk.util.messageprocessor.MessageProcessor
 import io.ktor.client.statement.HttpResponse
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.onCompletion
@@ -308,6 +309,7 @@ class ApiHandler(
         }
     }
 
+    @OptIn(FlowPreview::class)
     fun streamChatResponse(
         requestBody: ChatRequest,
         attachmentsToPassToApiClient: List<SelectedMediaItem>,
@@ -331,7 +333,6 @@ class ApiHandler(
                 is com.android.everytalk.data.DataClass.PartsApiMessage -> message.parts
                     .filterIsInstance<ApiContentPart.Text>()
                     .joinToString(" ") { it.text }
-                else -> ""
             }.length
             logger.debug("requestMessage[$index]: role=${message.role}, textChars=$textChars")
         }
@@ -477,7 +478,9 @@ class ApiHandler(
                                         imageUrls = archivedUrls, // 使用归档后的本地路径
                                         text = responseText ?: currentMessage.text,
                                         contentStarted = true,
-                                        isError = false
+                                        isError = false,
+                                        currentWebSearchStage = null,
+                                        executionStatus = null
                                     )
                                     
                                     // 🔥 关键修复：使用removeAt+add替代直接赋值，确保触发Compose重组
@@ -684,6 +687,7 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
 
             val currentMessage = messageList[messageIndex]
             var updatedMessage = currentMessage
+            fun latestMessageForUpdate(): Message = messageList.getOrNull(messageIndex) ?: updatedMessage
 
             when (appEvent) {
                 is AppStreamEvent.Content -> {
@@ -704,8 +708,17 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                             // 🎯 第一个非空内容到来时，标记contentStarted = true
                             // 这样思考框会收起，正式内容开始流式展示
                             if (!currentMessage.contentStarted) {
-                                updatedMessage = updatedMessage.copy(contentStarted = true)
+                                updatedMessage = latestMessageForUpdate().copy(
+                                    contentStarted = true,
+                                    currentWebSearchStage = null,
+                                    executionStatus = null
+                                )
                                 logger.debug("First content chunk received for message $aiMessageId, setting contentStarted=true")
+                            } else {
+                                updatedMessage = latestMessageForUpdate().copy(
+                                    currentWebSearchStage = null,
+                                    executionStatus = null
+                                )
                             }
                             // 🛡️ 持久化保护：实时流式期间也触发一次"可合流"的保存（内部1.8s防抖+CONFLATED）
                             // 目的：即使用户立刻切换会话，当前内容也能落入"最后打开"或历史
@@ -723,8 +736,9 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     if (code.isNotBlank()) {
                         val formattedCode = "\n```${appEvent.codeLanguage ?: "python"}\n$code\n```\n"
                         stateHolder.appendContentToMessage(aiMessageId, formattedCode, isImageGeneration)
-                        updatedMessage = updatedMessage.copy(
-                            executionStatus = "正在执行代码...",
+                        updatedMessage = latestMessageForUpdate().copy(
+                            executionStatus = null,
+                            currentWebSearchStage = null,
                             contentStarted = true
                         )
                     }
@@ -736,6 +750,11 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     if (!output.isNullOrBlank()) {
                         val formattedOutput = "\n```text\n$output\n```\n"
                         stateHolder.appendContentToMessage(aiMessageId, formattedOutput, isImageGeneration)
+                        updatedMessage = latestMessageForUpdate().copy(
+                            contentStarted = true,
+                            currentWebSearchStage = null,
+                            executionStatus = null
+                        )
                     }
                     // 如果有图片结果（虽然目前后端通过ImageGeneration事件发送，但保留兼容性）
                     if (!appEvent.imageUrl.isNullOrBlank()) {
@@ -745,6 +764,11 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                         // 2) 构建 Markdown 图片链接 (无尖括号，兼容性最好)
                         val imageMarkdown = "\n\n![Generated Image]($cleanUrl)\n\n"
                         stateHolder.appendContentToMessage(aiMessageId, imageMarkdown, isImageGeneration)
+                        updatedMessage = latestMessageForUpdate().copy(
+                            contentStarted = true,
+                            currentWebSearchStage = null,
+                            executionStatus = null
+                        )
                         logger.debug("Appended image markdown to UI state. url.len=${cleanUrl.length}")
                     }
                 }
@@ -764,8 +788,17 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                             stateHolder.appendContentToMessage(aiMessageId, filteredChunk, isImageGeneration)
                             // 🎯 第一个非空文本到来时，标记contentStarted = true
                             if (!currentMessage.contentStarted) {
-                                updatedMessage = updatedMessage.copy(contentStarted = true)
+                                updatedMessage = latestMessageForUpdate().copy(
+                                    contentStarted = true,
+                                    currentWebSearchStage = null,
+                                    executionStatus = null
+                                )
                                 logger.debug("First text chunk received for message $aiMessageId, setting contentStarted=true")
+                            } else {
+                                updatedMessage = latestMessageForUpdate().copy(
+                                    currentWebSearchStage = null,
+                                    executionStatus = null
+                                )
                             }
                             // 🛡️ 持久化保护：实时保存（可被防抖合并），防止切会话导致未落盘
                             viewModelScope.launch(Dispatchers.IO) {
@@ -786,8 +819,12 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     android.util.Log.d("ApiHandler", "   Note: Content already accumulated via Content events, skipping redundant processing")
                     
                     // 向后兼容：如果旧版本后端仍然发送此事件，确保内容已标记开始
-                    if (!currentMessage.contentStarted && appEvent.text.isNotBlank()) {
-                        updatedMessage = updatedMessage.copy(contentStarted = true)
+                    if (appEvent.text.isNotBlank()) {
+                        updatedMessage = updatedMessage.copy(
+                            contentStarted = true,
+                            currentWebSearchStage = null,
+                            executionStatus = null
+                        )
                         android.util.Log.d("ApiHandler", "   Marked contentStarted=true for backward compatibility")
                     }
                 }
@@ -833,10 +870,24 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     updatedMessage = updatedMessage.copy(outputType = appEvent.type)
                 }
                 is AppStreamEvent.WebSearchStatus -> {
-                    updatedMessage = updatedMessage.copy(currentWebSearchStage = appEvent.stage)
+                    updatedMessage = if (currentMessage.contentStarted || currentMessage.text.isNotBlank()) {
+                        updatedMessage.copy(
+                            currentWebSearchStage = null,
+                            executionStatus = null
+                        )
+                    } else {
+                        updatedMessage.copy(currentWebSearchStage = appEvent.stage)
+                    }
                 }
                 is AppStreamEvent.StatusUpdate -> {
-                    updatedMessage = updatedMessage.copy(currentWebSearchStage = appEvent.stage)
+                    updatedMessage = if (currentMessage.contentStarted || currentMessage.text.isNotBlank()) {
+                        updatedMessage.copy(
+                            currentWebSearchStage = null,
+                            executionStatus = null
+                        )
+                    } else {
+                        updatedMessage.copy(currentWebSearchStage = appEvent.stage)
+                    }
                     stateHolder.updateOpenClawGatewayStatus(appEvent.stage)
                     if (appEvent.stage.startsWith("agent_run:")) {
                         val runId = appEvent.stage.substringAfter(':', "").ifBlank { null }
@@ -847,7 +898,19 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     }
                 }
                 is AppStreamEvent.ExecutionStatusUpdate -> {
-                    updatedMessage = updatedMessage.copy(executionStatus = appEvent.status)
+                    updatedMessage = if (currentMessage.contentStarted || currentMessage.text.isNotBlank()) {
+                        updatedMessage.copy(
+                            currentWebSearchStage = null,
+                            executionStatus = null
+                        )
+                    } else if (appEvent.status.isNullOrBlank()) {
+                        updatedMessage.copy(
+                            currentWebSearchStage = null,
+                            executionStatus = null
+                        )
+                    } else {
+                        updatedMessage.copy(executionStatus = appEvent.status)
+                    }
                 }
                 is AppStreamEvent.WebSearchResults -> {
                     updatedMessage = updatedMessage.copy(
@@ -963,18 +1026,14 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                 }
                 is AppStreamEvent.ToolCall -> {
                     logger.debug("Received ToolCall event: ${appEvent.name}")
-                    val toolName = appEvent.name
-                    
-                    stateHolder.updateMessageStatus(
-                        aiMessageId,
-                        when (toolName.lowercase()) {
-                            "webfetch" -> "我先帮你读一下网页内容…"
-                            "firecrawl_search" -> "正在检索最新信息…"
-                            "web_search_exa" -> "正在检索最新信息…"
-                            else -> "我先调用一下 $toolName 看看…"
-                        },
-                        isImageGeneration
-                    )
+                    val toolStatus = appEvent.status?.takeIf { it.isNotBlank() }
+                    if (!toolStatus.isNullOrBlank() && !currentMessage.contentStarted && currentMessage.text.isBlank()) {
+                        stateHolder.updateMessageStatus(
+                            aiMessageId,
+                            toolStatus,
+                            isImageGeneration
+                        )
+                    }
                 }
                 // 其他事件类型（如 ImageGeneration）暂时不直接更新消息UI，由特定逻辑处理
                 else -> {

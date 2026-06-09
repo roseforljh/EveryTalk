@@ -13,6 +13,7 @@ import com.android.everytalk.statecontroller.ConversationScrollState
 import com.android.everytalk.statecontroller.safeApiConfigSummary
 import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.DataClass.VoiceBackendConfig
+import com.android.everytalk.util.storage.readAtMost
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -25,6 +26,8 @@ import java.io.FileOutputStream
 import java.util.Locale
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+
+private const val MAX_PERSISTED_IMAGE_DOWNLOAD_BYTES = 50L * 1024L * 1024L
 
 class DataPersistenceManager(
     private val context: Context,
@@ -133,12 +136,15 @@ class DataPersistenceManager(
                     readTimeout = 30000
                     instanceFollowRedirects = true
                 }
-                conn.connect()
-                if (conn.responseCode !in 200..299) return null
-                val mime = conn.contentType
-                val bytes = conn.inputStream.use { it.readBytes() }
-                conn.disconnect()
-                bytes to mime
+                try {
+                    conn.connect()
+                    if (conn.responseCode !in 200..299) return null
+                    val mime = conn.contentType
+                    val bytes = conn.inputStream.use { readAtMost(it, MAX_PERSISTED_IMAGE_DOWNLOAD_BYTES) }
+                    bytes to mime
+                } finally {
+                    conn.disconnect()
+                }
             } catch (e: Exception) {
                 Log.w(TAG, "persistImages: download failed for $url", e)
                 null

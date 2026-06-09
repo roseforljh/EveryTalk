@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.android.everytalk.config.PerformanceConfig
+import com.android.everytalk.ui.components.dialog.AppDialogButtonShape
 import com.android.everytalk.ui.components.dialog.AppDialogShape
 import com.android.everytalk.ui.components.dialog.appDialogBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogCancelColor
@@ -184,53 +185,58 @@ fun EditMessageDialog(
             }
         },
         confirmButton = {
-            Button(
-                onClick = {
-                    // 确认前确保同步本地文本到 ViewModel
-                    if (localText != editDialogInputText) {
-                        onEditDialogTextChanged(localText)
-                    }
-                    syncJob?.cancel()
-                    onConfirmMessageEdit()
-                },
-                modifier = Modifier
-                    .height(48.dp)
-                    .padding(horizontal = 4.dp),
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = confirmButtonColor,
-                    contentColor = confirmButtonTextColor
-                )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text(
-                    "确定",
-                    style = MaterialTheme.typography.labelLarge.copy(
-                        fontWeight = FontWeight.SemiBold
+                OutlinedButton(
+                    onClick = onDismissRequest,
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp),
+                    shape = AppDialogButtonShape,
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = dialogBg,
+                        contentColor = cancelButtonColor
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
+                ) {
+                    Text(
+                        "取消",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontWeight = FontWeight.SemiBold
+                        )
                     )
-                )
+                }
+
+                Button(
+                    onClick = {
+                        // 确认前确保同步本地文本到 ViewModel
+                        if (localText != editDialogInputText) {
+                            onEditDialogTextChanged(localText)
+                        }
+                        syncJob?.cancel()
+                        onConfirmMessageEdit()
+                    },
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp),
+                    shape = AppDialogButtonShape,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = confirmButtonColor,
+                        contentColor = confirmButtonTextColor
+                    )
+                ) {
+                    Text(
+                        "确定",
+                        style = MaterialTheme.typography.labelLarge.copy(
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    )
+                }
             }
         },
-        dismissButton = {
-            OutlinedButton(
-                onClick = onDismissRequest,
-                modifier = Modifier
-                    .height(48.dp)
-                    .padding(horizontal = 4.dp),
-                shape = RoundedCornerShape(24.dp),
-                colors = ButtonDefaults.outlinedButtonColors(
-                    containerColor = dialogBg,
-                    contentColor = cancelButtonColor
-                ),
-                border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
-            ) {
-                Text(
-                    "取消",
-                    style = MaterialTheme.typography.labelLarge.copy(
-                        fontWeight = FontWeight.SemiBold
-                    )
-                )
-            }
-        },
+        dismissButton = {},
         shape = AppDialogShape
     )
 }
