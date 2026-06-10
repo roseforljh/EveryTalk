@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.20.2](https://github.com/roseforljh/EveryTalk/compare/v1.20.1...v1.20.2) (2026-06-10)
+
+
+### Bug Fixes
+
+* harden app runtime, protocol, and build reliability ([9ec4200](https://github.com/roseforljh/EveryTalk/commit/9ec420013826e7e3f06948b0aa67aeb5eb567acf))
+* keep light input plus button borderless ([fe3fc56](https://github.com/roseforljh/EveryTalk/commit/fe3fc56731fa7ca3b62c2a1d1ffe3846bb803ab7))
+* merge remote release update before push ([44f581c](https://github.com/roseforljh/EveryTalk/commit/44f581cf3a850e380fe022bd0c69cab743989828))
+* stabilize chat progress and sanitize stream text ([f44aaef](https://github.com/roseforljh/EveryTalk/commit/f44aaefc79347ed8769977338d0aaf8919a03a55))
+
 ## [1.20.1](https://github.com/roseforljh/EveryTalk/compare/v1.20.0...v1.20.1) (2026-06-07)
 
 
