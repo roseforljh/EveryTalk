@@ -14,6 +14,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.android.everytalk.util.text.TextSanitizer
 import java.net.URLEncoder
 
 object JinaSearchService {
@@ -61,7 +62,7 @@ object JinaSearchService {
                 throw IllegalStateException("Jina Search 返回 HTTP ${response.status.value}: $errorBody")
             }
 
-            val content = response.bodyAsText()
+            val content = TextSanitizer.removeUnicodeReplacementCharacters(response.bodyAsText())
             if (content.isBlank()) {
                 throw IllegalStateException("Jina Search 返回空内容")
             }

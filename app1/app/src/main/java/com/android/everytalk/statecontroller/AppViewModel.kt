@@ -110,6 +110,19 @@ import java.util.Locale
 import java.util.TimeZone
 
 private const val MAX_URI_BASE64_BYTES = 10L * 1024L * 1024L
+private const val TOOL_STATUS_TARGET_MAX_CHARS = 24
+
+private fun compactToolStatusTarget(value: String, maxChars: Int = TOOL_STATUS_TARGET_MAX_CHARS): String {
+    val normalized = value.replace(Regex("\\s+"), " ").trim()
+    if (normalized.isBlank()) return ""
+    if (normalized.length <= maxChars) return normalized
+    return normalized.take((maxChars - 3).coerceAtLeast(1)).trimEnd() + "..."
+}
+
+private fun buildToolStatus(prefix: String, target: String): String {
+    val compactTarget = compactToolStatusTarget(target)
+    return if (compactTarget.isBlank()) prefix else "$prefix · $compactTarget"
+}
 
 internal fun shouldSkipReloadingLoadedHistory(
     requestedIndex: Int,
@@ -158,11 +171,14 @@ internal suspend fun executeSharedToolCall(
     fallbackExecutor: suspend (String, JsonObject) -> JsonElement,
 ): JsonElement {
     if (toolName.equals(BUILT_IN_WEBFETCH_TOOL_NAME, ignoreCase = true)) {
+        val url = arguments["url"]?.jsonPrimitive?.contentOrNull.orEmpty()
+        updateStatus(buildToolStatus("读取网页", url))
         val result = localWebFetchExecutor(arguments)
         val resultObj = result as? JsonObject
         val isSuccess = resultObj?.get("ok")?.jsonPrimitive?.booleanOrNull == true
         if (!isSuccess && mcpWebFetchFallback != null) {
             Log.d("ToolCall", "Jina Reader 失败，尝试 MCP webfetch fallback")
+            updateStatus(buildToolStatus("MCP读取网页", url))
             val mcpResult = mcpWebFetchFallback(arguments)
             updateStatus(null)
             return mcpResult
@@ -171,6 +187,7 @@ internal suspend fun executeSharedToolCall(
         return result
     }
     if (toolName.equals(BUILT_IN_CURRENT_TIME_TOOL_NAME, ignoreCase = true)) {
+        updateStatus("获取当前时间")
         val result = localCurrentTimeExecutor()
         updateStatus(null)
         return result
@@ -180,11 +197,17 @@ internal suspend fun executeSharedToolCall(
         if (query.isBlank()) {
             return buildJsonObject { put("error", JsonPrimitive("query is required")) }
         }
+        updateStatus(buildToolStatus("搜索网页", query))
         val result = localWebSearchExecutor(query)
         updateStatus(null)
         return result
     }
-    return fallbackExecutor(toolName, arguments)
+    updateStatus(buildToolStatus("调用MCP", toolName))
+    return try {
+        fallbackExecutor(toolName, arguments)
+    } finally {
+        updateStatus(null)
+    }
 }
 
 internal fun resolveHistoryIndexAfterSave(

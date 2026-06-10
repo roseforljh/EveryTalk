@@ -20,6 +20,7 @@ import com.android.everytalk.util.AppLogger
 import com.android.everytalk.util.PromptLeakGuard
 import com.android.everytalk.util.debug.PerformanceMonitor
 import com.android.everytalk.util.messageprocessor.MessageProcessor
+import com.android.everytalk.util.text.TextSanitizer
 import io.ktor.client.statement.HttpResponse
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -83,6 +84,19 @@ internal fun mergeWebSearchResults(
         .filter { it.href.isNotBlank() }
         .distinctBy { it.href }
         .mapIndexed { index, result -> result.copy(index = index + 1) }
+}
+
+private fun compactStreamToolName(name: String, maxChars: Int = 24): String {
+    val normalized = name.replace(Regex("\\s+"), " ").trim()
+    if (normalized.isBlank()) return ""
+    if (normalized.length <= maxChars) return normalized
+    return normalized.take((maxChars - 3).coerceAtLeast(1)).trimEnd() + "..."
+}
+
+private fun buildToolCallStatus(toolName: String): String {
+    val compactName = compactStreamToolName(toolName)
+    val prefix = if (compactName.contains("mcp", ignoreCase = true)) "调用MCP" else "调用工具"
+    return if (compactName.isBlank()) prefix else "$prefix · $compactName"
 }
 
 internal fun applyReasoningChunk(currentMessage: Message, reasoningChunk: String): Message {
@@ -692,7 +706,7 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
             when (appEvent) {
                 is AppStreamEvent.Content -> {
                     if (processedResult is com.android.everytalk.util.messageprocessor.ProcessedEventResult.ContentUpdated) {
-                        val deltaChunk = appEvent.text
+                        val deltaChunk = TextSanitizer.removeUnicodeReplacementCharacters(appEvent.text)
                         // 过滤纯空白内容，防止后端发送大量空格导致卡死
                         if (!deltaChunk.isNullOrEmpty() && deltaChunk.isNotBlank()) {
                             // 🛡️ 防 prompt 泄露：通过检测器过滤
@@ -746,7 +760,7 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                 is AppStreamEvent.CodeExecutionResult -> {
                     // 清除执行状态，追加执行结果
                     updatedMessage = updatedMessage.copy(executionStatus = null)
-                    val output = appEvent.codeExecutionOutput
+                    val output = appEvent.codeExecutionOutput?.let(TextSanitizer::removeUnicodeReplacementCharacters)
                     if (!output.isNullOrBlank()) {
                         val formattedOutput = "\n```text\n$output\n```\n"
                         stateHolder.appendContentToMessage(aiMessageId, formattedOutput, isImageGeneration)
@@ -774,7 +788,7 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                 }
                 is AppStreamEvent.Text -> {
                     if (processedResult is com.android.everytalk.util.messageprocessor.ProcessedEventResult.ContentUpdated) {
-                        val deltaChunk = appEvent.text
+                        val deltaChunk = TextSanitizer.removeUnicodeReplacementCharacters(appEvent.text)
                         // 过滤纯空白内容
                         if (!deltaChunk.isNullOrEmpty() && deltaChunk.isNotBlank()) {
                             // 🛡️ 防 prompt 泄露：通过检测器过滤
@@ -830,7 +844,7 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                 }
                 is AppStreamEvent.Reasoning -> {
                     if (processedResult is com.android.everytalk.util.messageprocessor.ProcessedEventResult.ReasoningUpdated) {
-                        val reasoningChunk = appEvent.text
+                        val reasoningChunk = TextSanitizer.removeUnicodeReplacementCharacters(appEvent.text)
                         if (reasoningChunk.isNotBlank()) {
                             val seededMessage = applyReasoningChunk(currentMessage, reasoningChunk)
                             if (seededMessage !== currentMessage) {
@@ -1027,6 +1041,7 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                 is AppStreamEvent.ToolCall -> {
                     logger.debug("Received ToolCall event: ${appEvent.name}")
                     val toolStatus = appEvent.status?.takeIf { it.isNotBlank() }
+                        ?: buildToolCallStatus(appEvent.name)
                     if (!toolStatus.isNullOrBlank() && !currentMessage.contentStarted && currentMessage.text.isBlank()) {
                         stateHolder.updateMessageStatus(
                             aiMessageId,

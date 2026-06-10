@@ -81,7 +81,7 @@ class AppViewModelWebFetchDispatchTest {
 
         assertSame(localResult, result)
         assertTrue(!fallbackCalled)
-        assertEquals(listOf<String?>(null), statusUpdates)
+        assertEquals(listOf("读取网页 · https://example.com", null), statusUpdates)
     }
 
     @Test
@@ -113,7 +113,32 @@ class AppViewModelWebFetchDispatchTest {
         assertSame(fallbackResult, result)
         assertEquals("search_docs", fallbackToolName)
         assertEquals(arguments, fallbackArguments)
-        assertTrue(statusUpdates.isEmpty())
+        assertEquals(listOf("调用MCP · search_docs", null), statusUpdates)
+    }
+
+    @Test
+    fun `web search tool reports compact search status`() = runTest {
+        val arguments = buildJsonObject {
+            put("query", JsonPrimitive("EveryTalk Android MCP 工具调用状态显示优化"))
+        }
+        val localResult = buildJsonObject {
+            put("ok", JsonPrimitive(true))
+        }
+        val statusUpdates = mutableListOf<String?>()
+
+        val result = executeSharedToolCall(
+            toolName = BUILT_IN_WEB_SEARCH_TOOL_NAME,
+            arguments = arguments,
+            updateStatus = { statusUpdates.add(it) },
+            localWebFetchExecutor = { error("webfetch executor should not run") },
+            localWebSearchExecutor = { localResult },
+            fallbackExecutor = { _, _ -> JsonObject(emptyMap()) }
+        )
+
+        assertSame(localResult, result)
+        assertTrue(statusUpdates.first().orEmpty().startsWith("搜索网页 · EveryTalk Android"))
+        assertTrue(statusUpdates.first().orEmpty().endsWith("..."))
+        assertEquals(null, statusUpdates.last())
     }
 
     @Test
@@ -138,6 +163,6 @@ class AppViewModelWebFetchDispatchTest {
 
         assertSame(localResult, result)
         assertTrue(!fallbackCalled)
-        assertEquals(listOf<String?>(null), statusUpdates)
+        assertEquals(listOf("获取当前时间", null), statusUpdates)
     }
 }

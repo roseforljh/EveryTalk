@@ -7,6 +7,7 @@ import com.android.everytalk.ui.components.MarkdownPart
 import com.android.everytalk.data.network.AppStreamEvent
 import com.android.everytalk.data.network.extractThinkTagContent
 import com.android.everytalk.util.AppLogger
+import com.android.everytalk.util.text.TextSanitizer
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.atomic.AtomicBoolean
@@ -33,7 +34,8 @@ class MessageProcessor {
      */
     private fun lightweightCleanup(text: String): String {
         // 全角空格归一化，减少排版异常
-        var s = text.replace("\u3000", " ")
+        var s = TextSanitizer.removeUnicodeReplacementCharacters(text)
+                    .replace("\u3000", " ")
                     .replace("&nbsp;", " ")
                     .replace("\u00A0", " ")
         return s
@@ -111,7 +113,7 @@ class MessageProcessor {
                 }
                 is AppStreamEvent.Reasoning -> {
                     if (event.text.isNotEmpty()) {
-                        currentReasoningBuilder.get().append(event.text)
+                        currentReasoningBuilder.get().append(lightweightCleanup(event.text))
                     }
                     ProcessedEventResult.ReasoningUpdated(currentReasoningBuilder.get().toString())
                 }
@@ -140,11 +142,14 @@ class MessageProcessor {
         logger.debug("Finalizing message ${message.id}: currentText=${currentText.length} chars, reasoning=${currentReasoning?.length ?: 0} chars")
 
         // 不做“整体重组/替换”。若本地缓冲为空，保留既有 message 字段，避免覆盖已持久化/已加载的文本。
-        val rawFinalText = if (currentText.isNotEmpty()) currentText else message.text
+        val rawFinalText = TextSanitizer.removeUnicodeReplacementCharacters(
+            if (currentText.isNotEmpty()) currentText else message.text
+        )
         val thinkTagExtraction = extractThinkTagContent(rawFinalText)
         val finalText = thinkTagExtraction.content
         val extractedReasoning = thinkTagExtraction.reasoning.takeIf { it.isNotBlank() }
         val finalReasoning = listOfNotNull(currentReasoning, message.reasoning, extractedReasoning)
+            .map(TextSanitizer::removeUnicodeReplacementCharacters)
             .filter { it.isNotBlank() }
             .joinToString("\n\n")
             .ifBlank { null }

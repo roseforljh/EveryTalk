@@ -2,9 +2,11 @@ package com.android.everytalk.util.messageprocessor
 
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.data.network.AppStreamEvent
 import com.android.everytalk.ui.components.MarkdownPart
 import io.mockk.every
 import io.mockk.mockkStatic
+import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -78,5 +80,24 @@ class MessageProcessorFinalizePartsTest {
 
         assertEquals("在这张截图的语境中，CTO 是 Community Takeover。", finalized.text)
         assertEquals("I've just received information about Bill Gates.", finalized.reasoning)
+    }
+
+    @Test
+    fun `stream processing removes unicode replacement characters from text and reasoning`() = runBlocking {
+        val processor = MessageProcessor().apply { initialize("session", "msg") }
+
+        processor.processStreamEvent(AppStreamEvent.Content("为什么���今天"), "msg")
+        processor.processStreamEvent(AppStreamEvent.Reasoning("推理���内容"), "msg")
+        val finalized = processor.finalizeMessageProcessing(
+            Message(
+                id = "msg",
+                text = "",
+                sender = Sender.AI,
+                contentStarted = true
+            )
+        )
+
+        assertEquals("为什么今天", finalized.text)
+        assertEquals("推理内容", finalized.reasoning)
     }
 }

@@ -86,9 +86,11 @@ open class MessageItemsController(
         if (message.contentStarted || message.text.isNotBlank()) {
             return null
         }
-        message.executionStatus?.takeIf { it.isNotBlank() }?.let { return it }
-        message.currentWebSearchStage?.takeIf { it.isNotBlank() }?.let { stage ->
-            normalizeStatusText(message).takeIf(::isDisplayableBackendStatus)?.let { return it }
+        message.executionStatus?.takeIf { it.isNotBlank() }?.let { status ->
+            formatStatusText(status)?.let { return it }
+        }
+        message.currentWebSearchStage?.takeIf { it.isNotBlank() }?.let {
+            normalizeStatusText(message).takeIf { it.isNotBlank() }?.let { return it }
         }
         return buildRuntimeLoadingStatus(message, elapsedMs, reasoningComplete)
     }
@@ -99,20 +101,14 @@ open class MessageItemsController(
             !message.reasoning.isNullOrBlank() -> "正在接收思考"
             else -> "等待首个响应"
         }
-        val runtimeParts = listOfNotNull(
-            message.providerName?.takeIf { it.isNotBlank() },
-            message.modelName?.takeIf { it.isNotBlank() }
-        )
         val elapsedSeconds = (elapsedMs / 1000L).coerceAtLeast(0L)
-        return (listOf(phase) + runtimeParts + "${elapsedSeconds}s").joinToString(" · ")
+        return "$phase · ${elapsedSeconds}s"
     }
 
     private fun isDisplayableBackendStatus(status: String): Boolean {
         val normalized = status.trim().lowercase()
         if (normalized.isBlank()) return false
         val hiddenExactStatuses = setOf(
-            "webfetch_reading",
-            "searching_web",
             "connected",
             "subscribed",
             "done"
@@ -608,14 +604,32 @@ open class MessageItemsController(
 
     protected fun normalizeStatusText(message: Message): String {
         val status = message.currentWebSearchStage.orEmpty()
-        if (status.startsWith("远程控制中")) return status
 
         val toolResultPrefix = "[工具结果] "
         return if (message.text.startsWith(toolResultPrefix)) {
-            "工具结果 · " + message.text.removePrefix(toolResultPrefix)
+            compactStatusText("工具结果 · " + message.text.removePrefix(toolResultPrefix))
         } else {
-            status
+            formatStatusText(status).orEmpty()
         }
+    }
+
+    private fun formatStatusText(rawStatus: String): String? {
+        val status = rawStatus.trim()
+        if (!isDisplayableBackendStatus(status)) return null
+
+        val normalized = status.lowercase()
+        val display = when (normalized) {
+            "searching_web" -> "搜索网页"
+            "webfetch_reading" -> "读取网页"
+            else -> status
+        }
+        return compactStatusText(display)
+    }
+
+    private fun compactStatusText(text: String, maxChars: Int = 28): String {
+        val normalized = text.replace(Regex("\\s+"), " ").trim()
+        if (normalized.length <= maxChars) return normalized
+        return normalized.take((maxChars - 3).coerceAtLeast(1)).trimEnd() + "..."
     }
 
     private fun createOtherMessageItems(message: Message): List<ChatListItem> {

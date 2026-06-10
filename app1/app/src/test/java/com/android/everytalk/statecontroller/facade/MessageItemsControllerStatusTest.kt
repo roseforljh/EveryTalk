@@ -54,7 +54,9 @@ class MessageItemsControllerStatusTest {
             )
         )
 
-        assertEquals("远程控制中 · 正在修改 /workspace/app/main.kt", result)
+        assertTrue(result.startsWith("远程控制中 · 正在修改"))
+        assertTrue(result.endsWith("..."))
+        assertTrue(result.length <= 28)
     }
 
     @Test
@@ -70,7 +72,9 @@ class MessageItemsControllerStatusTest {
             )
         )
 
-        assertEquals("工具结果 · fs.write: 已修改 /workspace/app/main.kt", result)
+        assertTrue(result.startsWith("工具结果 · fs.write: 已修改"))
+        assertTrue(result.endsWith("..."))
+        assertTrue(result.length <= 28)
     }
 
     @Test
@@ -147,7 +151,7 @@ class MessageItemsControllerStatusTest {
             6000L
         )
 
-        assertEquals("等待首个响应 · OpenAI · gpt-4o · 6s", text)
+        assertEquals("等待首个响应 · 6s", text)
     }
 
     @Test
@@ -173,8 +177,8 @@ class MessageItemsControllerStatusTest {
             0L
         )
 
-        assertEquals("等待首个响应 · 0s", webfetchText)
-        assertEquals("等待首个响应 · 0s", searchText)
+        assertEquals("读取网页", webfetchText)
+        assertEquals("搜索网页", searchText)
     }
 
     @Test
@@ -222,7 +226,7 @@ class MessageItemsControllerStatusTest {
             2500L
         )
 
-        assertEquals("正在接收思考 · Gemini · 2s", text)
+        assertEquals("正在接收思考 · 2s", text)
     }
 
     @Test
@@ -240,6 +244,25 @@ class MessageItemsControllerStatusTest {
         )
 
         assertEquals("搜索网页 2/5：正在读取 example.com", text)
+    }
+
+    @Test
+    fun `long web search stage is compacted for one line status`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+
+        val text = controller.resolveStreamingStageTextForTest(
+            Message(
+                id = "ai-long-progress",
+                text = "",
+                sender = Sender.AI,
+                currentWebSearchStage = "搜索网页 2/5：正在读取 https://example.com/some/really/long/path/for/status"
+            ),
+            0L
+        )
+
+        assertTrue(text.orEmpty().startsWith("搜索网页 2/5：正在读取"))
+        assertTrue(text.orEmpty().endsWith("..."))
+        assertTrue(text.orEmpty().length <= 28)
     }
 
     @Test
@@ -378,7 +401,9 @@ class MessageItemsControllerStatusTest {
         val items = controller.chatListItemsForTest()
         val loading = items.filterIsInstance<ChatListItem.LoadingIndicator>().single()
 
-        assertTrue(loading.text.orEmpty().startsWith("等待首个响应 · OpenAI · gpt-4o ·"))
+        assertTrue(loading.text.orEmpty().startsWith("等待首个响应 ·"))
+        assertFalse(loading.text.orEmpty().contains("OpenAI"))
+        assertFalse(loading.text.orEmpty().contains("gpt-4o"))
     }
 
     @Test
@@ -403,7 +428,9 @@ class MessageItemsControllerStatusTest {
         }
         val loading = items.filterIsInstance<ChatListItem.LoadingIndicator>().single()
 
-        assertTrue(loading.text.orEmpty().startsWith("等待首个响应 · Gemini · imagen-3 ·"))
+        assertTrue(loading.text.orEmpty().startsWith("等待首个响应 ·"))
+        assertFalse(loading.text.orEmpty().contains("Gemini"))
+        assertFalse(loading.text.orEmpty().contains("imagen-3"))
     }
 
     @Test
@@ -438,7 +465,9 @@ class MessageItemsControllerStatusTest {
         }
         val secondText = secondItems.filterIsInstance<ChatListItem.LoadingIndicator>().single().text
 
-        assertTrue(secondText.orEmpty().startsWith("等待首个响应 · Gemini · imagen-3 ·"))
+        assertTrue(secondText.orEmpty().startsWith("等待首个响应 ·"))
+        assertFalse(secondText.orEmpty().contains("Gemini"))
+        assertFalse(secondText.orEmpty().contains("imagen-3"))
         assertTrue(secondText.orEmpty() != firstText.orEmpty())
     }
 

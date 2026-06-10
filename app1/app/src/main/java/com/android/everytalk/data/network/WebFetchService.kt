@@ -13,6 +13,7 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.android.everytalk.util.text.TextSanitizer
 
 object WebFetchService {
     private const val TAG = "WebFetchService"
@@ -79,7 +80,7 @@ object WebFetchService {
                 )
             }
 
-            val content = response.bodyAsText()
+            val content = TextSanitizer.removeUnicodeReplacementCharacters(response.bodyAsText())
             if (content.isBlank()) {
                 return WebFetchResult(
                     success = false,

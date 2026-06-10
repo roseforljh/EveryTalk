@@ -24,6 +24,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import com.android.everytalk.util.text.TextSanitizer
 
 data class ExternalWebSearchResponse(
     val provider: ExternalWebSearchProvider,
@@ -151,9 +152,9 @@ object ExternalWebSearchService {
                 if (href.isBlank()) return@mapIndexedNotNull null
                 WebSearchResult(
                     index = index,
-                    title = item["title"]?.jsonPrimitive?.contentOrNull.orEmpty().ifBlank { href },
+                    title = cleanSearchText(item["title"]?.jsonPrimitive?.contentOrNull.orEmpty().ifBlank { href }),
                     href = href,
-                    snippet = item["content"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                    snippet = cleanSearchText(item["content"]?.jsonPrimitive?.contentOrNull.orEmpty()),
                 )
             }
 
@@ -163,12 +164,12 @@ object ExternalWebSearchService {
                 if (href.isBlank()) return@mapIndexedNotNull null
                 WebSearchResult(
                     index = index,
-                    title = item["title"]?.jsonPrimitive?.contentOrNull.orEmpty().ifBlank { href },
+                    title = cleanSearchText(item["title"]?.jsonPrimitive?.contentOrNull.orEmpty().ifBlank { href }),
                     href = href,
-                    snippet = item["text"]?.jsonPrimitive?.contentOrNull
+                    snippet = cleanSearchText(item["text"]?.jsonPrimitive?.contentOrNull
                         ?: extractExaHighlightText(item["highlights"])
                         ?: item["summary"]?.jsonPrimitive?.contentOrNull
-                        ?: "",
+                        ?: ""),
                 )
             }
 
@@ -177,13 +178,13 @@ object ExternalWebSearchService {
                     val item = element.jsonObject
                     val href = item["url"]?.jsonPrimitive?.contentOrNull.orEmpty()
                     if (href.isBlank()) return@mapIndexedNotNull null
-                    WebSearchResult(
-                        index = index,
-                        title = item["name"]?.jsonPrimitive?.contentOrNull.orEmpty().ifBlank { href },
-                        href = href,
-                        snippet = item["snippet"]?.jsonPrimitive?.contentOrNull.orEmpty(),
-                    )
-                }
+                WebSearchResult(
+                    index = index,
+                    title = cleanSearchText(item["name"]?.jsonPrimitive?.contentOrNull.orEmpty().ifBlank { href }),
+                    href = href,
+                    snippet = cleanSearchText(item["snippet"]?.jsonPrimitive?.contentOrNull.orEmpty()),
+                )
+            }
 
             ExternalWebSearchProvider.SERPAPI -> root["organic_results"]?.jsonArray.orEmpty().mapIndexedNotNull { index, element ->
                 val item = element.jsonObject
@@ -191,12 +192,16 @@ object ExternalWebSearchService {
                 if (href.isBlank()) return@mapIndexedNotNull null
                 WebSearchResult(
                     index = index,
-                    title = item["title"]?.jsonPrimitive?.contentOrNull.orEmpty().ifBlank { href },
+                    title = cleanSearchText(item["title"]?.jsonPrimitive?.contentOrNull.orEmpty().ifBlank { href }),
                     href = href,
-                    snippet = item["snippet"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                    snippet = cleanSearchText(item["snippet"]?.jsonPrimitive?.contentOrNull.orEmpty()),
                 )
             }
         }
+    }
+
+    private fun cleanSearchText(text: String): String {
+        return TextSanitizer.removeUnicodeReplacementCharacters(text)
     }
 
     private fun JsonElement.asJsonObjectOrNull() = runCatching { jsonObject }.getOrNull()

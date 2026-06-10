@@ -19,6 +19,22 @@ class LoadingStageIndicatorSpecTest {
     }
 
     @Test
+    fun `loading stage splits stable label from elapsed time`() {
+        assertEquals(
+            LoadingStageDisplayParts(label = "等待首个响应", elapsed = "6s"),
+            splitLoadingStageDisplayText("等待首个响应 · 6s")
+        )
+    }
+
+    @Test
+    fun `loading stage keeps non timer status as stable label`() {
+        assertEquals(
+            LoadingStageDisplayParts(label = "搜索网页 · example.com", elapsed = null),
+            splitLoadingStageDisplayText("搜索网页 · example.com")
+        )
+    }
+
+    @Test
     fun `loading stage visual spec uses stable fixed height`() {
         assertTrue(loadingStageViewportHeightDp() > 0f)
     }

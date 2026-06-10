@@ -1089,7 +1089,9 @@ fun ChatMessagesList(
                                 Text(
                                     text = item.text,
                                     style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurface
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
                                 )
                             }
                         }
@@ -1148,6 +1150,27 @@ internal fun resolveLoadingStageDisplayText(text: String?): String {
     return text?.takeIf { it.isNotBlank() }.orEmpty()
 }
 
+internal data class LoadingStageDisplayParts(
+    val label: String,
+    val elapsed: String?
+)
+
+internal fun splitLoadingStageDisplayText(text: String): LoadingStageDisplayParts {
+    val normalized = text.trim()
+    val match = Regex("^(.*)\\s+·\\s+(\\d+s)$").matchEntire(normalized)
+    return if (match != null) {
+        LoadingStageDisplayParts(
+            label = match.groupValues[1],
+            elapsed = match.groupValues[2]
+        )
+    } else {
+        LoadingStageDisplayParts(
+            label = normalized,
+            elapsed = null
+        )
+    }
+}
+
 internal fun loadingStageViewportHeightDp(): Float = 34f
 
 internal fun loadingStageMaskHeightDp(): Float = 10f
@@ -1165,10 +1188,13 @@ private fun LoadingStageIndicator(
     text: String,
     modifier: Modifier = Modifier,
 ) {
+    val displayParts = remember(text) { splitLoadingStageDisplayText(text) }
     val viewportHeight = loadingStageViewportHeightDp().dp
     val maskHeight = loadingStageMaskHeightDp().dp
     val breathingDotSize = loadingStageBreathingDotSizeDp().dp
     val dotColor = loadingStageDotColor(isLightTheme = !isSystemInDarkTheme())
+    val textStyle = MaterialTheme.typography.bodySmall
+    val textColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.92f)
     val infiniteTransition = rememberInfiniteTransition(label = "loadingStage")
     val lineAlpha by infiniteTransition.animateFloat(
         initialValue = 0.18f,
@@ -1214,22 +1240,47 @@ private fun LoadingStageIndicator(
                         .fillMaxWidth()
                         .padding(vertical = maskHeight)
                 ) {
-                    AnimatedContent(
-                        targetState = text,
-                        transitionSpec = {
-                            (slideInVertically(initialOffsetY = { it / 2 }) + fadeIn(animationSpec = tween(260)) + scaleIn(initialScale = 0.985f, animationSpec = tween(260)))
-                                .togetherWith(
-                                    slideOutVertically(targetOffsetY = { -it / 2 }) + fadeOut(animationSpec = tween(220)) + scaleOut(targetScale = 0.985f, animationSpec = tween(220))
-                                )
-                        },
-                        label = "LoadingStageTextAnimation"
-                    ) { stageText ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Text(
-                            text = stageText,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.92f),
+                            text = displayParts.label,
+                            style = textStyle,
+                            color = textColor,
                             maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = if (displayParts.elapsed == null) {
+                                Modifier.fillMaxWidth()
+                            } else {
+                                Modifier.weight(1f, fill = false)
+                            },
                         )
+                        displayParts.elapsed?.let { elapsed ->
+                            Text(
+                                text = " · ",
+                                style = textStyle,
+                                color = textColor,
+                                maxLines = 1,
+                            )
+                            AnimatedContent(
+                                targetState = elapsed,
+                                transitionSpec = {
+                                    (slideInVertically(initialOffsetY = { it / 2 }) + fadeIn(animationSpec = tween(260)) + scaleIn(initialScale = 0.985f, animationSpec = tween(260)))
+                                        .togetherWith(
+                                            slideOutVertically(targetOffsetY = { -it / 2 }) + fadeOut(animationSpec = tween(220)) + scaleOut(targetScale = 0.985f, animationSpec = tween(220))
+                                        )
+                                },
+                                label = "LoadingStageTimeAnimation"
+                            ) { elapsedText ->
+                                Text(
+                                    text = elapsedText,
+                                    style = textStyle,
+                                    color = textColor,
+                                    maxLines = 1,
+                                )
+                            }
+                        }
                     }
                 }
             }
