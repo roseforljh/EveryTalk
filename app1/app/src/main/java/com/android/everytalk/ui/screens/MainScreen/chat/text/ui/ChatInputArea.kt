@@ -920,7 +920,7 @@ fun ChatInputArea(
 
                     val plusStretchProgress = (plusMotionProgress * 2f).coerceIn(0f, 1f)
                     val plusRecoverProgress = ((plusMotionProgress - 0.5f) * 2f).coerceIn(0f, 1f)
-                    val plusBorderInset = 1.dp * (1f - plusMotionProgress)
+                    val plusBorderInset = if (isDarkTheme) 1.dp * (1f - plusMotionProgress) else 0.dp
                     val plusWidth = (48f + 16f * plusStretchProgress - 20f * plusRecoverProgress).dp - plusBorderInset * 2
                     val plusOffset = plusBorderInset + (-20f * plusStretchProgress - 40f * plusRecoverProgress).dp
                     val groupLeft = if (plusOffset < 0.dp) plusOffset * layoutProgress else 0.dp
@@ -931,7 +931,7 @@ fun ChatInputArea(
                     val plusBg = inputBackground
                     val borderColor = if (isDarkTheme) Color(0xFF48474C) else Color(0xFFD6D6D6)
                     val separatedBorderAlpha = if (isDarkTheme) (((layoutProgress - 0.15f) / 0.35f).coerceIn(0f, 1f)) else 0f
-                    val plusBorderAlpha = if (separationTarget > 0.5f) separatedBorderAlpha else 0f
+                    val plusBorderAlpha = if (isDarkTheme && separationTarget > 0.5f) separatedBorderAlpha else 0f
                     val collapsedInputBorderAlpha = if (isDarkTheme) (((0.35f - layoutProgress) / 0.35f).coerceIn(0f, 1f)) else 0f
                     val inputBorderAlpha = kotlin.math.max(separatedBorderAlpha, collapsedInputBorderAlpha)
 
@@ -973,7 +973,13 @@ fun ChatInputArea(
                                             offsetX = 0.dp
                                         )
                                         .background(plusBg, plusShape)
-                                        .border(1.dp, borderColor.copy(alpha = plusBorderAlpha), plusShape),
+                                        .then(
+                                            if (isDarkTheme) {
+                                                Modifier.border(1.dp, borderColor.copy(alpha = plusBorderAlpha), plusShape)
+                                            } else {
+                                                Modifier
+                                            }
+                                        ),
                                     contentAlignment = Alignment.CenterStart
                                 ) {
                                     IconButton(
