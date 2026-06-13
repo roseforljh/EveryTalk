@@ -4,8 +4,10 @@ import android.annotation.SuppressLint
 import android.content.ClipData
 import android.os.Build
 import android.view.WindowManager
+import android.webkit.ConsoleMessage
 import android.webkit.WebSettings
 import android.webkit.WebView
+import android.webkit.WebChromeClient
 import android.webkit.WebViewClient
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.animateFloatAsState
@@ -112,6 +114,152 @@ internal data class CodeViewerDialogAnimationTarget(
     val alpha: Float,
 )
 
+internal data class PreparedWebPreviewContent(
+    val templateFileName: String?,
+    val content: String,
+)
+
+internal fun prepareWebPreviewContent(
+    code: String,
+    language: String,
+): PreparedWebPreviewContent {
+    val normalizedLang = language.trim().lowercase()
+    return when (normalizedLang) {
+        "mermaid" -> PreparedWebPreviewContent("templates/mermaid.html", escapeHtml(code))
+        "echarts" -> PreparedWebPreviewContent("templates/echarts.html", code.replace("`", "\\`"))
+        "chartjs" -> PreparedWebPreviewContent("templates/chartjs.html", code.replace("`", "\\`"))
+        "flowchart", "flow" -> PreparedWebPreviewContent("templates/flowchart.html", code.replace("`", "\\`"))
+        "vega", "vega-lite" -> PreparedWebPreviewContent("templates/vega.html", code)
+        "infographic" -> PreparedWebPreviewContent("templates/html.html", renderInfographic(code))
+        "html" -> {
+            if (isCompleteHtmlDocument(code)) {
+                PreparedWebPreviewContent(null, code)
+            } else {
+                PreparedWebPreviewContent("templates/html.html", extractHtmlBodyOrSelf(code))
+            }
+        }
+        "svg", "xml" -> PreparedWebPreviewContent("templates/html.html", extractHtmlBodyOrSelf(code))
+        else -> PreparedWebPreviewContent("templates/html.html", code)
+    }
+}
+
+private fun isCompleteHtmlDocument(raw: String): Boolean {
+    val lower = raw.lowercase()
+    return lower.contains("<!doctype html") || lower.contains("<html")
+}
+
+internal fun formatWebPreviewConsoleMessage(
+    message: String?,
+    lineNumber: Int,
+    sourceId: String?,
+): String {
+    val safeMessage = message?.ifBlank { "Unknown preview error" } ?: "Unknown preview error"
+    val safeSource = sourceId
+        ?.substringAfterLast('/')
+        ?.ifBlank { "inline.html" }
+        ?: "inline.html"
+    return if (lineNumber > 0) {
+        "JS: $safeMessage ($safeSource:$lineNumber)"
+    } else {
+        "JS: $safeMessage"
+    }
+}
+
+private const val WEB_PREVIEW_DIAGNOSTICS_SNIPPET = """
+<style id="everytalk-preview-error-style">
+    #everytalk-preview-error-overlay {
+        position: fixed;
+        left: 12px;
+        right: 12px;
+        top: 12px;
+        z-index: 2147483647;
+        padding: 10px 12px;
+        border-radius: 12px;
+        background: rgba(176, 0, 32, 0.94);
+        color: #fff;
+        font: 12px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        white-space: pre-wrap;
+        word-break: break-word;
+        box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28);
+    }
+</style>
+<script>
+(function() {
+    if (window.__everytalkPreviewDiagnosticsInstalled) return;
+    window.__everytalkPreviewDiagnosticsInstalled = true;
+
+    function stringify(value) {
+        if (value instanceof Error) return value.stack || value.message || String(value);
+        if (typeof value === 'object') {
+            try { return JSON.stringify(value); } catch (e) { return String(value); }
+        }
+        return String(value);
+    }
+
+    function ensureOverlay() {
+        var existing = document.getElementById('everytalk-preview-error-overlay');
+        if (existing) return existing;
+        if (!document.body) return null;
+        var overlay = document.createElement('div');
+        overlay.id = 'everytalk-preview-error-overlay';
+        document.body.appendChild(overlay);
+        return overlay;
+    }
+
+    function showPreviewError(kind, message, source, line, column) {
+        var overlay = ensureOverlay();
+        if (!overlay) {
+            document.addEventListener('DOMContentLoaded', function() {
+                showPreviewError(kind, message, source, line, column);
+            }, { once: true });
+            return;
+        }
+        var location = source ? '\n' + source + (line ? ':' + line : '') + (column ? ':' + column : '') : '';
+        overlay.textContent = kind + ': ' + message + location;
+    }
+
+    window.addEventListener('error', function(event) {
+        showPreviewError('JS', event.message || 'Script error', event.filename, event.lineno, event.colno);
+    });
+
+    window.addEventListener('unhandledrejection', function(event) {
+        showPreviewError('Promise', stringify(event.reason || 'Unhandled rejection'));
+    });
+
+    var originalConsoleError = console.error;
+    console.error = function() {
+        var message = Array.prototype.map.call(arguments, stringify).join(' ');
+        showPreviewError('Console ERROR', message);
+        if (originalConsoleError) originalConsoleError.apply(console, arguments);
+    };
+})();
+</script>
+"""
+
+internal fun injectWebPreviewDiagnostics(raw: String): String {
+    if (raw.contains("__everytalkPreviewDiagnosticsInstalled")) return raw
+
+    val lower = raw.lowercase()
+    val headEnd = lower.indexOf("</head>")
+    if (headEnd >= 0) {
+        return raw.substring(0, headEnd) +
+            "\n$WEB_PREVIEW_DIAGNOSTICS_SNIPPET\n" +
+            raw.substring(headEnd)
+    }
+
+    val bodyIndex = lower.indexOf("<body")
+    if (bodyIndex >= 0) {
+        val bodyStartEnd = lower.indexOf(">", bodyIndex)
+        if (bodyStartEnd >= 0) {
+            return raw.substring(0, bodyStartEnd + 1) +
+                "\n$WEB_PREVIEW_DIAGNOSTICS_SNIPPET\n" +
+                raw.substring(bodyStartEnd + 1)
+        }
+    }
+
+    return "$WEB_PREVIEW_DIAGNOSTICS_SNIPPET\n$raw"
+}
+
 internal fun resolveCodeViewerDialogAnimationTarget(
     hasEntered: Boolean,
     isClosing: Boolean,
@@ -143,18 +291,8 @@ fun WebPreviewContent(
 ) {
     val context = LocalContext.current
 
-    val (templateFileName, processedCode) = remember(code, language) {
-        val normalizedLang = language.trim().lowercase()
-        when (normalizedLang) {
-            "mermaid" -> "templates/mermaid.html" to escapeHtml(code)
-            "echarts" -> "templates/echarts.html" to code.replace("`", "\\`")
-            "chartjs" -> "templates/chartjs.html" to code.replace("`", "\\`")
-            "flowchart", "flow" -> "templates/flowchart.html" to code.replace("`", "\\`")
-            "vega", "vega-lite" -> "templates/vega.html" to code
-            "infographic" -> "templates/html.html" to renderInfographic(code)
-            "html", "svg", "xml" -> "templates/html.html" to extractHtmlBodyOrSelf(code)
-            else -> "templates/html.html" to code
-        }
+    val previewContent = remember(code, language) {
+        prepareWebPreviewContent(code, language)
     }
 
     val isDarkPreview = previewBackgroundColor.luminance() < 0.5f
@@ -187,20 +325,25 @@ fun WebPreviewContent(
         ""
     }
 
-    val htmlContent = remember(templateFileName, processedCode, previewBackgroundColor, previewTextColor) {
+    val htmlContent = remember(previewContent, previewBackgroundColor, previewTextColor) {
         try {
-            val assetManager = context.assets
-            val inputStream = assetManager.open(templateFileName)
-            val reader = BufferedReader(InputStreamReader(inputStream))
-            val template = reader.readText()
-            reader.close()
-            template
-                .replace("ET_COLOR_SCHEME", if (isDarkPreview) "dark" else "light")
-                .replace("ET_THEME_CLASS", if (isDarkPreview) "everytalk-dark" else "everytalk-light")
-                .replace("ET_BACKGROUND_COLOR", previewBackgroundColor.toCssHex())
-                .replace("ET_TEXT_COLOR", previewTextCssColor)
-                .replace("ET_DARK_MODE_OVERRIDES", darkModeOverrides)
-                .replace("<!-- CONTENT_PLACEHOLDER -->", processedCode)
+            val diagnosticsContent = injectWebPreviewDiagnostics(previewContent.content)
+            if (previewContent.templateFileName == null) {
+                diagnosticsContent
+            } else {
+                val assetManager = context.assets
+                val inputStream = assetManager.open(previewContent.templateFileName)
+                val reader = BufferedReader(InputStreamReader(inputStream))
+                val template = reader.readText()
+                reader.close()
+                template
+                    .replace("ET_COLOR_SCHEME", if (isDarkPreview) "dark" else "light")
+                    .replace("ET_THEME_CLASS", if (isDarkPreview) "everytalk-dark" else "everytalk-light")
+                    .replace("ET_BACKGROUND_COLOR", previewBackgroundColor.toCssHex())
+                    .replace("ET_TEXT_COLOR", previewTextCssColor)
+                    .replace("ET_DARK_MODE_OVERRIDES", darkModeOverrides)
+                    .replace("<!-- CONTENT_PLACEHOLDER -->", diagnosticsContent)
+            }
         } catch (e: Exception) {
             e.printStackTrace()
             "<html><body>Error loading template: ${e.message}</body></html>"
@@ -208,6 +351,11 @@ fun WebPreviewContent(
     }
 
     var previewWebView by remember { mutableStateOf<WebView?>(null) }
+    var latestPreviewError by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(htmlContent) {
+        latestPreviewError = null
+    }
 
     DisposableEffect(Unit) {
         onDispose {
@@ -221,50 +369,82 @@ fun WebPreviewContent(
         }
     }
 
-    AndroidView(
-        factory = { ctx ->
-            WebView(ctx).apply {
-                previewWebView = this
-                settings.javaScriptEnabled = true
-                settings.domStorageEnabled = true
-                settings.allowFileAccess = true
-                settings.allowContentAccess = false
-                settings.disableFileUrlCrossOriginAccess()
-                settings.useWideViewPort = true
-                settings.loadWithOverviewMode = true
-                settings.builtInZoomControls = true
-                settings.displayZoomControls = false
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                    settings.isAlgorithmicDarkeningAllowed = false
-                } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    @Suppress("DEPRECATION")
-                    settings.forceDark = WebSettings.FORCE_DARK_OFF
+    Box(modifier = modifier) {
+        AndroidView(
+            factory = { ctx ->
+                WebView(ctx).apply {
+                    previewWebView = this
+                    settings.javaScriptEnabled = true
+                    settings.domStorageEnabled = true
+                    settings.allowFileAccess = true
+                    settings.allowContentAccess = false
+                    settings.disableFileUrlCrossOriginAccess()
+                    settings.useWideViewPort = true
+                    settings.loadWithOverviewMode = true
+                    settings.builtInZoomControls = true
+                    settings.displayZoomControls = false
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        settings.isAlgorithmicDarkeningAllowed = false
+                    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        @Suppress("DEPRECATION")
+                        settings.forceDark = WebSettings.FORCE_DARK_OFF
+                    }
+                    setBackgroundColor(previewBackgroundColor.toArgb())
+                    webViewClient = WebViewClient()
+                    webChromeClient = object : WebChromeClient() {
+                        override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+                            if (consoleMessage?.messageLevel() == ConsoleMessage.MessageLevel.ERROR) {
+                                latestPreviewError = formatWebPreviewConsoleMessage(
+                                    message = consoleMessage.message(),
+                                    lineNumber = consoleMessage.lineNumber(),
+                                    sourceId = consoleMessage.sourceId(),
+                                )
+                            }
+                            return true
+                        }
+                    }
+                    // 禁用 WebView 自身的滚动和点击拦截，让外层能够捕获事件（针对非全屏预览模式）
+                    isVerticalScrollBarEnabled = false
+                    isHorizontalScrollBarEnabled = false
+                    setOnTouchListener { v, event ->
+                        // 返回 false 允许事件冒泡到外层 Compose 点击监听器
+                        false
+                    }
                 }
-                setBackgroundColor(previewBackgroundColor.toArgb())
-                webViewClient = WebViewClient()
-                // 禁用 WebView 自身的滚动和点击拦截，让外层能够捕获事件（针对非全屏预览模式）
-                isVerticalScrollBarEnabled = false
-                isHorizontalScrollBarEnabled = false
-                setOnTouchListener { v, event ->
-                    // 返回 false 允许事件冒泡到外层 Compose 点击监听器
-                    false
+            },
+            update = { webView ->
+                if (webView.tag != htmlContent) {
+                    webView.tag = htmlContent
+                    webView.loadDataWithBaseURL(
+                        "file:///android_asset/templates/",
+                        htmlContent,
+                        "text/html",
+                        "UTF-8",
+                        null
+                    )
                 }
-            }
-        },
-        update = { webView ->
-            if (webView.tag != htmlContent) {
-                webView.tag = htmlContent
-                webView.loadDataWithBaseURL(
-                    "file:///android_asset/templates/",
-                    htmlContent,
-                    "text/html",
-                    "UTF-8",
-                    null
+            },
+            modifier = Modifier.fillMaxSize()
+        )
+
+        latestPreviewError?.let { errorText ->
+            Surface(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.errorContainer,
+            ) {
+                Text(
+                    text = errorText,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(12.dp),
                 )
             }
-        },
-        modifier = modifier
-    )
+        }
+    }
 }
 
 @Composable
