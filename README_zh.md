@@ -12,17 +12,6 @@
   <strong>一款革命性的 Android AI 对话客户端，集成前沿技术栈，支持任意大模型接入。<br/>从文本对话到图像生成，从语音交互到实时联网，打造您的专属 AI 助手。</strong>
 </p>
 
-<p align="center">
-  <a href="README.md">English</a> | <strong>中文</strong>
-</p>
-
-<p align="center">
-  <a href="https://github.com/roseforljh/EveryTalk/releases/latest"><img src="https://img.shields.io/github/v/release/roseforljh/EveryTalk?style=for-the-badge&label=release" alt="GitHub release (latest by date)"></a>
-  <a href="https://github.com/roseforljh/EveryTalk/blob/main/LICENSE.md"><img src="https://img.shields.io/github/license/roseforljh/EveryTalk?style=for-the-badge" alt="GitHub"></a>
-  <a href="https://github.com/roseforljh/EveryTalk/stargazers"><img src="https://img.shields.io/github/stars/roseforljh/EveryTalk?style=for-the-badge" alt="GitHub stars"></a>
-  <a href="https://t.me/+EKxpszVkOBc1MGJl"><img src="https://img.shields.io/badge/Telegram-Join%20Group-blue?style=for-the-badge&logo=telegram" alt="Telegram Group"></a>
-</p>
-
 ## 🧭 项目状态
 
 - **项目定位**: 面向 Android 的原生 AI 对话客户端，聚焦多模型接入、流式交互、多模态能力与本地化使用体验。

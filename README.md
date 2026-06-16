@@ -12,17 +12,6 @@
   <strong>A revolutionary Android AI client integrating cutting-edge technology stacks, supporting any LLM.<br/>From text chat to image generation, voice interaction, and real-time web search, build your custom AI companion.</strong>
 </p>
 
-<p align="center">
-  <strong>English</strong> | <a href="README_zh.md">中文</a>
-</p>
-
-<p align="center">
-  <a href="https://github.com/roseforljh/EveryTalk/releases/latest"><img src="https://img.shields.io/github/v/release/roseforljh/EveryTalk?style=for-the-badge&label=release" alt="GitHub release (latest by date)"></a>
-  <a href="https://github.com/roseforljh/EveryTalk/blob/main/LICENSE.md"><img src="https://img.shields.io/github/license/roseforljh/EveryTalk?style=for-the-badge" alt="GitHub"></a>
-  <a href="https://github.com/roseforljh/EveryTalk/stargazers"><img src="https://img.shields.io/github/stars/roseforljh/EveryTalk?style=for-the-badge" alt="GitHub stars"></a>
-  <a href="https://t.me/+EKxpszVkOBc1MGJl"><img src="https://img.shields.io/badge/Telegram-Join%20Group-blue?style=for-the-badge&logo=telegram" alt="Telegram Group"></a>
-</p>
-
 ## 🧭 Project Status
 
 - **Project Positioning**: A native Android AI client focusing on multi-model integration, real-time streaming, multimodal features, and local privacy.
