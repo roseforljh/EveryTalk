@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.20.3](https://github.com/roseforljh/EveryTalk/compare/v1.20.2...v1.20.3) (2026-06-16)
+
+
+### Bug Fixes
+
+* improve web preview error handling ([6aac2df](https://github.com/roseforljh/EveryTalk/commit/6aac2dfe7d8775fc8c182331debdc97f0f2167cd))
+* 修复代码预览长按复制崩溃 ([2673d57](https://github.com/roseforljh/EveryTalk/commit/2673d57c7bd5905c0991ee131545a76f80dbb9f8))
+* 对齐图像模式加载指示器样式 ([1f48876](https://github.com/roseforljh/EveryTalk/commit/1f488763dd623f5d2f700d2c842fa19471750748))
+* 对齐图像模式加载指示器样式，公开 LoadingStageIndicator 可见性 ([6e5c798](https://github.com/roseforljh/EveryTalk/commit/6e5c7980514c10da5fcd1578a79aa9d9187f7522))
+* 对齐图像模式输入框亮色主题样式与动画 ([c8cc51a](https://github.com/roseforljh/EveryTalk/commit/c8cc51ab4491ac405cbf3bfdb19ceb38242b7780))
+
 ## [1.20.2](https://github.com/roseforljh/EveryTalk/compare/v1.20.1...v1.20.2) (2026-06-10)
 
 
