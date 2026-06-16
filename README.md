@@ -1,15 +1,19 @@
-# EveryTalk - 新一代智能对话平台
+# EveryTalk - Next-Generation Intelligent Conversation Platform
 
 <p align="center">
-  <img src="app1/app/src/main/res/drawable/launcher_logo_asset.png" alt="EveryTalk Logo" width="200"/>
+  <img src="logo01.png" alt="EveryTalk Logo" width="200"/>
 </p>
 
 <p align="center">
-  <strong>🚀 极致流畅 · 🎨 高度定制 · 🔒 隐私至上 · 🌐 全能多模态</strong>
+  <strong>🚀 Ultra-smooth · 🎨 Highly Customizable · 🔒 Privacy First · 🌐 All-in-one Multimodal</strong>
 </p>
 
 <p align="center">
-  <strong>一款革命性的 Android AI 对话客户端，集成前沿技术栈，支持任意大模型接入。<br/>从文本对话到图像生成，从语音交互到实时联网，打造您的专属 AI 助手。</strong>
+  <strong>A revolutionary Android AI client integrating cutting-edge technology stacks, supporting any LLM.<br/>From text chat to image generation, voice interaction, and real-time web search, build your custom AI companion.</strong>
+</p>
+
+<p align="center">
+  <strong>English</strong> | <a href="README_zh.md">中文</a>
 </p>
 
 <p align="center">
@@ -19,296 +23,214 @@
   <a href="https://t.me/+EKxpszVkOBc1MGJl"><img src="https://img.shields.io/badge/Telegram-Join%20Group-blue?style=for-the-badge&logo=telegram" alt="Telegram Group"></a>
 </p>
 
-## 项目状态
+## 🧭 Project Status
 
-- **项目定位**: 面向 Android 的原生 AI 对话客户端，聚焦多模型接入、流式交互、多模态能力与本地化使用体验。
-- **当前平台**: Android 8.1 及以上，推荐 Android 10+；开发环境建议使用 Android Studio + JDK 17。
-- **能力范围**: 当前 README 所述能力覆盖文本对话、视觉理解、图像生成、语音交互、数学公式渲染、原生联网搜索与 OpenClaw 扩展接入。
-- **接入方式**: 支持直连兼容 API，也支持通过可选后端做请求代理、图像生成与附加能力扩展。
-- **使用门槛**: 首次使用至少需要一套可用的模型 API 地址、模型名称与对应密钥；部分高级能力依赖上游模型或后端支持。
-
-## 适合 / 不适合
-
-### 适合
-
-- 想在 Android 设备上统一接入多种大模型的个人用户
-- 需要流式响应、多模态输入、图像生成、语音交互的重度 AI 使用者
-- 希望基于 Kotlin + Jetpack Compose 学习原生 AI 应用实现的开发者
-- 需要通过 OpenClaw / Bridge 方案扩展远程能力的进阶用户
-
-### 不适合
-
-- 期望开箱即用、无需任何 API 配置即可直接使用的用户
-- 只关注单一模型官方体验，不需要多模型切换与自定义配置的用户
-- 需要 iOS、Web 或桌面端原生客户端的场景
-- 希望所有联网、语音、图像等能力都在纯离线环境下可用的场景
-
-## 使用前须知
-
-- 本项目当前主交付形态是 **Android 原生客户端**，核心工程位于 `app1/`。
-- 应用支持 **无后端直连模式**，但并不是所有模型都具备一致能力；例如联网搜索只对支持原生搜索的模型生效。
-- 图像生成、语音链路、后端代理、OpenClaw 等能力，是否可用取决于你接入的服务端或上游模型是否支持。
-- README 中的“支持”表示项目已经提供对应接入链路或消费能力，不等于任意模型在任意配置下都默认可用。
-- 仓库中同时包含 Android 客户端与可选后端相关代码，初次阅读时建议优先从 `README.md`、`docs/openclaw-integration.md` 和 `docs/plans/` 进入。
-
-## 文档入口
-
-- **项目总览**: 当前 `README.md`，用于了解定位、能力范围、接入方式与常见问题。
-- **OpenClaw 专题**: [`docs/openclaw-integration.md`](docs/openclaw-integration.md)，说明 EveryTalk -> Bridge -> Gateway 的接入链路与部署方式。
-- **方案沉淀**: `docs/plans/`，包含部分功能设计与演进方案，可用于理解历史决策与结构调整方向。
-- **Claude / Agent 相关文档**: `CLAUDE.md` 与 `AGENTS.md`，适合需要在本仓库内继续开发或协作的维护者。
+- **Project Positioning**: A native Android AI client focusing on multi-model integration, real-time streaming, multimodal features, and local privacy.
+- **Target Platform**: Android 8.1 and above (Android 10+ recommended); Development environment requires Android Studio + JDK 17.
+- **Capabilities**: Covers text conversation, vision, image generation, live voice, LaTeX offline rendering, native web search, and OpenClaw remote control integration.
+- **Connection Modes**: Supports direct upstream API calls (serverless), as well as routing through an optional proxy backend for image generation and extra endpoints.
+- **Minimum Requirement**: First-time use requires at least one set of API endpoint, model name, and API key. Advanced capabilities depend on upstream models or backend support.
 
 ---
 
-## 目录
+## 📌 Target Audience & Suitability
 
-- [🧭 项目状态](#项目状态)
-- [📌 适合--不适合](#适合--不适合)
-- [⚠️ 使用前须知](#使用前须知)
-- [📚 文档入口](#文档入口)
-- [🌟 核心特性](#-核心特性)
-- [🚀 快速开始](#-快速开始)
-- [👨‍💻 开发者指南](#-开发者指南)
-- [🛠️ 技术架构](#️-技术架构)
-- [📁 项目结构](#-项目结构)
-- [🔌 通信协议详解](#-通信协议详解)
-- [📚 技术实现文档](#-技术实现文档)
-- [🦞 OpenClaw 接入指南](#-openclaw-接入指南)
-- [🤝 贡献代码](#-贡献代码)
-- [❓ 常见问题](#-常见问题)
-- [📄 开源协议](#-开源协议)
+### Suitable For
+
+- Personal users who want to unify multiple LLMs (such as OpenAI o1/o3-mini, Gemini 2.5/2.0, Claude 3.7 Sonnet, DeepSeek-R1) in a single Android app.
+- Heavy AI users who require high-performance streaming, multimodal inputs, advanced image generation (Flux.1, Imagen 3, DALL-E 3), and voice conversations.
+- Developers wanting to learn modern native Android AI applications using Kotlin and Jetpack Compose.
+- Advanced users requiring remote server control via the OpenClaw / Bridge setup.
+
+### Not Suitable For
+
+- Users looking for a "ready-to-go" application with no API configurations or keys required.
+- Users who only want the official client experience of a single model and do not need customization.
+- Scenarios requiring native iOS, Web, or Desktop clients.
+- Environments where all search, voice, and image capabilities must work completely offline.
 
 ---
 
-## 🌟 核心特性
+## ⚠️ Prerequisites & Warnings
 
-### 🎯 智能对话系统
-- **🤖 全模型兼容**: 无缝接入 OpenAI、Google Gemini、Anthropic Claude、本地 Ollama 等任意兼容 API
-- **⚡ 极速流式响应**: 毫秒级流式输出，打字机效果丝般顺滑，当前采用直通式流式输出控制，接收到增量后直接累积并回传 UI
-- **🧠 推理过程可视化**: 支持 o1/o3 等推理模型的思考过程实时展示，让 AI 决策透明化
-- **🌐 深度联网搜索**:
-  - **Gemini**: 支持原生 Google Search 工具
-  - **Qwen**: 支持模型原生联网搜索
-- **🐍 代码解释器 (Code Execution)**:
-  - **Gemini**: 自动识别需要计算或数据处理的场景，在沙箱环境中运行 Python 代码并展示结果
-- **🔄 智能降级机制**: 遇到 Cloudflare 拦截自动切换直连模式，确保服务永不中断
-- **📐 数学公式渲染**: 支持 LaTeX 数学公式（$...$内联、$$...$$块级），离线渲染，深浅色主题自适应
-
-### 🎨 多模态交互
-- **🖼️ 视觉理解 (Vision)**:
-  - **图片识别**: 支持 GPT-4o, Gemini 1.5 Pro, Claude 3.5 Sonnet 等主流视觉模型
-  - **文档解析**: 智能识别 PDF、Word、Excel 等文档内容，直接与文档对话
-- **🎭 AI 图像生成**: 集成 DALL·E、Gemini Imagen 等主流图像生成模型
-- **🎙️ 实时语音对话 (Live Voice)**:
-  - **OpenAI**: 支持标准 TTS/STT 组合
-  - **Gemini**: 原生多模态音频流输入输出（低延迟）
-  - **Azure/Aliyun**: 接入云端高拟真语音合成服务
-- **🎨 图像编辑增强**: 支持图文混合编辑，智能图片压缩与优化
-
-### ⚙️ 高级定制
-- **🎛️ 深度参数控制**: Temperature、Top-P、Max Tokens 等参数精细调节
-- **📝 系统提示词管理**: 为不同场景创建专属 AI 人格
-- **🔧 多配置快速切换**: 保存多套 API 配置，一键切换不同模型
-- **🎨 图像比例预设**: 支持 1:1、16:9、9:16 等多种图像生成比例
-- **💾 会话历史管理**: 完整的对话历史记录与搜索功能
-- **☁️ 自动更新推送**: 每次发布新版本，自动通过 Telegram 频道推送通知
-
-### 🛡️ 安全与性能
-- **🔒 本地数据存储**: 所有配置和聊天记录仅存储在本地，零数据上传
-- **🔐 请求签名验证**: 内置 HMAC-SHA256 签名机制，防止中间人攻击
-- **⚡ 智能性能优化**:
-  - 流式输出控制器：直通式累积并回传 UI，支持长文本流式展示
-  - 智能滚动管理：用户手动滚动时自动暂停自动跟随
-- **🔄 容错与重试**: 多后端 URL 自动回退，确保服务高可用
-
-### 🎨 现代化 UI/UX
-- **🌓 完美深色模式**: 精心设计的浅色/深色主题，护眼舒适
-- **📱 Material Design 3**: 基于 Jetpack Compose 构建，遵循最新设计规范
-- **✨ 流畅动画效果**: Crossfade 过渡、平滑滚动、触觉反馈
-- **🎯 直观交互设计**: 侧边栏快速切换、长按操作菜单、智能输入建议
+- The primary deliverable of this project is the **native Android client** located in `app1/`.
+- The application supports a **serverless direct connection mode**, but not all models provide identical features (e.g., web search only works on models that support native search parameters).
+- Features like image generation, voice interaction, backend proxies, and OpenClaw depend on whether your upstream models or server endpoints support them.
+- "Supported" in this README means the client contains the integration pipeline, not that every model works with every config by default.
 
 ---
 
-## 🚀 快速开始
+## 📚 Document Index
 
-### 1. 下载安装
+- **Project Overview**: Current `README.md` (English) / `README_zh.md` (中文).
+- **OpenClaw Integration**: [`docs/openclaw-integration.md`](docs/openclaw-integration.md), detailing the setup of EveryTalk -> Bridge -> Gateway.
+- **Design Logs**: `docs/plans/`, containing design documentation and historical architectural decisions.
+- **Developer / Agent Docs**: `CLAUDE.md` and `AGENTS.md`, helpful for maintainers wanting to build and run tests.
 
-1.  前往项目的 [**Releases**](https://github.com/roseforljh/EveryTalk/releases/latest) 页面。
-2.  下载最新版本的 `app-release.apk` 文件。
-3.  在您的安卓设备上允许"安装未知来源的应用",然后点击 APK 文件进行安装。
+---
 
-### 1.1 自动发版与 Telegram 通知
+## 🌟 Core Features
 
-项目已配置完整的 CI/CD 流程（见 [.github/workflows/build-artifacts.yml](.github/workflows/build-artifacts.yml)）：
+### 🎯 Intelligent Chat System
+- **🤖 Full Model Compatibility**: Seamlessly connect to OpenAI (GPT-4o, o1, o3-mini), Google Gemini (Gemini 2.5, 2.0 Pro/Flash), Anthropic Claude (Claude 3.7 Sonnet, 3.5 Opus), Zhipu GLM, and local models via Ollama (Llama 3.3, Qwen 2.5, DeepSeek-R1).
+- **⚡ Ultra-fast Streaming**: Millisecond-level stream parser for fluid typing animation. Features a pass-through stream controller that accumulates tokens and updates UI immediately.
+- **🧠 Reasoning Chain Visualizer**: Real-time visualization of thinking processes for reasoning models like DeepSeek-R1, OpenAI o1, and o3-mini.
+- **🌐 Deep Web Search**:
+  - **Gemini**: Supports native Google Search tool call integration.
+  - **Qwen**: Supports native search parameters.
+  - **DeepSeek/OpenAI**: Displays search citations and results if supported by the endpoint.
+- **🐍 Code Interpreter**:
+  - **Gemini**: Detects computation/data execution tasks, runs Python code in a secure sandboxed environment, and renders output.
+- **🔄 Auto Fallback**: Seamlessly switches to direct connection mode when Cloudflare challenges are detected.
+- **📐 LaTeX Math Rendering**: Supports inline (`$...$`) and block (`$$...$$`) LaTeX formulas. Fully offline rendering with light/dark adaptive themes.
 
-1. **自动发版**：
-   - 合并 Release PR 后，自动构建 Release APK 和 AAB。
-   - 自动上传构建产物到 GitHub Releases。
+### 🎨 Multimodal Interactions
+- **🖼️ Vision & Documents**:
+  - **Image Recognition**: Support for GPT-4o, Gemini 2.0/2.5 Flash/Pro, Claude 3.7 Sonnet.
+  - **Document Analysis**: Directly upload and chat with PDF, Word, and Excel files (local PDF parser included).
+- **🎭 AI Image Generation**: Connects to Flux.1, Imagen 3, DALL-E 3, and other custom text-to-image endpoints.
+- **🎙️ Live Voice Dialogue**:
+  - **OpenAI**: High-quality TTS/STT combos or OpenAI Realtime audio protocols.
+  - **Gemini**: Low-latency native multimodal audio flow input/output (Live Voice).
+  - **Azure/Aliyun**: High-fidelity cloud text-to-speech engine integrations.
+- **🎨 Image Compression & Editing**: Smart on-device image optimization before upload.
 
-2. **Telegram 通知**：
-   - 构建完成后，机器人会自动向配置的 Telegram 频道发送新版本通知。
-   - 通知包含：版本号、更新日志链接、下载地址。
+### ⚙️ Customizations & Controls
+- **🎛️ Parameters Fine-tuning**: Fine-grained controls over Temperature, Top-P, Max Tokens, etc.
+- **📝 System Prompts**: Create and switch custom AI personas for various roles.
+- **🔧 Multi-Config Switcher**: Save multiple API profiles and switch models in one tap.
+- **🎨 Preset Aspect Ratios**: Choose from 1:1, 16:9, 9:16 for image generation.
+- **💾 History Manager**: Full conversation persistence and history search.
+- **☁️ Telegram Releases**: Get automatically notified of new APK releases in the official channel.
 
-3. **配置方法**：
-   - 在仓库 Settings → Secrets 中配置 `TELEGRAM_TOKEN` (Bot Token) 和 `TELEGRAM_TO` (频道 ID/用户名)。
-   - 配置 Android 签名密钥 (可选) 以生成正式签名的 APK。
+### 🛡️ Security & Performance
+- **🔒 On-Device Encryption**: Configuration and chat logs are stored locally with AES-256 encryption.
+- **🔐 Message Signatures**: Optional HMAC-SHA256 signature protocol verification for backend API calls.
+- **⚡ Performance Tuning**: Smart scroll controls (pauses autoscroll when user scrolls manually) and list view caching.
 
-### 2. 配置模型
+### 🎨 Modern UI/UX
+- **🌓 Perfect Dark Mode**: Curated dark and light themes using Material Design 3.
+- **✨ Smooth Motion**: Crossfades, spring animations, and tactile feedback.
+- **🎯 Dynamic Sidebar**: Easily switch chats, access settings, and manage multiple profiles.
 
-首次启动应用后,您需要配置连接 AI 模型的 API。
+---
 
-1.  从主屏幕左侧边缘向右滑动,或点击左上角的菜单按钮,打开侧边栏。
-2.  点击下方的 **"添加一套新配置"** 来创建您的专属连接。
-3.  在配置页面,填写您的服务信息:
-    - **配置名称**: 一个容易识别的名字 (例如: "我的本地模型")。
-    - **API 地址**: 您的 AI 服务 API 端点。
-    - **API 密钥**: 访问服务所需的密钥 (如果不需要,可以留空)。
-    - **模型名称**: 您想要使用的具体模型 ID (例如: `gpt-4`, `llama3-70b-8192`)。
-    - **系统提示词**: (可选)用于设定 AI 的角色和行为。
-4.  点击"保存",您的新配置就会出现在侧边栏列表中。
+## 🚀 Quick Start
 
-> **提示**: 应用支持无后端直连模式。当前联网搜索仅对支持原生搜索的模型生效（如 Gemini、Qwen）。
+### 1. Download & Installation
 
-### 3. 开始对话
+1. Go to the project's [**Releases**](https://github.com/roseforljh/EveryTalk/releases/latest) page.
+2. Download the latest `app-release.apk`.
+3. Allow "Install from Unknown Sources" on your Android device and install the package.
 
-1.  在侧边栏选择您想使用的配置。
-2.  返回主聊天界面,在底部的输入框中输入您的问题。
-3.  点击右侧的发送按钮,或点击 "+" 号上传图片进行多模态对话。
-4.  您还可以通过输入框上方的开关来启用 **联网搜索**（仅 Gemini、Qwen 等支持原生搜索的模型可用）或查看 **思考过程**。
+### 1.1 CI/CD & Telegram Notifications
 
-## 👨‍💻 开发者指南
+The project is configured with a automated pipeline (see [.github/workflows/build-artifacts.yml](.github/workflows/build-artifacts.yml)):
+1. **Auto Release**: Merging a Release PR builds and signs the APK and AAB, uploading them directly to GitHub Releases.
+2. **Telegram Broadcast**: A bot notifies the Telegram channel with release notes and download links instantly upon build completion.
 
-### 从源码构建
+### 2. Developer Configuration
 
-如果您想自行修改代码或体验最新功能,可以从源码构建应用:
+Before building or running the project locally, set up your keys:
 
-1.  克隆本仓库:
-    ```bash
-    git clone https://github.com/roseforljh/EveryTalk.git
-    cd EveryTalk
-    ```
-2.  使用 Android Studio 打开 `app1` 目录。
-3.  等待 Gradle 同步和构建完成。
-4.  连接您的安卓设备或使用模拟器,点击 "Run 'app'"。
-
-### 开发者配置
-
-应用支持通过构建参数注入一个"后端代理 URL 列表",用于容灾或并发请求:
-
-复制 `app1/local.properties.example` 为 `app1/local.properties`,并按需填写:
+1. Copy `app1/local.properties.example` and rename it to `app1/local.properties`.
+2. Populate the keys with your credentials:
 
 ```properties
-# 生产环境后端代理 URL (多个用逗号分隔)
-BACKEND_URLS_RELEASE="http://prod1.example.com/chat,http://prod2.example.com/chat"
-
-# 开发环境后端代理 URL
-BACKEND_URLS_DEBUG="http://127.0.0.1:8000/chat"
+# local.properties example configuration
+GOOGLE_API_KEY="AIzaSy..."
+GOOGLE_API_BASE_URL="https://generativelanguage.googleapis.com"
+DEFAULT_OPENAI_API_BASE_URL="https://api.openai.com"
+SILICONFLOW_API_KEY="sk-..."
+# For more parameters, refer to local.properties.example
 ```
-
-- 构建脚本会将该配置注入到 `BuildConfig.BACKEND_URLS` 中。
-- 默认使用串行模式(逐个尝试 URL),可在 `app/build.gradle.kts` 中开启并发模式。
-- 推荐将 URL 指向后端的聊天路由(如 `/chat`),图像生成路由会自动适配。
 
 ---
 
-## 🛠️ 技术架构
+## 🛠️ Technical Architecture
 
-### 前端技术栈
+### Frontend Technology Stack
 ```
 ┌─────────────────────────────────────────┐
 │         Jetpack Compose UI              │
-│  Material Design 3 · 响应式布局         │
+│     Material 3 · Responsive Layout      │
 └─────────────────────────────────────────┘
               ↓
 ┌─────────────────────────────────────────┐
-│      Kotlin Coroutines & Flow           │
-│  异步处理 · 流式数据 · 状态管理         │
+│       Kotlin Coroutines & Flow          │
+│   Async Process · SSE Stream · State    │
 └─────────────────────────────────────────┘
               ↓
 ┌─────────────────────────────────────────┐
-│         Ktor Client 网络层              │
-│  SSE 流式解析 · 多后端容错 · 直连降级   │
+│         Ktor Client Network             │
+│   SSE Parser · Fallback · Direct Call   │
 └─────────────────────────────────────────┘
               ↓
 ┌─────────────────────────────────────────┐
-│      本地数据持久化层                    │
-│  SharedPreferences · 文件管理           │
+│      Local Data (Room Database)         │
+│  Encrypted SharedPreferences · Files    │
 └─────────────────────────────────────────┘
 ```
 
-### 核心组件
-- **[`ApiClient.kt`](app1/app/src/main/java/com/android/everytalk/data/network/ApiClient.kt)**: 统一网络请求客户端，支持流式 SSE 解析、多后端容错、Cloudflare 拦截自动降级
-- **[`StreamingOutputController.kt`](app1/app/src/main/java/com/android/everytalk/util/streaming/StreamingOutputController.kt)**: 直通式流式输出控制器，接收增量后直接累积并回传 UI
-- **[`GeminiDirectClient.kt`](app1/app/src/main/java/com/android/everytalk/data/network/GeminiDirectClient.kt)** / **[`OpenAIDirectClient.kt`](app1/app/src/main/java/com/android/everytalk/data/network/OpenAIDirectClient.kt)**: 直连客户端，支持无后端模式
-- **[`VoiceChatSession.kt`](app1/app/src/main/java/com/android/everytalk/data/network/VoiceChatSession.kt)**: 语音对话会话管理，STT → Chat → TTS 完整链路
-- **[`ImageCompressionPreferences.kt`](app1/app/src/main/java/com/android/everytalk/config/ImageCompressionPreferences.kt)**: 智能图片压缩配置管理
+### Core Components
+- **[`ApiClient.kt`](app1/app/src/main/java/com/android/everytalk/data/network/ApiClient.kt)**: Manages network calls, SSE deserialization, error recovery, and Cloudflare bypass.
+- **[`StreamingOutputController.kt`](app1/app/src/main/java/com/android/everytalk/util/streaming/StreamingOutputController.kt)**: Pass-through streaming controller updating Compose states immediately.
+- **[`GeminiDirectClient.kt`](app1/app/src/main/java/com/android/everytalk/data/network/GeminiDirectClient.kt)** / **[`OpenAIDirectClient.kt`](app1/app/src/main/java/com/android/everytalk/data/network/OpenAIDirectClient.kt)**: Handles serverless connections directly to Google/OpenAI.
+- **[`VoiceChatSession.kt`](app1/app/src/main/java/com/android/everytalk/data/network/VoiceChatSession.kt)**: Manages continuous voice sessions (STT → Chat → TTS).
 
-### 系统要求
-| 组件 | 要求 |
+### System Requirements
+| Component | Requirement |
 |------|------|
-| **最低 Android 版本** | Android 8.1 (API 27) |
-| **推荐 Android 版本** | Android 10+ (API 29+) |
-| **开发 IDE** | Android Studio Koala+ |
-| **JDK 版本** | JDK 17+ |
-| **后端服务** | 可选，支持无后端直连模式 |
+| **Minimum SDK** | Android 8.1 (API 27) |
+| **Recommended SDK** | Android 10+ (API 29+) |
+| **IDE** | Android Studio Koala+ / Ladybug+ |
+| **JDK** | JDK 17+ |
+| **Backend** | Optional (Supports direct serverless mode) |
 
-### 后端服务（可选）
-- **开源后端**: [backdAiTalk](https://github.com/roseforljh/backdAiTalk)
-- **功能**: 请求代理、图像生成、速率限制
-- **部署**: 支持 Docker 一键部署，可配置多实例负载均衡
+### Backend Service (Optional Proxy)
+- **Open-source Proxy**: [backdAiTalk](https://github.com/roseforljh/backdAiTalk)
+- **Functions**: API proxying, remote image generation, rate limiting.
+- **Deployment**: Supports Docker containerized setup with multi-instance load balancing.
 
-## 📁 项目结构
+---
+
+## 📁 Project Structure
 
 ```
 EveryTalk/
-├── app1/                                    # 📱 Android 客户端
+├── app1/                                    # 📱 Android Client Module
 │   ├── app/
 │   │   ├── src/main/java/com/android/everytalk/
-│   │   │   ├── config/                      # ⚙️ 配置管理
-│   │   │   │   ├── BackendConfig.kt         # 后端 URL 配置
-│   │   │   │   └── ImageCompressionPreferences.kt  # 图片压缩配置
-│   │   │   ├── data/                        # 📊 数据层
-│   │   │   │   ├── network/                 # 🌐 网络请求
-│   │   │   │   │   ├── ApiClient.kt         # 统一 API 客户端
-│   │   │   │   │   ├── GeminiDirectClient.kt    # Gemini 直连
-│   │   │   │   │   ├── OpenAIDirectClient.kt    # OpenAI 直连
-│   │   │   │   │   ├── VoiceChatSession.kt      # 语音对话
-│   │   │   │   │   └── AppStreamEvent.kt        # 流式事件定义
-│   │   │   │   └── DataClass/               # 数据模型
-│   │   │   ├── statecontroller/             # 🎮 状态管理
-│   │   │   │   ├── AppViewModel.kt          # 主视图模型
-│   │   │   │   ├── facade/                  # 🌉 UI 状态门面 (原 statecontroller.ui)
-│   │   │   │   ├── StreamingBuffer.kt       # 流式缓冲
-│   │   │   │   └── ViewModelStateHolder.kt  # 状态持有者
-│   │   │   ├── ui/                          # 🎨 UI 层
-│   │   │   │   ├── screens/                 # 页面组件
-│   │   │   │   │   ├── MainScreen/          # 主聊天界面
-│   │   │   │   │   ├── ImageGeneration/     # 图像生成界面
-│   │   │   │   │   └── settings/            # 设置界面
-│   │   │   │   └── components/              # 通用组件
-│   │   │   └── util/                        # 🔧 工具类
-│   │   │       ├── StreamingOutputController.kt  # 流式输出控制
-│   │   │       ├── ImprovedContentDeduplicator.kt # 内容去重
-│   │   │       ├── RequestSignatureUtil.kt       # 请求签名
-│   │   │       └── ScrollController.kt           # 滚动控制
-│   │   └── build.gradle.kts                 # 构建配置
-│   └── local.properties.example             # 配置示例
-├── ET-Backend-code/                         # 🖥️ 后端服务（可选）
-│   ├── eztalk_proxy/                        # Python FastAPI 服务
-│   │   ├── api/                             # API 路由
-│   │   ├── services/                        # 业务逻辑
-│   │   └── docs/                            # 接口文档
-│   └── Dockerfile                           # Docker 部署
-└── README.md                                # 📖 项目文档
+│   │   │   ├── config/                      # ⚙️ Configurations
+│   │   │   ├── data/                        # 📊 Data Layer
+│   │   │   │   ├── network/                 # 🌐 Network APIs
+│   │   │   │   │   ├── ApiClient.kt         # Master Client
+│   │   │   │   │   ├── AppStreamEvent.kt    # SSE Event Models
+│   │   │   │   │   └── StreamEventParser.kt # Parser
+│   │   │   │   └── DataClass/               # Room Entities
+│   │   │   ├── statecontroller/             # 🎮 State Management
+│   │   │   │   ├── AppViewModel.kt          # Main ViewModel
+│   │   │   │   ├── facade/                  # UI State Facade
+│   │   │   │   └── ViewModelStateHolder.kt  # State Holder
+│   │   │   ├── ui/                          # 🎨 UI Screen Components
+│   │   │   │   ├── screens/                 # Screens
+│   │   │   │   └── components/              # UI Custom Components
+│   │   │   └── util/                        # 🔧 Utilities
+│   │   └── build.gradle.kts                 # Build Script
+│   └── local.properties.example             # Template Properties
+├── ET-Backend-code/                         # 🖥️ Optional Backend Proxy
+└── README.md                                # 📖 Master English Document
 ```
 
-## 🔌 通信协议详解
+---
 
-### 流式聊天接口
+## 🔌 API Protocols
 
-**端点**: `POST /chat`
+### Chat Completions (Stream)
 
-**请求格式**: `multipart/form-data`
+**Endpoint**: `POST /chat`
+
+**Request Format**: `multipart/form-data`
 ```
 ├── chat_request_json: ChatRequest (JSON)
 │   ├── model: string
@@ -316,10 +238,10 @@ EveryTalk/
 │   ├── useWebSearch: boolean
 │   ├── showReasoning: boolean
 │   └── generationConfig: {...}
-└── uploaded_documents: File[] (可选)
+└── uploaded_documents: File[] (Optional)
 ```
 
-**响应格式**: Server-Sent Events (SSE)
+**Response Format**: Server-Sent Events (SSE)
 ```
 data: {"type":"content","text":"Hello","output_type":null,"block_type":null}
 
@@ -332,35 +254,35 @@ data: {"type":"finish","reason":"stop"}
 data: [DONE]
 ```
 
-**事件类型**:
-- `content`: 流式文本内容
-- `content_final`: 最终完整内容
-- `reasoning`: 推理过程（o1/o3 模型）
-- `reasoning_finish`: 推理结束
-- `web_search_status`: 搜索状态更新
-- `web_search_results`: 搜索结果
-- `tool_call`: 工具调用
-- `error`: 错误信息
-- `finish`: 流结束
+**Event Types**:
+- `content`: Incremental token.
+- `content_final`: Completed message token.
+- `reasoning`: Mind chain tokens (OpenAI o1/o3-mini, DeepSeek-R1).
+- `reasoning_finish`: End of thinking step.
+- `web_search_status`: Real-time web crawling status.
+- `web_search_results`: Crawled search citations.
+- `tool_call`: Tool invocations.
+- `error`: Error logs.
+- `finish`: Stream close trigger.
 
-### 图像生成接口
+### Image Generations
 
-**端点**: `POST /v1/images/generations`
+**Endpoint**: `POST /v1/images/generations`
 
-**请求格式**: `application/json`
+**Request Format**: `application/json`
 ```json
 {
-  "model": "dall-e-3",
-  "prompt": "A beautiful sunset",
+  "model": "flux-1-schnell",
+  "prompt": "A beautiful sunset over the mountains",
   "image_size": "1024x1024",
   "batch_size": 1,
-  "apiAddress": "https://api.openai.com",
+  "apiAddress": "https://api.siliconflow.cn",
   "apiKey": "sk-...",
   "forceDataUri": true
 }
 ```
 
-**响应格式**:
+**Response Format**:
 ```json
 {
   "images": [
@@ -371,276 +293,90 @@ data: [DONE]
 }
 ```
 
-### 直连模式
-
-当后端不可用时，客户端自动切换到直连模式：
-
-**Gemini 直连**:
-- 端点: `https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent`
-- 支持: 流式对话、多模态输入、联网搜索
-
-**OpenAI 直连**:
-- 端点: `https://api.openai.com/v1/chat/completions`
-- 支持: 流式对话、多模态输入、推理模式；Qwen 等支持原生搜索的兼容模型可启用联网搜索
-
-### 安全机制
-
-**请求签名**: 所有请求使用 HMAC-SHA256 签名
-```
-X-Signature: HMAC-SHA256(secret, method + path + timestamp + body)
-X-Timestamp: Unix timestamp
-```
-
-**数据加密**:
-- 本地数据使用 AES-256 加密存储
-- 网络传输强制 HTTPS
-- 支持自定义 SSL 证书固定
-
 ---
 
-## 📚 技术实现文档
+## 🦞 OpenClaw Guide
 
-EveryTalk 不仅是一个应用，更是一个学习现代 Android AI 开发的实战案例。我们整理了核心功能的技术实现文档，供开发者参考：
-
-| 主题 | 说明 | 链接 |
-|------|------|------|
-| **OpenClaw 接入** | 说明如何通过 EveryTalk + VPS Bridge + OpenClaw Gateway 的方式远程控制龙虾，包含一键安装命令、ET 端填写方式与 Cloudflare Worker 入口。 | [👉 查看文档](docs/openclaw-integration.md) |
-
----
-
-## 🦞 OpenClaw 接入指南
-
-如果你希望通过 EveryTalk 在任意时间、任意地点远程控制部署在 VPS 上的龙虾，请查看：
-
-- [OpenClaw 接入指南](docs/openclaw-integration.md)
-
-当前推荐的最终安装方式是：
+If you wish to control your remote VPS instances running Claw via EveryTalk:
 
 ```bash
 curl -fsSL https://claw.everytalk.cc | bash
 ```
 
-文档中已经包含：
-- 远程单文件安装脚本方案
-- ET 端应填写的地址与 Key
-- Cloudflare Worker 短链接入口
-- Bridge 与 Gateway 的职责边界
+See [OpenClaw Integration](docs/openclaw-integration.md) for full configuration steps.
 
 ---
 
-## 🤝 贡献代码
+## 🤝 Contributions
 
-我们非常欢迎社区的贡献!无论是报告 Bug、提出功能建议,还是提交代码,都是对项目的巨大支持。
+1.  **Fork** this repository.
+2.  Create your feature branch (`git checkout -b feature/AmazingFeature`).
+3.  Commit changes (`git commit -m 'Add some AmazingFeature'`).
+4.  Push your branch (`git push origin feature/AmazingFeature`).
+5.  **Create a Pull Request**.
 
-1.  **Fork** 本仓库。
-2.  创建您的特性分支 (`git checkout -b feature/AmazingFeature`)。
-3.  提交您的修改 (`git commit -m 'Add some AmazingFeature'`)。
-4.  推送至您的分支 (`git push origin feature/AmazingFeature`)。
-5.  **创建 Pull Request**。
-
-请确保遵循 Kotlin 官方编码规范,并为您的代码添加必要的注释和测试！
+Make sure to follow Kotlin style guides and cover your changes with tests.
 
 ---
 
-## ❓ 常见问题
+## ❓ FAQ
 
 <details>
-<summary><b>Q1: 为什么无法连接到本地模型服务？</b></summary>
+<summary><b>Q1: Why can't I connect to my local Ollama server?</b></summary>
 
-**A:** 请检查以下几点：
-1. 确保手机与电脑在同一局域网
-2. 使用电脑的局域网 IP（如 `192.168.1.100`），而非 `localhost` 或 `127.0.0.1`
-3. 检查防火墙是否允许相应端口
-4. 确认后端服务已正常启动
-5. 尝试在浏览器中访问 API 地址测试连通性
+**A:** Check the following:
+1. Ensure your Android device and computer are on the same Wi-Fi network.
+2. Use your computer's local IP address (e.g., `192.168.1.100`), not `localhost` or `127.0.0.1`.
+3. Check your PC's firewall settings for the Ollama port (usually `11434`).
+4. Ensure Ollama is configured to listen on all interfaces by setting environment variable `OLLAMA_HOST=0.0.0.0`.
 </details>
 
 <details>
-<summary><b>Q2: 联网搜索是如何实现的？</b></summary>
+<summary><b>Q2: How does Web Search work?</b></summary>
 
-**A:** 当前仅保留模型原生搜索能力：
-1. **Gemini**：通过原生 `google_search` 工具执行联网搜索
-2. **Qwen**：通过上游接口的原生搜索参数启用联网搜索
-
-其他模型不会再走“客户端先搜索、再把结果注入上下文”的旧方案。搜索结果仍会以引用卡片形式展示，点击可查看来源链接。
+**A:** The app routes web queries natively:
+1. **Gemini**: Activates the native `google_search` tool call.
+2. **Qwen**: Sends the query with native search parameters (`enable_search=true`).
+3. **DeepSeek**: Triggers the search parameters.
+Search results will render in citation cards. Tap cards to open the link directly in your browser.
 </details>
 
 <details>
-<summary><b>Q3: 支持哪些 AI 模型？</b></summary>
+<summary><b>Q3: What are the latest supported models?</b></summary>
 
-**A:** 支持所有兼容 OpenAI API 格式的模型：
-- **商业模型**: OpenAI GPT-4/o1, Google Gemini, Anthropic Claude, 智谱 GLM 等
-- **开源模型**: 通过 Ollama、LM Studio、vLLM 等部署的 Llama、Qwen、DeepSeek 等
-- **图像模型**: DALL·E 3, Gemini Imagen, Stable Diffusion 等
-
-只需填入对应的 API 地址和密钥即可使用。
+**A:** EveryTalk supports all OpenAI-compatible APIs. Recommended latest models include:
+- **Reasoning Models**: DeepSeek-R1, OpenAI o1, o3-mini.
+- **Commercial Flagships**: Claude 3.7 Sonnet, Claude 3.5 Opus, Gemini 2.5 Pro/Flash, GPT-4o.
+- **Open-source / Local**: Llama 3.3, Qwen 2.5 (deployed via Ollama, LM Studio, vLLM).
+- **Image Generation**: Flux.1, Gemini Imagen 3, DALL-E 3.
 </details>
 
 <details>
-<summary><b>Q4: 如何配置后端代理？</b></summary>
+<summary><b>Q4: Does the app collect user telemetry?</b></summary>
 
-**A:** 后端代理是可选的，配置步骤：
-1. 克隆后端仓库: `git clone https://github.com/roseforljh/backdAiTalk.git`
-2. 配置环境变量（参考 `.env.example`）
-3. 使用 Docker 部署: `docker-compose up -d`
-4. 在应用的 `local.properties` 中填入后端 URL
-
-**无后端模式**：应用支持直连 Gemini 和 OpenAI；联网搜索仅在支持原生搜索的模型上可用。
+**A:** **No.** All settings, configurations, keys, and chat histories are saved locally in the SQLite Room Database with AES encryption. Telemetry SDKs are not included.
 </details>
 
 <details>
-<summary><b>Q5: 应用是否收集用户数据？</b></summary>
+<summary><b>Q5: The message list jumps when the streaming finishes. How do I fix it?</b></summary>
 
-**A:** **绝对不会！** 
-- ✅ 所有配置和聊天记录仅存储在本地设备
-- ✅ API 请求直接发送到您配置的服务端点
-- ✅ 不包含任何数据统计或追踪代码
-- ✅ 完全开源，代码可审计
-- ✅ 无需注册账号，无需联网激活
-</details>
-
-<details>
-<summary><b>Q6: 如何更新应用？</b></summary>
-
-**A:** 两种更新方式：
-1. **应用内更新**：设置 → 关于 → 检查更新
-2. **手动更新**：访问 [Releases](https://github.com/roseforljh/EveryTalk/releases) 页面下载最新 APK，直接覆盖安装
-
-应用会自动保留您的所有配置和聊天记录。
-</details>
-
-<details>
-<summary><b>Q7: 遇到 Cloudflare 拦截怎么办？</b></summary>
-
-**A:** 应用内置智能降级机制：
-1. 自动检测 Cloudflare 拦截
-2. 无缝切换到直连模式（Gemini/OpenAI）
-3. 保持对话连续性，用户无感知
-
-如果直连也失败，建议：
-- 更换 API 地址（使用反代或镜像站）
-- 配置自己的后端服务
-- 检查网络环境（VPN/代理设置）
-</details>
-
-<details>
-<summary><b>Q8: 如何报告 Bug 或提出建议？</b></summary>
-
-**A:** 欢迎通过以下方式反馈：
-1. [GitHub Issues](https://github.com/roseforljh/EveryTalk/issues)：提交 Bug 报告或功能建议
-2. 加入我们的 [Telegram 交流群](https://t.me/+EKxpszVkOBc1MGJl) 直接反馈
-3. 提供以下信息有助于快速定位问题：
-   - 设备型号和 Android 版本
-   - 应用版本号
-   - 详细的复现步骤
-   - 日志文件（设置 → 导出日志）
-</details>
-
-<details>
-<summary><b>Q9: 语音对话功能如何使用？</b></summary>
-
-**A:** 语音对话需要后端支持：
-1. 确保后端已配置 STT/TTS 服务
-2. 在聊天界面长按麦克风按钮开始录音
-3. 松开按钮自动识别并获取 AI 回复
-4. 支持多种音色选择（在设置中配置）
-</details>
-
-<details>
-<summary><b>Q10: 如何优化图片上传速度？</b></summary>
-
-**A:** 应用内置智能图片压缩：
-1. 进入设置 → 图片压缩配置
-2. 选择压缩模式：
-   - **自动选择**：根据用途自动优化
-   - **高质量**：最小压缩，保留细节
-   - **平衡**：默认模式，兼顾质量与速度
-   - **快速**：最大压缩，适合网络较慢时
-   - **自定义**：手动设置分辨率和质量
-3. 建议使用"平衡"或"快速"模式以提升上传速度
-</details>
-
-<details>
-<summary><b>Q11: 如何在对话中使用数学公式？</b></summary>
-
-**A:** 应用支持 LaTeX 数学公式渲染：
-
-**内联公式**（行内显示）：
-```
-这是一个内联公式 $E = mc^2$，它会在文本中显示。
-```
-
-**块级公式**（独立行显示）：
-```
-这是一个块级公式：
-
-$$
-\int_{-\infty}^{\infty} e^{-x^2} dx = \sqrt{\pi}
-$$
-```
-
-**支持的语法**：
-- 基础运算：`$a + b$`, `$x^2$`, `$\frac{a}{b}$`
-- 希腊字母：`$\alpha$`, `$\beta$`, `$\gamma$`
-- 积分微分：`$\int$`, `$\sum$`, `$\frac{d}{dx}$`
-- 矩阵：`$\begin{matrix} a & b \\ c & d \end{matrix}$`
-
-**特性**：
-- ✅ 离线渲染，无需网络
-- ✅ 深浅色主题自动适配
-- ✅ 流式渲染安全点检测（未闭合时缓冲，避免闪烁）
-- ✅ 与代码块、表格等其他格式兼容
-
-**示例对话**：
-```
-用户: 请解释二次方程公式
-AI: 二次方程 $ax^2 + bx + c = 0$ 的求根公式为：
-
-$$
-x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}
-$$
-
-其中 $\Delta = b^2 - 4ac$ 称为判别式。
-```
-</details>
-
-<details>
-<summary><b>Q12: AI流式输出结束后列表为什么会跳动？</b></summary>
-
-**A:** 这是由于流式渲染切换导致的高度突变问题，已在最新版本中修复：
-
-**问题原因**：
-- 流式期间使用单一 `MarkdownRenderer`（紧凑布局）
-- 完成后切换为分段渲染（`CodeBlock` + `TableRenderer`，包含工具条与更大padding）
-- LazyColumn 项高度突变导致可视区域"向上跳"
-
-**修复方案**：
-1. **等高占位策略**：流式期间为含代码块/表格的消息添加与完成态一致的占位高度
-2. **单次切换策略**：等待解析完成后一次性替换，避免中间态回退
-
-**详细说明**：参见 [STREAMING_JUMP_FIX.md](STREAMING_JUMP_FIX.md)
-
-**配置开关**（在 `PerformanceConfig.kt` 中）：
+**A:** This is caused by spacing variations between draft markdown and finished structured components (like code blocks and tables). We resolve this with two features: **streaming height placeholders** and **single-swap rendering**. You can tweak these options in `PerformanceConfig.kt`:
 ```kotlin
-ENABLE_STREAMING_HEIGHT_PLACEHOLDER = true  // 启用等高占位
-ENABLE_SINGLE_SWAP_RENDERING = true         // 启用单次切换
+ENABLE_STREAMING_HEIGHT_PLACEHOLDER = true
+ENABLE_SINGLE_SWAP_RENDERING = true
 ```
-
-如需回退到旧逻辑，将上述开关设为 `false` 即可。
 </details>
 
 ---
 
-## 📄 开源协议
+## 📄 License
 
-本项目采用 [MIT License](LICENSE.md) 开源协议。
-
-这意味着您可以自由使用、修改和分发本软件,无论是商业还是非商业用途,但需要保留原始的版权和许可声明。
+This project is licensed under the [MIT License](LICENSE.md).
 
 ---
 
 <p align="center">
-  <strong>如果这个项目对您有帮助,请给我们一个 ⭐ Star!</strong>
+  <strong>If this project helped you, please give us a ⭐ Star!</strong>
 </p>
 
 <p align="center">
