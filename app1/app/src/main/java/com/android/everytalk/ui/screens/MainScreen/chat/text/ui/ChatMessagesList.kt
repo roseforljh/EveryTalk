@@ -1184,7 +1184,7 @@ internal fun loadingStageDotColor(isLightTheme: Boolean): Color {
 internal fun loadingStageBackgroundColor(): Color = Color.Transparent
 
 @Composable
-private fun LoadingStageIndicator(
+internal fun LoadingStageIndicator(
     text: String,
     modifier: Modifier = Modifier,
 ) {

@@ -51,9 +51,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color
@@ -228,77 +226,10 @@ private fun ImageGenLoadingIndicator(
     val displayText = com.android.everytalk.ui.screens.MainScreen.chat.text.ui.resolveLoadingStageDisplayText(
         text
     )
-    val viewportHeight = com.android.everytalk.ui.screens.MainScreen.chat.text.ui.loadingStageViewportHeightDp().dp
-    val maskHeight = com.android.everytalk.ui.screens.MainScreen.chat.text.ui.loadingStageMaskHeightDp().dp
-    val breathingDotSize = com.android.everytalk.ui.screens.MainScreen.chat.text.ui.loadingStageBreathingDotSizeDp().dp
-    val dotColor = com.android.everytalk.ui.screens.MainScreen.chat.text.ui.loadingStageDotColor(
-        isLightTheme = !isSystemInDarkTheme()
+    com.android.everytalk.ui.screens.MainScreen.chat.text.ui.LoadingStageIndicator(
+        text = displayText,
+        modifier = modifier,
     )
-    val infiniteTransition = rememberInfiniteTransition(label = "imageGenLoading")
-    val lineAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.18f,
-        targetValue = 0.52f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 1800, easing = FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "imageGenLineAlpha",
-    )
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(viewportHeight),
-        contentAlignment = Alignment.CenterStart,
-    ) {
-        Box(
-            modifier = Modifier
-                .padding(start = 6.dp)
-                .size(breathingDotSize)
-                .background(
-                    color = dotColor.copy(alpha = lineAlpha),
-                    shape = CircleShape
-                )
-        )
-
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(start = 24.dp, end = 12.dp),
-            contentAlignment = Alignment.CenterStart,
-        ) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(viewportHeight)
-                    .clipToBounds()
-            ) {
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.CenterStart)
-                        .fillMaxWidth()
-                        .padding(vertical = maskHeight)
-                ) {
-                    AnimatedContent(
-                        targetState = displayText,
-                        transitionSpec = {
-                            (slideInVertically(initialOffsetY = { it / 2 }) + fadeIn(animationSpec = tween(260)) + scaleIn(initialScale = 0.985f, animationSpec = tween(260)))
-                                .togetherWith(
-                                    slideOutVertically(targetOffsetY = { -it / 2 }) + fadeOut(animationSpec = tween(220)) + scaleOut(targetScale = 0.985f, animationSpec = tween(220))
-                                )
-                        },
-                        label = "ImageGenLoadingTextAnimation"
-                    ) { stageText ->
-                        Text(
-                            text = stageText,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.92f),
-                            maxLines = 1,
-                        )
-                    }
-                }
-            }
-        }
-    }
 }
 
 @OptIn(ExperimentalFoundationApi::class)
