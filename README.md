@@ -1,10 +1,6 @@
 # EveryTalk - Next-Generation Intelligent Conversation Platform
 
 <p align="center">
-  <img src="logo01.png" alt="EveryTalk Logo" width="200"/>
-</p>
-
-<p align="center">
   <strong>🚀 Ultra-smooth · 🎨 Highly Customizable · 🔒 Privacy First · 🌐 All-in-one Multimodal</strong>
 </p>
 

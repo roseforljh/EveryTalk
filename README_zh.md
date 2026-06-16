@@ -1,10 +1,6 @@
 # EveryTalk - 新一代智能对话平台
 
 <p align="center">
-  <img src="logo01.png" alt="EveryTalk Logo" width="200"/>
-</p>
-
-<p align="center">
   <strong>🚀 极致流畅 · 🎨 高度定制 · 🔒 隐私至上 · 🌐 全能多模态</strong>
 </p>
 
