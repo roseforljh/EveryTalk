@@ -51,7 +51,9 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.Color
@@ -226,9 +228,12 @@ private fun ImageGenLoadingIndicator(
     val displayText = com.android.everytalk.ui.screens.MainScreen.chat.text.ui.resolveLoadingStageDisplayText(
         text
     )
-    val viewportHeight = 34.dp
-    val maskHeight = 10.dp
-    val breathingDotSize = 6.dp
+    val viewportHeight = com.android.everytalk.ui.screens.MainScreen.chat.text.ui.loadingStageViewportHeightDp().dp
+    val maskHeight = com.android.everytalk.ui.screens.MainScreen.chat.text.ui.loadingStageMaskHeightDp().dp
+    val breathingDotSize = com.android.everytalk.ui.screens.MainScreen.chat.text.ui.loadingStageBreathingDotSizeDp().dp
+    val dotColor = com.android.everytalk.ui.screens.MainScreen.chat.text.ui.loadingStageDotColor(
+        isLightTheme = !isSystemInDarkTheme()
+    )
     val infiniteTransition = rememberInfiniteTransition(label = "imageGenLoading")
     val lineAlpha by infiniteTransition.animateFloat(
         initialValue = 0.18f,
@@ -239,16 +244,6 @@ private fun ImageGenLoadingIndicator(
         ),
         label = "imageGenLineAlpha",
     )
-    val glowAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.06f,
-        targetValue = 0.14f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 2200, easing = LinearEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "imageGenGlowAlpha",
-    )
-
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -257,25 +252,10 @@ private fun ImageGenLoadingIndicator(
     ) {
         Box(
             modifier = Modifier
-                .matchParentSize()
-                .background(
-                    brush = androidx.compose.ui.graphics.Brush.radialGradient(
-                        colors = listOf(
-                            MaterialTheme.colorScheme.primary.copy(alpha = glowAlpha),
-                            Color.Transparent,
-                        ),
-                        radius = 220f,
-                        center = Offset(120f, viewportHeight.value * 1.6f),
-                    )
-                )
-        )
-
-        Box(
-            modifier = Modifier
                 .padding(start = 6.dp)
                 .size(breathingDotSize)
                 .background(
-                    color = Color.White.copy(alpha = lineAlpha),
+                    color = dotColor.copy(alpha = lineAlpha),
                     shape = CircleShape
                 )
         )
@@ -290,6 +270,7 @@ private fun ImageGenLoadingIndicator(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(viewportHeight)
+                    .clipToBounds()
             ) {
                 Box(
                     modifier = Modifier
@@ -315,36 +296,6 @@ private fun ImageGenLoadingIndicator(
                         )
                     }
                 }
-
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .fillMaxWidth()
-                        .height(maskHeight)
-                        .background(
-                            brush = androidx.compose.ui.graphics.Brush.verticalGradient(
-                                colors = listOf(
-                                    MaterialTheme.colorScheme.background,
-                                    MaterialTheme.colorScheme.background.copy(alpha = 0f),
-                                )
-                            )
-                        )
-                )
-
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .fillMaxWidth()
-                        .height(maskHeight)
-                        .background(
-                            brush = androidx.compose.ui.graphics.Brush.verticalGradient(
-                                colors = listOf(
-                                    MaterialTheme.colorScheme.background.copy(alpha = 0f),
-                                    MaterialTheme.colorScheme.background,
-                                )
-                            )
-                        )
-                )
             }
         }
     }
