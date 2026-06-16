@@ -12,8 +12,11 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -77,6 +80,7 @@ import coil3.compose.AsyncImage
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.ImageRatio
+import com.android.everytalk.ui.components.modifier.diffuseShadow
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.components.ImageRatioSelector
 import com.android.everytalk.ui.components.ImageGenCapabilities
@@ -548,7 +552,7 @@ fun ImageGenerationInputArea(
         }
     }
 
-    val keepInputSeparated = localText.isNotEmpty() && isFocused
+    val keepInputSeparated = localText.isNotEmpty() || selectedMediaItems.isNotEmpty()
     val separationTarget = if (keepInputSeparated) 1f else imeProgress
     val separationProgress by androidx.compose.animation.core.animateFloatAsState(
         targetValue = separationTarget,
@@ -660,12 +664,13 @@ fun ImageGenerationInputArea(
                     }
                 }
 
-                val inputBackground = if (isDarkTheme) Color(0xFF1F1F1F) else Color(0xFFE8E8E8)
+                val inputBackground = if (isDarkTheme) Color(0xFF1F1F1F) else Color.White
 
                 BoxWithConstraints(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .align(Alignment.CenterHorizontally),
+                        .align(Alignment.CenterHorizontally)
+                        .graphicsLayer { clip = false },
                     contentAlignment = Alignment.Center
                 ) {
                     val sep = separationProgress.coerceIn(0f, 1f)
@@ -679,7 +684,7 @@ fun ImageGenerationInputArea(
 
                     val plusStretchProgress = (plusMotionProgress * 2f).coerceIn(0f, 1f)
                     val plusRecoverProgress = ((plusMotionProgress - 0.5f) * 2f).coerceIn(0f, 1f)
-                    val plusBorderInset = 1.dp * (1f - plusMotionProgress)
+                    val plusBorderInset = if (isDarkTheme) 1.dp * (1f - plusMotionProgress) else 0.dp
                     val plusWidth = (48f + 16f * plusStretchProgress - 20f * plusRecoverProgress).dp - plusBorderInset * 2
                     val plusOffset = plusBorderInset + (-20f * plusStretchProgress - 40f * plusRecoverProgress).dp
                     val groupLeft = if (plusOffset < 0.dp) plusOffset * layoutProgress else 0.dp
@@ -689,9 +694,9 @@ fun ImageGenerationInputArea(
                     val plusShape = RoundedCornerShape(plusCorner)
                     val plusBg = inputBackground
                     val borderColor = if (isDarkTheme) Color(0xFF48474C) else Color(0xFFD6D6D6)
-                    val separatedBorderAlpha = ((layoutProgress - 0.15f) / 0.35f).coerceIn(0f, 1f)
-                    val plusBorderAlpha = if (separationTarget > 0.5f) separatedBorderAlpha else 0f
-                    val collapsedInputBorderAlpha = ((0.35f - layoutProgress) / 0.35f).coerceIn(0f, 1f)
+                    val separatedBorderAlpha = if (isDarkTheme) ((layoutProgress - 0.15f) / 0.35f).coerceIn(0f, 1f) else 0f
+                    val plusBorderAlpha = if (isDarkTheme && separationTarget > 0.5f) separatedBorderAlpha else 0f
+                    val collapsedInputBorderAlpha = if (isDarkTheme) ((0.35f - layoutProgress) / 0.35f).coerceIn(0f, 1f) else 0f
                     val inputBorderAlpha = kotlin.math.max(separatedBorderAlpha, collapsedInputBorderAlpha)
 
                     val inputShape = RoundedCornerShape(inputMinHeight / 2)
@@ -708,18 +713,28 @@ fun ImageGenerationInputArea(
                             modifier = Modifier
                                 .offset(x = -groupLeft)
                                 .zIndex(2f)
+                                .graphicsLayer { clip = false }
                         ) {
                             Box(
                                 modifier = Modifier
                                     .width(plusBoxWidth)
                                     .height(plusHeight)
                                     .wrapContentWidth(Alignment.Start)
+                                    .graphicsLayer { clip = false }
                             ) {
                                 Box(
                                     modifier = Modifier
                                         .offset(x = plusOffset)
                                         .width(plusWidth)
                                         .height(plusHeight)
+                                        .diffuseShadow(
+                                            color = Color.Black,
+                                            alpha = 0.12f * layoutProgress,
+                                            borderRadius = plusCorner,
+                                            shadowRadius = 24.dp,
+                                            offsetY = 0.dp,
+                                            offsetX = 0.dp
+                                        )
                                         .background(plusBg, plusShape)
                                         .border(1.dp, borderColor.copy(alpha = plusBorderAlpha), plusShape),
                                     contentAlignment = Alignment.CenterStart
@@ -825,14 +840,29 @@ fun ImageGenerationInputArea(
                         }
 
                         // 输入框
+                        val inputModifier = Modifier
+                            .offset(x = -groupLeft)
+                            .width(inputFieldWidth)
+                            .align(Alignment.CenterStart)
+                            .zIndex(1f)
+
+                        val shadowedInputModifier = if (!isDarkTheme) {
+                            inputModifier.diffuseShadow(
+                                color = Color.Black,
+                                alpha = 0.12f,
+                                borderRadius = inputMinHeight / 2,
+                                shadowRadius = 24.dp,
+                                offsetY = 0.dp,
+                                offsetX = 0.dp
+                            )
+                        } else {
+                            inputModifier
+                        }
+
                         BasicTextField(
                             value = localText,
                             onValueChange = { newText -> localText = newText },
-                            modifier = Modifier
-                                .offset(x = -groupLeft)
-                                .width(inputFieldWidth)
-                                .align(Alignment.CenterStart)
-                                .zIndex(1f)
+                            modifier = shadowedInputModifier
                                 .focusRequester(focusRequester)
                                 .onFocusChanged { focusState ->
                                     isFocused = focusState.isFocused
@@ -850,6 +880,7 @@ fun ImageGenerationInputArea(
                                 Column(
                                     modifier = Modifier
                                         .heightIn(min = inputMinHeight)
+                                        .animateContentSize(animationSpec = spring(stiffness = Spring.StiffnessMediumLow))
                                         .background(inputBackground, inputShape)
                                         .border(1.dp, borderColor.copy(alpha = inputBorderAlpha), inputShape)
                                         .padding(start = textStartPadding, end = 5.dp, top = safeVerticalPadding, bottom = safeVerticalPadding)
