@@ -2,13 +2,21 @@ package com.android.everytalk.ui.components
 
 import android.annotation.SuppressLint
 import android.content.ClipData
+import android.graphics.Typeface
 import android.os.Build
+import android.text.SpannableString
+import android.text.Spanned
+import android.text.style.ForegroundColorSpan
+import android.util.TypedValue
 import android.view.WindowManager
 import android.webkit.ConsoleMessage
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebChromeClient
 import android.webkit.WebViewClient
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.TextView
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
@@ -39,9 +47,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.selection.DisableSelection
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -72,17 +79,17 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
+import androidx.compose.ui.zIndex
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.android.everytalk.R
-import com.android.everytalk.ui.components.syntax.HighlightCache
 import com.android.everytalk.ui.components.syntax.SyntaxHighlightTheme
 import com.android.everytalk.ui.components.syntax.SyntaxHighlighter
 import com.android.everytalk.ui.components.content.isPreviewSupported
@@ -555,214 +562,312 @@ fun FullScreenCodeViewerDialog(
                 .background(bgColor)
                 .statusBarsPadding()
         ) {
-            // 顶部导航栏
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                // 左侧：关闭按钮
-                IconButton(onClick = { requestDismiss() }, modifier = Modifier.size(48.dp)) {
-                    Icon(
-                        imageVector = Icons.Default.Close,
-                        contentDescription = "关闭",
-                        tint = headerColor
-                    )
-                }
-
-                // 中间：胶囊按钮 (代码/预览)
-                if (canPreview) {
-                    val capsuleWidth = 140.dp
-                    val indicatorWidth = 70.dp
-                    val indicatorProgress =
-                        (pagerState.currentPage + pagerState.currentPageOffsetFraction).coerceIn(0f, 1f)
-                    val indicatorOffset = indicatorWidth * indicatorProgress
-
-                    Surface(
-                        shape = RoundedCornerShape(50),
-                        color = capsuleBgColor,
-                        modifier = Modifier.size(width = capsuleWidth, height = 36.dp)
+                // 顶部导航栏
+                DisableSelection {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .zIndex(1f)
+                            .background(bgColor)
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
                     ) {
-                        Box(modifier = Modifier.fillMaxSize()) {
-                            // 滑块指示器
-                            Box(
-                                modifier = Modifier
-                                    .padding(2.dp)
-                                    .offset(x = indicatorOffset)
-                                    .size(width = indicatorWidth - 4.dp, height = 32.dp)
-                                    .background(capsuleSelectedBgColor, RoundedCornerShape(50))
+                        // 左侧：关闭按钮
+                        IconButton(onClick = { requestDismiss() }, modifier = Modifier.size(48.dp)) {
+                            Icon(
+                                imageVector = Icons.Default.Close,
+                                contentDescription = "关闭",
+                                tint = headerColor
                             )
+                        }
 
-                            // 按钮文本层
-                            Row(
-                                modifier = Modifier.fillMaxSize(),
-                                verticalAlignment = Alignment.CenterVertically
+                        // 中间：胶囊按钮 (代码/预览)
+                        if (canPreview) {
+                            val capsuleWidth = 140.dp
+                            val indicatorWidth = 70.dp
+                            val indicatorProgress =
+                                (pagerState.currentPage + pagerState.currentPageOffsetFraction).coerceIn(0f, 1f)
+                            val indicatorOffset = indicatorWidth * indicatorProgress
+
+                            Surface(
+                                shape = RoundedCornerShape(50),
+                                color = capsuleBgColor,
+                                modifier = Modifier.size(width = capsuleWidth, height = 36.dp)
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .fillMaxHeight()
-                                        .clip(RoundedCornerShape(50))
-                                        .clickable(
-                                            interactionSource = remember { MutableInteractionSource() },
-                                            indication = null
+                                Box(modifier = Modifier.fillMaxSize()) {
+                                    // 滑块指示器
+                                    Box(
+                                        modifier = Modifier
+                                            .padding(2.dp)
+                                            .offset(x = indicatorOffset)
+                                            .size(width = indicatorWidth - 4.dp, height = 32.dp)
+                                            .background(capsuleSelectedBgColor, RoundedCornerShape(50))
+                                    )
+
+                                    // 按钮文本层
+                                    Row(
+                                        modifier = Modifier.fillMaxSize(),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .fillMaxHeight()
+                                                .clip(RoundedCornerShape(50))
+                                                .clickable(
+                                                    interactionSource = remember { MutableInteractionSource() },
+                                                    indication = null
+                                                ) {
+                                                    scope.launch { pagerState.animateScrollToPage(0) }
+                                                },
+                                            contentAlignment = Alignment.Center
                                         ) {
-                                            scope.launch { pagerState.animateScrollToPage(0) }
-                                        },
-                                    contentAlignment = Alignment.Center
+                                            Text(
+                                                text = "代码",
+                                                color = headerColor,
+                                                style = MaterialTheme.typography.labelLarge
+                                            )
+                                        }
+
+                                        Box(
+                                            modifier = Modifier
+                                                .weight(1f)
+                                                .fillMaxHeight()
+                                                .clip(RoundedCornerShape(50))
+                                                .clickable(
+                                                    interactionSource = remember { MutableInteractionSource() },
+                                                    indication = null
+                                                ) {
+                                                    scope.launch { pagerState.animateScrollToPage(1) }
+                                                },
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            Text(
+                                                text = "预览",
+                                                color = headerColor,
+                                                style = MaterialTheme.typography.labelLarge
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
+
+                        // 右侧：预览模式为分享，代码模式为复制
+                        val context = LocalContext.current
+                        AnimatedContent(
+                            targetState = isPreviewMode,
+                            transitionSpec = {
+                                (fadeIn(tween(220)) + scaleIn(
+                                    tween(220),
+                                    initialScale = 0.8f
+                                )).togetherWith(
+                                    fadeOut(tween(150)) + scaleOut(
+                                        tween(150),
+                                        targetScale = 0.6f
+                                    )
+                                )
+                            },
+                            label = "PreviewHeaderActionButton"
+                        ) { previewMode ->
+                            if (previewMode) {
+                                IconButton(
+                                    onClick = {
+                                        val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                                            type = "text/plain"
+                                            putExtra(android.content.Intent.EXTRA_TEXT, code)
+                                        }
+                                        context.startActivity(android.content.Intent.createChooser(shareIntent, "分享代码"))
+                                    },
+                                    modifier = Modifier.size(48.dp)
                                 ) {
-                                    Text(
-                                        text = "代码",
-                                        color = headerColor,
-                                        style = MaterialTheme.typography.labelLarge
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_gpt_share),
+                                        contentDescription = "分享",
+                                        tint = headerColor,
+                                        modifier = Modifier.size(24.dp)
                                     )
                                 }
-
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .fillMaxHeight()
-                                        .clip(RoundedCornerShape(50))
-                                        .clickable(
-                                            interactionSource = remember { MutableInteractionSource() },
-                                            indication = null
-                                        ) {
-                                            scope.launch { pagerState.animateScrollToPage(1) }
-                                        },
-                                    contentAlignment = Alignment.Center
+                            } else {
+                                IconButton(
+                                    onClick = {
+                                        scope.launch {
+                                            clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("code", code)))
+                                        }
+                                    },
+                                    modifier = Modifier.size(48.dp)
                                 ) {
-                                    Text(
-                                        text = "预览",
-                                        color = headerColor,
-                                        style = MaterialTheme.typography.labelLarge
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_gpt_copy),
+                                        contentDescription = "复制",
+                                        tint = headerColor,
+                                        modifier = Modifier.size(24.dp)
                                     )
                                 }
                             }
                         }
                     }
-                } else {
-                    Spacer(modifier = Modifier.weight(1f))
                 }
 
-                // 右侧：预览模式为分享，代码模式为复制
-                val context = LocalContext.current
-                AnimatedContent(
-                    targetState = isPreviewMode,
-                    transitionSpec = {
-                        (fadeIn(tween(220)) + scaleIn(
-                            tween(220),
-                            initialScale = 0.8f
-                        )).togetherWith(
-                            fadeOut(tween(150)) + scaleOut(
-                                tween(150),
-                                targetScale = 0.6f
-                            )
-                        )
-                    },
-                    label = "PreviewHeaderActionButton"
-                ) { previewMode ->
-                    if (previewMode) {
-                        IconButton(
-                            onClick = {
-                                val shareIntent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
-                                    type = "text/plain"
-                                    putExtra(android.content.Intent.EXTRA_TEXT, code)
-                                }
-                                context.startActivity(android.content.Intent.createChooser(shareIntent, "分享代码"))
-                            },
-                            modifier = Modifier.size(48.dp)
-                        ) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_gpt_share),
-                                contentDescription = "分享",
-                                tint = headerColor,
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
-                    } else {
-                        IconButton(
-                            onClick = {
-                                scope.launch {
-                                    clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("code", code)))
-                                }
-                            },
-                            modifier = Modifier.size(48.dp)
-                        ) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_gpt_copy),
-                                contentDescription = "复制",
-                                tint = headerColor,
-                                modifier = Modifier.size(24.dp)
-                            )
-                        }
-                    }
-                }
-            }
-
-            // 主体内容
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-            ) {
-                HorizontalPager(
-                    state = pagerState,
-                    modifier = Modifier.fillMaxSize(),
-                    userScrollEnabled = false
-                ) { page ->
-                    if (page == 1) {
-                        // 全屏预览时，在底部增加圆角和内边距，使其有悬浮感并避免遮挡底部系统导航条
-                        Surface(
-                            modifier = Modifier
-                                .fillMaxSize(),
-                            shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
-                            color = previewBgColor
-                        ) {
-                            WebPreviewContent(
+                // 主体内容
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f)
+                ) {
+                    HorizontalPager(
+                        state = pagerState,
+                        modifier = Modifier.fillMaxSize(),
+                        userScrollEnabled = false
+                    ) { page ->
+                        if (page == 1) {
+                            // 全屏预览时，在底部增加圆角和内边距，使其有悬浮感并避免遮挡底部系统导航条
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxSize(),
+                                shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp),
+                                color = previewBgColor
+                            ) {
+                                WebPreviewContent(
+                                    code = code,
+                                    language = language,
+                                    previewBackgroundColor = previewBgColor,
+                                    previewTextColor = previewTextColor,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
+                        } else {
+                            SelectableCodeTextView(
                                 code = code,
                                 language = language,
-                                previewBackgroundColor = previewBgColor,
-                                previewTextColor = previewTextColor,
-                                modifier = Modifier.fillMaxSize()
+                                isDarkTheme = isDarkTheme,
+                                headerColor = headerColor,
+                                codeTextColor = previewTextColor,
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(horizontal = 16.dp)
                             )
-                        }
-                    } else {
-                        val syntaxTheme = if (isDarkTheme) SyntaxHighlightTheme.Dark else SyntaxHighlightTheme.Light
-                        val highlightedCode = remember(code, language, isDarkTheme) {
-                            SyntaxHighlighter.highlight(code, language, syntaxTheme)
-                        }
-
-                        Column(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .verticalScroll(rememberScrollState())
-                                .padding(horizontal = 16.dp)
-                        ) {
-                            Text(
-                                text = language.trim().ifBlank { "CODE" }.uppercase(),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = headerColor,
-                                fontFamily = FontFamily.Monospace,
-                                modifier = Modifier.padding(bottom = 16.dp)
-                            )
-                            Text(
-                                text = highlightedCode,
-                                style = MaterialTheme.typography.bodyMedium.copy(
-                                    fontFamily = FontFamily.Monospace,
-                                    fontSize = 13.sp,
-                                    lineHeight = 18.sp
-                                ),
-                                softWrap = true
-                            )
-                            Spacer(modifier = Modifier.height(64.dp))
                         }
                     }
                 }
             }
         }
     }
+
+@Composable
+private fun SelectableCodeTextView(
+    code: String,
+    language: String,
+    isDarkTheme: Boolean,
+    headerColor: Color,
+    codeTextColor: Color,
+    modifier: Modifier = Modifier
+) {
+    val syntaxTheme = if (isDarkTheme) SyntaxHighlightTheme.Dark else SyntaxHighlightTheme.Light
+    val highlightedCode = remember(code, language, isDarkTheme) {
+        SyntaxHighlighter.highlight(code, language, syntaxTheme).toSpannableString(codeTextColor)
+    }
+    val languageLabel = remember(language) { language.trim().ifBlank { "CODE" }.uppercase() }
+    val headerArgb = headerColor.toArgb()
+    val codeArgb = codeTextColor.toArgb()
+
+    AndroidView(
+        modifier = modifier,
+        factory = { context ->
+            ScrollView(context).apply {
+                isFillViewport = true
+                overScrollMode = android.view.View.OVER_SCROLL_IF_CONTENT_SCROLLS
+                setBackgroundColor(android.graphics.Color.TRANSPARENT)
+
+                val density = resources.displayMetrics.density
+                val topPadding = (8f * density).toInt()
+                val bottomPadding = (64f * density).toInt()
+                val content = LinearLayout(context).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(0, topPadding, 0, bottomPadding)
+                }
+
+                val labelView = TextView(context).apply {
+                    typeface = Typeface.MONOSPACE
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+                    setTextColor(headerArgb)
+                    text = languageLabel
+                    includeFontPadding = true
+                    setPadding(0, 0, 0, (16f * density).toInt())
+                }
+
+                val codeView = TextView(context).apply {
+                    typeface = Typeface.MONOSPACE
+                    setTextSize(TypedValue.COMPLEX_UNIT_SP, 13f)
+                    setTextColor(codeArgb)
+                    setLineSpacing(0f, 1.0f)
+                    includeFontPadding = true
+                    setTextIsSelectable(true)
+                    setHorizontallyScrolling(false)
+                    text = highlightedCode
+                }
+
+                content.addView(
+                    labelView,
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    )
+                )
+                content.addView(
+                    codeView,
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    )
+                )
+                addView(
+                    content,
+                    android.view.ViewGroup.LayoutParams(
+                        android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                        android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+                    )
+                )
+                tag = Pair(labelView, codeView)
+            }
+        },
+        update = { scrollView ->
+            @Suppress("UNCHECKED_CAST")
+            val views = scrollView.tag as Pair<TextView, TextView>
+            val labelView = views.first
+            val codeView = views.second
+            labelView.text = languageLabel
+            labelView.setTextColor(headerArgb)
+            codeView.setTextColor(codeArgb)
+            codeView.text = highlightedCode
+        }
+    )
+}
+
+private fun AnnotatedString.toSpannableString(defaultColor: Color): SpannableString {
+    val spannable = SpannableString(text)
+    if (text.isEmpty()) return spannable
+    spannable.setSpan(
+        ForegroundColorSpan(defaultColor.toArgb()),
+        0,
+        text.length,
+        Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+    )
+    spanStyles.forEach { range ->
+        val color = range.item.color
+        if (color != Color.Unspecified) {
+            spannable.setSpan(
+                ForegroundColorSpan(color.toArgb()),
+                range.start.coerceIn(0, text.length),
+                range.end.coerceIn(0, text.length),
+                Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
+            )
+        }
+    }
+    return spannable
 }
 
 /**
