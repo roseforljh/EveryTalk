@@ -4,12 +4,14 @@ import android.content.Context
 import android.graphics.Typeface
 import android.os.Build
 import android.text.TextPaint
+import android.text.style.CharacterStyle
 import android.util.TypedValue
 import android.text.style.ForegroundColorSpan
 import android.text.style.MetricAffectingSpan
 import android.text.style.RelativeSizeSpan
 import android.text.style.StyleSpan
 import android.text.style.TypefaceSpan
+import android.text.style.UpdateAppearance
 import com.android.everytalk.ui.components.ChatMarkdownTextStyle
 import io.noties.markwon.AbstractMarkwonPlugin
 import io.noties.markwon.Markwon
@@ -24,6 +26,7 @@ import io.noties.markwon.inlineparser.MarkwonInlineParserPlugin
 import io.noties.markwon.movement.MovementMethodPlugin
 import org.commonmark.node.Code
 import org.commonmark.node.StrongEmphasis
+import kotlin.math.roundToInt
 
 internal fun chatGptHeadingRelativeSizeMultiplier(level: Int): Float {
     return ChatMarkdownTextStyle.headingRelativeSizeMultiplier(level)
@@ -40,7 +43,15 @@ internal fun chatInlineCodeTextColorArgb(isDark: Boolean): Int {
 }
 
 internal fun chatHeadingTextWeight(level: Int): Int {
-    return if (level.coerceIn(1, 6) <= 3) 600 else 400
+    return if (level.coerceIn(1, 6) <= 5) 700 else 400
+}
+
+internal fun chatHeadingTextAlpha(level: Int): Float {
+    return when (level.coerceIn(1, 6)) {
+        2, 4 -> 0.7f
+        5 -> 0.5f
+        else -> 1f
+    }
 }
 
 internal class ChatTextWeightSpan(
@@ -65,6 +76,15 @@ internal class ChatTextWeightSpan(
     }
 }
 
+internal class ChatTextAlphaSpan(
+    val alpha: Float
+) : CharacterStyle(), UpdateAppearance {
+    override fun updateDrawState(textPaint: TextPaint) {
+        val alphaChannel = (alpha.coerceIn(0f, 1f) * 255f).roundToInt().coerceIn(0, 255)
+        textPaint.color = (textPaint.color and 0x00FFFFFF) or (alphaChannel shl 24)
+    }
+}
+
 object MarkwonCache {
 
     private val cacheMap = mutableMapOf<String, Markwon>()
@@ -77,7 +97,7 @@ object MarkwonCache {
         imageClickListener: ((String) -> Unit)? = null
     ): Markwon {
         val roundedSize = textSize.toInt()
-        val cacheKey = "v39_dark=${isDark}_size=${roundedSize}"
+        val cacheKey = "v41_dark=${isDark}_size=${roundedSize}"
 
         synchronized(lock) {
             cacheMap[cacheKey]?.let { return it }
@@ -115,10 +135,17 @@ object MarkwonCache {
                     override fun configureSpansFactory(builder: MarkwonSpansFactory.Builder) {
                         builder.setFactory(org.commonmark.node.Heading::class.java) { _, props ->
                             val level = CoreProps.HEADING_LEVEL.get(props) ?: 1
-                            arrayOf<Any>(
-                                ChatTextWeightSpan(chatHeadingTextWeight(level)),
-                                RelativeSizeSpan(chatGptHeadingRelativeSizeMultiplier(level))
-                            )
+                            buildList<Any> {
+                                val alpha = chatHeadingTextAlpha(level)
+                                add(ChatTextWeightSpan(chatHeadingTextWeight(level)))
+                                add(RelativeSizeSpan(chatGptHeadingRelativeSizeMultiplier(level)))
+                                if (alpha < 1f) {
+                                    add(ChatTextAlphaSpan(alpha))
+                                }
+                                if (level.coerceIn(1, 6) == 3) {
+                                    add(StyleSpan(Typeface.ITALIC))
+                                }
+                            }.toTypedArray()
                         }
 
                         builder.setFactory(StrongEmphasis::class.java) { _, _ ->

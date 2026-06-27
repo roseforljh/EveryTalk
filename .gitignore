@@ -66,6 +66,13 @@ app1/app/src/main/java/**/graphify-out/
 !app1/gradle/libs.versions.toml
 
 # ===== 允许文档文件 =====
+!docs/
+!docs/analysis/
+!docs/analysis/gpt-android-markdown-typography-evidence.md
+!docs/plans/
+docs/plans/*
+!docs/plans/2026-06-19-gpt-android-markdown-typography-alignment.md
+!docs/plans/2026-06-19-gpt-level-native-markdown-renderer.md
 !app1/*.md
 !app1/preview/
 !app1/preview/**

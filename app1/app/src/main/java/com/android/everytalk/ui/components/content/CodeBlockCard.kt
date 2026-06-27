@@ -61,6 +61,8 @@ import kotlinx.coroutines.launch
  */
 val LocalStickyHeaderTop = compositionLocalOf { Float.NaN }
 
+internal const val GPT_CODE_BLOCK_CONTENT_PADDING_DP = 16f
+
 internal fun resolveCodeBlockScrollTarget(isStreaming: Boolean, maxValue: Int): Int {
     return if (isStreaming) maxValue.coerceAtLeast(0) else 0
 }
@@ -429,8 +431,7 @@ fun CodeBlockCard(
                             ),
                             softWrap = true,
                             modifier = Modifier
-                                .padding(start = 12.dp, end = 12.dp, top = 8.dp)
-                                .padding(bottom = if (isAtMaxHeight) 0.dp else 24.dp)
+                                .padding(GPT_CODE_BLOCK_CONTENT_PADDING_DP.dp)
                         )
                     }
                 }

@@ -340,7 +340,8 @@ private fun TextView.applyMarkdownLayoutMode(pureMathBlockMessage: Boolean) {
         breakStrategy = Layout.BREAK_STRATEGY_SIMPLE
         hyphenationFrequency = Layout.HYPHENATION_FREQUENCY_NONE
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            justificationMode = LineBreaker.JUSTIFICATION_MODE_INTER_WORD
+            // 保持 AI 正文左对齐，避免短中文行被两端拉宽。
+            justificationMode = LineBreaker.JUSTIFICATION_MODE_NONE
         }
     }
 }

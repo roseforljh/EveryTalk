@@ -16,24 +16,6 @@ object StreamBlockParser {
         val stateWhenPending: MathBlockState,
     )
 
-    private fun shouldPromoteInlineMathToBlock(mathBody: String): Boolean {
-        val body = mathBody.trim()
-        if (body.isEmpty()) return false
-
-        val hasComplexToken = body.contains("\\frac") ||
-            body.contains("\\sum") ||
-            body.contains("\\int") ||
-            body.contains("\\prod") ||
-            body.contains("\\lim") ||
-            body.contains("\\begin") ||
-            body.contains("\\left") ||
-            body.contains("\\right") ||
-            body.contains("\\matrix") ||
-            body.contains("\\cases")
-
-        return body.length >= 36 || hasComplexToken
-    }
-
     private fun findNextInlineMathStart(content: String, startIndex: Int): Int {
         var index = content.indexOf('$', startIndex)
         while (index >= 0) {
@@ -307,29 +289,15 @@ object StreamBlockParser {
                 if (close >= 0) {
                     val end = close + 1
                     val inlineToken = content.substring(cursor, end)
-                    val mathBody = inlineToken.removePrefix("$").removeSuffix("$")
-                    if (shouldPromoteInlineMathToBlock(mathBody)) {
-                        val blockToken = "$$${mathBody}$$"
-                        blocks.add(
-                            StreamBlock.MathBlock(
-                                stableId = nextId(StreamBlockType.MATH_BLOCK),
-                                text = blockToken,
-                                start = cursor,
-                                endExclusive = end,
-                                state = MathBlockState.RENDERED
-                            )
+                    blocks.add(
+                        StreamBlock.MathInline(
+                            stableId = nextId(StreamBlockType.MATH_INLINE),
+                            text = inlineToken,
+                            start = cursor,
+                            endExclusive = end,
+                            state = MathBlockState.RENDERED
                         )
-                    } else {
-                        blocks.add(
-                            StreamBlock.MathInline(
-                                stableId = nextId(StreamBlockType.MATH_INLINE),
-                                text = inlineToken,
-                                start = cursor,
-                                endExclusive = end,
-                                state = MathBlockState.RENDERED
-                            )
-                        )
-                    }
+                    )
                     cursor = end
                 } else {
                     hasPendingMath = true

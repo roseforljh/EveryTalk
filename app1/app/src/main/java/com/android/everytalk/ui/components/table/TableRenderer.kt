@@ -1,17 +1,20 @@
 package com.android.everytalk.ui.components.table
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.gestures.detectTapGestures
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.wrapContentWidth
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -22,8 +25,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.style.TextAlign
@@ -31,7 +36,16 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.TextUnit
 import com.android.everytalk.ui.components.ChatMarkdownTextStyle
-import com.android.everytalk.ui.components.markdown.MarkdownRenderer
+import com.android.everytalk.ui.components.ProportionalAsyncImage
+import com.android.everytalk.ui.components.markdown.StableLatexRenderer
+import com.android.everytalk.ui.components.math.MathInline
+import com.android.everytalk.ui.components.streaming.InlineRenderPart
+import com.android.everytalk.ui.components.streaming.MathBlockState
+import com.android.everytalk.ui.components.streaming.StreamBlock
+import com.android.everytalk.ui.components.streaming.StreamBlockParser
+import com.android.everytalk.ui.components.streaming.buildInlinePartsTextModel
+import com.android.everytalk.ui.components.streaming.resolveStreamMathRenderPath
+import com.android.everytalk.ui.components.streaming.StreamMathRenderPath
 
 /**
  * 表格渲染器（优化版，参考 RikkaHub DataTable）
@@ -58,7 +72,8 @@ fun TableRenderer(
         lineHeight = ChatMarkdownTextStyle.TABLE_CELL_LINE_HEIGHT_SP.sp
     ),
     contentKey: String = "",
-    onLongPress: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null
+    onLongPress: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null,
+    onImageClick: ((String) -> Unit)? = null,
 ) {
     if (lines.size < 2) return
 
@@ -72,18 +87,15 @@ fun TableRenderer(
         val parsedDataRows = lines.drop(2).map {
             TableUtils.padRowCells(TableUtils.parseTableRow(it), parsedHeaders.size)
         }
-        val parsedColumnWidths = TableUtils.calculateColumnWidths(parsedHeaders, parsedDataRows)
         object {
             val headers = parsedHeaders
             val alignments = paddedAlignments
             val dataRows = parsedDataRows
-            val columnWidths = parsedColumnWidths
         }
     }
 
     val headers = parsedTableData.headers
     val dataRows = parsedTableData.dataRows
-    val columnWidths = parsedTableData.columnWidths
     val alignments = parsedTableData.alignments
 
     // 根据表格规模决定渲染策略：大表格默认降级为纯文本，但若检测到 Markdown 语法仍保留解析
@@ -97,14 +109,12 @@ fun TableRenderer(
         }
     }
     val usePlainTextCells = !renderMarkdownInCells || (totalCells > 40 && !hasMarkdownSyntaxInCells)
-
-    val scrollState = rememberScrollState()
     val outlineColor = MaterialTheme.colorScheme.outline
     val headerBackgroundColor = MaterialTheme.colorScheme.surfaceVariant
     val rowBackgroundColor = MaterialTheme.colorScheme.background
     val rowDividerColor = outlineColor.copy(alpha = 0.3f)
-    val columnDividerColor = outlineColor.copy(alpha = 0.2f)
-    Box(
+    val headerDividerColor = rowDividerColor
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
             .pointerInput(onLongPress) {
@@ -119,16 +129,32 @@ fun TableRenderer(
             }
             .background(headerBackgroundColor)
     ) {
+        val density = LocalDensity.current
+        val columnWidth = with(density) {
+            TableUtils.calculateChatGptEqualColumnWidthPx(
+                maxTableWidthPx = maxWidth.toPx(),
+                columnCount = headers.size,
+                borderStrokeWidthPx = ChatMarkdownTextStyle.TABLE_BORDER_STROKE_WIDTH_DP.dp.toPx(),
+            ).toDp()
+        }
+
         Column(
-            modifier = Modifier
-                .wrapContentWidth()
-                .horizontalScroll(scrollState)
+            modifier = Modifier.fillMaxWidth()
         ) {
             // 渲染表头
             Row(
                 modifier = Modifier
-                    .wrapContentWidth()
+                    .fillMaxWidth()
                     .background(headerBackgroundColor)
+                    .drawBehind {
+                        val strokeWidth = ChatMarkdownTextStyle.TABLE_BORDER_STROKE_WIDTH_DP.dp.toPx()
+                        drawLine(
+                            color = headerDividerColor,
+                            start = androidx.compose.ui.geometry.Offset(0f, size.height - strokeWidth / 2f),
+                            end = androidx.compose.ui.geometry.Offset(size.width, size.height - strokeWidth / 2f),
+                            strokeWidth = strokeWidth
+                        )
+                    }
                     .padding(vertical = ChatMarkdownTextStyle.TABLE_ROW_VERTICAL_PADDING_DP.dp),
                 verticalAlignment = Alignment.Top
             ) {
@@ -136,15 +162,14 @@ fun TableRenderer(
                     key("header_$index") {
                         TableCell(
                             content = header.trim(),
-                            width = columnWidths.getOrElse(index) { 100.dp },
+                            width = columnWidth,
                             alignment = alignments[index],
                             style = headerStyle,
                             usePlainText = false,
                             contentKey = if (contentKey.isNotBlank()) "${contentKey}_th_$index" else "",
                             backgroundColor = headerBackgroundColor,
-                            drawRightSeparator = index < headers.lastIndex,
-                            separatorColor = columnDividerColor,
-                            isHeader = true
+                            isHeader = true,
+                            onImageClick = onImageClick,
                         )
                     }
                 }
@@ -155,35 +180,34 @@ fun TableRenderer(
                 key("row_$rowIndex") {
                     Row(
                         modifier = Modifier
-                            .wrapContentWidth()
+                            .fillMaxWidth()
                             .background(rowBackgroundColor)
                             .drawBehind {
-                                val strokeWidth = 0.5.dp.toPx()
-                                drawLine(
-                                    color = rowDividerColor,
-                                    start = androidx.compose.ui.geometry.Offset(0f, size.height - strokeWidth / 2f),
-                                    end = androidx.compose.ui.geometry.Offset(size.width, size.height - strokeWidth / 2f),
-                                    strokeWidth = strokeWidth
-                                )
+                                if (rowIndex < dataRows.lastIndex) {
+                                    val strokeWidth = ChatMarkdownTextStyle.TABLE_BORDER_STROKE_WIDTH_DP.dp.toPx()
+                                    drawLine(
+                                        color = rowDividerColor,
+                                        start = androidx.compose.ui.geometry.Offset(0f, size.height - strokeWidth / 2f),
+                                        end = androidx.compose.ui.geometry.Offset(size.width, size.height - strokeWidth / 2f),
+                                        strokeWidth = strokeWidth
+                                    )
+                                }
                             }
                             .padding(vertical = ChatMarkdownTextStyle.TABLE_ROW_VERTICAL_PADDING_DP.dp),
                         verticalAlignment = Alignment.Top
                     ) {
                         row.forEachIndexed { colIndex, cell ->
-                            if (colIndex < columnWidths.size) {
-                                key("cell_${rowIndex}_$colIndex") {
-                                    TableCell(
-                                        content = cell.trim(),
-                                        width = columnWidths[colIndex],
-                                        alignment = alignments[colIndex],
-                                        style = cellStyle,
-                                        usePlainText = usePlainTextCells,
-                                        contentKey = if (contentKey.isNotBlank()) "${contentKey}_tr_${rowIndex}_td_$colIndex" else "",
-                                        backgroundColor = rowBackgroundColor,
-                                        drawRightSeparator = colIndex < headers.lastIndex,
-                                        separatorColor = columnDividerColor
-                                    )
-                                }
+                            key("cell_${rowIndex}_$colIndex") {
+                                TableCell(
+                                    content = cell.trim(),
+                                    width = columnWidth,
+                                    alignment = alignments[colIndex],
+                                    style = cellStyle,
+                                    usePlainText = usePlainTextCells,
+                                    contentKey = if (contentKey.isNotBlank()) "${contentKey}_tr_${rowIndex}_td_$colIndex" else "",
+                                    backgroundColor = rowBackgroundColor,
+                                    onImageClick = onImageClick,
+                                )
                             }
                         }
                     }
@@ -200,6 +224,46 @@ internal fun compactTableCellTextStyle(style: TextStyle): TextStyle {
     )
 }
 
+internal fun shouldRenderTableCellNativeInlineMath(
+    content: String,
+    usePlainText: Boolean,
+): Boolean {
+    if (usePlainText) return false
+    if (!InlineMarkdownParser.containsMath(content)) return false
+    val blocks = StreamBlockParser.parse(content, "table-cell").blocks
+    return blocks.any { it is StreamBlock.MathInline } &&
+        blocks.none { it is StreamBlock.MathBlock || it is StreamBlock.CodeBlock }
+}
+
+internal fun shouldRenderTableCellNativeBlockMath(
+    content: String,
+    usePlainText: Boolean,
+): Boolean {
+    if (usePlainText) return false
+    if (!InlineMarkdownParser.containsMath(content)) return false
+    val block = StreamBlockParser.parse(content.trim(), "table-cell").blocks.singleOrNull()
+    return block is StreamBlock.MathBlock && block.state == MathBlockState.RENDERED
+}
+
+internal fun shouldRenderTableCellNativeMixedMath(
+    content: String,
+    usePlainText: Boolean,
+): Boolean {
+    if (usePlainText) return false
+    if (!InlineMarkdownParser.containsMath(content)) return false
+    val blocks = StreamBlockParser.parse(content, "table-cell").blocks
+    if (blocks.none { it is StreamBlock.MathBlock || it is StreamBlock.MathInline }) {
+        return false
+    }
+    if (blocks.size > 1) return true
+
+    return when (val block = blocks.singleOrNull()) {
+        is StreamBlock.MathBlock -> resolveStreamMathRenderPath(block) == StreamMathRenderPath.RawText
+        is StreamBlock.MathInline -> block.state == MathBlockState.RAW
+        else -> false
+    }
+}
+
 /**
  * 表格单元格组件
  *
@@ -207,7 +271,7 @@ internal fun compactTableCellTextStyle(style: TextStyle): TextStyle {
  * - 使用轻量级 InlineMarkdownParser 渲染内联 Markdown
  * - 纯 Compose AnnotatedString，无 AndroidView 开销
  * - 支持加粗、斜体、代码、删除线等格式
- * - 当检测到数学公式时，使用 MarkdownRenderer 渲染（支持 LaTeX）
+ * - 当检测到数学公式时，优先使用原生 inline/block/mixed 路径渲染
  */
 @Composable
 private fun TableCell(
@@ -218,12 +282,10 @@ private fun TableCell(
     usePlainText: Boolean,
     contentKey: String,
     backgroundColor: Color,
-    drawRightSeparator: Boolean = false,
-    separatorColor: Color = Color.Transparent,
-    isHeader: Boolean = false
+    isHeader: Boolean = false,
+    onImageClick: ((String) -> Unit)? = null,
 ) {
     val textColor = MaterialTheme.colorScheme.onSurface
-    // 内联代码不使用背景色
     val codeBackground = Color.Transparent
     val isDark = isSystemInDarkTheme()
     val codeColor = if (isDark) Color(0xFFD1D5DB) else Color(0xFF4F5661)
@@ -231,11 +293,6 @@ private fun TableCell(
         TextUnit.Unspecified
     } else {
         style.fontSize * ChatMarkdownTextStyle.INLINE_CODE_RELATIVE_SIZE
-    }
-
-    // 检测是否包含数学公式
-    val containsMath = remember(content) {
-        InlineMarkdownParser.containsMath(content)
     }
 
     val boxAlignment = when (alignment) {
@@ -252,36 +309,79 @@ private fun TableCell(
         TableUtils.TableAlignment.START -> TextAlign.Start
     }
     val compactStyle = compactTableCellTextStyle(style).copy(textAlign = textAlign)
+    val image = remember(content, usePlainText) {
+        if (usePlainText) null else parseTableCellImageMarkdown(content)
+    }
+    val mixedParts = remember(content, usePlainText) {
+        if (usePlainText) null else parseTableCellMarkdownParts(content)
+    }
 
     Box(
         modifier = Modifier
             .width(width)
             .drawBehind {
                 drawRect(backgroundColor)
-                if (drawRightSeparator) {
-                    val strokeWidth = 0.5.dp.toPx()
-                    drawLine(
-                        color = separatorColor,
-                        start = androidx.compose.ui.geometry.Offset(size.width - strokeWidth / 2f, 0f),
-                        end = androidx.compose.ui.geometry.Offset(size.width - strokeWidth / 2f, size.height),
-                        strokeWidth = strokeWidth
-                    )
-                }
             }
-            .padding(horizontal = 12.dp),
+            .padding(horizontal = ChatMarkdownTextStyle.TABLE_CELL_PADDING_DP.dp),
         contentAlignment = boxAlignment
     ) {
-        if (containsMath && !usePlainText) {
-            // 包含数学公式：使用 MarkdownRenderer 渲染（支持 LaTeX）
-            MarkdownRenderer(
-                markdown = content,
-                style = compactStyle,
-                color = textColor,
+        if (image != null) {
+            val imageClickModifier = if (onImageClick != null) {
+                Modifier.clickable { onImageClick(image.url) }
+            } else {
+                Modifier
+            }
+            ProportionalAsyncImage(
+                model = image.url,
+                contentDescription = image.alt.ifBlank { null },
+                maxWidth = maxOf(width - ChatMarkdownTextStyle.TABLE_CELL_CONTENT_MAX_WIDTH_INSET_DP.dp, 56.dp),
+                modifier = Modifier
+                    .padding(vertical = 4.dp)
+                    .then(imageClickModifier),
+            )
+        } else if (mixedParts != null) {
+            TableCellMarkdownParts(
+                parts = mixedParts,
+                width = width,
+                compactStyle = compactStyle,
+                textColor = textColor,
+                codeColor = codeColor,
+                codeFontSize = codeFontSize,
+                textAlign = textAlign,
+                alignment = alignment,
+                onImageClick = onImageClick,
+            )
+        } else if (shouldRenderTableCellNativeInlineMath(content, usePlainText)) {
+            TableCellNativeInlineMath(
+                content = content,
+                compactStyle = compactStyle,
+                textColor = textColor,
+                codeBackground = codeBackground,
+                codeColor = codeColor,
+                codeFontSize = codeFontSize,
+                textAlign = textAlign,
+                isHeader = isHeader,
+            )
+        } else if (shouldRenderTableCellNativeBlockMath(content, usePlainText)) {
+            TableCellNativeBlockMath(
+                content = content,
+                compactStyle = compactStyle,
+                textColor = textColor,
                 contentKey = contentKey,
-                disableVerticalPadding = true
+            )
+        } else if (shouldRenderTableCellNativeMixedMath(content, usePlainText)) {
+            TableCellNativeMixedMath(
+                content = content,
+                width = width,
+                compactStyle = compactStyle,
+                textColor = textColor,
+                codeColor = codeColor,
+                codeFontSize = codeFontSize,
+                textAlign = textAlign,
+                alignment = alignment,
+                contentKey = contentKey,
             )
         } else {
-            // 普通文本或纯文本模式：使用 AnnotatedString 渲染
             val annotatedText = remember(content, usePlainText, codeColor, codeFontSize) {
                 if (usePlainText || !InlineMarkdownParser.containsInlineMarkdown(content)) {
                     androidx.compose.ui.text.AnnotatedString(content)
@@ -301,10 +401,323 @@ private fun TableCell(
                 style = compactStyle,
                 color = textColor,
                 textAlign = textAlign,
-                modifier = Modifier.fillMaxWidth(), // 关键：填充以响应 TextAlign
-                softWrap = !isHeader, // 强制表头不换行，而普通单元格允许换行
+                modifier = Modifier.fillMaxWidth(),
+                softWrap = !isHeader,
                 overflow = TextOverflow.Clip
             )
+        }
+    }
+}
+
+@Composable
+private fun TableCellNativeBlockMath(
+    content: String,
+    compactStyle: TextStyle,
+    textColor: Color,
+    contentKey: String,
+) {
+    val block = remember(content) {
+        StreamBlockParser.parse(content.trim(), "table-cell").blocks.singleOrNull() as? StreamBlock.MathBlock
+    } ?: return
+
+    StableLatexRenderer(
+        latex = block.text,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 2.dp),
+        style = compactStyle,
+        color = textColor,
+        contentKey = contentKey,
+    )
+}
+
+@Composable
+private fun TableCellNativeMixedMath(
+    content: String,
+    width: androidx.compose.ui.unit.Dp,
+    compactStyle: TextStyle,
+    textColor: Color,
+    codeColor: Color,
+    codeFontSize: TextUnit,
+    textAlign: TextAlign,
+    alignment: TableUtils.TableAlignment,
+    contentKey: String,
+) {
+    val blocks = remember(content) {
+        StreamBlockParser.parse(content, "table-cell").blocks
+    }
+    val horizontalAlignment = when (alignment) {
+        TableUtils.TableAlignment.LEFT,
+        TableUtils.TableAlignment.START -> Alignment.Start
+        TableUtils.TableAlignment.CENTER -> Alignment.CenterHorizontally
+        TableUtils.TableAlignment.RIGHT -> Alignment.End
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        horizontalAlignment = horizontalAlignment,
+    ) {
+        blocks.forEachIndexed { index, block ->
+            if (index > 0) {
+                Spacer(modifier = Modifier.height(6.dp))
+            }
+            when (block) {
+                is StreamBlock.PlainText -> {
+                    val text = block.text.trim()
+                    if (text.isNotEmpty()) {
+                        val annotatedText = remember(text, codeColor, codeFontSize) {
+                            if (InlineMarkdownParser.containsInlineMarkdown(text)) {
+                                InlineMarkdownParser.parse(
+                                    text = text,
+                                    baseColor = Color.Unspecified,
+                                    codeBackground = Color.Transparent,
+                                    codeColor = codeColor,
+                                    codeFontSize = codeFontSize,
+                                )
+                            } else {
+                                androidx.compose.ui.text.AnnotatedString(text)
+                            }
+                        }
+                        Text(
+                            text = annotatedText,
+                            style = compactStyle,
+                            color = textColor,
+                            textAlign = textAlign,
+                            modifier = Modifier.fillMaxWidth(),
+                            overflow = TextOverflow.Clip,
+                        )
+                    }
+                }
+                is StreamBlock.MathInline -> {
+                    if (block.state == MathBlockState.RENDERED) {
+                        MathInline(
+                            latex = stripTableCellInlineMathDelimiters(block.text),
+                            modifier = Modifier
+                                .width(maxOf(width - ChatMarkdownTextStyle.TABLE_CELL_CONTENT_MAX_WIDTH_INSET_DP.dp, 56.dp))
+                                .padding(vertical = 2.dp),
+                        )
+                    } else {
+                        TableCellRawMathText(
+                            text = block.text,
+                            compactStyle = compactStyle,
+                            textColor = textColor,
+                            textAlign = textAlign,
+                        )
+                    }
+                }
+                is StreamBlock.MathBlock -> {
+                    when (resolveStreamMathRenderPath(block)) {
+                        StreamMathRenderPath.NativeLatex -> {
+                            StableLatexRenderer(
+                                latex = block.text,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 2.dp),
+                                style = compactStyle,
+                                color = textColor,
+                                contentKey = "$contentKey:mixed-math:$index",
+                            )
+                        }
+                        StreamMathRenderPath.RawText -> {
+                            TableCellRawMathText(
+                                text = block.text,
+                                compactStyle = compactStyle,
+                                textColor = textColor,
+                                textAlign = textAlign,
+                            )
+                        }
+                    }
+                }
+                is StreamBlock.CodeBlock -> {
+                    val text = block.text.trim()
+                    if (text.isNotEmpty()) {
+                        TableCellCodeText(
+                            text = text,
+                            compactStyle = compactStyle,
+                            textColor = codeColor,
+                            textAlign = textAlign,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+@Composable
+private fun TableCellCodeText(
+    text: String,
+    compactStyle: TextStyle,
+    textColor: Color,
+    textAlign: TextAlign,
+) {
+    Text(
+        text = text,
+        style = compactStyle.copy(fontFamily = FontFamily.Monospace),
+        color = textColor,
+        textAlign = textAlign,
+        modifier = Modifier.fillMaxWidth(),
+        overflow = TextOverflow.Clip,
+    )
+}
+
+@Composable
+private fun TableCellRawMathText(
+    text: String,
+    compactStyle: TextStyle,
+    textColor: Color,
+    textAlign: TextAlign,
+) {
+    Text(
+        text = text,
+        style = compactStyle,
+        color = textColor,
+        textAlign = textAlign,
+        modifier = Modifier.fillMaxWidth(),
+        overflow = TextOverflow.Clip,
+    )
+}
+
+private fun stripTableCellInlineMathDelimiters(text: String): String {
+    return when {
+        text.startsWith("\\(") && text.endsWith("\\)") && text.length >= 4 ->
+            text.substring(2, text.length - 2)
+        text.startsWith("$") && text.endsWith("$") && !text.startsWith("$$") && text.length >= 2 ->
+            text.substring(1, text.length - 1)
+        else -> text
+    }
+}
+
+@Composable
+private fun TableCellNativeInlineMath(
+    content: String,
+    compactStyle: TextStyle,
+    textColor: Color,
+    codeBackground: Color,
+    codeColor: Color,
+    codeFontSize: TextUnit,
+    textAlign: TextAlign,
+    isHeader: Boolean,
+) {
+    val parts = remember(content) {
+        tableCellInlineParts(content)
+    }
+    val model = remember(parts, textColor, codeBackground, codeColor, codeFontSize) {
+        buildInlinePartsTextModel(
+            parts = parts,
+            baseColor = textColor,
+            codeBackground = codeBackground,
+            codeColor = codeColor,
+            codeFontSize = codeFontSize,
+        )
+    }
+    val inlineContent = remember(model.mathPlaceholders) {
+        model.mathPlaceholders.associate { placeholder ->
+            placeholder.id to InlineTextContent(
+                placeholder = androidx.compose.ui.text.Placeholder(
+                    width = placeholder.width,
+                    height = placeholder.height,
+                    placeholderVerticalAlign = androidx.compose.ui.text.PlaceholderVerticalAlign.TextCenter,
+                ),
+            ) {
+                MathInline(
+                    latex = placeholder.latex,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = 1.dp),
+                )
+            }
+        }
+    }
+    Text(
+        text = model.annotatedText,
+        style = compactStyle,
+        color = textColor,
+        textAlign = textAlign,
+        modifier = Modifier.fillMaxWidth(),
+        softWrap = !isHeader,
+        overflow = TextOverflow.Clip,
+        inlineContent = inlineContent,
+    )
+}
+
+private fun tableCellInlineParts(content: String): List<InlineRenderPart> {
+    return StreamBlockParser.parse(content, "table-cell").blocks.mapNotNull { block ->
+        when (block) {
+            is StreamBlock.PlainText -> InlineRenderPart.Text(block.text)
+            is StreamBlock.MathInline -> InlineRenderPart.Math(block)
+            else -> null
+        }
+    }
+}
+
+@Composable
+private fun TableCellMarkdownParts(
+    parts: List<TableCellMarkdownPart>,
+    width: androidx.compose.ui.unit.Dp,
+    compactStyle: TextStyle,
+    textColor: Color,
+    codeColor: Color,
+    codeFontSize: TextUnit,
+    textAlign: TextAlign,
+    alignment: TableUtils.TableAlignment,
+    onImageClick: ((String) -> Unit)?,
+) {
+    val horizontalAlignment = when (alignment) {
+        TableUtils.TableAlignment.LEFT,
+        TableUtils.TableAlignment.START -> Alignment.Start
+        TableUtils.TableAlignment.CENTER -> Alignment.CenterHorizontally
+        TableUtils.TableAlignment.RIGHT -> Alignment.End
+    }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        horizontalAlignment = horizontalAlignment,
+    ) {
+        parts.forEachIndexed { index, part ->
+            if (index > 0) {
+                Spacer(modifier = Modifier.height(6.dp))
+            }
+            when (part) {
+                is TableCellMarkdownPart.Text -> {
+                    val annotatedText = remember(part.text, codeColor, codeFontSize) {
+                        if (InlineMarkdownParser.containsInlineMarkdown(part.text)) {
+                            InlineMarkdownParser.parse(
+                                text = part.text,
+                                baseColor = Color.Unspecified,
+                                codeBackground = Color.Transparent,
+                                codeColor = codeColor,
+                                codeFontSize = codeFontSize,
+                            )
+                        } else {
+                            androidx.compose.ui.text.AnnotatedString(part.text)
+                        }
+                    }
+                    Text(
+                        text = annotatedText,
+                        style = compactStyle,
+                        color = textColor,
+                        textAlign = textAlign,
+                        modifier = Modifier.fillMaxWidth(),
+                        overflow = TextOverflow.Clip,
+                    )
+                }
+                is TableCellMarkdownPart.Image -> {
+                    val imageClickModifier = if (onImageClick != null) {
+                        Modifier.clickable { onImageClick(part.url) }
+                    } else {
+                        Modifier
+                    }
+                    ProportionalAsyncImage(
+                        model = part.url,
+                        contentDescription = part.alt.ifBlank { null },
+                        maxWidth = maxOf(width - ChatMarkdownTextStyle.TABLE_CELL_CONTENT_MAX_WIDTH_INSET_DP.dp, 56.dp),
+                        modifier = imageClickModifier,
+                    )
+                }
+            }
         }
     }
 }

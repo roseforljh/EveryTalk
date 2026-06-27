@@ -42,16 +42,37 @@ class MarkwonCacheTest {
         ).toInt()
     }
 
-    @Test
-    fun `heading relative sizes follow chatgpt title scale`() {
-        assertEquals(20f / 14f, chatGptHeadingRelativeSizeMultiplier(1), 0.001f)
-        assertEquals(18f / 14f, chatGptHeadingRelativeSizeMultiplier(2), 0.001f)
-        assertEquals(16f / 14f, chatGptHeadingRelativeSizeMultiplier(3), 0.001f)
-        assertEquals(1.0f, chatGptHeadingRelativeSizeMultiplier(6), 0.001f)
+    private fun assertHeadingAlpha(rendered: Spanned, text: String, expectedAlpha: Float) {
+        val start = rendered.toString().indexOf(text)
+        val end = start + text.length
+        val span = rendered.getSpans(start, end, Any::class.java)
+            .firstOrNull { it.javaClass.simpleName == "ChatTextAlphaSpan" }
+        assertTrue("缺少 ChatTextAlphaSpan", span != null)
+        assertEquals(expectedAlpha, span!!.readFloatFieldForTest("alpha"), 0.001f)
+    }
+
+    private fun Any.readFloatFieldForTest(name: String): Float {
+        val field = runCatching {
+            this::class.java.getDeclaredField(name)
+        }.getOrElse { error ->
+            throw AssertionError("缺少字段 $name", error)
+        }
+        field.isAccessible = true
+        return field.get(this) as Float
     }
 
     @Test
-    fun `level four heading keeps body scale and normal text weight`() {
+    fun `heading relative sizes follow chatgpt heading style evidence`() {
+        assertEquals(26f / 16f, chatGptHeadingRelativeSizeMultiplier(1), 0.001f)
+        assertEquals(22f / 16f, chatGptHeadingRelativeSizeMultiplier(2), 0.001f)
+        assertEquals(20f / 16f, chatGptHeadingRelativeSizeMultiplier(3), 0.001f)
+        assertEquals(18f / 16f, chatGptHeadingRelativeSizeMultiplier(4), 0.001f)
+        assertEquals(16f / 16f, chatGptHeadingRelativeSizeMultiplier(5), 0.001f)
+        assertEquals(16f / 16f, chatGptHeadingRelativeSizeMultiplier(6), 0.001f)
+    }
+
+    @Test
+    fun `level four heading uses chatgpt bold eighteen sp scale`() {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val markwon = MarkwonCache.getOrCreate(context, isDark = false, textSize = 16f)
 
@@ -59,15 +80,42 @@ class MarkwonCacheTest {
         val start = rendered.toString().indexOf("3. 左图")
         val end = rendered.length
 
-        assertTrue(rendered.getSpans(start, end, ChatTextWeightSpan::class.java).any { it.weight == 400 })
-        assertTrue(rendered.getSpans(start, end, RelativeSizeSpan::class.java).any { it.sizeChange == 1.0f })
+        assertTrue(rendered.getSpans(start, end, ChatTextWeightSpan::class.java).any { it.weight == 700 })
+        assertTrue(rendered.getSpans(start, end, RelativeSizeSpan::class.java).any { it.sizeChange == 18f / 16f })
+    }
+
+    @Test
+    fun `heading alpha and italic follow chatgpt heading style evidence`() {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val markwon = MarkwonCache.getOrCreate(context, isDark = false, textSize = 16f)
+
+        val h2 = markwon.render(markwon.parse("## 透明标题")) as Spanned
+        val h3 = markwon.render(markwon.parse("### 斜体标题")) as Spanned
+        val h4 = markwon.render(markwon.parse("#### 淡色标题")) as Spanned
+        val h5 = markwon.render(markwon.parse("##### 更淡标题")) as Spanned
+
+        assertHeadingAlpha(h2, "透明标题", 0.7f)
+        assertHeadingAlpha(h4, "淡色标题", 0.7f)
+        assertHeadingAlpha(h5, "更淡标题", 0.5f)
+
+        val h3Start = h3.toString().indexOf("斜体标题")
+        val h3End = h3Start + "斜体标题".length
+        assertTrue(h3.getSpans(h3Start, h3End, StyleSpan::class.java).any { it.style == Typeface.ITALIC })
     }
 
     @Test
     fun `body line height stays compact inside wrapped chinese list items`() {
-        assertEquals(14f, ChatMarkdownTextStyle.BODY_FONT_SIZE_SP, 0.001f)
-        assertEquals(22f, ChatMarkdownTextStyle.BODY_LINE_HEIGHT_SP, 0.001f)
-        assertEquals(22f, ChatMarkdownTextStyle.LIST_ITEM_LINE_HEIGHT_SP, 0.001f)
+        assertEquals(16f, ChatMarkdownTextStyle.BODY_FONT_SIZE_SP, 0.001f)
+        assertEquals(24f, ChatMarkdownTextStyle.BODY_LINE_HEIGHT_SP, 0.001f)
+        assertEquals(24f, ChatMarkdownTextStyle.LIST_ITEM_LINE_HEIGHT_SP, 0.001f)
+    }
+
+    @Test
+    fun `assistant prose container follows chatgpt padding evidence`() {
+        assertEquals(16f, ChatMarkdownTextStyle.ASSISTANT_CONTENT_START_PADDING_DP, 0.001f)
+        assertEquals(4f, ChatMarkdownTextStyle.ASSISTANT_CONTENT_TOP_PADDING_DP, 0.001f)
+        assertEquals(0f, ChatMarkdownTextStyle.ASSISTANT_CONTENT_END_PADDING_DP, 0.001f)
+        assertEquals(4f, ChatMarkdownTextStyle.ASSISTANT_CONTENT_BOTTOM_PADDING_DP, 0.001f)
     }
 
     @Test

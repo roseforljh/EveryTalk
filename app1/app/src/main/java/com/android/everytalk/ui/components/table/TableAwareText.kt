@@ -6,6 +6,7 @@ import android.content.ClipData
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -71,10 +72,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.Hyphens
+import androidx.compose.ui.text.style.LineBreak
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.android.everytalk.data.DataClass.Sender
@@ -83,11 +89,18 @@ import com.android.everytalk.ui.components.ContentParser
 import com.android.everytalk.ui.components.ContentPart
 import com.android.everytalk.ui.components.FullScreenCodeViewerDialog
 import com.android.everytalk.ui.components.content.CodeBlockCard
-import com.android.everytalk.ui.components.StableMarkdownText
 import com.android.everytalk.ui.components.markdown.BreakableLatexRenderer
-import com.android.everytalk.ui.components.markdown.MarkdownRenderer
 import com.android.everytalk.ui.components.markdown.NativeLatexSupport
 import com.android.everytalk.ui.components.markdown.StableLatexRenderer
+import com.android.everytalk.ui.components.streaming.InlinePartsSegment
+import com.android.everytalk.ui.components.streaming.InlineRenderPart
+import com.android.everytalk.ui.components.streaming.MathBlockState
+import com.android.everytalk.ui.components.streaming.NativeMarkdownBlocksSegment
+import com.android.everytalk.ui.components.streaming.NativeStreamingMarkdownBlockType
+import com.android.everytalk.ui.components.streaming.StreamBlock
+import com.android.everytalk.ui.components.streaming.StreamBlockParser
+import com.android.everytalk.ui.components.streaming.buildNativeInlinePartsForText
+import com.android.everytalk.ui.components.streaming.parseNativeStreamingMarkdownBlocks
 import com.android.everytalk.ui.components.syntax.HighlightCache
 import com.android.everytalk.ui.components.syntax.SyntaxHighlightTheme
 import com.android.everytalk.ui.components.syntax.SyntaxHighlighter
@@ -105,12 +118,7 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.mapLatest
 
 internal fun shouldRenderTrailingStreamingTextWithMarkdown(content: String): Boolean {
-    return !content.contains("```") &&
-        !content.contains("~~~") &&
-        !content.contains("```infographic", ignoreCase = true) &&
-        !(content.contains('|') && content.contains("---")) &&
-        !content.contains("$$") &&
-        !content.contains("\\[")
+    return false
 }
 
 internal fun containsFencedCodeSyntax(content: String): Boolean {
@@ -144,6 +152,105 @@ internal fun shouldPreferStableMarkdownFallback(
     return content.contains("$$") || content.contains("\\[")
 }
 
+internal fun shouldRenderTextPartAsNativeRawMath(
+    content: String,
+    isStreaming: Boolean,
+    isTrailingStreamingText: Boolean,
+): Boolean {
+    if (!isStreaming || !isTrailingStreamingText) return false
+    if (containsFencedCodeSyntax(content)) return false
+    return hasRawStreamingMathToken(content)
+}
+
+private fun hasRawStreamingMathToken(content: String): Boolean {
+    val blocks = StreamBlockParser.parse(content, "table-aware-raw-math").blocks
+    return blocks.any { block ->
+        when (block) {
+            is StreamBlock.MathBlock -> block.state == MathBlockState.RAW
+            is StreamBlock.MathInline -> block.state == MathBlockState.RAW
+            else -> false
+        }
+    }
+}
+
+internal fun shouldRenderTextPartNatively(
+    content: String,
+    isStreaming: Boolean,
+    isTrailingStreamingText: Boolean,
+    recursionDepth: Int,
+): Boolean {
+    if (containsFencedCodeSyntax(content)) return false
+    if (shouldRerouteTextPartThroughTableAwareParser(content, recursionDepth)) return false
+    if (shouldPreferStableMarkdownFallback(content, isStreaming, isTrailingStreamingText)) return false
+    if (InlineMarkdownParser.containsMath(content)) return false
+    if (containsTableAwareBlockMarkdownSyntax(content)) return false
+    return true
+}
+
+internal fun shouldRenderTextPartWithNativeBlocks(
+    content: String,
+    isStreaming: Boolean,
+    isTrailingStreamingText: Boolean,
+    recursionDepth: Int,
+): Boolean {
+    if (containsFencedCodeSyntax(content)) return false
+    if (shouldRerouteTextPartThroughTableAwareParser(content, recursionDepth)) return false
+    if (shouldPreferStableMarkdownFallback(content, isStreaming, isTrailingStreamingText)) return false
+    if (InlineMarkdownParser.containsMath(content)) {
+        val blocks = parseNativeStreamingMarkdownBlocks(
+            text = content,
+            segmentId = "table-aware-route-${content.hashCode()}",
+        ) ?: return false
+        return blocks.any { it.type == NativeStreamingMarkdownBlockType.MathBlock }
+    }
+    if (!containsTableAwareBlockMarkdownSyntax(content)) return false
+    return parseNativeStreamingMarkdownBlocks(
+        text = content,
+        segmentId = "table-aware-route-${content.hashCode()}",
+    ) != null
+}
+
+internal fun shouldRenderTextPartWithNativeInlineParts(
+    content: String,
+    isStreaming: Boolean,
+    isTrailingStreamingText: Boolean,
+    recursionDepth: Int,
+): Boolean {
+    if (containsFencedCodeSyntax(content)) return false
+    if (shouldRerouteTextPartThroughTableAwareParser(content, recursionDepth)) return false
+    if (shouldPreferStableMarkdownFallback(content, isStreaming, isTrailingStreamingText)) return false
+    if (containsTableAwareBlockMarkdownSyntax(content)) return false
+
+    val inlineParts = buildNativeInlinePartsForText(content) ?: return false
+    return inlineParts.any { part ->
+        part is InlineRenderPart.Math && part.block.state == MathBlockState.RENDERED
+    }
+}
+
+private fun containsTableAwareBlockMarkdownSyntax(content: String): Boolean {
+    val lines = content.replace("\r\n", "\n").replace('\r', '\n').lines()
+    return lines.indices.any { index ->
+        val line = lines[index]
+        tableAwareAtxHeadingLinePattern.matches(line) ||
+            tableAwareHorizontalRuleLinePattern.matches(line) ||
+            tableAwareBlockQuoteLinePattern.matches(line) ||
+            tableAwareUnorderedListLinePattern.matches(line) ||
+            tableAwareOrderedListLinePattern.matches(line) ||
+            (
+                index + 1 < lines.size &&
+                    line.isNotBlank() &&
+                    tableAwareSetextUnderlineLinePattern.matches(lines[index + 1])
+            )
+    }
+}
+
+private val tableAwareAtxHeadingLinePattern = Regex("""^\s{0,3}#{1,6}\s+.+$""")
+private val tableAwareHorizontalRuleLinePattern = Regex("""^\s{0,3}(-{3,}|\*{3,}|_{3,})\s*$""")
+private val tableAwareBlockQuoteLinePattern = Regex("""^\s{0,3}>\s?.*$""")
+private val tableAwareUnorderedListLinePattern = Regex("""^\s{0,12}[-*+]\s+.+$""")
+private val tableAwareOrderedListLinePattern = Regex("""^\s{0,12}\d+[.)]\s+.+$""")
+private val tableAwareSetextUnderlineLinePattern = Regex("""^\s{0,3}(={3,}|-{3,})\s*$""")
+
 private fun hasUnclosedFencedCodeSyntax(content: String): Boolean =
     countFenceMarkers(content, "```") % 2 == 1 ||
         countFenceMarkers(content, "~~~") % 2 == 1
@@ -156,6 +263,17 @@ private fun countFenceMarkers(content: String, marker: String): Int {
         if (found < 0) return count
         count++
         index = found + marker.length
+    }
+}
+
+private fun countTokenOccurrences(content: String, token: String): Int {
+    var index = 0
+    var count = 0
+    while (true) {
+        val found = content.indexOf(token, index)
+        if (found < 0) return count
+        count++
+        index = found + token.length
     }
 }
 
@@ -319,8 +437,6 @@ fun TableAwareText(
                 when (part) {
                     is ContentPart.Text -> {
                         val isTrailingStreamingText = isStreaming && index == parsedParts.lastIndex
-                        val trailingLooksLightweightMarkdown = isTrailingStreamingText &&
-                            shouldRenderTrailingStreamingTextWithMarkdown(part.content)
                         val shouldRerouteCompletedFencedText = !isStreaming &&
                             recursionDepth < 3 &&
                             containsFencedCodeSyntax(part.content)
@@ -329,6 +445,11 @@ fun TableAwareText(
                             recursionDepth = recursionDepth,
                         )
                         val shouldUseStableFallback = shouldPreferStableMarkdownFallback(
+                            content = part.content,
+                            isStreaming = isStreaming,
+                            isTrailingStreamingText = isTrailingStreamingText,
+                        )
+                        val shouldUseNativeRawMath = shouldRenderTextPartAsNativeRawMath(
                             content = part.content,
                             isStreaming = isStreaming,
                             isTrailingStreamingText = isTrailingStreamingText,
@@ -353,11 +474,18 @@ fun TableAwareText(
                                     onCodeCopied = onCodeCopied,
                                 )
                             }
-                            shouldUseStableFallback -> {
-                                StableMarkdownText(
-                                    markdown = part.content,
+                            shouldUseNativeRawMath -> {
+                                TableAwareNativeTextPart(
+                                    content = part.content,
                                     style = style,
-                                    modifier = Modifier.fillMaxWidth()
+                                    color = color,
+                                )
+                            }
+                            shouldUseStableFallback -> {
+                                TableAwareNativeTextPart(
+                                    content = part.content,
+                                    style = style,
+                                    color = color,
                                 )
                             }
                             shouldRerouteTableText -> {
@@ -378,40 +506,51 @@ fun TableAwareText(
                                     onCodeCopied = onCodeCopied,
                                 )
                             }
-                            trailingLooksLightweightMarkdown -> {
-                                MarkdownRenderer(
-                                    markdown = part.content,
+                            shouldRenderTextPartNatively(
+                                content = part.content,
+                                isStreaming = isStreaming,
+                                isTrailingStreamingText = isTrailingStreamingText,
+                                recursionDepth = recursionDepth,
+                            ) -> {
+                                TableAwareNativeTextPart(
+                                    content = part.content,
                                     style = style,
                                     color = color,
-                                    modifier = Modifier.fillMaxWidth(),
-                                    isStreaming = true,
-                                    onLongPress = onLongPress,
+                                )
+                            }
+                            shouldRenderTextPartWithNativeBlocks(
+                                content = part.content,
+                                isStreaming = isStreaming,
+                                isTrailingStreamingText = isTrailingStreamingText,
+                                recursionDepth = recursionDepth,
+                            ) -> {
+                                TableAwareNativeBlocksPart(
+                                    content = part.content,
+                                    style = style,
+                                    color = color,
+                                    isStreaming = isStreaming,
                                     onImageClick = onImageClick,
-                                    sender = sender,
-                                    contentKey = "",
-                                    disableVerticalPadding = disableMarkdownVerticalPadding
+                                    onCodePreviewRequested = onCodePreviewRequested,
+                                    onCodeCopied = onCodeCopied,
+                                )
+                            }
+                            shouldRenderTextPartWithNativeInlineParts(
+                                content = part.content,
+                                isStreaming = isStreaming,
+                                isTrailingStreamingText = isTrailingStreamingText,
+                                recursionDepth = recursionDepth,
+                            ) -> {
+                                TableAwareNativeInlinePartsPart(
+                                    content = part.content,
+                                    style = style,
+                                    color = color,
                                 )
                             }
                             else -> {
-                                MarkdownRenderer(
-                                    markdown = part.content,
+                                TableAwareNativeTextPart(
+                                    content = part.content,
                                     style = style,
                                     color = color,
-                                    modifier = Modifier.fillMaxWidth(),
-                                    isStreaming = isStreaming,
-                                    onLongPress = onLongPress,
-                                    onImageClick = onImageClick,
-                                    sender = sender,
-                                    contentKey = if (contentKey.isNotBlank()) {
-                                        if (isStreaming) {
-                                            if (index < parsedParts.size - 1) {
-                                                "${contentKey}_part_${index}_${part.content.hashCode()}"
-                                            } else ""
-                                        } else {
-                                            "${contentKey}_part_${index}_${part.content.hashCode()}"
-                                        }
-                                    } else "",
-                                    disableVerticalPadding = disableMarkdownVerticalPadding
                                 )
                             }
                         }
@@ -468,7 +607,8 @@ fun TableAwareText(
                             } else "",
                             onLongPress = onLongPress,
                             headerStyle = style.copy(fontWeight = FontWeight.Bold),
-                            cellStyle = style
+                            cellStyle = style,
+                            onImageClick = onImageClick,
                         )
                     }
                     is ContentPart.Math -> {
@@ -582,6 +722,114 @@ fun TableAwareText(
             onDismiss = { previewState = null }
         )
     }
+}
+
+@Composable
+private fun TableAwareNativeBlocksPart(
+    content: String,
+    style: TextStyle,
+    color: Color,
+    isStreaming: Boolean,
+    onImageClick: ((String) -> Unit)?,
+    onCodePreviewRequested: ((String, String) -> Unit)?,
+    onCodeCopied: (() -> Unit)?,
+) {
+    val blocks = remember(content) {
+        parseNativeStreamingMarkdownBlocks(
+            text = content,
+            segmentId = "table-aware-${content.hashCode()}",
+        )
+    }
+    if (blocks != null) {
+        NativeMarkdownBlocksSegment(
+            blocks = blocks,
+            style = style,
+            color = color,
+            isStreaming = isStreaming,
+            onCodePreviewRequested = onCodePreviewRequested,
+            onCodeCopied = onCodeCopied,
+            onImageClick = onImageClick,
+        )
+    } else {
+        TableAwareNativeTextPart(
+            content = content,
+            style = style,
+            color = color,
+        )
+    }
+}
+
+@Composable
+private fun TableAwareNativeInlinePartsPart(
+    content: String,
+    style: TextStyle,
+    color: Color,
+) {
+    val parts = remember(content) {
+        buildNativeInlinePartsForText(content).orEmpty()
+    }
+    InlinePartsSegment(
+        parts = parts,
+        style = style,
+        color = color,
+    )
+}
+
+@Composable
+private fun TableAwareNativeTextPart(
+    content: String,
+    style: TextStyle,
+    color: Color,
+) {
+    val isDark = isSystemInDarkTheme()
+    val finalColor = when {
+        color != Color.Unspecified -> color
+        style.color != Color.Unspecified -> style.color
+        else -> MaterialTheme.colorScheme.onSurface
+    }
+    val codeColor = if (isDark) {
+        Color(0xFFD1D5DB)
+    } else {
+        Color(0xFF4F5661)
+    }
+    val codeFontSize = if (style.fontSize == TextUnit.Unspecified) {
+        TextUnit.Unspecified
+    } else {
+        style.fontSize * ChatMarkdownTextStyle.INLINE_CODE_RELATIVE_SIZE
+    }
+    val annotatedText = remember(content, finalColor, codeColor, codeFontSize) {
+        if (InlineMarkdownParser.containsInlineMarkdown(content)) {
+            InlineMarkdownParser.parse(
+                text = content,
+                baseColor = finalColor,
+                codeBackground = Color.Transparent,
+                codeColor = codeColor,
+                codeFontSize = codeFontSize,
+            )
+        } else {
+            AnnotatedString(content)
+        }
+    }
+    val lineHeight = if (style.lineHeight == TextUnit.Unspecified) {
+        ChatMarkdownTextStyle.BODY_LINE_HEIGHT_SP.sp
+    } else {
+        style.lineHeight
+    }
+
+    Text(
+        text = annotatedText,
+        style = style.copy(
+            color = finalColor,
+            lineHeight = lineHeight,
+            lineBreak = LineBreak.Simple,
+            hyphens = Hyphens.None,
+            platformStyle = PlatformTextStyle(includeFontPadding = false),
+            textAlign = TextAlign.Start,
+        ),
+        modifier = Modifier.fillMaxWidth(),
+        textAlign = TextAlign.Start,
+        overflow = TextOverflow.Clip,
+    )
 }
 
 @Composable
@@ -900,17 +1148,10 @@ private fun InfographicBlock(
     }
 
     if (title.isBlank() && items.isEmpty()) {
-        MarkdownRenderer(
-            markdown = raw,
+        TableAwareNativeTextPart(
+            content = raw,
             style = style,
             color = color,
-            modifier = modifier,
-            isStreaming = false,
-            onLongPress = null,
-            onImageClick = null,
-            sender = Sender.AI,
-            contentKey = "",
-            disableVerticalPadding = true
         )
         return
     }

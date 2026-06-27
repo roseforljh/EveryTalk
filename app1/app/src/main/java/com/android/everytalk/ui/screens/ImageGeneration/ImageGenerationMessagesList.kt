@@ -118,9 +118,11 @@ import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.restorePinnedBub
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.shouldClearTransientBottomReserveOnStreamChange
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.shouldDispatchImageLoadedToBottomScroller
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.shouldEnableUserScrollForPinnedUserBubble
+import com.android.everytalk.ui.components.ChatMarkdownTextStyle
+import com.android.everytalk.ui.components.streaming.StreamBlocksRenderer
+import com.android.everytalk.ui.components.streaming.buildStreamingRenderState
 import com.android.everytalk.ui.theme.ChatDimensions
 import com.android.everytalk.ui.theme.chatColors
-import com.android.everytalk.ui.components.EnhancedMarkdownText
 import com.android.everytalk.ui.components.scrollFadeEdge
 import com.android.everytalk.util.storage.readAtMost
 import kotlinx.coroutines.launch
@@ -2092,6 +2094,37 @@ private fun AiMessageItem(
 ) {
     val shape = androidx.compose.ui.graphics.RectangleShape
     val aiReplyMessageDescription = stringResource(id = R.string.ai_reply_message)
+    val streamingRenderState by remember(message.id, viewModel) {
+        viewModel.getStreamingRenderState(message.id)
+    }.collectAsState()
+    val shouldPreferStreamingContent = isStreaming || streamingRenderState.isStreaming
+    val effectiveText = if (shouldPreferStreamingContent) {
+        streamingRenderState.content.ifBlank { text.ifBlank { message.text } }
+    } else {
+        val staticText = text.ifBlank { message.text }
+        if (staticText.isBlank() && streamingRenderState.content.isNotBlank()) {
+            streamingRenderState.content
+        } else {
+            staticText
+        }
+    }
+    val renderMessage = if (effectiveText == message.text) {
+        message
+    } else {
+        message.copy(text = effectiveText)
+    }
+    val renderState = remember(message.id, effectiveText, shouldPreferStreamingContent) {
+        if (effectiveText.isNotBlank()) {
+            buildStreamingRenderState(
+                messageId = "${message.id}:image-generation",
+                content = effectiveText,
+                isStreaming = shouldPreferStreamingContent,
+                isComplete = !shouldPreferStreamingContent,
+            )
+        } else {
+            null
+        }
+    }
 
     Row(
         modifier = modifier
@@ -2124,19 +2157,32 @@ private fun AiMessageItem(
             Box(
                 modifier = Modifier
                     .padding(
-                        horizontal = ChatDimensions.BUBBLE_INNER_PADDING_HORIZONTAL,
-                        vertical = ChatDimensions.BUBBLE_INNER_PADDING_VERTICAL
+                        start = ChatMarkdownTextStyle.ASSISTANT_CONTENT_START_PADDING_DP.dp,
+                        top = ChatMarkdownTextStyle.ASSISTANT_CONTENT_TOP_PADDING_DP.dp,
+                        end = ChatMarkdownTextStyle.ASSISTANT_CONTENT_END_PADDING_DP.dp,
+                        bottom = ChatMarkdownTextStyle.ASSISTANT_CONTENT_BOTTOM_PADDING_DP.dp
                     )
             ) {
                 Column {
-                    if (text.isNotBlank()) {
-                        EnhancedMarkdownText(
-                            message = message,
+                    if (renderState != null && renderState.blocks.isNotEmpty()) {
+                        StreamBlocksRenderer(
+                            message = renderMessage,
+                            blocks = renderState.blocks,
+                            committedBlocks = renderState.committedBlocks,
+                            tailBlocks = renderState.tailBlocks,
+                            committedBlocksHash = renderState.committedBlocksHash,
+                            tailBlocksHash = renderState.tailBlocksHash,
+                            nativeMarkdownBlocks = renderState.nativeMarkdownBlocks,
+                            committedNativeMarkdownBlocks = renderState.committedNativeMarkdownBlocks,
+                            tailNativeMarkdownBlocks = renderState.tailNativeMarkdownBlocks,
+                            nativeMarkdownBlocksHash = renderState.nativeMarkdownBlocksHash,
+                            committedNativeMarkdownBlocksHash = renderState.committedNativeMarkdownBlocksHash,
+                            tailNativeMarkdownBlocksHash = renderState.tailNativeMarkdownBlocksHash,
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurface,
-                            isStreaming = isStreaming,
                             messageOutputType = message.outputType,
                             viewModel = viewModel,
+                            isStreaming = shouldPreferStreamingContent,
                             onImageClick = { url -> onOpenPreview(url) }
                         )
                     }

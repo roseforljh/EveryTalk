@@ -1,6 +1,7 @@
 package com.android.everytalk.ui.components.table
 
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 
 /**
  * 表格工具类
@@ -322,6 +323,22 @@ object TableUtils {
         }
 
         return widths
+    }
+
+    /**
+     * 按 GPT 默认表格列布局公式计算等宽列宽。
+     */
+    fun calculateChatGptEqualColumnWidthPx(
+        maxTableWidthPx: Float,
+        columnCount: Int,
+        borderStrokeWidthPx: Float,
+    ): Int {
+        if (columnCount <= 0) return 0
+        if (!maxTableWidthPx.isFinite() || maxTableWidthPx <= 0f) return 10
+
+        val totalBorderWidth = borderStrokeWidthPx * (columnCount + 1)
+        val availableCellWidth = (maxTableWidthPx - totalBorderWidth) / columnCount
+        return maxOf(availableCellWidth, 10f).roundToInt()
     }
 
     /**

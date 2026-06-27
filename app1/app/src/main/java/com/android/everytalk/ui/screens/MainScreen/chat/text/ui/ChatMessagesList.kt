@@ -77,7 +77,7 @@ import com.android.everytalk.ui.screens.MainScreen.chat.core.PlaceholderRole
 import com.android.everytalk.ui.theme.ChatDimensions
 import com.android.everytalk.ui.theme.chatColors
 
-import com.android.everytalk.ui.components.EnhancedMarkdownText
+import com.android.everytalk.ui.components.ChatMarkdownTextStyle
 import com.android.everytalk.ui.components.FullScreenCodeViewerDialog
 import com.android.everytalk.ui.components.WebMarkdownSourcesExtractor
 import com.android.everytalk.ui.components.dialog.AppDialogShape
@@ -88,6 +88,7 @@ import com.android.everytalk.ui.components.dialog.appDialogSubtextColor
 import com.android.everytalk.ui.components.scrollFadeEdge
 import com.android.everytalk.ui.components.streaming.StreamBlock
 import com.android.everytalk.ui.components.streaming.StreamBlocksRenderer
+import com.android.everytalk.ui.components.streaming.buildStreamingRenderState
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
@@ -112,6 +113,33 @@ internal fun shouldEnableUserScrollForPinnedUserBubble(
 ): Boolean = grokScrollCompleted
 
 internal fun shouldClearTransientBottomReserveOnStreamChange(isApiCalling: Boolean): Boolean = false
+
+internal fun shouldBuildSourceStrippedRenderBlocks(
+    messageOutputType: String,
+    extractedSourceCount: Int,
+    effectiveContent: String,
+    displayContent: String,
+): Boolean {
+    return messageOutputType != "code" &&
+        extractedSourceCount > 0 &&
+        displayContent.isNotBlank() &&
+        displayContent != effectiveContent
+}
+
+internal fun shouldBuildLocalRenderBlocks(
+    messageOutputType: String,
+    displayContent: String,
+    hasUpstreamBlocks: Boolean,
+    hasStreamingBlocks: Boolean,
+    hasSourceStrippedBlocks: Boolean,
+    hasExtractedSources: Boolean,
+): Boolean {
+    return displayContent.isNotBlank() &&
+        !hasUpstreamBlocks &&
+        !hasStreamingBlocks &&
+        !hasSourceStrippedBlocks &&
+        !hasExtractedSources
+}
 
 internal fun resolvePinnedAnchorPreScrollConsumption(
     availableY: Float,
@@ -1428,13 +1456,13 @@ fun AiMessageItem(
     var lastMeasuredHeightPx by remember(message.id) { mutableStateOf(0) }
 
     Row(
-        modifier = modifier.wrapContentWidth(),
+        modifier = modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.Start
     ) {
         Surface(
             modifier = Modifier
-                .wrapContentWidth()
                 .widthIn(max = maxWidth)
+                .fillMaxWidth()
                 .semantics { contentDescription = aiReplyMessageDescription },
             shape = shape,
             color = Color.Transparent,
@@ -1485,14 +1513,14 @@ fun AiMessageItem(
             } else {
                 Modifier
             }
-            Column(modifier = Modifier.wrapContentWidth()) {
+            Column(modifier = Modifier.fillMaxWidth()) {
                 if (pageSources.isNotEmpty()) {
                     PageSourcesButton(
                         pageSources = pageSources,
                         viewModel = viewModel,
                         modifier = Modifier.padding(
-                            start = ChatDimensions.BUBBLE_INNER_PADDING_HORIZONTAL,
-                            top = ChatDimensions.BUBBLE_INNER_PADDING_VERTICAL,
+                            start = ChatMarkdownTextStyle.ASSISTANT_CONTENT_START_PADDING_DP.dp,
+                            top = ChatMarkdownTextStyle.ASSISTANT_CONTENT_TOP_PADDING_DP.dp,
                             bottom = 6.dp
                         )
                     )
@@ -1500,9 +1528,12 @@ fun AiMessageItem(
 
                 Box(
                     modifier = minHeightModifier
+                        .fillMaxWidth()
                         .padding(
-                            horizontal = ChatDimensions.BUBBLE_INNER_PADDING_HORIZONTAL,
-                            vertical = ChatDimensions.BUBBLE_INNER_PADDING_VERTICAL
+                            start = ChatMarkdownTextStyle.ASSISTANT_CONTENT_START_PADDING_DP.dp,
+                            top = ChatMarkdownTextStyle.ASSISTANT_CONTENT_TOP_PADDING_DP.dp,
+                            end = ChatMarkdownTextStyle.ASSISTANT_CONTENT_END_PADDING_DP.dp,
+                            bottom = ChatMarkdownTextStyle.ASSISTANT_CONTENT_BOTTOM_PADDING_DP.dp
                         )
                         .onSizeChanged { size ->
                             if (isStreaming && size.height > lastMeasuredHeightPx) {
@@ -1519,44 +1550,113 @@ fun AiMessageItem(
                         streamingRenderState.content == effectiveContent &&
                         streamingRenderState.blocks.isNotEmpty()
 
+                val sourceStrippedRenderState = remember(
+                    message.id,
+                    displayContent,
+                    effectiveContent,
+                    messageOutputType,
+                    sourcesExtraction.sources.size,
+                    shouldPreferStreamingContent,
+                ) {
+                    if (shouldBuildSourceStrippedRenderBlocks(
+                            messageOutputType = messageOutputType,
+                            extractedSourceCount = sourcesExtraction.sources.size,
+                            effectiveContent = effectiveContent,
+                            displayContent = displayContent,
+                        )
+                    ) {
+                        buildStreamingRenderState(
+                            messageId = "${message.id}:sources-stripped",
+                            content = displayContent,
+                            isStreaming = shouldPreferStreamingContent,
+                            isComplete = !shouldPreferStreamingContent,
+                        )
+                    } else {
+                        null
+                    }
+                }
+
                 val renderBlocks = when {
-                    messageOutputType == "code" -> emptyList()
                     useStreamingBlocks -> streamingRenderState.blocks
+                    sourceStrippedRenderState != null -> sourceStrippedRenderState.blocks
                     sourcesExtraction.sources.isNotEmpty() -> emptyList()
                     blocks.isNotEmpty() && (text == effectiveContent || message.text == effectiveContent) -> blocks
                     else -> emptyList()
                 }
 
-                if (renderBlocks.isNotEmpty()) {
+                val localRenderState = remember(
+                    message.id,
+                    displayContent,
+                    messageOutputType,
+                    blocks.size,
+                    streamingRenderState.blocks.size,
+                    sourceStrippedRenderState?.blocks?.size ?: 0,
+                    sourcesExtraction.sources.size,
+                ) {
+                    if (shouldBuildLocalRenderBlocks(
+                            messageOutputType = messageOutputType,
+                            displayContent = displayContent,
+                            hasUpstreamBlocks = blocks.isNotEmpty(),
+                            hasStreamingBlocks = useStreamingBlocks,
+                            hasSourceStrippedBlocks = sourceStrippedRenderState != null,
+                            hasExtractedSources = sourcesExtraction.sources.isNotEmpty(),
+                        )
+                    ) {
+                        buildStreamingRenderState(
+                            messageId = "${message.id}:local",
+                            content = displayContent,
+                            isStreaming = false,
+                            isComplete = true,
+                        )
+                    } else {
+                        null
+                    }
+                }
+
+                val fallbackRenderState = remember(
+                    message.id,
+                    displayContent,
+                    renderBlocks.size,
+                    localRenderState?.blocks?.size ?: 0,
+                ) {
+                    if (displayContent.isNotBlank() && renderBlocks.isEmpty() && localRenderState == null) {
+                        buildStreamingRenderState(
+                            messageId = "${message.id}:fallback",
+                            content = displayContent,
+                            isStreaming = shouldPreferStreamingContent,
+                            isComplete = !shouldPreferStreamingContent,
+                        )
+                    } else {
+                        null
+                    }
+                }
+
+                val selectedRenderState = when {
+                    useStreamingBlocks -> streamingRenderState
+                    sourceStrippedRenderState != null -> sourceStrippedRenderState
+                    localRenderState != null -> localRenderState
+                    fallbackRenderState != null -> fallbackRenderState
+                    else -> null
+                }
+
+                val effectiveRenderBlocks = renderBlocks.ifEmpty {
+                    selectedRenderState?.blocks ?: emptyList()
+                }
+
+                if (effectiveRenderBlocks.isNotEmpty()) {
                     StreamBlocksRenderer(
                         message = displayMessage,
-                        blocks = renderBlocks,
-                        committedBlocks = if (useStreamingBlocks) streamingRenderState.committedBlocks else emptyList(),
-                        tailBlocks = if (useStreamingBlocks) streamingRenderState.tailBlocks else emptyList(),
-                        committedBlocksHash = if (useStreamingBlocks) streamingRenderState.committedBlocksHash else "",
-                        tailBlocksHash = if (useStreamingBlocks) streamingRenderState.tailBlocksHash else "",
-                        nativeMarkdownBlocks = if (useStreamingBlocks) streamingRenderState.nativeMarkdownBlocks else emptyList(),
-                        committedNativeMarkdownBlocks = if (useStreamingBlocks) {
-                            streamingRenderState.committedNativeMarkdownBlocks
-                        } else {
-                            emptyList()
-                        },
-                        tailNativeMarkdownBlocks = if (useStreamingBlocks) {
-                            streamingRenderState.tailNativeMarkdownBlocks
-                        } else {
-                            emptyList()
-                        },
-                        nativeMarkdownBlocksHash = if (useStreamingBlocks) streamingRenderState.nativeMarkdownBlocksHash else "",
-                        committedNativeMarkdownBlocksHash = if (useStreamingBlocks) {
-                            streamingRenderState.committedNativeMarkdownBlocksHash
-                        } else {
-                            ""
-                        },
-                        tailNativeMarkdownBlocksHash = if (useStreamingBlocks) {
-                            streamingRenderState.tailNativeMarkdownBlocksHash
-                        } else {
-                            ""
-                        },
+                        blocks = effectiveRenderBlocks,
+                        committedBlocks = selectedRenderState?.committedBlocks ?: emptyList(),
+                        tailBlocks = selectedRenderState?.tailBlocks ?: emptyList(),
+                        committedBlocksHash = selectedRenderState?.committedBlocksHash ?: "",
+                        tailBlocksHash = selectedRenderState?.tailBlocksHash ?: "",
+                        nativeMarkdownBlocks = selectedRenderState?.nativeMarkdownBlocks ?: emptyList(),
+                        committedNativeMarkdownBlocks = selectedRenderState?.committedNativeMarkdownBlocks ?: emptyList(),
+                        tailNativeMarkdownBlocks = selectedRenderState?.tailNativeMarkdownBlocks ?: emptyList(),
+                        nativeMarkdownBlocksHash = selectedRenderState?.nativeMarkdownBlocksHash ?: "",
+                        committedNativeMarkdownBlocksHash = selectedRenderState?.committedNativeMarkdownBlocksHash ?: "",
+                        tailNativeMarkdownBlocksHash = selectedRenderState?.tailNativeMarkdownBlocksHash ?: "",
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurface,
                         messageOutputType = messageOutputType,
@@ -1571,26 +1671,6 @@ fun AiMessageItem(
                         onCodeCopied = {
                             viewModel.showSnackbar("已复制代码")
                         },
-                    )
-                } else {
-                    EnhancedMarkdownText(
-                        message = displayMessage,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        isStreaming = shouldPreferStreamingContent,
-                        messageOutputType = messageOutputType,
-                        onImageClick = onImageClick,
-                        onCodePreviewRequested = { lang, code ->
-                            previewLanguage = lang
-                            previewCode = code
-                        },
-                        onCodeCopied = {
-                            viewModel.showSnackbar("已复制代码")
-                        },
-                        viewModel = viewModel,
-                        contentOverride = displayContent,
-                        contentKeyOverride = message.id,
-                        disableStreamingSubscription = true
                     )
                 }
                 }
