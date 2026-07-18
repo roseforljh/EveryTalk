@@ -61,6 +61,27 @@ class MarkdownEngineOwnershipTest {
         assertFalse(adapter.contains("StableLatexRenderer("))
     }
 
+    @Test
+    fun `Markdown标准组件使用MikePenz且标题只映射移动端Material3字级`() {
+        val adapter = mainSource(
+            "com/android/everytalk/ui/components/markdown/MikePenzMarkdownRenderer.kt"
+        )
+
+        assertTrue(adapter.contains("colors = markdownColor()"))
+        assertTrue(adapter.contains("h3 = MaterialTheme.typography.titleMedium"))
+        assertTrue(adapter.contains("typography = typography"))
+        assertTrue(adapter.contains("CodeBlockCard("))
+        assertFalse(adapter.contains("headingStyle("))
+        assertFalse(adapter.contains("FontStyle.Italic"))
+        assertFalse(adapter.contains("table = {"))
+        assertFalse(adapter.contains("image = {"))
+        assertFalse(adapter.contains("markdownPadding("))
+        assertFalse(adapter.contains("markdownDimens("))
+        assertFalse(adapter.contains("TableRenderer("))
+        assertFalse(adapter.contains("ProportionalAsyncImage("))
+        assertFalse(adapter.contains("InlineMarkdownParser"))
+    }
+
     private fun mainSource(relativePath: String): String {
         return projectFile("app/src/main/java/$relativePath").readText(Charsets.UTF_8)
     }

@@ -1234,10 +1234,7 @@ fun AiMessageItem(
                         markdown = displayMessage.text,
                         contentKey = message.id,
                         sender = displayMessage.sender,
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurface,
                         isStreaming = shouldPreferStreamingContent,
-                        onImageClick = onImageClick,
                         onCodePreviewRequested = { lang, code ->
                             previewLanguage = lang
                             previewCode = code

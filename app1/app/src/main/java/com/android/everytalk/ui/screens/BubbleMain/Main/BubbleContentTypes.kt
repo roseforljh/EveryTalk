@@ -82,8 +82,6 @@ import com.android.everytalk.ui.components.ChatMarkdownTextStyle
 import com.android.everytalk.ui.components.ProportionalAsyncImage
 import com.android.everytalk.ui.components.ImagePreviewDialog
 import com.android.everytalk.ui.components.streaming.UnifiedMarkdownRenderer
-import com.android.everytalk.ui.components.streaming.buildStreamingRenderState
-import com.android.everytalk.ui.components.table.InlineMarkdownParser
 import android.graphics.Bitmap
 import android.util.Base64
 import java.io.ByteArrayOutputStream
@@ -133,25 +131,7 @@ internal fun UserOrErrorMessageContent(
 ) {
     val haptic = LocalHapticFeedback.current
     var globalPosition by remember { mutableStateOf(Offset.Zero) }
-    var previewUrl by remember(message.id) { mutableStateOf<String?>(null) }
     val renderText = displayedText.ifBlank { message.text }
-    val renderMessage = if (renderText == message.text) {
-        message
-    } else {
-        message.copy(text = renderText)
-    }
-    val renderState = remember(message.id, renderText, message.outputType) {
-        if (message.sender != Sender.User && renderText.isNotBlank()) {
-            buildStreamingRenderState(
-                messageId = "${message.id}:bubble",
-                content = renderText,
-                isStreaming = false,
-                isComplete = true,
-            )
-        } else {
-            null
-        }
-    }
 
     // 基于发送者动态计算最大宽度：用户71%，AI80%
     val configuration = LocalConfiguration.current
@@ -288,23 +268,12 @@ internal fun UserOrErrorMessageContent(
                                     .offset(y = (-6).dp)
                             )
                         } else if (displayedText.isNotBlank() || isError) {
-                            if (message.sender == Sender.User || renderState == null || renderState.blocks.isEmpty()) {
-                                BubbleCompactNativeText(
-                                    content = renderText,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = contentColor,
-                                    modifier = Modifier.wrapContentWidth(),
-                                )
-                            } else {
-                                UnifiedMarkdownRenderer(
-                                    markdown = renderMessage.text,
-                                    contentKey = message.id,
-                                    sender = renderMessage.sender,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = contentColor,
-                                    onImageClick = { url -> previewUrl = url },
-                                )
-                            }
+                            UnifiedMarkdownRenderer(
+                                markdown = renderText,
+                                contentKey = message.id,
+                                sender = message.sender,
+                                modifier = Modifier.wrapContentWidth(),
+                            )
                         }
                     }
                 }
@@ -341,62 +310,7 @@ internal fun UserOrErrorMessageContent(
             }
         }
 
-        // 全屏图片预览对话框
-        if (previewUrl != null) {
-            ImagePreviewDialog(
-                url = previewUrl!!,
-                onDismiss = { previewUrl = null }
-            )
-        }
     }
-}
-
-@Composable
-private fun BubbleCompactNativeText(
-    content: String,
-    style: TextStyle,
-    color: Color,
-    modifier: Modifier = Modifier,
-) {
-    val isDark = isSystemInDarkTheme()
-    val codeColor = if (isDark) {
-        Color(0xFFD1D5DB)
-    } else {
-        Color(0xFF4F5661)
-    }
-    val codeFontSize = if (style.fontSize == TextUnit.Unspecified) {
-        TextUnit.Unspecified
-    } else {
-        style.fontSize * ChatMarkdownTextStyle.INLINE_CODE_RELATIVE_SIZE
-    }
-    val annotatedText = remember(content, color, codeColor, codeFontSize) {
-        if (InlineMarkdownParser.containsInlineMarkdown(content)) {
-            InlineMarkdownParser.parse(
-                text = content,
-                baseColor = color,
-                codeBackground = Color.Transparent,
-                codeColor = codeColor,
-                codeFontSize = codeFontSize,
-            )
-        } else {
-            AnnotatedString(content)
-        }
-    }
-
-    Text(
-        text = annotatedText,
-        style = style.copy(
-            color = color,
-            lineHeight = ChatMarkdownTextStyle.BODY_LINE_HEIGHT_SP.sp,
-            lineBreak = LineBreak.Simple,
-            hyphens = Hyphens.None,
-            platformStyle = PlatformTextStyle(includeFontPadding = false),
-            textAlign = TextAlign.Start,
-        ),
-        modifier = modifier,
-        overflow = TextOverflow.Clip,
-        textAlign = TextAlign.Start,
-    )
 }
 
 @OptIn(ExperimentalLayoutApi::class)

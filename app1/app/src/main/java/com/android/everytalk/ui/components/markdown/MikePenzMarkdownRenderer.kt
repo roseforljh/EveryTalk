@@ -1,7 +1,5 @@
 package com.android.everytalk.ui.components.markdown
 
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -12,46 +10,26 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.painter.ColorPainter
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.TextLinkStyles
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.PlaceholderVerticalAlign
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.Density
-import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.isSpecified
-import androidx.compose.ui.unit.sp
 import com.android.everytalk.data.DataClass.Sender
-import com.android.everytalk.ui.components.ChatMarkdownTextStyle
-import com.android.everytalk.ui.components.ProportionalAsyncImage
 import com.android.everytalk.ui.components.content.CodeBlockCard
 import com.android.everytalk.ui.components.math.MathBlock
 import com.android.everytalk.ui.components.math.MathInline
 import com.android.everytalk.ui.components.streaming.MathBlockState
 import com.android.everytalk.ui.components.streaming.StreamBlock
 import com.android.everytalk.ui.components.streaming.StreamBlockParser
-import com.android.everytalk.ui.components.table.TableRenderer
-import com.android.everytalk.ui.components.table.TableUtils
 import com.mikepenz.markdown.coil3.Coil3ImageTransformerImpl
 import com.mikepenz.markdown.compose.Markdown
 import com.mikepenz.markdown.compose.components.markdownComponents
 import com.mikepenz.markdown.compose.elements.MarkdownCodeBlock
 import com.mikepenz.markdown.compose.elements.MarkdownCodeFence
-import com.mikepenz.markdown.compose.elements.MarkdownImage
 import com.mikepenz.markdown.compose.elements.MarkdownInlineImage
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
 import com.mikepenz.markdown.model.ImageData
 import com.mikepenz.markdown.model.ImageTransformer
 import com.mikepenz.markdown.model.PlaceholderConfig
-import com.mikepenz.markdown.model.markdownDimens
-import com.mikepenz.markdown.model.markdownPadding
-import org.intellij.markdown.MarkdownElementTypes
-import org.intellij.markdown.ast.findChildOfType
-import org.intellij.markdown.ast.getTextInNode
 import java.nio.charset.StandardCharsets
 import java.util.Base64
 
@@ -64,58 +42,20 @@ fun MikePenzMarkdownRenderer(
     contentKey: String,
     modifier: Modifier = Modifier,
     sender: Sender = Sender.AI,
-    style: TextStyle,
-    color: Color,
     isStreaming: Boolean = false,
-    onImageClick: ((String) -> Unit)? = null,
     onCodePreviewRequested: ((String, String) -> Unit)? = null,
     onCodeCopied: (() -> Unit)? = null,
 ) {
-    val renderedMarkdown = remember(markdown, contentKey, isStreaming) {
+    val renderedMarkdown = remember(markdown, contentKey) {
         prepareMarkdownForMikePenz(markdown, contentKey)
     }
-    val resolvedColor = when {
-        color != Color.Unspecified -> color
-        style.color != Color.Unspecified -> style.color
-        else -> MaterialTheme.colorScheme.onSurface
-    }
-    val bodyStyle = style.copy(color = resolvedColor)
     val typography = markdownTypography(
-        h1 = headingStyle(bodyStyle, resolvedColor, 1),
-        h2 = headingStyle(bodyStyle, resolvedColor, 2),
-        h3 = headingStyle(bodyStyle, resolvedColor, 3),
-        h4 = headingStyle(bodyStyle, resolvedColor, 4),
-        h5 = headingStyle(bodyStyle, resolvedColor, 5),
-        h6 = headingStyle(bodyStyle, resolvedColor, 6),
-        text = bodyStyle,
-        paragraph = bodyStyle,
-        ordered = bodyStyle,
-        bullet = bodyStyle,
-        list = bodyStyle,
-        quote = bodyStyle.copy(fontStyle = FontStyle.Italic),
-        code = bodyStyle.copy(fontFamily = FontFamily.Monospace),
-        inlineCode = bodyStyle.copy(
-            fontFamily = FontFamily.Monospace,
-            fontSize = if (bodyStyle.fontSize.isSpecified) {
-                bodyStyle.fontSize * ChatMarkdownTextStyle.INLINE_CODE_RELATIVE_SIZE
-            } else {
-                bodyStyle.fontSize
-            },
-        ),
-        textLink = TextLinkStyles(
-            style = SpanStyle(
-                color = MaterialTheme.colorScheme.primary,
-                textDecoration = TextDecoration.Underline,
-            )
-        ),
-        table = bodyStyle,
-    )
-    val colors = markdownColor(
-        text = resolvedColor,
-        codeBackground = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-        inlineCodeBackground = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.62f),
-        dividerColor = resolvedColor.copy(alpha = ChatMarkdownTextStyle.HORIZONTAL_RULE_COLOR_ALPHA),
-        tableBackground = MaterialTheme.colorScheme.background,
+        h1 = MaterialTheme.typography.headlineSmall,
+        h2 = MaterialTheme.typography.titleLarge,
+        h3 = MaterialTheme.typography.titleMedium,
+        h4 = MaterialTheme.typography.titleSmall,
+        h5 = MaterialTheme.typography.bodyLarge,
+        h6 = MaterialTheme.typography.bodyMedium,
     )
     val components = markdownComponents(
         codeFence = { model ->
@@ -152,43 +92,6 @@ fun MikePenzMarkdownRenderer(
                 )
             }
         },
-        table = { model ->
-            val lines = model.node.getTextInNode(model.content).toString().lines()
-            TableRenderer(
-                lines = lines,
-                modifier = Modifier.fillMaxWidth(),
-                isStreaming = isStreaming,
-                headerStyle = bodyStyle.copy(fontWeight = FontWeight.Bold),
-                cellStyle = bodyStyle,
-                onImageClick = onImageClick,
-            )
-        },
-        image = { model ->
-            val link = model.node.findChildOfType(MarkdownElementTypes.LINK_DESTINATION)
-                ?.getTextInNode(model.content)
-                ?.toString()
-                ?.trim()
-                ?.removeSurrounding("<", ">")
-            if (link != null) {
-                val alt = model.node.findChildOfType(MarkdownElementTypes.LINK_TEXT)
-                    ?.getTextInNode(model.content)
-                    ?.toString()
-                    ?.removeSurrounding("[", "]")
-                val clickModifier = if (onImageClick != null) {
-                    Modifier.clickable { onImageClick(link) }
-                } else {
-                    Modifier
-                }
-                ProportionalAsyncImage(
-                    model = link,
-                    contentDescription = alt,
-                    maxWidth = 320.dp,
-                    modifier = Modifier.then(clickModifier),
-                )
-            } else {
-                MarkdownImage(model.content, model.node)
-            }
-        },
         inlineImage = { model ->
             val latex = decodeInlineMathLink(model.content)
             if (latex != null) {
@@ -204,28 +107,11 @@ fun MikePenzMarkdownRenderer(
     val markdownContent: @Composable () -> Unit = {
         Markdown(
             content = renderedMarkdown,
-            colors = colors,
+            colors = markdownColor(),
             typography = typography,
             modifier = modifier.fillMaxWidth(),
-            padding = markdownPadding(
-                block = 4.dp,
-                list = 2.dp,
-                listItemTop = 2.dp,
-                listItemBottom = 2.dp,
-                listIndent = 16.dp,
-            ),
-            dimens = markdownDimens(
-                dividerThickness = ChatMarkdownTextStyle.HORIZONTAL_RULE_THICKNESS_DP.dp,
-                codeBackgroundCornerSize = 24.dp,
-                blockQuoteThickness = ChatMarkdownTextStyle.BLOCK_QUOTE_BAR_WIDTH_DP.dp,
-                tableCellPadding = 8.dp,
-                tableCornerSize = 12.dp,
-            ),
             imageTransformer = EveryTalkMarkdownImageTransformer,
             components = components,
-            retainState = true,
-            loading = { Box(it) },
-            error = { Box(it) },
         )
     }
 
@@ -236,65 +122,140 @@ fun MikePenzMarkdownRenderer(
     }
 }
 
-private fun headingStyle(base: TextStyle, color: Color, level: Int): TextStyle {
-    val normalizedLevel = level.coerceIn(1, 6)
-    return base.copy(
-        color = color.copy(
-            alpha = when (normalizedLevel) {
-                2, 4 -> 0.7f
-                5 -> 0.5f
-                else -> 1f
-            }
-        ),
-        fontSize = ChatMarkdownTextStyle.headingFontSizeSp(normalizedLevel).sp,
-        lineHeight = ChatMarkdownTextStyle.headingLineHeightSp(normalizedLevel).sp,
-        fontWeight = if (normalizedLevel <= 5) FontWeight.W700 else FontWeight.Normal,
-        fontStyle = if (normalizedLevel == 3) FontStyle.Italic else null,
+internal fun prepareMarkdownForMikePenz(markdown: String, contentKey: String): String {
+    val normalizedFences = normalizeNestedMarkdownCodeFences(markdown)
+    return transformMathForMikePenz(
+        markdown = unwrapMarkdownDocumentFences(normalizedFences),
+        contentKey = contentKey,
     )
 }
 
-internal fun prepareMarkdownForMikePenz(markdown: String, contentKey: String): String {
+private data class MarkdownFenceLine(
+    val indent: String,
+    val marker: String,
+    val info: String,
+)
+
+private val markdownFenceLinePattern = Regex("""^(\s{0,3})(`{3,}|~{3,})([^\r\n]*)\r?$""")
+
+/**
+ * 修复 Markdown 示例代码块内嵌套同长度围栏时的边界泄漏。
+ * 外层仍是标准 fenced code block，只把外层围栏扩展到比内部围栏更长。
+ */
+internal fun normalizeNestedMarkdownCodeFences(markdown: String): String {
     if (markdown.isEmpty()) return markdown
-    val lines = markdown.split('\n')
-    val chunks = mutableListOf<String>()
+    val lines = markdown.replace("\r\n", "\n").replace('\r', '\n').split('\n').toMutableList()
     var index = 0
-    var plainStart = 0
-    var segmentIndex = 0
 
     while (index < lines.size) {
-        if (!TableUtils.isValidTableStart(lines, index)) {
+        val opening = parseMarkdownFenceLine(lines[index])
+        if (opening == null || opening.info.lowercase() !in setOf("markdown", "md")) {
             index++
             continue
         }
 
-        if (plainStart < index) {
-            chunks += transformMathOutsideTables(
-                markdown = lines.subList(plainStart, index).joinToString("\n"),
-                contentKey = "$contentKey:segment:${segmentIndex++}",
-            )
+        val markerChar = opening.marker.first()
+        var nestedDepth = 0
+        var maxNestedMarkerLength = 0
+        var closingIndex = -1
+        var scanIndex = index + 1
+
+        while (scanIndex < lines.size) {
+            val candidate = parseMarkdownFenceLine(lines[scanIndex])
+            if (candidate == null || candidate.marker.first() != markerChar) {
+                scanIndex++
+                continue
+            }
+
+            if (candidate.info.isNotEmpty()) {
+                nestedDepth++
+                maxNestedMarkerLength = maxOf(maxNestedMarkerLength, candidate.marker.length)
+            } else if (nestedDepth > 0) {
+                nestedDepth--
+            } else if (candidate.marker.length >= opening.marker.length) {
+                closingIndex = scanIndex
+                break
+            }
+            scanIndex++
         }
-        val (tableLines, nextIndex) = TableUtils.extractTableLines(lines, index)
-        chunks += tableLines.joinToString("\n")
-        index = nextIndex
-        plainStart = nextIndex
+
+        if (closingIndex < 0) {
+            index++
+            continue
+        }
+
+        if (maxNestedMarkerLength >= opening.marker.length) {
+            val outerMarker = markerChar.toString().repeat(maxNestedMarkerLength + 1)
+            val closing = requireNotNull(parseMarkdownFenceLine(lines[closingIndex]))
+            lines[index] = opening.indent + outerMarker + opening.info
+            lines[closingIndex] = closing.indent + outerMarker
+        }
+        index = closingIndex + 1
     }
 
-    if (plainStart < lines.size) {
-        chunks += transformMathOutsideTables(
-            markdown = lines.subList(plainStart, lines.size).joinToString("\n"),
-            contentKey = "$contentKey:segment:${segmentIndex}",
-        )
-    }
-    return chunks.joinToString("\n")
+    return lines.joinToString("\n")
 }
 
-private fun transformMathOutsideTables(markdown: String, contentKey: String): String {
+private fun parseMarkdownFenceLine(line: String): MarkdownFenceLine? {
+    val match = markdownFenceLinePattern.matchEntire(line) ?: return null
+    return MarkdownFenceLine(
+        indent = match.groupValues[1],
+        marker = match.groupValues[2],
+        info = match.groupValues[3].trim(),
+    )
+}
+
+/**
+ * AI 常用 markdown fenced block 包裹完整文档。这里仅解包语言为 markdown 或 md 的外层，
+ * 内部其他语言代码围栏继续交给 Markdown 引擎和 CodeBlockCard。
+ */
+internal fun unwrapMarkdownDocumentFences(markdown: String): String {
+    if (markdown.isEmpty()) return markdown
+    val lines = markdown.replace("\r\n", "\n").replace('\r', '\n').split('\n')
+    val output = mutableListOf<String>()
+    var index = 0
+
+    while (index < lines.size) {
+        val opening = parseMarkdownFenceLine(lines[index])
+        if (opening == null || opening.info.lowercase() !in setOf("markdown", "md")) {
+            output += lines[index++]
+            continue
+        }
+
+        val markerChar = opening.marker.first()
+        val closingIndex = ((index + 1) until lines.size).firstOrNull { candidateIndex ->
+            val candidate = parseMarkdownFenceLine(lines[candidateIndex])
+            candidate != null &&
+                candidate.info.isEmpty() &&
+                candidate.marker.first() == markerChar &&
+                candidate.marker.length >= opening.marker.length
+        }
+        if (closingIndex == null) {
+            output += lines[index++]
+            continue
+        }
+
+        output += lines.subList(index + 1, closingIndex)
+        index = closingIndex + 1
+    }
+
+    return output.joinToString("\n")
+}
+
+private val inProgressTaskMarkerPattern =
+    Regex("""(?m)^([ \t]*[-+*][ \t]+)\[/]([ \t]+)""")
+
+private fun normalizeInProgressTaskMarkers(markdown: String): String {
+    return inProgressTaskMarkerPattern.replace(markdown, "\$1[ ]\$2")
+}
+
+private fun transformMathForMikePenz(markdown: String, contentKey: String): String {
     if (markdown.isEmpty()) return markdown
     val parsed = StreamBlockParser.parse(markdown, contentKey)
     return buildString(markdown.length) {
         parsed.blocks.forEach { block ->
             when (block) {
-                is StreamBlock.PlainText,
+                is StreamBlock.PlainText -> append(normalizeInProgressTaskMarkers(block.text))
                 is StreamBlock.CodeBlock -> append(block.text)
 
                 is StreamBlock.MathInline -> {

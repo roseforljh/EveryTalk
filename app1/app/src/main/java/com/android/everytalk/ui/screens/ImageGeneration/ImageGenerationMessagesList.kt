@@ -1990,10 +1990,7 @@ private fun AiMessageItem(
                             markdown = renderMessage.text,
                             contentKey = message.id,
                             sender = renderMessage.sender,
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurface,
                             isStreaming = shouldPreferStreamingContent,
-                            onImageClick = { url -> onOpenPreview(url) }
                         )
                     }
                     android.util.Log.d("AiMessageItem", "🖼️ [RENDER] messageId=${message.id.take(8)}, imageUrls=${message.imageUrls?.size}, text='${text.take(20)}...'")

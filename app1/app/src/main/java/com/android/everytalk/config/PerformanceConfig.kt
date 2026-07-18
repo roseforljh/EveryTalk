@@ -129,7 +129,7 @@ object PerformanceConfig {
     
     /**
      * 表格额外垂直外边距（dp）- 用于等高占位
-     * 匹配TableRenderer的padding策略
+     * 兼容 Markdown 表格的布局高度
      */
     const val TABLE_EXTRA_VERTICAL_MARGIN_DP = 8f
     

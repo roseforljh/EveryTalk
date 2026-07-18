@@ -5,7 +5,6 @@ import com.android.everytalk.ui.components.streaming.StreamBlockParser
 import com.android.everytalk.ui.components.streaming.extractFencedCodeBlockContent
 import com.android.everytalk.ui.components.markdown.markdownToPlainText
 import com.android.everytalk.ui.components.markdown.prepareMarkdownForMikePenz
-import com.android.everytalk.ui.components.table.InlineMarkdownParser
 import com.android.everytalk.ui.components.table.TableUtils
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -86,10 +85,6 @@ class MarkdownRenderingFullSampleTest {
         assertTrue(text.contains("1. **Free**"))
         assertTrue(text.contains("2. **Pro**"))
         assertTrue(text.contains("3. **Enterprise**"))
-        assertTrue(InlineMarkdownParser.containsInlineMarkdown("**$0/月**"))
-        assertFalse(InlineMarkdownParser.containsMath("**$0/月**"))
-        assertFalse(InlineMarkdownParser.containsMath("含 **$30 inference credit**"))
-
         val processed = prepareMarkdownForMikePenz(pioneerPricingMarkdown, "pricing")
         assertEquals(pioneerPricingMarkdown, processed)
         assertFalse(processed.contains("everytalk-math-inline:"))
@@ -115,8 +110,6 @@ class MarkdownRenderingFullSampleTest {
         assertFalse(parts.any { it is ContentPart.Table })
         assertFalse(parts.any { it is ContentPart.Code })
         assertFalse(parts.any { it is ContentPart.Math })
-        assertFalse(InlineMarkdownParser.containsMath("$30/month credit"))
-
         val processed = prepareMarkdownForMikePenz(pioneerFreeCreditMarkdown, "free-credit")
         assertEquals(pioneerFreeCreditMarkdown, processed)
         assertFalse(processed.contains("everytalk-math-inline:"))
@@ -162,9 +155,6 @@ class MarkdownRenderingFullSampleTest {
 
         assertTrue(text.contains("### 套餐对比表"))
         assertTrue(text.contains("### 核心区别解析"))
-        assertFalse(InlineMarkdownParser.containsMath("**$0** / 月"))
-        assertFalse(InlineMarkdownParser.containsMath("• 赠送 **$30** 的推理额度"))
-
         val processed = prepareMarkdownForMikePenz(pioneerDetailedPricingMarkdown, "detailed-pricing")
         assertEquals(pioneerDetailedPricingMarkdown, processed)
         assertFalse(processed.contains("everytalk-math-inline:"))
