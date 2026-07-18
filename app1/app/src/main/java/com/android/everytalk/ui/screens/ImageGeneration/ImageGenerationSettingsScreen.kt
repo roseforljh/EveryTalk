@@ -150,8 +150,12 @@ fun ImageGenerationSettingsScreen(
         modifier = modifier.fillMaxSize(),
         containerColor = MaterialTheme.colorScheme.background,
         contentWindowInsets = WindowInsets(0.dp)
-    ) { _ ->
-        Box(modifier = Modifier.fillMaxSize()) {
+    ) { contentPadding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(contentPadding)
+        ) {
             SettingsScreenContent(
                 paddingValues = PaddingValues(top = topContentPadding),
             apiConfigsByApiKeyAndModality = apiConfigsByApiKeyAndModality,

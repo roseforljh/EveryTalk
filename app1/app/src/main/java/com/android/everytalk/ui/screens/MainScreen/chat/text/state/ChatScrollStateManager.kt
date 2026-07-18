@@ -15,6 +15,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.unit.Velocity
+import com.android.everytalk.ui.topanchor.BottomScrollReason
+import com.android.everytalk.ui.topanchor.shouldAllowBottomScroll
 import com.android.everytalk.util.AppLogger
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -67,9 +69,15 @@ class ChatScrollStateManager(
 
     private var preventAutoScroll = false
     private var isProgrammaticScroll = false
+    private var suppressTopAnchorBottomScroll by mutableStateOf(false)
+    private var topAnchorRuntimeClearer: (() -> Unit)? = null
 
     val nestedScrollConnection = object : NestedScrollConnection {
         override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+            if (source == NestedScrollSource.UserInput && suppressTopAnchorBottomScroll) {
+                topAnchorRuntimeClearer?.invoke()
+                suppressTopAnchorBottomScroll = false
+            }
             if (source == NestedScrollSource.UserInput || source == NestedScrollSource.SideEffect) {
                 updateScrollToBottomButton(available.y)
             }
@@ -166,6 +174,14 @@ class ChatScrollStateManager(
         isStreaming = streaming
     }
 
+    fun updateTopAnchorBottomScrollSuppression(suppressed: Boolean) {
+        suppressTopAnchorBottomScroll = suppressed
+    }
+
+    fun setTopAnchorRuntimeClearer(clearer: (() -> Unit)?) {
+        topAnchorRuntimeClearer = clearer
+    }
+
     fun lockAutoScroll() {
         preventAutoScroll = true
         logger.debug("Auto-scroll locked")
@@ -225,12 +241,30 @@ class ChatScrollStateManager(
     }
 
     private fun jumpToBottomInternal(isUserAction: Boolean, smooth: Boolean) {
+        val reason = if (isUserAction) {
+            BottomScrollReason.Button
+        } else {
+            BottomScrollReason.ExternalEvent
+        }
+        if (!shouldAllowBottomScroll(
+                isUserAction = isUserAction,
+                suppressesBottomScroll = suppressTopAnchorBottomScroll,
+                isAtBottom = _isAtBottom.value,
+                reason = reason
+            )
+        ) {
+            logger.debug("Ignoring bottom scroll because top anchor is active")
+            return
+        }
+
         if (!isUserAction && preventAutoScroll) {
             logger.debug("Ignoring auto jumpToBottom because preventAutoScroll is active")
             return
         }
         
         if (isUserAction) {
+            topAnchorRuntimeClearer?.invoke()
+            suppressTopAnchorBottomScroll = false
             preventAutoScroll = false
         }
 

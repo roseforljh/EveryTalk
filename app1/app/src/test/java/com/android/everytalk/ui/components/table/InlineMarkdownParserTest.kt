@@ -6,6 +6,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -45,10 +46,125 @@ class InlineMarkdownParserTest {
     }
 
     @Test
+    fun `inline code supports multi backtick fence containing single backtick`() {
+        val parsed = InlineMarkdownParser.parse("Use ``code with `tick` inside`` now")
+
+        assertEquals("Use code with `tick` inside now", parsed.text)
+        assertTrue(parsed.spanStyles.any { it.item.fontFamily == FontFamily.Monospace })
+    }
+
+    @Test
+    fun `inline code trims one wrapping space from code span literal`() {
+        val parsed = InlineMarkdownParser.parse("Use ` code ` now")
+
+        assertEquals("Use code now", parsed.text)
+        assertTrue(parsed.spanStyles.any { it.item.fontFamily == FontFamily.Monospace })
+    }
+
+    @Test
+    fun `font color html tag maps to foreground span like gpt html renderer`() {
+        val parsed = InlineMarkdownParser.parse("""A <font color="#ff0000">red **bold**</font> B""")
+
+        assertEquals("A red bold B", parsed.text)
+        assertTrue(parsed.spanStyles.any { it.item.color == Color(0xFFFF0000) })
+        assertTrue(parsed.spanStyles.any { it.item.fontWeight == FontWeight.Bold })
+    }
+
+    @Test
+    fun `font face html tag maps to font family span like gpt html renderer`() {
+        val parsed = InlineMarkdownParser.parse("""A <font face="monospace">code</font> B""")
+
+        assertEquals("A code B", parsed.text)
+        assertTrue(parsed.spanStyles.any { it.item.fontFamily == FontFamily.Monospace })
+    }
+
+    @Test
+    fun `tt html tag maps to monospace span like gpt html renderer`() {
+        val parsed = InlineMarkdownParser.parse("""A <tt>code **bold**</tt> B""")
+
+        assertEquals("A code bold B", parsed.text)
+        assertTrue(parsed.spanStyles.any { it.item.fontFamily == FontFamily.Monospace })
+        assertTrue(parsed.spanStyles.any { it.item.fontWeight == FontWeight.Bold })
+    }
+
+    @Test
+    fun `big and small html tags map to relative size spans like gpt html renderer`() {
+        val parsed = InlineMarkdownParser.parse("""A <big>large</big> <small>tiny</small> B""")
+
+        assertEquals("A large tiny B", parsed.text)
+        assertTrue(parsed.spanStyles.any { it.item.fontSize == 1.25.em })
+        assertTrue(parsed.spanStyles.any { it.item.fontSize == 0.8.em })
+    }
+
+    @Test
+    fun `span style html tag maps css spans like gpt html renderer`() {
+        val parsed = InlineMarkdownParser.parse(
+            """A <span style="color:#ff0000; background-color:#00ff00; text-decoration:line-through">red **bold**</span> B"""
+        )
+
+        assertEquals("A red bold B", parsed.text)
+        assertTrue(parsed.spanStyles.any { it.item.color == Color(0xFFFF0000) })
+        assertTrue(parsed.spanStyles.any { it.item.background == Color(0xFF00FF00) })
+        assertTrue(parsed.spanStyles.any { it.item.textDecoration == TextDecoration.LineThrough })
+        assertTrue(parsed.spanStyles.any { it.item.fontWeight == FontWeight.Bold })
+    }
+
+    @Test
+    fun `span style html tag maps android text decoration first token like gpt html renderer`() {
+        val parsed = InlineMarkdownParser.parse(
+            """A <span style="text-decoration:line-through underline">red **bold**</span> B"""
+        )
+
+        assertEquals("A red bold B", parsed.text)
+        assertTrue(parsed.spanStyles.any { it.item.textDecoration == TextDecoration.LineThrough })
+        assertTrue(parsed.spanStyles.any { it.item.fontWeight == FontWeight.Bold })
+    }
+
+    @Test
+    fun `span style html tag maps android standard named colors like gpt html renderer`() {
+        val parsed = InlineMarkdownParser.parse(
+            """A <span style="color:lime; background-color:silver">tone</span> B"""
+        )
+
+        assertEquals("A tone B", parsed.text)
+        assertTrue(parsed.spanStyles.any { it.item.color == Color(0xFF00FF00) })
+        assertTrue(parsed.spanStyles.any { it.item.background == Color(0xFFC0C0C0) })
+    }
+
+    @Test
+    fun `span style html tag maps android numeric colors like gpt html renderer`() {
+        val parsed = InlineMarkdownParser.parse(
+            """A <span style="color:0x00ff0000; background-color:65280">tone</span> B"""
+        )
+
+        assertEquals("A tone B", parsed.text)
+        assertTrue(parsed.spanStyles.any { it.item.color == Color(0xFFFF0000) })
+        assertTrue(parsed.spanStyles.any { it.item.background == Color(0xFF00FF00) })
+    }
+
+    @Test
+    fun `annotation html tag maps attributes to string annotations like gpt html renderer`() {
+        val parsed = InlineMarkdownParser.parse(
+            """A <annotation openai_meta="tool" source='search'>**annotated**</annotation> B"""
+        )
+
+        assertEquals("A annotated B", parsed.text)
+        assertEquals(
+            "tool",
+            parsed.getStringAnnotations("openai_meta", 0, parsed.length).single().item,
+        )
+        assertEquals(
+            "search",
+            parsed.getStringAnnotations("source", 0, parsed.length).single().item,
+        )
+        assertTrue(parsed.spanStyles.any { it.item.fontWeight == FontWeight.Bold })
+    }
+
+    @Test
     fun `bold can contain link annotation`() {
         val parsed = InlineMarkdownParser.parse("**粗体里的 [链接](https://example.com)**")
 
-        assertEquals("粗体里的 链接 ↗", parsed.text)
+        assertEquals("粗体里的 链接", parsed.text)
         assertTrue(parsed.spanStyles.any { it.item.fontWeight == FontWeight.Bold })
         assertEquals(
             "https://example.com",
@@ -60,7 +176,7 @@ class InlineMarkdownParserTest {
     fun `markdown link with double quoted title uses only url annotation`() {
         val parsed = InlineMarkdownParser.parse("""Read [docs](https://example.com/docs "文档") now""")
 
-        assertEquals("Read docs ↗ now", parsed.text)
+        assertEquals("Read docs now", parsed.text)
         assertEquals(
             "https://example.com/docs",
             parsed.getStringAnnotations("URL", 0, parsed.length).single().item,
@@ -71,7 +187,7 @@ class InlineMarkdownParserTest {
     fun `markdown link with single quoted title uses only url annotation`() {
         val parsed = InlineMarkdownParser.parse("Read [docs](https://example.com/docs '文档') now")
 
-        assertEquals("Read docs ↗ now", parsed.text)
+        assertEquals("Read docs now", parsed.text)
         assertEquals(
             "https://example.com/docs",
             parsed.getStringAnnotations("URL", 0, parsed.length).single().item,
@@ -82,7 +198,7 @@ class InlineMarkdownParserTest {
     fun `markdown link with parenthesized title uses only url annotation`() {
         val parsed = InlineMarkdownParser.parse("Read [docs](https://example.com/docs (文档)) now")
 
-        assertEquals("Read docs ↗ now", parsed.text)
+        assertEquals("Read docs now", parsed.text)
         assertEquals(
             "https://example.com/docs",
             parsed.getStringAnnotations("URL", 0, parsed.length).single().item,
@@ -93,7 +209,7 @@ class InlineMarkdownParserTest {
     fun `markdown link with parenthesized url keeps full url annotation`() {
         val parsed = InlineMarkdownParser.parse("See [page](https://example.com/wiki/A_(B)) now")
 
-        assertEquals("See page ↗ now", parsed.text)
+        assertEquals("See page now", parsed.text)
         assertEquals(
             "https://example.com/wiki/A_(B)",
             parsed.getStringAnnotations("URL", 0, parsed.length).single().item,
@@ -104,7 +220,7 @@ class InlineMarkdownParserTest {
     fun `markdown link with angle bracket destination strips brackets from url annotation`() {
         val parsed = InlineMarkdownParser.parse("See [page](<https://example.com/wiki/A_(B)>) now")
 
-        assertEquals("See page ↗ now", parsed.text)
+        assertEquals("See page now", parsed.text)
         assertEquals(
             "https://example.com/wiki/A_(B)",
             parsed.getStringAnnotations("URL", 0, parsed.length).single().item,
@@ -115,9 +231,20 @@ class InlineMarkdownParserTest {
     fun `autolink becomes url annotation`() {
         val parsed = InlineMarkdownParser.parse("Open <https://example.com> now")
 
-        assertEquals("Open https://example.com ↗ now", parsed.text)
+        assertEquals("Open https://example.com now", parsed.text)
         assertEquals(
             "https://example.com",
+            parsed.getStringAnnotations("URL", 0, parsed.length).single().item,
+        )
+    }
+
+    @Test
+    fun `email autolink becomes mailto annotation`() {
+        val parsed = InlineMarkdownParser.parse("Contact <team@example.com> now")
+
+        assertEquals("Contact team@example.com now", parsed.text)
+        assertEquals(
+            "mailto:team@example.com",
             parsed.getStringAnnotations("URL", 0, parsed.length).single().item,
         )
     }
@@ -126,7 +253,7 @@ class InlineMarkdownParserTest {
     fun `bare url becomes url annotation`() {
         val parsed = InlineMarkdownParser.parse("Open https://example.com/docs now")
 
-        assertEquals("Open https://example.com/docs ↗ now", parsed.text)
+        assertEquals("Open https://example.com/docs now", parsed.text)
         assertEquals(
             "https://example.com/docs",
             parsed.getStringAnnotations("URL", 0, parsed.length).single().item,
@@ -244,6 +371,14 @@ class InlineMarkdownParserTest {
 
         assertEquals("这是 **不是粗体**", parsed.text)
         assertTrue(parsed.spanStyles.none { it.item.fontWeight == FontWeight.Bold })
+    }
+
+    @Test
+    fun `backslash before non punctuation stays literal while markdown still parses`() {
+        val parsed = InlineMarkdownParser.parse("""Path C:\Users\name has **bold** marker""")
+
+        assertEquals("""Path C:\Users\name has bold marker""", parsed.text)
+        assertTrue(parsed.spanStyles.any { it.item.fontWeight == FontWeight.Bold })
     }
 
     @Test

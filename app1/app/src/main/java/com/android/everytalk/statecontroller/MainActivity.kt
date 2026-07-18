@@ -212,7 +212,9 @@ class MainActivity : ComponentActivity() {
                         DismissibleNavigationDrawer(
                             drawerState = appViewModel.drawerState,
                             gesturesEnabled = !isCodeBlockScrolling, // 代码块滚动时禁用抽屉手势
-                            modifier = Modifier.fillMaxSize(),
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(contentPadding),
                             drawerContent = {
                                 val navBackStackEntryState = navController.currentBackStackEntryAsState()
                                 val currentRoute = navBackStackEntryState.value?.destination?.route

@@ -23,7 +23,6 @@ import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
@@ -46,9 +45,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
-import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.platform.*
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
@@ -87,8 +85,15 @@ import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.components.dialog.appDialogSubtextColor
 import com.android.everytalk.ui.components.scrollFadeEdge
 import com.android.everytalk.ui.components.streaming.StreamBlock
-import com.android.everytalk.ui.components.streaming.StreamBlocksRenderer
+import com.android.everytalk.ui.components.streaming.UnifiedMarkdownRenderer
 import com.android.everytalk.ui.components.streaming.buildStreamingRenderState
+import com.android.everytalk.ui.topanchor.RunTopAnchorReserveEngine
+import com.android.everytalk.ui.topanchor.TopAnchorConfig
+import com.android.everytalk.ui.topanchor.TopAnchorPhase
+import com.android.everytalk.ui.topanchor.TopAnchorReserveEngineState
+import com.android.everytalk.ui.topanchor.computeTopAnchorY
+import com.android.everytalk.ui.topanchor.mapChatItemsToTopAnchorItems
+import com.android.everytalk.ui.topanchor.resolveActiveTopAnchorTurn
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
@@ -96,23 +101,6 @@ import coil3.compose.AsyncImage
 import androidx.compose.ui.layout.onSizeChanged
 import kotlinx.coroutines.flow.first
 import java.net.URI
-
-internal fun shouldResetTransientBottomReserve(
-    previousConversationId: String?,
-    currentConversationId: String,
-    isApiCalling: Boolean
-): Boolean = !isApiCalling &&
-    !previousConversationId.isNullOrBlank() &&
-    previousConversationId != currentConversationId
-
-internal fun shouldEnableUserScrollForPinnedUserBubble(
-    grokScrollCompleted: Boolean,
-    isApiCalling: Boolean,
-    hasPinnedUserMessage: Boolean,
-    hasDynamicBottomReserve: Boolean
-): Boolean = grokScrollCompleted
-
-internal fun shouldClearTransientBottomReserveOnStreamChange(isApiCalling: Boolean): Boolean = false
 
 internal fun shouldBuildSourceStrippedRenderBlocks(
     messageOutputType: String,
@@ -139,87 +127,6 @@ internal fun shouldBuildLocalRenderBlocks(
         !hasStreamingBlocks &&
         !hasSourceStrippedBlocks &&
         !hasExtractedSources
-}
-
-internal fun resolvePinnedAnchorPreScrollConsumption(
-    availableY: Float,
-    currentY: Int,
-    targetY: Int,
-    hasPinnedUserMessage: Boolean,
-    hasDynamicBottomReserve: Boolean,
-    grokScrollCompleted: Boolean
-): Float = 0f
-
-internal fun pinnedAnchorLayoutVersion(
-    totalItemsCount: Int,
-    firstVisibleItemIndex: Int,
-    firstVisibleItemScrollOffset: Int,
-    visibleItemsSizeSum: Int,
-    visibleItemsOffsetSum: Int
-): Long {
-    var result = totalItemsCount.toLong()
-    result = result * 31 + firstVisibleItemIndex
-    result = result * 31 + firstVisibleItemScrollOffset
-    result = result * 31 + visibleItemsSizeSum
-    result = result * 31 + visibleItemsOffsetSum
-    return result
-}
-
-internal fun restorePinnedBubbleAnchorForSession(
-    savedAnchorY: Int,
-    isPinnedRuntimeActive: Boolean
-): Int = if (isPinnedRuntimeActive && savedAnchorY > 0) savedAnchorY else -1
-
-internal fun resolvePinnedUserBubbleAnchorY(
-    itemTopY: Int,
-    itemHeightPx: Int,
-    maxUserBubbleHeightPx: Int,
-): Int = if (itemHeightPx > maxUserBubbleHeightPx / 2) {
-    itemTopY + itemHeightPx / 2
-} else {
-    itemTopY
-}
-
-internal fun shouldDispatchImageLoadedToBottomScroller(
-    isApiCalling: Boolean,
-    isAtBottom: Boolean,
-    hasPinnedUserMessage: Boolean,
-    hasDynamicBottomReserve: Boolean
-): Boolean = !isApiCalling && isAtBottom && !(hasPinnedUserMessage && hasDynamicBottomReserve)
-
-internal fun shouldShrinkDynamicBottomReserveForVisibleGap(
-    hasPinnedUserMessage: Boolean,
-    preservePinnedReserve: Boolean,
-    isTrailingContentVisible: Boolean = true
-): Boolean = isTrailingContentVisible && (!preservePinnedReserve || !hasPinnedUserMessage)
-
-internal fun shouldPreservePinnedReserveAfterScroll(
-    hasPinnedUserMessage: Boolean,
-    hasDynamicBottomReserve: Boolean,
-    isApiCalling: Boolean,
-    isUserInputScroll: Boolean,
-): Boolean = hasPinnedUserMessage && hasDynamicBottomReserve && isApiCalling && isUserInputScroll
-
-internal fun shouldRunPinnedAnchorCorrection(
-    isApiCalling: Boolean,
-    grokScrollCompleted: Boolean,
-    hasPinnedUserMessage: Boolean,
-    hasDynamicBottomReserve: Boolean,
-): Boolean = isApiCalling &&
-    grokScrollCompleted &&
-    hasPinnedUserMessage &&
-    hasDynamicBottomReserve
-
-internal fun resolveDynamicBottomReserveForVisibleGap(
-    currentReservePx: Int,
-    visibleGapPx: Int,
-    minPinnedReservePx: Int,
-    maxPinnedReservePx: Int,
-    hasPinnedUserMessage: Boolean
-): Int {
-    val safeCurrent = currentReservePx.coerceAtLeast(0)
-    val safeGap = visibleGapPx.coerceAtLeast(0)
-    return safeGap.coerceAtMost(safeCurrent)
 }
 
 @Composable
@@ -321,166 +228,52 @@ fun ChatMessagesList(
         }
     }
 
-    val isAtBottom by scrollStateManager.isAtBottom
-    
-    val userMessageIndices = remember(chatItems) {
-        val indices = mutableListOf<Int>()
-        chatItems.forEachIndexed { i, item ->
-            if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage) {
-                indices.add(i)
-            }
-        }
-        indices
-    }
-    
-    val lastUserMessageInfo = remember(chatItems) {
-        var index = -1
-        var id: String? = null
-        chatItems.forEachIndexed { i, item ->
-            if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage) {
-                index = i
-                id = item.stableId
-            }
-        }
-        Pair(index, id)
-    }
-    
-    var dynamicBottomPaddingTarget by remember(scrollSessionKey) { mutableStateOf(0.dp) }
-    var dynamicBottomPaddingImmediate by remember(scrollSessionKey) { mutableStateOf(0.dp) }
-    var grokScrollCompleted by remember(scrollSessionKey) { mutableStateOf(true) }
-    var pinnedUserMessageId by remember(scrollSessionKey) { mutableStateOf<String?>(null) }
-    var preservePinnedReserveAfterUserScroll by remember(scrollSessionKey) { mutableStateOf(false) }
+    val statusBarTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    val topPadding = statusBarTop + 72.dp
+    val topPaddingPx = with(density) { topPadding.toPx().toInt() }
+    val topAnchorEngine = remember(scrollSessionKey) { TopAnchorReserveEngineState() }
     var firstBubbleScreenY by remember(scrollSessionKey) {
         mutableStateOf(-1)
     }
-    var previousConversationIdForReserve by remember { mutableStateOf<String?>(null) }
-
-    var skipAnimation by remember(scrollSessionKey) { mutableStateOf(true) }
-    val trailingChatItemIndex by rememberUpdatedState(chatItems.lastIndex)
-    val hasPinnedUserMessageForScroll by rememberUpdatedState(pinnedUserMessageId != null)
-    val hasDynamicBottomReserveForScroll by rememberUpdatedState(dynamicBottomPaddingTarget > 0.dp)
-    val isApiCallingForScroll by rememberUpdatedState(isApiCalling)
-
-    fun clearTransientBottomReserve() {
-        skipAnimation = true
-        pinnedUserMessageId = null
-        preservePinnedReserveAfterUserScroll = false
-        dynamicBottomPaddingTarget = 0.dp
-        dynamicBottomPaddingImmediate = 0.dp
-    }
-
-    val pinnedReserveUserScrollConnection = remember(scrollSessionKey) {
-        object : NestedScrollConnection {
-            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
-                if (shouldPreservePinnedReserveAfterScroll(
-                        hasPinnedUserMessage = hasPinnedUserMessageForScroll,
-                        hasDynamicBottomReserve = hasDynamicBottomReserveForScroll,
-                        isApiCalling = isApiCallingForScroll,
-                        isUserInputScroll = source == NestedScrollSource.UserInput,
-                    )
-                ) {
-                    preservePinnedReserveAfterUserScroll = true
-                }
-                return Offset.Zero
-            }
-        }
-    }
-
-    // 流式期间用快速动画，结束归零用慢动画
-    val isTargetZero = dynamicBottomPaddingTarget <= 0.dp
-    val dynamicBottomPaddingAnimated by androidx.compose.animation.core.animateDpAsState(
-        targetValue = dynamicBottomPaddingTarget,
-        animationSpec = when {
-            skipAnimation -> androidx.compose.animation.core.snap()
-            isTargetZero -> androidx.compose.animation.core.tween(
-                durationMillis = 800,
-                easing = androidx.compose.animation.core.CubicBezierEasing(0.22f, 1.0f, 0.36f, 1.0f)
-            )
-            else -> androidx.compose.animation.core.tween(
-                durationMillis = 80,
-                easing = androidx.compose.animation.core.LinearEasing
-            )
-        },
-        finishedListener = { if (skipAnimation) skipAnimation = false },
-        label = "dynamicBottomPadding"
-    )
-
-    // 始终用 animated 值，避免 immediate/animated 切换时的跳变
-    val dynamicBottomPadding = dynamicBottomPaddingAnimated
-
-    LaunchedEffect(scrollSessionKey) {
-        grokScrollCompleted = true
-        clearTransientBottomReserve()
-        firstBubbleScreenY = restorePinnedBubbleAnchorForSession(
-            savedAnchorY = viewModel.getScrollState(scrollSessionKey)?.firstBubbleScreenY ?: -1,
-            isPinnedRuntimeActive = pinnedUserMessageId != null && dynamicBottomPaddingTarget > 0.dp
+    val lastSentUserMessageId by viewModel.lastSentUserMessageId.collectAsState()
+    val topAnchorItems = remember(chatItems) {
+        mapChatItemsToTopAnchorItems(
+            items = chatItems,
+            resolveErrorSender = { messageId -> viewModel.getMessageById(messageId)?.sender }
         )
-        android.util.Log.d("GrokScroll", "Session changed, reset state, restored firstBubbleScreenY=$firstBubbleScreenY")
     }
+    val activeTurn = remember(topAnchorItems, lastSentUserMessageId, scrollSessionKey, chatItems.size) {
+        resolveActiveTopAnchorTurn(
+            items = topAnchorItems,
+            sentUserMessageId = lastSentUserMessageId,
+            sessionKey = scrollSessionKey,
+            generation = chatItems.size.toLong()
+        )
+    }
+    val engineAnchorInfo = remember(chatItems, topAnchorEngine.runtime.currentTurn) {
+        val turn = topAnchorEngine.runtime.currentTurn ?: return@remember null
+        chatItems.mapIndexedNotNull { index, item ->
+            if (item.stableId == turn.anchorMessageId) index to item.stableId else null
+        }.firstOrNull()
+    }
+    val engineReserveDp = with(density) { topAnchorEngine.reservePx.toDp() }
 
-    LaunchedEffect(conversationId, isApiCalling) {
-        if (shouldResetTransientBottomReserve(previousConversationIdForReserve, conversationId, isApiCalling)) {
-            grokScrollCompleted = true
-            clearTransientBottomReserve()
-            firstBubbleScreenY = restorePinnedBubbleAnchorForSession(
-                savedAnchorY = viewModel.getScrollState(conversationId)?.firstBubbleScreenY ?: -1,
-                isPinnedRuntimeActive = pinnedUserMessageId != null && dynamicBottomPaddingTarget > 0.dp
-            )
-            android.util.Log.d("GrokScroll", "Conversation changed, cleared transient bottom reserve")
-        }
-        previousConversationIdForReserve = conversationId
-    }
-    
-    LaunchedEffect(isApiCalling) {
-        if (!isApiCalling) {
-            preservePinnedReserveAfterUserScroll = false
-        }
-        if (shouldClearTransientBottomReserveOnStreamChange(isApiCalling)) {
-            clearTransientBottomReserve()
-        }
-    }
-
-    // 只用列表尾部真实内容计算 gap，避免用户上滑时用历史可见 item 误缩 spacer。
     LaunchedEffect(scrollSessionKey) {
-        snapshotFlow {
-            if (!grokScrollCompleted || dynamicBottomPaddingTarget <= 0.dp) return@snapshotFlow -1
-            val li = listState.layoutInfo
-            val viewportHeight = li.viewportEndOffset - li.viewportStartOffset
-            if (viewportHeight <= 0) return@snapshotFlow -1
+        topAnchorEngine.clearRuntime()
+        firstBubbleScreenY = -1
+        scrollStateManager.updateTopAnchorBottomScrollSuppression(false)
+        scrollStateManager.setTopAnchorRuntimeClearer(null)
+    }
 
-            val lastRealIndex = trailingChatItemIndex
-            if (lastRealIndex < 0) return@snapshotFlow -1
-            val lastRealItem = li.visibleItemsInfo.firstOrNull {
-                it.index == lastRealIndex && it.key != "dynamic_padding_spacer"
-            }
-                ?: return@snapshotFlow -1
-            if (!shouldShrinkDynamicBottomReserveForVisibleGap(
-                    hasPinnedUserMessage = pinnedUserMessageId != null,
-                    preservePinnedReserve = preservePinnedReserveAfterUserScroll,
-                    isTrailingContentVisible = true,
-                )
-            ) {
-                return@snapshotFlow -1
-            }
+    DisposableEffect(scrollStateManager, topAnchorEngine) {
+        scrollStateManager.setTopAnchorRuntimeClearer(topAnchorEngine::clearRuntime)
+        onDispose { scrollStateManager.setTopAnchorRuntimeClearer(null) }
+    }
 
-            val contentBottomInViewport = lastRealItem.offset + lastRealItem.size
-            val gap = li.viewportEndOffset - contentBottomInViewport - li.afterContentPadding
-            gap.coerceAtLeast(0)
-        }.collect { gapPx ->
-            if (gapPx < 0) return@collect
-            val newPadding = with(density) { gapPx.toDp() }
-            if (
-                newPadding < dynamicBottomPaddingTarget &&
-                shouldShrinkDynamicBottomReserveForVisibleGap(
-                    hasPinnedUserMessage = pinnedUserMessageId != null,
-                    preservePinnedReserve = preservePinnedReserveAfterUserScroll,
-                    isTrailingContentVisible = true,
-                )
-            ) {
-                dynamicBottomPaddingImmediate = newPadding
-                dynamicBottomPaddingTarget = newPadding
-            }
-        }
+    LaunchedEffect(topAnchorEngine.runtime.suppressesBottomScroll) {
+        scrollStateManager.updateTopAnchorBottomScrollSuppression(
+            topAnchorEngine.runtime.suppressesBottomScroll
+        )
     }
 
     LaunchedEffect(firstBubbleScreenY) {
@@ -497,272 +290,85 @@ fun ChatMessagesList(
         }
     }
 
-    LaunchedEffect(pinnedUserMessageId, isApiCalling, grokScrollCompleted, firstBubbleScreenY) {
-        val pinnedId = pinnedUserMessageId ?: return@LaunchedEffect
-        if (!shouldRunPinnedAnchorCorrection(
-                isApiCalling = isApiCalling,
-                grokScrollCompleted = grokScrollCompleted,
-                hasPinnedUserMessage = true,
-                hasDynamicBottomReserve = dynamicBottomPaddingTarget > 0.dp,
-            )
-        ) {
-            return@LaunchedEffect
-        }
-        val targetY = firstBubbleScreenY
-        if (targetY <= 0) return@LaunchedEffect
-
-        val stableWindowNanos = 50_000_000L
-        var stableSinceNanos = 0L
-        var lastLayoutVersion = listState.layoutInfo.run {
-            pinnedAnchorLayoutVersion(
-                totalItemsCount = totalItemsCount,
-                firstVisibleItemIndex = listState.firstVisibleItemIndex,
-                firstVisibleItemScrollOffset = listState.firstVisibleItemScrollOffset,
-                visibleItemsSizeSum = visibleItemsInfo.sumOf { it.size },
-                visibleItemsOffsetSum = visibleItemsInfo.sumOf { it.offset }
-            )
-        }
-        while (true) {
-            val frameNanos = withFrameNanos { it }
-            val li = listState.layoutInfo
-            val layoutVersion = pinnedAnchorLayoutVersion(
-                totalItemsCount = li.totalItemsCount,
-                firstVisibleItemIndex = listState.firstVisibleItemIndex,
-                firstVisibleItemScrollOffset = listState.firstVisibleItemScrollOffset,
-                visibleItemsSizeSum = li.visibleItemsInfo.sumOf { it.size },
-                visibleItemsOffsetSum = li.visibleItemsInfo.sumOf { it.offset }
-            )
-            val layoutChanged = layoutVersion != lastLayoutVersion
-            lastLayoutVersion = layoutVersion
-
-            val item = li.visibleItemsInfo.firstOrNull { it.key == pinnedId }
-                ?: continue
-            val currentTopY = item.offset - li.viewportStartOffset
-            val currentAnchorY = resolvePinnedUserBubbleAnchorY(
-                itemTopY = currentTopY,
-                itemHeightPx = item.size,
-                maxUserBubbleHeightPx = pinnedUserBubbleMaxHeightPx,
-            )
-            val drift = currentAnchorY - targetY
-
-            if (kotlin.math.abs(drift) > 1) {
-                stableSinceNanos = 0L
-                val consumed = listState.scrollBy(drift.toFloat())
-                val missing = kotlin.math.abs(drift.toFloat()) - kotlin.math.abs(consumed)
-                if (drift > 0 && missing > 0.5f) {
-                    val missingDp = with(density) { missing.toDp() }
-                    dynamicBottomPaddingImmediate += missingDp
-                    dynamicBottomPaddingTarget += missingDp
-                }
-            } else {
-                if (stableSinceNanos == 0L) {
-                    stableSinceNanos = frameNanos
-                }
-                val stableDurationNanos = frameNanos - stableSinceNanos
-                if (stableDurationNanos >= stableWindowNanos && dynamicBottomPaddingTarget > 0.dp) {
-                    val lastRealItem = li.visibleItemsInfo.firstOrNull {
-                        it.index == trailingChatItemIndex && it.key != "dynamic_padding_spacer"
-                    }
-                    if (lastRealItem != null) {
-                        val contentBottom = lastRealItem.offset + lastRealItem.size
-                        val gapPx = (li.viewportEndOffset - contentBottom - li.afterContentPadding)
-                            .coerceAtLeast(0)
-                        val gapDp = with(density) { gapPx.toDp() }
-                        if (
-                            gapDp < dynamicBottomPaddingTarget &&
-                            shouldShrinkDynamicBottomReserveForVisibleGap(
-                                hasPinnedUserMessage = pinnedUserMessageId != null,
-                                preservePinnedReserve = preservePinnedReserveAfterUserScroll,
-                                isTrailingContentVisible = true,
-                            )
-                        ) {
-                            dynamicBottomPaddingImmediate = gapDp
-                            dynamicBottomPaddingTarget = gapDp
-                        }
-                    }
-                }
-                if (!layoutChanged && stableDurationNanos >= stableWindowNanos) {
-                    snapshotFlow {
-                        val info = listState.layoutInfo
-                        pinnedAnchorLayoutVersion(
-                            totalItemsCount = info.totalItemsCount,
-                            firstVisibleItemIndex = listState.firstVisibleItemIndex,
-                            firstVisibleItemScrollOffset = listState.firstVisibleItemScrollOffset,
-                            visibleItemsSizeSum = info.visibleItemsInfo.sumOf { it.size },
-                            visibleItemsOffsetSum = info.visibleItemsInfo.sumOf { it.offset }
-                        )
-                    }
-                        .first { it != lastLayoutVersion }
-                    stableSinceNanos = 0L
-                }
+    LaunchedEffect(lastSentUserMessageId, chatItems.size, topPaddingPx) {
+        val sentId = lastSentUserMessageId ?: return@LaunchedEffect
+        val currentItems = viewModel.chatListItems.first { items ->
+            items.any { item ->
+                item is ChatListItem.UserMessage && item.stableId == sentId
             }
         }
+        val currentUserMessageIndices = currentItems.mapIndexedNotNull { index, item ->
+            if (item is ChatListItem.UserMessage) index else null
+        }
+        if (currentUserMessageIndices.size != 1) return@LaunchedEffect
+
+        val firstUserIndex = currentUserMessageIndices.first()
+        val firstItem = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == firstUserIndex }
+            ?: kotlinx.coroutines.withTimeoutOrNull(2000) {
+                snapshotFlow {
+                    listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == firstUserIndex }
+                }.first { it != null }
+            }
+        firstBubbleScreenY = if (firstItem != null) {
+            val itemTopY = firstItem.offset - listState.layoutInfo.viewportStartOffset
+            computeTopAnchorY(
+                itemTopY = itemTopY,
+                itemHeightPx = firstItem.size,
+                tallAnchorThresholdPx = pinnedUserBubbleMaxHeightPx,
+                tallAnchorVisibleHeightPx = with(density) { 96.dp.toPx().toInt() }
+            )
+        } else {
+            topPaddingPx
+        }
+        viewModel.consumeLastSentUserMessageId()
     }
-    
+
+    LaunchedEffect(activeTurn?.anchorMessageId, activeTurn?.targetItemId, activeTurn?.generation) {
+        val turn = activeTurn ?: return@LaunchedEffect
+        if (firstBubbleScreenY < 0) {
+            firstBubbleScreenY = topPaddingPx
+        }
+        if (topAnchorEngine.runtime.currentTurn != turn) {
+            topAnchorEngine.updateRuntime(
+                topAnchorEngine.runtime.copy(
+                    phase = TopAnchorPhase.InitialSnap,
+                    activeTurn = turn,
+                    retainedTurn = null
+                )
+            )
+        }
+        viewModel.consumeLastSentUserMessageId()
+    }
+
+    LaunchedEffect(topAnchorEngine.runtime.currentTurn, engineAnchorInfo, chatItems.size) {
+        if (topAnchorEngine.runtime.currentTurn != null && engineAnchorInfo == null) {
+            topAnchorEngine.clearRuntime()
+        }
+    }
+
     val fadeBackgroundColor = MaterialTheme.colorScheme.background
     Box(
         modifier = Modifier
             .fillMaxSize()
             .scrollFadeEdge(listState = listState, backgroundColor = fadeBackgroundColor)
     ) {
-            val statusBarTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
-            val topPadding = statusBarTop + 72.dp
-            val density = LocalDensity.current
-            val topPaddingPx = with(density) { topPadding.toPx().toInt() }
-            
-            val lastSentUserMessageId by viewModel.lastSentUserMessageId.collectAsState()
-            
-            LaunchedEffect(lastSentUserMessageId) {
-                val sentId = lastSentUserMessageId ?: return@LaunchedEffect
-                android.util.Log.d("GrokScroll", "Triggered by lastSentUserMessageId=$sentId")
-                
-                val currentItems = viewModel.chatListItems.first { items ->
-                    items.any { item ->
-                        item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage &&
-                            item.stableId == sentId
-                    }
-                }
-                val lastUserIndex = currentItems.indexOfLast { item ->
-                    item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage &&
-                        item.stableId == sentId
-                }
-                val currentUserMessageIndices = currentItems.mapIndexedNotNull { index, item ->
-                    if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage) index else null
-                }
-                
-                android.util.Log.d("GrokScroll", "Found sent message at index=$lastUserIndex")
-                
-                val li = listState.layoutInfo
-                val firstUserIndex = currentUserMessageIndices.firstOrNull() ?: -1
-                
-                if (currentUserMessageIndices.size == 1) {
-                    val firstItem = li.visibleItemsInfo.firstOrNull { it.index == firstUserIndex }
-                        ?: kotlinx.coroutines.withTimeoutOrNull(2000) {
-                            snapshotFlow {
-                                listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == firstUserIndex }
-                            }.first { it != null }
-                        }
-                    firstBubbleScreenY = if (firstItem != null) {
-                        val itemTopY = firstItem.offset - listState.layoutInfo.viewportStartOffset
-                        resolvePinnedUserBubbleAnchorY(
-                            itemTopY = itemTopY,
-                            itemHeightPx = firstItem.size,
-                            maxUserBubbleHeightPx = pinnedUserBubbleMaxHeightPx,
-                        )
-                    } else {
-                        topPaddingPx
-                    }
-                    android.util.Log.d("GrokScroll", "First bubble Y: $firstBubbleScreenY")
-                    viewModel.consumeLastSentUserMessageId()
-                    return@LaunchedEffect
-                }
-                
-                android.util.Log.d("GrokScroll", "Consumed, proceeding with scroll")
-                
-                grokScrollCompleted = false
-                pinnedUserMessageId = sentId
-                try {
-                    if (firstBubbleScreenY < 0) {
-                        firstBubbleScreenY = topPaddingPx
-                    }
-                    val targetScreenY = firstBubbleScreenY
-                    
-                    val viewportHeight = li.viewportEndOffset - li.viewportStartOffset
-                    val paddingDp = with(density) { viewportHeight.toDp() }
-                    dynamicBottomPaddingImmediate = paddingDp
-                    dynamicBottomPaddingTarget = paddingDp
-
-                    // 等待 spacer 被添加到布局中（currentItems + spacer）
-                    val expectedItemCount = currentItems.size + 1
-                    kotlinx.coroutines.withTimeoutOrNull(500) {
-                        snapshotFlow { listState.layoutInfo.totalItemsCount }
-                            .first { it >= expectedItemCount }
-                    }
-
-                    val initialItem = kotlinx.coroutines.withTimeoutOrNull(300) {
-                        snapshotFlow {
-                            listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == lastUserIndex }
-                        }.first { it != null }
-                    }
-
-                    if (initialItem == null) {
-                        listState.animateScrollToItem(lastUserIndex, scrollOffset = 0)
-                        kotlinx.coroutines.withTimeoutOrNull(300) {
-                            snapshotFlow {
-                                listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == lastUserIndex }
-                            }.first { it != null }
-                        }
-                    }
-
-                    val startInfo = listState.layoutInfo
-                    val startItem = startInfo.visibleItemsInfo.firstOrNull { it.index == lastUserIndex }
-                    if (startItem != null) {
-                        val startTopY = startItem.offset - startInfo.viewportStartOffset
-                        val startAnchorY = resolvePinnedUserBubbleAnchorY(
-                            itemTopY = startTopY,
-                            itemHeightPx = startItem.size,
-                            maxUserBubbleHeightPx = pinnedUserBubbleMaxHeightPx,
-                        )
-                        val distancePx = startAnchorY - targetScreenY
-                        if (kotlin.math.abs(distancePx) > 4) {
-                            val durationMs = (240 + kotlin.math.abs(distancePx) * 0.35f).toInt().coerceIn(260, 520)
-                            val easing = CubicBezierEasing(0.25f, 0.1f, 0.25f, 1.0f)
-                            val startNanos = withFrameNanos { it }
-                            var previous = 0f
-                            while (true) {
-                                val frameNanos = withFrameNanos { it }
-                                val elapsedMs = (frameNanos - startNanos) / 1_000_000f
-                                val fraction = (elapsedMs / durationMs).coerceIn(0f, 1f)
-                                val current = distancePx * easing.transform(fraction)
-                                listState.scrollBy(current - previous)
-                                previous = current
-                                if (fraction >= 1f) break
-                            }
-                            val remaining = distancePx - previous
-                            if (kotlin.math.abs(remaining) > 0.5f) {
-                                listState.scrollBy(remaining)
-                            }
-                        }
-                    }
-
-                    val li2 = listState.layoutInfo
-                    val currItem = li2.visibleItemsInfo.firstOrNull { it.index == lastUserIndex }
-                    if (currItem != null) {
-                        val actualTopY = currItem.offset - li2.viewportStartOffset
-                        val actualAnchorY = resolvePinnedUserBubbleAnchorY(
-                            itemTopY = actualTopY,
-                            itemHeightPx = currItem.size,
-                            maxUserBubbleHeightPx = pinnedUserBubbleMaxHeightPx,
-                        )
-                        val correction = actualAnchorY - targetScreenY
-                        if (kotlin.math.abs(correction) > 4) {
-                            listState.scrollBy(correction.toFloat())
-                        }
-                        android.util.Log.d("GrokScroll", "Scrolled: targetY=$targetScreenY, actualY=$actualAnchorY, correction=$correction")
-                    } else {
-                        android.util.Log.d("GrokScroll", "Item not visible after scrollToItem, fallback")
-                    }
-
-                    android.util.Log.d("GrokScroll", "Keep padding until API done")
-
-                    // 立即缩减多余空白
-                    val liAfter = listState.layoutInfo
-                    val lastReal = liAfter.visibleItemsInfo.lastOrNull { it.key != "dynamic_padding_spacer" }
-                    if (lastReal != null) {
-                        val gapPx = (liAfter.viewportEndOffset - (lastReal.offset + lastReal.size) - liAfter.afterContentPadding)
-                            .coerceAtLeast(0)
-                        val gapDp = with(density) { gapPx.toDp() }
-                        if (gapDp < dynamicBottomPaddingImmediate) {
-                            dynamicBottomPaddingImmediate = gapDp
-                            dynamicBottomPaddingTarget = gapDp
-                        }
-                    }
-
-                    viewModel.consumeLastSentUserMessageId()
-                    android.util.Log.d("GrokScroll", "Scroll sequence completed")
-                } finally {
-                    grokScrollCompleted = true
-                }
+            engineAnchorInfo?.let { (anchorIndex, anchorKey) ->
+                RunTopAnchorReserveEngine(
+                    state = topAnchorEngine,
+                    listState = listState,
+                    anchorIndex = anchorIndex,
+                    anchorKey = anchorKey,
+                    targetAnchorY = firstBubbleScreenY.takeIf { it > 0 } ?: topPaddingPx,
+                    trailingRealItemIndex = chatItems.lastIndex,
+                    isRunning = isApiCalling,
+                    config = TopAnchorConfig(
+                        tallAnchorThresholdPx = pinnedUserBubbleMaxHeightPx,
+                        tallAnchorVisibleHeightPx = with(density) { 96.dp.toPx().toInt() },
+                        topInsetPx = topPaddingPx,
+                        stableWindowNanos = 50_000_000L
+                    ),
+                    enabled = topAnchorEngine.runtime.hasRuntime
+                )
             }
             
             // 前端消息列表渲染。
@@ -770,15 +376,9 @@ fun ChatMessagesList(
             LazyColumn(
                 state = listState,
                 reverseLayout = false,
-                userScrollEnabled = shouldEnableUserScrollForPinnedUserBubble(
-                    grokScrollCompleted = grokScrollCompleted,
-                    isApiCalling = isApiCalling,
-                    hasPinnedUserMessage = pinnedUserMessageId != null,
-                    hasDynamicBottomReserve = dynamicBottomPaddingTarget > 0.dp
-                ),
+                userScrollEnabled = topAnchorEngine.userScrollEnabled,
                 modifier = Modifier
                     .fillMaxSize()
-                    .nestedScroll(pinnedReserveUserScrollConnection)
                     .nestedScroll(scrollStateManager.nestedScrollConnection),
                 contentPadding = PaddingValues(
                     start = ChatDimensions.HORIZONTAL_PADDING,
@@ -955,21 +555,7 @@ fun ChatMessagesList(
 
                             Box(
                                 modifier = Modifier
-                                    .fillMaxWidth()
-                                    .onSizeChanged { newSize ->
-                                        val prevHeight = reasoningHeightMap[item.message.id] ?: newSize.height
-                                        if (
-                                            prevHeight > newSize.height &&
-                                            isApiCalling &&
-                                            firstBubbleScreenY > 0 &&
-                                            pinnedUserMessageId != null
-                                        ) {
-                                            val deltaDp = with(density) { (prevHeight - newSize.height).toDp() }
-                                            dynamicBottomPaddingImmediate += deltaDp
-                                            dynamicBottomPaddingTarget += deltaDp
-                                        }
-                                        reasoningHeightMap[item.message.id] = newSize.height
-                                    },
+                                    .fillMaxWidth(),
                                 contentAlignment = Alignment.CenterStart
                             ) {
                                 ReasoningToggleAndContent(
@@ -1127,9 +713,9 @@ fun ChatMessagesList(
                 }
             }
                 
-            if (dynamicBottomPadding > 0.dp) {
+            if (engineReserveDp > 0.dp) {
                 item(key = "dynamic_padding_spacer") {
-                    Spacer(modifier = Modifier.height(dynamicBottomPadding))
+                    Spacer(modifier = Modifier.height(engineReserveDp))
                 }
             }
         }
@@ -1644,13 +1230,10 @@ fun AiMessageItem(
                 }
 
                 if (effectiveRenderBlocks.isNotEmpty()) {
-                    StreamBlocksRenderer(
-                        message = displayMessage,
-                        blocks = effectiveRenderBlocks,
-                        committedBlocks = selectedRenderState?.committedBlocks ?: emptyList(),
-                        tailBlocks = selectedRenderState?.tailBlocks ?: emptyList(),
-                        committedBlocksHash = selectedRenderState?.committedBlocksHash ?: "",
-                        tailBlocksHash = selectedRenderState?.tailBlocksHash ?: "",
+                    UnifiedMarkdownRenderer(
+                        markdown = displayMessage.text,
+                        contentKey = message.id,
+                        sender = displayMessage.sender,
                         nativeMarkdownBlocks = selectedRenderState?.nativeMarkdownBlocks ?: emptyList(),
                         committedNativeMarkdownBlocks = selectedRenderState?.committedNativeMarkdownBlocks ?: emptyList(),
                         tailNativeMarkdownBlocks = selectedRenderState?.tailNativeMarkdownBlocks ?: emptyList(),
@@ -1659,10 +1242,7 @@ fun AiMessageItem(
                         tailNativeMarkdownBlocksHash = selectedRenderState?.tailNativeMarkdownBlocksHash ?: "",
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurface,
-                        messageOutputType = messageOutputType,
-                        viewModel = viewModel,
                         isStreaming = shouldPreferStreamingContent,
-                        onLongPress = {},
                         onImageClick = onImageClick,
                         onCodePreviewRequested = { lang, code ->
                             previewLanguage = lang

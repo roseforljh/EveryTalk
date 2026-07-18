@@ -10,12 +10,26 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.BaselineShift
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.em
 import com.android.everytalk.ui.components.streaming.StreamBlock
 import com.android.everytalk.ui.components.streaming.StreamBlockParser
 
-private const val INLINE_EXTERNAL_LINK_SUFFIX = " ↗"
 private val inlineHighlightBackgroundColor = Color(0x33FFD54F)
 private val inlineAutolinkPattern = Regex("""<https?://[^>\s]+>""")
+private val inlineEmailAutolinkPattern = Regex("""<[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}>""")
+private val inlineFontOpenTagPattern = Regex("""<font\b([^>]*)>""", RegexOption.IGNORE_CASE)
+private val inlineFontCloseTagPattern = Regex("""</font\s*>""", RegexOption.IGNORE_CASE)
+private val inlineTtOpenTagPattern = Regex("""<tt\b[^>]*>""", RegexOption.IGNORE_CASE)
+private val inlineTtCloseTagPattern = Regex("""</tt\s*>""", RegexOption.IGNORE_CASE)
+private val inlineBigOpenTagPattern = Regex("""<big\b[^>]*>""", RegexOption.IGNORE_CASE)
+private val inlineBigCloseTagPattern = Regex("""</big\s*>""", RegexOption.IGNORE_CASE)
+private val inlineSmallOpenTagPattern = Regex("""<small\b[^>]*>""", RegexOption.IGNORE_CASE)
+private val inlineSmallCloseTagPattern = Regex("""</small\s*>""", RegexOption.IGNORE_CASE)
+private val inlineSpanOpenTagPattern = Regex("""<span\b([^>]*)>""", RegexOption.IGNORE_CASE)
+private val inlineSpanCloseTagPattern = Regex("""</span\s*>""", RegexOption.IGNORE_CASE)
+private val inlineAnnotationOpenTagPattern = Regex("""<annotation\b([^>]*)>""", RegexOption.IGNORE_CASE)
+private val inlineAnnotationCloseTagPattern = Regex("""</annotation\s*>""", RegexOption.IGNORE_CASE)
+private val inlineHtmlAttributePattern = Regex("""([A-Za-z_:][A-Za-z0-9_:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))""")
 private val inlineBareUrlPattern = Regex("""https?://[^\s<>()\[\]{}]+(?:\([^\s<>()\[\]{}]*\)[^\s<>()\[\]{}]*)*""")
 private val inlineHtmlEntityPattern = Regex("""&(?:amp|lt|gt|quot|apos|nbsp|ndash|mdash|hellip|copy|reg|trade|bull|middot|ldquo|rdquo|lsquo|rsquo|minus|times|divide|plusmn|deg|le|ge|ne|rarr|larr|Alpha|Beta|Gamma|Delta|Epsilon|Zeta|Eta|Theta|Iota|Kappa|Lambda|Mu|Nu|Xi|Omicron|Pi|Rho|Sigma|Tau|Upsilon|Phi|Chi|Psi|Omega|alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lambda|mu|nu|xi|omicron|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega|#\d+|#x[0-9A-Fa-f]+);""")
 
@@ -72,9 +86,16 @@ object InlineMarkdownParser {
                 text.contains('^') ||
                 text.contains(',') ||
                 text.contains('[') ||
+                text.contains("<font", ignoreCase = true) ||
+                text.contains("<tt", ignoreCase = true) ||
+                text.contains("<big", ignoreCase = true) ||
+                text.contains("<small", ignoreCase = true) ||
+                text.contains("<span", ignoreCase = true) ||
+                text.contains("<annotation", ignoreCase = true) ||
                 inlineBareUrlPattern.containsMatchIn(text) ||
                 inlineHtmlEntityPattern.containsMatchIn(text) ||
-                inlineAutolinkPattern.containsMatchIn(text)
+                inlineAutolinkPattern.containsMatchIn(text) ||
+                inlineEmailAutolinkPattern.containsMatchIn(text)
     }
 
     /**
@@ -100,7 +121,11 @@ object InlineMarkdownParser {
     ) {
         var index = 0
         while (index < text.length) {
-            if (text[index] == '\\' && index + 1 < text.length) {
+            if (
+                text[index] == '\\' &&
+                index + 1 < text.length &&
+                isMarkdownEscapablePunctuation(text[index + 1])
+            ) {
                 append(text[index + 1])
                 index += 2
                 continue
@@ -142,6 +167,12 @@ object InlineMarkdownParser {
             ?: parseStyled(text, start, "==", SpanStyle(background = inlineHighlightBackgroundColor), codeBackground, codeColor, codeFontSize, linkColor)
             ?: parseStyled(text, start, "^^", SpanStyle(baselineShift = BaselineShift.Superscript), codeBackground, codeColor, codeFontSize, linkColor)
             ?: parseStyled(text, start, ",,", SpanStyle(baselineShift = BaselineShift.Subscript), codeBackground, codeColor, codeFontSize, linkColor)
+            ?: parseFontTag(text, start, codeBackground, codeColor, codeFontSize, linkColor)
+            ?: parseStyledSpanTag(text, start, codeBackground, codeColor, codeFontSize, linkColor)
+            ?: parseAnnotationTag(text, start, codeBackground, codeColor, codeFontSize, linkColor)
+            ?: parseSimpleHtmlSpanTag(text, start, inlineTtOpenTagPattern, inlineTtCloseTagPattern, SpanStyle(fontFamily = FontFamily.Monospace), codeBackground, codeColor, codeFontSize, linkColor)
+            ?: parseSimpleHtmlSpanTag(text, start, inlineBigOpenTagPattern, inlineBigCloseTagPattern, SpanStyle(fontSize = 1.25.em), codeBackground, codeColor, codeFontSize, linkColor)
+            ?: parseSimpleHtmlSpanTag(text, start, inlineSmallOpenTagPattern, inlineSmallCloseTagPattern, SpanStyle(fontSize = 0.8.em), codeBackground, codeColor, codeFontSize, linkColor)
             ?: parseAutolink(text, start, linkColor)
             ?: parseHtmlEntity(text, start)
             ?: parseLink(text, start, codeBackground, codeColor, codeFontSize, linkColor)
@@ -156,7 +187,9 @@ object InlineMarkdownParser {
         codeFontSize: TextUnit,
     ): Int? {
         if (text[start] != '`') return null
-        val end = findClosingMarker(text, start + 1, "`") ?: return null
+        val markerLength = countBacktickRun(text, start)
+        val marker = "`".repeat(markerLength)
+        val end = findClosingMarker(text, start + markerLength, marker) ?: return null
         pushStyle(
             SpanStyle(
                 fontFamily = FontFamily.Monospace,
@@ -165,9 +198,34 @@ object InlineMarkdownParser {
                 fontSize = codeFontSize,
             )
         )
-        append(text.substring(start + 1, end))
+        append(normalizeCodeSpanLiteral(text.substring(start + markerLength, end)))
         pop()
-        return end + 1
+        return end + markerLength
+    }
+
+    private fun normalizeCodeSpanLiteral(raw: String): String {
+        val normalizedLineEndings = raw
+            .replace("\r\n", " ")
+            .replace('\n', ' ')
+            .replace('\r', ' ')
+        return if (
+            normalizedLineEndings.length >= 2 &&
+            normalizedLineEndings.first() == ' ' &&
+            normalizedLineEndings.last() == ' ' &&
+            normalizedLineEndings.any { it != ' ' }
+        ) {
+            normalizedLineEndings.substring(1, normalizedLineEndings.length - 1)
+        } else {
+            normalizedLineEndings
+        }
+    }
+
+    private fun countBacktickRun(text: String, start: Int): Int {
+        var end = start
+        while (end < text.length && text[end] == '`') {
+            end++
+        }
+        return end - start
     }
 
     private fun AnnotatedString.Builder.parseStyled(
@@ -225,6 +283,298 @@ object InlineMarkdownParser {
         return end + 1
     }
 
+    private fun AnnotatedString.Builder.parseFontTag(
+        text: String,
+        start: Int,
+        codeBackground: Color,
+        codeColor: Color,
+        codeFontSize: TextUnit,
+        linkColor: Color,
+    ): Int? {
+        val openTag = inlineFontOpenTagPattern.find(text, start) ?: return null
+        if (openTag.range.first != start) return null
+        val closeTag = inlineFontCloseTagPattern.find(text, openTag.range.last + 1) ?: return null
+        val content = text.substring(openTag.range.last + 1, closeTag.range.first)
+        val attributes = parseInlineHtmlAttributes(openTag.groupValues[1])
+        val color = parseInlineHtmlColor(attributes["color"])
+        val fontFamily = parseInlineHtmlFontFamily(attributes["face"])
+        val hasFontStyle = color != null || fontFamily != null
+
+        if (hasFontStyle) {
+            pushStyle(
+                SpanStyle(
+                    color = color ?: Color.Unspecified,
+                    fontFamily = fontFamily,
+                )
+            )
+        }
+        appendInlineMarkdown(
+            text = content,
+            codeBackground = codeBackground,
+            codeColor = codeColor,
+            codeFontSize = codeFontSize,
+            linkColor = linkColor,
+        )
+        if (hasFontStyle) {
+            pop()
+        }
+        return closeTag.range.last + 1
+    }
+
+    private fun parseInlineHtmlAttributes(rawAttributes: String): Map<String, String> {
+        if (rawAttributes.isBlank()) return emptyMap()
+        return inlineHtmlAttributePattern.findAll(rawAttributes).associate { match ->
+            val name = match.groupValues[1].lowercase()
+            val value = match.groupValues[2]
+                .ifEmpty { match.groupValues[3] }
+                .ifEmpty { match.groupValues[4] }
+            name to value
+        }
+    }
+
+    private fun parseInlineHtmlColor(rawColor: String?): Color? {
+        val color = rawColor
+            ?.trim()
+            ?.trimEnd(';')
+            ?.substringBefore(' ')
+            ?.takeIf { it.isNotEmpty() }
+            ?: return null
+        return parseInlineHexColor(color) ?: parseInlineNamedColor(color) ?: parseInlineAndroidNumericColor(color)
+    }
+
+    private fun parseInlineHexColor(rawColor: String): Color? {
+        if (!rawColor.startsWith("#")) return null
+        val hex = rawColor.drop(1)
+        return when (hex.length) {
+            3 -> {
+                val red = hexDigitPair(hex[0]) ?: return null
+                val green = hexDigitPair(hex[1]) ?: return null
+                val blue = hexDigitPair(hex[2]) ?: return null
+                Color(red / 255f, green / 255f, blue / 255f, 1f)
+            }
+            6 -> {
+                val rgb = hex.toIntOrNull(16) ?: return null
+                val red = (rgb shr 16) and 0xFF
+                val green = (rgb shr 8) and 0xFF
+                val blue = rgb and 0xFF
+                Color(red / 255f, green / 255f, blue / 255f, 1f)
+            }
+            8 -> {
+                val argb = hex.toLongOrNull(16) ?: return null
+                val alpha = ((argb shr 24) and 0xFF).toInt()
+                val red = ((argb shr 16) and 0xFF).toInt()
+                val green = ((argb shr 8) and 0xFF).toInt()
+                val blue = (argb and 0xFF).toInt()
+                Color(red / 255f, green / 255f, blue / 255f, alpha / 255f)
+            }
+            else -> null
+        }
+    }
+
+    private fun hexDigitPair(char: Char): Int? {
+        val digit = char.digitToIntOrNull(16) ?: return null
+        return digit * 16 + digit
+    }
+
+    private fun parseInlineNamedColor(rawColor: String): Color? {
+        return when (rawColor.lowercase()) {
+            "black" -> Color.Black
+            "white" -> Color.White
+            "red" -> Color.Red
+            "green" -> Color(0xFF008000)
+            "blue" -> Color.Blue
+            "yellow" -> Color.Yellow
+            "cyan", "aqua" -> Color.Cyan
+            "magenta", "fuchsia" -> Color.Magenta
+            "darkgray", "darkgrey" -> Color(0xFFA9A9A9)
+            "gray", "grey" -> Color(0xFF808080)
+            "lightgray", "lightgrey" -> Color(0xFFD3D3D3)
+            "lime" -> Color(0xFF00FF00)
+            "maroon" -> Color(0xFF800000)
+            "navy" -> Color(0xFF000080)
+            "olive" -> Color(0xFF808000)
+            "purple" -> Color(0xFF800080)
+            "silver" -> Color(0xFFC0C0C0)
+            "teal" -> Color(0xFF008080)
+            else -> null
+        }
+    }
+
+    private fun parseInlineAndroidNumericColor(rawColor: String): Color? {
+        val color = parseAndroidHtmlColorInt(rawColor)?.takeIf { it != -1 } ?: return null
+        return Color(color or 0xFF000000.toInt())
+    }
+
+    private fun parseAndroidHtmlColorInt(rawColor: String): Int? {
+        if (rawColor.isEmpty()) return null
+        var sign = 1
+        var index = 0
+        var base = 10
+
+        if (rawColor[index] == '-') {
+            sign = -1
+            index++
+            if (index >= rawColor.length) return null
+        }
+
+        if (rawColor[index] == '0') {
+            if (index == rawColor.lastIndex) return 0
+            val next = rawColor[index + 1]
+            if (next == 'x' || next == 'X') {
+                index += 2
+                base = 16
+            } else {
+                index++
+                base = 8
+            }
+        } else if (rawColor[index] == '#') {
+            index++
+            base = 16
+        }
+
+        if (index >= rawColor.length) return null
+        return rawColor.substring(index).toIntOrNull(base)?.let { it * sign }
+    }
+
+    private fun parseInlineHtmlFontFamily(rawFace: String?): FontFamily? {
+        val face = rawFace
+            ?.split(',')
+            ?.firstOrNull()
+            ?.trim()
+            ?.trim('"', '\'')
+            ?.lowercase()
+            ?: return null
+        return when (face) {
+            "monospace" -> FontFamily.Monospace
+            "serif" -> FontFamily.Serif
+            "sans-serif", "sans" -> FontFamily.SansSerif
+            "cursive" -> FontFamily.Cursive
+            else -> null
+        }
+    }
+
+    private fun AnnotatedString.Builder.parseSimpleHtmlSpanTag(
+        text: String,
+        start: Int,
+        openPattern: Regex,
+        closePattern: Regex,
+        style: SpanStyle,
+        codeBackground: Color,
+        codeColor: Color,
+        codeFontSize: TextUnit,
+        linkColor: Color,
+    ): Int? {
+        val openTag = openPattern.find(text, start) ?: return null
+        if (openTag.range.first != start) return null
+        val closeTag = closePattern.find(text, openTag.range.last + 1) ?: return null
+        pushStyle(style)
+        appendInlineMarkdown(
+            text = text.substring(openTag.range.last + 1, closeTag.range.first),
+            codeBackground = codeBackground,
+            codeColor = codeColor,
+            codeFontSize = codeFontSize,
+            linkColor = linkColor,
+        )
+        pop()
+        return closeTag.range.last + 1
+    }
+
+    private fun AnnotatedString.Builder.parseStyledSpanTag(
+        text: String,
+        start: Int,
+        codeBackground: Color,
+        codeColor: Color,
+        codeFontSize: TextUnit,
+        linkColor: Color,
+    ): Int? {
+        val openTag = inlineSpanOpenTagPattern.find(text, start) ?: return null
+        if (openTag.range.first != start) return null
+        val closeTag = inlineSpanCloseTagPattern.find(text, openTag.range.last + 1) ?: return null
+        val attributes = parseInlineHtmlAttributes(openTag.groupValues[1])
+        val style = parseInlineCssStyle(attributes["style"]) ?: return null
+        pushStyle(style)
+        appendInlineMarkdown(
+            text = text.substring(openTag.range.last + 1, closeTag.range.first),
+            codeBackground = codeBackground,
+            codeColor = codeColor,
+            codeFontSize = codeFontSize,
+            linkColor = linkColor,
+        )
+        pop()
+        return closeTag.range.last + 1
+    }
+
+    private fun AnnotatedString.Builder.parseAnnotationTag(
+        text: String,
+        start: Int,
+        codeBackground: Color,
+        codeColor: Color,
+        codeFontSize: TextUnit,
+        linkColor: Color,
+    ): Int? {
+        val openTag = inlineAnnotationOpenTagPattern.find(text, start) ?: return null
+        if (openTag.range.first != start) return null
+        val closeTag = inlineAnnotationCloseTagPattern.find(text, openTag.range.last + 1) ?: return null
+        val attributes = parseInlineHtmlAttributes(openTag.groupValues[1])
+        attributes.forEach { (tag, annotation) ->
+            pushStringAnnotation(tag = tag, annotation = annotation)
+        }
+        appendInlineMarkdown(
+            text = text.substring(openTag.range.last + 1, closeTag.range.first),
+            codeBackground = codeBackground,
+            codeColor = codeColor,
+            codeFontSize = codeFontSize,
+            linkColor = linkColor,
+        )
+        repeat(attributes.size) {
+            pop()
+        }
+        return closeTag.range.last + 1
+    }
+
+    private fun parseInlineCssStyle(rawStyle: String?): SpanStyle? {
+        val declarations = parseInlineCssDeclarations(rawStyle ?: return null)
+        val color = declarations.firstNotNullOfOrNull { (name, value) ->
+            if (name == "color") parseInlineHtmlColor(value) else null
+        }
+        val background = declarations.firstNotNullOfOrNull { (name, value) ->
+            if (name == "background" || name == "background-color") parseInlineHtmlColor(value) else null
+        }
+        val textDecoration = declarations.firstNotNullOfOrNull { (name, value) ->
+            if (
+                name == "text-decoration" &&
+                isAndroidHtmlLineThroughTextDecoration(value)
+            ) {
+                TextDecoration.LineThrough
+            } else {
+                null
+            }
+        }
+        if (color == null && background == null && textDecoration == null) return null
+        return SpanStyle(
+            color = color ?: Color.Unspecified,
+            background = background ?: Color.Unspecified,
+            textDecoration = textDecoration,
+        )
+    }
+
+    private fun isAndroidHtmlLineThroughTextDecoration(rawValue: String): Boolean {
+        return rawValue.trim().substringBefore(' ').equals("line-through", ignoreCase = true)
+    }
+
+    private fun parseInlineCssDeclarations(rawStyle: String): List<Pair<String, String>> {
+        return rawStyle.split(';').mapNotNull { declaration ->
+            val separator = declaration.indexOf(':')
+            if (separator <= 0) {
+                null
+            } else {
+                val name = declaration.substring(0, separator).trim().lowercase()
+                val value = declaration.substring(separator + 1).trim()
+                if (name.isEmpty() || value.isEmpty()) null else name to value
+            }
+        }
+    }
+
     private fun AnnotatedString.Builder.parseLink(
         text: String,
         start: Int,
@@ -253,7 +603,6 @@ object InlineMarkdownParser {
             codeFontSize = codeFontSize,
             linkColor = linkColor,
         )
-        append(INLINE_EXTERNAL_LINK_SUFFIX)
         pop()
         pop()
         return urlEnd + 1
@@ -322,18 +671,19 @@ object InlineMarkdownParser {
         val end = text.indexOf('>', start + 1)
         if (end < 0) return null
         val raw = text.substring(start, end + 1)
-        if (!inlineAutolinkPattern.matches(raw)) return null
+        val isEmailAutolink = inlineEmailAutolinkPattern.matches(raw)
+        if (!inlineAutolinkPattern.matches(raw) && !isEmailAutolink) return null
 
-        val url = raw.substring(1, raw.length - 1)
-        pushStringAnnotation(tag = "URL", annotation = url)
+        val target = raw.substring(1, raw.length - 1)
+        val annotation = if (isEmailAutolink) "mailto:$target" else target
+        pushStringAnnotation(tag = "URL", annotation = annotation)
         pushStyle(
             SpanStyle(
                 color = linkColor,
                 textDecoration = TextDecoration.Underline,
             )
         )
-        append(url)
-        append(INLINE_EXTERNAL_LINK_SUFFIX)
+        append(target)
         pop()
         pop()
         return end + 1
@@ -361,7 +711,6 @@ object InlineMarkdownParser {
             )
         )
         append(visibleUrl)
-        append(INLINE_EXTERNAL_LINK_SUFFIX)
         pop()
         pop()
 
@@ -509,6 +858,14 @@ object InlineMarkdownParser {
             cursor--
         }
         return slashCount % 2 == 1
+    }
+
+    private fun isMarkdownEscapablePunctuation(char: Char): Boolean {
+        val code = char.code
+        return code in 0x21..0x2F ||
+            code in 0x3A..0x40 ||
+            code in 0x5B..0x60 ||
+            code in 0x7B..0x7E
     }
 
     private fun isUnderscoreOpeningDelimiter(text: String, index: Int): Boolean {

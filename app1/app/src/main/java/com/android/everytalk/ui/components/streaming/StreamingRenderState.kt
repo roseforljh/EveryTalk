@@ -41,7 +41,7 @@ internal fun buildStreamingRenderState(
 ): StreamingRenderState {
     val parseResult = StreamBlockParser.parse(content, messageId)
     val split = splitBlocksForRender(parseResult.blocks, isComplete)
-    val nativeMarkdownBlocks = parseNativeStreamingMarkdownBlocks(content, messageId).orEmpty()
+    val nativeMarkdownBlocks = parseUnifiedStreamingMarkdownBlocks(content, messageId)
     val nativeSplit = splitNativeBlocksForRender(nativeMarkdownBlocks, isComplete)
     return StreamingRenderState(
         messageId = messageId,
@@ -94,7 +94,7 @@ internal fun buildStreamingRenderStateIncremental(
     val allBlocks = cache.committedBlocks + tailResult.blocks
     val hasPendingMath = tailResult.hasPendingMath
     val split = splitBlocksForRender(allBlocks, isComplete)
-    val nativeMarkdownBlocks = parseNativeStreamingMarkdownBlocks(content, messageId).orEmpty()
+    val nativeMarkdownBlocks = parseUnifiedStreamingMarkdownBlocks(content, messageId)
     val nativeSplit = splitNativeBlocksForRender(nativeMarkdownBlocks, isComplete)
 
     val state = StreamingRenderState(
@@ -198,6 +198,7 @@ private fun hashNativeBlocks(blocks: List<NativeStreamingMarkdownBlock>): String
             append(it.items.hashCode()); append('|')
             append(it.listItems.hashCode()); append('|')
             append(it.children.hashCode()); append('|')
+            append(it.textAlign); append('|')
             append(it.start); append('|')
             append(it.endExclusive); append(';')
         }

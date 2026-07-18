@@ -69,6 +69,8 @@ app1/app/src/main/java/**/graphify-out/
 !docs/
 !docs/analysis/
 !docs/analysis/gpt-android-markdown-typography-evidence.md
+!docs/streamdown-parity/
+!docs/streamdown-parity/**
 !docs/plans/
 docs/plans/*
 !docs/plans/2026-06-19-gpt-android-markdown-typography-alignment.md
@@ -155,3 +157,4 @@ Desktop.ini
 # 只提交源代码、配置和文档,不提交构建产物、IDE 配置和临时文件
 CLAUDE.md
 AGENTS.md
+.gstack/

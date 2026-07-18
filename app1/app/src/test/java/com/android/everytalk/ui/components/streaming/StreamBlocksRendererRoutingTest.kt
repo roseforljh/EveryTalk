@@ -1,6 +1,5 @@
 package com.android.everytalk.ui.components.streaming
 
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontStyle
@@ -10,7 +9,6 @@ import androidx.compose.ui.text.style.LineBreak
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.ui.components.ChatMarkdownTextStyle
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -30,15 +28,49 @@ class StreamBlocksRendererRoutingTest {
     }
 
     @Test
-    fun `full markdown path uses fallback renderer instead of plain text`() {
+    fun `unified markdown renderer has no alternate markdown engine`() {
         val source = streamBlocksRendererSource()
-        val fullMarkdownBranch = source
-            .substringAfter("StreamingMarkdownRenderPath.FullMarkdown ->")
-            .substringBefore("is RenderSegment.InlineParts")
 
-        assertTrue(fullMarkdownBranch.contains("FullMarkdownFallbackSegment("))
-        assertTrue(source.contains("MarkdownRenderer("))
-        assertFalse(fullMarkdownBranch.contains("PlainTextSegment("))
+        assertTrue(source.contains("fun UnifiedMarkdownRenderer("))
+        assertTrue(source.contains("parseUnifiedStreamingMarkdownBlocks(markdown, contentKey)"))
+        assertFalse(source.contains("import com.android.everytalk.ui.components.markdown.MarkdownRenderer"))
+        assertFalse(source.contains("FullMarkdownFallbackSegment("))
+        assertFalse(source.contains("RenderSegment"))
+    }
+
+    @Test
+    fun `unified parser keeps unsupported markdown in compose paragraph`() {
+        val markdown = "A &InvisibleTimes; B"
+
+        assertNull(parseNativeStreamingMarkdownBlocks(markdown, "strict"))
+        val blocks = parseUnifiedStreamingMarkdownBlocks(markdown, "unified")
+
+        assertEquals(1, blocks.size)
+        assertEquals(NativeStreamingMarkdownBlockType.Paragraph, blocks.single().type)
+        assertEquals(markdown, blocks.single().text)
+    }
+
+    @Test
+    fun `production markdown entry points only call unified renderer`() {
+        val entryPoints = listOf(
+            "com/android/everytalk/ui/components/coordinator/ContentCoordinator.kt",
+            "com/android/everytalk/ui/screens/MainScreen/chat/text/ui/ChatMessagesList.kt",
+            "com/android/everytalk/ui/screens/ImageGeneration/ImageGenerationMessagesList.kt",
+            "com/android/everytalk/ui/screens/BubbleMain/Main/BubbleContentTypes.kt",
+        )
+
+        entryPoints.forEach { path ->
+            val source = mainSource(path)
+            assertTrue(path, source.contains("UnifiedMarkdownRenderer("))
+            assertFalse(path, Regex("(?m)^\\s*MarkdownRenderer\\(").containsMatchIn(source))
+            assertFalse(path, Regex("(?m)^\\s*StreamBlocksRenderer\\(").containsMatchIn(source))
+        }
+
+        val renderStateSource = mainSource(
+            "com/android/everytalk/ui/components/streaming/StreamingRenderState.kt"
+        )
+        assertTrue(renderStateSource.contains("parseUnifiedStreamingMarkdownBlocks(content, messageId)"))
+        assertFalse(renderStateSource.contains("parseNativeStreamingMarkdownBlocks(content, messageId)"))
     }
 
     @Test
@@ -46,11 +78,6 @@ class StreamBlocksRendererRoutingTest {
         val source = streamBlocksRendererSource()
 
         assertFalse(source.contains("EnhancedMarkdownText("))
-    }
-
-    @Test
-    fun `code output should still allow stream block segments`() {
-        assertTrue(shouldBuildStreamSegmentsForOutputType(messageOutputType = "code"))
     }
 
     @Test
@@ -66,24 +93,14 @@ class StreamBlocksRendererRoutingTest {
     }
 
     @Test
-    fun `ai stream markdown does not consume long press so text selection can open`() {
-        var called = false
+    fun `native heading renders inline markdown content through inline renderer`() {
+        val source = streamBlocksRendererSource()
+        val headingSource = source
+            .substringAfter("private fun NativeHeadingText(")
+            .substringBefore("@Composable\nprivate fun NativeBlockQuote(")
 
-        val handler = streamMarkdownLongPressHandler(Sender.AI) { called = true }
-
-        assertNull(handler)
-        assertFalse(called)
-    }
-
-    @Test
-    fun `non ai stream markdown keeps parent long press handler`() {
-        var called = false
-
-        val handler = streamMarkdownLongPressHandler(Sender.User) { called = true }
-
-        assertNotNull(handler)
-        handler?.invoke(Offset.Zero)
-        assertTrue(called)
+        assertTrue(headingSource.contains("NativeInlineText("))
+        assertFalse(headingSource.contains("androidx.compose.material3.Text("))
     }
 
     @Test
@@ -120,58 +137,6 @@ class StreamBlocksRendererRoutingTest {
     }
 
     @Test
-    fun `raw block only math uses native plain text render path`() {
-        val block = StreamBlock.MathBlock(
-            stableId = "math-raw",
-            text = "${'$'}${'$'}x^2",
-            start = 0,
-            endExclusive = 5,
-            state = MathBlockState.RAW,
-        )
-
-        assertEquals(StreamBlockOnlyRenderPath.PlainText, resolveBlockOnlyRenderPath(block))
-    }
-
-    @Test
-    fun `rendered block only math uses native latex render path`() {
-        val block = StreamBlock.MathBlock(
-            stableId = "math-rendered",
-            text = "${'$'}${'$'}x^2${'$'}${'$'}",
-            start = 0,
-            endExclusive = 7,
-            state = MathBlockState.RENDERED,
-        )
-
-        assertEquals(StreamBlockOnlyRenderPath.NativeLatex, resolveBlockOnlyRenderPath(block))
-    }
-
-    @Test
-    fun `rendered block only inline math uses native inline parts render path`() {
-        val block = StreamBlock.MathInline(
-            stableId = "math-inline-rendered",
-            text = "${'$'}x+1${'$'}",
-            start = 0,
-            endExclusive = 5,
-            state = MathBlockState.RENDERED,
-        )
-
-        assertEquals(StreamBlockOnlyRenderPath.NativeInlineParts, resolveBlockOnlyRenderPath(block))
-    }
-
-    @Test
-    fun `raw block only inline math uses native plain text render path`() {
-        val block = StreamBlock.MathInline(
-            stableId = "math-inline-raw",
-            text = "${'$'}x+1",
-            start = 0,
-            endExclusive = 4,
-            state = MathBlockState.RAW,
-        )
-
-        assertEquals(StreamBlockOnlyRenderPath.PlainText, resolveBlockOnlyRenderPath(block))
-    }
-
-    @Test
     fun `simple inline dollar math symbols use compose block markdown path`() {
         val markdown = "公式里的 ${'$'}\\hbar${'$'} 和 ${'$'}\\nabla^2${'$'} 可见"
         val blocks = parseNativeStreamingMarkdownBlocks(markdown, "msg-inline-simple-math")
@@ -194,29 +159,19 @@ class StreamBlocksRendererRoutingTest {
     }
 
     @Test
-    fun `render segments preserve inline math token instead of merging into markdown text`() {
-        val parsed = StreamBlockParser.parse("公式 ${'$'}x+1${'$'} 成立", "msg-inline-math")
-        val segments = invokeBuildSegmentsForTest(parsed.blocks)
+    fun `native inline parts preserve inline math token instead of merging into markdown text`() {
+        val parts = requireNotNull(buildNativeInlinePartsForText("公式 ${'$'}x+1${'$'} 成立"))
 
-        assertEquals(1, segments.size)
-        val segment = segments.single()
-        assertEquals("InlineParts", segment::class.simpleName)
-        val parts = requireNotNull(segment.readFieldForTest<List<*>>("parts"))
         assertEquals(3, parts.size)
-        assertEquals("Text", parts[0]?.let { it::class.simpleName })
-        assertEquals("公式 ", parts[0]?.readFieldForTest<String>("text"))
-        assertEquals("Math", parts[1]?.let { it::class.simpleName })
-        assertEquals("${'$'}x+1${'$'}", parts[1]?.readFieldForTest<StreamBlock.MathInline>("block")?.text)
-        assertEquals("Text", parts[2]?.let { it::class.simpleName })
-        assertEquals(" 成立", parts[2]?.readFieldForTest<String>("text"))
+        assertEquals("公式 ", (parts[0] as InlineRenderPart.Text).text)
+        assertEquals("${'$'}x+1${'$'}", (parts[1] as InlineRenderPart.Math).block.text)
+        assertEquals(" 成立", (parts[2] as InlineRenderPart.Text).text)
     }
 
     @Test
     fun `inline parts text model uses compose placeholder for complex math token`() {
         val markdown = "公式 ${'$'}\\frac{a}{b}${'$'} 仍交给完整数学渲染"
-        val parsed = StreamBlockParser.parse(markdown, "msg-complex-inline-math")
-        val segments = invokeBuildSegmentsForTest(parsed.blocks)
-        val parts = requireNotNull(segments.single().readFieldForTest<List<InlineRenderPart>>("parts"))
+        val parts = requireNotNull(buildNativeInlinePartsForText(markdown))
 
         val model = buildInlinePartsTextModel(
             parts = parts,
@@ -413,15 +368,11 @@ class StreamBlocksRendererRoutingTest {
             | **Set A** | ${'$'}\sum_{i=1}^{n} x_i^2 \ge \frac{(\sum x_i)^2}{n}${'$'} | `\|` pipe escape |
         """.trimIndent()
 
-        val result = StreamBlockParser.parse(input, "msg-table")
-        val mathIndex = result.blocks.indexOfFirst { it is StreamBlock.MathInline }
+        val blocks = parseUnifiedStreamingMarkdownBlocks(input, "msg-table")
 
-        assertTrue(mathIndex >= 0)
-        assertEquals(
-            "${'$'}\\sum_{i=1}^{n} x_i^2 \\ge \\frac{(\\sum x_i)^2}{n}${'$'}",
-            result.blocks[mathIndex].text
-        )
-        assertTrue(isTableCellEmbeddedMathToken(result.blocks, mathIndex))
+        assertEquals(1, blocks.size)
+        assertEquals(NativeStreamingMarkdownBlockType.Table, blocks.single().type)
+        assertEquals(input.lines(), blocks.single().tableLines)
     }
 
     @Test
@@ -443,6 +394,65 @@ class StreamBlocksRendererRoutingTest {
         val path = resolveStreamingMarkdownRenderPath("""<span class="note">content</span>""")
 
         assertEquals(StreamingMarkdownRenderPath.ComposeBlockMarkdown, path)
+    }
+
+    @Test
+    fun `styled span html tag uses compose inline markdown path`() {
+        val path = resolveStreamingMarkdownRenderPath(
+            """A <span style="color:#ff0000; background-color:#00ff00; text-decoration:line-through">red</span> B"""
+        )
+
+        assertEquals(StreamingMarkdownRenderPath.ComposeInlineMarkdown, path)
+    }
+
+    @Test
+    fun `styled span html tag with android text decoration first token uses compose inline markdown path`() {
+        val path = resolveStreamingMarkdownRenderPath(
+            """A <span style="text-decoration:line-through underline">red</span> B"""
+        )
+
+        assertEquals(StreamingMarkdownRenderPath.ComposeInlineMarkdown, path)
+    }
+
+    @Test
+    fun `styled span html tag with android standard named colors uses compose inline markdown path`() {
+        val path = resolveStreamingMarkdownRenderPath(
+            """A <span style="color:lime; background-color:silver">tone</span> B"""
+        )
+
+        assertEquals(StreamingMarkdownRenderPath.ComposeInlineMarkdown, path)
+    }
+
+    @Test
+    fun `styled span html tag with android numeric colors uses compose inline markdown path`() {
+        val path = resolveStreamingMarkdownRenderPath(
+            """A <span style="color:0x00ff0000; background-color:65280">tone</span> B"""
+        )
+
+        assertEquals(StreamingMarkdownRenderPath.ComposeInlineMarkdown, path)
+    }
+
+    @Test
+    fun `font color html tag uses compose inline markdown path`() {
+        val path = resolveStreamingMarkdownRenderPath("""A <font color="#ff0000">red</font> B""")
+
+        assertEquals(StreamingMarkdownRenderPath.ComposeInlineMarkdown, path)
+    }
+
+    @Test
+    fun `gpt html text span tags use compose inline markdown path`() {
+        val path = resolveStreamingMarkdownRenderPath("""A <tt>code</tt> <big>large</big> <small>tiny</small> B""")
+
+        assertEquals(StreamingMarkdownRenderPath.ComposeInlineMarkdown, path)
+    }
+
+    @Test
+    fun `gpt annotation html tag uses compose inline markdown path`() {
+        val path = resolveStreamingMarkdownRenderPath(
+            """A <annotation openai_meta="tool">annotated</annotation> B"""
+        )
+
+        assertEquals(StreamingMarkdownRenderPath.ComposeInlineMarkdown, path)
     }
 
     @Test
@@ -484,6 +494,20 @@ class StreamBlocksRendererRoutingTest {
     }
 
     @Test
+    fun `native parser preserves supported paragraph html style as inline span`() {
+        val markdown = """<p style="color:#ff0000; background-color:#00ff00">red <strong>bold</strong></p>"""
+        val blocks = parseNativeStreamingMarkdownBlocks(markdown, "msg-p-style-html")
+
+        assertEquals(StreamingMarkdownRenderPath.ComposeBlockMarkdown, resolveStreamingMarkdownRenderPath(markdown))
+        requireNotNull(blocks)
+        assertEquals(NativeStreamingMarkdownBlockType.Paragraph, blocks.single().type)
+        assertEquals(
+            """<span style="color:#ff0000; background-color:#00ff00">red **bold**</span>""",
+            blocks.single().text,
+        )
+    }
+
+    @Test
     fun `div html tag uses compose block markdown path and preserves inline markdown`() {
         val markdown = """<div class="note">A <strong>bold</strong> item</div>"""
         val blocks = parseNativeStreamingMarkdownBlocks(markdown, "msg-div-html")
@@ -492,6 +516,41 @@ class StreamBlocksRendererRoutingTest {
         requireNotNull(blocks)
         assertEquals(NativeStreamingMarkdownBlockType.Paragraph, blocks.single().type)
         assertEquals("A **bold** item", blocks.single().text)
+    }
+
+    @Test
+    fun `native parser strips div html style because android html does not apply css style to div`() {
+        val markdown = """<div style="text-decoration:line-through">A <em>marked</em> item</div>"""
+        val blocks = parseNativeStreamingMarkdownBlocks(markdown, "msg-div-style-html")
+
+        assertEquals(StreamingMarkdownRenderPath.ComposeBlockMarkdown, resolveStreamingMarkdownRenderPath(markdown))
+        requireNotNull(blocks)
+        assertEquals(NativeStreamingMarkdownBlockType.Paragraph, blocks.single().type)
+        assertEquals("A *marked* item", blocks.single().text)
+    }
+
+    @Test
+    fun `native parser preserves paragraph text align style like android html renderer`() {
+        val markdown = """<p style="text-align:center">Centered **text**</p>"""
+        val blocks = parseNativeStreamingMarkdownBlocks(markdown, "msg-p-align-html")
+
+        assertEquals(StreamingMarkdownRenderPath.ComposeBlockMarkdown, resolveStreamingMarkdownRenderPath(markdown))
+        requireNotNull(blocks)
+        assertEquals(NativeStreamingMarkdownBlockType.Paragraph, blocks.single().type)
+        assertEquals("Centered **text**", blocks.single().text)
+        assertEquals(TextAlign.Center, blocks.single().textAlign)
+    }
+
+    @Test
+    fun `native parser preserves div text align style like android html renderer`() {
+        val markdown = """<div style="text-align:end">Right side</div>"""
+        val blocks = parseNativeStreamingMarkdownBlocks(markdown, "msg-div-align-html")
+
+        assertEquals(StreamingMarkdownRenderPath.ComposeBlockMarkdown, resolveStreamingMarkdownRenderPath(markdown))
+        requireNotNull(blocks)
+        assertEquals(NativeStreamingMarkdownBlockType.Paragraph, blocks.single().type)
+        assertEquals("Right side", blocks.single().text)
+        assertEquals(TextAlign.End, blocks.single().textAlign)
     }
 
     @Test
@@ -514,6 +573,61 @@ class StreamBlocksRendererRoutingTest {
             listOf(
                 NativeStreamingListItem(text = "第一项"),
                 NativeStreamingListItem(text = "**第二项**"),
+            ),
+            blocks.single().listItems,
+        )
+    }
+
+    @Test
+    fun `native parser preserves html list item text align style like android html renderer`() {
+        val markdown = """<ul><li style="text-align:center">居中项</li><li>普通项</li></ul>"""
+        val blocks = parseNativeStreamingMarkdownBlocks(
+            text = markdown,
+            segmentId = "msg-li-align-html",
+        )
+
+        assertEquals(StreamingMarkdownRenderPath.ComposeBlockMarkdown, resolveStreamingMarkdownRenderPath(markdown))
+        requireNotNull(blocks)
+        assertEquals(NativeStreamingMarkdownBlockType.ListBlock, blocks.single().type)
+        assertEquals("居中项", blocks.single().listItems[0].text)
+        assertEquals(TextAlign.Center, blocks.single().listItems[0].textAlign)
+        assertEquals("普通项", blocks.single().listItems[1].text)
+        assertEquals(TextAlign.Start, blocks.single().listItems[1].textAlign)
+    }
+
+    @Test
+    fun `native parser preserves html list item css spans like android html renderer`() {
+        val markdown = """<ul><li style="color:#ff0000; background-color:#00ff00; text-decoration:line-through">彩色项</li></ul>"""
+        val blocks = parseNativeStreamingMarkdownBlocks(
+            text = markdown,
+            segmentId = "msg-li-css-html",
+        )
+
+        assertEquals(StreamingMarkdownRenderPath.ComposeBlockMarkdown, resolveStreamingMarkdownRenderPath(markdown))
+        requireNotNull(blocks)
+        assertEquals(NativeStreamingMarkdownBlockType.ListBlock, blocks.single().type)
+        assertEquals(
+            """<span style="color:#ff0000; background-color:#00ff00; text-decoration:line-through">彩色项</span>""",
+            blocks.single().listItems.single().text,
+        )
+    }
+
+    @Test
+    fun `native parser preserves nested unordered html list levels like gpt html handler`() {
+        val markdown = """<ul><li>父项<ul><li>子项</li></ul></li><li>同级</li></ul>"""
+        val blocks = parseNativeStreamingMarkdownBlocks(
+            text = markdown,
+            segmentId = "msg-nested-ul-html",
+        )
+
+        assertEquals(StreamingMarkdownRenderPath.ComposeBlockMarkdown, resolveStreamingMarkdownRenderPath(markdown))
+        requireNotNull(blocks)
+        assertEquals(NativeStreamingMarkdownBlockType.ListBlock, blocks.single().type)
+        assertEquals(
+            listOf(
+                NativeStreamingListItem(text = "父项"),
+                NativeStreamingListItem(text = "子项", level = 1),
+                NativeStreamingListItem(text = "同级"),
             ),
             blocks.single().listItems,
         )
@@ -597,6 +711,19 @@ class StreamBlocksRendererRoutingTest {
     }
 
     @Test
+    fun `native parser preserves heading text align style like android html renderer`() {
+        val markdown = """<h2 style="text-align:center">Section <strong>Title</strong></h2>"""
+        val blocks = parseNativeStreamingMarkdownBlocks(markdown, "msg-heading-align-html")
+
+        assertEquals(StreamingMarkdownRenderPath.ComposeBlockMarkdown, resolveStreamingMarkdownRenderPath(markdown))
+        requireNotNull(blocks)
+        assertEquals(NativeStreamingMarkdownBlockType.Heading, blocks.single().type)
+        assertEquals(2, blocks.single().level)
+        assertEquals("Section **Title**", blocks.single().text)
+        assertEquals(TextAlign.Center, blocks.single().textAlign)
+    }
+
+    @Test
     fun `html blockquote tag uses compose block markdown path and preserves inline markdown`() {
         val markdown = """<blockquote>A <strong>bold</strong> quote</blockquote>"""
         val blocks = parseNativeStreamingMarkdownBlocks(markdown, "msg-blockquote-html")
@@ -605,6 +732,18 @@ class StreamBlocksRendererRoutingTest {
         requireNotNull(blocks)
         assertEquals(NativeStreamingMarkdownBlockType.BlockQuote, blocks.single().type)
         assertEquals("A **bold** quote", blocks.single().text)
+    }
+
+    @Test
+    fun `native parser preserves blockquote text align style like android html renderer`() {
+        val markdown = """<blockquote style="text-align:center">A <strong>bold</strong> quote</blockquote>"""
+        val blocks = parseNativeStreamingMarkdownBlocks(markdown, "msg-blockquote-align-html")
+
+        assertEquals(StreamingMarkdownRenderPath.ComposeBlockMarkdown, resolveStreamingMarkdownRenderPath(markdown))
+        requireNotNull(blocks)
+        assertEquals(NativeStreamingMarkdownBlockType.BlockQuote, blocks.single().type)
+        assertEquals("A **bold** quote", blocks.single().text)
+        assertEquals(TextAlign.Center, blocks.single().textAlign)
     }
 
     @Test
@@ -631,24 +770,15 @@ class StreamBlocksRendererRoutingTest {
     }
 
     @Test
-    fun `paragraph html img tag splits into native image block`() {
+    fun `paragraph html img tag stays inline inside native paragraph`() {
         val markdown = """before <img alt='diagram' src='https://example.com/a.png' /> after"""
         val blocks = parseNativeStreamingMarkdownBlocks(markdown, "msg-inline-img-html")
 
         assertEquals(StreamingMarkdownRenderPath.ComposeBlockMarkdown, resolveStreamingMarkdownRenderPath(markdown))
         requireNotNull(blocks)
-        assertEquals(
-            listOf(
-                NativeStreamingMarkdownBlockType.Paragraph,
-                NativeStreamingMarkdownBlockType.Image,
-                NativeStreamingMarkdownBlockType.Paragraph,
-            ),
-            blocks.map { it.type },
-        )
-        assertEquals("before", blocks[0].text)
-        assertEquals("diagram", blocks[1].imageAlt)
-        assertEquals("https://example.com/a.png", blocks[1].imageUrl)
-        assertEquals("after", blocks[2].text)
+        assertEquals(1, blocks.size)
+        assertEquals(NativeStreamingMarkdownBlockType.Paragraph, blocks.single().type)
+        assertEquals("before ![diagram](https://example.com/a.png) after", blocks.single().text)
     }
 
     @Test
@@ -687,6 +817,22 @@ class StreamBlocksRendererRoutingTest {
         requireNotNull(blocks)
         assertEquals(NativeStreamingMarkdownBlockType.Paragraph, blocks.single().type)
         assertEquals("A **bold** and `x`", blocks.single().text)
+    }
+
+    @Test
+    fun `native parser normalizes gpt html italic and strike aliases`() {
+        val blocks = parseNativeStreamingMarkdownBlocks(
+            text = "A <cite>cite</cite> <dfn>term</dfn> <strike>old</strike>",
+            segmentId = "msg-html-aliases",
+        )
+
+        assertEquals(
+            StreamingMarkdownRenderPath.ComposeBlockMarkdown,
+            resolveStreamingMarkdownRenderPath("A <cite>cite</cite> <dfn>term</dfn> <strike>old</strike>"),
+        )
+        requireNotNull(blocks)
+        assertEquals(NativeStreamingMarkdownBlockType.Paragraph, blocks.single().type)
+        assertEquals("A *cite* *term* ~~old~~", blocks.single().text)
     }
 
     @Test
@@ -842,6 +988,63 @@ class StreamBlocksRendererRoutingTest {
     }
 
     @Test
+    fun `html relative anchor link uses compose block markdown path like gpt url span`() {
+        val path = resolveStreamingMarkdownRenderPath("""Read <a href="/docs/start">docs</a> now""")
+
+        assertEquals(StreamingMarkdownRenderPath.ComposeBlockMarkdown, path)
+    }
+
+    @Test
+    fun `native parser normalizes html relative anchor link like gpt url span`() {
+        val blocks = parseNativeStreamingMarkdownBlocks(
+            text = """Read <a class="primary" href="/docs/start">docs</a> now""",
+            segmentId = "msg-anchor-html-relative",
+        )
+
+        requireNotNull(blocks)
+        assertEquals(NativeStreamingMarkdownBlockType.Paragraph, blocks.single().type)
+        assertEquals("Read [docs](/docs/start) now", blocks.single().text)
+    }
+
+    @Test
+    fun `html mailto anchor link uses compose block markdown path like gpt url span`() {
+        val path = resolveStreamingMarkdownRenderPath("""Email <a href="mailto:team@example.com">team</a> now""")
+
+        assertEquals(StreamingMarkdownRenderPath.ComposeBlockMarkdown, path)
+    }
+
+    @Test
+    fun `native parser normalizes html mailto anchor link like gpt url span`() {
+        val blocks = parseNativeStreamingMarkdownBlocks(
+            text = """Email <a href="mailto:team@example.com">team</a> now""",
+            segmentId = "msg-anchor-html-mailto",
+        )
+
+        requireNotNull(blocks)
+        assertEquals(NativeStreamingMarkdownBlockType.Paragraph, blocks.single().type)
+        assertEquals("Email [team](mailto:team@example.com) now", blocks.single().text)
+    }
+
+    @Test
+    fun `html tel anchor link uses compose block markdown path like gpt url span`() {
+        val path = resolveStreamingMarkdownRenderPath("""Call <a href="tel:+123456789">support</a> now""")
+
+        assertEquals(StreamingMarkdownRenderPath.ComposeBlockMarkdown, path)
+    }
+
+    @Test
+    fun `native parser normalizes html tel anchor link like gpt url span`() {
+        val blocks = parseNativeStreamingMarkdownBlocks(
+            text = """Call <a href="tel:+123456789">support</a> now""",
+            segmentId = "msg-anchor-html-tel",
+        )
+
+        requireNotNull(blocks)
+        assertEquals(NativeStreamingMarkdownBlockType.Paragraph, blocks.single().type)
+        assertEquals("Call [support](tel:+123456789) now", blocks.single().text)
+    }
+
+    @Test
     fun `html entity uses compose inline markdown path`() {
         val path = resolveStreamingMarkdownRenderPath("A &amp; B")
 
@@ -916,6 +1119,75 @@ class StreamBlocksRendererRoutingTest {
     }
 
     @Test
+    fun `native parser strips angle destination from reference link definitions`() {
+        val markdown = """
+            Read [docs][doc]
+
+            [doc]: <https://example.com/docs> "文档"
+        """.trimIndent()
+        val blocks = parseNativeStreamingMarkdownBlocks(
+            text = markdown,
+            segmentId = "msg-angle-ref-link",
+        )
+
+        assertEquals(StreamingMarkdownRenderPath.ComposeBlockMarkdown, resolveStreamingMarkdownRenderPath(markdown))
+        requireNotNull(blocks)
+        assertEquals(1, blocks.size)
+        assertEquals(NativeStreamingMarkdownBlockType.Paragraph, blocks.single().type)
+        assertEquals("Read [docs](https://example.com/docs)", blocks.single().text)
+    }
+
+    @Test
+    fun `native parser drops multiline reference link title definition`() {
+        val markdown = """
+            Read [docs][doc]
+
+            [doc]: https://example.com/docs
+              "文档"
+        """.trimIndent()
+        val blocks = parseNativeStreamingMarkdownBlocks(
+            text = markdown,
+            segmentId = "msg-multiline-title-ref-link",
+        )
+
+        assertEquals(StreamingMarkdownRenderPath.ComposeBlockMarkdown, resolveStreamingMarkdownRenderPath(markdown))
+        requireNotNull(blocks)
+        assertEquals(1, blocks.size)
+        assertEquals(NativeStreamingMarkdownBlockType.Paragraph, blocks.single().type)
+        assertEquals("Read [docs](https://example.com/docs)", blocks.single().text)
+    }
+
+    @Test
+    fun `native parser resolves shortcut reference link definitions`() {
+        val markdown = "Read [docs]\n\n[docs]: https://example.com"
+        val blocks = parseNativeStreamingMarkdownBlocks(
+            text = markdown,
+            segmentId = "msg-shortcut-ref-link",
+        )
+
+        assertEquals(StreamingMarkdownRenderPath.ComposeBlockMarkdown, resolveStreamingMarkdownRenderPath(markdown))
+        requireNotNull(blocks)
+        assertEquals(1, blocks.size)
+        assertEquals(NativeStreamingMarkdownBlockType.Paragraph, blocks.single().type)
+        assertEquals("Read [docs](https://example.com)", blocks.single().text)
+    }
+
+    @Test
+    fun `native parser normalizes reference labels by case and internal whitespace`() {
+        val markdown = "Read [my docs]\n\n[My   Docs]: https://example.com"
+        val blocks = parseNativeStreamingMarkdownBlocks(
+            text = markdown,
+            segmentId = "msg-ref-label-whitespace",
+        )
+
+        assertEquals(StreamingMarkdownRenderPath.ComposeBlockMarkdown, resolveStreamingMarkdownRenderPath(markdown))
+        requireNotNull(blocks)
+        assertEquals(1, blocks.size)
+        assertEquals(NativeStreamingMarkdownBlockType.Paragraph, blocks.single().type)
+        assertEquals("Read [my docs](https://example.com)", blocks.single().text)
+    }
+
+    @Test
     fun `reference link without definition stays native literal text`() {
         val markdown = "Read [docs][missing]"
         val path = resolveStreamingMarkdownRenderPath(markdown)
@@ -941,6 +1213,48 @@ class StreamBlocksRendererRoutingTest {
     @Test
     fun `standard markdown link uses compose inline markdown path`() {
         val path = resolveStreamingMarkdownRenderPath("Read [docs](https://example.com) now")
+
+        assertEquals(StreamingMarkdownRenderPath.ComposeInlineMarkdown, path)
+    }
+
+    @Test
+    fun `email autolink uses compose inline markdown path`() {
+        val path = resolveStreamingMarkdownRenderPath("Contact <team@example.com> now")
+
+        assertEquals(StreamingMarkdownRenderPath.ComposeInlineMarkdown, path)
+    }
+
+    @Test
+    fun `html like text inside inline code uses compose inline markdown path`() {
+        val path = resolveStreamingMarkdownRenderPath("Use `<span>` literally")
+
+        assertEquals(StreamingMarkdownRenderPath.ComposeInlineMarkdown, path)
+    }
+
+    @Test
+    fun `unsupported html entity inside inline code uses compose inline markdown path`() {
+        val path = resolveStreamingMarkdownRenderPath("Use `&InvisibleTimes;` literally")
+
+        assertEquals(StreamingMarkdownRenderPath.ComposeInlineMarkdown, path)
+    }
+
+    @Test
+    fun `image markdown inside inline code uses compose inline markdown path`() {
+        val path = resolveStreamingMarkdownRenderPath("Use `![diagram](https://example.com/a.png)` literally")
+
+        assertEquals(StreamingMarkdownRenderPath.ComposeInlineMarkdown, path)
+    }
+
+    @Test
+    fun `dollar math syntax inside inline code uses compose inline markdown path`() {
+        val path = resolveStreamingMarkdownRenderPath("Use `${'$'}x${'$'}` literally")
+
+        assertEquals(StreamingMarkdownRenderPath.ComposeInlineMarkdown, path)
+    }
+
+    @Test
+    fun `simple dollar math symbol inside inline code is not normalized into block markdown path`() {
+        val path = resolveStreamingMarkdownRenderPath("Use `${'$'}\\partial${'$'}` literally")
 
         assertEquals(StreamingMarkdownRenderPath.ComposeInlineMarkdown, path)
     }
@@ -1044,47 +1358,63 @@ class StreamBlocksRendererRoutingTest {
     }
 
     @Test
-    fun `native parser splits paragraph image markdown into image block`() {
+    fun `native parser keeps paragraph image markdown as inline paragraph`() {
+        val markdown = "before ![diagram](https://example.com/a.png) after"
         val blocks = parseNativeStreamingMarkdownBlocks(
-            text = "before ![diagram](https://example.com/a.png) after",
+            text = markdown,
             segmentId = "msg-inline-image",
         )
 
         requireNotNull(blocks)
-        assertEquals(
-            listOf(
-                NativeStreamingMarkdownBlockType.Paragraph,
-                NativeStreamingMarkdownBlockType.Image,
-                NativeStreamingMarkdownBlockType.Paragraph,
-            ),
-            blocks.map { it.type },
-        )
-        assertEquals("before", blocks[0].text)
-        assertEquals("diagram", blocks[1].imageAlt)
-        assertEquals("https://example.com/a.png", blocks[1].imageUrl)
-        assertEquals("after", blocks[2].text)
+        assertEquals(1, blocks.size)
+        assertEquals(NativeStreamingMarkdownBlockType.Paragraph, blocks.single().type)
+        assertEquals(markdown, blocks.single().text)
     }
 
     @Test
-    fun `native parser splits paragraph image with parenthesized url into image block`() {
+    fun `native inline parts model builds image placeholder from markdown image`() {
+        val parts = buildNativeInlinePartsForText("before ![diagram](https://example.com/a.png) after")
+
+        requireNotNull(parts)
+        val model = buildInlinePartsTextModel(
+            parts = parts,
+            baseColor = Color.Black,
+            codeBackground = Color.Transparent,
+            codeColor = Color.Black,
+            codeFontSize = 14.sp,
+        )
+        val imagePlaceholders = requireNotNull(
+            model.readNullableFieldForTest<List<*>>("imagePlaceholders")
+        )
+
+        assertEquals("before � after", model.annotatedText.text)
+        assertEquals(1, imagePlaceholders.size)
+    }
+
+    @Test
+    fun `native inline image placeholder preserves image click callback`() {
+        val source = streamBlocksRendererSource()
+        val inlinePartsSource = source
+            .substringAfter("internal fun InlinePartsSegment(")
+            .substringBefore("internal fun buildInlinePartsTextModel")
+
+        assertTrue(inlinePartsSource.contains("onImageClick: ((String) -> Unit)?"))
+        assertTrue(inlinePartsSource.contains("Modifier.clickable { onImageClick(placeholder.url) }"))
+        assertTrue(source.contains("onImageClick = onImageClick"))
+    }
+
+    @Test
+    fun `native parser keeps paragraph image with parenthesized url as inline paragraph`() {
+        val markdown = "before ![diagram](https://example.com/wiki/A_(B).png) after"
         val blocks = parseNativeStreamingMarkdownBlocks(
-            text = "before ![diagram](https://example.com/wiki/A_(B).png) after",
+            text = markdown,
             segmentId = "msg-inline-image-parentheses",
         )
 
         requireNotNull(blocks)
-        assertEquals(
-            listOf(
-                NativeStreamingMarkdownBlockType.Paragraph,
-                NativeStreamingMarkdownBlockType.Image,
-                NativeStreamingMarkdownBlockType.Paragraph,
-            ),
-            blocks.map { it.type },
-        )
-        assertEquals("before", blocks[0].text)
-        assertEquals("diagram", blocks[1].imageAlt)
-        assertEquals("https://example.com/wiki/A_(B).png", blocks[1].imageUrl)
-        assertEquals("after", blocks[2].text)
+        assertEquals(1, blocks.size)
+        assertEquals(NativeStreamingMarkdownBlockType.Paragraph, blocks.single().type)
+        assertEquals(markdown, blocks.single().text)
     }
 
     @Test
@@ -1097,6 +1427,32 @@ class StreamBlocksRendererRoutingTest {
         requireNotNull(blocks)
         assertEquals(NativeStreamingMarkdownBlockType.Paragraph, blocks.single().type)
         assertEquals("Read [docs](https://example.com) now", blocks.single().text)
+    }
+
+    @Test
+    fun `native parser normalizes paragraph soft line break to space like gpt`() {
+        val blocks = parseNativeStreamingMarkdownBlocks(
+            text = "first line\nsecond line",
+            segmentId = "msg-soft-break",
+        )
+
+        requireNotNull(blocks)
+        assertEquals(1, blocks.size)
+        assertEquals(NativeStreamingMarkdownBlockType.Paragraph, blocks.single().type)
+        assertEquals("first line second line", blocks.single().text)
+    }
+
+    @Test
+    fun `native parser keeps markdown hard line break as newline`() {
+        val blocks = parseNativeStreamingMarkdownBlocks(
+            text = "first line  \nsecond line",
+            segmentId = "msg-hard-break",
+        )
+
+        requireNotNull(blocks)
+        assertEquals(1, blocks.size)
+        assertEquals(NativeStreamingMarkdownBlockType.Paragraph, blocks.single().type)
+        assertEquals("first line\nsecond line", blocks.single().text)
     }
 
     @Test
@@ -1200,6 +1556,33 @@ class StreamBlocksRendererRoutingTest {
         )
         assertEquals("kotlin", blocks[1].language)
         assertEquals("val x = 1", blocks[1].code)
+    }
+
+    @Test
+    fun `indented code uses compose block markdown path`() {
+        val path = resolveStreamingMarkdownRenderPath("    val x = 1\n    println(x)")
+
+        assertEquals(StreamingMarkdownRenderPath.ComposeBlockMarkdown, path)
+    }
+
+    @Test
+    fun `native parser handles indented code block`() {
+        val blocks = parseNativeStreamingMarkdownBlocks(
+            text = "before\n\n    val x = 1\n    println(x)\n\nafter",
+            segmentId = "msg-indented-code",
+        )
+
+        requireNotNull(blocks)
+        assertEquals(
+            listOf(
+                NativeStreamingMarkdownBlockType.Paragraph,
+                NativeStreamingMarkdownBlockType.CodeBlock,
+                NativeStreamingMarkdownBlockType.Paragraph,
+            ),
+            blocks.map { it.type },
+        )
+        assertEquals(null, blocks[1].language)
+        assertEquals("val x = 1\nprintln(x)", blocks[1].code)
     }
 
     @Test
@@ -1652,6 +2035,32 @@ after"""
     }
 
     @Test
+    fun `native parser preserves trailing hash when atx heading has no closing marker space`() {
+        val markdown = "# C#"
+        val blocks = parseNativeStreamingMarkdownBlocks(
+            text = markdown,
+            segmentId = "heading-trailing-hash",
+        )
+
+        requireNotNull(blocks)
+        assertEquals(NativeStreamingMarkdownBlockType.Heading, blocks.single().type)
+        assertEquals("C#", blocks.single().text)
+    }
+
+    @Test
+    fun `native parser strips atx heading closing marker when separated by space`() {
+        val markdown = "### Title ###"
+        val blocks = parseNativeStreamingMarkdownBlocks(
+            text = markdown,
+            segmentId = "heading-closing-marker",
+        )
+
+        requireNotNull(blocks)
+        assertEquals(NativeStreamingMarkdownBlockType.Heading, blocks.single().type)
+        assertEquals("Title", blocks.single().text)
+    }
+
+    @Test
     fun `native parser handles setext heading with inline code`() {
         val markdown = "Heading with `cases`\n---"
         val blocks = parseNativeStreamingMarkdownBlocks(
@@ -1755,21 +2164,6 @@ after"""
         assertEquals("```kotlin\nval x = 1\n```", codeBlock.code)
     }
 
-    @Suppress("UNCHECKED_CAST")
-    private fun invokeBuildSegmentsForTest(blocks: List<StreamBlock>): List<Any> {
-        val rendererClass = Class.forName("com.android.everytalk.ui.components.streaming.StreamBlocksRendererKt")
-        val method = rendererClass.getDeclaredMethod("buildSegments", List::class.java)
-        method.isAccessible = true
-        return method.invoke(null, blocks) as List<Any>
-    }
-
-    @Suppress("UNCHECKED_CAST")
-    private fun <T> Any.readFieldForTest(name: String): T? {
-        val field = this::class.java.getDeclaredField(name)
-        field.isAccessible = true
-        return field.get(this) as? T
-    }
-
     private fun Any.readFloatFieldForTest(name: String): Float {
         val field = runCatching {
             this::class.java.getDeclaredField(name)
@@ -1799,6 +2193,17 @@ after"""
         )
         val sourceFile = candidates.firstOrNull { it.isFile }
         requireNotNull(sourceFile) { "找不到 StreamBlocksRenderer.kt" }
+        return sourceFile.readText(Charsets.UTF_8)
+    }
+
+    private fun mainSource(relativePath: String): String {
+        val candidates = listOf(
+            File("src/main/java/$relativePath"),
+            File("app/src/main/java/$relativePath"),
+            File("app1/app/src/main/java/$relativePath"),
+        )
+        val sourceFile = candidates.firstOrNull { it.isFile }
+        requireNotNull(sourceFile) { "找不到 $relativePath" }
         return sourceFile.readText(Charsets.UTF_8)
     }
 

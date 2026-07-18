@@ -12,7 +12,8 @@ import io.mockk.unmockkAll
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -78,7 +79,8 @@ class HistoryManagerCustomPromptPersistenceTest {
             assertEquals("文本回答", stateHolder._historicalConversations.value.single().last().text)
             assertEquals("图片完成", stateHolder._imageGenerationHistoricalConversations.value.single().last().text)
         } finally {
-            scope.cancel()
+            scope.coroutineContext[Job]?.cancel()
+            testScheduler.advanceUntilIdle()
         }
     }
 
@@ -127,7 +129,7 @@ class HistoryManagerCustomPromptPersistenceTest {
             assertEquals("hello", savedConversation.first().text)
             assertTrue(savedConversation.none { it.sender == Sender.System })
         } finally {
-            scope.cancel()
+            scope.coroutineContext[Job]?.cancelAndJoin()
         }
     }
 
@@ -182,7 +184,7 @@ class HistoryManagerCustomPromptPersistenceTest {
             assertEquals(1, stateHolder._loadedHistoryIndex.value)
             assertEquals("user-other", stateHolder._currentConversationId.value)
         } finally {
-            scope.cancel()
+            scope.coroutineContext[Job]?.cancelAndJoin()
         }
     }
 
@@ -223,7 +225,7 @@ class HistoryManagerCustomPromptPersistenceTest {
             assertEquals("另一个回答", stateHolder._historicalConversations.value[1].last().text)
             assertEquals(0, stateHolder._loadedHistoryIndex.value)
         } finally {
-            scope.cancel()
+            scope.coroutineContext[Job]?.cancelAndJoin()
         }
     }
 
@@ -264,7 +266,7 @@ class HistoryManagerCustomPromptPersistenceTest {
             assertEquals("newer answer", stateHolder._historicalConversations.value[1].last().text)
             assertEquals(0, stateHolder._loadedHistoryIndex.value)
         } finally {
-            scope.cancel()
+            scope.coroutineContext[Job]?.cancelAndJoin()
         }
     }
 
@@ -301,7 +303,7 @@ class HistoryManagerCustomPromptPersistenceTest {
             assertEquals(0, stateHolder._loadedHistoryIndex.value)
             assertEquals("actual-user-message-id", stateHolder._currentConversationId.value)
         } finally {
-            scope.cancel()
+            scope.coroutineContext[Job]?.cancelAndJoin()
         }
     }
 
@@ -343,7 +345,7 @@ class HistoryManagerCustomPromptPersistenceTest {
             assertEquals(0, stateHolder._loadedHistoryIndex.value)
             assertEquals("user-1", stateHolder._currentConversationId.value)
         } finally {
-            scope.cancel()
+            scope.coroutineContext[Job]?.cancelAndJoin()
         }
     }
 
@@ -382,7 +384,7 @@ class HistoryManagerCustomPromptPersistenceTest {
             assertEquals(updatedConversation, stateHolder._historicalConversations.value[0])
             assertEquals(0, stateHolder._loadedHistoryIndex.value)
         } finally {
-            scope.cancel()
+            scope.coroutineContext[Job]?.cancelAndJoin()
         }
     }
 
@@ -419,7 +421,7 @@ class HistoryManagerCustomPromptPersistenceTest {
             assertEquals(firstVersion, stateHolder._historicalConversations.value[0])
             assertEquals(0, stateHolder._loadedHistoryIndex.value)
         } finally {
-            scope.cancel()
+            scope.coroutineContext[Job]?.cancelAndJoin()
         }
     }
 
@@ -456,7 +458,7 @@ class HistoryManagerCustomPromptPersistenceTest {
             assertEquals(conversationBeingUpdated, stateHolder._historicalConversations.value[0])
             assertEquals(0, stateHolder._loadedHistoryIndex.value)
         } finally {
-            scope.cancel()
+            scope.coroutineContext[Job]?.cancelAndJoin()
         }
     }
 
@@ -497,7 +499,7 @@ class HistoryManagerCustomPromptPersistenceTest {
             assertEquals(olderConversation, stateHolder._historicalConversations.value[1])
             assertEquals(0, stateHolder._loadedHistoryIndex.value)
         } finally {
-            scope.cancel()
+            scope.coroutineContext[Job]?.cancelAndJoin()
         }
     }
 
@@ -556,7 +558,7 @@ class HistoryManagerCustomPromptPersistenceTest {
             assertFalse(stateHolder.conversationApiConfigIds.value.containsKey("temp-conversation-id"))
             assertEquals("user-other", stateHolder._currentConversationId.value)
         } finally {
-            scope.cancel()
+            scope.coroutineContext[Job]?.cancelAndJoin()
         }
     }
 
@@ -601,7 +603,7 @@ class HistoryManagerCustomPromptPersistenceTest {
             assertEquals(setOf("user-keep"), stateHolder.systemPrompts.keys)
             assertEquals(setOf("user-keep"), stateHolder.conversationScrollStates.keys)
         } finally {
-            scope.cancel()
+            scope.coroutineContext[Job]?.cancelAndJoin()
         }
     }
 
@@ -660,7 +662,7 @@ class HistoryManagerCustomPromptPersistenceTest {
             assertEquals(afterSecondRegenerationAndNewQuestion, stateHolder._historicalConversations.value[0])
             assertEquals(0, stateHolder._loadedHistoryIndex.value)
         } finally {
-            scope.cancel()
+            scope.coroutineContext[Job]?.cancelAndJoin()
         }
     }
 }

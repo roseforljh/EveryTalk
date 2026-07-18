@@ -17,6 +17,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import com.android.everytalk.data.DataClass.Sender
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertNotSame
@@ -101,7 +102,7 @@ class MarkdownRendererStreamingBoundaryTest {
     }
 
     @Test
-    fun `link markdown uses text colored dotted underline style with external marker`() {
+    fun `link markdown uses text colored dotted underline style without external marker`() {
         composeRule.setContent {
             MarkdownRenderer(
                 markdown = "* **淘宝/天猫选购入口**: [淘宝网 - 蜜丝婷泰版防晒](https://example.com/item)",
@@ -120,14 +121,14 @@ class MarkdownRendererStreamingBoundaryTest {
         val labelEnd = labelStart + "淘宝/天猫选购入口".length
         val linkStart = renderedText.indexOf("淘宝网 - 蜜丝婷泰版防晒")
         val linkEnd = linkStart + "淘宝网 - 蜜丝婷泰版防晒".length
-        val markerEnd = linkEnd + " ↗".length
 
-        assertTrue(renderedText.contains("淘宝网 - 蜜丝婷泰版防晒 ↗"))
-        val urlSpans = spanned.getSpans(linkStart, markerEnd, URLSpan::class.java)
+        assertTrue(renderedText.contains("淘宝网 - 蜜丝婷泰版防晒"))
+        assertFalse(renderedText.contains("淘宝网 - 蜜丝婷泰版防晒 ↗"))
+        val urlSpans = spanned.getSpans(linkStart, linkEnd, URLSpan::class.java)
         assertEquals(1, urlSpans.size)
         assertEquals("https://example.com/item", urlSpans.single().url)
         assertEquals(linkStart, spanned.getSpanStart(urlSpans.single()))
-        assertEquals(markerEnd, spanned.getSpanEnd(urlSpans.single()))
+        assertEquals(linkEnd, spanned.getSpanEnd(urlSpans.single()))
         val dottedUnderlineSpan = spanned.getSpans(linkStart, linkEnd, Any::class.java)
             .single { it.javaClass.simpleName == "DottedLinkUnderlineSpan" }
         assertTrue(dottedUnderlineSpan is LineBackgroundSpan)

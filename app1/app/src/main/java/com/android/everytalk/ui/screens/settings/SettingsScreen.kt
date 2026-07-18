@@ -315,8 +315,12 @@ fun SettingsScreen(
         modifier = modifier.fillMaxSize(),
         containerColor = MaterialTheme.colorScheme.background,
         contentWindowInsets = WindowInsets(0.dp)
-    ) { _ ->
-        Box(modifier = Modifier.fillMaxSize()) {
+    ) { contentPadding ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(contentPadding)
+        ) {
             // 内容层
             Column(modifier = Modifier.fillMaxSize()) {
                 if (isInImageMode) {

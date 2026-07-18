@@ -452,7 +452,6 @@ class SettingsController(
                 val errorMessage = when (e) {
                     is SerializationException -> "JSON格式错误，请检查文件是否损坏"
                     is IllegalStateException -> e.message ?: "解析失败"
-                    is OutOfMemoryError -> "文件过大，内存不足"
                     else -> "导入失败: ${e.message ?: "未知错误"}"
                 }
                 withContext(Dispatchers.Main) {

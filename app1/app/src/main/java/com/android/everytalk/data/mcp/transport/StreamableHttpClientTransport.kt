@@ -169,7 +169,7 @@ class StreamableHttpClientTransport(
         } catch (_: Exception) {
         } finally {
             initialized.set(false)
-            _onClose()
+            invokeOnCloseCallback()
         }
     }
 

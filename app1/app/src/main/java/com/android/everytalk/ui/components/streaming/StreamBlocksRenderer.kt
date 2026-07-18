@@ -1,6 +1,5 @@
 package com.android.everytalk.ui.components.streaming
 
-import android.content.ClipData
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.text.InlineTextContent
@@ -27,13 +26,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.key
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.platform.ClipEntry
-import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.PlatformTextStyle
@@ -51,13 +46,9 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
-import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.ui.components.ChatMarkdownTextStyle
 import com.android.everytalk.ui.components.ProportionalAsyncImage
-import com.android.everytalk.ui.components.content.CodeBlockCard
-import com.android.everytalk.ui.components.markdown.MarkdownRenderer
 import com.android.everytalk.ui.components.markdown.StableLatexRenderer
 import com.android.everytalk.ui.components.math.MathInline
 import com.android.everytalk.ui.components.table.InlineMarkdownParser
@@ -66,35 +57,17 @@ import com.android.everytalk.ui.components.table.TableUtils
 import com.android.everytalk.ui.components.table.parseTableCellMarkdownParts
 import com.android.everytalk.ui.components.table.stripMarkdownDestinationAngleBrackets
 import java.util.Locale
-import kotlinx.coroutines.launch
-
-private sealed interface RenderSegment {
-    val stableId: String
-
-    data class InlineText(
-        override val stableId: String,
-        val text: String,
-    ) : RenderSegment
-
-    data class InlineParts(
-        override val stableId: String,
-        val parts: List<InlineRenderPart>,
-    ) : RenderSegment
-
-    data class BlockOnly(
-        override val stableId: String,
-        val block: StreamBlock,
-    ) : RenderSegment
-}
 
 internal sealed interface InlineRenderPart {
     data class Text(val text: String) : InlineRenderPart
     data class Math(val block: StreamBlock.MathInline) : InlineRenderPart
+    data class Image(val alt: String, val url: String) : InlineRenderPart
 }
 
 internal data class InlinePartsTextModel(
     val annotatedText: AnnotatedString,
     val mathPlaceholders: List<InlineMathPlaceholder>,
+    val imagePlaceholders: List<InlineImagePlaceholder>,
 )
 
 internal data class InlineMathPlaceholder(
@@ -104,23 +77,23 @@ internal data class InlineMathPlaceholder(
     val height: TextUnit,
 )
 
+internal data class InlineImagePlaceholder(
+    val id: String,
+    val alt: String,
+    val url: String,
+    val width: TextUnit,
+    val height: TextUnit,
+)
+
 internal enum class StreamingMarkdownRenderPath {
     PlainText,
     ComposeInlineMarkdown,
     ComposeBlockMarkdown,
-    FullMarkdown,
 }
 
 internal enum class StreamMathRenderPath {
     RawText,
     NativeLatex,
-}
-
-internal enum class StreamBlockOnlyRenderPath {
-    PlainText,
-    NativeInlineParts,
-    NativeLatex,
-    CodeBlock,
 }
 
 internal fun resolveStreamMathRenderPath(block: StreamBlock.MathBlock): StreamMathRenderPath {
@@ -129,35 +102,6 @@ internal fun resolveStreamMathRenderPath(block: StreamBlock.MathBlock): StreamMa
         MathBlockState.RAW,
         MathBlockState.PARSING,
         MathBlockState.FAILED -> StreamMathRenderPath.RawText
-    }
-}
-
-internal fun resolveBlockOnlyRenderPath(block: StreamBlock): StreamBlockOnlyRenderPath {
-    return when (block) {
-        is StreamBlock.MathInline -> when (block.state) {
-            MathBlockState.RENDERED -> StreamBlockOnlyRenderPath.NativeInlineParts
-            MathBlockState.RAW,
-            MathBlockState.PARSING,
-            MathBlockState.FAILED -> StreamBlockOnlyRenderPath.PlainText
-        }
-        is StreamBlock.MathBlock -> when (resolveStreamMathRenderPath(block)) {
-            StreamMathRenderPath.RawText -> StreamBlockOnlyRenderPath.PlainText
-            StreamMathRenderPath.NativeLatex -> StreamBlockOnlyRenderPath.NativeLatex
-        }
-        is StreamBlock.CodeBlock -> StreamBlockOnlyRenderPath.CodeBlock
-        else -> StreamBlockOnlyRenderPath.PlainText
-    }
-}
-
-internal fun shouldBuildStreamSegmentsForOutputType(messageOutputType: String): Boolean = true
-
-internal fun streamMarkdownLongPressHandler(
-    sender: Sender,
-    onLongPress: (() -> Unit)?,
-): ((Offset) -> Unit)? {
-    if (sender == Sender.AI) return null
-    return onLongPress?.let { callback ->
-        { callback() }
     }
 }
 
@@ -189,6 +133,7 @@ data class NativeStreamingMarkdownBlock(
     val imageAlt: String = "",
     val imageUrl: String = "",
     val children: List<NativeStreamingMarkdownBlock> = emptyList(),
+    val textAlign: TextAlign = TextAlign.Start,
 )
 
 data class NativeStreamingListItem(
@@ -197,6 +142,7 @@ data class NativeStreamingListItem(
     val ordered: Boolean = false,
     val number: Int = 1,
     val children: List<NativeStreamingMarkdownBlock> = emptyList(),
+    val textAlign: TextAlign = TextAlign.Start,
 )
 
 internal data class ChatGptHeadingTextSpec(
@@ -254,13 +200,11 @@ internal fun chatInlineCodeFontSize(baseFontSize: TextUnit): TextUnit {
 }
 
 @Composable
-fun StreamBlocksRenderer(
-    message: Message,
-    blocks: List<StreamBlock>,
-    committedBlocks: List<StreamBlock> = emptyList(),
-    tailBlocks: List<StreamBlock> = emptyList(),
-    committedBlocksHash: String = "",
-    tailBlocksHash: String = "",
+fun UnifiedMarkdownRenderer(
+    markdown: String,
+    contentKey: String,
+    modifier: Modifier = Modifier,
+    sender: Sender = Sender.AI,
     nativeMarkdownBlocks: List<NativeStreamingMarkdownBlock> = emptyList(),
     committedNativeMarkdownBlocks: List<NativeStreamingMarkdownBlock> = emptyList(),
     tailNativeMarkdownBlocks: List<NativeStreamingMarkdownBlock> = emptyList(),
@@ -269,10 +213,7 @@ fun StreamBlocksRenderer(
     tailNativeMarkdownBlocksHash: String = "",
     style: TextStyle,
     color: Color,
-    messageOutputType: String,
-    viewModel: AppViewModel? = null,
     isStreaming: Boolean = false,
-    onLongPress: (() -> Unit)? = null,
     onImageClick: ((String) -> Unit)? = null,
     onCodePreviewRequested: ((String, String) -> Unit)? = null,
     onCodeCopied: (() -> Unit)? = null,
@@ -285,15 +226,20 @@ fun StreamBlocksRenderer(
         nativeMarkdownBlocks,
         committedNativeMarkdownBlocks,
         tailNativeMarkdownBlocks,
+        markdown,
+        contentKey,
     ) {
         when {
             hasNativeSplitBlocks -> committedNativeMarkdownBlocks + tailNativeMarkdownBlocks
-            else -> nativeMarkdownBlocks
+            nativeMarkdownBlocks.isNotEmpty() -> nativeMarkdownBlocks
+            else -> parseUnifiedStreamingMarkdownBlocks(markdown, contentKey)
         }
     }
 
-    if (nativeBlocks.isNotEmpty()) {
-        StreamTextSelectionContainer(enabled = message.sender == Sender.AI) {
+    if (nativeBlocks.isEmpty()) return
+
+    Box(modifier = modifier) {
+        StreamTextSelectionContainer(enabled = sender == Sender.AI) {
             NativeMarkdownBlocksSegment(
                 blocks = nativeBlocks,
                 style = style,
@@ -303,220 +249,6 @@ fun StreamBlocksRenderer(
                 onCodeCopied = onCodeCopied,
                 onImageClick = onImageClick,
             )
-        }
-        return
-    }
-
-    val hasSplitBlocks = committedBlocks.isNotEmpty() || tailBlocks.isNotEmpty()
-    val shouldBuildSegments = shouldBuildStreamSegmentsForOutputType(messageOutputType)
-    val committedSegments = remember(committedBlocksHash, committedBlocks, shouldBuildSegments) {
-        if (!hasSplitBlocks || committedBlocks.isEmpty() || !shouldBuildSegments) {
-            emptyList()
-        } else {
-            buildSegments(committedBlocks)
-        }
-    }
-    val tailSegments = remember(tailBlocksHash, tailBlocks, shouldBuildSegments) {
-        if (!hasSplitBlocks || tailBlocks.isEmpty() || !shouldBuildSegments) {
-            emptyList()
-        } else {
-            buildSegments(tailBlocks)
-        }
-    }
-    val fallbackSegments = remember(blocks, shouldBuildSegments) {
-        if (blocks.isEmpty() || !shouldBuildSegments) {
-            emptyList()
-        } else {
-            buildSegments(blocks)
-        }
-    }
-    val segments = if (hasSplitBlocks) committedSegments + tailSegments else fallbackSegments
-    val renderPhaseKey = if (hasSplitBlocks) {
-        "$committedBlocksHash:$tailBlocksHash"
-    } else {
-        blocks.hashCode().toString()
-    }
-
-    if (segments.isEmpty()) {
-        if (message.text.isNotBlank()) {
-            StreamTextSelectionContainer(enabled = message.sender == Sender.AI) {
-                PlainTextSegment(
-                    text = message.text,
-                    style = style,
-                    color = color,
-                )
-            }
-        }
-        return
-    }
-
-    StreamTextSelectionContainer(enabled = message.sender == Sender.AI) {
-        Column(
-            modifier = Modifier.fillMaxWidth(),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            segments.forEach { segment ->
-                key(segment.stableId) {
-                    when (segment) {
-                        is RenderSegment.InlineText -> {
-                            when (resolveStreamingMarkdownRenderPath(segment.text)) {
-                                StreamingMarkdownRenderPath.PlainText -> {
-                                    PlainTextSegment(
-                                        text = segment.text,
-                                        style = style,
-                                        color = color,
-                                    )
-                                }
-                                StreamingMarkdownRenderPath.ComposeInlineMarkdown -> {
-                                    ComposeInlineMarkdownSegment(
-                                        text = segment.text,
-                                        style = style,
-                                        color = color,
-                                    )
-                                }
-                                StreamingMarkdownRenderPath.ComposeBlockMarkdown -> {
-                                    val nativeBlocks = remember(segment.stableId, segment.text) {
-                                        parseNativeStreamingMarkdownBlocks(
-                                            text = segment.text,
-                                            segmentId = segment.stableId,
-                                        )
-                                    }
-                                    if (nativeBlocks != null) {
-                                        NativeMarkdownBlocksSegment(
-                                            blocks = nativeBlocks,
-                                            style = style,
-                                            color = color,
-                                            isStreaming = isStreaming,
-                                            onCodePreviewRequested = onCodePreviewRequested,
-                                            onCodeCopied = onCodeCopied,
-                                            onImageClick = onImageClick,
-                                        )
-                                    } else {
-                                        PlainTextSegment(
-                                            text = segment.text,
-                                            style = style,
-                                            color = color,
-                                        )
-                                    }
-                                }
-                                StreamingMarkdownRenderPath.FullMarkdown -> {
-                                    val nativeBlocks = remember(segment.stableId, segment.text) {
-                                        parseNativeStreamingMarkdownBlocks(
-                                            text = segment.text,
-                                            segmentId = segment.stableId,
-                                        )
-                                    }
-                                    if (nativeBlocks != null) {
-                                        NativeMarkdownBlocksSegment(
-                                            blocks = nativeBlocks,
-                                            style = style,
-                                            color = color,
-                                            isStreaming = isStreaming,
-                                            onCodePreviewRequested = onCodePreviewRequested,
-                                            onCodeCopied = onCodeCopied,
-                                            onImageClick = onImageClick,
-                                        )
-                                    } else {
-                                        FullMarkdownFallbackSegment(
-                                            text = segment.text,
-                                            stableId = segment.stableId,
-                                            style = style,
-                                            color = color,
-                                            isStreaming = isStreaming,
-                                            sender = message.sender,
-                                            onLongPress = onLongPress,
-                                            onImageClick = onImageClick,
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        is RenderSegment.InlineParts -> {
-                            InlinePartsSegment(
-                                parts = segment.parts,
-                                style = style,
-                                color = color,
-                            )
-                        }
-
-                        is RenderSegment.BlockOnly -> {
-                            when (val block = segment.block) {
-                                is StreamBlock.MathInline -> when (resolveBlockOnlyRenderPath(block)) {
-                                    StreamBlockOnlyRenderPath.PlainText -> {
-                                        PlainTextSegment(
-                                            text = block.text,
-                                            style = style,
-                                            color = color,
-                                        )
-                                    }
-                                    StreamBlockOnlyRenderPath.NativeInlineParts -> {
-                                        InlinePartsSegment(
-                                            parts = listOf(InlineRenderPart.Math(block)),
-                                            style = style,
-                                            color = color,
-                                        )
-                                    }
-                                    StreamBlockOnlyRenderPath.NativeLatex,
-                                    StreamBlockOnlyRenderPath.CodeBlock -> {
-                                        PlainTextSegment(
-                                            text = block.text,
-                                            style = style,
-                                            color = color,
-                                        )
-                                    }
-                                }
-
-                                is StreamBlock.MathBlock -> when (resolveBlockOnlyRenderPath(block)) {
-                                    StreamBlockOnlyRenderPath.PlainText -> {
-                                        PlainTextSegment(
-                                            text = block.text,
-                                            style = style,
-                                            color = color,
-                                        )
-                                    }
-                                    StreamBlockOnlyRenderPath.NativeLatex -> {
-                                        StableLatexRenderer(
-                                            latex = block.text,
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .padding(vertical = 6.dp),
-                                            style = style,
-                                            color = color,
-                                            contentKey = block.stableId,
-                                        )
-                                    }
-                                    StreamBlockOnlyRenderPath.CodeBlock,
-                                    StreamBlockOnlyRenderPath.NativeInlineParts -> {
-                                        PlainTextSegment(
-                                            text = block.text,
-                                            style = style,
-                                            color = color,
-                                        )
-                                    }
-                                }
-
-                                is StreamBlock.CodeBlock -> {
-                                    CodeBlockSegment(
-                                        block = block,
-                                        isStreaming = isStreaming,
-                                        onCodePreviewRequested = onCodePreviewRequested,
-                                        onCodeCopied = onCodeCopied,
-                                    )
-                                }
-
-                                else -> {
-                                    PlainTextSegment(
-                                        text = block.text,
-                                        style = style,
-                                        color = color,
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
         }
     }
 }
@@ -533,58 +265,6 @@ private fun StreamTextSelectionContainer(
     } else {
         content()
     }
-}
-
-@Composable
-private fun CodeBlockSegment(
-    block: StreamBlock.CodeBlock,
-    isStreaming: Boolean,
-    onCodePreviewRequested: ((String, String) -> Unit)?,
-    onCodeCopied: (() -> Unit)?,
-) {
-    val codeBlock = remember(block.text) {
-        extractFencedCodeBlockContent(block.text)
-    }
-    CodeBlockCardSegment(
-        language = codeBlock.language,
-        code = codeBlock.code,
-        isStreaming = isStreaming,
-        onCodePreviewRequested = onCodePreviewRequested,
-        onCodeCopied = onCodeCopied,
-    )
-}
-
-@Composable
-private fun CodeBlockCardSegment(
-    language: String?,
-    code: String,
-    isStreaming: Boolean,
-    onCodePreviewRequested: ((String, String) -> Unit)?,
-    onCodeCopied: (() -> Unit)?,
-) {
-    val clipboard = LocalClipboard.current
-    val coroutineScope = rememberCoroutineScope()
-    CodeBlockCard(
-        language = language,
-        code = code,
-        modifier = Modifier.padding(vertical = 4.dp),
-        isStreaming = isStreaming,
-        onPreviewRequested = if (onCodePreviewRequested != null) {
-            { onCodePreviewRequested(language.orEmpty(), code) }
-        } else {
-            null
-        },
-        onCopy = {
-            coroutineScope.launch {
-                clipboard.setClipEntry(
-                    ClipEntry(
-                        ClipData.newPlainText("code", code)
-                    )
-                )
-                onCodeCopied?.invoke()
-            }
-        },
-    )
 }
 
 @Composable
@@ -608,6 +288,8 @@ internal fun NativeMarkdownBlocksSegment(
                             text = block.text,
                             style = style,
                             color = color,
+                            textAlign = block.textAlign,
+                            onImageClick = onImageClick,
                         )
                     }
 
@@ -616,6 +298,7 @@ internal fun NativeMarkdownBlocksSegment(
                             text = block.text,
                             level = block.level,
                             color = color,
+                            textAlign = block.textAlign,
                         )
                     }
 
@@ -635,6 +318,7 @@ internal fun NativeMarkdownBlocksSegment(
                             children = block.children,
                             style = style,
                             color = color,
+                            textAlign = block.textAlign,
                             isStreaming = isStreaming,
                             onCodePreviewRequested = onCodePreviewRequested,
                             onCodeCopied = onCodeCopied,
@@ -758,6 +442,7 @@ private fun NativeHeadingText(
     text: String,
     level: Int,
     color: Color,
+    textAlign: TextAlign = TextAlign.Start,
 ) {
     val headingLevel = level.coerceIn(1, 6)
     val headingStyle = when (headingLevel) {
@@ -766,20 +451,24 @@ private fun NativeHeadingText(
         else -> MaterialTheme.typography.titleSmall
     }
     val headingSpec = chatGptHeadingTextSpecForLevel(headingLevel)
-    androidx.compose.material3.Text(
+    val headingColor = if (color == Color.Unspecified) {
+        color
+    } else {
+        color.copy(alpha = headingSpec.colorAlpha)
+    }
+    NativeInlineText(
         text = text,
         style = headingStyle.copy(
-            color = if (color == Color.Unspecified) {
-                color
-            } else {
-                color.copy(alpha = headingSpec.colorAlpha)
-            },
+            color = headingColor,
             fontSize = headingSpec.fontSize,
             lineHeight = headingSpec.lineHeight,
             fontWeight = headingSpec.fontWeight,
             fontStyle = headingSpec.fontStyle,
             platformStyle = PlatformTextStyle(includeFontPadding = false),
         ),
+        color = headingColor,
+        lineHeightSp = ChatMarkdownTextStyle.headingLineHeightSp(headingLevel),
+        textAlign = textAlign,
     )
 }
 
@@ -789,6 +478,7 @@ private fun NativeBlockQuote(
     children: List<NativeStreamingMarkdownBlock>,
     style: TextStyle,
     color: Color,
+    textAlign: TextAlign = TextAlign.Start,
     isStreaming: Boolean,
     onCodePreviewRequested: ((String, String) -> Unit)?,
     onCodeCopied: (() -> Unit)?,
@@ -830,6 +520,8 @@ private fun NativeBlockQuote(
                     text = text,
                     style = style,
                     color = color,
+                    textAlign = textAlign,
+                    onImageClick = onImageClick,
                 )
             }
         }
@@ -917,12 +609,14 @@ private fun NativeListBlock(
                 Column(
                     modifier = Modifier.weight(1f),
                 ) {
-                    NativeInlineText(
-                        text = item.text,
-                        style = style,
-                        color = color,
-                        lineHeightSp = ChatMarkdownTextStyle.LIST_ITEM_LINE_HEIGHT_SP,
-                    )
+                NativeInlineText(
+                    text = item.text,
+                    style = style,
+                    color = color,
+                    lineHeightSp = ChatMarkdownTextStyle.LIST_ITEM_LINE_HEIGHT_SP,
+                    textAlign = item.textAlign,
+                    onImageClick = onImageClick,
+                )
                     if (item.children.isNotEmpty()) {
                         Spacer(modifier = Modifier.height(ChatMarkdownTextStyle.SPACING_PARAGRAPH_DP.dp))
                         NativeMarkdownBlocksSegment(
@@ -1064,6 +758,8 @@ private fun NativeInlineText(
     style: TextStyle,
     color: Color,
     lineHeightSp: Float = ChatMarkdownTextStyle.BODY_LINE_HEIGHT_SP,
+    textAlign: TextAlign = TextAlign.Start,
+    onImageClick: ((String) -> Unit)? = null,
 ) {
     val inlineParts = remember(text) {
         buildNativeInlinePartsForText(text)
@@ -1073,6 +769,8 @@ private fun NativeInlineText(
             parts = inlineParts,
             style = style,
             color = color,
+            textAlign = textAlign,
+            onImageClick = onImageClick,
         )
     } else if (supportedInlineMarkdownPattern.containsMatchIn(text)) {
         ComposeInlineMarkdownSegment(
@@ -1080,6 +778,7 @@ private fun NativeInlineText(
             style = style,
             color = color,
             lineHeightSp = lineHeightSp,
+            textAlign = textAlign,
         )
     } else {
         PlainTextSegment(
@@ -1087,20 +786,46 @@ private fun NativeInlineText(
             style = style,
             color = color,
             lineHeightSp = lineHeightSp,
+            textAlign = textAlign,
         )
     }
 }
 
 internal fun buildNativeInlinePartsForText(text: String): List<InlineRenderPart>? {
     val blocks = StreamBlockParser.parse(text, "native-inline").blocks
-    if (blocks.none { it is StreamBlock.MathInline }) return null
+    val hasInlineImage = hasImageMarkdownOutsideInlineCode(text)
+    if (blocks.none { it is StreamBlock.MathInline } && !hasInlineImage) return null
 
     val parts = mutableListOf<InlineRenderPart>()
+    fun appendTextAndImages(rawText: String) {
+        var cursor = 0
+        var appendedImage = false
+        imageMarkdownMatchesOutsideInlineCode(rawText).forEach { image ->
+            val before = rawText.substring(cursor, image.range.first)
+            if (before.isNotEmpty()) {
+                parts.add(InlineRenderPart.Text(before))
+            }
+            parts.add(
+                InlineRenderPart.Image(
+                    alt = image.groupValues[1],
+                    url = stripMarkdownDestinationAngleBrackets(image.groupValues[2]),
+                )
+            )
+            cursor = image.range.last + 1
+            appendedImage = true
+        }
+
+        val after = if (appendedImage) rawText.substring(cursor) else rawText
+        if (after.isNotEmpty()) {
+            parts.add(InlineRenderPart.Text(after))
+        }
+    }
+
     blocks.forEach { block ->
         when (block) {
             is StreamBlock.PlainText -> {
                 if (block.text.isNotEmpty()) {
-                    parts.add(InlineRenderPart.Text(block.text))
+                    appendTextAndImages(block.text)
                 }
             }
             is StreamBlock.MathInline -> {
@@ -1118,6 +843,8 @@ internal fun InlinePartsSegment(
     parts: List<InlineRenderPart>,
     style: TextStyle,
     color: Color,
+    textAlign: TextAlign = TextAlign.Start,
+    onImageClick: ((String) -> Unit)? = null,
 ) {
     val isDark = isSystemInDarkTheme()
     val codeBackground = chatInlineCodeBackgroundColor(MaterialTheme.colorScheme.surfaceVariant, isDark)
@@ -1132,8 +859,8 @@ internal fun InlinePartsSegment(
             codeFontSize = codeFontSize,
         )
     }
-    val inlineContent = remember(model.mathPlaceholders) {
-        model.mathPlaceholders.associate { placeholder ->
+    val inlineContent = remember(model.mathPlaceholders, model.imagePlaceholders) {
+        val mathContent = model.mathPlaceholders.associate { placeholder ->
             placeholder.id to InlineTextContent(
                 placeholder = Placeholder(
                     width = placeholder.width,
@@ -1149,11 +876,35 @@ internal fun InlinePartsSegment(
                 )
             }
         }
+        val imageContent = model.imagePlaceholders.associate { placeholder ->
+            placeholder.id to InlineTextContent(
+                placeholder = Placeholder(
+                    width = placeholder.width,
+                    height = placeholder.height,
+                    placeholderVerticalAlign = PlaceholderVerticalAlign.TextCenter,
+                ),
+            ) {
+                val imageModifier = if (onImageClick != null) {
+                    Modifier.clickable { onImageClick(placeholder.url) }
+                        .fillMaxSize()
+                } else {
+                    Modifier.fillMaxSize()
+                }
+                ProportionalAsyncImage(
+                    model = placeholder.url,
+                    contentDescription = placeholder.alt.ifBlank { null },
+                    modifier = imageModifier,
+                    maxWidth = 48.dp,
+                    preserveAspectRatio = false,
+                )
+            }
+        }
+        mathContent + imageContent
     }
     androidx.compose.material3.Text(
         text = model.annotatedText,
-        style = compactBodyTextStyle(style, color),
-        textAlign = TextAlign.Start,
+        style = compactBodyTextStyle(style, color, textAlign = textAlign),
+        textAlign = textAlign,
         inlineContent = inlineContent,
     )
 }
@@ -1167,7 +918,9 @@ internal fun buildInlinePartsTextModel(
 ): InlinePartsTextModel {
     val builder = AnnotatedString.Builder()
     val mathPlaceholders = mutableListOf<InlineMathPlaceholder>()
+    val imagePlaceholders = mutableListOf<InlineImagePlaceholder>()
     var mathIndex = 0
+    var imageIndex = 0
 
     parts.forEach { part ->
         when (part) {
@@ -1203,12 +956,28 @@ internal fun buildInlinePartsTextModel(
                     )
                 }
             }
+
+            is InlineRenderPart.Image -> {
+                val id = "image-${imageIndex++}"
+                val placeholderSize = inlineImagePlaceholderSize(codeFontSize)
+                builder.appendInlineContent(id = id, alternateText = "�")
+                imagePlaceholders.add(
+                    InlineImagePlaceholder(
+                        id = id,
+                        alt = part.alt,
+                        url = part.url,
+                        width = placeholderSize.width,
+                        height = placeholderSize.height,
+                    )
+                )
+            }
         }
     }
 
     return InlinePartsTextModel(
         annotatedText = builder.toAnnotatedString(),
         mathPlaceholders = mathPlaceholders,
+        imagePlaceholders = imagePlaceholders,
     )
 }
 
@@ -1222,6 +991,14 @@ private fun inlineMathPlaceholderSize(latex: String, fontSize: TextUnit): Inline
     val widthFactor = (latex.length.coerceIn(2, 32) * 0.54f).coerceAtLeast(2.2f)
     return InlineMathPlaceholderSize(
         width = baseSize * widthFactor,
+        height = baseSize * 1.55f,
+    )
+}
+
+private fun inlineImagePlaceholderSize(fontSize: TextUnit): InlineMathPlaceholderSize {
+    val baseSize = if (fontSize == TextUnit.Unspecified) 16.sp else fontSize
+    return InlineMathPlaceholderSize(
+        width = baseSize * 2.25f,
         height = baseSize * 1.55f,
     )
 }
@@ -1242,11 +1019,12 @@ private fun PlainTextSegment(
     style: TextStyle,
     color: Color,
     lineHeightSp: Float = ChatMarkdownTextStyle.BODY_LINE_HEIGHT_SP,
+    textAlign: TextAlign = TextAlign.Start,
 ) {
     androidx.compose.material3.Text(
         text = text,
-        style = compactBodyTextStyle(style, color, lineHeightSp),
-        textAlign = TextAlign.Start,
+        style = compactBodyTextStyle(style, color, lineHeightSp, textAlign),
+        textAlign = textAlign,
     )
 }
 
@@ -1256,6 +1034,7 @@ private fun ComposeInlineMarkdownSegment(
     style: TextStyle,
     color: Color,
     lineHeightSp: Float = ChatMarkdownTextStyle.BODY_LINE_HEIGHT_SP,
+    textAlign: TextAlign = TextAlign.Start,
 ) {
     val isDark = isSystemInDarkTheme()
     val codeBackground = chatInlineCodeBackgroundColor(MaterialTheme.colorScheme.surfaceVariant, isDark)
@@ -1272,41 +1051,17 @@ private fun ComposeInlineMarkdownSegment(
     }
     androidx.compose.material3.Text(
         text = annotatedString,
-        style = compactBodyTextStyle(style, color, lineHeightSp),
-        textAlign = TextAlign.Start,
+        style = compactBodyTextStyle(style, color, lineHeightSp, textAlign),
+        textAlign = textAlign,
     )
 }
 
-
-@Composable
-private fun FullMarkdownFallbackSegment(
-    text: String,
-    stableId: String,
-    style: TextStyle,
-    color: Color,
-    isStreaming: Boolean,
-    sender: Sender,
-    onLongPress: (() -> Unit)?,
-    onImageClick: ((String) -> Unit)?,
-) {
-    MarkdownRenderer(
-        markdown = text,
-        modifier = Modifier.fillMaxWidth(),
-        style = style,
-        color = color,
-        isStreaming = isStreaming,
-        onLongPress = streamMarkdownLongPressHandler(sender, onLongPress),
-        onImageClick = onImageClick,
-        sender = sender,
-        contentKey = stableId,
-        disableVerticalPadding = true,
-    )
-}
 
 internal fun compactBodyTextStyle(
     style: TextStyle,
     color: Color,
     lineHeightSp: Float = ChatMarkdownTextStyle.BODY_LINE_HEIGHT_SP,
+    textAlign: TextAlign = TextAlign.Start,
 ): TextStyle {
     return style.copy(
         color = color,
@@ -1314,51 +1069,61 @@ internal fun compactBodyTextStyle(
         lineBreak = LineBreak.Simple,
         hyphens = Hyphens.None,
         platformStyle = PlatformTextStyle(includeFontPadding = false),
-        textAlign = TextAlign.Start,
+        textAlign = textAlign,
     )
 }
 
 private val supportedInlineMarkdownPattern = Regex(
-    """(&(?:amp|lt|gt|quot|apos|nbsp|ndash|mdash|hellip|copy|reg|trade|bull|middot|ldquo|rdquo|lsquo|rsquo|minus|times|divide|plusmn|deg|le|ge|ne|rarr|larr|Alpha|Beta|Gamma|Delta|Epsilon|Zeta|Eta|Theta|Iota|Kappa|Lambda|Mu|Nu|Xi|Omicron|Pi|Rho|Sigma|Tau|Upsilon|Phi|Chi|Psi|Omega|alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lambda|mu|nu|xi|omicron|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega|#\d+|#x[0-9A-Fa-f]+);|<https?://[^>\s]+>|https?://[^\s<>()\[\]{}]+(?:\([^\s<>()\[\]{}]*\)[^\s<>()\[\]{}]*)*|\[[^\]]+]\([^)]+?\)|\*\*|__|\*(?=[^\s*])|_(?=[^\s_])|~~|\+\+|==|\^\^|,,|`)"""
+    """(&(?:amp|lt|gt|quot|apos|nbsp|ndash|mdash|hellip|copy|reg|trade|bull|middot|ldquo|rdquo|lsquo|rsquo|minus|times|divide|plusmn|deg|le|ge|ne|rarr|larr|Alpha|Beta|Gamma|Delta|Epsilon|Zeta|Eta|Theta|Iota|Kappa|Lambda|Mu|Nu|Xi|Omicron|Pi|Rho|Sigma|Tau|Upsilon|Phi|Chi|Psi|Omega|alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lambda|mu|nu|xi|omicron|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega|#\d+|#x[0-9A-Fa-f]+);|<https?://[^>\s]+>|</?(?:font|tt|big|small|span|annotation)\b[^>]*>|https?://[^\s<>()\[\]{}]+(?:\([^\s<>()\[\]{}]*\)[^\s<>()\[\]{}]*)*|\[[^\]]+]\([^)]+?\)|\*\*|__|\*(?=[^\s*])|_(?=[^\s_])|~~|\+\+|==|\^\^|,,|`)"""
 )
 
-private val fullMarkdownOnlyPattern = Regex("""(!\[|^\s{0,3}#{1,6}\s+|^\s*[-*+]\s+|^\s*\d+[.)]\s+|^\s*>\s?|^\s{0,3}(-{3,}|\*{3,}|_{3,})\s*$)""", RegexOption.MULTILINE)
+private val fullMarkdownOnlyPattern = Regex("""(^\s{0,3}#{1,6}\s+|^\s*[-*+]\s+|^\s*\d+[.)]\s+|^\s*>\s?|^\s{0,3}(-{3,}|\*{3,}|_{3,})\s*$)""", RegexOption.MULTILINE)
 
 private val fencedCodeStartPattern = Regex("""^\s{0,3}(```|~~~)""", RegexOption.MULTILINE)
 private val setextHeadingPattern = Regex("""^\S[^\n]*(?:\n|\r\n?)\s{0,3}(={3,}|-{3,})\s*$""", RegexOption.MULTILINE)
 private val referenceLinkPattern = Regex("""!?\[[^\]]+]\[[^\]]*]|\[[^\]]+]:\s+\S+""", RegexOption.MULTILINE)
 private val referenceDefinitionPattern = Regex("""^\s{0,3}\[[^\]]+]:\s+\S+""", RegexOption.MULTILINE)
-private val referenceDefinitionLinePattern = Regex("""^\s{0,3}\[([^\]]+)]:\s+(\S+)(?:\s+.*)?$""")
+private val referenceDefinitionLinePattern = Regex("""^\s{0,3}\[([^\]]+)]:\s+(\S+)(?:\s+(.*))?$""")
+private val referenceDefinitionTitleLinePattern = Regex("""^\s{0,3}(?:"[^"]*"|'[^']*'|\([^)]*\))\s*$""")
 private val referenceUsePattern = Regex("""(!?)\[([^\]]+)]\[([^\]]*)]""")
+private val shortcutReferenceUsePattern = Regex("""(!?)\[([^\]]+)](?![\[(])""")
 private val autolinkPattern = Regex("""<https?://[^>\s]+>""")
+private val emailAutolinkPattern = Regex("""<[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}>""")
 private val htmlTagPattern = Regex("""</?[A-Za-z][A-Za-z0-9:-]*(?:\s+[^>]*)?/?>""")
 private val doubleQuotedAnchorHtmlTagPattern = Regex("""<a\b[^>]*\bhref\s*=\s*"([^"]+)"[^>]*>([\s\S]*?)</a>""", RegexOption.IGNORE_CASE)
 private val singleQuotedAnchorHtmlTagPattern = Regex("""<a\b[^>]*\bhref\s*=\s*'([^']+)'[^>]*>([\s\S]*?)</a>""", RegexOption.IGNORE_CASE)
 private val genericAnchorHtmlTagPattern = Regex("""<a\b([^>]*)>([\s\S]*?)</a>""", RegexOption.IGNORE_CASE)
 private val preCodeHtmlTagPattern = Regex("""<pre\b[^>]*>\s*<code\b([^>]*)>([\s\S]*?)</code>\s*</pre>""", RegexOption.IGNORE_CASE)
 private val boldHtmlTagPattern = Regex("""<(strong|b)(?:\s+[^>]*)?>([\s\S]*?)</\1>""", RegexOption.IGNORE_CASE)
-private val italicHtmlTagPattern = Regex("""<(em|i)(?:\s+[^>]*)?>([\s\S]*?)</\1>""", RegexOption.IGNORE_CASE)
+private val italicHtmlTagPattern = Regex("""<(em|i|cite|dfn)(?:\s+[^>]*)?>([\s\S]*?)</\1>""", RegexOption.IGNORE_CASE)
 private val codeHtmlTagPattern = Regex("""<code(?:\s+[^>]*)?>([\s\S]*?)</code>""", RegexOption.IGNORE_CASE)
-private val strikeHtmlTagPattern = Regex("""<(s|del)(?:\s+[^>]*)?>([\s\S]*?)</\1>""", RegexOption.IGNORE_CASE)
+private val strikeHtmlTagPattern = Regex("""<(s|del|strike)(?:\s+[^>]*)?>([\s\S]*?)</\1>""", RegexOption.IGNORE_CASE)
 private val underlineHtmlTagPattern = Regex("""<u(?:\s+[^>]*)?>([\s\S]*?)</u>""", RegexOption.IGNORE_CASE)
 private val markHtmlTagPattern = Regex("""<mark(?:\s+[^>]*)?>([\s\S]*?)</mark>""", RegexOption.IGNORE_CASE)
 private val supHtmlTagPattern = Regex("""<sup(?:\s+[^>]*)?>([\s\S]*?)</sup>""", RegexOption.IGNORE_CASE)
 private val subHtmlTagPattern = Regex("""<sub(?:\s+[^>]*)?>([\s\S]*?)</sub>""", RegexOption.IGNORE_CASE)
 private val kbdHtmlTagPattern = Regex("""<kbd(?:\s+[^>]*)?>([\s\S]*?)</kbd>""", RegexOption.IGNORE_CASE)
-private val spanHtmlTagPattern = Regex("""<span(?:\s+[^>]*)?>([\s\S]*?)</span>""", RegexOption.IGNORE_CASE)
-private val paragraphHtmlTagPattern = Regex("""<p(?:\s+[^>]*)?>([\s\S]*?)</p>""", RegexOption.IGNORE_CASE)
-private val divHtmlTagPattern = Regex("""<div(?:\s+[^>]*)?>([\s\S]*?)</div>""", RegexOption.IGNORE_CASE)
+private val spanHtmlTagPattern = Regex("""<span\b([^>]*)>([\s\S]*?)</span>""", RegexOption.IGNORE_CASE)
+private val htmlTextSpanTagPattern = Regex("""</?(?:font|tt|big|small|span|annotation)\b[^>]*>""", RegexOption.IGNORE_CASE)
+private val paragraphHtmlTagPattern = Regex("""<p\b([^>]*)>([\s\S]*?)</p>""", RegexOption.IGNORE_CASE)
+private val divHtmlTagPattern = Regex("""<div\b([^>]*)>([\s\S]*?)</div>""", RegexOption.IGNORE_CASE)
+private val nativeTextAlignMarkerPattern = Regex("""^<!--ET_ALIGN:(start|center|end)-->\s*""")
 private val unorderedHtmlListPattern = Regex("""<ul(?:\s+[^>]*)?>([\s\S]*?)</ul>""", RegexOption.IGNORE_CASE)
+private val unorderedHtmlListOpenTagPattern = Regex("""<ul(?:\s+[^>]*)?>""", RegexOption.IGNORE_CASE)
+private val unorderedHtmlListTagPattern = Regex("""</?ul(?:\s+[^>]*)?>""", RegexOption.IGNORE_CASE)
 private val orderedHtmlListPattern = Regex("""<ol\b([^>]*)>([\s\S]*?)</ol>""", RegexOption.IGNORE_CASE)
 private val htmlListItemPattern = Regex("""<li\b([^>]*)>([\s\S]*?)</li>""", RegexOption.IGNORE_CASE)
-private val headingHtmlTagPattern = Regex("""<h([1-6])(?:\s+[^>]*)?>([\s\S]*?)</h\1>""", RegexOption.IGNORE_CASE)
-private val blockQuoteHtmlTagPattern = Regex("""<blockquote(?:\s+[^>]*)?>([\s\S]*?)</blockquote>""", RegexOption.IGNORE_CASE)
+private val htmlListItemOpenTagPattern = Regex("""<li\b([^>]*)>""", RegexOption.IGNORE_CASE)
+private val htmlListItemTagPattern = Regex("""</?li\b[^>]*>""", RegexOption.IGNORE_CASE)
+private val headingHtmlTagPattern = Regex("""<h([1-6])\b([^>]*)>([\s\S]*?)</h\1>""", RegexOption.IGNORE_CASE)
+private val blockQuoteHtmlTagPattern = Regex("""<blockquote\b([^>]*)>([\s\S]*?)</blockquote>""", RegexOption.IGNORE_CASE)
 private val imageHtmlTagPattern = Regex("""<img\b([^>]*?)\s*/?>""", RegexOption.IGNORE_CASE)
 private val horizontalRuleHtmlTagPattern = Regex("""<hr\b[^>]*/?>""", RegexOption.IGNORE_CASE)
 private val htmlAttributePattern = Regex("""([A-Za-z_:][A-Za-z0-9_:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))""")
 private val htmlLineBreakTagPattern = Regex("""<br\s*/?>""", RegexOption.IGNORE_CASE)
 private val htmlEntityPattern = Regex("""&(?:[A-Za-z][A-Za-z0-9]+|#\d+|#x[0-9A-Fa-f]+);""")
 private val supportedHtmlEntityPattern = Regex("""&(?:amp|lt|gt|quot|apos|nbsp|ndash|mdash|hellip|copy|reg|trade|bull|middot|ldquo|rdquo|lsquo|rsquo|minus|times|divide|plusmn|deg|le|ge|ne|rarr|larr|Alpha|Beta|Gamma|Delta|Epsilon|Zeta|Eta|Theta|Iota|Kappa|Lambda|Mu|Nu|Xi|Omicron|Pi|Rho|Sigma|Tau|Upsilon|Phi|Chi|Psi|Omega|alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lambda|mu|nu|xi|omicron|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega|#\d+|#x[0-9A-Fa-f]+);""")
+private val supportedCssNamedColorPattern = Regex("""(?i)^(?:black|white|red|green|blue|yellow|cyan|aqua|magenta|fuchsia|darkgr[ae]y|gr[ae]y|lightgr[ae]y|lime|maroon|navy|olive|purple|silver|teal)$""")
 private val simpleDollarInlineMathPattern = Regex("""(?<!\\)\$([^$\r\n]{1,32})(?<!\\)\$""")
 private val simpleEscapedInlineMathPattern = Regex("""\\\(([^)\r\n]{1,32})\\\)""")
 private val simpleInlineMathSymbolReplacements = mapOf(
@@ -1367,6 +1132,7 @@ private val simpleInlineMathSymbolReplacements = mapOf(
     "\\nabla" to "∇",
     "\\partial" to "∂",
 )
+private val imageMarkdownOpeningPattern = Regex("""!\[""")
 private val imageMarkdownPattern = Regex("""!\[([^\]]*)]\((<[^>\s]+>|(?:[^\s()]|\([^)]*\))+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\)""")
 private val standaloneImageMarkdownLinePattern = Regex("""^\s*!\[([^\]]*)]\((<[^>\s]+>|(?:[^\s()]|\([^)]*\))+)(?:\s+(?:"[^"]*"|'[^']*'|\([^)]*\)))?\)\s*$""")
 
@@ -1374,7 +1140,7 @@ private val tableSeparatorPattern = Regex(
     """^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$"""
 )
 
-private val atxHeadingLinePattern = Regex("""^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$""")
+private val atxHeadingLinePattern = Regex("""^\s{0,3}(#{1,6})\s+(.+?)\s*$""")
 private val setextUnderlineLinePattern = Regex("""^\s{0,3}(={3,}|-{3,})\s*$""")
 private val horizontalRuleLinePattern = Regex("""^\s{0,3}(-{3,}|\*{3,}|_{3,})\s*$""")
 private val blockQuoteLinePattern = Regex("""^\s{0,3}>\s?(.*)$""")
@@ -1411,13 +1177,16 @@ private data class NativeParagraphMathBlock(
 
 internal fun resolveStreamingMarkdownRenderPath(text: String): StreamingMarkdownRenderPath {
     if (text.isEmpty()) return StreamingMarkdownRenderPath.PlainText
-    val nativeText = prepareNativeMarkdownText(text) ?: return StreamingMarkdownRenderPath.FullMarkdown
-    if (hasUnsupportedNativeMarkdownForCompose(nativeText)) return StreamingMarkdownRenderPath.FullMarkdown
+    val nativeText = prepareNativeMarkdownText(text) ?: return StreamingMarkdownRenderPath.ComposeBlockMarkdown
+    if (hasUnsupportedNativeMarkdownForCompose(nativeText)) return StreamingMarkdownRenderPath.ComposeBlockMarkdown
     if (text != nativeText) return StreamingMarkdownRenderPath.ComposeBlockMarkdown
     if (hasNativeBlockMarkdownSyntax(nativeText)) return StreamingMarkdownRenderPath.ComposeBlockMarkdown
     if (hasInlineMathSyntax(nativeText)) return StreamingMarkdownRenderPath.ComposeBlockMarkdown
-    if (hasFullMarkdownSyntax(nativeText)) return StreamingMarkdownRenderPath.FullMarkdown
-    return if (supportedInlineMarkdownPattern.containsMatchIn(nativeText)) {
+    if (hasFullMarkdownSyntax(nativeText)) return StreamingMarkdownRenderPath.ComposeBlockMarkdown
+    return if (
+        supportedInlineMarkdownPattern.containsMatchIn(nativeText) ||
+        emailAutolinkPattern.containsMatchIn(nativeText)
+    ) {
         StreamingMarkdownRenderPath.ComposeInlineMarkdown
     } else {
         StreamingMarkdownRenderPath.PlainText
@@ -1441,8 +1210,9 @@ private fun hasNativeBlockMarkdownSyntax(text: String): Boolean {
     val lines = normalized.lines()
     return lines.indices.any { index ->
         TableUtils.isValidTableStart(lines, index) ||
+            isIndentedCodeBlockStart(lines, index) ||
             htmlLineBreakTagPattern.containsMatchIn(lines[index]) ||
-            imageMarkdownPattern.containsMatchIn(lines[index]) ||
+            hasImageMarkdownOutsideInlineCode(lines[index]) ||
             standaloneImageMarkdownLinePattern.matches(lines[index]) ||
             atxHeadingLinePattern.matches(lines[index]) ||
             fencedCodeOpeningLinePattern.matches(lines[index]) ||
@@ -1503,17 +1273,19 @@ private fun normalizeSimpleInlineHtmlTags(text: String): String {
         "`${match.groupValues[1]}`"
     }
     normalized = spanHtmlTagPattern.replace(normalized) { match ->
-        match.groupValues[1]
+        if (hasSupportedHtmlSpanStyle(match.groupValues[1])) {
+            match.value
+        } else {
+            match.groupValues[2]
+        }
     }
     normalized = paragraphHtmlTagPattern.replace(normalized) { match ->
-        "\n\n${match.groupValues[1].trim()}\n\n"
+        "\n\n${normalizeHtmlBlockContent(match.groupValues[1], match.groupValues[2], preserveCssSpanStyle = true)}\n\n"
     }
     normalized = divHtmlTagPattern.replace(normalized) { match ->
-        "\n\n${match.groupValues[1].trim()}\n\n"
+        "\n\n${normalizeHtmlBlockContent(match.groupValues[1], match.groupValues[2], preserveCssSpanStyle = false)}\n\n"
     }
-    normalized = unorderedHtmlListPattern.replace(normalized) { match ->
-        normalizeHtmlListItems(match.groupValues[1], ordered = false)
-    }
+    normalized = normalizeUnorderedHtmlLists(normalized)
     normalized = orderedHtmlListPattern.replace(normalized) { match ->
         val attributes = parseHtmlAttributes(match.groupValues[1])
         val startNumber = attributes["start"]?.toIntOrNull()?.coerceAtLeast(1) ?: 1
@@ -1525,10 +1297,13 @@ private fun normalizeSimpleInlineHtmlTags(text: String): String {
     }
     normalized = headingHtmlTagPattern.replace(normalized) { match ->
         val level = match.groupValues[1].toIntOrNull()?.coerceIn(1, 6) ?: 1
-        "\n\n${"#".repeat(level)} ${match.groupValues[2].trim()}\n\n"
+        val textAlignPrefix = htmlBlockTextAlignFromAttributes(match.groupValues[2])
+            ?.let(::nativeTextAlignMarkerFor)
+            .orEmpty()
+        "\n\n${"#".repeat(level)} $textAlignPrefix${match.groupValues[3].trim()}\n\n"
     }
     normalized = blockQuoteHtmlTagPattern.replace(normalized) { match ->
-        normalizeHtmlBlockQuote(match.groupValues[1])
+        normalizeHtmlBlockQuote(match.groupValues[1], match.groupValues[2])
     }
     return normalized
 }
@@ -1557,6 +1332,57 @@ private fun resolveHtmlCodeLanguage(attributes: Map<String, String>): String {
 }
 
 private fun String.ifNotBlank(): String? = takeIf { it.isNotBlank() }
+
+private fun normalizeHtmlBlockContent(
+    rawAttributes: String,
+    body: String,
+    preserveCssSpanStyle: Boolean,
+): String {
+    val trimmedBody = body.trim()
+    val content = if (preserveCssSpanStyle && hasSupportedHtmlSpanStyle(rawAttributes)) {
+        "<span$rawAttributes>$trimmedBody</span>"
+    } else {
+        trimmedBody
+    }
+    val textAlign = htmlBlockTextAlignFromAttributes(rawAttributes) ?: return content
+    return "${nativeTextAlignMarkerFor(textAlign)}$content"
+}
+
+private fun nativeTextAlignMarkerFor(textAlign: TextAlign): String {
+    val value = when (textAlign) {
+        TextAlign.Center -> "center"
+        TextAlign.End -> "end"
+        else -> "start"
+    }
+    return "<!--ET_ALIGN:$value-->"
+}
+
+private fun htmlBlockTextAlignFromAttributes(rawAttributes: String): TextAlign? {
+    val style = parseHtmlAttributes(rawAttributes)["style"] ?: return null
+    return parseHtmlCssDeclarations(style).firstNotNullOfOrNull { (name, value) ->
+        if (name != "text-align") {
+            null
+        } else {
+            when (value.trim().lowercase(Locale.ROOT)) {
+                "start" -> TextAlign.Start
+                "center" -> TextAlign.Center
+                "end" -> TextAlign.End
+                else -> null
+            }
+        }
+    }
+}
+
+private fun extractNativeTextAlignMarker(text: String): Pair<TextAlign, String> {
+    val match = nativeTextAlignMarkerPattern.find(text)
+    if (match == null) return TextAlign.Start to text
+    val textAlign = when (match.groupValues[1]) {
+        "center" -> TextAlign.Center
+        "end" -> TextAlign.End
+        else -> TextAlign.Start
+    }
+    return textAlign to text.removeRange(match.range).trimStart()
+}
 
 private fun decodeBasicHtmlCodeEntities(text: String): String {
     return text
@@ -1602,8 +1428,181 @@ private fun parseHtmlAttributes(rawAttributes: String): Map<String, String> {
     }
 }
 
+private fun hasSupportedHtmlSpanStyle(rawAttributes: String): Boolean {
+    val style = parseHtmlAttributes(rawAttributes)["style"] ?: return false
+    return parseHtmlCssDeclarations(style).any { (name, value) ->
+        when (name) {
+            "color", "background", "background-color" -> isSupportedHtmlCssColor(value)
+            "text-decoration" -> isAndroidHtmlLineThroughTextDecoration(value)
+            else -> false
+        }
+    }
+}
+
+private fun parseHtmlCssDeclarations(rawStyle: String): List<Pair<String, String>> {
+    return rawStyle.split(';').mapNotNull { declaration ->
+        val separator = declaration.indexOf(':')
+        if (separator <= 0) {
+            null
+        } else {
+            val name = declaration.substring(0, separator).trim().lowercase(Locale.ROOT)
+            val value = declaration.substring(separator + 1).trim()
+            if (name.isEmpty() || value.isEmpty()) null else name to value
+        }
+    }
+}
+
+private fun isSupportedHtmlCssColor(rawValue: String): Boolean {
+    val color = rawValue.trim().trimEnd(';').substringBefore(' ')
+    val hex = color.removePrefix("#")
+    return when {
+        color.startsWith("#") && (hex.length == 3 || hex.length == 6 || hex.length == 8) ->
+            hex.all { it.digitToIntOrNull(16) != null }
+        supportedCssNamedColorPattern.matches(color) -> true
+        parseAndroidHtmlColorInt(color)?.takeIf { it != -1 } != null -> true
+        else -> false
+    }
+}
+
+private fun isAndroidHtmlLineThroughTextDecoration(rawValue: String): Boolean {
+    return rawValue.trim().substringBefore(' ').equals("line-through", ignoreCase = true)
+}
+
+private fun parseAndroidHtmlColorInt(rawColor: String): Int? {
+    if (rawColor.isEmpty()) return null
+    var sign = 1
+    var index = 0
+    var base = 10
+
+    if (rawColor[index] == '-') {
+        sign = -1
+        index++
+        if (index >= rawColor.length) return null
+    }
+
+    if (rawColor[index] == '0') {
+        if (index == rawColor.lastIndex) return 0
+        val next = rawColor[index + 1]
+        if (next == 'x' || next == 'X') {
+            index += 2
+            base = 16
+        } else {
+            index++
+            base = 8
+        }
+    } else if (rawColor[index] == '#') {
+        index++
+        base = 16
+    }
+
+    if (index >= rawColor.length) return null
+    return rawColor.substring(index).toIntOrNull(base)?.let { it * sign }
+}
+
 private fun isSafeNativeImageUrl(url: String): Boolean {
     return url.startsWith("http://") || url.startsWith("https://")
+}
+
+private fun normalizeUnorderedHtmlLists(text: String): String {
+    val builder = StringBuilder()
+    var cursor = 0
+    while (cursor < text.length) {
+        val open = unorderedHtmlListOpenTagPattern.find(text, cursor) ?: break
+        val close = findMatchingHtmlTag(text, open.range.last + 1, unorderedHtmlListTagPattern, "ul") ?: break
+        builder.append(text.substring(cursor, open.range.first))
+        val body = text.substring(open.range.last + 1, close.range.first)
+        val listMarkdown = normalizeUnorderedHtmlListBody(body, level = 0)
+        if (listMarkdown.isBlank()) {
+            builder.append(body)
+        } else {
+            builder.append("\n\n").append(listMarkdown).append("\n\n")
+        }
+        cursor = close.range.last + 1
+    }
+    builder.append(text.substring(cursor))
+    return builder.toString()
+}
+
+private fun normalizeUnorderedHtmlListBody(body: String, level: Int): String {
+    val lines = mutableListOf<String>()
+    var cursor = 0
+    while (cursor < body.length) {
+        val open = htmlListItemOpenTagPattern.find(body, cursor) ?: break
+        val close = findMatchingHtmlTag(body, open.range.last + 1, htmlListItemTagPattern, "li") ?: break
+        val itemBody = body.substring(open.range.last + 1, close.range.first)
+        lines += normalizeUnorderedHtmlListItem(open.groupValues[1], itemBody, level)
+        cursor = close.range.last + 1
+    }
+    return lines.filter { it.isNotBlank() }.joinToString("\n")
+}
+
+private fun normalizeUnorderedHtmlListItem(
+    rawAttributes: String,
+    itemBody: String,
+    level: Int,
+): List<String> {
+    val textParts = mutableListOf<String>()
+    val childLines = mutableListOf<String>()
+    var cursor = 0
+    while (cursor < itemBody.length) {
+        val open = unorderedHtmlListOpenTagPattern.find(itemBody, cursor) ?: break
+        val close = findMatchingHtmlTag(itemBody, open.range.last + 1, unorderedHtmlListTagPattern, "ul") ?: break
+        textParts += itemBody.substring(cursor, open.range.first)
+        val childBody = itemBody.substring(open.range.last + 1, close.range.first)
+        normalizeUnorderedHtmlListBody(childBody, level + 1)
+            .takeIf { it.isNotBlank() }
+            ?.let(childLines::add)
+        cursor = close.range.last + 1
+    }
+    textParts += itemBody.substring(cursor)
+
+    val ownText = textParts.joinToString(" ")
+        .replace(Regex("""\s+"""), " ")
+        .trim()
+    val lines = mutableListOf<String>()
+    if (ownText.isNotEmpty()) {
+        lines += "${"  ".repeat(level)}- ${normalizeHtmlListItemText(rawAttributes, ownText)}"
+    }
+    lines += childLines
+    return lines
+}
+
+private fun htmlListItemTextPrefix(rawAttributes: String): String {
+    return htmlBlockTextAlignFromAttributes(rawAttributes)
+        ?.let(::nativeTextAlignMarkerFor)
+        .orEmpty()
+}
+
+private fun normalizeHtmlListItemText(rawAttributes: String, itemText: String): String {
+    val textAlignPrefix = htmlListItemTextPrefix(rawAttributes)
+    return if (hasSupportedHtmlSpanStyle(rawAttributes)) {
+        "$textAlignPrefix<span$rawAttributes>$itemText</span>"
+    } else {
+        "$textAlignPrefix$itemText"
+    }
+}
+
+private fun findMatchingHtmlTag(
+    text: String,
+    start: Int,
+    tagPattern: Regex,
+    tagName: String,
+): MatchResult? {
+    var depth = 1
+    var cursor = start
+    while (cursor < text.length) {
+        val match = tagPattern.find(text, cursor) ?: return null
+        val value = match.value.trimStart()
+        val isClose = value.startsWith("</", ignoreCase = true)
+        if (isClose) {
+            depth--
+            if (depth == 0) return match
+        } else if (value.startsWith("<$tagName", ignoreCase = true)) {
+            depth++
+        }
+        cursor = match.range.last + 1
+    }
+    return null
 }
 
 private fun normalizeHtmlListItems(
@@ -1620,9 +1619,9 @@ private fun normalizeHtmlListItems(
         } else if (ordered) {
             val number = attributes["value"]?.toIntOrNull()?.coerceAtLeast(1) ?: nextNumber
             nextNumber = number + 1
-            "$number. $itemText"
+            "$number. ${normalizeHtmlListItemText(match.groupValues[1], itemText)}"
         } else {
-            "- $itemText"
+            "- ${normalizeHtmlListItemText(match.groupValues[1], itemText)}"
         }
     }.toList()
     return if (items.isEmpty()) {
@@ -1632,8 +1631,11 @@ private fun normalizeHtmlListItems(
     }
 }
 
-private fun normalizeHtmlBlockQuote(body: String): String {
-    val normalizedBody = body.trim()
+private fun normalizeHtmlBlockQuote(rawAttributes: String, body: String): String {
+    val textAlignPrefix = htmlBlockTextAlignFromAttributes(rawAttributes)
+        ?.let(::nativeTextAlignMarkerFor)
+        .orEmpty()
+    val normalizedBody = "$textAlignPrefix${body.trim()}"
     if (normalizedBody.isEmpty()) return ""
     val quoted = normalizedBody
         .lines()
@@ -1669,7 +1671,12 @@ private fun normalizeAnchorHtmlTags(text: String, pattern: Regex): String {
 }
 
 private fun isSafeNativeLinkUrl(url: String): Boolean {
-    return url.startsWith("http://") || url.startsWith("https://")
+    if (url.isEmpty() || url.any { it.isWhitespace() || it.isISOControl() }) return false
+    val schemeSeparator = url.indexOf(':')
+    if (schemeSeparator < 0) return true
+    if (schemeSeparator == 0) return false
+    val scheme = url.substring(0, schemeSeparator)
+    return scheme.matches(Regex("""[A-Za-z][A-Za-z0-9+.-]*"""))
 }
 
 private fun normalizeReferenceLinksForNativeMarkdown(text: String): String? {
@@ -1678,18 +1685,29 @@ private fun normalizeReferenceLinksForNativeMarkdown(text: String): String? {
     val definitions = linkedMapOf<String, String>()
     val contentLines = mutableListOf<String>()
 
-    lines.forEach { line ->
+    var index = 0
+    while (index < lines.size) {
+        val line = lines[index]
         val definition = referenceDefinitionLinePattern.matchEntire(line)
         if (definition != null) {
             val key = normalizeReferenceKey(definition.groupValues[1])
-            definitions[key] = definition.groupValues[2]
+            definitions[key] = stripMarkdownDestinationAngleBrackets(definition.groupValues[2])
+            index++
+            if (
+                definition.groupValues[3].isBlank() &&
+                index < lines.size &&
+                referenceDefinitionTitleLinePattern.matches(lines[index])
+            ) {
+                index++
+            }
         } else {
             contentLines.add(line)
+            index++
         }
     }
 
     val content = contentLines.joinToString("\n").trimEnd()
-    if (!referenceUsePattern.containsMatchIn(content)) {
+    if (!referenceUsePattern.containsMatchIn(content) && !shortcutReferenceUsePattern.containsMatchIn(content)) {
         return content
     }
 
@@ -1705,21 +1723,44 @@ private fun normalizeReferenceLinksForNativeMarkdown(text: String): String? {
         }
     }
 
-    return converted
+    return shortcutReferenceUsePattern.replace(converted) { match ->
+        val isImageReference = match.groupValues[1] == "!"
+        val label = match.groupValues[2]
+        val url = definitions[normalizeReferenceKey(label)]
+        if (url == null) {
+            match.value
+        } else {
+            if (isImageReference) "![$label]($url)" else "[$label]($url)"
+        }
+    }
 }
 
 private fun normalizeReferenceKey(value: String): String {
-    return value.trim().lowercase(Locale.ROOT)
+    return value.trim()
+        .replace(Regex("""\s+"""), " ")
+        .lowercase(Locale.ROOT)
 }
 
 private fun normalizeSimpleInlineMathSymbols(text: String): String {
-    var normalized = simpleEscapedInlineMathPattern.replace(text) { match ->
-        simpleInlineMathReplacement(match.groupValues[1]) ?: match.value
-    }
-    normalized = simpleDollarInlineMathPattern.replace(normalized) { match ->
-        simpleInlineMathReplacement(match.groupValues[1]) ?: match.value
-    }
+    var normalized = replaceSimpleMathSymbolsOutsideInlineCode(text, simpleEscapedInlineMathPattern)
+    normalized = replaceSimpleMathSymbolsOutsideInlineCode(normalized, simpleDollarInlineMathPattern)
     return normalized
+}
+
+private fun replaceSimpleMathSymbolsOutsideInlineCode(text: String, pattern: Regex): String {
+    var builder: StringBuilder? = null
+    var lastIndex = 0
+    pattern.findAll(text).forEach { match ->
+        if (isInsideInlineCodeSpan(text, match.range.first)) return@forEach
+        val replacement = simpleInlineMathReplacement(match.groupValues[1]) ?: return@forEach
+        val currentBuilder = builder ?: StringBuilder().also { builder = it }
+        currentBuilder.append(text, lastIndex, match.range.first)
+        currentBuilder.append(replacement)
+        lastIndex = match.range.last + 1
+    }
+    val currentBuilder = builder ?: return text
+    currentBuilder.append(text, lastIndex, text.length)
+    return currentBuilder.toString()
 }
 
 private fun simpleInlineMathReplacement(body: String): String? {
@@ -1735,20 +1776,39 @@ private fun hasMarkdownTable(text: String): Boolean {
 }
 
 private fun hasInlineMathSyntax(text: String): Boolean {
-    if (text.contains("\\(") || text.contains("\\[")) return true
+    if (hasEscapedInlineMathDelimiterOutsideInlineCode(text)) return true
     var index = 0
     while (index < text.length) {
-        if (text[index] == '$' && (index == 0 || text[index - 1] != '\\')) {
+        if (
+            text[index] == '$' &&
+            (index == 0 || text[index - 1] != '\\') &&
+            !isInsideInlineCodeSpan(text, index)
+        ) {
             if (index + 1 < text.length && text[index + 1] == '$') {
                 return true
             }
-            val close = findClosingSingleDollar(text, index + 1) ?: return false
+            val close = findClosingSingleDollarOutsideInlineCode(text, index + 1) ?: return false
             val body = text.substring(index + 1, close)
             if (!isCurrencyLikeDollarBody(body)) {
                 return true
             }
             index = close + 1
             continue
+        }
+        index++
+    }
+    return false
+}
+
+private fun hasEscapedInlineMathDelimiterOutsideInlineCode(text: String): Boolean {
+    var index = 0
+    while (index + 1 < text.length) {
+        if (
+            text[index] == '\\' &&
+            (text[index + 1] == '(' || text[index + 1] == '[') &&
+            !isInsideInlineCodeSpan(text, index)
+        ) {
+            return true
         }
         index++
     }
@@ -1837,12 +1897,16 @@ private fun isInsideInlineCodeSpan(text: String, offset: Int): Boolean {
 }
 
 
-private fun findClosingSingleDollar(text: String, start: Int): Int? {
+private fun findClosingSingleDollarOutsideInlineCode(text: String, start: Int): Int? {
     var index = start
     while (index < text.length) {
         val char = text[index]
         if (char == '\n' || char == '\r') return null
-        if (char == '$' && (index == 0 || text[index - 1] != '\\')) {
+        if (
+            char == '$' &&
+            (index == 0 || text[index - 1] != '\\') &&
+            !isInsideInlineCodeSpan(text, index)
+        ) {
             return index
         }
         index++
@@ -1886,6 +1950,30 @@ private fun isFenceClosingLineForMarker(line: String, marker: String): Boolean {
         markerLength++
     }
     return markerLength >= marker.length && trimmed.substring(markerLength).isBlank()
+}
+
+private fun isIndentedCodeBlockStart(lines: List<String>, index: Int): Boolean {
+    if (index !in lines.indices) return false
+    return isIndentedCodeLine(lines[index]) && (index == 0 || lines[index - 1].isBlank())
+}
+
+private fun isIndentedCodeLine(line: String): Boolean {
+    return line.startsWith("    ") || line.startsWith("\t")
+}
+
+private fun stripIndentedCodePrefix(line: String): String {
+    return if (line.startsWith("\t")) line.drop(1) else line.drop(4)
+}
+
+private fun normalizeAtxHeadingText(rawText: String): String {
+    val trimmed = rawText.trim()
+    var hashStart = trimmed.length
+    while (hashStart > 0 && trimmed[hashStart - 1] == '#') {
+        hashStart--
+    }
+    if (hashStart == trimmed.length || hashStart == 0) return trimmed
+    if (!trimmed[hashStart - 1].isWhitespace()) return trimmed
+    return trimmed.substring(0, hashStart).trimEnd()
 }
 
 private fun matchNativeListLine(line: String): NativeListLine? {
@@ -1980,6 +2068,40 @@ private fun appendNativeListContinuation(text: String, continuation: String): St
     return "$text $continuation"
 }
 
+private fun nativeStreamingListItemFromLine(
+    line: NativeListLine,
+    level: Int,
+): NativeStreamingListItem {
+    val (textAlign, itemText) = extractNativeTextAlignMarker(
+        normalizeHtmlLineBreakTags(line.text)
+    )
+    return NativeStreamingListItem(
+        text = itemText,
+        level = level,
+        ordered = line.ordered,
+        number = line.number,
+        textAlign = textAlign,
+    )
+}
+
+internal fun parseUnifiedStreamingMarkdownBlocks(
+    text: String,
+    segmentId: String = "segment",
+    blockQuoteDepth: Int = 0,
+): List<NativeStreamingMarkdownBlock> {
+    if (text.isEmpty()) return emptyList()
+    return parseNativeStreamingMarkdownBlocks(text, segmentId, blockQuoteDepth)
+        ?: listOf(
+            NativeStreamingMarkdownBlock(
+                stableId = "$segmentId:native:paragraph:0",
+                type = NativeStreamingMarkdownBlockType.Paragraph,
+                start = 0,
+                endExclusive = text.length,
+                text = text,
+            )
+        )
+}
+
 internal fun parseNativeStreamingMarkdownBlocks(
     text: String,
     segmentId: String = "segment",
@@ -2007,7 +2129,10 @@ internal fun parseNativeStreamingMarkdownBlocks(
         "$segmentId:native:${type.name.lowercase(Locale.ROOT)}:$startOffset"
 
     fun appendParagraph(startIndex: Int, contentLines: List<String>) {
-        val content = normalizeHtmlLineBreakTags(contentLines.joinToString("\n")).trimEnd()
+        val (textAlign, alignedContent) = extractNativeTextAlignMarker(
+            normalizeNativeParagraphLineBreaks(contentLines).trimEnd()
+        )
+        val content = alignedContent.trimEnd()
         if (content.isEmpty()) return
         val endIndex = startIndex + contentLines.size - 1
         val paragraphStartOffset = lineStarts[startIndex]
@@ -2021,46 +2146,8 @@ internal fun parseNativeStreamingMarkdownBlocks(
                 start = paragraphStartOffset + fragmentStart,
                 endExclusive = paragraphStartOffset + fragmentStart + fragment.length,
                 text = trimmed,
+                textAlign = textAlign,
             ).also(blocks::add)
-        }
-
-        fun appendParagraphTextAndImages(fragment: String, fragmentStart: Int) {
-            var cursor = 0
-            var appendedImage = false
-            imageMarkdownPattern.findAll(fragment).forEach { image ->
-                appendParagraphFragment(
-                    fragment = fragment.substring(cursor, image.range.first),
-                    fragmentStart = fragmentStart + cursor,
-                )
-                blocks.add(
-                    NativeStreamingMarkdownBlock(
-                        stableId = stableId(
-                            NativeStreamingMarkdownBlockType.Image,
-                            paragraphStartOffset + fragmentStart + image.range.first
-                        ),
-                        type = NativeStreamingMarkdownBlockType.Image,
-                        start = paragraphStartOffset + fragmentStart + image.range.first,
-                        endExclusive = paragraphStartOffset + fragmentStart + image.range.last + 1,
-                        text = image.value,
-                        imageAlt = image.groupValues[1],
-                        imageUrl = stripMarkdownDestinationAngleBrackets(image.groupValues[2]),
-                    )
-                )
-                cursor = image.range.last + 1
-                appendedImage = true
-            }
-
-            if (appendedImage) {
-                appendParagraphFragment(
-                    fragment = fragment.substring(cursor),
-                    fragmentStart = fragmentStart + cursor,
-                )
-            } else {
-                appendParagraphFragment(
-                    fragment = fragment,
-                    fragmentStart = fragmentStart,
-                )
-            }
         }
 
         val mathBlocks = findNativeParagraphMathBlocks(content)
@@ -2069,7 +2156,7 @@ internal fun parseNativeStreamingMarkdownBlocks(
         if (mathBlocks.isNotEmpty()) {
             var cursor = 0
             mathBlocks.forEach { mathBlock ->
-                appendParagraphTextAndImages(
+                appendParagraphFragment(
                     fragment = content.substring(cursor, mathBlock.start),
                     fragmentStart = cursor,
                 )
@@ -2084,24 +2171,21 @@ internal fun parseNativeStreamingMarkdownBlocks(
                 )
                 cursor = mathBlock.endExclusive
             }
-            appendParagraphTextAndImages(
+            appendParagraphFragment(
                 fragment = content.substring(cursor),
                 fragmentStart = cursor,
             )
             return
         }
 
-        if (imageMarkdownPattern.containsMatchIn(content)) {
-            appendParagraphTextAndImages(content, fragmentStart = 0)
-        } else {
-            NativeStreamingMarkdownBlock(
-                stableId = stableId(NativeStreamingMarkdownBlockType.Paragraph, lineStarts[startIndex]),
-                type = NativeStreamingMarkdownBlockType.Paragraph,
-                start = lineStarts[startIndex],
-                endExclusive = lineEnd(endIndex),
-                text = content,
-            ).also(blocks::add)
-        }
+        NativeStreamingMarkdownBlock(
+            stableId = stableId(NativeStreamingMarkdownBlockType.Paragraph, lineStarts[startIndex]),
+            type = NativeStreamingMarkdownBlockType.Paragraph,
+            start = lineStarts[startIndex],
+            endExclusive = lineEnd(endIndex),
+            text = content,
+            textAlign = textAlign,
+        ).also(blocks::add)
     }
 
     while (index < lines.size) {
@@ -2192,16 +2276,63 @@ internal fun parseNativeStreamingMarkdownBlocks(
             continue
         }
 
+        if (isIndentedCodeLine(line)) {
+            val startIndex = index
+            val codeLines = mutableListOf<String>()
+            var endIndex = startIndex
+            while (index < lines.size) {
+                val current = lines[index]
+                if (isIndentedCodeLine(current)) {
+                    codeLines.add(stripIndentedCodePrefix(current))
+                    endIndex = index
+                    index++
+                    continue
+                }
+                if (current.isBlank()) {
+                    val blankStart = index
+                    while (index < lines.size && lines[index].isBlank()) {
+                        index++
+                    }
+                    if (index < lines.size && isIndentedCodeLine(lines[index])) {
+                        repeat(index - blankStart) {
+                            codeLines.add("")
+                        }
+                        endIndex = index - 1
+                        continue
+                    }
+                    break
+                }
+                break
+            }
+            val rawBlock = lines.subList(startIndex, endIndex + 1).joinToString("\n")
+            blocks.add(
+                NativeStreamingMarkdownBlock(
+                    stableId = stableId(NativeStreamingMarkdownBlockType.CodeBlock, lineStarts[startIndex]),
+                    type = NativeStreamingMarkdownBlockType.CodeBlock,
+                    start = lineStarts[startIndex],
+                    endExclusive = lineEnd(endIndex),
+                    text = rawBlock,
+                    language = null,
+                    code = codeLines.joinToString("\n"),
+                )
+            )
+            continue
+        }
+
         val atxHeading = atxHeadingLinePattern.matchEntire(line)
         if (atxHeading != null) {
+            val (textAlign, headingText) = extractNativeTextAlignMarker(
+                normalizeAtxHeadingText(atxHeading.groupValues[2])
+            )
             blocks.add(
                 NativeStreamingMarkdownBlock(
                     stableId = stableId(NativeStreamingMarkdownBlockType.Heading, lineStarts[index]),
                     type = NativeStreamingMarkdownBlockType.Heading,
                     start = lineStarts[index],
                     endExclusive = lineEnd(index),
-                    text = atxHeading.groupValues[2].trim(),
+                    text = headingText,
                     level = atxHeading.groupValues[1].length,
+                    textAlign = textAlign,
                 )
             )
             index++
@@ -2211,14 +2342,16 @@ internal fun parseNativeStreamingMarkdownBlocks(
         if (index + 1 < lines.size) {
             val underline = setextUnderlineLinePattern.matchEntire(lines[index + 1])
             if (underline != null) {
+                val (textAlign, headingText) = extractNativeTextAlignMarker(line.trim())
                 blocks.add(
                     NativeStreamingMarkdownBlock(
                         stableId = stableId(NativeStreamingMarkdownBlockType.Heading, lineStarts[index]),
                         type = NativeStreamingMarkdownBlockType.Heading,
                         start = lineStarts[index],
                         endExclusive = lineEnd(index + 1),
-                        text = line.trim(),
+                        text = headingText,
                         level = if (underline.groupValues[1].startsWith("=")) 1 else 2,
+                        textAlign = textAlign,
                     )
                 )
                 index += 2
@@ -2251,13 +2384,14 @@ internal fun parseNativeStreamingMarkdownBlocks(
             }
             blocks.add(
                 run {
-                    val quoteText = normalizeHtmlLineBreakTags(quoteLines.joinToString("\n")).trimEnd()
+                    val quoteTextWithMarker = normalizeHtmlLineBreakTags(quoteLines.joinToString("\n")).trimEnd()
+                    val (textAlign, quoteText) = extractNativeTextAlignMarker(quoteTextWithMarker)
                     val quoteChildren = if (blockQuoteDepth < MAX_NATIVE_BLOCK_QUOTE_DEPTH && quoteText.isNotBlank()) {
-                        parseNativeStreamingMarkdownBlocks(
-                            text = quoteText,
+                        parseUnifiedStreamingMarkdownBlocks(
+                            text = quoteTextWithMarker,
                             segmentId = "$segmentId:quote:${lineStarts[startIndex]}",
                             blockQuoteDepth = blockQuoteDepth + 1,
-                        ).orEmpty()
+                        )
                     } else {
                         emptyList()
                     }
@@ -2268,6 +2402,7 @@ internal fun parseNativeStreamingMarkdownBlocks(
                         endExclusive = lineEnd(index - 1),
                         text = quoteText,
                         children = quoteChildren,
+                        textAlign = textAlign,
                     )
                 }
             )
@@ -2279,12 +2414,7 @@ internal fun parseNativeStreamingMarkdownBlocks(
             val startIndex = index
             val listIndentColumns = mutableListOf(listLine.indentColumns)
             val listItems = mutableListOf(
-                NativeStreamingListItem(
-                    text = normalizeHtmlLineBreakTags(listLine.text),
-                    level = 0,
-                    ordered = listLine.ordered,
-                    number = listLine.number,
-                )
+                nativeStreamingListItemFromLine(listLine, level = 0)
             )
             index++
             var sawBlankBeforeListContinuation = false
@@ -2305,12 +2435,7 @@ internal fun parseNativeStreamingMarkdownBlocks(
                         previousLevel = listItems.lastOrNull()?.level ?: 0,
                     )
                     listItems.add(
-                        NativeStreamingListItem(
-                            text = normalizeHtmlLineBreakTags(next.text),
-                            level = level,
-                            ordered = next.ordered,
-                            number = next.number,
-                        )
+                        nativeStreamingListItemFromLine(next, level = level)
                     )
                     index++
                     continue
@@ -2322,11 +2447,11 @@ internal fun parseNativeStreamingMarkdownBlocks(
                     val normalizedContinuation = normalizeHtmlLineBreakTags(continuation)
                     listItems[listItems.lastIndex] = if (sawBlankBeforeListContinuation) {
                         last.copy(
-                            children = last.children + parseNativeStreamingMarkdownBlocks(
+                            children = last.children + parseUnifiedStreamingMarkdownBlocks(
                                 text = normalizedContinuation,
                                 segmentId = "$segmentId:list-item:${lineStarts[index]}",
                                 blockQuoteDepth = blockQuoteDepth,
-                            ).orEmpty(),
+                            ),
                         )
                     } else {
                         last.copy(
@@ -2450,8 +2575,12 @@ private fun lineHasDollarBlockMathSyntax(line: String): Boolean {
 private fun lineHasInlineMathSyntax(line: String): Boolean {
     var index = 0
     while (index < line.length) {
-        if (line[index] == '$' && (index == 0 || line[index - 1] != '\\')) {
-            val close = findClosingSingleDollar(line, index + 1) ?: return false
+        if (
+            line[index] == '$' &&
+            (index == 0 || line[index - 1] != '\\') &&
+            !isInsideInlineCodeSpan(line, index)
+        ) {
+            val close = findClosingSingleDollarOutsideInlineCode(line, index + 1) ?: return false
             val body = line.substring(index + 1, close)
             if (!isCurrencyLikeDollarBody(body)) return true
             index = close + 1
@@ -2466,7 +2595,7 @@ private fun lineHasEscapedInlineMathSyntax(line: String): Boolean {
     var index = line.indexOf("\\(")
     while (index >= 0) {
         val close = line.indexOf("\\)", index + 2)
-        if (close >= 0) return true
+        if (close >= 0 && !isInsideInlineCodeSpan(line, index)) return true
         index = line.indexOf("\\(", index + 2)
     }
     return false
@@ -2484,7 +2613,9 @@ private fun lineHasEscapedBlockMathSyntax(line: String): Boolean {
 
 private fun hasUnsupportedHtmlTag(text: String): Boolean {
     return htmlTagPattern.findAll(text).any { match ->
-        !htmlLineBreakTagPattern.matches(match.value)
+        !isInsideInlineCodeSpan(text, match.range.first) &&
+            !htmlLineBreakTagPattern.matches(match.value) &&
+            !htmlTextSpanTagPattern.matches(match.value)
     }
 }
 
@@ -2492,9 +2623,39 @@ private fun normalizeHtmlLineBreakTags(text: String): String {
     return htmlLineBreakTagPattern.replace(text, "\n")
 }
 
+private fun normalizeNativeParagraphLineBreaks(lines: List<String>): String {
+    val builder = StringBuilder()
+    var previousHardBreak = false
+
+    lines.forEachIndexed { index, line ->
+        if (index > 0) {
+            builder.append(if (previousHardBreak) '\n' else ' ')
+        }
+        val hardBreak = hasMarkdownHardLineBreak(line)
+        builder.append(normalizeHtmlLineBreakTags(stripMarkdownHardLineBreak(line, hardBreak)))
+        previousHardBreak = hardBreak
+    }
+
+    return builder.toString()
+}
+
+private fun hasMarkdownHardLineBreak(line: String): Boolean {
+    return line.endsWith("  ") || line.endsWith("\\")
+}
+
+private fun stripMarkdownHardLineBreak(line: String, hardBreak: Boolean): String {
+    if (!hardBreak) return line
+    return if (line.endsWith("\\")) {
+        line.dropLast(1)
+    } else {
+        line.trimEnd(' ')
+    }
+}
+
 private fun hasUnsupportedHtmlEntity(text: String): Boolean {
     return htmlEntityPattern.findAll(text).any { match ->
-        !supportedHtmlEntityPattern.matches(match.value)
+        !isInsideInlineCodeSpan(text, match.range.first) &&
+            !supportedHtmlEntityPattern.matches(match.value)
     }
 }
 
@@ -2503,139 +2664,41 @@ private fun hasUnsupportedImageMarkdown(text: String): Boolean {
 
     val normalized = text.replace("\r\n", "\n").replace('\r', '\n')
     if (normalized.lines().any { line ->
-            line.contains("![") &&
+            hasImageOpeningOutsideInlineCode(line) &&
                 TableUtils.isTableDataRow(line) &&
                 TableUtils.parseTableRow(line).any { cell ->
-                    cell.contains("![") && parseTableCellMarkdownParts(cell) == null
+                    hasImageOpeningOutsideInlineCode(cell) && parseTableCellMarkdownParts(cell) == null
                 }
         }
     ) {
         return true
     }
 
-    val supportedRanges = imageMarkdownPattern.findAll(text).map { it.range }.toList()
+    val openings = imageMarkdownOpeningPattern.findAll(text)
+        .filterNot { opening -> isInsideInlineCodeSpan(text, opening.range.first) }
+        .toList()
+    if (openings.isEmpty()) return false
+
+    val supportedRanges = imageMarkdownMatchesOutsideInlineCode(text).map { it.range }.toList()
     if (supportedRanges.isEmpty()) return true
 
-    return Regex("""!\[""").findAll(text).any { opening ->
+    return openings.any { opening ->
         supportedRanges.none { range -> opening.range.first in range }
     }
 }
 
-internal fun isTableCellEmbeddedMathBlock(blocks: List<StreamBlock>, index: Int): Boolean {
-    return blocks.getOrNull(index) is StreamBlock.MathBlock && isTableCellEmbeddedMathToken(blocks, index)
+private fun hasImageMarkdownOutsideInlineCode(text: String): Boolean {
+    return imageMarkdownMatchesOutsideInlineCode(text).isNotEmpty()
 }
 
-internal fun isTableCellEmbeddedMathToken(blocks: List<StreamBlock>, index: Int): Boolean {
-    val block = blocks.getOrNull(index)
-    if (block !is StreamBlock.MathBlock && block !is StreamBlock.MathInline) return false
-    val before = collectSameLineBeforeBlock(blocks, index)
-    val after = collectSameLineAfterBlock(blocks, index)
-    if (!before.contains('|') || !after.contains('|')) return false
-
-    val line = before + block.text + after
-    return TableUtils.isTableDataRow(line)
+private fun hasImageOpeningOutsideInlineCode(text: String): Boolean {
+    return imageMarkdownOpeningPattern.findAll(text).any { opening ->
+        !isInsideInlineCodeSpan(text, opening.range.first)
+    }
 }
 
-private fun collectSameLineBeforeBlock(blocks: List<StreamBlock>, index: Int): String {
-    val out = StringBuilder()
-    for (cursor in index - 1 downTo 0) {
-        val text = blocks[cursor].text
-        val lineBreak = text.lastIndexOf('\n')
-        if (lineBreak >= 0) {
-            out.insert(0, text.substring(lineBreak + 1))
-            break
-        }
-        out.insert(0, text)
-    }
-    return out.toString()
-}
-
-private fun collectSameLineAfterBlock(blocks: List<StreamBlock>, index: Int): String {
-    val out = StringBuilder()
-    for (cursor in index + 1 until blocks.size) {
-        val text = blocks[cursor].text
-        val lineBreak = text.indexOf('\n')
-        if (lineBreak >= 0) {
-            out.append(text.substring(0, lineBreak))
-            break
-        }
-        out.append(text)
-    }
-    return out.toString()
-}
-
-private fun buildSegments(blocks: List<StreamBlock>): List<RenderSegment> {
-    val result = mutableListOf<RenderSegment>()
-    val inlineParts = mutableListOf<InlineRenderPart>()
-    var inlineStartId: String? = null
-    var inlineEndId: String? = null
-
-    fun flushInline() {
-        if (inlineParts.isEmpty()) return
-        val stableId = buildString {
-            append(inlineStartId ?: "inline")
-            append(':')
-            append(inlineEndId ?: inlineStartId ?: "tail")
-        }
-        val singleTextPart = inlineParts.singleOrNull() as? InlineRenderPart.Text
-        if (singleTextPart != null) {
-            result.add(RenderSegment.InlineText(stableId = stableId, text = singleTextPart.text))
-        } else {
-            result.add(RenderSegment.InlineParts(stableId = stableId, parts = inlineParts.toList()))
-        }
-        inlineParts.clear()
-        inlineStartId = null
-        inlineEndId = null
-    }
-
-    fun markInlineRange(block: StreamBlock) {
-        if (inlineStartId == null) inlineStartId = block.stableId
-        inlineEndId = block.stableId
-    }
-
-    fun appendInlineText(block: StreamBlock) {
-        val text = block.text
-        if (text.isEmpty()) return
-        markInlineRange(block)
-        val last = inlineParts.lastOrNull()
-        if (last is InlineRenderPart.Text) {
-            inlineParts[inlineParts.lastIndex] = last.copy(text = last.text + text)
-        } else {
-            inlineParts.add(InlineRenderPart.Text(text))
-        }
-    }
-
-    blocks.forEachIndexed { index, block ->
-        when (block) {
-            is StreamBlock.PlainText -> {
-                appendInlineText(block)
-            }
-
-            is StreamBlock.MathInline -> {
-                if (isTableCellEmbeddedMathToken(blocks, index)) {
-                    appendInlineText(block)
-                } else {
-                    markInlineRange(block)
-                    inlineParts.add(InlineRenderPart.Math(block))
-                }
-            }
-
-            is StreamBlock.MathBlock -> {
-                if (isTableCellEmbeddedMathToken(blocks, index)) {
-                    appendInlineText(block)
-                } else {
-                    flushInline()
-                    result.add(RenderSegment.BlockOnly(stableId = block.stableId, block = block))
-                }
-            }
-
-            else -> {
-                flushInline()
-                result.add(RenderSegment.BlockOnly(stableId = block.stableId, block = block))
-            }
-        }
-    }
-
-    flushInline()
-    return result
+private fun imageMarkdownMatchesOutsideInlineCode(text: String): List<MatchResult> {
+    return imageMarkdownPattern.findAll(text)
+        .filterNot { image -> isInsideInlineCodeSpan(text, image.range.first) }
+        .toList()
 }

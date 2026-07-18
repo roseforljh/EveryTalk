@@ -1,0 +1,43 @@
+package com.android.everytalk.ui.topanchor
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class TopAnchorModelsTest {
+    @Test
+    fun `initial snap suppresses bottom scroll even when reserve is zero`() {
+        val state = TopAnchorRuntimeState(
+            phase = TopAnchorPhase.InitialSnap,
+            activeTurn = TopAnchorTurn("u2", "a2", "s1", 2L),
+            reservePx = 0
+        )
+
+        assertTrue(state.suppressesBottomScroll)
+        assertTrue(state.hasRuntime)
+        assertEquals("u2", state.currentTurn?.anchorMessageId)
+    }
+
+    @Test
+    fun `retained turn keeps runtime and suppression alive`() {
+        val turn = TopAnchorTurn("u2", "a2", "s1", 2L)
+        val state = TopAnchorRuntimeState(
+            phase = TopAnchorPhase.Retained,
+            retainedTurn = turn,
+            reservePx = 0
+        )
+
+        assertTrue(state.suppressesBottomScroll)
+        assertTrue(state.hasRuntime)
+        assertEquals(turn, state.currentTurn)
+    }
+
+    @Test
+    fun `idle state has no runtime`() {
+        val state = TopAnchorRuntimeState()
+
+        assertFalse(state.suppressesBottomScroll)
+        assertFalse(state.hasRuntime)
+    }
+}

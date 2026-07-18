@@ -1,5 +1,6 @@
 ﻿package com.android.everytalk.ui.components.markdown
 
+import android.annotation.SuppressLint
 import android.util.TypedValue
 import android.graphics.Canvas
 import android.graphics.DashPathEffect
@@ -61,7 +62,6 @@ import kotlin.math.min
 private val MULTIPLE_SPACES_REGEX = Regex(" {2,}")
 private val ENUM_ITEM_REGEX = Regex("(?<!\\n)\\s+([A-D])[\\.)]\\s")
 private val WINDOWS_PATH_REGEX = Regex("^[A-Za-z]:\\\\")
-private const val EXTERNAL_LINK_SUFFIX = " ↗"
 private const val LINK_DOTTED_UNDERLINE_LIGHT = 0xCC000000.toInt()
 private const val LINK_DOTTED_UNDERLINE_DARK = 0xFFFFFFFF.toInt()
 
@@ -227,24 +227,13 @@ private fun styleMarkdownLinks(
         .sortedByDescending { it.start }
 
     links.forEach { link ->
-        val suffixAlreadyPresent = builder.subSequence(
-            link.end,
-            min(builder.length, link.end + EXTERNAL_LINK_SUFFIX.length)
-        ).toString() == EXTERNAL_LINK_SUFFIX
-        val linkEndWithSuffix = if (suffixAlreadyPresent) {
-            link.end + EXTERNAL_LINK_SUFFIX.length
-        } else {
-            builder.insert(link.end, EXTERNAL_LINK_SUFFIX)
-            link.end + EXTERNAL_LINK_SUFFIX.length
-        }
-
         builder.removeSpan(link.span)
-        builder.removeContainedSpans(link.start, linkEndWithSuffix, ForegroundColorSpan::class.java)
-        builder.removeContainedSpans(link.start, linkEndWithSuffix, UnderlineSpan::class.java)
+        builder.removeContainedSpans(link.start, link.end, ForegroundColorSpan::class.java)
+        builder.removeContainedSpans(link.start, link.end, UnderlineSpan::class.java)
         builder.setSpan(
             ChatLinkUrlSpan(link.url, linkTextColorArgb),
             link.start,
-            linkEndWithSuffix,
+            link.end,
             Spannable.SPAN_EXCLUSIVE_EXCLUSIVE,
         )
         builder.setSpan(
@@ -329,6 +318,7 @@ private fun TextView.applyMarkdownTextSelectionState(allowSystemTextSelection: B
     }
 }
 
+@SuppressLint("WrongConstant")
 private fun TextView.applyMarkdownLayoutMode(pureMathBlockMessage: Boolean) {
     setHorizontallyScrolling(pureMathBlockMessage)
     isHorizontalScrollBarEnabled = false
@@ -337,11 +327,18 @@ private fun TextView.applyMarkdownLayoutMode(pureMathBlockMessage: Boolean) {
         isSingleLine = false
         maxLines = Int.MAX_VALUE
         ellipsize = null
-        breakStrategy = Layout.BREAK_STRATEGY_SIMPLE
+        // API 27、28 使用 Layout 常量，API 29 起使用 LineBreaker 常量；两组值保持兼容。
+        breakStrategy = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            LineBreaker.BREAK_STRATEGY_SIMPLE
+        } else {
+            Layout.BREAK_STRATEGY_SIMPLE
+        }
         hyphenationFrequency = Layout.HYPHENATION_FREQUENCY_NONE
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             // 保持 AI 正文左对齐，避免短中文行被两端拉宽。
             justificationMode = LineBreaker.JUSTIFICATION_MODE_NONE
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            justificationMode = Layout.JUSTIFICATION_MODE_NONE
         }
     }
 }

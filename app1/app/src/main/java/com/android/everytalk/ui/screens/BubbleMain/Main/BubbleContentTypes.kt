@@ -81,7 +81,7 @@ import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.components.ChatMarkdownTextStyle
 import com.android.everytalk.ui.components.ProportionalAsyncImage
 import com.android.everytalk.ui.components.ImagePreviewDialog
-import com.android.everytalk.ui.components.streaming.StreamBlocksRenderer
+import com.android.everytalk.ui.components.streaming.UnifiedMarkdownRenderer
 import com.android.everytalk.ui.components.streaming.buildStreamingRenderState
 import com.android.everytalk.ui.components.table.InlineMarkdownParser
 import android.graphics.Bitmap
@@ -296,13 +296,10 @@ internal fun UserOrErrorMessageContent(
                                     modifier = Modifier.wrapContentWidth(),
                                 )
                             } else {
-                                StreamBlocksRenderer(
-                                    message = renderMessage,
-                                    blocks = renderState.blocks,
-                                    committedBlocks = renderState.committedBlocks,
-                                    tailBlocks = renderState.tailBlocks,
-                                    committedBlocksHash = renderState.committedBlocksHash,
-                                    tailBlocksHash = renderState.tailBlocksHash,
+                                UnifiedMarkdownRenderer(
+                                    markdown = renderMessage.text,
+                                    contentKey = message.id,
+                                    sender = renderMessage.sender,
                                     nativeMarkdownBlocks = renderState.nativeMarkdownBlocks,
                                     committedNativeMarkdownBlocks = renderState.committedNativeMarkdownBlocks,
                                     tailNativeMarkdownBlocks = renderState.tailNativeMarkdownBlocks,
@@ -311,7 +308,6 @@ internal fun UserOrErrorMessageContent(
                                     tailNativeMarkdownBlocksHash = renderState.tailNativeMarkdownBlocksHash,
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = contentColor,
-                                    messageOutputType = message.outputType,
                                     onImageClick = { url -> previewUrl = url },
                                 )
                             }

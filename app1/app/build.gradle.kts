@@ -72,18 +72,19 @@ configurations.all {
 
 plugins {
     alias(libs.plugins.android.application)
+    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     // Kotlin Serialization 插件
     id("org.jetbrains.kotlin.plugin.serialization") version libs.versions.kotlin.get()
     // 使用 KSP2（Gradle 插件在顶层声明版本，这里只启用插件即可）
     alias(libs.plugins.ksp)
-    // Hilt 暂不启用 - Kotlin 2.1.0 兼容性问题
+    // Hilt 暂不启用，项目统一使用 Koin
     // alias(libs.plugins.hilt.android)
 }
 
 android {
     namespace = "com.android.everytalk"
-    compileSdk = 36
+    compileSdk = 37
 
     lint {
         checkReleaseBuilds = true
@@ -94,7 +95,7 @@ android {
         applicationId = "com.android.everytalk"
         minSdk = 27
         //noinspection OldTargetApi
-        targetSdk = 36 // 通常与 compileSdk 一致
+        targetSdk = 37 // 通常与 compileSdk 一致
         versionCode = 6000
         // 优先从环境变量获取版本号(CI环境)，否则使用默认值
         val baseVersionName = "1.20.0"
@@ -212,13 +213,8 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
-    kotlin {
-        compilerOptions {
-            jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
-        }
+        sourceCompatibility = JavaVersion.VERSION_21
+        targetCompatibility = JavaVersion.VERSION_21
     }
     buildFeatures {
         compose = true
@@ -233,15 +229,28 @@ android {
             pickFirsts+="META-INF/LICENSE-W3C-TEST"
         }
     }
-    buildToolsVersion = "36.0.0"
-    ndkVersion = "25.2.9519653"
+    ndkVersion = "29.0.14206865"
     
     testOptions {
         unitTests {
             isIncludeAndroidResources = true
+            all { test ->
+                if (System.getenv("CI") != "true") {
+                    test.systemProperty(
+                        "robolectric.dependency.repo.url",
+                        "https://maven.aliyun.com/repository/public",
+                    )
+                }
+            }
         }
     }
 
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_21)
+    }
 }
 
 androidComponents {
@@ -276,20 +285,20 @@ ksp {
         debugImplementation("androidx.compose.ui:ui-tooling")
 
         // ===== Lifecycle & ViewModel =====
-        implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.9.0")
-        implementation("androidx.activity:activity-compose:1.10.1")
+        implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.11.0")
+        implementation("androidx.activity:activity-compose:1.13.0")
 
         // ===== Core Android & Lifecycle =====
         implementation(libs.androidx.core.ktx)
         implementation(libs.androidx.lifecycle.runtime.ktx)
-        implementation("androidx.lifecycle:lifecycle-process:2.9.0")
+        implementation("androidx.lifecycle:lifecycle-process:2.11.0")
 
         // ===== Kotlin Serialization =====
-        implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.6.3")
+        implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
 
         // ===== Coroutines =====
-        implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.7.3")
-        implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+        implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
+        implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
 
         // ===== Ktor Client (网络请求) =====
         implementation(libs.ktor.client.core)
@@ -300,17 +309,17 @@ ksp {
         implementation(libs.ktor.client.websockets)  // WebSocket 支持，用于阿里云实时语音识别
 
         // SLF4J - Ktor logging 的间接依赖,必须保留
-        implementation("org.slf4j:slf4j-nop:2.0.17")
+        implementation("org.slf4j:slf4j-nop:2.0.18")
 
         // ===== MCP (Model Context Protocol) SDK =====
         implementation(libs.mcp.kotlin.sdk)
 
         // ===== Testing =====
         testImplementation(libs.junit)
-        testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
-        testImplementation("io.mockk:mockk:1.13.8")
-        testImplementation("app.cash.turbine:turbine:1.0.0")
-        testImplementation("org.robolectric:robolectric:4.11.1")
+        testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
+        testImplementation("io.mockk:mockk:1.14.11")
+        testImplementation("app.cash.turbine:turbine:1.2.1")
+        testImplementation("org.robolectric:robolectric:4.16.1")
         testImplementation(libs.room.testing)
         testImplementation("androidx.compose.ui:ui-test-junit4")
         androidTestImplementation(libs.androidx.junit)
@@ -319,20 +328,20 @@ ksp {
         debugImplementation(libs.androidx.ui.test.manifest)
 
         // ===== Navigation =====
-        implementation("androidx.navigation:navigation-compose:2.9.6")
+        implementation("androidx.navigation:navigation-compose:2.9.8")
         
         // ===== AppCompat & Material =====
         implementation("androidx.appcompat:appcompat:1.7.1")
-        implementation("com.google.android.material:material:1.13.0")
+        implementation("com.google.android.material:material:1.14.0")
 
         // ===== Profile Installer =====
         implementation(libs.androidx.profileinstaller)
 
 
         // ===== 图片加载 - Coil =====
-        implementation("io.coil-kt.coil3:coil-compose:3.2.0")
-        implementation("io.coil-kt.coil3:coil-network-okhttp:3.2.0")
-        implementation("io.coil-kt.coil3:coil-video:3.2.0")
+        implementation("io.coil-kt.coil3:coil-compose:3.5.0")
+        implementation("io.coil-kt.coil3:coil-network-okhttp:3.5.0")
+        implementation("io.coil-kt.coil3:coil-video:3.5.0")
 
         // ===== 网络 - OkHttp =====
         implementation(libs.okhttp)
@@ -351,7 +360,7 @@ ksp {
         // 图片支持 - 用于渲染 Markdown 中的图片
         implementation("io.noties.markwon:image:4.6.2")
         // 直接声明底层解码库，避免额外模块解析失败
-        implementation("pl.droidsonroids.gif:android-gif-drawable:1.2.29")
+        implementation("pl.droidsonroids.gif:android-gif-drawable:1.2.32")
         implementation("com.caverock:androidsvg:1.4")
 
         // ===== PDF 处理 =====
@@ -363,17 +372,17 @@ ksp {
         ksp(libs.room.compiler)
         
         // ===== Paging 3 =====
-        implementation("androidx.paging:paging-runtime:3.3.6")
-        implementation("androidx.paging:paging-compose:3.3.6")
+        implementation("androidx.paging:paging-runtime:3.5.0")
+        implementation("androidx.paging:paging-compose:3.5.0")
         
         // ===== Hilt Dependency Injection =====
-        // 暂不启用 - Kotlin 2.1.0 兼容性问题
+        // 暂不启用，项目统一使用 Koin
         // implementation(libs.hilt.android)
         // ksp(libs.hilt.compiler)
         // implementation(libs.hilt.navigation.compose)
         
         // ===== Koin Dependency Injection =====
-        implementation("io.insert-koin:koin-android:3.5.6")
-        implementation("io.insert-koin:koin-androidx-compose:3.5.6")
-        testImplementation("io.insert-koin:koin-test:3.5.6")
+        implementation("io.insert-koin:koin-android:4.2.2")
+        implementation("io.insert-koin:koin-androidx-compose:4.2.2")
+        testImplementation("io.insert-koin:koin-test:4.2.2")
     }
