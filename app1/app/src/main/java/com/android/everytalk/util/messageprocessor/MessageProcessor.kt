@@ -94,7 +94,7 @@ class MessageProcessor {
                     if (!event.imageUrl.isNullOrBlank()) {
                         // 1) 移除一切空白(空格/制表/换行)，防止被Markdown当作多段文本
                         val cleanUrl = event.imageUrl.replace(Regex("\\s+"), "")
-                        // 2) 直接拼接 URL，不使用尖括号，以兼容 Markwon 的 DataUriSchemeHandler 和 MarkdownRenderer 的预处理正则
+                        // 2) 直接拼接 URL，不使用尖括号，保持标准 Markdown 图片语法。
                         // Base64 字符集不包含空格或括号，因此不使用尖括号也是安全的
                         val imageMarkdown = "\n\n![Generated Image](" + cleanUrl + ")\n\n"
                         builder.append(imageMarkdown)

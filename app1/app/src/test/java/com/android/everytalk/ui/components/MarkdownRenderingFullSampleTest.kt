@@ -4,7 +4,7 @@ import com.android.everytalk.ui.components.streaming.StreamBlock
 import com.android.everytalk.ui.components.streaming.StreamBlockParser
 import com.android.everytalk.ui.components.streaming.extractFencedCodeBlockContent
 import com.android.everytalk.ui.components.markdown.markdownToPlainText
-import com.android.everytalk.ui.components.markdown.preprocessAiMarkdown
+import com.android.everytalk.ui.components.markdown.prepareMarkdownForMikePenz
 import com.android.everytalk.ui.components.table.InlineMarkdownParser
 import com.android.everytalk.ui.components.table.TableUtils
 import org.junit.Assert.assertEquals
@@ -90,13 +90,9 @@ class MarkdownRenderingFullSampleTest {
         assertFalse(InlineMarkdownParser.containsMath("**$0/月**"))
         assertFalse(InlineMarkdownParser.containsMath("含 **$30 inference credit**"))
 
-        val processed = preprocessAiMarkdown(pioneerPricingMarkdown, isStreaming = false)
-        assertTrue(processed.contains("**\\$0/月**"))
-        assertTrue(processed.contains("**\\$30 inference credit**"))
-        assertTrue(processed.contains("**\\$20/用户/月**"))
-        assertFalse(processed.contains("$$0"))
-        assertFalse(processed.contains("$$30"))
-        assertFalse(processed.contains("$$20"))
+        val processed = prepareMarkdownForMikePenz(pioneerPricingMarkdown, "pricing")
+        assertEquals(pioneerPricingMarkdown, processed)
+        assertFalse(processed.contains("everytalk-math-inline:"))
 
         val plainText = markdownToPlainText(pioneerPricingMarkdown)
         assertTrue(plainText.contains("Free"))
@@ -121,11 +117,9 @@ class MarkdownRenderingFullSampleTest {
         assertFalse(parts.any { it is ContentPart.Math })
         assertFalse(InlineMarkdownParser.containsMath("$30/month credit"))
 
-        val processed = preprocessAiMarkdown(pioneerFreeCreditMarkdown, isStreaming = false)
-        assertTrue(processed.contains("> **\\$30 inference credit included**"))
-        assertTrue(processed.contains("> \\$30/month credit"))
-        assertTrue(processed.contains("> Is the \\$30 inference credit in the Free plan"))
-        assertFalse(processed.contains("$$30"))
+        val processed = prepareMarkdownForMikePenz(pioneerFreeCreditMarkdown, "free-credit")
+        assertEquals(pioneerFreeCreditMarkdown, processed)
+        assertFalse(processed.contains("everytalk-math-inline:"))
 
         val plainText = markdownToPlainText(pioneerFreeCreditMarkdown)
         assertTrue(plainText.contains("$30 inference credit included"))
@@ -171,13 +165,9 @@ class MarkdownRenderingFullSampleTest {
         assertFalse(InlineMarkdownParser.containsMath("**$0** / 月"))
         assertFalse(InlineMarkdownParser.containsMath("• 赠送 **$30** 的推理额度"))
 
-        val processed = preprocessAiMarkdown(pioneerDetailedPricingMarkdown, isStreaming = false)
-        assertTrue(processed.contains("**\\$0** / 月"))
-        assertTrue(processed.contains("**\\$30** 的推理额度"))
-        assertTrue(processed.contains("**\\$20** / 用户/月"))
-        assertFalse(processed.contains("$$0"))
-        assertFalse(processed.contains("$$30"))
-        assertFalse(processed.contains("$$20"))
+        val processed = prepareMarkdownForMikePenz(pioneerDetailedPricingMarkdown, "detailed-pricing")
+        assertEquals(pioneerDetailedPricingMarkdown, processed)
+        assertFalse(processed.contains("everytalk-math-inline:"))
     }
 
     @Test
@@ -194,13 +184,9 @@ class MarkdownRenderingFullSampleTest {
         assertFalse(parts.any { it is ContentPart.Code })
         assertFalse(parts.any { it is ContentPart.Math })
 
-        val processed = preprocessAiMarkdown(pioneerMonthlyCreditMarkdown, isStreaming = false)
-        assertTrue(processed.contains("\\$75"))
-        assertTrue(processed.contains("\\$30"))
-        assertTrue(processed.contains("**\\$40/月**"))
-        assertFalse(processed.contains("$$75"))
-        assertFalse(processed.contains("$$30"))
-        assertFalse(processed.contains("$$40"))
+        val processed = prepareMarkdownForMikePenz(pioneerMonthlyCreditMarkdown, "monthly-credit")
+        assertEquals(pioneerMonthlyCreditMarkdown, processed)
+        assertFalse(processed.contains("everytalk-math-inline:"))
 
         val plainText = markdownToPlainText(pioneerMonthlyCreditMarkdown)
         assertTrue(plainText.contains("每个月都有"))

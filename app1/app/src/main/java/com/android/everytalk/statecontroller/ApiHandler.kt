@@ -1028,7 +1028,7 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     
                     // 按用户期望：不要在 finish 事件处强制切 isStreaming=false
                     // 说明：
-                    // - 是否呈现"最终渲染"由渲染层的 looksFinalized 判定决定（MarkdownRenderer）
+                    // - 是否呈现“最终渲染”由统一 Markdown 渲染层的 looksFinalized 判定决定
                     // - 流程收尾的 isApiCalling 状态与 streamingId 归位交由上游 onCompletion 分支处理
                     // - 此处仅记录会话摘要，避免二次清空引发 UI 抖动
                     PerformanceMonitor.onFinish(aiMessageId)

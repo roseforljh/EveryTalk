@@ -4,7 +4,7 @@ enum class StreamdownEntryPoint {
     StreamingMessageStateManager,
     ChatMessagesList,
     ContentCoordinator,
-    TableAwareText,
+    MikePenzMarkdownRenderer,
     ImageGenerationMessagesList,
     BubbleContentTypes,
 }

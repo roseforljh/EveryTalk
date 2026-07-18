@@ -1,9 +1,8 @@
 package com.android.everytalk
 
-import android.graphics.Color
+import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import com.android.everytalk.ui.components.markdown.NativeLatexSupport
 import org.junit.After
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -27,17 +26,9 @@ class EveryTalkApplicationTest {
     }
 
     @Test
-    fun `application startup should initialize native latex support`() {
-        val application = ApplicationProvider.getApplicationContext<EveryTalkApplication>()
+    fun `application startup should create EveryTalk application`() {
+        val application = ApplicationProvider.getApplicationContext<Application>()
 
-        NativeLatexSupport.ensureInitialized(application)
-        val icon = NativeLatexSupport.buildDisplayIcon(
-            latex = """$$ x^2 + y^2 $$""",
-            textSizePx = 48f,
-            colorArgb = Color.WHITE,
-        )
-
-        assertTrue(icon.iconWidth > 0)
-        assertTrue(icon.iconHeight > 0)
+        assertTrue(application is EveryTalkApplication)
     }
 }

@@ -529,7 +529,7 @@ open class MessageItemsController(
                     items.add(ChatListItem.AiMessageReasoning(message))
                 }
 
-                // 始终使用“完成态”组件类型，依靠 EnhancedMarkdownText 的 isStreaming 实时订阅更新内容
+                // 始终使用“完成态”组件类型，由统一 Markdown 入口实时接收流式内容。
                 // 这样在 Finish 事件到来时不会切换 item 类型，避免 LazyColumn 发生一次布局重排导致页面跳动
                 val streamingItem: ChatListItem = when (message.outputType) {
                     "code" -> ChatListItem.AiMessageCode(message, message.id, message.text, state.hasReasoning)

@@ -105,7 +105,7 @@ object PerformanceConfig {
     // ===== 流式渲染跳动修复配置 =====
     /**
      * 启用等高占位策略：流式期间为含代码块/表格的消息添加与完成态一致的占位高度
-     * 目的：消除流式结束时从单一MarkdownRenderer切换到分段渲染（CodeBlock/TableRenderer）的高度突变
+     * 目的：消除流式结束时 Markdown 内容高度突变
      */
     const val ENABLE_STREAMING_HEIGHT_PLACEHOLDER = true
     
@@ -138,20 +138,6 @@ object PerformanceConfig {
      */
     const val ENABLE_RENDER_TRANSITION_LOGGING = false
     
-    // ===== Markwon缓存配置 =====
-    /**
-     * 启用Markwon全局缓存：避免LazyColumn回收导致的重复初始化
-     * 修复前：流式结束后4次初始化，累计200-400ms
-     * 修复后：全局只初始化1-2次，后续<1ms命中缓存
-     */
-    const val ENABLE_MARKWON_GLOBAL_CACHE = true
-    
-    /**
-     * Markwon缓存最大实例数：按主题+字号缓存
-     * 推荐值：4（深色/浅色 × 2种常用字号）
-     */
-    const val MARKWON_CACHE_MAX_SIZE = 4
-
     // ===== 语音模式配置 =====
     /**
      * 语音录音采样率（Hz）

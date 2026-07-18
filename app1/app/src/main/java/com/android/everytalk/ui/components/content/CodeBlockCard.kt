@@ -253,12 +253,9 @@ fun CodeBlockCard(
                             .size(36.dp)
                             .clip(RoundedCornerShape(50)) // 只需要 clip 裁剪涟漪即可，不需要显式设置背景色
                             .clickable {
-                                if (onCopy != null) {
-                                    onCopy()
-                                } else {
-                                    scope.launch {
-                                        clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("code", code)))
-                                    }
+                                scope.launch {
+                                    clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("code", code)))
+                                    onCopy?.invoke()
                                 }
                             },
                         contentAlignment = Alignment.Center

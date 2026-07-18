@@ -14,7 +14,7 @@ class StreamdownEntryPointTest {
                 "StreamingMessageStateManager",
                 "ChatMessagesList",
                 "ContentCoordinator",
-                "TableAwareText",
+                "MikePenzMarkdownRenderer",
                 "ImageGenerationMessagesList",
                 "BubbleContentTypes",
             ),
@@ -28,13 +28,13 @@ class StreamdownEntryPointTest {
             entryPoint = StreamdownEntryPoint.ChatMessagesList,
             rawLength = 12,
             displayLength = 18,
-            fallbackReason = "markwon-fallback",
+            fallbackReason = null,
         )
 
         assertEquals(StreamdownEntryPoint.ChatMessagesList, event.entryPoint)
         assertEquals(12, event.rawLength)
         assertEquals(18, event.displayLength)
-        assertEquals("markwon-fallback", event.fallbackReason)
+        assertEquals(null, event.fallbackReason)
 
         val sink = StreamdownTelemetry.InMemorySink()
         StreamdownTelemetry.record(event, sink)

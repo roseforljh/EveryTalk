@@ -349,19 +349,10 @@ ksp {
         // ===== Markdown AST Parser =====
         implementation(libs.intellij.markdown)
 
-        // ===== Markdown 渲染 - Markwon =====
-        // 核心 + 表格
-        implementation("io.noties.markwon:core:4.6.2")
-        implementation("io.noties.markwon:ext-tables:4.6.2")
-        implementation("io.noties.markwon:ext-strikethrough:4.6.2")
-        // 数学公式支持 - Latex 扩展（使用 JLatexMath 离线渲染）
-        implementation("io.noties.markwon:ext-latex:4.6.2")
-        implementation("io.noties.markwon:inline-parser:4.6.2")
-        // 图片支持 - 用于渲染 Markdown 中的图片
-        implementation("io.noties.markwon:image:4.6.2")
-        // 直接声明底层解码库，避免额外模块解析失败
-        implementation("pl.droidsonroids.gif:android-gif-drawable:1.2.32")
-        implementation("com.caverock:androidsvg:1.4")
+        // ===== Markdown 渲染 =====
+        implementation(libs.mikepenz.markdown.core)
+        implementation(libs.mikepenz.markdown.m3)
+        implementation(libs.mikepenz.markdown.coil3)
 
         // ===== PDF 处理 =====
         implementation("com.tom-roush:pdfbox-android:2.0.27.0")

@@ -2383,7 +2383,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun clearMessageCache(messageId: String, isImageGeneration: Boolean = false) {
         messageItemsController.clearCacheForMessage(messageId, isImageGeneration)
         // Also clear Markdown cache for this message to force re-rendering
-        com.android.everytalk.ui.components.markdown.MarkdownSpansCache.remove(messageId)
     }
 
     fun onSelectAllModels() {

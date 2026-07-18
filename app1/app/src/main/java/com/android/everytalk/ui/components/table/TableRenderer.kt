@@ -37,7 +37,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.unit.TextUnit
 import com.android.everytalk.ui.components.ChatMarkdownTextStyle
 import com.android.everytalk.ui.components.ProportionalAsyncImage
-import com.android.everytalk.ui.components.markdown.StableLatexRenderer
+import com.android.everytalk.ui.components.math.MathBlock
 import com.android.everytalk.ui.components.math.MathInline
 import com.android.everytalk.ui.components.streaming.InlineRenderPart
 import com.android.everytalk.ui.components.streaming.MathBlockState
@@ -71,7 +71,6 @@ fun TableRenderer(
         fontSize = 13.sp,
         lineHeight = ChatMarkdownTextStyle.TABLE_CELL_LINE_HEIGHT_SP.sp
     ),
-    contentKey: String = "",
     onLongPress: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null,
     onImageClick: ((String) -> Unit)? = null,
 ) {
@@ -166,7 +165,6 @@ fun TableRenderer(
                             alignment = alignments[index],
                             style = headerStyle,
                             usePlainText = false,
-                            contentKey = if (contentKey.isNotBlank()) "${contentKey}_th_$index" else "",
                             backgroundColor = headerBackgroundColor,
                             isHeader = true,
                             onImageClick = onImageClick,
@@ -204,7 +202,6 @@ fun TableRenderer(
                                     alignment = alignments[colIndex],
                                     style = cellStyle,
                                     usePlainText = usePlainTextCells,
-                                    contentKey = if (contentKey.isNotBlank()) "${contentKey}_tr_${rowIndex}_td_$colIndex" else "",
                                     backgroundColor = rowBackgroundColor,
                                     onImageClick = onImageClick,
                                 )
@@ -280,7 +277,6 @@ private fun TableCell(
     alignment: TableUtils.TableAlignment,
     style: TextStyle,
     usePlainText: Boolean,
-    contentKey: String,
     backgroundColor: Color,
     isHeader: Boolean = false,
     onImageClick: ((String) -> Unit)? = null,
@@ -365,9 +361,6 @@ private fun TableCell(
         } else if (shouldRenderTableCellNativeBlockMath(content, usePlainText)) {
             TableCellNativeBlockMath(
                 content = content,
-                compactStyle = compactStyle,
-                textColor = textColor,
-                contentKey = contentKey,
             )
         } else if (shouldRenderTableCellNativeMixedMath(content, usePlainText)) {
             TableCellNativeMixedMath(
@@ -379,7 +372,6 @@ private fun TableCell(
                 codeFontSize = codeFontSize,
                 textAlign = textAlign,
                 alignment = alignment,
-                contentKey = contentKey,
             )
         } else {
             val annotatedText = remember(content, usePlainText, codeColor, codeFontSize) {
@@ -412,22 +404,16 @@ private fun TableCell(
 @Composable
 private fun TableCellNativeBlockMath(
     content: String,
-    compactStyle: TextStyle,
-    textColor: Color,
-    contentKey: String,
 ) {
     val block = remember(content) {
         StreamBlockParser.parse(content.trim(), "table-cell").blocks.singleOrNull() as? StreamBlock.MathBlock
     } ?: return
 
-    StableLatexRenderer(
-        latex = block.text,
+    MathBlock(
+        latex = stripTableCellMathDelimiters(block.text),
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 2.dp),
-        style = compactStyle,
-        color = textColor,
-        contentKey = contentKey,
     )
 }
 
@@ -441,7 +427,6 @@ private fun TableCellNativeMixedMath(
     codeFontSize: TextUnit,
     textAlign: TextAlign,
     alignment: TableUtils.TableAlignment,
-    contentKey: String,
 ) {
     val blocks = remember(content) {
         StreamBlockParser.parse(content, "table-cell").blocks
@@ -493,7 +478,7 @@ private fun TableCellNativeMixedMath(
                 is StreamBlock.MathInline -> {
                     if (block.state == MathBlockState.RENDERED) {
                         MathInline(
-                            latex = stripTableCellInlineMathDelimiters(block.text),
+                            latex = stripTableCellMathDelimiters(block.text),
                             modifier = Modifier
                                 .width(maxOf(width - ChatMarkdownTextStyle.TABLE_CELL_CONTENT_MAX_WIDTH_INSET_DP.dp, 56.dp))
                                 .padding(vertical = 2.dp),
@@ -509,15 +494,12 @@ private fun TableCellNativeMixedMath(
                 }
                 is StreamBlock.MathBlock -> {
                     when (resolveStreamMathRenderPath(block)) {
-                        StreamMathRenderPath.NativeLatex -> {
-                            StableLatexRenderer(
-                                latex = block.text,
+                        StreamMathRenderPath.KaTeX -> {
+                            MathBlock(
+                                latex = stripTableCellMathDelimiters(block.text),
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .padding(vertical = 2.dp),
-                                style = compactStyle,
-                                color = textColor,
-                                contentKey = "$contentKey:mixed-math:$index",
                             )
                         }
                         StreamMathRenderPath.RawText -> {
@@ -579,8 +561,12 @@ private fun TableCellRawMathText(
     )
 }
 
-private fun stripTableCellInlineMathDelimiters(text: String): String {
+private fun stripTableCellMathDelimiters(text: String): String {
     return when {
+        text.startsWith("\\[") && text.endsWith("\\]") && text.length >= 4 ->
+            text.substring(2, text.length - 2)
+        text.startsWith("$$") && text.endsWith("$$") && text.length >= 4 ->
+            text.substring(2, text.length - 2)
         text.startsWith("\\(") && text.endsWith("\\)") && text.length >= 4 ->
             text.substring(2, text.length - 2)
         text.startsWith("$") && text.endsWith("$") && !text.startsWith("$$") && text.length >= 2 ->

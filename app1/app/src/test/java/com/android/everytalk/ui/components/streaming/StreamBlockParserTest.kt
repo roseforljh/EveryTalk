@@ -146,68 +146,6 @@ class StreamBlockParserTest {
     }
 
     @Test
-    fun `streaming render state splits native markdown blocks`() {
-        val state = buildStreamingRenderState(
-            messageId = "msg-7",
-            content = "- 第一项\n- 第二项\n\n> 引用\n\n尾段",
-            isStreaming = true,
-            isComplete = false,
-        )
-
-        assertEquals(3, state.nativeMarkdownBlocks.size)
-        assertEquals(state.nativeMarkdownBlocks.dropLast(1), state.committedNativeMarkdownBlocks)
-        assertEquals(state.nativeMarkdownBlocks.takeLast(1), state.tailNativeMarkdownBlocks)
-        assertTrue(state.committedNativeMarkdownBlocksHash != "empty")
-        assertTrue(state.tailNativeMarkdownBlocksHash != "empty")
-    }
-
-    @Test
-    fun `complete render state commits native markdown blocks`() {
-        val state = buildStreamingRenderState(
-            messageId = "msg-8",
-            content = "# 标题\n\n---\n\n> 引用",
-            isStreaming = false,
-            isComplete = true,
-        )
-
-        assertEquals(state.nativeMarkdownBlocks, state.committedNativeMarkdownBlocks)
-        assertTrue(state.tailNativeMarkdownBlocks.isEmpty())
-    }
-
-    @Test
-    fun `native markdown block hash changes when recursive children change`() {
-        val headingChild = NativeStreamingMarkdownBlock(
-            stableId = "child",
-            type = NativeStreamingMarkdownBlockType.Heading,
-            text = "引用标题",
-            level = 2,
-        )
-        val paragraphChild = NativeStreamingMarkdownBlock(
-            stableId = "child",
-            type = NativeStreamingMarkdownBlockType.Paragraph,
-            text = "引用标题",
-        )
-        val headingQuote = NativeStreamingMarkdownBlock(
-            stableId = "quote",
-            type = NativeStreamingMarkdownBlockType.BlockQuote,
-            start = 0,
-            endExclusive = 8,
-            text = "## 引用标题",
-            children = listOf(headingChild),
-        )
-        val paragraphQuote = headingQuote.copy(children = listOf(paragraphChild))
-        val hashNativeBlocks = Class
-            .forName("com.android.everytalk.ui.components.streaming.StreamingRenderStateKt")
-            .getDeclaredMethod("hashNativeBlocks", List::class.java)
-            .apply { isAccessible = true }
-
-        val headingHash = hashNativeBlocks.invoke(null, listOf(headingQuote))
-        val paragraphHash = hashNativeBlocks.invoke(null, listOf(paragraphQuote))
-
-        assertNotEquals(headingHash, paragraphHash)
-    }
-
-    @Test
     fun `code block with longer outer fence keeps inner triple fences inside code`() {
         val result = StreamBlockParser.parse(
             "````markdown\n```kotlin\nval x = 1\n```\n````",
@@ -257,7 +195,7 @@ class StreamBlockParserTest {
     }
 
     @Test
-    fun `pricing table streaming state uses native table without splitting currency as math`() {
+    fun `pricing table streaming state does not split currency as math`() {
         val state = buildStreamingRenderState(
             messageId = "msg-pricing-state",
             content = pioneerPricingMarkdown,
@@ -269,11 +207,6 @@ class StreamBlockParserTest {
         assertEquals(1, state.blocks.size)
         assertTrue(state.blocks.single() is StreamBlock.PlainText)
         assertTrue(state.mathRanges.isEmpty())
-        assertEquals(2, state.nativeMarkdownBlocks.size)
-        assertEquals(NativeStreamingMarkdownBlockType.Paragraph, state.nativeMarkdownBlocks[0].type)
-        assertEquals(NativeStreamingMarkdownBlockType.Table, state.nativeMarkdownBlocks[1].type)
-        assertEquals(state.nativeMarkdownBlocks, state.committedNativeMarkdownBlocks)
-        assertTrue(state.tailNativeMarkdownBlocks.isEmpty())
     }
 
     @Test

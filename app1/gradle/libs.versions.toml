@@ -4,6 +4,7 @@ agp = "9.3.0"
 kotlin = "2.4.10"
 # Markdown AST Parser
 intellijMarkdown = "0.7.7"
+mikepenzMarkdown = "0.43.0"
 kspVersion = "2.3.10"
 room = "2.8.4"
 mcp = "0.14.0"
@@ -63,6 +64,9 @@ koin-test = { group = "io.insert-koin", name = "koin-test", version.ref = "koin"
 
 # Markdown AST Parser
 intellij-markdown = { group = "org.jetbrains", name = "markdown", version.ref = "intellijMarkdown" }
+mikepenz-markdown-core = { group = "com.mikepenz", name = "multiplatform-markdown-renderer", version.ref = "mikepenzMarkdown" }
+mikepenz-markdown-m3 = { group = "com.mikepenz", name = "multiplatform-markdown-renderer-m3", version.ref = "mikepenzMarkdown" }
+mikepenz-markdown-coil3 = { group = "com.mikepenz", name = "multiplatform-markdown-renderer-coil3", version.ref = "mikepenzMarkdown" }
 
 # MCP (Model Context Protocol) SDK
 mcp-kotlin-sdk = { module = "io.modelcontextprotocol:kotlin-sdk", version.ref = "mcp" }
