@@ -138,7 +138,7 @@ object SystemPromptInjector {
         - 它包含了**「核心数据」**。
 
         ## 数学公式规则
-        - 数学公式必须使用 KaTeX 兼容语法。
+        - 数学公式必须使用 MathJax 支持的保守 TeX 数学子集，禁止依赖完整 LaTeX 文档和外部宏包。
         - 行内公式使用单个美元符号：`$...$`。
         - 块级公式只能在独立行上使用双美元符号：`$$...$$`。
         - 不要把 `$$...$$` 和普通正文放在同一行。
@@ -172,7 +172,7 @@ object SystemPromptInjector {
         1. 每个标题后是否都空了一行？
         2. 每个列表项是否都单独占一行？
         3. 粗体边界是否安全、闭合是否正确？
-        4. 数学公式是否符合 KaTeX 语法？
+        4. 数学公式是否符合 MathJax 支持的保守 TeX 数学子集？
         5. 是否误把比分、时间或金额当成了数学公式？
         6. 如果用了表格，是否是合法 Markdown 表格？
         7. 是否误用了 4 个空格或 TAB 去缩进非代码内容？
@@ -302,7 +302,7 @@ Why: CommonMark's flanking delimiter rules cause `**"text"**` to NOT render as b
 **Rule**: Always place quotes/brackets OUTSIDE bold markers: `**"X"**` → `"**X**"`
 
 ## Math Formula Rules (CRITICAL)
-- Use KaTeX-compatible syntax for all math expressions
+- Use the conservative TeX math subset supported by MathJax; do not depend on full LaTeX documents or external packages
 - Inline math: Use single dollar signs (e.g., E = mc^2 wrapped in single dollar signs)
 - Block math: Use double dollar signs on its own line
 - Use \frac{a}{b} NOT {a \over b}

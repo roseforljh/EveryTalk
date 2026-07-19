@@ -13,6 +13,7 @@ import com.android.everytalk.statecontroller.ConversationScrollState
 import com.android.everytalk.statecontroller.safeApiConfigSummary
 import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.DataClass.VoiceBackendConfig
+import com.android.everytalk.ui.components.toRecoveredMarkdown
 import com.android.everytalk.util.storage.readAtMost
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -849,8 +850,7 @@ class DataPersistenceManager(
                 android.util.Log.w("DataPersistenceManager", "Fixing AI message with blank text but has parts: ${message.id}")
                 
                 // 尝试从parts重建文本内容
-                val rebuiltText = message.parts.filterIsInstance<com.android.everytalk.ui.components.MarkdownPart.Text>()
-                    .joinToString("") { it.content }
+                val rebuiltText = message.parts.toRecoveredMarkdown()
                 
                 if (rebuiltText.isNotBlank()) {
                     android.util.Log.d("DataPersistenceManager", "Rebuilt text from parts: length=${rebuiltText.length}")

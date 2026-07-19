@@ -119,33 +119,6 @@ class StreamBlockParserTest {
     }
 
     @Test
-    fun `streaming render state keeps only tail mutable while streaming`() {
-        val state = buildStreamingRenderState(
-            messageId = "msg-5",
-            content = "第一段\n```kotlin\nval x = 1\n```\n正在增长的尾段",
-            isStreaming = true,
-            isComplete = false,
-        )
-
-        assertTrue(state.blocks.size > 1)
-        assertEquals(state.blocks.dropLast(1), state.committedBlocks)
-        assertEquals(state.blocks.takeLast(1), state.tailBlocks)
-    }
-
-    @Test
-    fun `complete render state commits all blocks and has no mutable tail`() {
-        val state = buildStreamingRenderState(
-            messageId = "msg-6",
-            content = "第一段\n```kotlin\nval x = 1\n```\n最终尾段",
-            isStreaming = false,
-            isComplete = true,
-        )
-
-        assertEquals(state.blocks, state.committedBlocks)
-        assertTrue(state.tailBlocks.isEmpty())
-    }
-
-    @Test
     fun `code block with longer outer fence keeps inner triple fences inside code`() {
         val result = StreamBlockParser.parse(
             "````markdown\n```kotlin\nval x = 1\n```\n````",
@@ -206,7 +179,7 @@ class StreamBlockParserTest {
         assertFalse(state.hasPendingMath)
         assertEquals(1, state.blocks.size)
         assertTrue(state.blocks.single() is StreamBlock.PlainText)
-        assertTrue(state.mathRanges.isEmpty())
+        assertTrue(state.preparedMessage.formulas.isEmpty())
     }
 
     @Test

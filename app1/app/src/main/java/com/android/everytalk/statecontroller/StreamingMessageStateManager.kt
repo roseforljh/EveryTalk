@@ -72,6 +72,7 @@ class StreamingMessageStateManager {
 
     private val contentLengthTracker = ConcurrentHashMap<String, Int>()
     private val incrementalParseCaches = ConcurrentHashMap<String, IncrementalParseCache>()
+    private val contentVersions = ConcurrentHashMap<String, Long>()
 
     fun getOrCreateStreamingState(messageId: String): StateFlow<String> {
         return streamingStates.getOrPut(messageId) {
@@ -87,6 +88,7 @@ class StreamingMessageStateManager {
                     content = "",
                     isStreaming = activeStreamingMessages.contains(messageId),
                     isComplete = false,
+                    contentVersion = contentVersions[messageId] ?: 0L,
                 )
             )
         }.asStateFlow()
@@ -95,6 +97,7 @@ class StreamingMessageStateManager {
     fun startStreaming(messageId: String) {
         activeStreamingMessages.add(messageId)
         finalizedMessages.remove(messageId)
+        contentVersions[messageId] = 0L
         streamingStates.getOrPut(messageId) {
             MutableStateFlow("")
         }
@@ -104,6 +107,7 @@ class StreamingMessageStateManager {
                 content = streamingStates[messageId]?.value.orEmpty(),
                 isStreaming = true,
                 isComplete = false,
+                contentVersion = 0L,
             )
         )
         pendingBuffers.remove(messageId)
@@ -201,12 +205,14 @@ class StreamingMessageStateManager {
                 "Creating new state for message: $messageId, len=${content.length}"
             )
             streamingStates[messageId] = MutableStateFlow(content)
+            val contentVersion = nextContentVersion(messageId)
             streamingRenderStates[messageId] = MutableStateFlow(
                 buildStreamingRenderState(
                     messageId = messageId,
                     content = content,
                     isStreaming = activeStreamingMessages.contains(messageId),
                     isComplete = false,
+                    contentVersion = contentVersion,
                 )
             )
         }
@@ -254,6 +260,7 @@ class StreamingMessageStateManager {
         pendingBuffers.remove(messageId)
         hasFirstFlushed.remove(messageId)
         incrementalParseCaches.remove(messageId)
+        contentVersions.remove(messageId)
         streamingStates.remove(messageId)
         // 不删除 streamingRenderStates：UI 侧仍在 collectAsState 订阅该 Flow，
         // 如果此时 remove，UI 会收到一个全新的空 RenderState，导致一帧内容空白和高度坍塌。
@@ -269,6 +276,7 @@ class StreamingMessageStateManager {
         pendingBuffers.clear()
         hasFirstFlushed.clear()
         incrementalParseCaches.clear()
+        contentVersions.clear()
         streamingStates.clear()
         streamingRenderStates.clear()
         Log.d("StreamingMessageStateManager", "Cleared all streaming states (count: $count)")
@@ -292,6 +300,7 @@ class StreamingMessageStateManager {
             content = getCurrentContent(messageId),
             isStreaming = isStreaming(messageId),
             isComplete = !isStreaming(messageId),
+            contentVersion = contentVersions[messageId] ?: 0L,
         )
     }
 
@@ -317,6 +326,7 @@ class StreamingMessageStateManager {
         pendingBuffers.clear()
         hasFirstFlushed.clear()
         incrementalParseCaches.clear()
+        contentVersions.clear()
         activeStreamingMessages.clear()
         streamingStates.clear()
         streamingRenderStates.clear()
@@ -389,15 +399,24 @@ class StreamingMessageStateManager {
     private fun updateRenderState(messageId: String, content: String, isComplete: Boolean) {
         val isCurrentlyStreaming = activeStreamingMessages.contains(messageId) && !isComplete
         val cache = incrementalParseCaches[messageId]
+        val previousContent = streamingRenderStates[messageId]?.value?.content
+        val contentVersion = nextContentVersion(messageId)
 
         val state: StreamingRenderState
-        if (cache != null && content.length >= cache.committedEndOffset && isCurrentlyStreaming) {
+        if (
+            cache != null &&
+            previousContent != null &&
+            content.startsWith(previousContent) &&
+            content.length >= cache.committedEndOffset &&
+            isCurrentlyStreaming
+        ) {
             val (newState, newCache) = buildStreamingRenderStateIncremental(
                 messageId = messageId,
                 content = content,
                 isStreaming = true,
                 isComplete = false,
                 cache = cache,
+                contentVersion = contentVersion,
             )
             state = newState
             incrementalParseCaches[messageId] = newCache
@@ -407,6 +426,7 @@ class StreamingMessageStateManager {
                 content = content,
                 isStreaming = isCurrentlyStreaming,
                 isComplete = isComplete,
+                contentVersion = contentVersion,
             )
             if (isCurrentlyStreaming) {
                 val blocks = state.blocks
@@ -424,5 +444,9 @@ class StreamingMessageStateManager {
         }
 
         streamingRenderStates.getOrPut(messageId) { MutableStateFlow(state) }.value = state
+    }
+
+    private fun nextContentVersion(messageId: String): Long {
+        return contentVersions.merge(messageId, 1L) { current, _ -> current + 1L } ?: 1L
     }
 }

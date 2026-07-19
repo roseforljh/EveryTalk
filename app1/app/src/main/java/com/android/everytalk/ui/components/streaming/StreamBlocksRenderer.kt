@@ -7,8 +7,7 @@ import com.android.everytalk.ui.components.markdown.MikePenzMarkdownRenderer
 
 @Composable
 fun UnifiedMarkdownRenderer(
-    markdown: String,
-    contentKey: String,
+    preparedMessage: PreparedMessage,
     modifier: Modifier = Modifier,
     sender: Sender = Sender.AI,
     isStreaming: Boolean = false,
@@ -16,14 +15,17 @@ fun UnifiedMarkdownRenderer(
     onCodeCopied: (() -> Unit)? = null,
 ) {
     MikePenzMarkdownRenderer(
-        markdown = markdown,
-        contentKey = contentKey,
+        preparedMessage = preparedMessage,
         modifier = modifier,
         sender = sender,
         isStreaming = isStreaming,
         onCodePreviewRequested = onCodePreviewRequested,
         onCodeCopied = onCodeCopied,
     )
+}
+
+internal fun contentVersionForRendering(content: String): Long {
+    return (content.length.toLong() shl 32) xor (content.hashCode().toLong() and 0xffffffffL)
 }
 
 internal data class FencedCodeBlockContent(

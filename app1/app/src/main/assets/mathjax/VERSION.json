@@ -1,0 +1,38 @@
+{
+  "package": "mathjax",
+  "version": "4.1.3",
+  "source": "https://registry.npmjs.org/mathjax/-/mathjax-4.1.3.tgz",
+  "repository": "https://github.com/mathjax/MathJax",
+  "license": "Apache-2.0",
+  "npmIntegrity": "sha512-BN/8Pkgn7G1pIDYJqd9md+JHsE/jydSYbyOZnSdSA0WziuVO8mRxdYiWFumkVVly/8U+hm9DpIIoWuvySverzw==",
+  "files": {
+    "index.html": "sha256-a6b136d600bbe1c660433df17a3e41afadecb01b41f386e523cf0468fde2af40",
+    "tex-svg.js": "sha256-23c036deccc0f2374834a47e4032e452419f3ac027bf17e17c104e2746b19f4c",
+    "LICENSE": "sha256-cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+  },
+  "rendererConfig": {
+    "sha256": "12b8c2ab9827b146e579bb0f01e101faefc4c8081fa47d915c3e142957a82bf7",
+    "packages": ["base", "ams", "newcommand"],
+    "maxBuffer": 8192,
+    "maxMacros": 1000,
+    "maxFormulaLength": 4096,
+    "maxSvgBytes": 1048576,
+    "maxSvgNodes": 8192
+  },
+  "fontPackages": [
+    {
+      "package": "@mathjax/mathjax-newcm-font",
+      "version": "4.1.3",
+      "source": "https://registry.npmjs.org/@mathjax/mathjax-newcm-font/-/mathjax-newcm-font-4.1.3.tgz",
+      "repository": "https://github.com/mathjax/MathJax-fonts",
+      "license": "Apache-2.0",
+      "npmIntegrity": "sha512-gzAB3dFHilHX1l5x2xUqRL+1jDQt3Fyza1DkEMVXWC4E8SvsGdlgEza47HYi2WhVcgfkvf4zgUGzuhbq3Pjlew==",
+      "assetScope": "svg/dynamic/*.js",
+      "target": "font/svg/dynamic/",
+      "fileCount": 40,
+      "totalBytes": 9968318,
+      "manifestAlgorithm": "SHA-256 of UTF-8 LF-terminated lines sorted by ordinal filename: <filename>=<file-sha256>",
+      "manifestSha256": "a4100bbac386b90c364ac74fb9d923706eb22b3c929c4325dcdf46216051275f"
+    }
+  ]
+}

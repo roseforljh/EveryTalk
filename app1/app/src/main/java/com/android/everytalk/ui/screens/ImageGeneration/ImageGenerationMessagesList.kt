@@ -1987,8 +1987,7 @@ private fun AiMessageItem(
                 Column {
                     if (renderState != null && renderState.blocks.isNotEmpty()) {
                         UnifiedMarkdownRenderer(
-                            markdown = renderMessage.text,
-                            contentKey = message.id,
+                            preparedMessage = renderState.preparedMessage,
                             sender = renderMessage.sender,
                             isStreaming = shouldPreferStreamingContent,
                         )

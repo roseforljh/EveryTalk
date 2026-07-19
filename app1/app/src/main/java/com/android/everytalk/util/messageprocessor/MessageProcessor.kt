@@ -1,8 +1,6 @@
 package com.android.everytalk.util.messageprocessor
 
 import com.android.everytalk.data.DataClass.Message
-import com.android.everytalk.ui.components.ContentParser
-import com.android.everytalk.ui.components.ContentPart
 import com.android.everytalk.ui.components.MarkdownPart
 import com.android.everytalk.data.network.AppStreamEvent
 import com.android.everytalk.data.network.extractThinkTagContent
@@ -170,20 +168,7 @@ class MessageProcessor {
     }
 
     private fun buildMarkdownParts(text: String): List<MarkdownPart> {
-        return ContentParser.parseCompleteContent(text, isStreaming = true).mapIndexedNotNull { index, part ->
-            when (part) {
-                is ContentPart.Text -> MarkdownPart.Text(
-                    id = "text_$index",
-                    content = part.content
-                )
-                is ContentPart.Code -> MarkdownPart.CodeBlock(
-                    id = "code_$index",
-                    content = part.content,
-                    language = part.language.orEmpty()
-                )
-                else -> null
-            }
-        }
+        return listOf(MarkdownPart.Text(id = "text_0", content = text))
     }
 
     fun cancel() {

@@ -49,6 +49,7 @@
 
 - **Project Overview**: Current `README.md` (English) / `README_zh.md` (中文).
 - **OpenClaw Integration**: [`docs/openclaw-integration.md`](docs/openclaw-integration.md), detailing the setup of EveryTalk -> Bridge -> Gateway.
+- **Markdown and Math Rendering Record**: [`docs/plans/markdown-mathjax-rendering-plan.md`](docs/plans/markdown-mathjax-rendering-plan.md), recording the completed MikePenz + CodeBlockCard + MathJax 4 SVG architecture, verification results, and remaining device acceptance items.
 - **Design Logs**: `docs/plans/`, containing design documentation and historical architectural decisions.
 - **Developer / Agent Docs**: `CLAUDE.md` and `AGENTS.md`, helpful for maintainers wanting to build and run tests.
 

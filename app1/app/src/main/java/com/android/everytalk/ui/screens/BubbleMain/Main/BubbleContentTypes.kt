@@ -81,7 +81,9 @@ import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.components.ChatMarkdownTextStyle
 import com.android.everytalk.ui.components.ProportionalAsyncImage
 import com.android.everytalk.ui.components.ImagePreviewDialog
+import com.android.everytalk.ui.components.streaming.StreamBlockParser
 import com.android.everytalk.ui.components.streaming.UnifiedMarkdownRenderer
+import com.android.everytalk.ui.components.streaming.contentVersionForRendering
 import android.graphics.Bitmap
 import android.util.Base64
 import java.io.ByteArrayOutputStream
@@ -132,6 +134,13 @@ internal fun UserOrErrorMessageContent(
     val haptic = LocalHapticFeedback.current
     var globalPosition by remember { mutableStateOf(Offset.Zero) }
     val renderText = displayedText.ifBlank { message.text }
+    val preparedMessage = remember(message.id, renderText) {
+        StreamBlockParser.prepareMessage(
+            content = renderText,
+            messageId = message.id,
+            contentVersion = contentVersionForRendering(renderText),
+        )
+    }
 
     // 基于发送者动态计算最大宽度：用户71%，AI80%
     val configuration = LocalConfiguration.current
@@ -269,8 +278,7 @@ internal fun UserOrErrorMessageContent(
                             )
                         } else if (displayedText.isNotBlank() || isError) {
                             UnifiedMarkdownRenderer(
-                                markdown = renderText,
-                                contentKey = message.id,
+                                preparedMessage = preparedMessage,
                                 sender = message.sender,
                                 modifier = Modifier.wrapContentWidth(),
                             )

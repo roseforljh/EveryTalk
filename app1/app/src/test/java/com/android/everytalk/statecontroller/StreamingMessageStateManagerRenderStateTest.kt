@@ -69,6 +69,40 @@ class StreamingMessageStateManagerRenderStateTest {
     }
 
     @Test
+    fun `每次内容更新都会生成更高的公式内容版本`() {
+        val messageId = "version-msg"
+
+        subject.startStreaming(messageId)
+        subject.updateContent(messageId, "公式：${'$'}x${'$'}")
+        val first = subject.getCurrentRenderState(messageId).preparedMessage
+
+        subject.updateContent(messageId, "公式：${'$'}x+1${'$'}")
+        val second = subject.getCurrentRenderState(messageId).preparedMessage
+
+        assertTrue(second.contentVersion > first.contentVersion)
+        assertEquals(
+            second.contentVersion,
+            second.formulas.values.single().contentVersion,
+        )
+    }
+
+    @Test
+    fun `替换已提交前缀时必须按新内容重新解析`() {
+        val messageId = "replacement-msg"
+        val initial = "旧前缀\n\n${'$'}${'$'}x${'$'}${'$'}\n\n尾部"
+        val replacement = "新前缀\n\n${'$'}${'$'}y${'$'}${'$'}\n\n尾部"
+
+        subject.startStreaming(messageId)
+        subject.updateContent(messageId, initial)
+        subject.updateContent(messageId, replacement)
+
+        val renderState = subject.getCurrentRenderState(messageId)
+
+        assertEquals(replacement, renderState.content)
+        assertEquals(listOf("y"), renderState.preparedMessage.formulas.values.map { it.latex })
+    }
+
+    @Test
     fun `未闭合代码块正文不应阻止流式刷新`() {
         val shouldDelayFlush = StreamingMessageStateManager::class.java.getDeclaredMethod(
             "shouldDelayFlush",

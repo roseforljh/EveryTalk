@@ -2,6 +2,7 @@
 import java.util.Properties
 import java.io.FileInputStream
 import java.io.File
+import java.security.MessageDigest
 
 // Function to safely load properties from a file
 fun loadProperties(project: Project): Properties {
@@ -343,6 +344,10 @@ ksp {
         implementation("io.coil-kt.coil3:coil-compose:3.5.0")
         implementation("io.coil-kt.coil3:coil-network-okhttp:3.5.0")
         implementation("io.coil-kt.coil3:coil-video:3.5.0")
+        implementation(libs.coil.svg)
+
+        // ===== 本地 MathJax WebView 运行时 =====
+        implementation(libs.androidx.webkit)
 
         // ===== 网络 - OkHttp =====
         implementation(libs.okhttp)
@@ -378,3 +383,77 @@ ksp {
         implementation("io.insert-koin:koin-androidx-compose:4.2.2")
         testImplementation("io.insert-koin:koin-test:4.2.2")
     }
+
+val verifyMathJaxAssets by tasks.registering {
+    group = "verification"
+    description = "校验固定版本的 MathJax 本地资产是否完整且未被篡改"
+
+    val assetsDirectory = layout.projectDirectory.dir("src/main/assets/mathjax")
+    val dynamicFontDirectory = assetsDirectory.dir("font/svg/dynamic")
+    val requiredFiles = listOf("index.html", "tex-svg.js", "LICENSE", "VERSION.json")
+        .map(assetsDirectory::file)
+    inputs.files(requiredFiles)
+    inputs.dir(dynamicFontDirectory)
+
+    doLast {
+        requiredFiles.forEach { asset ->
+            val file = asset.asFile
+            check(file.isFile && file.length() > 0L) {
+                "缺少 MathJax 资产或文件为空：${file.absolutePath}"
+            }
+        }
+
+        val expectedHashes = mapOf(
+            "index.html" to "a6b136d600bbe1c660433df17a3e41afadecb01b41f386e523cf0468fde2af40",
+            "tex-svg.js" to "23c036deccc0f2374834a47e4032e452419f3ac027bf17e17c104e2746b19f4c",
+            "LICENSE" to "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        )
+        expectedHashes.forEach { (name, expectedHash) ->
+            val file = assetsDirectory.file(name).asFile
+            val actualHash = MessageDigest.getInstance("SHA-256")
+                .digest(file.readBytes())
+                .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+            check(actualHash == expectedHash) {
+                "MathJax 资产校验失败：$name，期望 $expectedHash，实际 $actualHash"
+            }
+        }
+
+        val dynamicFontFiles = dynamicFontDirectory.asFile
+            .listFiles { file -> file.isFile && file.extension == "js" }
+            .orEmpty()
+            .sortedBy(File::getName)
+        check(dynamicFontFiles.size == 40) {
+            "MathJax NewCM SVG 动态字体文件数量错误：期望 40，实际 ${dynamicFontFiles.size}"
+        }
+        val dynamicFontManifest = buildString {
+            dynamicFontFiles.forEach { file ->
+                val fileHash = MessageDigest.getInstance("SHA-256")
+                    .digest(file.readBytes())
+                    .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+                append(file.name).append('=').append(fileHash).append('\n')
+            }
+        }
+        val dynamicFontManifestHash = MessageDigest.getInstance("SHA-256")
+            .digest(dynamicFontManifest.toByteArray(Charsets.UTF_8))
+            .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+        check(dynamicFontManifestHash == "a4100bbac386b90c364ac74fb9d923706eb22b3c929c4325dcdf46216051275f") {
+            "MathJax NewCM SVG 动态字体清单校验失败：$dynamicFontManifestHash"
+        }
+
+        val versionManifest = assetsDirectory.file("VERSION.json").asFile
+            .readText(Charsets.UTF_8)
+        check(versionManifest.contains("\"version\": \"4.1.3\"")) {
+            "MathJax VERSION.json 未锁定到 4.1.3"
+        }
+        check(versionManifest.contains("@mathjax/mathjax-newcm-font")) {
+            "MathJax VERSION.json 缺少 NewCM 字体包来源"
+        }
+        check(versionManifest.contains("12b8c2ab9827b146e579bb0f01e101faefc4c8081fa47d915c3e142957a82bf7")) {
+            "MathJax VERSION.json 缺少固定渲染配置哈希"
+        }
+    }
+}
+
+tasks.named("preBuild").configure {
+    dependsOn(verifyMathJaxAssets)
+}

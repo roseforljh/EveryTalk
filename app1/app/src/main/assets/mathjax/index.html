@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'self' 'unsafe-inline'; worker-src blob:; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>EveryTalk MathJax Renderer</title>
+  <script>
+    window.MathJax = {
+      loader: {
+        load: ['[tex]/ams', '[tex]/newcommand']
+      },
+       tex: {
+         packages: ['base', 'ams', 'newcommand'],
+         maxBuffer: 8192,
+         maxMacros: 1000,
+         formatError: function (_jax, error) {
+          throw error;
+        }
+      },
+      svg: {
+        fontCache: 'local',
+        localID: 'everytalk',
+        dynamicPrefix: './font/svg/dynamic',
+        useXlink: false
+      },
+      options: {
+        enableMenu: false,
+        enableSpeech: false,
+        enableBraille: false,
+        enableExplorer: false,
+        enableComplexity: false,
+        renderActions: {
+          attachSpeech: [],
+          assistiveMml: []
+        },
+        a11y: {
+          speech: false,
+          braille: false
+        }
+      },
+      startup: {
+        typeset: false
+      }
+    };
+  </script>
+  <script defer src="./tex-svg.js"></script>
+</head>
+<body>
+  <main id="measurement-root" aria-hidden="true"></main>
+  <script>
+    (function () {
+      'use strict';
+
+       const ENGINE_VERSION = '4.1.3';
+       const CONFIG_HASH = '12b8c2ab9827b146e579bb0f01e101faefc4c8081fa47d915c3e142957a82bf7';
+       const MAX_FORMULA_LENGTH = 4096;
+       const MAX_BATCH_SIZE = 16;
+       const MAX_SVG_BYTES = 1048576;
+       const MAX_SVG_NODES = 8192;
+       const URL_RESOURCE_ATTRIBUTES = new Set([
+         'clip-path', 'cursor', 'fill', 'filter', 'marker-end',
+         'marker-mid', 'marker-start', 'mask', 'stroke', 'style'
+       ]);
+       const root = document.getElementById('measurement-root');
+
+      root.style.position = 'fixed';
+      root.style.left = '-100000px';
+      root.style.top = '0';
+      root.style.visibility = 'hidden';
+      root.style.pointerEvents = 'none';
+      root.style.whiteSpace = 'nowrap';
+
+      function postMessage(payload) {
+        const bridge = window.everytalkMathJaxResult;
+        if (bridge && typeof bridge.postMessage === 'function') {
+          bridge.postMessage(JSON.stringify(payload));
+        }
+      }
+
+      function safeColor(value) {
+        return /^#[0-9a-f]{6}([0-9a-f]{2})?$/i.test(value || '') ? value : '#000000';
+      }
+
+       function safeNumber(value, fallback, min, max) {
+         const number = Number(value);
+         return Number.isFinite(number) ? Math.min(max, Math.max(min, number)) : fallback;
+       }
+
+       function describeError(error) {
+         if (error && typeof error.message === 'string') {
+           return error.message;
+         }
+         try {
+           return typeof error === 'string' ? error : JSON.stringify(error);
+         } catch (_ignored) {
+           return String(error);
+         }
+       }
+
+       function validateSvg(svg, svgText) {
+         if (!svg || svg.localName !== 'svg' || new Blob([svgText]).size > MAX_SVG_BYTES) {
+           throw new Error('MathJax 返回了无效或过大的 SVG');
+         }
+         const elements = [svg].concat(Array.from(svg.querySelectorAll('*')));
+         if (elements.length > MAX_SVG_NODES) {
+           throw new Error('MathJax SVG 节点数量超过限制');
+         }
+         for (const element of elements) {
+           const tagName = element.localName.toLowerCase();
+           if (['a', 'embed', 'foreignobject', 'iframe', 'image', 'link', 'object', 'script', 'style'].includes(tagName)) {
+             throw new Error('MathJax SVG 包含不允许的元素');
+           }
+           for (const attribute of Array.from(element.attributes)) {
+             const attributeName = attribute.localName.toLowerCase();
+             const rawAttributeName = attribute.name.toLowerCase();
+             const value = attribute.value.trim();
+             if (rawAttributeName === 'xmlns' || rawAttributeName.startsWith('xmlns:')) {
+               continue;
+             }
+             if (attributeName.startsWith('on')) {
+               throw new Error('MathJax SVG 包含事件属性');
+             }
+             if ((attributeName === 'href' || attributeName === 'src') && !/^#[A-Za-z0-9_.:-]+$/.test(value)) {
+               throw new Error('MathJax SVG 包含外部资源');
+             }
+             if (URL_RESOURCE_ATTRIBUTES.has(attributeName) && /url\(\s*["']?(?!#)/i.test(value)) {
+               throw new Error('MathJax SVG 包含外部 URL 资源');
+             }
+             if (attributeName === 'style' && /(?:javascript|https?|file|content|data):/i.test(value)) {
+               throw new Error('MathJax SVG 包含不允许的协议');
+             }
+           }
+         }
+       }
+
+      async function renderOne(request, localID) {
+        const requestVersion = Number.isSafeInteger(request.requestVersion) ? request.requestVersion : 0;
+        if (typeof request.id !== 'string' || typeof request.latex !== 'string') {
+          return {
+            id: String(request.id || ''),
+            status: 'engine_error',
+            errorMessage: '公式请求格式无效',
+            requestVersion: requestVersion
+          };
+        }
+        if (request.latex.length === 0 || request.latex.length > MAX_FORMULA_LENGTH) {
+          return {
+            id: request.id,
+            status: 'syntax_error',
+            errorMessage: '公式为空或超过 4096 字符',
+            requestVersion: requestVersion
+          };
+        }
+
+        const fontSizePx = safeNumber(request.fontSizePx, 16, 8, 128);
+        const maxWidthPx = safeNumber(request.maxWidthPx, 100000, 1, 100000);
+        const color = safeColor(request.color);
+        const host = document.createElement('div');
+        host.style.fontSize = fontSizePx + 'px';
+        host.style.color = color;
+        host.style.width = maxWidthPx + 'px';
+        root.appendChild(host);
+
+        try {
+          MathJax.startup.output.options.localID = localID;
+          let container;
+          try {
+            container = await MathJax.tex2svgPromise(request.latex, {
+              display: request.display === true,
+              em: fontSizePx,
+              ex: fontSizePx * 0.442,
+              containerWidth: maxWidthPx
+            });
+          } catch (error) {
+            return {
+             id: request.id,
+             status: 'syntax_error',
+             errorMessage: describeError(error),
+              requestVersion: requestVersion
+            };
+          }
+
+          try {
+            host.appendChild(container);
+            const svg = container.querySelector('svg');
+            if (!svg) {
+              throw new Error('MathJax 未返回 SVG');
+            }
+
+            const bounds = svg.getBoundingClientRect();
+            const widthPx = Math.max(1, bounds.width);
+            const heightPx = Math.max(1, bounds.height);
+            const verticalAlignPx = parseFloat(getComputedStyle(svg).verticalAlign) || 0;
+            const depthPx = Math.max(0, -verticalAlignPx);
+            const viewBox = svg.getAttribute('viewBox') || '';
+
+            svg.setAttribute('width', String(widthPx));
+            svg.setAttribute('height', String(heightPx));
+            svg.setAttribute('color', color);
+            svg.removeAttribute('style');
+
+            const svgText = new XMLSerializer().serializeToString(svg);
+            validateSvg(svg, svgText);
+            return {
+              id: request.id,
+              status: 'ready',
+              svg: svgText,
+              widthPx: widthPx,
+              heightPx: heightPx,
+              depthPx: depthPx,
+              viewBox: viewBox,
+              requestVersion: requestVersion
+            };
+          } catch (error) {
+            return {
+             id: request.id,
+             status: 'engine_error',
+             errorMessage: describeError(error),
+              requestVersion: requestVersion
+            };
+          }
+        } finally {
+          host.remove();
+        }
+      }
+
+      window.renderBatch = async function (batch) {
+        try {
+          if (!batch || typeof batch.batchId !== 'string' || !Array.isArray(batch.requests)) {
+            throw new Error('批量请求格式无效');
+          }
+          if (batch.requests.length === 0 || batch.requests.length > MAX_BATCH_SIZE) {
+            throw new Error('单批公式数量必须为 1 至 16');
+          }
+
+          const results = [];
+          const safeBatchID = batch.batchId.replace(/[^a-z0-9_-]/gi, '');
+          for (let index = 0; index < batch.requests.length; index += 1) {
+            results.push(await renderOne(batch.requests[index], 'et-' + safeBatchID + '-' + index));
+          }
+          const response = {
+            type: 'result',
+            batchId: batch.batchId,
+            results: results
+          };
+          postMessage(response);
+          return response;
+        } catch (error) {
+          const response = {
+           type: 'engine_error',
+           batchId: batch && typeof batch.batchId === 'string' ? batch.batchId : null,
+           errorMessage: describeError(error)
+          };
+          postMessage(response);
+          return response;
+        }
+      };
+
+      window.addEventListener('load', function () {
+        MathJax.startup.promise.then(function () {
+           postMessage({
+             type: 'ready',
+             engineVersion: MathJax.version || ENGINE_VERSION,
+             configHash: CONFIG_HASH
+           });
+        }).catch(function (error) {
+          postMessage({
+             type: 'engine_error',
+             errorMessage: describeError(error)
+          });
+        });
+      }, { once: true });
+    }());
+  </script>
+</body>
+</html>

@@ -1,5 +1,7 @@
 ﻿# EveryTalk 接近 Gemini 的流式渲染新架构方案
 
+> 状态说明（2026-07-19）：本文保留为流式架构历史方案。数学渲染部分已由 `docs/plans/markdown-mathjax-rendering-plan.md` 取代，当前实现统一使用 `StreamBlockParser + PreparedMessage + MathJax 4 SVG`，不再规划自研 `MathLexer` 或 `MathParser`。
+
 ## 1. 背景与目标
 
 当前 EveryTalk 的流式输出主要还是“累积字符串 -> 整段 Markdown / 富文本渲染”的路线。这个路线在普通文本下还能工作，但一旦叠加以下内容，就很容易出现整段重组、闪烁、高度抖动、尾部来回跳动等问题：

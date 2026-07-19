@@ -2,6 +2,7 @@ package com.android.everytalk.statecontroller
 
 import android.util.Log
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.ui.components.toRecoveredMarkdown
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -306,8 +307,7 @@ class SimpleModeManager(
                     
                     if (msg.text.isBlank() && msg.parts.isNotEmpty()) {
                         // 尝试从parts重建文本内容
-                        val rebuiltText = msg.parts.filterIsInstance<com.android.everytalk.ui.components.MarkdownPart.Text>()
-                            .joinToString("") { it.content }
+                        val rebuiltText = msg.parts.toRecoveredMarkdown()
                         
                         if (rebuiltText.isNotBlank()) {
                             android.util.Log.d("SimpleModeManager", "Rebuilt AI message text from parts: ${rebuiltText.take(50)}...")
@@ -466,9 +466,7 @@ class SimpleModeManager(
         
             if (msg.sender == com.android.everytalk.data.DataClass.Sender.AI) {
                 if (hasImages && msg.text.isBlank() && msg.parts.isNotEmpty()) {
-                    val rebuiltText = msg.parts
-                        .filterIsInstance<com.android.everytalk.ui.components.MarkdownPart.Text>()
-                        .joinToString("") { it.content }
+                    val rebuiltText = msg.parts.toRecoveredMarkdown()
                     if (rebuiltText.isNotBlank()) {
                         android.util.Log.d(TAG, "Rebuilt text for image msg ${msg.id}, images=${msg.imageUrls?.size ?: 0}")
                         msg.copy(text = rebuiltText, contentStarted = updatedContentStarted)

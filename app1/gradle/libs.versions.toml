@@ -20,6 +20,8 @@ lifecycleRuntimeKtx = "2.11.0"
 activityCompose = "1.13.0"
 composeBom = "2026.06.01"
 okhttp = "5.4.0"
+androidxWebkit = "1.16.0"
+coil = "3.5.0"
 uiautomator = "2.4.0"
 benchmarkMacroJunit4 = "1.4.1"
 androidxJunit = "1.3.0"
@@ -40,6 +42,7 @@ androidx-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-toolin
 androidx-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
 androidx-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
 androidx-material3 = { group = "androidx.compose.material3", name = "material3"}
+androidx-webkit = { group = "androidx.webkit", name = "webkit", version.ref = "androidxWebkit" }
 androidx-uiautomator = { group = "androidx.test.uiautomator", name = "uiautomator", version.ref = "uiautomator" }
 androidx-benchmark-macro-junit4 = { group = "androidx.benchmark", name = "benchmark-macro-junit4", version.ref = "benchmarkMacroJunit4" }
 # profileinstaller 应该在 app 模块的依赖中，但版本可以放这里管理
@@ -67,6 +70,9 @@ intellij-markdown = { group = "org.jetbrains", name = "markdown", version.ref = 
 mikepenz-markdown-core = { group = "com.mikepenz", name = "multiplatform-markdown-renderer", version.ref = "mikepenzMarkdown" }
 mikepenz-markdown-m3 = { group = "com.mikepenz", name = "multiplatform-markdown-renderer-m3", version.ref = "mikepenzMarkdown" }
 mikepenz-markdown-coil3 = { group = "com.mikepenz", name = "multiplatform-markdown-renderer-coil3", version.ref = "mikepenzMarkdown" }
+
+# SVG 图片解码
+coil-svg = { group = "io.coil-kt.coil3", name = "coil-svg", version.ref = "coil" }
 
 # MCP (Model Context Protocol) SDK
 mcp-kotlin-sdk = { module = "io.modelcontextprotocol:kotlin-sdk", version.ref = "mcp" }

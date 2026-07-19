@@ -1,5 +1,7 @@
 package com.android.everytalk.ui.components.streaming
 
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
 import java.util.Locale
 
 object StreamBlockParser {
@@ -7,6 +9,7 @@ object StreamBlockParser {
     private val openingFenceRegex = Regex("^([`~]{3,})([^`~]*)$")
     private val latexCommandRegex = Regex("""\\[A-Za-z]+""")
     private val proseWordRegex = Regex("""[A-Za-z]{2,}""")
+    private val renderableMarkdownFenceLanguages = setOf("markdown", "md")
 
     private data class DelimiterMatch(
         val start: Int,
@@ -21,7 +24,12 @@ object StreamBlockParser {
         while (index >= 0) {
             val escaped = index > 0 && content[index - 1] == '\\'
             val isDoubleDollar = index + 1 < content.length && content[index + 1] == '$'
-            if (!escaped && !isDoubleDollar && !isCurrencyDollar(content, index)) {
+            if (
+                !escaped &&
+                !isDoubleDollar &&
+                !isInsideMarkdownLinkDestination(content, index) &&
+                !isCurrencyDollar(content, index)
+            ) {
                 return index
             }
             index = content.indexOf('$', index + 1)
@@ -67,6 +75,10 @@ object StreamBlockParser {
 
             val escaped = index > 0 && content[index - 1] == '\\'
             if (ch == '$' && !escaped) {
+                if (isInsideMarkdownLinkDestination(content, index)) {
+                    index++
+                    continue
+                }
                 if (index + 1 < content.length && content[index + 1] == '$') {
                     index += 2
                     continue
@@ -114,13 +126,15 @@ object StreamBlockParser {
 
         while (cursor < content.length) {
             val codeStart = findNextFenceStart(content, cursor)
-            val mathBlockStart = content.indexOf("$$", cursor)
+            val inlineCodeStart = findNextInlineCodeStart(content, cursor)
+            val mathBlockStart = findNextMathTokenStart(content, "$$", cursor)
             val inlineStart = findNextInlineMathStart(content, cursor)
-            val escapedInlineStart = content.indexOf("\\(", cursor)
-            val escapedBlockStart = content.indexOf("\\[", cursor)
+            val escapedInlineStart = findNextMathTokenStart(content, "\\(", cursor)
+            val escapedBlockStart = findNextMathTokenStart(content, "\\[", cursor)
 
             val candidates = mutableListOf<Int>()
             if (codeStart >= 0) candidates.add(codeStart)
+            if (inlineCodeStart >= 0) candidates.add(inlineCodeStart)
             if (mathBlockStart >= 0) candidates.add(mathBlockStart)
             if (inlineStart >= 0) candidates.add(inlineStart)
             if (escapedInlineStart >= 0) candidates.add(escapedInlineStart)
@@ -185,6 +199,13 @@ object StreamBlockParser {
                     )
                     cursor = content.length
                 }
+                continue
+            }
+
+            val inlineCodeEnd = findInlineCodeEnd(content, cursor)
+            if (inlineCodeEnd != null) {
+                appendPlain(cursor, inlineCodeEnd)
+                cursor = inlineCodeEnd
                 continue
             }
 
@@ -285,7 +306,7 @@ object StreamBlockParser {
             }
 
             if (content[cursor] == '$') {
-                val close = content.indexOf('$', cursor + 1)
+                val close = findNextUnescapedSingleDollarOnLine(content, cursor + 1)
                 if (close >= 0) {
                     val end = close + 1
                     val inlineToken = content.substring(cursor, end)
@@ -334,6 +355,181 @@ object StreamBlockParser {
             hasPendingMath = hasPendingMath,
             blocksHash = hashSource.hashCode().toString()
         )
+    }
+
+    fun prepareMessage(
+        content: String,
+        messageId: String,
+        contentVersion: Long,
+    ): PreparedMessage {
+        val parsed = parse(content, messageId)
+        return prepareMessage(
+            content = content,
+            blocks = parsed.blocks,
+            hasPendingFormula = parsed.hasPendingMath,
+            contentVersion = contentVersion,
+        )
+    }
+
+    internal fun prepareMessage(
+        content: String,
+        blocks: List<StreamBlock>,
+        hasPendingFormula: Boolean,
+        contentVersion: Long,
+    ): PreparedMessage {
+        val renderableContent = unwrapRenderableMarkdownFences(content)
+        val renderBlocks: List<StreamBlock>
+        val renderHasPendingFormula: Boolean
+        if (renderableContent == content) {
+            renderBlocks = blocks
+            renderHasPendingFormula = hasPendingFormula
+        } else {
+            val reparsed = parse(renderableContent, "renderable-markdown")
+            renderBlocks = reparsed.blocks
+            renderHasPendingFormula = reparsed.hasPendingMath
+        }
+        val formulas = linkedMapOf<String, FormulaRequest>()
+
+        fun registerFormula(token: String, displayMode: FormulaDisplayMode): FormulaRequest {
+            val latex = extractFormulaBody(token)
+            val id = createFormulaId(latex, displayMode)
+            return FormulaRequest(
+                id = id,
+                latex = latex,
+                displayMode = displayMode,
+                contentVersion = contentVersion,
+            ).also { formulas[id] = it }
+        }
+
+        val markdown = buildString(renderableContent.length) {
+            renderBlocks.forEach { block ->
+                when (block) {
+                    is StreamBlock.PlainText,
+                    is StreamBlock.CodeBlock,
+                    -> append(block.text)
+
+                    is StreamBlock.MathInline -> {
+                        if (block.state == MathBlockState.RENDERED) {
+                            val formula = registerFormula(block.text, FormulaDisplayMode.INLINE)
+                            append("![math](")
+                            append(INLINE_FORMULA_SCHEME)
+                            append(formula.id)
+                            append(')')
+                        } else {
+                            append(block.text)
+                        }
+                    }
+
+                    is StreamBlock.MathBlock -> {
+                        if (block.state == MathBlockState.RENDERED) {
+                            val formula = registerFormula(block.text, FormulaDisplayMode.BLOCK)
+                            if (isNotEmpty() && !endsWith("\n\n")) append("\n\n")
+                            append("```")
+                            append(BLOCK_FORMULA_FENCE_LANGUAGE)
+                            append('\n')
+                            append(formula.id)
+                            append("\n```")
+                            if (block.endExclusive < renderableContent.length) append("\n\n")
+                        } else {
+                            append(block.text)
+                        }
+                    }
+                }
+            }
+        }
+        return PreparedMessage(
+            markdown = markdown,
+            formulas = formulas,
+            hasPendingFormula = renderHasPendingFormula,
+            contentVersion = contentVersion,
+        )
+    }
+
+    /**
+     * 模型经常用 markdown 或 md 围栏包裹本应直接显示的完整正文。
+     * 这里只移除这两种外层围栏，围栏内的真实语言代码块仍交给 CodeBlockCard。
+     */
+    private fun unwrapRenderableMarkdownFences(content: String): String {
+        if (content.isEmpty() || (!content.contains("```") && !content.contains("~~~"))) {
+            return content
+        }
+
+        val output = StringBuilder(content.length)
+        var outerMarker: String? = null
+        var nestedCodeMarker: String? = null
+        var ordinaryCodeMarker: String? = null
+        var changed = false
+        var lineStart = 0
+
+        while (lineStart < content.length) {
+            val newline = content.indexOf('\n', lineStart)
+            val lineEnd = if (newline >= 0) newline else content.length
+            val segmentEnd = if (newline >= 0) newline + 1 else content.length
+            val segment = content.substring(lineStart, segmentEnd)
+            val trimmedLine = content.substring(lineStart, lineEnd).trim()
+            val fenceMatch = openingFenceRegex.matchEntire(trimmedLine)
+            val marker = fenceMatch?.groupValues?.get(1)
+            val language = fenceMatch
+                ?.groupValues
+                ?.get(2)
+                ?.trim()
+                ?.lowercase(Locale.ROOT)
+            val activeOuterMarker = outerMarker
+            val activeNestedMarker = nestedCodeMarker
+            val activeOrdinaryMarker = ordinaryCodeMarker
+
+            when {
+                activeOuterMarker == null && activeOrdinaryMarker != null -> {
+                    output.append(segment)
+                    if (isStandaloneFenceClose(trimmedLine, activeOrdinaryMarker)) {
+                        ordinaryCodeMarker = null
+                    }
+                }
+
+                activeOuterMarker == null &&
+                    marker != null &&
+                    language in renderableMarkdownFenceLanguages -> {
+                    outerMarker = marker
+                    changed = true
+                }
+
+                activeOuterMarker == null -> {
+                    output.append(segment)
+                    if (marker != null) {
+                        ordinaryCodeMarker = marker
+                    }
+                }
+
+                activeNestedMarker != null -> {
+                    output.append(segment)
+                    if (isStandaloneFenceClose(trimmedLine, activeNestedMarker)) {
+                        nestedCodeMarker = null
+                    }
+                }
+
+                isStandaloneFenceClose(trimmedLine, activeOuterMarker) -> {
+                    outerMarker = null
+                    changed = true
+                }
+
+                else -> {
+                    output.append(segment)
+                    if (marker != null && !language.isNullOrEmpty()) {
+                        nestedCodeMarker = marker
+                    }
+                }
+            }
+
+            lineStart = segmentEnd
+        }
+
+        return if (changed) output.toString() else content
+    }
+
+    private fun isStandaloneFenceClose(line: String, marker: String): Boolean {
+        if (line.isEmpty() || line.first() != marker.first()) return false
+        val markerLength = countFenceMarkerLength(line, marker.first())
+        return markerLength >= marker.length && line.substring(markerLength).isBlank()
     }
 
     /**
@@ -411,6 +607,80 @@ object StreamBlockParser {
         return -1
     }
 
+    private fun findNextInlineCodeStart(content: String, startIndex: Int): Int {
+        var candidate = content.indexOf('`', startIndex)
+        while (candidate >= 0) {
+            if (findInlineCodeEnd(content, candidate) != null) return candidate
+            candidate = content.indexOf('`', candidate + 1)
+        }
+        return -1
+    }
+
+    private fun findNextMathTokenStart(
+        content: String,
+        token: String,
+        startIndex: Int,
+    ): Int {
+        var candidate = content.indexOf(token, startIndex)
+        while (candidate >= 0) {
+            if (!isInsideMarkdownLinkDestination(content, candidate)) return candidate
+            candidate = content.indexOf(token, candidate + 1)
+        }
+        return -1
+    }
+
+    private fun isInsideMarkdownLinkDestination(content: String, index: Int): Boolean {
+        if (index !in content.indices) return false
+        val lineStart = content.lastIndexOf('\n', index).let { if (it < 0) 0 else it + 1 }
+        var searchIndex = index
+        while (searchIndex > lineStart) {
+            val open = content.lastIndexOf('(', searchIndex - 1)
+            if (open < lineStart) return false
+            val isLinkDestination = open > lineStart &&
+                content[open - 1] == ']'
+            if (isLinkDestination) {
+                val close = findMarkdownLinkDestinationEnd(content, open)
+                return close == null || index < close
+            }
+            searchIndex = open
+        }
+        return false
+    }
+
+    private fun findMarkdownLinkDestinationEnd(content: String, open: Int): Int? {
+        var depth = 1
+        var index = open + 1
+        while (index < content.length) {
+            when (content[index]) {
+                '\n', '\r' -> return null
+                '\\' -> index++
+                '(' -> depth++
+                ')' -> {
+                    depth--
+                    if (depth == 0) return index
+                }
+            }
+            index++
+        }
+        return null
+    }
+
+    private fun findInlineCodeEnd(content: String, start: Int): Int? {
+        if (start !in content.indices || content[start] != '`') return null
+        val markerLength = countFenceMarkerLength(content.substring(start), '`')
+        val marker = "`".repeat(markerLength)
+        var searchIndex = start + markerLength
+        while (searchIndex < content.length) {
+            val close = content.indexOf(marker, searchIndex)
+            if (close < 0) return null
+            val precededByBacktick = close > 0 && content[close - 1] == '`'
+            val followedByBacktick = close + markerLength < content.length && content[close + markerLength] == '`'
+            if (!precededByBacktick && !followedByBacktick) return close + markerLength
+            searchIndex = close + markerLength
+        }
+        return null
+    }
+
     private fun parseFenceStart(content: String, start: Int): FenceStart? {
         if (start < 0 || start >= content.length) return null
         val lineStart = content.lastIndexOf('\n', start).let { if (it < 0) 0 else it + 1 }
@@ -474,5 +744,27 @@ object StreamBlockParser {
             markerLength++
         }
         return markerLength
+    }
+
+    private fun createFormulaId(latex: String, displayMode: FormulaDisplayMode): String {
+        val source = "${displayMode.name}\u0000$latex"
+        return MessageDigest.getInstance("SHA-256")
+            .digest(source.toByteArray(StandardCharsets.UTF_8))
+            .joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
+    }
+
+    private fun extractFormulaBody(token: String): String {
+        val normalized = token.replace("\r\n", "\n").replace('\r', '\n').trim()
+        return when {
+            normalized.startsWith("$$") && normalized.endsWith("$$") && normalized.length >= 4 ->
+                normalized.substring(2, normalized.length - 2)
+            normalized.startsWith("\\[") && normalized.endsWith("\\]") && normalized.length >= 4 ->
+                normalized.substring(2, normalized.length - 2)
+            normalized.startsWith("\\(") && normalized.endsWith("\\)") && normalized.length >= 4 ->
+                normalized.substring(2, normalized.length - 2)
+            normalized.startsWith('$') && normalized.endsWith('$') && normalized.length >= 2 ->
+                normalized.substring(1, normalized.length - 1)
+            else -> normalized
+        }.trim()
     }
 }

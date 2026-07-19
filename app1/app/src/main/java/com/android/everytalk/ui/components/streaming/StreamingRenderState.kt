@@ -3,17 +3,17 @@ package com.android.everytalk.ui.components.streaming
 data class StreamingRenderState(
     val messageId: String,
     val content: String = "",
+    val preparedMessage: PreparedMessage = PreparedMessage(
+        markdown = "",
+        formulas = emptyMap(),
+        hasPendingFormula = false,
+        contentVersion = 0L,
+    ),
     val blocks: List<StreamBlock> = emptyList(),
-    val committedBlocks: List<StreamBlock> = emptyList(),
-    val tailBlocks: List<StreamBlock> = emptyList(),
     val hasPendingMath: Boolean = false,
     val blocksHash: String = "empty",
-    val committedBlocksHash: String = "empty",
-    val tailBlocksHash: String = "empty",
     val isStreaming: Boolean = false,
     val isComplete: Boolean = false,
-    val codeBlockRanges: List<IntRange> = emptyList(),
-    val mathRanges: List<IntRange> = emptyList(),
 )
 
 /**
@@ -32,27 +32,24 @@ internal fun buildStreamingRenderState(
     content: String,
     isStreaming: Boolean,
     isComplete: Boolean,
+    contentVersion: Long = contentVersionForRendering(content),
 ): StreamingRenderState {
     val parseResult = StreamBlockParser.parse(content, messageId)
-    val split = splitBlocksForRender(parseResult.blocks, isComplete)
+    val preparedMessage = StreamBlockParser.prepareMessage(
+        content = content,
+        blocks = parseResult.blocks,
+        hasPendingFormula = parseResult.hasPendingMath,
+        contentVersion = contentVersion,
+    )
     return StreamingRenderState(
         messageId = messageId,
         content = content,
+        preparedMessage = preparedMessage,
         blocks = parseResult.blocks,
-        committedBlocks = split.committedBlocks,
-        tailBlocks = split.tailBlocks,
         hasPendingMath = parseResult.hasPendingMath,
         blocksHash = parseResult.blocksHash,
-        committedBlocksHash = hashBlocks(split.committedBlocks, includePending = false),
-        tailBlocksHash = hashBlocks(split.tailBlocks, includePending = parseResult.hasPendingMath),
         isStreaming = isStreaming,
         isComplete = isComplete,
-        codeBlockRanges = parseResult.blocks
-            .filterIsInstance<StreamBlock.CodeBlock>()
-            .map { it.start until it.endExclusive },
-        mathRanges = parseResult.blocks
-            .filter { it is StreamBlock.MathBlock || it is StreamBlock.MathInline }
-            .map { it.start until it.endExclusive },
     )
 }
 
@@ -65,9 +62,16 @@ internal fun buildStreamingRenderStateIncremental(
     isStreaming: Boolean,
     isComplete: Boolean,
     cache: IncrementalParseCache,
+    contentVersion: Long = contentVersionForRendering(content),
 ): Pair<StreamingRenderState, IncrementalParseCache> {
     if (content.length < cache.committedEndOffset || content.isEmpty()) {
-        val state = buildStreamingRenderState(messageId, content, isStreaming, isComplete)
+        val state = buildStreamingRenderState(
+            messageId = messageId,
+            content = content,
+            isStreaming = isStreaming,
+            isComplete = isComplete,
+            contentVersion = contentVersion,
+        )
         val newCache = buildCacheFromBlocks(state.blocks, content.length)
         return state to newCache
     }
@@ -79,26 +83,21 @@ internal fun buildStreamingRenderStateIncremental(
 
     val allBlocks = cache.committedBlocks + tailResult.blocks
     val hasPendingMath = tailResult.hasPendingMath
-    val split = splitBlocksForRender(allBlocks, isComplete)
-
+    val preparedMessage = StreamBlockParser.prepareMessage(
+        content = content,
+        blocks = allBlocks,
+        hasPendingFormula = hasPendingMath,
+        contentVersion = contentVersion,
+    )
     val state = StreamingRenderState(
         messageId = messageId,
         content = content,
+        preparedMessage = preparedMessage,
         blocks = allBlocks,
-        committedBlocks = split.committedBlocks,
-        tailBlocks = split.tailBlocks,
         hasPendingMath = hasPendingMath,
         blocksHash = hashBlocks(allBlocks, includePending = hasPendingMath),
-        committedBlocksHash = hashBlocks(split.committedBlocks, includePending = false),
-        tailBlocksHash = hashBlocks(split.tailBlocks, includePending = hasPendingMath),
         isStreaming = isStreaming,
         isComplete = isComplete,
-        codeBlockRanges = allBlocks
-            .filterIsInstance<StreamBlock.CodeBlock>()
-            .map { it.start until it.endExclusive },
-        mathRanges = allBlocks
-            .filter { it is StreamBlock.MathBlock || it is StreamBlock.MathInline }
-            .map { it.start until it.endExclusive },
     )
 
     val newCache = buildCacheFromBlocks(allBlocks, content.length)
@@ -117,21 +116,6 @@ private fun buildCacheFromBlocks(blocks: List<StreamBlock>, contentLength: Int):
         committedEndOffset = committedEnd,
         lastContentLength = contentLength,
         lastBlockIndex = committed.size,
-    )
-}
-
-private data class RenderBlockSplit(
-    val committedBlocks: List<StreamBlock>,
-    val tailBlocks: List<StreamBlock>,
-)
-
-private fun splitBlocksForRender(blocks: List<StreamBlock>, isComplete: Boolean): RenderBlockSplit {
-    if (blocks.isEmpty()) return RenderBlockSplit(emptyList(), emptyList())
-    if (isComplete) return RenderBlockSplit(committedBlocks = blocks, tailBlocks = emptyList())
-    if (blocks.size == 1) return RenderBlockSplit(committedBlocks = emptyList(), tailBlocks = blocks)
-    return RenderBlockSplit(
-        committedBlocks = blocks.dropLast(1),
-        tailBlocks = blocks.takeLast(1),
     )
 }
 

@@ -1,164 +1,110 @@
 package com.android.everytalk.ui.components.markdown
 
+import com.android.everytalk.ui.components.streaming.BLOCK_FORMULA_FENCE_LANGUAGE
+import com.android.everytalk.ui.components.streaming.FormulaDisplayMode
+import com.android.everytalk.ui.components.streaming.FormulaRequest
+import com.android.everytalk.ui.components.streaming.INLINE_FORMULA_SCHEME
+import com.android.everytalk.ui.components.streaming.PreparedMessage
+import com.android.everytalk.ui.components.streaming.StreamBlockParser
 import com.mikepenz.markdown.model.State
 import com.mikepenz.markdown.model.parseMarkdown
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MikePenzMarkdownRendererTest {
 
     @Test
-    fun `行内公式会转换为MikePenz可承载的行内组件`() {
-        val rendered = prepareMarkdownForMikePenz(
-            markdown = "勾股定理为 ${'$'}a^2+b^2=c^2${'$'}。",
-            contentKey = "inline",
+    fun `行内公式链接只按64位小写SHA256查PreparedMessage映射`() {
+        val prepared = StreamBlockParser.prepareMessage(
+            content = "勾股定理为 ${'$'}a^2+b^2=c^2${'$'}。",
+            messageId = "inline",
+            contentVersion = 1L,
         )
+        val formula = prepared.formulas.values.single()
+        val link = INLINE_FORMULA_SCHEME + formula.id
 
-        val link = Regex("everytalk-math-inline:[A-Za-z0-9_-]+").find(rendered)?.value
-        requireNotNull(link)
-        assertEquals("a^2+b^2=c^2", decodeInlineMathLink(link))
-        assertFalse(rendered.contains("${'$'}a^2+b^2=c^2${'$'}"))
+        assertSame(formula, resolveInlineFormula(link, prepared))
+        assertEquals("${'$'}${formula.latex}${'$'}", inlineFormulaAlternateText(formula))
+        assertNull(resolveInlineFormula("${INLINE_FORMULA_SCHEME}ABC", prepared))
+        assertNull(resolveInlineFormula("${INLINE_FORMULA_SCHEME}${"a".repeat(63)}", prepared))
+        assertNull(resolveInlineFormula("${INLINE_FORMULA_SCHEME}${"a".repeat(64)}", prepared))
     }
 
     @Test
-    fun `块级公式会转换为内部公式组件而不进入代码块样式`() {
-        val rendered = prepareMarkdownForMikePenz(
-            markdown = "积分：\n${'$'}${'$'}\\int_0^1 x^2 dx${'$'}${'$'}\n结束",
-            contentKey = "block",
+    fun `行内公式拒绝块模式和过期contentVersion`() {
+        val id = "a".repeat(64)
+        val blockFormula = FormulaRequest(id, "x", FormulaDisplayMode.BLOCK, 7L)
+        val staleInlineFormula = FormulaRequest(id, "x", FormulaDisplayMode.INLINE, 6L)
+
+        assertNull(
+            resolveInlineFormula(
+                INLINE_FORMULA_SCHEME + id,
+                PreparedMessage("", mapOf(id to blockFormula), false, 7L),
+            )
         )
-
-        assertTrue(rendered.contains("```everytalk-internal-math-v1"))
-        val payload = rendered
-            .substringAfter("```everytalk-internal-math-v1\n")
-            .substringBefore("\n```")
-        assertEquals("\\int_0^1 x^2 dx", decodeMathPayload(payload))
+        assertNull(
+            resolveInlineFormula(
+                INLINE_FORMULA_SCHEME + id,
+                PreparedMessage("", mapOf(id to staleInlineFormula), false, 7L),
+            )
+        )
     }
 
     @Test
-    fun `表格由MikePenz原生解析且行内公式继续交给KaTeX`() {
-        val markdown = """
-            | 公式名称 | 数学表达式 |
-            |:---|:---:|
-            | 欧拉恒等式 | ${'$'}e^{i\\pi} + 1 = 0${'$'} |
-        """.trimIndent()
+    fun `块公式必须同时通过语言ID模式映射和版本校验`() {
+        val prepared = StreamBlockParser.prepareMessage(
+            content = "${'$'}${'$'}\\int_0^1 x^2 dx${'$'}${'$'}",
+            messageId = "block",
+            contentVersion = 2L,
+        )
+        val formula = prepared.formulas.values.single()
 
-        val rendered = prepareMarkdownForMikePenz(markdown, "table")
-
-        assertTrue(rendered.contains("everytalk-math-inline:"))
-        assertFalse(rendered.contains("${'$'}e^{i\\pi} + 1 = 0${'$'}"))
-        assertTrue(parseMarkdown(rendered) is State.Success)
+        assertSame(
+            formula,
+            resolveBlockFormula(BLOCK_FORMULA_FENCE_LANGUAGE, formula.id, prepared),
+        )
+        assertNull(resolveBlockFormula("kotlin", formula.id, prepared))
+        assertNull(resolveBlockFormula(BLOCK_FORMULA_FENCE_LANGUAGE, "not-an-id", prepared))
+        assertNull(
+            resolveBlockFormula(
+                BLOCK_FORMULA_FENCE_LANGUAGE,
+                "b".repeat(64),
+                prepared,
+            )
+        )
     }
 
     @Test
-    fun `代码块中的美元符号和LaTeX不会被公式预处理改写`() {
-        val markdown = """
-            ```kotlin
-            val price = "${'$'}30"
-            val latex = "${'$'}\\frac{a}{b}${'$'}"
-            ```
-        """.trimIndent()
-
-        assertEquals(markdown, prepareMarkdownForMikePenz(markdown, "code"))
-    }
-
-    @Test
-    fun `Markdown示例中的嵌套代码围栏不会吞掉后续内容`() {
+    fun `Markdown围栏解包但任务标记和表格原文不改写`() {
         val markdown = """
             ```markdown
-            ### Python 示例
+            - [/] 保留非标准任务标记
 
-            ```python
-            print("ok")
-            ```
-
-            行内代码说明
-            ```
-
-            ### 后续标题
-            后续正文
-        """.trimIndent()
-
-        val normalized = normalizeNestedMarkdownCodeFences(markdown)
-
-        assertTrue(normalized.startsWith("````markdown\n"))
-        assertTrue(normalized.contains("\n```python\n"))
-        assertTrue(normalized.contains("\n```\n\n行内代码说明\n````\n\n### 后续标题"))
-        assertTrue(parseMarkdown(normalized) is State.Success)
-
-        val prepared = prepareMarkdownForMikePenz(markdown, "nested-markdown")
-        assertFalse(prepared.contains("````markdown"))
-        assertFalse(prepared.contains("```markdown"))
-        assertTrue(prepared.contains("```python\nprint(\"ok\")\n```"))
-        assertTrue(prepared.contains("### 后续标题\n后续正文"))
-        assertTrue(parseMarkdown(prepared) is State.Success)
-    }
-
-    @Test
-    fun `普通代码围栏保持原样`() {
-        val markdown = """
-            ```python
-            print("ok")
-            ```
-        """.trimIndent()
-
-        assertEquals(markdown, normalizeNestedMarkdownCodeFences(markdown))
-    }
-
-    @Test
-    fun `Markdown文档围栏中的表格和公式进入正式渲染`() {
-        val markdown = """
-            ```markdown
-            | 名称 | 公式 |
+            | 名称 | 状态 |
             |:---|:---:|
-            | 质能方程 | ${'$'}E = mc^2${'$'} |
-
-            ${'$'}${'$'}e^{i\\pi} + 1 = 0${'$'}${'$'}
+            | 示例 | 正常 |
             ```
         """.trimIndent()
 
-        val prepared = prepareMarkdownForMikePenz(markdown, "wrapped-table-math")
+        val prepared = StreamBlockParser.prepareMessage(
+            content = markdown,
+            messageId = "native-markdown",
+            contentVersion = 3L,
+        )
 
-        assertFalse(prepared.contains("```markdown"))
-        assertTrue(prepared.contains("| 名称 | 公式 |"))
-        assertTrue(prepared.contains("everytalk-math-inline:"))
-        assertTrue(prepared.contains("```everytalk-internal-math-v1"))
-        assertTrue(parseMarkdown(prepared) is State.Success)
+        assertFalse(prepared.markdown.contains("```markdown"))
+        assertTrue(prepared.markdown.contains("- [/] 保留非标准任务标记"))
+        assertTrue(prepared.markdown.contains("| 名称 | 状态 |"))
+        assertTrue(prepared.formulas.isEmpty())
+        assertTrue(parseMarkdown(prepared.markdown) is State.Success)
     }
 
     @Test
-    fun `进行中任务标记转为标准未完成任务且代码块内容不变`() {
-        val markdown = """
-            - [/] 核心功能模块开发（进行中）
-
-            ```text
-            - [/] 代码示例
-            ```
-        """.trimIndent()
-
-        val prepared = prepareMarkdownForMikePenz(markdown, "in-progress-task")
-
-        assertTrue(prepared.startsWith("- [ ] 核心功能模块开发（进行中）"))
-        assertTrue(prepared.contains("```text\n- [/] 代码示例\n```"))
-    }
-
-    @Test
-    fun `货币美元符号不会被识别为数学公式`() {
-        val markdown = "Free ${'$'}0, Pro ${'$'}20, credit ${'$'}30"
-
-        assertEquals(markdown, prepareMarkdownForMikePenz(markdown, "currency"))
-    }
-
-    @Test
-    fun `公式载荷按UTF8往返编码`() {
-        val latex = "\\begin{cases} 中文 & x > 0 \\\\ 0 & x = 0 \\end{cases}"
-
-        assertEquals(latex, decodeMathPayload(encodeMathPayload(latex)))
-    }
-
-    @Test
-    fun `完整表格代码块和公式样例可由MikePenz解析`() {
+    fun `表格代码块和公式占位可由MikePenz一次解析`() {
         val markdown = """
             # 渲染测试
 
@@ -172,11 +118,16 @@ class MikePenzMarkdownRendererTest {
 
             ${'$'}${'$'}\\int_0^1 x^2 dx${'$'}${'$'}
         """.trimIndent()
-        val prepared = prepareMarkdownForMikePenz(markdown, "full-sample")
+        val prepared = StreamBlockParser.prepareMessage(
+            content = markdown,
+            messageId = "full-sample",
+            contentVersion = 4L,
+        )
 
-        val state = parseMarkdown(prepared)
+        val state = parseMarkdown(prepared.markdown)
 
         assertTrue(state is State.Success)
-        assertEquals(prepared, (state as State.Success).content)
+        assertEquals(prepared.markdown, (state as State.Success).content)
+        assertEquals(2, prepared.formulas.size)
     }
 }

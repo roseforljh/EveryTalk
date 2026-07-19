@@ -8,7 +8,6 @@ import io.mockk.every
 import io.mockk.mockkStatic
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
@@ -27,36 +26,31 @@ class MessageProcessorFinalizePartsTest {
     }
 
     @Test
-    fun `finalize message processing should persist code blocks into message parts`() {
+    fun `finalize message processing should persist complete raw markdown as one text part`() {
         val text = """
-            ### 2. Windows 系统安装
-            Windows 用户通常需要通过 **PowerShell**（管理员权限）运行安装脚本。目前社区推荐的一键安装方式如下：
-            *   **方式 A（官方/通用）：**
-                打开 PowerShell，输入：
-                ```powershell
-                irm https://openclaw.ai/install.ps1 | iex
-                ```
-            *   **方式 B（社区简化版/Qclaw）：**
-                部分博主（如秋芝2046）提供的简化脚本，通常在 PowerShell 中运行：
-                ```powershell
-                iex (irm https://qclaw.io/install.ps1)
-                ```
-        """.trimIndent()
+            # 渲染测试
 
+            | 名称 | 公式 |
+            |:---|:---:|
+            | 质能方程 | ${'$'}E = mc^2${'$'} |
+
+            ```kotlin
+            val answer = 42
+            ```
+
+            ${'$'}${'$'}\int_0^1 x^2 dx${'$'}${'$'}
+        """.trimIndent()
         val message = Message(
-            id = "msg",
+            id = "raw-markdown-message",
             text = text,
             sender = Sender.AI,
-            contentStarted = true
+            contentStarted = true,
         )
 
-        val processor = MessageProcessor().apply { initialize("session", "msg") }
+        val processor = MessageProcessor().apply { initialize("session", message.id) }
         val finalized = processor.finalizeMessageProcessing(message)
-        val codeBlocks = finalized.parts.filterIsInstance<MarkdownPart.CodeBlock>()
 
-        assertEquals(2, codeBlocks.size)
-        assertTrue(codeBlocks.any { it.language == "powershell" && it.content.contains("openclaw.ai/install.ps1 | iex") })
-        assertTrue(codeBlocks.any { it.language == "powershell" && it.content.contains("qclaw.io/install.ps1") })
+        assertEquals(listOf(MarkdownPart.Text(id = "text_0", content = text)), finalized.parts)
     }
 
     @Test

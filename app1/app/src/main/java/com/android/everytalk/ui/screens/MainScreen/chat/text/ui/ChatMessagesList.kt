@@ -85,8 +85,11 @@ import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.components.dialog.appDialogSubtextColor
 import com.android.everytalk.ui.components.scrollFadeEdge
 import com.android.everytalk.ui.components.streaming.StreamBlock
+import com.android.everytalk.ui.components.streaming.MathBlockState
+import com.android.everytalk.ui.components.streaming.StreamBlockParser
 import com.android.everytalk.ui.components.streaming.UnifiedMarkdownRenderer
 import com.android.everytalk.ui.components.streaming.buildStreamingRenderState
+import com.android.everytalk.ui.components.streaming.contentVersionForRendering
 import com.android.everytalk.ui.topanchor.RunTopAnchorReserveEngine
 import com.android.everytalk.ui.topanchor.TopAnchorConfig
 import com.android.everytalk.ui.topanchor.TopAnchorPhase
@@ -1229,10 +1232,26 @@ fun AiMessageItem(
                     selectedRenderState?.blocks ?: emptyList()
                 }
 
+                val preparedFromBlocks = remember(displayMessage.text, effectiveRenderBlocks) {
+                    val hasPendingFormula = effectiveRenderBlocks.any { block ->
+                        when (block) {
+                            is StreamBlock.MathInline -> block.state != MathBlockState.RENDERED
+                            is StreamBlock.MathBlock -> block.state != MathBlockState.RENDERED
+                            else -> false
+                        }
+                    }
+                    StreamBlockParser.prepareMessage(
+                        content = displayMessage.text,
+                        blocks = effectiveRenderBlocks,
+                        hasPendingFormula = hasPendingFormula,
+                        contentVersion = contentVersionForRendering(displayMessage.text),
+                    )
+                }
+                val preparedMessage = selectedRenderState?.preparedMessage ?: preparedFromBlocks
+
                 if (effectiveRenderBlocks.isNotEmpty()) {
                     UnifiedMarkdownRenderer(
-                        markdown = displayMessage.text,
-                        contentKey = message.id,
+                        preparedMessage = preparedMessage,
                         sender = displayMessage.sender,
                         isStreaming = shouldPreferStreamingContent,
                         onCodePreviewRequested = { lang, code ->

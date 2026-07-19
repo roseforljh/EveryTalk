@@ -7,6 +7,7 @@ import com.android.everytalk.service.ChatService
 import com.android.everytalk.service.ChatServiceImpl
 import com.android.everytalk.statecontroller.StreamingMessageStateManager
 import com.android.everytalk.statecontroller.ViewModelStateHolder
+import com.android.everytalk.ui.components.math.MathJaxSvgRenderer
 import com.android.everytalk.util.cache.CacheManager
 import com.android.everytalk.util.storage.FileManager
 import io.ktor.client.HttpClient
@@ -58,6 +59,7 @@ val cacheModule = module {
 val serviceModule = module {
     single<ChatService> { ChatServiceImpl(androidContext()) }
     single { StreamingMessageStateManager() }
+    single { MathJaxSvgRenderer(androidContext()) }
 }
 
 val stateModule = module {
