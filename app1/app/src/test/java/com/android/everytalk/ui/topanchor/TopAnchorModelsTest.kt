@@ -40,4 +40,19 @@ class TopAnchorModelsTest {
         assertFalse(state.suppressesBottomScroll)
         assertFalse(state.hasRuntime)
     }
+
+    @Test
+    fun `user controlled phase keeps reserve runtime without suppressing user scroll`() {
+        val turn = TopAnchorTurn("u2", "a2", "s1", 2L)
+        val state = TopAnchorRuntimeState(
+            phase = TopAnchorPhase.UserControlled,
+            retainedTurn = turn,
+            reservePx = 120,
+        )
+
+        assertFalse(state.suppressesBottomScroll)
+        assertTrue(state.hasRuntime)
+        assertEquals(120, state.reservePx)
+        assertEquals(turn, state.currentTurn)
+    }
 }

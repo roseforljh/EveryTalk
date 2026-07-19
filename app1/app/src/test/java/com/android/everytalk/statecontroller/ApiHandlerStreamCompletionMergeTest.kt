@@ -11,6 +11,40 @@ import org.junit.Test
 class ApiHandlerStreamCompletionMergeTest {
 
     @Test
+    fun `merge streaming completion message keeps the more complete synced reasoning`() {
+        val syncedMessage = Message(
+            id = "msg-reasoning",
+            text = "answer",
+            sender = Sender.AI,
+            reasoning = "第一段第二段第三段",
+        )
+        val finalizedMessage = syncedMessage.copy(reasoning = "第一段")
+
+        val merged = mergeStreamingCompletionMessage(syncedMessage, finalizedMessage)
+
+        assertEquals("第一段第二段第三段", merged.reasoning)
+    }
+
+    @Test
+    fun `merge streaming completion message never restores filtered raw text or parts`() {
+        val syncedMessage = Message(
+            id = "msg-filtered",
+            text = "安全正文",
+            sender = Sender.AI,
+            contentStarted = true,
+        )
+        val finalizedMessage = syncedMessage.copy(
+            text = "安全正文\n泄露内容",
+            parts = listOf(MarkdownPart.Text(id = "text_0", content = "安全正文\n泄露内容")),
+        )
+
+        val merged = mergeStreamingCompletionMessage(syncedMessage, finalizedMessage)
+
+        assertEquals("安全正文", merged.text)
+        assertEquals(listOf(MarkdownPart.Text(id = "text_0", content = "安全正文")), merged.parts)
+    }
+
+    @Test
     fun `merge streaming completion message should keep synced text and finalized structure`() {
         val syncedMessage = Message(
             id = "msg-1",

@@ -71,11 +71,12 @@ class ChatScrollStateManager(
     private var isProgrammaticScroll = false
     private var suppressTopAnchorBottomScroll by mutableStateOf(false)
     private var topAnchorRuntimeClearer: (() -> Unit)? = null
+    private var topAnchorUserScrollReleaser: (() -> Unit)? = null
 
     val nestedScrollConnection = object : NestedScrollConnection {
         override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
             if (source == NestedScrollSource.UserInput && suppressTopAnchorBottomScroll) {
-                topAnchorRuntimeClearer?.invoke()
+                topAnchorUserScrollReleaser?.invoke()
                 suppressTopAnchorBottomScroll = false
             }
             if (source == NestedScrollSource.UserInput || source == NestedScrollSource.SideEffect) {
@@ -176,15 +177,26 @@ class ChatScrollStateManager(
 
     fun updateTopAnchorBottomScrollSuppression(suppressed: Boolean) {
         suppressTopAnchorBottomScroll = suppressed
+        if (suppressed) cancelAutoScrollJob()
     }
 
     fun setTopAnchorRuntimeClearer(clearer: (() -> Unit)?) {
         topAnchorRuntimeClearer = clearer
     }
 
+    fun setTopAnchorUserScrollReleaser(releaser: (() -> Unit)?) {
+        topAnchorUserScrollReleaser = releaser
+    }
+
     fun lockAutoScroll() {
+        cancelAutoScrollJob()
         preventAutoScroll = true
         logger.debug("Auto-scroll locked")
+    }
+
+    private fun cancelAutoScrollJob() {
+        autoScrollJob?.cancel()
+        autoScrollJob = null
     }
 
     /**

@@ -1,5 +1,6 @@
 package com.android.everytalk.statecontroller
 
+import com.android.everytalk.config.PerformanceConfig
 import com.android.everytalk.util.debug.PerformanceMonitor
 import io.mockk.every
 import io.mockk.justRun
@@ -118,5 +119,12 @@ class StreamingBufferTest {
         assertTrue(allContent.contains("A"))
         assertTrue(allContent.contains("B"))
         assertTrue(allContent.contains("C"))
+    }
+
+    @Test
+    fun `default streaming buffer uses bounded markdown cadence`() {
+        assertEquals(120L, PerformanceConfig.STREAMING_BUFFER_UPDATE_INTERVAL_MS)
+        assertEquals(64, PerformanceConfig.STREAMING_BUFFER_BATCH_THRESHOLD)
+        assertTrue(PerformanceConfig.STREAMING_BUFFER_MIN_INTERVAL_MS >= 80L)
     }
 }

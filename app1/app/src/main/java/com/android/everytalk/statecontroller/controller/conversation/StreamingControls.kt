@@ -50,19 +50,7 @@ class StreamingControls(
     private fun flushIfResumed() {
         val isImageMode = isImageModeProvider()
         scope.launch {
-            // 获取当前流式消息ID
-            val currentStreamingId = if (isImageMode) {
-                stateHolder._currentImageStreamingAiMessageId.value
-            } else {
-                stateHolder._currentTextStreamingAiMessageId.value
-            }
-            
-            // 先同步 StreamingMessageStateManager 中的累积内容到 messages 列表
-            if (!currentStreamingId.isNullOrBlank()) {
-                stateHolder.syncStreamingMessageToList(currentStreamingId, isImageMode)
-            }
-            
-            // 然后调用 ApiHandler 的 flush 方法
+            // 恢复显示只同步快照，流仍继续接收，不能提前进入终态。
             apiHandler.flushPausedStreamingUpdate(isImageGeneration = isImageMode)
             showSnackbar("已继续")
         }

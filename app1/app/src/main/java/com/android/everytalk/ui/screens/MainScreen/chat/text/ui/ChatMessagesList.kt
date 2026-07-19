@@ -65,6 +65,7 @@ import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.statecontroller.AppViewModel
+import com.android.everytalk.statecontroller.freezeWhileStreamingPaused
 import com.android.everytalk.ui.screens.BubbleMain.Main.AttachmentsContent
 import com.android.everytalk.ui.screens.BubbleMain.Main.ReasoningToggleAndContent
 import com.android.everytalk.ui.screens.BubbleMain.Main.UserOrErrorMessageContent
@@ -94,7 +95,6 @@ import com.android.everytalk.ui.topanchor.RunTopAnchorReserveEngine
 import com.android.everytalk.ui.topanchor.TopAnchorConfig
 import com.android.everytalk.ui.topanchor.TopAnchorPhase
 import com.android.everytalk.ui.topanchor.TopAnchorReserveEngineState
-import com.android.everytalk.ui.topanchor.computeTopAnchorY
 import com.android.everytalk.ui.topanchor.mapChatItemsToTopAnchorItems
 import com.android.everytalk.ui.topanchor.resolveActiveTopAnchorTurn
 import kotlinx.coroutines.delay
@@ -102,7 +102,6 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import coil3.compose.AsyncImage
 import androidx.compose.ui.layout.onSizeChanged
-import kotlinx.coroutines.flow.first
 import java.net.URI
 
 internal fun shouldBuildSourceStrippedRenderBlocks(
@@ -206,8 +205,16 @@ fun ChatMessagesList(
     // 防重复触发：在极短时间内只允许一次预览弹出
     var lastImagePreviewAt by remember { mutableStateOf(0L) }
 
-    val isApiCalling by viewModel.isTextApiCalling.collectAsState()
-    val currentStreamingId by viewModel.currentTextStreamingAiMessageId.collectAsState()
+    val pauseAwareApiCalling = remember(viewModel) {
+        viewModel.isTextApiCalling.freezeWhileStreamingPaused(viewModel.isStreamingPaused)
+    }
+    val pauseAwareStreamingId = remember(viewModel) {
+        viewModel.currentTextStreamingAiMessageId.freezeWhileStreamingPaused(viewModel.isStreamingPaused)
+    }
+    val isApiCalling by pauseAwareApiCalling.collectAsState(initial = viewModel.isTextApiCalling.value)
+    val currentStreamingId by pauseAwareStreamingId.collectAsState(
+        initial = viewModel.currentTextStreamingAiMessageId.value
+    )
     val configuration = LocalConfiguration.current
     val density = LocalDensity.current
     val pinnedUserBubbleMaxHeightPx = with(density) {
@@ -217,27 +224,10 @@ fun ChatMessagesList(
         ).dp.toPx().toInt()
     }
     
-    // Performance monitoring: Track recomposition count for ChatMessagesList
-    // This helps verify that the overall list recomposition is reduced
-    // Requirements: 1.4, 3.4
-    val listRecompositionCount = remember { mutableStateOf(0) }
-    LaunchedEffect(chatItems.size, isApiCalling, currentStreamingId) {
-        listRecompositionCount.value++
-        if (listRecompositionCount.value % 5 == 0) {
-            android.util.Log.d(
-                "ChatMessagesList",
-                "List recomposed ${listRecompositionCount.value} times (items: ${chatItems.size}, streaming: $isApiCalling)"
-            )
-        }
-    }
-
     val statusBarTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val topPadding = statusBarTop + 72.dp
     val topPaddingPx = with(density) { topPadding.toPx().toInt() }
     val topAnchorEngine = remember(scrollSessionKey) { TopAnchorReserveEngineState() }
-    var firstBubbleScreenY by remember(scrollSessionKey) {
-        mutableStateOf(-1)
-    }
     val lastSentUserMessageId by viewModel.lastSentUserMessageId.collectAsState()
     val topAnchorItems = remember(chatItems) {
         mapChatItemsToTopAnchorItems(
@@ -245,16 +235,22 @@ fun ChatMessagesList(
             resolveErrorSender = { messageId -> viewModel.getMessageById(messageId)?.sender }
         )
     }
-    val activeTurn = remember(topAnchorItems, lastSentUserMessageId, scrollSessionKey, chatItems.size) {
+    val activeTurn = remember(
+        topAnchorItems,
+        lastSentUserMessageId,
+        scrollSessionKey,
+        chatItems.size,
+    ) {
         resolveActiveTopAnchorTurn(
             items = topAnchorItems,
             sentUserMessageId = lastSentUserMessageId,
             sessionKey = scrollSessionKey,
-            generation = chatItems.size.toLong()
+            generation = chatItems.size.toLong(),
         )
     }
-    val engineAnchorInfo = remember(chatItems, topAnchorEngine.runtime.currentTurn) {
-        val turn = topAnchorEngine.runtime.currentTurn ?: return@remember null
+    val engineTurn = topAnchorEngine.runtime.currentTurn
+    val engineAnchorInfo = remember(chatItems, engineTurn) {
+        val turn = engineTurn ?: return@remember null
         chatItems.mapIndexedNotNull { index, item ->
             if (item.stableId == turn.anchorMessageId) index to item.stableId else null
         }.firstOrNull()
@@ -263,14 +259,16 @@ fun ChatMessagesList(
 
     LaunchedEffect(scrollSessionKey) {
         topAnchorEngine.clearRuntime()
-        firstBubbleScreenY = -1
         scrollStateManager.updateTopAnchorBottomScrollSuppression(false)
-        scrollStateManager.setTopAnchorRuntimeClearer(null)
     }
 
     DisposableEffect(scrollStateManager, topAnchorEngine) {
         scrollStateManager.setTopAnchorRuntimeClearer(topAnchorEngine::clearRuntime)
-        onDispose { scrollStateManager.setTopAnchorRuntimeClearer(null) }
+        scrollStateManager.setTopAnchorUserScrollReleaser(topAnchorEngine::releaseForUserScroll)
+        onDispose {
+            scrollStateManager.setTopAnchorRuntimeClearer(null)
+            scrollStateManager.setTopAnchorUserScrollReleaser(null)
+        }
     }
 
     LaunchedEffect(topAnchorEngine.runtime.suppressesBottomScroll) {
@@ -279,72 +277,24 @@ fun ChatMessagesList(
         )
     }
 
-    LaunchedEffect(firstBubbleScreenY) {
-        if (firstBubbleScreenY > 0) {
-            val current = viewModel.getScrollState(scrollSessionKey)
-            if (current == null || current.firstBubbleScreenY != firstBubbleScreenY) {
-                viewModel.cacheScrollState(
-                    scrollSessionKey,
-                    (current ?: com.android.everytalk.statecontroller.ConversationScrollState()).copy(
-                        firstBubbleScreenY = firstBubbleScreenY
-                    )
-                )
-            }
-        }
-    }
-
-    LaunchedEffect(lastSentUserMessageId, chatItems.size, topPaddingPx) {
-        val sentId = lastSentUserMessageId ?: return@LaunchedEffect
-        val currentItems = viewModel.chatListItems.first { items ->
-            items.any { item ->
-                item is ChatListItem.UserMessage && item.stableId == sentId
-            }
-        }
-        val currentUserMessageIndices = currentItems.mapIndexedNotNull { index, item ->
-            if (item is ChatListItem.UserMessage) index else null
-        }
-        if (currentUserMessageIndices.size != 1) return@LaunchedEffect
-
-        val firstUserIndex = currentUserMessageIndices.first()
-        val firstItem = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == firstUserIndex }
-            ?: kotlinx.coroutines.withTimeoutOrNull(2000) {
-                snapshotFlow {
-                    listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == firstUserIndex }
-                }.first { it != null }
-            }
-        firstBubbleScreenY = if (firstItem != null) {
-            val itemTopY = firstItem.offset - listState.layoutInfo.viewportStartOffset
-            computeTopAnchorY(
-                itemTopY = itemTopY,
-                itemHeightPx = firstItem.size,
-                tallAnchorThresholdPx = pinnedUserBubbleMaxHeightPx,
-                tallAnchorVisibleHeightPx = with(density) { 96.dp.toPx().toInt() }
-            )
-        } else {
-            topPaddingPx
-        }
-        viewModel.consumeLastSentUserMessageId()
-    }
-
     LaunchedEffect(activeTurn?.anchorMessageId, activeTurn?.targetItemId, activeTurn?.generation) {
         val turn = activeTurn ?: return@LaunchedEffect
-        if (firstBubbleScreenY < 0) {
-            firstBubbleScreenY = topPaddingPx
-        }
-        if (topAnchorEngine.runtime.currentTurn != turn) {
-            topAnchorEngine.updateRuntime(
-                topAnchorEngine.runtime.copy(
-                    phase = TopAnchorPhase.InitialSnap,
-                    activeTurn = turn,
-                    retainedTurn = null
-                )
+        topAnchorEngine.updateRuntime(
+            topAnchorEngine.runtime.copy(
+                phase = TopAnchorPhase.InitialSnap,
+                activeTurn = turn,
+                retainedTurn = null
             )
-        }
-        viewModel.consumeLastSentUserMessageId()
+        )
+        viewModel.consumeLastSentUserMessageId(turn.anchorMessageId)
     }
 
-    LaunchedEffect(topAnchorEngine.runtime.currentTurn, engineAnchorInfo, chatItems.size) {
-        if (topAnchorEngine.runtime.currentTurn != null && engineAnchorInfo == null) {
+    LaunchedEffect(engineTurn, engineAnchorInfo) {
+        if (
+            engineTurn != null &&
+            engineAnchorInfo == null &&
+            topAnchorEngine.runtime.currentTurn == engineTurn
+        ) {
             topAnchorEngine.clearRuntime()
         }
     }
@@ -361,14 +311,15 @@ fun ChatMessagesList(
                     listState = listState,
                     anchorIndex = anchorIndex,
                     anchorKey = anchorKey,
-                    targetAnchorY = firstBubbleScreenY.takeIf { it > 0 } ?: topPaddingPx,
+                    targetAnchorY = topPaddingPx,
                     trailingRealItemIndex = chatItems.lastIndex,
                     isRunning = isApiCalling,
                     config = TopAnchorConfig(
                         tallAnchorThresholdPx = pinnedUserBubbleMaxHeightPx,
                         tallAnchorVisibleHeightPx = with(density) { 96.dp.toPx().toInt() },
                         topInsetPx = topPaddingPx,
-                        stableWindowNanos = 50_000_000L
+                        stableWindowNanos = 50_000_000L,
+                        keepReserveAfterRunEnd = false,
                     ),
                     enabled = topAnchorEngine.runtime.hasRuntime
                 )
@@ -536,9 +487,15 @@ fun ChatMessagesList(
 
                         is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageReasoning -> {
                             val reasoningCompleteMap = viewModel.textReasoningCompleteMap
-                            val streamingReasoning by remember(item.message.id) {
+                            val streamingReasoningSource = remember(item.message.id, viewModel) {
                                 viewModel.getStreamingReasoning(item.message.id)
-                            }.collectAsState(initial = item.message.reasoning ?: "")
+                            }
+                            val pauseAwareReasoning = remember(streamingReasoningSource, viewModel) {
+                                streamingReasoningSource.freezeWhileStreamingPaused(viewModel.isStreamingPaused)
+                            }
+                            val streamingReasoning by pauseAwareReasoning.collectAsState(
+                                initial = streamingReasoningSource.value.ifBlank { item.message.reasoning ?: "" }
+                            )
                             val displayedReasoningText =
                                 if (currentStreamingId == item.message.id && streamingReasoning.isNotBlank()) {
                                     streamingReasoning
@@ -582,12 +539,6 @@ fun ChatMessagesList(
                             if (message != null) {
                                 val text = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage) item.text else message.text
                                 val isStreaming = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageStreaming) true else (currentStreamingId == message.id)
-                                if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage && item.hasPendingMath) {
-                                    android.util.Log.d(
-                                        "ChatMessagesList",
-                                        "Pending math block: msgId=${item.messageId.take(8)}, blocks=${item.blocks.size}, hash=${item.blocksHash}"
-                                    )
-                                }
 
                                 Column(
                                     modifier = Modifier.fillMaxWidth(),
@@ -1058,9 +1009,15 @@ fun AiMessageItem(
             contentColor = MaterialTheme.colorScheme.onSurface,
             shadowElevation = 0.dp
         ) {
-            val streamingRenderState by remember(message.id, viewModel) {
+            val streamingRenderStateSource = remember(message.id, viewModel) {
                 viewModel.getStreamingRenderState(message.id)
-            }.collectAsState()
+            }
+            val pauseAwareRenderState = remember(streamingRenderStateSource, viewModel) {
+                streamingRenderStateSource.freezeWhileStreamingPaused(viewModel.isStreamingPaused)
+            }
+            val streamingRenderState by pauseAwareRenderState.collectAsState(
+                initial = streamingRenderStateSource.value
+            )
 
             val shouldPreferStreamingContent =
                 isStreaming ||

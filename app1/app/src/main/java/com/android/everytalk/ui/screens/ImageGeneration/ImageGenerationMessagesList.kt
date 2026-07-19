@@ -103,6 +103,7 @@ import okhttp3.Request
 import android.graphics.BitmapFactory
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.statecontroller.AppViewModel
+import com.android.everytalk.statecontroller.freezeWhileStreamingPaused
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
 import com.android.everytalk.ui.screens.MainScreen.chat.text.state.ChatScrollStateManager
 import com.android.everytalk.ui.screens.BubbleMain.Main.AttachmentsContent
@@ -121,7 +122,6 @@ import com.android.everytalk.ui.topanchor.RunTopAnchorReserveEngine
 import com.android.everytalk.ui.topanchor.TopAnchorConfig
 import com.android.everytalk.ui.topanchor.TopAnchorPhase
 import com.android.everytalk.ui.topanchor.TopAnchorReserveEngineState
-import com.android.everytalk.ui.topanchor.computeTopAnchorY
 import com.android.everytalk.ui.topanchor.mapChatItemsToTopAnchorItems
 import com.android.everytalk.ui.topanchor.resolveActiveTopAnchorTurn
 import com.android.everytalk.ui.topanchor.shouldAllowBottomScroll
@@ -130,7 +130,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.flow.first
 import coil3.size.Size
 import kotlin.math.min
 
@@ -281,7 +280,7 @@ fun ImageGenerationMessagesList(
                     }
                 }
                 is ChatListItem.AiMessage -> {
-                    (viewModel.getMessageById(item.messageId)?.imageUrls ?: emptyList()).map { it as Any }
+                    (item.message.imageUrls ?: emptyList()).map { it as Any }
                 }
                 else -> emptyList()
             }
@@ -387,14 +386,21 @@ fun ImageGenerationMessagesList(
         isImagePreviewVisible = true
     }
 
-    val isApiCalling by viewModel.isImageApiCalling.collectAsState()
-    val currentStreamingId by viewModel.currentImageStreamingAiMessageId.collectAsState()
+    val pauseAwareApiCalling = remember(viewModel) {
+        viewModel.isImageApiCalling.freezeWhileStreamingPaused(viewModel.isStreamingPaused)
+    }
+    val pauseAwareStreamingId = remember(viewModel) {
+        viewModel.currentImageStreamingAiMessageId.freezeWhileStreamingPaused(viewModel.isStreamingPaused)
+    }
+    val isApiCalling by pauseAwareApiCalling.collectAsState(initial = viewModel.isImageApiCalling.value)
+    val currentStreamingId by pauseAwareStreamingId.collectAsState(
+        initial = viewModel.currentImageStreamingAiMessageId.value
+    )
 
     val statusBarTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
     val topPadding = statusBarTop + 72.dp
     val topPaddingPx = with(density) { topPadding.toPx().toInt() }
     val topAnchorEngine = remember(scrollSessionKey) { TopAnchorReserveEngineState() }
-    var firstBubbleScreenY by remember(scrollSessionKey) { mutableStateOf(-1) }
     val lastSentImageUserMessageId by viewModel.lastSentImageUserMessageId.collectAsState()
     val topAnchorItems = remember(chatItems) {
         mapChatItemsToTopAnchorItems(
@@ -402,16 +408,22 @@ fun ImageGenerationMessagesList(
             resolveErrorSender = { messageId -> viewModel.getMessageById(messageId)?.sender }
         )
     }
-    val activeTurn = remember(topAnchorItems, lastSentImageUserMessageId, scrollSessionKey, chatItems.size) {
+    val activeTurn = remember(
+        topAnchorItems,
+        lastSentImageUserMessageId,
+        scrollSessionKey,
+        chatItems.size,
+    ) {
         resolveActiveTopAnchorTurn(
             items = topAnchorItems,
             sentUserMessageId = lastSentImageUserMessageId,
             sessionKey = scrollSessionKey,
-            generation = chatItems.size.toLong()
+            generation = chatItems.size.toLong(),
         )
     }
-    val engineAnchorInfo = remember(chatItems, topAnchorEngine.runtime.currentTurn) {
-        val turn = topAnchorEngine.runtime.currentTurn ?: return@remember null
+    val engineTurn = topAnchorEngine.runtime.currentTurn
+    val engineAnchorInfo = remember(chatItems, engineTurn) {
+        val turn = engineTurn ?: return@remember null
         chatItems.mapIndexedNotNull { index, item ->
             if (item.stableId == turn.anchorMessageId) index to item.stableId else null
         }.firstOrNull()
@@ -431,14 +443,16 @@ fun ImageGenerationMessagesList(
 
     LaunchedEffect(scrollSessionKey) {
         topAnchorEngine.clearRuntime()
-        firstBubbleScreenY = -1
         scrollStateManager.updateTopAnchorBottomScrollSuppression(false)
-        scrollStateManager.setTopAnchorRuntimeClearer(null)
     }
 
     DisposableEffect(scrollStateManager, topAnchorEngine) {
         scrollStateManager.setTopAnchorRuntimeClearer(topAnchorEngine::clearRuntime)
-        onDispose { scrollStateManager.setTopAnchorRuntimeClearer(null) }
+        scrollStateManager.setTopAnchorUserScrollReleaser(topAnchorEngine::releaseForUserScroll)
+        onDispose {
+            scrollStateManager.setTopAnchorRuntimeClearer(null)
+            scrollStateManager.setTopAnchorUserScrollReleaser(null)
+        }
     }
 
     LaunchedEffect(topAnchorEngine.runtime.suppressesBottomScroll) {
@@ -447,72 +461,24 @@ fun ImageGenerationMessagesList(
         )
     }
 
-    LaunchedEffect(firstBubbleScreenY) {
-        if (firstBubbleScreenY > 0) {
-            val current = viewModel.getScrollState(scrollSessionKey)
-            if (current == null || current.firstBubbleScreenY != firstBubbleScreenY) {
-                viewModel.cacheScrollState(
-                    scrollSessionKey,
-                    (current ?: com.android.everytalk.statecontroller.ConversationScrollState()).copy(
-                        firstBubbleScreenY = firstBubbleScreenY
-                    )
-                )
-            }
-        }
-    }
-
-    LaunchedEffect(lastSentImageUserMessageId, chatItems.size, topPaddingPx) {
-        val sentId = lastSentImageUserMessageId ?: return@LaunchedEffect
-        val currentItems = viewModel.imageGenerationChatListItems.first { items ->
-            items.any { item ->
-                item is ChatListItem.UserMessage && item.stableId == sentId
-            }
-        }
-        val currentUserMessageIndices = currentItems.mapIndexedNotNull { index, item ->
-            if (item is ChatListItem.UserMessage) index else null
-        }
-        if (currentUserMessageIndices.size != 1) return@LaunchedEffect
-
-        val firstUserIndex = currentUserMessageIndices.first()
-        val firstItem = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == firstUserIndex }
-            ?: kotlinx.coroutines.withTimeoutOrNull(2000) {
-                snapshotFlow {
-                    listState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == firstUserIndex }
-                }.first { it != null }
-            }
-        firstBubbleScreenY = if (firstItem != null) {
-            val itemTopY = firstItem.offset - listState.layoutInfo.viewportStartOffset
-            computeTopAnchorY(
-                itemTopY = itemTopY,
-                itemHeightPx = firstItem.size,
-                tallAnchorThresholdPx = with(density) { 240.dp.toPx().toInt() },
-                tallAnchorVisibleHeightPx = with(density) { 96.dp.toPx().toInt() }
-            )
-        } else {
-            topPaddingPx
-        }
-        viewModel.consumeLastSentImageUserMessageId()
-    }
-
     LaunchedEffect(activeTurn?.anchorMessageId, activeTurn?.targetItemId, activeTurn?.generation) {
         val turn = activeTurn ?: return@LaunchedEffect
-        if (firstBubbleScreenY < 0) {
-            firstBubbleScreenY = topPaddingPx
-        }
-        if (topAnchorEngine.runtime.currentTurn != turn) {
-            topAnchorEngine.updateRuntime(
-                topAnchorEngine.runtime.copy(
-                    phase = TopAnchorPhase.InitialSnap,
-                    activeTurn = turn,
-                    retainedTurn = null
-                )
+        topAnchorEngine.updateRuntime(
+            topAnchorEngine.runtime.copy(
+                phase = TopAnchorPhase.InitialSnap,
+                activeTurn = turn,
+                retainedTurn = null
             )
-        }
-        viewModel.consumeLastSentImageUserMessageId()
+        )
+        viewModel.consumeLastSentImageUserMessageId(turn.anchorMessageId)
     }
 
-    LaunchedEffect(topAnchorEngine.runtime.currentTurn, engineAnchorInfo, chatItems.size) {
-        if (topAnchorEngine.runtime.currentTurn != null && engineAnchorInfo == null) {
+    LaunchedEffect(engineTurn, engineAnchorInfo) {
+        if (
+            engineTurn != null &&
+            engineAnchorInfo == null &&
+            topAnchorEngine.runtime.currentTurn == engineTurn
+        ) {
             topAnchorEngine.clearRuntime()
         }
     }
@@ -529,14 +495,15 @@ fun ImageGenerationMessagesList(
                 listState = listState,
                 anchorIndex = anchorIndex,
                 anchorKey = anchorKey,
-                targetAnchorY = firstBubbleScreenY.takeIf { it > 0 } ?: topPaddingPx,
+                targetAnchorY = topPaddingPx,
                 trailingRealItemIndex = chatItems.lastIndex,
                 isRunning = isApiCalling,
                 config = TopAnchorConfig(
                     tallAnchorThresholdPx = with(density) { 240.dp.toPx().toInt() },
                     tallAnchorVisibleHeightPx = with(density) { 96.dp.toPx().toInt() },
                     topInsetPx = topPaddingPx,
-                    stableWindowNanos = 50_000_000L
+                    stableWindowNanos = 50_000_000L,
+                    keepReserveAfterRunEnd = false,
                 ),
                 enabled = topAnchorEngine.runtime.hasRuntime
             )
@@ -670,33 +637,30 @@ fun ImageGenerationMessagesList(
                         }
 
                         is ChatListItem.AiMessage -> {
-                            val message = viewModel.getMessageById(item.messageId)
-                            android.util.Log.d("ImageGenMessagesList", "[UI] Rendering AI message: id=${message?.id?.take(8)}, hasImageUrls=${message?.imageUrls?.isNotEmpty()}, imageUrlsCount=${message?.imageUrls?.size}")
-                            if (message != null) {
-                                AiMessageItem(
-                                    message = message,
-                                    text = item.text,
-                                    maxWidth = bubbleMaxWidth,
-                                    onLongPress = { msg, pressOffset ->
-                                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                        if (msg.imageUrls?.isNotEmpty() == true) {
-                                            imageMenuMessage = msg
-                                            imageMenuPressOffset = pressOffset
-                                            isImageMenuVisible = true
-                                        } else {
-                                            onShowAiMessageOptions(msg)
-                                        }
-                                    },
-                                    onOpenPreview = { model ->
-                                        openImagePreview(model)
-                                    },
-                                    isStreaming = currentStreamingId == message.id,
-                                    onImageLoaded = guardedOnImageLoaded,
-                                    scrollStateManager = scrollStateManager,
-                                    viewModel = viewModel,
-                                    modifier = Modifier
-                                )
-                            }
+                            val message = item.message
+                            AiMessageItem(
+                                message = message,
+                                text = item.text,
+                                maxWidth = bubbleMaxWidth,
+                                onLongPress = { msg, pressOffset ->
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    if (msg.imageUrls?.isNotEmpty() == true) {
+                                        imageMenuMessage = msg
+                                        imageMenuPressOffset = pressOffset
+                                        isImageMenuVisible = true
+                                    } else {
+                                        onShowAiMessageOptions(msg)
+                                    }
+                                },
+                                onOpenPreview = { model ->
+                                    openImagePreview(model)
+                                },
+                                isStreaming = currentStreamingId == message.id,
+                                onImageLoaded = guardedOnImageLoaded,
+                                scrollStateManager = scrollStateManager,
+                                viewModel = viewModel,
+                                modifier = Modifier
+                            )
                         }
                         is ChatListItem.ErrorMessage -> {
                             val message = viewModel.getMessageById(item.messageId)
@@ -1915,9 +1879,15 @@ private fun AiMessageItem(
 ) {
     val shape = androidx.compose.ui.graphics.RectangleShape
     val aiReplyMessageDescription = stringResource(id = R.string.ai_reply_message)
-    val streamingRenderState by remember(message.id, viewModel) {
+    val streamingRenderStateSource = remember(message.id, viewModel) {
         viewModel.getStreamingRenderState(message.id)
-    }.collectAsState()
+    }
+    val pauseAwareRenderState = remember(streamingRenderStateSource, viewModel) {
+        streamingRenderStateSource.freezeWhileStreamingPaused(viewModel.isStreamingPaused)
+    }
+    val streamingRenderState by pauseAwareRenderState.collectAsState(
+        initial = streamingRenderStateSource.value
+    )
     val shouldPreferStreamingContent = isStreaming || streamingRenderState.isStreaming
     val effectiveText = if (shouldPreferStreamingContent) {
         streamingRenderState.content.ifBlank { text.ifBlank { message.text } }
@@ -1934,8 +1904,16 @@ private fun AiMessageItem(
     } else {
         message.copy(text = effectiveText)
     }
-    val renderState = remember(message.id, effectiveText, shouldPreferStreamingContent) {
-        if (effectiveText.isNotBlank()) {
+    val useUpstreamRenderState = shouldPreferStreamingContent &&
+        streamingRenderState.content == effectiveText &&
+        streamingRenderState.blocks.isNotEmpty()
+    val localRenderState = remember(
+        message.id,
+        effectiveText,
+        shouldPreferStreamingContent,
+        useUpstreamRenderState,
+    ) {
+        if (!useUpstreamRenderState && effectiveText.isNotBlank()) {
             buildStreamingRenderState(
                 messageId = "${message.id}:image-generation",
                 content = effectiveText,
@@ -1945,6 +1923,11 @@ private fun AiMessageItem(
         } else {
             null
         }
+    }
+    val renderState = if (useUpstreamRenderState) {
+        streamingRenderState
+    } else {
+        localRenderState
     }
 
     Row(
@@ -1992,10 +1975,7 @@ private fun AiMessageItem(
                             isStreaming = shouldPreferStreamingContent,
                         )
                     }
-                    android.util.Log.d("AiMessageItem", "🖼️ [RENDER] messageId=${message.id.take(8)}, imageUrls=${message.imageUrls?.size}, text='${text.take(20)}...'")
-                    
                     if (message.imageUrls != null && message.imageUrls.isNotEmpty()) {
-                        android.util.Log.d("AiMessageItem", "🖼️ [RENDER IMAGE] Showing ${message.imageUrls.size} images")
                         if (text.isNotBlank()) {
                             Spacer(modifier = Modifier.height(8.dp))
                         }

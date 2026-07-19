@@ -26,6 +26,10 @@ data class TopAnchorLayoutSnapshot(
     val layoutVersion: Long
         get() {
             var result = totalItemsCount.toLong()
+            result = result * 31 + viewportStartOffset
+            result = result * 31 + viewportEndOffset
+            result = result * 31 + beforeContentPadding
+            result = result * 31 + afterContentPadding
             result = result * 31 + firstVisibleItemIndex
             result = result * 31 + firstVisibleItemScrollOffset
             result = result * 31 + visibleItems.sumOf { it.size }

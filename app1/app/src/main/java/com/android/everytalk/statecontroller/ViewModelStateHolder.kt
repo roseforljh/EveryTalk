@@ -461,6 +461,7 @@ val _isStreamingPaused = MutableStateFlow(false)
     val _loadedHistoryIndex = MutableStateFlow<Int?>(null)
     val _loadedImageGenerationHistoryIndex = MutableStateFlow<Int?>(null)
     val _isLoadingHistory = MutableStateFlow(false)
+    val _historyLoadGeneration = MutableStateFlow(0L)
     
     // 图像生成错误处理状态
     val _imageGenerationRetryCount = MutableStateFlow(0)
@@ -552,21 +553,9 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
     }
     
     /**
-     * Create a StreamingBuffer for a message
-     * 
-     * This method creates a new buffer that will accumulate streaming content
-     * and trigger throttled updates to the UI. The buffer automatically handles:
-     * - Time-based throttling (300ms intervals)
-     * - Size-based batching (30 character threshold)
-     * - Delayed flush for slow streams
-     * 
-     * Also initializes the StreamingMessageStateManager for efficient UI observation.
-     * 
-     * Requirements: 1.4, 3.1, 3.2, 3.3, 3.4
-     * 
-     * @param messageId Unique identifier for the message
-     * @param isImageGeneration Whether this is for image generation chat
-     * @return The created StreamingBuffer instance
+     * 为消息创建流式缓冲区。
+     *
+     * 首个内容块立即显示，后续按时间和字符阈值合并，并同步初始化独立渲染状态。
      */
     fun createStreamingBuffer(messageId: String, isImageGeneration: Boolean = false): StreamingBuffer {
         val scope = bufferCoroutineScope ?: throw IllegalStateException(
@@ -588,8 +577,6 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
 
         val buffer = StreamingBuffer(
             messageId = messageId,
-            updateInterval = 120L,
-            batchThreshold = 30,
             onUpdate = { _, delta ->
                 if (delta.isNotEmpty()) {
                     streamingMessageStateManager.appendText(messageId, delta)
@@ -825,28 +812,9 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
         return metrics
     }
     fun appendReasoningToMessage(messageId: String, text: String, isImageGeneration: Boolean = false) {
+        if (text.isEmpty()) return
         val state = streamingReasoningStates.getOrPut(messageId) { MutableStateFlow("") }
         state.value += text
-
-        val messageList = if (isImageGeneration) imageGenerationMessages else messages
-        val index = messageList.indexOfFirst { it.id == messageId }
-        if (index != -1) {
-            val currentMessage = messageList[index]
-            val updatedMessage = currentMessage.copy(
-                reasoning = (currentMessage.reasoning ?: "") + text
-            )
-            messageList[index] = updatedMessage
-            
-            // 🔍 [STREAM_DEBUG] 记录reasoning更新
-            android.util.Log.i("STREAM_DEBUG", "[ViewModelStateHolder] ✅ Reasoning updated: msgId=$messageId, totalLen=${updatedMessage.reasoning?.length ?: 0}")
-            
-            // 🎯 根因修复：推理文本更新必须标记"会话脏"，否则不会被持久化
-            if (isImageGeneration) {
-                isImageConversationDirty.value = true
-            } else {
-                isTextConversationDirty.value = true
-            }
-        }
     }
 
     /**
@@ -859,10 +827,10 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
      * - 导致 LazyColumn 频繁重组（100次/10秒）
      * 
      * 新逻辑：
-     * - 流式期间：通过 StreamingBuffer 路由，自动节流（300ms/30字符）
+     * - 流式期间：通过 StreamingBuffer 路由，按 80 至 180ms 和 64 字符阈值合并
      * - 同时更新 StreamingMessageStateManager 以支持高效的 UI 观察
      * - 非流式：正常更新 messages
-     * - 大幅减少状态更新频率（从 100次/10秒 → ~10次/10秒）
+     * - 列表只在正文首次出现和终态同步时更新，正文增量由独立 StateFlow 驱动
      * 
      * Requirements: 1.4, 3.1, 3.2, 3.3, 3.4
      */
@@ -992,11 +960,12 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
 
         streamingBuffers[messageId]?.flush()
         val finalText = streamingMessageStateManager.finishStreaming(messageId)
+        val finalReasoning = streamingReasoningStates[messageId]?.value.orEmpty()
 
         android.util.Log.d("ViewModelStateHolder", "🎯 Syncing streaming message $messageId: finalText.length=${finalText.length}")
 
-        if (finalText.isEmpty()) {
-            android.util.Log.w("ViewModelStateHolder", "syncStreamingMessageToList: empty text for $messageId")
+        if (finalText.isEmpty() && finalReasoning.isEmpty()) {
+            android.util.Log.w("ViewModelStateHolder", "syncStreamingMessageToList: empty content for $messageId")
             return
         }
 
@@ -1005,10 +974,10 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
 
         if (index != -1) {
             val currentMessage = messageList[index]
-            // 🎯 流式结束：将 StreamingMessageStateManager 的内容同步到 message.text
             val updatedMessage = currentMessage.copy(
-                text = finalText,
-                contentStarted = true
+                text = finalText.ifEmpty { currentMessage.text },
+                reasoning = finalReasoning.ifEmpty { currentMessage.reasoning },
+                contentStarted = finalText.isNotEmpty() || currentMessage.contentStarted,
             )
             messageList[index] = updatedMessage
             android.util.Log.d("ViewModelStateHolder", "🎯 Synced message.text chars=${finalText.length}")
@@ -1024,6 +993,28 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
 
             android.util.Log.d("ViewModelStateHolder", "Synced streaming message $messageId, final length: ${finalText.length}")
         }
+    }
+
+    /**
+     * 将当前流式快照写入消息列表，但不结束流，也不设置终态幂等标记。
+     * 暂停后恢复显示时使用，后续增量仍可继续进入真正的终态同步。
+     */
+    fun syncStreamingSnapshotToList(messageId: String, isImageGeneration: Boolean = false) {
+        streamingBuffers[messageId]?.flush()
+        val currentText = streamingMessageStateManager.getCurrentContent(messageId)
+        val currentReasoning = streamingReasoningStates[messageId]?.value.orEmpty()
+        if (currentText.isEmpty() && currentReasoning.isEmpty()) return
+
+        val messageList = if (isImageGeneration) imageGenerationMessages else messages
+        val index = messageList.indexOfFirst { it.id == messageId }
+        if (index < 0) return
+
+        val currentMessage = messageList[index]
+        messageList[index] = currentMessage.copy(
+            text = currentText.ifEmpty { currentMessage.text },
+            reasoning = currentReasoning.ifEmpty { currentMessage.reasoning },
+            contentStarted = currentText.isNotEmpty() || currentMessage.contentStarted,
+        )
     }
     
     // 图像生成错误处理方法

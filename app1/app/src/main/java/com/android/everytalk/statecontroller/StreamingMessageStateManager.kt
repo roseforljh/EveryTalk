@@ -17,6 +17,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.locks.ReentrantReadWriteLock
+import kotlin.concurrent.read
+import kotlin.concurrent.write
 import kotlin.math.min
 
 /**
@@ -55,18 +58,17 @@ class StreamingMessageStateManager {
     private val scope = CoroutineScope(Dispatchers.Default + supervisorJob)
     private val pendingBuffers: MutableMap<String, StringBuilder> = ConcurrentHashMap()
     private val pendingJobs: MutableMap<String, Job> = ConcurrentHashMap()
+    private val bufferLocks = Array(LOCK_STRIPE_COUNT) { Any() }
+    private val renderLocks = Array(LOCK_STRIPE_COUNT) { Any() }
+    private val lifecycleLock = ReentrantReadWriteLock()
 
     private val DEBOUNCE_MS = 60L
     private val MAX_BUFFER_BEFORE_FORCE = 1024
+    private val SHORT_CONTENT_THRESHOLD = 200
     
     // 短内容快速响应：首次 flush 不走 debounce
     private val FIRST_FLUSH_DEBOUNCE_MS = 8L
-    // 短内容（< 200 字符）使用更短的 flush 间隔
-    private val SHORT_CONTENT_FLUSH_INTERVAL_MS = 30L
-    private val SHORT_CONTENT_THRESHOLD = 200
-
     private val lastFlushTime = ConcurrentHashMap<String, Long>()
-    private val MIN_FLUSH_INTERVAL_MS = 90L
     // 记录每个消息是否已经执行过首次 flush
     private val hasFirstFlushed = ConcurrentHashMap.newKeySet<String>()
 
@@ -95,127 +97,144 @@ class StreamingMessageStateManager {
     }
 
     fun startStreaming(messageId: String) {
-        activeStreamingMessages.add(messageId)
-        finalizedMessages.remove(messageId)
-        contentVersions[messageId] = 0L
-        streamingStates.getOrPut(messageId) {
-            MutableStateFlow("")
+        val initialContent = synchronized(bufferLockFor(messageId)) {
+            activeStreamingMessages.add(messageId)
+            finalizedMessages.remove(messageId)
+            contentVersions[messageId] = 0L
+            val stateFlow = streamingStates.getOrPut(messageId) {
+                MutableStateFlow("")
+            }
+            pendingBuffers.remove(messageId)
+            pendingJobs.remove(messageId)?.cancel()
+            hasFirstFlushed.remove(messageId)
+            lastFlushTime.remove(messageId)
+            contentLengthTracker.remove(messageId)
+            stateFlow.value
         }
-        streamingRenderStates[messageId] = MutableStateFlow(
-            buildStreamingRenderState(
+        synchronized(renderLockFor(messageId)) {
+            incrementalParseCaches.remove(messageId)
+            if (contentVersions[messageId] != 0L) return@synchronized
+            val initialState = buildStreamingRenderState(
                 messageId = messageId,
-                content = streamingStates[messageId]?.value.orEmpty(),
+                content = initialContent,
                 isStreaming = true,
                 isComplete = false,
                 contentVersion = 0L,
             )
-        )
-        pendingBuffers.remove(messageId)
-        pendingJobs.remove(messageId)?.cancel()
-        hasFirstFlushed.remove(messageId)
-        incrementalParseCaches.remove(messageId)
+            lifecycleLock.read {
+                if (contentVersions[messageId] != 0L || !streamingStates.containsKey(messageId)) return@read
+                streamingRenderStates[messageId] = MutableStateFlow(initialState)
+            }
+        }
         Log.d("StreamingMessageStateManager", "Started streaming for message: $messageId")
     }
 
     fun appendText(messageId: String, text: String) {
         if (text.isEmpty()) return
 
-        val stateFlow = streamingStates[messageId]
-        if (stateFlow == null) {
-            Log.w(
-                "StreamingMessageStateManager",
-                "Attempted to append to non-existent streaming state: $messageId"
-            )
-            return
+        val shouldForceFlush = synchronized(bufferLockFor(messageId)) {
+            if (streamingStates[messageId] == null || finalizedMessages.contains(messageId)) {
+                Log.w(
+                    "StreamingMessageStateManager",
+                    "Attempted to append to inactive streaming state: $messageId"
+                )
+                return
+            }
+
+            val buf = pendingBuffers.getOrPut(messageId) { StringBuilder() }
+            buf.append(text)
+
+            if (buf.length >= MAX_BUFFER_BEFORE_FORCE) {
+                true
+            } else {
+                // 首次 flush 使用极短延迟，确保短回复快速显示
+                val isFirstFlush = !hasFirstFlushed.contains(messageId)
+                val effectiveDebounce = if (isFirstFlush) FIRST_FLUSH_DEBOUNCE_MS else DEBOUNCE_MS
+
+                pendingJobs.remove(messageId)?.cancel()
+                pendingJobs[messageId] = scope.launch {
+                    delay(effectiveDebounce)
+                    flushNow(messageId)
+                }
+                false
+            }
         }
 
-        val buf = pendingBuffers.getOrPut(messageId) { StringBuilder() }
-        buf.append(text)
-
-        if (buf.length >= MAX_BUFFER_BEFORE_FORCE) {
-            flushNow(messageId)
-            return
-        }
-
-        // 首次 flush 使用极短延迟，确保短回复快速显示
-        val isFirstFlush = !hasFirstFlushed.contains(messageId)
-        val effectiveDebounce = if (isFirstFlush) FIRST_FLUSH_DEBOUNCE_MS else DEBOUNCE_MS
-
-        pendingJobs.remove(messageId)?.cancel()
-        pendingJobs[messageId] = scope.launch {
-            delay(effectiveDebounce)
-            flushNow(messageId)
-        }
+        if (shouldForceFlush) flushNow(messageId)
     }
 
     private fun flushNow(messageId: String) {
-        val stateFlow = streamingStates[messageId] ?: return
-        val buf = pendingBuffers[messageId] ?: return
-        if (buf.isEmpty()) return
+        var renderedContent: String? = null
+        var renderedVersion = 0L
+        var deltaLength = 0
+        var previousLength = 0
+        var adaptiveInterval = 0L
 
-        val combined = stateFlow.value + buf.toString()
-        if (shouldDelayFlush(stateFlow.value, combined, buf.length)) {
-            return
+        synchronized(bufferLockFor(messageId)) {
+            val stateFlow = streamingStates[messageId] ?: return
+            val buf = pendingBuffers[messageId] ?: return
+            if (buf.isEmpty()) return
+
+            val previousContent = stateFlow.value
+            val pendingText = buf.toString()
+            val combined = previousContent + pendingText
+            if (shouldDelayFlush(previousContent, combined, pendingText.length)) {
+                return
+            }
+
+            previousLength = previousContent.length
+            contentLengthTracker[messageId] = previousLength
+            adaptiveInterval = resolveStreamingRenderFlushIntervalMs(previousLength)
+
+            val now = System.currentTimeMillis()
+            val lastTime = lastFlushTime[messageId] ?: 0L
+            if ((now - lastTime) < adaptiveInterval && pendingText.length < MAX_BUFFER_BEFORE_FORCE) {
+                val remainingDelay = (adaptiveInterval - (now - lastTime)).coerceAtLeast(1L)
+                pendingJobs[messageId] = scope.launch {
+                    delay(remainingDelay)
+                    flushNow(messageId)
+                }
+                return
+            }
+
+            buf.setLength(0)
+            stateFlow.value = combined
+            hasFirstFlushed.add(messageId)
+            lastFlushTime[messageId] = now
+
+            deltaLength = pendingText.length
+            renderedContent = combined
+            renderedVersion = nextContentVersion(messageId)
         }
 
-        val currentLength = stateFlow.value.length
-        contentLengthTracker[messageId] = currentLength
-
-        val adaptiveInterval = when {
-            currentLength < SHORT_CONTENT_THRESHOLD -> SHORT_CONTENT_FLUSH_INTERVAL_MS
-            currentLength < 500 -> MIN_FLUSH_INTERVAL_MS
-            currentLength < 2000 -> MIN_FLUSH_INTERVAL_MS + 30L
-            currentLength < 5000 -> MIN_FLUSH_INTERVAL_MS + 60L
-            else -> MIN_FLUSH_INTERVAL_MS + 100L
-        }
-
-        val now = System.currentTimeMillis()
-        val lastTime = lastFlushTime[messageId] ?: 0L
-        if ((now - lastTime) < adaptiveInterval && buf.length < MAX_BUFFER_BEFORE_FORCE) {
-            return
-        }
-
-        val delta = buf.toString()
-        buf.setLength(0)
-
-        if (delta.length >= 50 || currentLength > 3000) {
+        val content = renderedContent ?: return
+        if (PerformanceMonitor.enabled && (deltaLength >= 50 || previousLength > 3000)) {
             Log.d(
                 "StreamingMessageStateManager",
-                "Flush: len=$currentLength, delta=${delta.length}, interval=${adaptiveInterval}ms"
+                "Flush: len=$previousLength, delta=$deltaLength, interval=${adaptiveInterval}ms"
             )
         }
-        PerformanceMonitor.recordStateFlowFlush(messageId, delta.length, currentLength + delta.length)
-
-        stateFlow.value = stateFlow.value + delta
-        hasFirstFlushed.add(messageId)
-        updateRenderState(messageId, stateFlow.value, isComplete = false)
-        lastFlushTime[messageId] = now
+        PerformanceMonitor.recordStateFlowFlush(messageId, deltaLength, content.length)
+        updateRenderState(messageId, content, isComplete = false, contentVersion = renderedVersion)
     }
 
     fun updateContent(messageId: String, content: String) {
-        val stateFlow = streamingStates[messageId]
-        if (stateFlow != null) {
+        val contentVersion = synchronized(bufferLockFor(messageId)) {
+            val stateFlow = streamingStates[messageId]
             pendingBuffers.remove(messageId)
             pendingJobs.remove(messageId)?.cancel()
-            stateFlow.value = content
-            updateRenderState(messageId, content, isComplete = false)
-        } else {
-            Log.w(
-                "StreamingMessageStateManager",
-                "Creating new state for message: $messageId, len=${content.length}"
-            )
-            streamingStates[messageId] = MutableStateFlow(content)
-            val contentVersion = nextContentVersion(messageId)
-            streamingRenderStates[messageId] = MutableStateFlow(
-                buildStreamingRenderState(
-                    messageId = messageId,
-                    content = content,
-                    isStreaming = activeStreamingMessages.contains(messageId),
-                    isComplete = false,
-                    contentVersion = contentVersion,
+            if (stateFlow != null) {
+                stateFlow.value = content
+            } else {
+                Log.w(
+                    "StreamingMessageStateManager",
+                    "Creating new state for message: $messageId, len=${content.length}"
                 )
-            )
+                streamingStates[messageId] = MutableStateFlow(content)
+            }
+            nextContentVersion(messageId)
         }
+        updateRenderState(messageId, content, isComplete = false, contentVersion = contentVersion)
     }
 
     fun finishStreaming(messageId: String): String {
@@ -223,30 +242,38 @@ class StreamingMessageStateManager {
     }
 
     fun finalizeMessage(messageId: String): String {
-        if (!finalizedMessages.add(messageId)) {
-            return streamingStates[messageId]?.value ?: ""
+        var finalContent: String
+        var contentVersion = 0L
+        var finalDeltaLength = 0
+
+        synchronized(bufferLockFor(messageId)) {
+            if (!finalizedMessages.add(messageId)) {
+                return streamingStates[messageId]?.value ?: ""
+            }
+
+            pendingJobs.remove(messageId)?.cancel()
+
+            val stateFlow = streamingStates[messageId]
+            val buf = pendingBuffers.remove(messageId)
+            if (stateFlow != null && buf != null && buf.isNotEmpty()) {
+                val delta = buf.toString()
+                stateFlow.value = stateFlow.value + delta
+                finalDeltaLength = delta.length
+            }
+
+            activeStreamingMessages.remove(messageId)
+            finalContent = stateFlow?.value.orEmpty()
+            contentVersion = nextContentVersion(messageId)
         }
 
-        pendingJobs.remove(messageId)?.cancel()
-
-        val stateFlow = streamingStates[messageId]
-        val buf = pendingBuffers[messageId]
-
-        if (stateFlow != null && buf != null && buf.isNotEmpty()) {
-            val delta = buf.toString()
-            stateFlow.value = stateFlow.value + delta
-            updateRenderState(messageId, stateFlow.value, isComplete = false)
-            buf.setLength(0)
-
+        if (PerformanceMonitor.enabled && finalDeltaLength > 0) {
             Log.d(
                 "StreamingMessageStateManager",
-                "Final flush for $messageId: deltaLen=${delta.length}, totalLen=${stateFlow.value.length}"
+                "Final flush for $messageId: deltaLen=$finalDeltaLength, totalLen=${finalContent.length}"
             )
         }
 
-        activeStreamingMessages.remove(messageId)
-        val finalContent = streamingStates[messageId]?.value ?: ""
-        updateRenderState(messageId, finalContent, isComplete = true)
+        updateRenderState(messageId, finalContent, isComplete = true, contentVersion = contentVersion)
         Log.d(
             "StreamingMessageStateManager",
             "Finished streaming for message: $messageId, final length: ${finalContent.length}"
@@ -255,13 +282,20 @@ class StreamingMessageStateManager {
     }
 
     fun clearStreamingState(messageId: String) {
-        activeStreamingMessages.remove(messageId)
-        pendingJobs.remove(messageId)?.cancel()
-        pendingBuffers.remove(messageId)
-        hasFirstFlushed.remove(messageId)
-        incrementalParseCaches.remove(messageId)
-        contentVersions.remove(messageId)
-        streamingStates.remove(messageId)
+        synchronized(bufferLockFor(messageId)) {
+            lifecycleLock.write {
+                activeStreamingMessages.remove(messageId)
+                finalizedMessages.remove(messageId)
+                pendingJobs.remove(messageId)?.cancel()
+                pendingBuffers.remove(messageId)
+                hasFirstFlushed.remove(messageId)
+                lastFlushTime.remove(messageId)
+                contentLengthTracker.remove(messageId)
+                contentVersions.remove(messageId)
+                streamingStates.remove(messageId)
+                incrementalParseCaches.remove(messageId)
+            }
+        }
         // 不删除 streamingRenderStates：UI 侧仍在 collectAsState 订阅该 Flow，
         // 如果此时 remove，UI 会收到一个全新的空 RenderState，导致一帧内容空白和高度坍塌。
         // 保留最终态让 UI 自然过渡到 message.text；下次 startStreaming 时会覆盖。
@@ -270,15 +304,22 @@ class StreamingMessageStateManager {
 
     fun clearAll() {
         val count = streamingStates.size
-        activeStreamingMessages.clear()
-        pendingJobs.values.forEach { it.cancel() }
-        pendingJobs.clear()
-        pendingBuffers.clear()
-        hasFirstFlushed.clear()
-        incrementalParseCaches.clear()
-        contentVersions.clear()
-        streamingStates.clear()
-        streamingRenderStates.clear()
+        withAllLocks(bufferLocks) {
+            lifecycleLock.write {
+                activeStreamingMessages.clear()
+                pendingJobs.values.forEach { it.cancel() }
+                pendingJobs.clear()
+                pendingBuffers.clear()
+                hasFirstFlushed.clear()
+                finalizedMessages.clear()
+                lastFlushTime.clear()
+                contentLengthTracker.clear()
+                incrementalParseCaches.clear()
+                contentVersions.clear()
+                streamingStates.clear()
+                streamingRenderStates.clear()
+            }
+        }
         Log.d("StreamingMessageStateManager", "Cleared all streaming states (count: $count)")
     }
 
@@ -287,9 +328,11 @@ class StreamingMessageStateManager {
     }
 
     fun getCurrentContent(messageId: String): String {
-        val base = streamingStates[messageId]?.value ?: ""
-        val buf = pendingBuffers[messageId]?.toString().orEmpty()
-        return base + buf
+        return synchronized(bufferLockFor(messageId)) {
+            val base = streamingStates[messageId]?.value ?: ""
+            val buf = pendingBuffers[messageId]?.toString().orEmpty()
+            base + buf
+        }
     }
 
     fun getCurrentRenderState(messageId: String): StreamingRenderState {
@@ -309,27 +352,38 @@ class StreamingMessageStateManager {
     }
 
     fun getStats(): Map<String, Any> {
+        val pendingLengths = pendingBuffers.keys.associateWith { messageId ->
+            synchronized(bufferLockFor(messageId)) {
+                min(pendingBuffers[messageId]?.length ?: 0, 256)
+            }
+        }
         return mapOf(
             "activeStreamingCount" to activeStreamingMessages.size,
             "totalStatesCount" to streamingStates.size,
             "activeMessageIds" to activeStreamingMessages.toList(),
-            "pendingBuffers" to pendingBuffers.mapValues { min(it.value.length, 256) }
+            "pendingBuffers" to pendingLengths
         )
     }
 
     fun cleanup() {
         Log.d("StreamingMessageStateManager", "🧹 Cleaning up StreamingMessageStateManager")
 
-        pendingJobs.values.forEach { it.cancel() }
-        pendingJobs.clear()
-
-        pendingBuffers.clear()
-        hasFirstFlushed.clear()
-        incrementalParseCaches.clear()
-        contentVersions.clear()
-        activeStreamingMessages.clear()
-        streamingStates.clear()
-        streamingRenderStates.clear()
+        withAllLocks(bufferLocks) {
+            lifecycleLock.write {
+                pendingJobs.values.forEach { it.cancel() }
+                pendingJobs.clear()
+                pendingBuffers.clear()
+                hasFirstFlushed.clear()
+                finalizedMessages.clear()
+                lastFlushTime.clear()
+                contentLengthTracker.clear()
+                incrementalParseCaches.clear()
+                contentVersions.clear()
+                activeStreamingMessages.clear()
+                streamingStates.clear()
+                streamingRenderStates.clear()
+            }
+        }
 
         scope.cancel()
 
@@ -396,57 +450,102 @@ class StreamingMessageStateManager {
         return false
     }
 
-    private fun updateRenderState(messageId: String, content: String, isComplete: Boolean) {
-        val isCurrentlyStreaming = activeStreamingMessages.contains(messageId) && !isComplete
-        val cache = incrementalParseCaches[messageId]
-        val previousContent = streamingRenderStates[messageId]?.value?.content
-        val contentVersion = nextContentVersion(messageId)
+    private fun updateRenderState(
+        messageId: String,
+        content: String,
+        isComplete: Boolean,
+        contentVersion: Long,
+    ) {
+        synchronized(renderLockFor(messageId)) {
+            // 只允许当前版本发布，避免旧解析任务或已清理生命周期覆盖新结果。
+            if (contentVersions[messageId] != contentVersion || !streamingStates.containsKey(messageId)) return
 
-        val state: StreamingRenderState
-        if (
-            cache != null &&
-            previousContent != null &&
-            content.startsWith(previousContent) &&
-            content.length >= cache.committedEndOffset &&
-            isCurrentlyStreaming
-        ) {
-            val (newState, newCache) = buildStreamingRenderStateIncremental(
-                messageId = messageId,
-                content = content,
-                isStreaming = true,
-                isComplete = false,
-                cache = cache,
-                contentVersion = contentVersion,
-            )
-            state = newState
-            incrementalParseCaches[messageId] = newCache
-        } else {
-            state = buildStreamingRenderState(
-                messageId = messageId,
-                content = content,
-                isStreaming = isCurrentlyStreaming,
-                isComplete = isComplete,
-                contentVersion = contentVersion,
-            )
-            if (isCurrentlyStreaming) {
-                val blocks = state.blocks
-                val committed = if (blocks.size > 1) blocks.dropLast(1) else emptyList()
-                val committedEnd = committed.lastOrNull()?.endExclusive ?: 0
-                incrementalParseCaches[messageId] = IncrementalParseCache(
-                    committedBlocks = committed,
-                    committedEndOffset = committedEnd,
-                    lastContentLength = content.length,
-                    lastBlockIndex = committed.size,
+            val isCurrentlyStreaming = activeStreamingMessages.contains(messageId) && !isComplete
+            val cache = incrementalParseCaches[messageId]
+            val previousContent = streamingRenderStates[messageId]?.value?.content
+
+            val state: StreamingRenderState
+            val nextCache: IncrementalParseCache?
+            if (
+                cache != null &&
+                previousContent != null &&
+                content.startsWith(previousContent) &&
+                content.length >= cache.committedEndOffset &&
+                isCurrentlyStreaming
+            ) {
+                val (newState, newCache) = buildStreamingRenderStateIncremental(
+                    messageId = messageId,
+                    content = content,
+                    isStreaming = true,
+                    isComplete = false,
+                    cache = cache,
+                    contentVersion = contentVersion,
                 )
+                state = newState
+                nextCache = newCache
             } else {
-                incrementalParseCaches.remove(messageId)
+                state = buildStreamingRenderState(
+                    messageId = messageId,
+                    content = content,
+                    isStreaming = isCurrentlyStreaming,
+                    isComplete = isComplete,
+                    contentVersion = contentVersion,
+                )
+                if (isCurrentlyStreaming) {
+                    val blocks = state.blocks
+                    val committed = if (blocks.size > 1) blocks.dropLast(1) else emptyList()
+                    val committedEnd = committed.lastOrNull()?.endExclusive ?: 0
+                    nextCache = IncrementalParseCache(
+                        committedBlocks = committed,
+                        committedEndOffset = committedEnd,
+                        lastContentLength = content.length,
+                        lastBlockIndex = committed.size,
+                    )
+                } else {
+                    nextCache = null
+                }
+            }
+
+            lifecycleLock.read {
+                if (contentVersions[messageId] != contentVersion || !streamingStates.containsKey(messageId)) {
+                    return@read
+                }
+                if (nextCache != null) {
+                    incrementalParseCaches[messageId] = nextCache
+                } else {
+                    incrementalParseCaches.remove(messageId)
+                }
+                streamingRenderStates.getOrPut(messageId) { MutableStateFlow(state) }.value = state
             }
         }
-
-        streamingRenderStates.getOrPut(messageId) { MutableStateFlow(state) }.value = state
     }
 
     private fun nextContentVersion(messageId: String): Long {
         return contentVersions.merge(messageId, 1L) { current, _ -> current + 1L } ?: 1L
     }
+
+    private fun bufferLockFor(messageId: String): Any =
+        bufferLocks[(messageId.hashCode() and Int.MAX_VALUE) % bufferLocks.size]
+
+    private fun renderLockFor(messageId: String): Any =
+        renderLocks[(messageId.hashCode() and Int.MAX_VALUE) % renderLocks.size]
+
+    private fun <T> withAllLocks(locks: Array<Any>, index: Int = 0, block: () -> T): T {
+        if (index == locks.size) return block()
+        return synchronized(locks[index]) {
+            withAllLocks(locks, index + 1, block)
+        }
+    }
+
+    private companion object {
+        const val LOCK_STRIPE_COUNT = 32
+    }
+}
+
+internal fun resolveStreamingRenderFlushIntervalMs(contentLength: Int): Long = when {
+    contentLength < 200 -> 80L
+    contentLength < 500 -> 120L
+    contentLength < 2_000 -> 150L
+    contentLength < 5_000 -> 180L
+    else -> 220L
 }

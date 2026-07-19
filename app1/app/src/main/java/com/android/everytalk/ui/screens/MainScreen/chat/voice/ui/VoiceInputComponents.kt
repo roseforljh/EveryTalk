@@ -37,6 +37,7 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.android.everytalk.ui.components.EveryTalkLoadingIndicator
 import com.android.everytalk.data.network.VoiceChatSession
 import kotlinx.coroutines.delay
 
@@ -193,9 +194,10 @@ fun VoiceContentDisplay(
         // 处理状态指示器
         if (isProcessing) {
             Spacer(modifier = Modifier.height(32.dp))
-            CircularProgressIndicator(
-                color = waveCircleColor,
-                modifier = Modifier.size(32.dp)
+            EveryTalkLoadingIndicator(
+                size = 32.dp,
+                strokeWidth = 3.dp,
+                contentDescription = "语音处理中",
             )
             Spacer(modifier = Modifier.height(16.dp))
             Text(

@@ -5,7 +5,8 @@ enum class TopAnchorPhase {
     AnchorRecorded,
     InitialSnap,
     AnchoredRunning,
-    Retained
+    Retained,
+    UserControlled
 }
 
 enum class TopAnchorItemRole {

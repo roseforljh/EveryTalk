@@ -7,6 +7,8 @@ import java.util.Locale
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.ChatRequest
+import com.android.everytalk.ui.components.MarkdownPart
+import com.android.everytalk.ui.components.toRecoveredMarkdown
 import com.android.everytalk.data.network.AppStreamEvent
 import com.android.everytalk.data.DataClass.ApiContentPart
 import com.android.everytalk.data.network.ApiClient
@@ -65,10 +67,22 @@ internal fun reconcileMessageAfterStatusClear(updatedMessage: Message, clearedMe
 
 internal fun mergeStreamingCompletionMessage(syncedMessage: Message, finalizedMessage: Message): Message {
     val syncedThinkExtraction = extractThinkTagContent(syncedMessage.text)
+    val mergedText = if (syncedThinkExtraction.changed) finalizedMessage.text else syncedMessage.text
+    val finalizedPartsMatchMergedText = finalizedMessage.parts.isNotEmpty() &&
+        finalizedMessage.parts.toRecoveredMarkdown() == mergedText
+    val mergedParts = when {
+        finalizedMessage.text == mergedText -> finalizedMessage.parts.ifEmpty { syncedMessage.parts }
+        finalizedPartsMatchMergedText -> finalizedMessage.parts
+        syncedMessage.parts.isNotEmpty() -> syncedMessage.parts
+        mergedText.isNotBlank() -> listOf(MarkdownPart.Text(id = "text_0", content = mergedText))
+        else -> emptyList()
+    }
     return syncedMessage.copy(
-        text = if (syncedThinkExtraction.changed) finalizedMessage.text else syncedMessage.text,
-        reasoning = finalizedMessage.reasoning ?: syncedMessage.reasoning,
-        parts = finalizedMessage.parts.ifEmpty { syncedMessage.parts },
+        text = mergedText,
+        reasoning = listOfNotNull(syncedMessage.reasoning, finalizedMessage.reasoning)
+            .filter { it.isNotBlank() }
+            .maxByOrNull { it.length },
+        parts = mergedParts,
         webSearchResults = finalizedMessage.webSearchResults
             ?.takeIf { it.isNotEmpty() }
             ?: syncedMessage.webSearchResults,
@@ -221,36 +235,33 @@ class ApiHandler(
         val specificCancelReason =
             if (isNewMessageSend) "$NEW_STREAM_CANCEL_PREFIX [$modeInfo] $reason" else "$USER_CANCEL_PREFIX [$modeInfo] $reason"
 
-        if (jobToCancel?.isActive == true) {
-            // 获取当前会话的消息处理器和块管理器
-            val currentMessageProcessor = messageProcessorMap[messageIdBeingCancelled] ?: MessageProcessor()
-            val partialText = currentMessageProcessor.getCurrentText().trim()
-            val partialReasoning = currentMessageProcessor.getCurrentReasoning()
+        if (messageIdBeingCancelled != null) {
+            stateHolder.syncStreamingMessageToList(messageIdBeingCancelled, isImageGeneration)
+        }
 
-            if (partialText.isNotBlank() || partialReasoning != null) {
+        if (jobToCancel?.isActive == true) {
+            if (messageIdBeingCancelled != null) {
                 viewModelScope.launch(Dispatchers.Main.immediate) {
                     val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
                     val index =
                         messageList.indexOfFirst { it.id == messageIdBeingCancelled }
                     if (index != -1) {
-                        val currentMessage = messageList[index]
-                        val updatedMessage = currentMessage.copy(
-                            contentStarted = currentMessage.contentStarted || partialText.isNotBlank(),
-                            isError = false
-                        )
-                        messageList[index] = updatedMessage
-
-                        if (partialText.isNotBlank() && messageIdBeingCancelled != null) {
-                            onAiMessageFullTextChanged(messageIdBeingCancelled, partialText)
+                        val syncedMessage = messageList[index]
+                        if (syncedMessage.text.isNotBlank()) {
+                            onAiMessageFullTextChanged(messageIdBeingCancelled, syncedMessage.text)
                         }
-                        
-                        // 🎯 Save partial content on cancellation (Requirements: 7.5)
-                        logger.debug("Saving partial content on user cancellation (${partialText.length} chars)")
+
+                        logger.debug("Saving partial content on user cancellation (${syncedMessage.text.length} chars)")
                         historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = isImageGeneration)
                     }
                 }
             }
         }
+
+        if (messageIdBeingCancelled != null) {
+            PerformanceMonitor.onAbort(messageIdBeingCancelled, reason = specificCancelReason)
+        }
+        jobToCancel?.cancel(CancellationException(specificCancelReason))
 
         if (isImageGeneration) {
             stateHolder._isImageApiCalling.value = false
@@ -305,12 +316,6 @@ class ApiHandler(
                 }
             }
         }
-        // Emit abort summary before cancellation
-        if (messageIdBeingCancelled != null) {
-            PerformanceMonitor.onAbort(messageIdBeingCancelled, reason = specificCancelReason)
-        }
-        jobToCancel?.cancel(CancellationException(specificCancelReason))
-        
         // 🔧 修复：取消时必须重置所有流式状态，否则UI会继续显示"正在连接"
         if (isImageGeneration) {
             stateHolder.imageApiJob = null
@@ -852,17 +857,6 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                             }
                             PerformanceMonitor.recordEvent(aiMessageId, "Reasoning", reasoningChunk.length)
                             stateHolder.appendReasoningToMessage(aiMessageId, reasoningChunk, isImageGeneration)
-                            if (isImageGeneration) {
-                                stateHolder.isImageConversationDirty.value = true
-                            } else {
-                                stateHolder.isTextConversationDirty.value = true
-                            }
-                            viewModelScope.launch(Dispatchers.IO) {
-                                try {
-                                    historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = isImageGeneration)
-                                } catch (_: Exception) {
-                                }
-                            }
                         }
                         return@withContext
                     }
@@ -987,8 +981,8 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     // 暂停时不触发UI刷新，等待恢复后统一刷新
                     if (!stateHolder._isStreamingPaused.value) {
                         try {
-                            if (finalizedMessage.text.isNotBlank()) {
-                                onAiMessageFullTextChanged(aiMessageId, finalizedMessage.text)
+                            if (updatedMessage.text.isNotBlank()) {
+                                onAiMessageFullTextChanged(aiMessageId, updatedMessage.text)
                             }
                         } catch (e: Exception) {
                             logger.warn("onAiMessageFullTextChanged in Finish handler failed: ${e.message}")
@@ -1101,6 +1095,8 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
             logger.debug("Max retry attempts reached for message: $messageId")
             retryCountMap.remove(messageId)
         }
+
+        stateHolder.syncStreamingMessageToList(messageId, isImageGeneration)
         
         // 获取当前消息ID对应的处理器并重置
         val currentMessageProcessor = messageProcessorMap[messageId] ?: MessageProcessor()
@@ -1516,19 +1512,12 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
 
         if (messageId.isNullOrBlank()) return
 
-        val processor = messageProcessorMap[messageId] ?: return
-        val fullText = processor.getCurrentText()
-
         viewModelScope.launch(Dispatchers.Main.immediate) {
+            stateHolder.syncStreamingSnapshotToList(messageId, isImageGeneration)
             val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
             val idx = messageList.indexOfFirst { it.id == messageId }
             if (idx != -1) {
-                val msg = messageList[idx]
-                val updated = msg.copy(
-                    text = fullText,
-                    contentStarted = msg.contentStarted || fullText.isNotBlank()
-                )
-                messageList[idx] = updated
+                val fullText = messageList[idx].text
                 try {
                     if (fullText.isNotBlank()) {
                         onAiMessageFullTextChanged(messageId, fullText)

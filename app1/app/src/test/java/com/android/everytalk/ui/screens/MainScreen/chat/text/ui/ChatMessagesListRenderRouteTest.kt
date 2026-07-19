@@ -15,6 +15,23 @@ class ChatMessagesListRenderRouteTest {
     }
 
     @Test
+    fun `text chat top anchor always uses configured top inset`() {
+        val source = chatMessagesListSource()
+
+        assertFalse(source.contains("firstBubbleScreenY"))
+        assertTrue(source.contains("targetAnchorY = topPaddingPx"))
+    }
+
+    @Test
+    fun `streaming text and reasoning should respect pause aware collection`() {
+        val source = chatMessagesListSource()
+
+        assertTrue(source.contains("streamingRenderStateSource.freezeWhileStreamingPaused"))
+        assertTrue(source.contains("streamingReasoningSource.freezeWhileStreamingPaused"))
+        assertTrue(source.contains("currentTextStreamingAiMessageId.freezeWhileStreamingPaused"))
+    }
+
+    @Test
     fun `source stripped ai answer should rebuild stream blocks for display content`() {
         val effectiveContent = """
             正文第一段。

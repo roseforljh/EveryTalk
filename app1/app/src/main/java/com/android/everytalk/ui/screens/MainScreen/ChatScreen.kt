@@ -3,12 +3,14 @@ package com.android.everytalk.ui.screens.MainScreen
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.scrollBy
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.rememberScrollState
@@ -32,6 +34,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
@@ -56,6 +59,7 @@ import com.android.everytalk.statecontroller.ConversationScrollState
 import com.android.everytalk.statecontroller.SimpleModeManager
 import com.android.everytalk.ui.components.AppTopBar
 import com.android.everytalk.ui.components.AnimatedWebSourcesDialog
+import com.android.everytalk.ui.components.EveryTalkLoadingIndicator
 import com.android.everytalk.ui.components.ScrollToBottomButton
 import com.android.everytalk.ui.components.WebSourcesDialogEdgeGap
 import com.android.everytalk.ui.components.ImagePreviewDialog
@@ -66,7 +70,6 @@ import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.ChatInputArea
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.ChatMessagesList
-import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.HistoryLoadingBubblePlaceholderItem
 import com.android.everytalk.ui.components.content.LocalStickyHeaderTop
 import com.android.everytalk.ui.screens.MainScreen.chat.dialog.EditMessageDialog
 import com.android.everytalk.ui.screens.MainScreen.chat.dialog.SystemPromptDialog
@@ -140,6 +143,50 @@ internal fun shouldHideHistoryLoadingSkeleton(
     return chatItems.isNotEmpty()
 }
 
+internal fun shouldShowHistoryConversationLoadingOverlay(
+    isLoadingHistory: Boolean,
+    overlayKey: String?,
+    observedLoadGeneration: Long,
+    currentLoadGeneration: Long,
+): Boolean = isLoadingHistory ||
+    overlayKey != null ||
+    shouldStartHistoryConversationLoadingOverlay(
+        observedLoadGeneration = observedLoadGeneration,
+        currentLoadGeneration = currentLoadGeneration,
+    )
+
+internal fun shouldStartHistoryConversationLoadingOverlay(
+    observedLoadGeneration: Long,
+    currentLoadGeneration: Long,
+): Boolean = currentLoadGeneration > 0L && currentLoadGeneration != observedLoadGeneration
+
+@Composable
+internal fun HistoryConversationLoadingOverlay(
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.background.copy(alpha = 0.88f))
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        awaitPointerEvent().changes.forEach { change ->
+                            change.consume()
+                        }
+                    }
+                }
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        EveryTalkLoadingIndicator(
+            size = 32.dp,
+            strokeWidth = 3.dp,
+            contentDescription = "正在加载会话",
+        )
+    }
+}
+
 internal fun calculateSourcesDialogBottomAvoidance(
     inputAreaHeight: Dp,
     inputBottomInset: Dp,
@@ -204,6 +251,7 @@ fun ChatScreen(
     }
     val selectedMediaItems = viewModel.selectedMediaItems
     val isLoadingHistory by viewModel.isLoadingHistory.collectAsState()
+    val historyLoadGeneration by viewModel.historyLoadGeneration.collectAsState()
     val mcpServerStates by viewModel.mcpServerStates.collectAsState()
     val isLoadingHistoryData by viewModel.isLoadingHistoryData.collectAsState()
     val conversationId by viewModel.currentConversationId.collectAsState()
@@ -221,64 +269,42 @@ fun ChatScreen(
      val coroutineScope = rememberCoroutineScope()
      val loadedHistoryIndex by viewModel.loadedHistoryIndex.collectAsState()
     val chatListItems by viewModel.chatListItems.collectAsState()
-    var historySkeletonKey by remember { mutableStateOf<String?>(null) }
-    var isHistorySkeletonReadyToReveal by remember { mutableStateOf(false) }
+    var observedHistoryLoadGeneration by remember {
+        mutableLongStateOf(historyLoadGeneration)
+    }
+    var historyLoadingOverlayKey by remember { mutableStateOf<String?>(null) }
 
-    var previousConversationIdForSkeleton by remember { mutableStateOf<String?>(null) }
-
-    LaunchedEffect(isLoadingHistory, conversationId) {
-        if (isLoadingHistory) {
-            historySkeletonKey = conversationId.ifBlank { "history" }
-            isHistorySkeletonReadyToReveal = false
-        } else if (previousConversationIdForSkeleton != null &&
-            previousConversationIdForSkeleton != conversationId
+    LaunchedEffect(historyLoadGeneration) {
+        if (shouldStartHistoryConversationLoadingOverlay(
+                observedLoadGeneration = observedHistoryLoadGeneration,
+                currentLoadGeneration = historyLoadGeneration,
+            )
         ) {
-            historySkeletonKey = null
-            isHistorySkeletonReadyToReveal = false
-        }
-        previousConversationIdForSkeleton = conversationId
-    }
-
-    LaunchedEffect(
-        isLoadingHistory,
-        historySkeletonKey,
-        chatListItems,
-    ) {
-        if (!isLoadingHistory && historySkeletonKey != null) {
-            if (shouldHideHistoryLoadingSkeleton(chatListItems)) {
-                isHistorySkeletonReadyToReveal = true
-            }
+            historyLoadingOverlayKey = "history-load-$historyLoadGeneration"
+            observedHistoryLoadGeneration = historyLoadGeneration
         }
     }
 
-    LaunchedEffect(historySkeletonKey) {
-        if (historySkeletonKey != null) {
-            delay(5_000L)
-            if (historySkeletonKey != null) {
-                historySkeletonKey = null
-                isHistorySkeletonReadyToReveal = false
-            }
-        }
-    }
-
-    val historySkeletonRenderKey = historySkeletonKey ?: conversationId.ifBlank { "history" }
-    val shouldRenderHistorySkeletonItems = isLoadingHistory ||
-        (historySkeletonKey != null && !isHistorySkeletonReadyToReveal)
-    val shouldShowHistorySkeletonOverlay = historySkeletonKey != null && isHistorySkeletonReadyToReveal
-    val isHistorySkeletonVisible = shouldRenderHistorySkeletonItems || shouldShowHistorySkeletonOverlay
     val isLoadingHistoryState = rememberUpdatedState(isLoadingHistory)
-    val isHistorySkeletonVisibleState = rememberUpdatedState(isHistorySkeletonVisible)
-    val isHistorySkeletonItemListVisibleState = rememberUpdatedState(shouldRenderHistorySkeletonItems)
-    val isHistorySkeletonReadyToRevealState = rememberUpdatedState(isHistorySkeletonReadyToReveal)
-    val historySkeletonKeyState = rememberUpdatedState(historySkeletonKey)
-    val chatListItemsState = rememberUpdatedState(chatListItems)
-    val visibleChatListItems = remember(shouldRenderHistorySkeletonItems, historySkeletonRenderKey, chatListItems) {
-        if (shouldRenderHistorySkeletonItems) {
-            buildHistoryLoadingBubblePlaceholders(historySkeletonRenderKey)
-        } else {
-            chatListItems
+    LaunchedEffect(historyLoadingOverlayKey) {
+        val key = historyLoadingOverlayKey ?: return@LaunchedEffect
+        delay(15_000L)
+        if (historyLoadingOverlayKey == key && !isLoadingHistoryState.value) {
+            historyLoadingOverlayKey = null
         }
     }
+
+    val isHistoryLoadingOverlayVisible = shouldShowHistoryConversationLoadingOverlay(
+        isLoadingHistory = isLoadingHistory,
+        overlayKey = historyLoadingOverlayKey,
+        observedLoadGeneration = observedHistoryLoadGeneration,
+        currentLoadGeneration = historyLoadGeneration,
+    )
+    val isHistoryLoadingOverlayVisibleState = rememberUpdatedState(isHistoryLoadingOverlayVisible)
+    val historyLoadingOverlayKeyState = rememberUpdatedState(historyLoadingOverlayKey)
+    val observedHistoryLoadGenerationState = rememberUpdatedState(observedHistoryLoadGeneration)
+    val historyLoadGenerationState = rememberUpdatedState(historyLoadGeneration)
+    val chatListItemsState = rememberUpdatedState(chatListItems)
 
     // 获取抽屉和搜索相关状态
     val isDrawerOpen = !viewModel.drawerState.isClosed
@@ -335,11 +361,14 @@ fun ChatScreen(
         val skipScrollToBottom = System.currentTimeMillis() - lastSendAt.value < 1200
 
         snapshotFlow {
-            val noSkeleton = historySkeletonKeyState.value == null
-            if (noSkeleton) return@snapshotFlow true
+            val generationObserved = !shouldStartHistoryConversationLoadingOverlay(
+                observedLoadGeneration = observedHistoryLoadGenerationState.value,
+                currentLoadGeneration = historyLoadGenerationState.value,
+            )
+            if (!generationObserved) return@snapshotFlow false
+            if (!isHistoryLoadingOverlayVisibleState.value) return@snapshotFlow true
             val realItemCount = chatListItemsState.value.size
             !isLoadingHistoryState.value &&
-                !isHistorySkeletonItemListVisibleState.value &&
                 realItemCount > 0 &&
                 listState.layoutInfo.totalItemsCount >= realItemCount
         }
@@ -354,9 +383,8 @@ fun ChatScreen(
                 listState.scrollBy(Float.MAX_VALUE)
             }
         }
-        if (historySkeletonKeyState.value != null) {
-            historySkeletonKey = null
-            isHistorySkeletonReadyToReveal = false
+        if (historyLoadingOverlayKeyState.value != null) {
+            historyLoadingOverlayKey = null
         }
         initialScrollHandled = true
     }
@@ -386,7 +414,7 @@ fun ChatScreen(
         }
             .distinctUntilChanged()
             .filter { (_, _, isScrolling) ->
-                !isScrolling && !isLoadingHistoryState.value && !isHistorySkeletonVisibleState.value
+                !isScrolling && !isLoadingHistoryState.value && !isHistoryLoadingOverlayVisibleState.value
             }
             .collect { (index, offset, _) ->
                 if (listState.layoutInfo.totalItemsCount > 0) {
@@ -573,7 +601,7 @@ fun ChatScreen(
                 contentAlignment = Alignment.BottomCenter
             ) {
                 when {
-                    messages.isEmpty() && !isHistorySkeletonVisible -> {
+                    messages.isEmpty() && !isHistoryLoadingOverlayVisible -> {
                         EmptyChatView(
                             onNavigateToImageGen = {
                                 viewModel.simpleModeManager.setIntendedMode(com.android.everytalk.statecontroller.SimpleModeManager.ModeType.IMAGE)
@@ -624,7 +652,7 @@ fun ChatScreen(
                                     }
                             ) {
                                 ChatMessagesList(
-                                chatItems = visibleChatListItems,
+                                chatItems = chatListItems,
                                 viewModel = viewModel,
                                 listState = listState,
                                 scrollStateManager = scrollStateManager,
@@ -667,36 +695,6 @@ fun ChatScreen(
                                 },
                                 additionalBottomPadding = inputAreaHeightDp
                             )
-                                if (shouldShowHistorySkeletonOverlay) {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxSize()
-                                            .background(MaterialTheme.colorScheme.background)
-                                            .padding(
-                                                start = 6.dp,
-                                                top = 8.dp,
-                                                end = 16.dp,
-                                                bottom = inputAreaHeightDp + 12.dp,
-                                            ),
-                                        contentAlignment = Alignment.BottomCenter,
-                                    ) {
-                                        Column(
-                                            modifier = Modifier.fillMaxWidth(),
-                                            verticalArrangement = Arrangement.spacedBy(12.dp),
-                                        ) {
-                                            buildHistoryLoadingBubblePlaceholders(historySkeletonRenderKey)
-                                                .forEach { placeholder ->
-                                                    if (placeholder is ChatListItem.LoadingBubblePlaceholder) {
-                                                        HistoryLoadingBubblePlaceholderItem(
-                                                            role = placeholder.role,
-                                                            widthFraction = placeholder.widthFraction,
-                                                            estimatedHeight = placeholder.estimatedHeightDp.dp,
-                                                        )
-                                                    }
-                                                }
-                                        }
-                                    }
-                                }
                             }
                         }
                     }
@@ -862,6 +860,15 @@ fun ChatScreen(
                         color = MaterialTheme.colorScheme.onSecondaryContainer,
                     )
                 }
+            }
+
+            AnimatedVisibility(
+                visible = isHistoryLoadingOverlayVisible,
+                modifier = Modifier.fillMaxSize(),
+                enter = fadeIn(animationSpec = tween(durationMillis = 90)),
+                exit = fadeOut(animationSpec = tween(durationMillis = 120)),
+            ) {
+                HistoryConversationLoadingOverlay()
             }
         }
 

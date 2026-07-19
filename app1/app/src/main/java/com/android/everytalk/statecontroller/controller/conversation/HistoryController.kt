@@ -5,6 +5,7 @@ import com.android.everytalk.statecontroller.ApiHandler
 import com.android.everytalk.statecontroller.ViewModelStateHolder
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
 import com.android.everytalk.util.cache.CacheManager
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -176,10 +177,17 @@ class HistoryController(
             stateHolder._lastSentUserMessageId.value = null
             try {
                 simpleModeSwitcher.loadTextHistory(index)
-                val processed = processLoadedMessages(stateHolder.messages.toList())
-                val repaired = repairHistoryMessageParts(processed)
-                stateHolder.messages.clear()
-                stateHolder.messages.addAll(repaired)
+                val loadedMessages = stateHolder.messages.toList()
+                val sessionId = stateHolder._currentConversationId.value
+                val repaired = withContext(Dispatchers.Default) {
+                    repairHistoryMessageParts(processLoadedMessages(loadedMessages), sessionId)
+                }
+                if (loadedMessages != repaired) {
+                    stateHolder.messages.clear()
+                    stateHolder.messages.addAll(repaired)
+                }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e("HistoryController", "Error loading text history", e)
                 showSnackbar("加载文本历史对话失败: ${e.message}")
@@ -192,12 +200,20 @@ class HistoryController(
     fun loadImageHistory(index: Int) {
         scope.launch {
             stateHolder._isLoadingImageHistory.value = true
+            stateHolder._lastSentImageUserMessageId.value = null
             try {
                 simpleModeSwitcher.loadImageHistory(index)
-                val processed = processLoadedMessages(stateHolder.imageGenerationMessages.toList())
-                val repaired = repairHistoryMessageParts(processed)
-                stateHolder.imageGenerationMessages.clear()
-                stateHolder.imageGenerationMessages.addAll(repaired)
+                val loadedMessages = stateHolder.imageGenerationMessages.toList()
+                val sessionId = stateHolder._currentImageGenerationConversationId.value
+                val repaired = withContext(Dispatchers.Default) {
+                    repairHistoryMessageParts(processLoadedMessages(loadedMessages), sessionId)
+                }
+                if (loadedMessages != repaired) {
+                    stateHolder.imageGenerationMessages.clear()
+                    stateHolder.imageGenerationMessages.addAll(repaired)
+                }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e("HistoryController", "IMAGE ERROR", e)
                 showSnackbar("加载图像历史失败: ${e.message}")
@@ -294,14 +310,13 @@ class HistoryController(
         }
     }
 
-    private fun repairHistoryMessageParts(messages: List<Message>): List<Message> {
+    private fun repairHistoryMessageParts(messages: List<Message>, sessionId: String): List<Message> {
         return messages.map { message ->
             if (message.sender == Sender.AI &&
                 message.text.isNotBlank() &&
                 (message.parts.isEmpty() || !hasValidParts(message.parts))) {
                 Log.d("HistoryController", "Repairing message parts for messageId=${message.id}")
                 try {
-                    val sessionId = stateHolder._currentConversationId.value
                     val tempProcessor = com.android.everytalk.util.messageprocessor.MessageProcessor().apply {
                         initialize(sessionId, message.id)
                     }

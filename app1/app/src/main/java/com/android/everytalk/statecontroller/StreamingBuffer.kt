@@ -9,8 +9,8 @@ import kotlinx.coroutines.*
  * StreamingBuffer - 自适应节流内容累积器，用于流式显示平滑输出
  * 
  * 实现自适应节流策略：
- * - 初始以 60fps（16ms）高频刷新确保首屏响应
- * - 当累积字符超过阈值后，根据流速动态调整刷新频率
+ * - 首个内容块立即刷新，确保首屏响应
+ * - 后续按 80 至 180ms 与字符阈值合并更新
  * - 避免高速流式时过度重组导致的 UI 卡顿
  */
 class StreamingBuffer(
@@ -40,8 +40,8 @@ class StreamingBuffer(
     private var consecutiveHighSpeedFlushes = 0
     private companion object {
         const val HIGH_SPEED_CHARS_PER_SECOND = 1500
-        const val MAX_DYNAMIC_BATCH_THRESHOLD = 50
-        const val BATCH_THRESHOLD_INCREMENT = 5
+        const val MAX_DYNAMIC_BATCH_THRESHOLD = 192
+        const val BATCH_THRESHOLD_INCREMENT = 16
     }
     
     fun append(chunk: String) {
@@ -97,7 +97,7 @@ class StreamingBuffer(
             updateInterval = newInterval
         }
         
-        // 批量合并策略：高速流时增加批量阈值，减少UI重组次数
+        // 批量合并策略：高速流时增加批量阈值，减少 UI 重组次数
         if (enableBatchMerging) {
             if (charsPerSecond > HIGH_SPEED_CHARS_PER_SECOND) {
                 consecutiveHighSpeedFlushes++

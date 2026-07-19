@@ -7,6 +7,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
@@ -37,6 +39,15 @@ class TopAnchorReserveEngineState {
     fun clearRuntime() {
         runtime = TopAnchorRuntimeState()
     }
+
+    fun releaseForUserScroll() {
+        if (!runtime.hasRuntime) return
+        if (runtime.reservePx <= 0) {
+            clearRuntime()
+            return
+        }
+        runtime = runtime.copy(phase = TopAnchorPhase.UserControlled)
+    }
 }
 
 @Composable
@@ -52,13 +63,18 @@ fun RunTopAnchorReserveEngine(
     enabled: Boolean
 ) {
     val currentTurn = state.runtime.currentTurn
+    val trailingRealItemIndexState = rememberUpdatedState(trailingRealItemIndex)
+    var hasObservedRunning by remember(currentTurn) { mutableStateOf(isRunning) }
 
-    LaunchedEffect(enabled, currentTurn, anchorIndex, anchorKey, targetAnchorY, trailingRealItemIndex) {
+    LaunchedEffect(enabled, currentTurn, anchorIndex, anchorKey, targetAnchorY) {
         val turn = currentTurn
         if (!enabled || turn == null || targetAnchorY <= 0 || anchorIndex < 0) {
             return@LaunchedEffect
         }
-        if (state.runtime.phase != TopAnchorPhase.Retained) {
+        if (
+            state.runtime.phase != TopAnchorPhase.Retained &&
+            state.runtime.phase != TopAnchorPhase.UserControlled
+        ) {
             state.updateRuntime(state.runtime.copy(phase = TopAnchorPhase.InitialSnap))
             try {
                 snapshotFlow { listState.layoutInfo.totalItemsCount }
@@ -66,6 +82,7 @@ fun RunTopAnchorReserveEngine(
                 if (listState.layoutInfo.visibleItemsInfo.none { it.index == anchorIndex }) {
                     listState.scrollToItem(anchorIndex, scrollOffset = 0)
                 }
+                val reserveBeforeCorrection = state.reservePx
                 correctTopAnchorOnce(
                     state = state,
                     listState = listState,
@@ -73,6 +90,21 @@ fun RunTopAnchorReserveEngine(
                     targetAnchorY = targetAnchorY,
                     config = config
                 )
+                if (state.reservePx > reserveBeforeCorrection) {
+                    snapshotFlow {
+                        listState.layoutInfo.totalItemsCount to trailingRealItemIndexState.value
+                    }.first { (totalItemsCount, latestTrailingIndex) ->
+                        totalItemsCount > latestTrailingIndex + 1
+                    }
+                    withFrameNanos { }
+                    correctTopAnchorOnce(
+                        state = state,
+                        listState = listState,
+                        anchorKey = anchorKey,
+                        targetAnchorY = targetAnchorY,
+                        config = config,
+                    )
+                }
             } finally {
                 if (
                     currentCoroutineContext().isActive &&
@@ -89,19 +121,25 @@ fun RunTopAnchorReserveEngine(
             turn = turn,
             anchorKey = anchorKey,
             targetAnchorY = targetAnchorY,
-            trailingRealItemIndex = trailingRealItemIndex,
+            trailingRealItemIndex = { trailingRealItemIndexState.value },
             config = config
         )
     }
 
     LaunchedEffect(isRunning, state.runtime.phase, state.runtime.currentTurn, config.keepReserveAfterRunEnd) {
-        if (
-            !isRunning &&
-            config.keepReserveAfterRunEnd &&
-            state.runtime.phase == TopAnchorPhase.AnchoredRunning
-        ) {
-            val turn = state.runtime.activeTurn ?: return@LaunchedEffect
-            if (state.runtime.currentTurn != turn) return@LaunchedEffect
+        if (isRunning) {
+            hasObservedRunning = true
+            return@LaunchedEffect
+        }
+        if (!hasObservedRunning) return@LaunchedEffect
+
+        val turn = state.runtime.currentTurn ?: return@LaunchedEffect
+        if (turn != currentTurn) return@LaunchedEffect
+        if (!config.keepReserveAfterRunEnd) {
+            state.clearRuntime()
+            return@LaunchedEffect
+        }
+        if (state.runtime.phase == TopAnchorPhase.AnchoredRunning) {
             state.updateRuntime(
                 state.runtime.copy(
                     phase = TopAnchorPhase.Retained,
@@ -125,6 +163,8 @@ private suspend fun correctTopAnchorOnce(
         firstVisibleItemScrollOffset = listState.firstVisibleItemScrollOffset
     )
     val anchor = snapshot.visibleItems.firstOrNull { it.key == anchorKey } ?: return false
+    // offset 属于 LazyList 的内容坐标；viewportStartOffset 包含负的顶部 contentPadding。
+    // 两者相减后才是列表视口内的真实坐标，避免目标位置被顶部 padding 再向下推一次。
     val currentTopY = anchor.offset - snapshot.viewportStartOffset
     val currentAnchorY = computeTopAnchorY(
         itemTopY = currentTopY,
@@ -154,7 +194,7 @@ private suspend fun runTopAnchorCorrectionLoop(
     turn: TopAnchorTurn,
     anchorKey: Any?,
     targetAnchorY: Int,
-    trailingRealItemIndex: Int,
+    trailingRealItemIndex: () -> Int,
     config: TopAnchorConfig
 ) {
     var stableSinceNanos = 0L
@@ -176,8 +216,24 @@ private suspend fun runTopAnchorCorrectionLoop(
         val layoutChanged = snapshot.layoutVersion != lastLayoutVersion
         lastLayoutVersion = snapshot.layoutVersion
 
-        val corrected = correctTopAnchorOnce(state, listState, anchorKey, targetAnchorY, config)
-        shrinkReserveIfPossible(state, snapshot, trailingRealItemIndex)
+        // 用户接管后停止自动纠偏，并冻结占位，确保下滑后仍能上滑回原置顶位置。
+        val corrected = if (state.runtime.phase == TopAnchorPhase.UserControlled) {
+            false
+        } else {
+            correctTopAnchorOnce(state, listState, anchorKey, targetAnchorY, config)
+        }
+        // 本帧发生过滚动或增加占位时，snapshot 仍是校正前的旧布局。
+        // 用旧快照收缩会立即撤销刚完成的校正，造成 reserve 与锚点位置逐帧抖动。
+        if (!corrected && state.runtime.phase != TopAnchorPhase.UserControlled) {
+            shrinkReserveIfPossible(state, snapshot, trailingRealItemIndex())
+        }
+        if (
+            state.runtime.phase == TopAnchorPhase.UserControlled &&
+            state.reservePx == 0
+        ) {
+            state.clearRuntime()
+            return
+        }
 
         if (corrected || layoutChanged) {
             stableSinceNanos = 0L

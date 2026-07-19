@@ -23,6 +23,23 @@ class TopAnchorLayoutSnapshotTest {
     }
 
     @Test
+    fun `layout version changes when viewport expands after keyboard hides`() {
+        val before = TopAnchorLayoutSnapshot(
+            totalItemsCount = 3,
+            viewportStartOffset = -96,
+            viewportEndOffset = 420,
+            beforeContentPadding = 96,
+            afterContentPadding = 80,
+            firstVisibleItemIndex = 1,
+            firstVisibleItemScrollOffset = 0,
+            visibleItems = listOf(TopAnchorVisibleItem("u1", 1, 96, 80))
+        )
+        val after = before.copy(viewportEndOffset = 640)
+
+        assertNotEquals(before.layoutVersion, after.layoutVersion)
+    }
+
+    @Test
     fun `viewport height never goes negative`() {
         val snapshot = TopAnchorLayoutSnapshot(
             totalItemsCount = 0,

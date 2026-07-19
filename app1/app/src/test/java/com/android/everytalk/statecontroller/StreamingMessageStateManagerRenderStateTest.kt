@@ -12,6 +12,8 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 class StreamingMessageStateManagerRenderStateTest {
 
@@ -123,5 +125,48 @@ class StreamingMessageStateManagerRenderStateTest {
         ) as Boolean
 
         assertFalse(shouldDelay)
+    }
+
+    @Test
+    fun `完整Markdown刷新频率随正文长度逐级降低`() {
+        assertEquals(80L, resolveStreamingRenderFlushIntervalMs(0))
+        assertEquals(80L, resolveStreamingRenderFlushIntervalMs(199))
+        assertEquals(120L, resolveStreamingRenderFlushIntervalMs(200))
+        assertEquals(150L, resolveStreamingRenderFlushIntervalMs(500))
+        assertEquals(180L, resolveStreamingRenderFlushIntervalMs(2_000))
+        assertEquals(220L, resolveStreamingRenderFlushIntervalMs(5_000))
+    }
+
+    @Test
+    fun `并发追加与后台刷新不会丢失正文片段`() {
+        val messageId = "concurrent-msg"
+        val workerCount = 8
+        val appendCount = 500
+        val chunkSize = 4
+        val executor = Executors.newFixedThreadPool(workerCount)
+
+        subject.startStreaming(messageId)
+        try {
+            val futures = (0 until workerCount).map { workerIndex ->
+                executor.submit {
+                    val chunk = ('a' + workerIndex).toString().repeat(chunkSize)
+                    repeat(appendCount) {
+                        subject.appendText(messageId, chunk)
+                    }
+                }
+            }
+            futures.forEach { it.get(10, TimeUnit.SECONDS) }
+        } finally {
+            executor.shutdownNow()
+        }
+
+        val finalContent = subject.finalizeMessage(messageId)
+
+        assertEquals(workerCount * appendCount * chunkSize, finalContent.length)
+        (0 until workerCount).forEach { workerIndex ->
+            val expectedChar = 'a' + workerIndex
+            assertEquals(appendCount * chunkSize, finalContent.count { it == expectedChar })
+        }
+        assertEquals(finalContent, subject.getCurrentRenderState(messageId).content)
     }
 }
