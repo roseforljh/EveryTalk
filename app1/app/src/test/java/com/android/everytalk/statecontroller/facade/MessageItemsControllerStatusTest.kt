@@ -151,7 +151,7 @@ class MessageItemsControllerStatusTest {
             6000L
         )
 
-        assertEquals("等待首个响应 · 6s", text)
+        assertEquals("等待首个响应", text)
     }
 
     @Test
@@ -207,7 +207,7 @@ class MessageItemsControllerStatusTest {
                 ),
                 0L
             )
-            assertEquals("status=$status", "等待首个响应 · 0s", text)
+            assertEquals("status=$status", "等待首个响应", text)
         }
     }
 
@@ -226,7 +226,7 @@ class MessageItemsControllerStatusTest {
             2500L
         )
 
-        assertEquals("正在接收思考 · 2s", text)
+        assertEquals("正在接收思考", text)
     }
 
     @Test
@@ -346,6 +346,73 @@ class MessageItemsControllerStatusTest {
     }
 
     @Test
+    fun `暂停状态不会把已完成消息降级为空闲状态`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.stateHolder._isStreamingPaused.value = true
+
+        val state = controller.computeBubbleStateForTest(
+            message = Message(
+                id = "ai-paused-complete",
+                text = "完整回复",
+                sender = Sender.AI,
+                contentStarted = true,
+            ),
+            isApiCalling = false,
+            currentStreamingAiMessageId = null,
+        )
+
+        assertTrue(state is com.android.everytalk.ui.state.AiBubbleState.Complete)
+    }
+
+    @Test
+    fun `暂停期间完成流式响应会保留最后一帧并在恢复时追平终态`() = runBlocking {
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.stateHolder.messages.add(
+            Message(
+                id = "ai-paused-finish",
+                text = "部分回复",
+                sender = Sender.AI,
+                contentStarted = true,
+            )
+        )
+        controller.stateHolder._isTextApiCalling.value = true
+        controller.stateHolder._currentTextStreamingAiMessageId.value = "ai-paused-finish"
+
+        val initialItems = withTimeout(1_000) {
+            controller.chatListItems.first { items ->
+                items.filterIsInstance<ChatListItem.AiMessage>().firstOrNull()?.text == "部分回复"
+            }
+        }
+
+        controller.stateHolder._isStreamingPaused.value = true
+        delay(20)
+        controller.stateHolder.messages[0] = Message(
+            id = "ai-paused-finish",
+            text = "完整回复",
+            sender = Sender.AI,
+            contentStarted = true,
+        )
+        controller.stateHolder._isTextApiCalling.value = false
+        controller.stateHolder._currentTextStreamingAiMessageId.value = null
+        Snapshot.sendApplyNotifications()
+        delay(50)
+
+        assertEquals(initialItems, controller.chatListItems.value)
+
+        controller.stateHolder._isStreamingPaused.value = false
+        val resumedItems = withTimeout(1_000) {
+            controller.chatListItems.first { items ->
+                items.filterIsInstance<ChatListItem.AiMessage>().firstOrNull()?.text == "完整回复"
+            }
+        }
+
+        assertEquals(
+            "完整回复",
+            resumedItems.filterIsInstance<ChatListItem.AiMessage>().first().text,
+        )
+    }
+
+    @Test
     fun `stage text disappears when streaming render state already has content`() {
         val controller = MessageItemsControllerTestAccess.newController()
         controller.seedStreamingRenderContent("ai-stage-hidden", "已经输出正文")
@@ -380,7 +447,7 @@ class MessageItemsControllerStatusTest {
             6000L
         )
 
-        assertEquals("等待首个响应 · 6s", text)
+        assertEquals("等待首个响应", text)
     }
 
     @Test
@@ -401,7 +468,7 @@ class MessageItemsControllerStatusTest {
         val items = controller.chatListItemsForTest()
         val loading = items.filterIsInstance<ChatListItem.LoadingIndicator>().single()
 
-        assertTrue(loading.text.orEmpty().startsWith("等待首个响应 ·"))
+        assertEquals("等待首个响应", loading.text)
         assertFalse(loading.text.orEmpty().contains("OpenAI"))
         assertFalse(loading.text.orEmpty().contains("gpt-4o"))
     }
@@ -428,13 +495,13 @@ class MessageItemsControllerStatusTest {
         }
         val loading = items.filterIsInstance<ChatListItem.LoadingIndicator>().single()
 
-        assertTrue(loading.text.orEmpty().startsWith("等待首个响应 ·"))
+        assertEquals("等待首个响应", loading.text)
         assertFalse(loading.text.orEmpty().contains("Gemini"))
         assertFalse(loading.text.orEmpty().contains("imagen-3"))
     }
 
     @Test
-    fun `image loading indicator runtime text advances while waiting for first content`() = runBlocking {
+    fun `image loading indicator remains stable while waiting for first content`() = runBlocking {
         val controller = MessageItemsControllerTestAccess.newController()
         controller.stateHolder.imageGenerationMessages.add(
             Message(
@@ -456,19 +523,13 @@ class MessageItemsControllerStatusTest {
         val firstText = firstItems.filterIsInstance<ChatListItem.LoadingIndicator>().single().text
         delay(1_100)
 
-        val secondItems = withTimeout(2_000) {
-            controller.imageGenerationChatListItems.first { chatItems ->
-                chatItems.filterIsInstance<ChatListItem.LoadingIndicator>()
-                    .singleOrNull()
-                    ?.text != firstText
-            }
-        }
+        val secondItems = controller.imageGenerationChatListItems.value
         val secondText = secondItems.filterIsInstance<ChatListItem.LoadingIndicator>().single().text
 
-        assertTrue(secondText.orEmpty().startsWith("等待首个响应 ·"))
+        assertEquals("等待首个响应", secondText)
         assertFalse(secondText.orEmpty().contains("Gemini"))
         assertFalse(secondText.orEmpty().contains("imagen-3"))
-        assertTrue(secondText.orEmpty() != firstText.orEmpty())
+        assertEquals(firstText, secondText)
     }
 
     @Test

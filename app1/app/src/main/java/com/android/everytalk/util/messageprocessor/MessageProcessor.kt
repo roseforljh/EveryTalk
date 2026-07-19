@@ -71,11 +71,11 @@ class MessageProcessor {
                         
                         currentTextBuilder.get().append(cleanedChunk)
                     }
-                    ProcessedEventResult.ContentUpdated(currentTextBuilder.get().toString())
+                    ProcessedEventResult.ContentUpdated
                 }
                 is AppStreamEvent.ContentFinal -> {
                     // 不对已有内容做任何替换/合并处理，保持已累积文本原样
-                    ProcessedEventResult.ContentUpdated(currentTextBuilder.get().toString())
+                    ProcessedEventResult.ContentUpdated
                 }
                 is AppStreamEvent.CodeExecutionResult -> {
                     // 处理代码执行结果：优先显示图片；若前面有未闭合代码块，先补一个围栏以避免图片被包进代码块
@@ -97,13 +97,13 @@ class MessageProcessor {
                         val imageMarkdown = "\n\n![Generated Image](" + cleanUrl + ")\n\n"
                         builder.append(imageMarkdown)
                         logger.debug("Appended image markdown. url.len=${cleanUrl.length}, md.len=${imageMarkdown.length}")
-                        ProcessedEventResult.ContentUpdated(builder.toString())
+                        ProcessedEventResult.ContentUpdated
                     } else {
                         // 兜底：仅文本输出时以代码块形式追加，并显式闭合
                         if (!event.codeExecutionOutput.isNullOrBlank()) {
                             val outputMarkdown = "\n\n```\n${event.codeExecutionOutput}\n```\n\n"
                             builder.append(outputMarkdown)
-                            ProcessedEventResult.ContentUpdated(builder.toString())
+                            ProcessedEventResult.ContentUpdated
                         } else {
                             ProcessedEventResult.NoChange
                         }
@@ -113,7 +113,7 @@ class MessageProcessor {
                     if (event.text.isNotEmpty()) {
                         currentReasoningBuilder.get().append(lightweightCleanup(event.text))
                     }
-                    ProcessedEventResult.ReasoningUpdated(currentReasoningBuilder.get().toString())
+                    ProcessedEventResult.ReasoningUpdated
                 }
                 is AppStreamEvent.ReasoningFinish -> {
                     // 推理完成事件 - 标记推理已完成，但流还在继续
@@ -146,11 +146,11 @@ class MessageProcessor {
         val thinkTagExtraction = extractThinkTagContent(rawFinalText)
         val finalText = thinkTagExtraction.content
         val extractedReasoning = thinkTagExtraction.reasoning.takeIf { it.isNotBlank() }
-        val finalReasoning = listOfNotNull(currentReasoning, message.reasoning, extractedReasoning)
-            .map(TextSanitizer::removeUnicodeReplacementCharacters)
-            .filter { it.isNotBlank() }
-            .joinToString("\n\n")
-            .ifBlank { null }
+        val finalReasoning = mergeReasoningSegments(
+            currentReasoning,
+            message.reasoning,
+            extractedReasoning,
+        )
         val finalParts = when {
             thinkTagExtraction.changed && finalText.isBlank() -> emptyList()
             finalText.isBlank() -> message.parts
@@ -184,11 +184,28 @@ class MessageProcessor {
 }
 
 sealed class ProcessedEventResult {
-    data class ContentUpdated(val content: String) : ProcessedEventResult()
-    data class ReasoningUpdated(val reasoning: String) : ProcessedEventResult()
+    data object ContentUpdated : ProcessedEventResult()
+    data object ReasoningUpdated : ProcessedEventResult()
     object ReasoningComplete : ProcessedEventResult()
     object StreamComplete : ProcessedEventResult()
     object NoChange : ProcessedEventResult()
     object Cancelled : ProcessedEventResult()
     data class Error(val message: String) : ProcessedEventResult()
+}
+
+internal fun mergeReasoningSegments(vararg segments: String?): String? {
+    val merged = mutableListOf<String>()
+    segments.asSequence()
+        .filterNotNull()
+        .map(TextSanitizer::removeUnicodeReplacementCharacters)
+        .map(String::trim)
+        .filter(String::isNotBlank)
+        .forEach { candidate ->
+            if (merged.any { existing -> existing == candidate || existing.contains(candidate) }) {
+                return@forEach
+            }
+            merged.removeAll { existing -> candidate.contains(existing) }
+            merged += candidate
+        }
+    return merged.joinToString("\n\n").ifBlank { null }
 }

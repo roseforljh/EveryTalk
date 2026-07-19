@@ -94,4 +94,22 @@ class MessageProcessorFinalizePartsTest {
         assertEquals("为什么今天", finalized.text)
         assertEquals("推理内容", finalized.reasoning)
     }
+
+    @Test
+    fun `finalize reasoning does not append the seeded first chunk twice`() = runBlocking {
+        val processor = MessageProcessor().apply { initialize("session", "reasoning-seed") }
+        processor.processStreamEvent(AppStreamEvent.Reasoning("第一段"), "reasoning-seed")
+        processor.processStreamEvent(AppStreamEvent.Reasoning("第二段"), "reasoning-seed")
+
+        val finalized = processor.finalizeMessageProcessing(
+            Message(
+                id = "reasoning-seed",
+                text = "",
+                sender = Sender.AI,
+                reasoning = "第一段",
+            )
+        )
+
+        assertEquals("第一段第二段", finalized.reasoning)
+    }
 }

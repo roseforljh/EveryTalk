@@ -1,11 +1,11 @@
 package com.android.everytalk.statecontroller.facade
 
 import android.util.Log
-import com.android.everytalk.config.PerformanceConfig
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.statecontroller.StreamingMessageStateManager
 import com.android.everytalk.statecontroller.ViewModelStateHolder
+import com.android.everytalk.statecontroller.freezeWhileStreamingPaused
 import com.android.everytalk.ui.components.streaming.StreamBlockParser
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
 import kotlinx.coroutines.CoroutineScope
@@ -16,7 +16,6 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.flowOn
-import kotlinx.coroutines.launch
 import androidx.compose.runtime.snapshotFlow
 import java.util.concurrent.ConcurrentHashMap
 
@@ -61,19 +60,6 @@ open class MessageItemsController(
     // Loading状态最小显示时间（毫秒）- 确保用户能看到连接状态
     private val MIN_CONNECTING_DISPLAY_TIME_MS = 300L
 
-    private val tickerFlow = kotlinx.coroutines.flow.MutableStateFlow(0L)
-
-    init {
-        scope.launch {
-            while (true) {
-                if (stateHolder._isTextApiCalling.value || stateHolder._isImageApiCalling.value) {
-                    tickerFlow.value = System.currentTimeMillis()
-                }
-                kotlinx.coroutines.delay(500)
-            }
-        }
-    }
-
     private fun buildEffectiveMessage(message: Message, isCurrentStreaming: Boolean): Message {
         if (!isCurrentStreaming) return message
         val renderState = streamingMessageStateManager.getCurrentRenderState(message.id)
@@ -82,7 +68,7 @@ open class MessageItemsController(
         return message.copy(contentStarted = true)
     }
 
-    private fun resolveStreamingStageText(message: Message, elapsedMs: Long, reasoningComplete: Boolean = false): String? {
+    private fun resolveStreamingStageText(message: Message, _elapsedMs: Long, reasoningComplete: Boolean = false): String? {
         if (message.contentStarted || message.text.isNotBlank()) {
             return null
         }
@@ -92,17 +78,15 @@ open class MessageItemsController(
         message.currentWebSearchStage?.takeIf { it.isNotBlank() }?.let {
             normalizeStatusText(message).takeIf { it.isNotBlank() }?.let { return it }
         }
-        return buildRuntimeLoadingStatus(message, elapsedMs, reasoningComplete)
+        return buildRuntimeLoadingStatus(message, reasoningComplete)
     }
 
-    private fun buildRuntimeLoadingStatus(message: Message, elapsedMs: Long, reasoningComplete: Boolean): String {
-        val phase = when {
+    private fun buildRuntimeLoadingStatus(message: Message, reasoningComplete: Boolean): String {
+        return when {
             !message.reasoning.isNullOrBlank() && reasoningComplete -> "已收到思考，等待正文"
             !message.reasoning.isNullOrBlank() -> "正在接收思考"
             else -> "等待首个响应"
         }
-        val elapsedSeconds = (elapsedMs / 1000L).coerceAtLeast(0L)
-        return "$phase · ${elapsedSeconds}s"
     }
 
     private fun isDisplayableBackendStatus(status: String): Boolean {
@@ -148,8 +132,7 @@ open class MessageItemsController(
             snapshotFlow { stateHolder.messages.toList() },
             stateHolder._isTextApiCalling,
             stateHolder._currentTextStreamingAiMessageId,
-            tickerFlow
-        ) { messages, isApiCalling, currentStreamingAiMessageId, _ ->
+        ) { messages, isApiCalling, currentStreamingAiMessageId ->
             filterRenderableMessages(messages)
                 .map { message ->
                     when (message.sender) {
@@ -218,19 +201,8 @@ open class MessageItemsController(
                                 (isCurrentlyStreaming || !hasStreamingOnlyItems || allowStreamingBlocksHashReuse)
 
                             if (cacheValid) {
-                                android.util.Log.d(
-                                    "MessageItemsController",
-                                    "Cache HIT for ${message.id.take(8)}, items=${cached!!.items.map { it::class.simpleName }}"
-                                )
-                                cached.items
+                                cached!!.items
                             } else {
-                                android.util.Log.d(
-                                    "MessageItemsController",
-                                    "Cache MISS for ${message.id.take(8)}, text.len=${message.text.length}, " +
-                                        "contentStarted=${effectiveMessage.contentStarted}, cached.contentStarted=${cached?.contentStarted}, " +
-                                        "blocksHash=${parseResult.blocksHash}, cachedHash=${cached?.blocksHash}, " +
-                                        "pendingMath=${parseResult.hasPendingMath}, cachedPending=${cached?.hasPendingMath}"
-                                )
                                 val newItems = createAiMessageItems(
                                     effectiveMessage,
                                     isApiCalling,
@@ -261,6 +233,7 @@ open class MessageItemsController(
         }
         .flowOn(Dispatchers.Default)
         .distinctUntilChanged()
+        .freezeWhileStreamingPaused(stateHolder._isStreamingPaused)
         .stateIn(
             scope = scope,
             started = SharingStarted.WhileSubscribed(5000),
@@ -272,12 +245,7 @@ open class MessageItemsController(
             snapshotFlow { stateHolder.imageGenerationMessages.toList() },
             stateHolder._isImageApiCalling,
             stateHolder._currentImageStreamingAiMessageId,
-            tickerFlow
-        ) { messages, isApiCalling, currentStreamingAiMessageId, _ ->
-            android.util.Log.d(
-                "MessageItemsController",
-                "[IMAGE FLOW] Triggered - messages.size=${messages.size}, isApiCalling=$isApiCalling"
-            )
+        ) { messages, isApiCalling, currentStreamingAiMessageId ->
             filterRenderableMessages(messages)
                 .map { message ->
                     when (message.sender) {
@@ -314,21 +282,9 @@ open class MessageItemsController(
                                 loadingTextMatches &&
                                 (isCurrentlyStreaming == (cached.items.any { it is ChatListItem.LoadingIndicator }))
 
-                            android.util.Log.d(
-                                "MessageItemsController",
-                                "[IMAGE CACHE] messageId=${message.id.take(8)}, " +
-                                    "cacheValid=$cacheValid, " +
-                                    "blocksHash=${parseResult.blocksHash}, " +
-                                    "cachedHash=${cached?.blocksHash}, " +
-                                    "cached.imageUrls=${cached?.imageUrls?.size}, " +
-                                    "message.imageUrls=${message.imageUrls?.size}"
-                            )
-
                             if (cacheValid) {
-                                android.util.Log.d("MessageItemsController", "[IMAGE CACHE HIT] Using cached items")
                                 cached!!.items
                             } else {
-                                android.util.Log.d("MessageItemsController", "[IMAGE CACHE MISS] Recomputing items")
                                 val newItems = createAiMessageItems(
                                     effectiveMessage,
                                     isApiCalling,
@@ -360,6 +316,7 @@ open class MessageItemsController(
         }
         .flowOn(Dispatchers.Default)
         .distinctUntilChanged()
+        .freezeWhileStreamingPaused(stateHolder._isStreamingPaused)
         .stateIn(
             scope = scope,
             started = SharingStarted.WhileSubscribed(5000),
@@ -373,10 +330,6 @@ open class MessageItemsController(
         isImageGeneration: Boolean
     ): com.android.everytalk.ui.state.AiBubbleState {
         if (message.isError) return com.android.everytalk.ui.state.AiBubbleState.Error(message.text)
-
-        if (stateHolder._isStreamingPaused.value) {
-            return com.android.everytalk.ui.state.AiBubbleState.Idle
-        }
 
         val isCurrentStreaming = isApiCalling && message.id == currentStreamingAiMessageId
         val effectiveMessage = buildEffectiveMessage(message, isCurrentStreaming)
@@ -457,15 +410,6 @@ open class MessageItemsController(
             else -> com.android.everytalk.ui.state.AiBubbleState.Idle
         }
 
-        if (isCurrentStreaming) {
-            android.util.Log.d(
-                "MessageItemsController",
-                "BubbleState for ${message.id.take(8)}: ${state::class.simpleName}, " +
-                    "isStreaming=$isCurrentStreaming, contentStarted=${effectiveMessage.contentStarted}, " +
-                    "textLen=${message.text.length}, isWithinMinDisplayTime=$isWithinMinDisplayTime"
-            )
-        }
-
         return state
     }
 
@@ -489,7 +433,6 @@ open class MessageItemsController(
 
         return when (state) {
             is com.android.everytalk.ui.state.AiBubbleState.Connecting -> {
-                android.util.Log.d("MessageItemsController", "createAiMessageItems: Connecting -> LoadingIndicator")
                 val elapsedMs = streamingStartTimestamps[message.id]?.let { System.currentTimeMillis() - it } ?: 0L
                 listOf(
                     ChatListItem.LoadingIndicator(
@@ -506,10 +449,6 @@ open class MessageItemsController(
                 items.add(ChatListItem.AiMessageReasoning(message))
                 
                 if (!stageText.isNullOrBlank()) {
-                    android.util.Log.d(
-                        "MessageItemsController",
-                        "createAiMessageItems: Reasoning + LoadingIndicator, stage=$stageText"
-                    )
                     items.add(
                         ChatListItem.LoadingIndicator(
                             messageId = message.id,
@@ -575,11 +514,6 @@ open class MessageItemsController(
                                 blocks = resolvedParseResult.blocks
                             )
                         }
-                    )
-                    android.util.Log.d(
-                        "MessageItemsController",
-                        "[COMPLETE STATE] Created AiMessage item: hasTextContent=$hasTextContent, " +
-                            "hasImageContent=$hasImageContent, imageUrls=${message.imageUrls?.size}"
                     )
                 }
 
@@ -712,13 +646,6 @@ open class MessageItemsController(
 
         val renderState = streamingMessageStateManager.getCurrentRenderState(message.id)
         val content = renderState.content.ifBlank { message.text }
-
-        if (content != message.text && content.isNotBlank()) {
-            android.util.Log.d(
-                "MessageItemsController",
-                "Using streaming render state for ${message.id.take(8)}: len=${content.length}, hash=${renderState.blocksHash}"
-            )
-        }
 
         return StreamBlockParser.ParseResult(
             blocks = renderState.blocks,
