@@ -2,6 +2,7 @@ package com.android.everytalk.ui.components
 
 import com.android.everytalk.ui.components.markdown.markdownToPlainText
 import com.android.everytalk.ui.components.streaming.BLOCK_FORMULA_FENCE_LANGUAGE
+import com.android.everytalk.ui.components.streaming.DETAILS_FENCE_LANGUAGE
 import com.android.everytalk.ui.components.streaming.FormulaDisplayMode
 import com.android.everytalk.ui.components.streaming.INLINE_FORMULA_SCHEME
 import com.android.everytalk.ui.components.streaming.StreamBlock
@@ -278,5 +279,63 @@ class MarkdownRenderingContractTest {
         assertFalse(prepared.markdown.contains("E = mc^2"))
         assertFalse(prepared.markdown.contains("base64", ignoreCase = true))
         assertFalse(prepared.markdown.contains("katex", ignoreCase = true))
+    }
+
+    @Test
+    fun `edge case extensions keep one markdown math and code ownership chain`() {
+        val markdown = """
+            <span style="color:red;font-weight:bold">红色粗体</span>
+
+            联系邮箱 <test@example.com>，实体 &copy; &amp; &lt; &gt;，表情 :rocket:。
+
+            转义括号 \[这不是链接\]。
+
+            正文脚注[^note]。
+
+            <details>
+            <summary>折叠详情 :smile:</summary>
+
+            公式 ${'$'}E=mc^2${'$'} 与 **粗体**。
+
+            </details>
+
+            ```text
+            <code@example.com> :rocket:
+            ```
+
+            <script>alert('不执行')</script>
+
+            [^note]: 脚注包含 [链接](https://example.com/docs)。
+        """.trimIndent()
+
+        val prepared = StreamBlockParser.prepareMessage(
+            content = markdown,
+            messageId = "edge-case-extensions",
+            contentVersion = 32L,
+        )
+        val details = prepared.details.values.single()
+
+        assertEquals(1, prepared.formulas.size)
+        assertTrue(prepared.markdown.contains("[test@example.com](mailto:test@example.com)"))
+        assertTrue(prepared.markdown.contains("实体 &copy; &amp; &lt; &gt;，表情 🚀"))
+        assertTrue(prepared.markdown.contains("\\[这不是链接\\]"))
+        assertTrue(
+            prepared.markdown.contains(
+                "正文脚注[¹](everytalk-footnote-definition:1:1)"
+            )
+        )
+        assertTrue(
+            prepared.markdown.contains(
+                "[¹](everytalk-footnote-reference:1) " +
+                    "脚注包含 [链接](https://example.com/docs)"
+            )
+        )
+        assertTrue(prepared.markdown.contains("```$DETAILS_FENCE_LANGUAGE\n${details.id}\n```"))
+        assertEquals("折叠详情 😄", details.summary)
+        assertTrue(details.markdown.contains(INLINE_FORMULA_SCHEME))
+        assertTrue(details.markdown.contains("**粗体**"))
+        assertTrue(prepared.markdown.contains("<code@example.com> :rocket:"))
+        assertFalse(prepared.markdown.contains("alert('不执行')"))
+        assertTrue(parseMarkdown(prepared.markdown) is State.Success)
     }
 }

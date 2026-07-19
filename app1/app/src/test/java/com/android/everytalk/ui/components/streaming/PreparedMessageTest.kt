@@ -42,6 +42,35 @@ class PreparedMessageTest {
     }
 
     @Test
+    fun `closed escaped block math inside prose creates a block formula request`() {
+        val prepared = StreamBlockParser.prepareMessage(
+            content = "公式：\\[x^2+y^2\\]。",
+            messageId = "inline-block-formula",
+            contentVersion = 18L,
+        )
+
+        val formula = prepared.formulas.values.single()
+        assertEquals("x^2+y^2", formula.latex)
+        assertEquals(FormulaDisplayMode.BLOCK, formula.displayMode)
+        assertTrue(prepared.markdown.contains("```$BLOCK_FORMULA_FENCE_LANGUAGE\n${formula.id}\n```"))
+        assertFalse(prepared.hasPendingFormula)
+    }
+
+    @Test
+    fun `standalone escaped prose brackets do not create a formula request`() {
+        val content = "\\[这不是链接\\]"
+        val prepared = StreamBlockParser.prepareMessage(
+            content = content,
+            messageId = "escaped-prose-brackets",
+            contentVersion = 9L,
+        )
+
+        assertEquals(content, prepared.markdown)
+        assertTrue(prepared.formulas.isEmpty())
+        assertFalse(prepared.hasPendingFormula)
+    }
+
+    @Test
     fun `inline code is preserved and dollar signs inside it are not formulas`() {
         val prepared = StreamBlockParser.prepareMessage(
             content = "命令 `echo ${'$'}HOME`，公式 ${'$'}x+1${'$'}。",
@@ -157,5 +186,46 @@ class PreparedMessageTest {
         assertEquals("E=mc^2", formula.latex)
         assertTrue(prepared.markdown.contains("| 质能方程 | ![math](everytalk-math-inline:${formula.id}) |"))
         assertFalse(prepared.hasPendingFormula)
+    }
+
+    @Test
+    fun `统一准备入口同时生成扩展Markdown与details资产`() {
+        val prepared = StreamBlockParser.prepareMessage(
+            content = """
+                联系 <test@example.com> :rocket:
+
+                <details>
+                <summary>公式详情</summary>
+
+                质能方程 ${'$'}E=mc^2${'$'}。
+
+                </details>
+            """.trimIndent(),
+            messageId = "markdown-extensions",
+            contentVersion = 18L,
+        )
+
+        val details = prepared.details.values.single()
+        val formula = prepared.formulas.values.single()
+
+        assertTrue(prepared.markdown.contains("[test@example.com](mailto:test@example.com) 🚀"))
+        assertTrue(prepared.markdown.contains("```$DETAILS_FENCE_LANGUAGE\n${details.id}\n```"))
+        assertEquals("公式详情", details.summary)
+        assertEquals(18L, details.contentVersion)
+        assertTrue(details.markdown.contains("everytalk-math-inline:${formula.id}"))
+        assertFalse(prepared.markdown.contains("<details>"))
+    }
+
+    @Test
+    fun `script删除后不会保留孤儿公式资产`() {
+        val prepared = StreamBlockParser.prepareMessage(
+            content = "前文<script>const value = '${'$'}x+1${'$'}';</script>后文",
+            messageId = "script-formula",
+            contentVersion = 19L,
+        )
+
+        assertEquals("前文后文", prepared.markdown)
+        assertTrue(prepared.formulas.isEmpty())
+        assertTrue(prepared.details.isEmpty())
     }
 }

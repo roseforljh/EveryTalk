@@ -8,8 +8,11 @@ import android.text.SpannableString
 import android.text.Spanned
 import android.text.style.ForegroundColorSpan
 import android.util.TypedValue
+import android.view.MotionEvent
 import android.view.WindowManager
 import android.webkit.ConsoleMessage
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebChromeClient
@@ -63,6 +66,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -74,12 +78,12 @@ import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -94,8 +98,7 @@ import com.android.everytalk.ui.components.syntax.SyntaxHighlightTheme
 import com.android.everytalk.ui.components.syntax.SyntaxHighlighter
 import com.android.everytalk.ui.components.content.isPreviewSupported
 import com.android.everytalk.ui.theme.chatColors
-import java.io.BufferedReader
-import java.io.InputStreamReader
+import java.util.UUID
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
@@ -124,7 +127,82 @@ internal data class CodeViewerDialogAnimationTarget(
 internal data class PreparedWebPreviewContent(
     val templateFileName: String?,
     val content: String,
+    val requiresExplicitCompletionSignal: Boolean = false,
 )
+
+private class WebPreviewLoadSession(
+    val token: String,
+    initialError: String?,
+) {
+    var error by mutableStateOf(initialError)
+    var completionReported: Boolean = initialError != null
+}
+
+enum class WebPreviewLoadState {
+    LOADING,
+    READY,
+    ERROR,
+}
+
+internal sealed interface WebPreviewCompletionSignal {
+    data object Ready : WebPreviewCompletionSignal
+    data class Error(val message: String) : WebPreviewCompletionSignal
+}
+
+private const val WEB_PREVIEW_READY_SIGNAL = "__EVERYTALK_PREVIEW_READY__"
+private const val WEB_PREVIEW_ERROR_SIGNAL_PREFIX = "__EVERYTALK_PREVIEW_ERROR__:"
+private const val WEB_PREVIEW_COMPLETION_TOKEN_PLACEHOLDER = "__EVERYTALK_COMPLETION_TOKEN__"
+private const val WEB_PREVIEW_COMPLETION_TIMEOUT_MILLIS = 15_000L
+private const val WEB_PREVIEW_DIAGNOSTICS_SCRIPT_TAG =
+    "<script id=\"everytalk-preview-diagnostics\">"
+
+internal fun parseWebPreviewCompletionSignal(
+    message: String?,
+    expectedToken: String,
+): WebPreviewCompletionSignal? {
+    val readySignal = "$WEB_PREVIEW_READY_SIGNAL:$expectedToken"
+    val errorSignalPrefix = "$WEB_PREVIEW_ERROR_SIGNAL_PREFIX$expectedToken:"
+    return when {
+        message == readySignal -> WebPreviewCompletionSignal.Ready
+        message?.startsWith(errorSignalPrefix) == true -> WebPreviewCompletionSignal.Error(
+            message.removePrefix(errorSignalPrefix).ifBlank { "Unknown preview error" }
+        )
+        else -> null
+    }
+}
+
+internal fun buildWebPreviewBaseUrl(token: String): String =
+    "file:///android_asset/templates/preview-$token.html"
+
+internal fun shouldMarkWebPreviewLoadError(
+    isForMainFrame: Boolean,
+    requestUrl: String?,
+    expectedToken: String,
+): Boolean = isForMainFrame && requestUrl == buildWebPreviewBaseUrl(expectedToken)
+
+internal fun shouldMarkWebPreviewConsoleError(
+    sourceId: String?,
+    expectedToken: String,
+): Boolean = sourceId == buildWebPreviewBaseUrl(expectedToken)
+
+internal fun shouldHandleWebPreviewPageFinished(
+    url: String?,
+    expectedToken: String,
+): Boolean = url == buildWebPreviewBaseUrl(expectedToken)
+
+internal fun shouldMarkWebPreviewReadyOnPageFinished(
+    requiresExplicitCompletionSignal: Boolean,
+    hasError: Boolean,
+): Boolean = !requiresExplicitCompletionSignal && !hasError
+
+internal fun resolveInitialWebPreviewLoadState(buildError: String?): WebPreviewLoadState =
+    if (buildError == null) WebPreviewLoadState.LOADING else WebPreviewLoadState.ERROR
+
+internal fun shouldMarkWebPreviewCompletionTimeoutError(
+    requiresExplicitCompletionSignal: Boolean,
+    completionReported: Boolean,
+    hasError: Boolean,
+): Boolean = requiresExplicitCompletionSignal && !completionReported && !hasError
 
 internal fun prepareWebPreviewContent(
     code: String,
@@ -132,11 +210,31 @@ internal fun prepareWebPreviewContent(
 ): PreparedWebPreviewContent {
     val normalizedLang = language.trim().lowercase()
     return when (normalizedLang) {
-        "mermaid" -> PreparedWebPreviewContent("templates/mermaid.html", escapeHtml(code))
-        "echarts" -> PreparedWebPreviewContent("templates/echarts.html", code.replace("`", "\\`"))
-        "chartjs" -> PreparedWebPreviewContent("templates/chartjs.html", code.replace("`", "\\`"))
-        "flowchart", "flow" -> PreparedWebPreviewContent("templates/flowchart.html", code.replace("`", "\\`"))
-        "vega", "vega-lite" -> PreparedWebPreviewContent("templates/vega.html", code)
+        "mermaid" -> PreparedWebPreviewContent(
+            "templates/mermaid.html",
+            escapeHtml(code),
+            requiresExplicitCompletionSignal = true,
+        )
+        "echarts" -> PreparedWebPreviewContent(
+            "templates/echarts.html",
+            code.replace("`", "\\`"),
+            requiresExplicitCompletionSignal = true,
+        )
+        "chartjs" -> PreparedWebPreviewContent(
+            "templates/chartjs.html",
+            code.replace("`", "\\`"),
+            requiresExplicitCompletionSignal = true,
+        )
+        "flowchart", "flow" -> PreparedWebPreviewContent(
+            "templates/flowchart.html",
+            code.replace("`", "\\`"),
+            requiresExplicitCompletionSignal = true,
+        )
+        "vega", "vega-lite" -> PreparedWebPreviewContent(
+            "templates/vega.html",
+            code,
+            requiresExplicitCompletionSignal = true,
+        )
         "infographic" -> PreparedWebPreviewContent("templates/html.html", renderInfographic(code))
         "html" -> {
             if (isCompleteHtmlDocument(code)) {
@@ -190,10 +288,10 @@ private const val WEB_PREVIEW_DIAGNOSTICS_SNIPPET = """
         box-shadow: 0 6px 24px rgba(0, 0, 0, 0.28);
     }
 </style>
-<script>
+$WEB_PREVIEW_DIAGNOSTICS_SCRIPT_TAG
 (function() {
-    if (window.__everytalkPreviewDiagnosticsInstalled) return;
     window.__everytalkPreviewDiagnosticsInstalled = true;
+    var completionToken = '$WEB_PREVIEW_COMPLETION_TOKEN_PLACEHOLDER';
 
     function stringify(value) {
         if (value instanceof Error) return value.stack || value.message || String(value);
@@ -225,46 +323,83 @@ private const val WEB_PREVIEW_DIAGNOSTICS_SNIPPET = """
         overlay.textContent = kind + ': ' + message + location;
     }
 
+    function reportPreviewError(kind, error, source, line, column) {
+        var message = stringify(error || 'Unknown preview error');
+        var location = source ? '\n' + source + (line ? ':' + line : '') + (column ? ':' + column : '') : '';
+        showPreviewError(kind, message, source, line, column);
+        console.log('${WEB_PREVIEW_ERROR_SIGNAL_PREFIX}' + completionToken + ':' + kind + ': ' + message + location);
+    }
+
+    window.__everytalkPreviewReady = function() {
+        console.log('${WEB_PREVIEW_READY_SIGNAL}:' + completionToken);
+    };
+
+    window.__everytalkPreviewError = function(error) {
+        reportPreviewError('Preview', error);
+    };
+
     window.addEventListener('error', function(event) {
-        showPreviewError('JS', event.message || 'Script error', event.filename, event.lineno, event.colno);
+        reportPreviewError('JS', event.message || 'Script error', event.filename, event.lineno, event.colno);
     });
 
     window.addEventListener('unhandledrejection', function(event) {
-        showPreviewError('Promise', stringify(event.reason || 'Unhandled rejection'));
+        reportPreviewError('Promise', event.reason || 'Unhandled rejection');
     });
 
     var originalConsoleError = console.error;
     console.error = function() {
         var message = Array.prototype.map.call(arguments, stringify).join(' ');
-        showPreviewError('Console ERROR', message);
+        reportPreviewError('Console ERROR', message);
         if (originalConsoleError) originalConsoleError.apply(console, arguments);
     };
 })();
 </script>
 """
 
-internal fun injectWebPreviewDiagnostics(raw: String): String {
-    if (raw.contains("__everytalkPreviewDiagnosticsInstalled")) return raw
+internal fun injectWebPreviewDiagnostics(
+    raw: String,
+    completionToken: String,
+): String {
+    if (raw.contains(WEB_PREVIEW_DIAGNOSTICS_SCRIPT_TAG)) return raw
 
-    val lower = raw.lowercase()
-    val headEnd = lower.indexOf("</head>")
-    if (headEnd >= 0) {
-        return raw.substring(0, headEnd) +
-            "\n$WEB_PREVIEW_DIAGNOSTICS_SNIPPET\n" +
-            raw.substring(headEnd)
+    val diagnosticsSnippet = WEB_PREVIEW_DIAGNOSTICS_SNIPPET.replace(
+        WEB_PREVIEW_COMPLETION_TOKEN_PLACEHOLDER,
+        completionToken,
+    )
+    val headStartEnd = Regex("""<head(?:\s[^>]*)?>""", RegexOption.IGNORE_CASE)
+        .find(raw)
+        ?.range
+        ?.last
+        ?.plus(1)
+    if (headStartEnd != null) {
+        return raw.substring(0, headStartEnd) +
+            "\n$diagnosticsSnippet\n" +
+            raw.substring(headStartEnd)
     }
 
+    val lower = raw.lowercase()
     val bodyIndex = lower.indexOf("<body")
     if (bodyIndex >= 0) {
         val bodyStartEnd = lower.indexOf(">", bodyIndex)
         if (bodyStartEnd >= 0) {
             return raw.substring(0, bodyStartEnd + 1) +
-                "\n$WEB_PREVIEW_DIAGNOSTICS_SNIPPET\n" +
+                "\n$diagnosticsSnippet\n" +
                 raw.substring(bodyStartEnd + 1)
         }
     }
 
-    return "$WEB_PREVIEW_DIAGNOSTICS_SNIPPET\n$raw"
+    return "$diagnosticsSnippet\n$raw"
+}
+
+internal fun buildWebPreviewDocument(
+    content: String,
+    template: String?,
+    completionToken: String,
+): String {
+    val completedHtml = template
+        ?.replace("<!-- CONTENT_PLACEHOLDER -->", content)
+        ?: content
+    return injectWebPreviewDiagnostics(completedHtml, completionToken)
 }
 
 internal fun resolveCodeViewerDialogAnimationTarget(
@@ -292,15 +427,27 @@ internal fun resolveCodeViewerDialogAnimationTarget(
 fun WebPreviewContent(
     code: String,
     language: String,
+    modifier: Modifier = Modifier,
     previewBackgroundColor: Color = Color.White,
     previewTextColor: Color = Color.Black,
-    modifier: Modifier = Modifier
+    onLoadStateChanged: (WebPreviewLoadState) -> Unit = {},
 ) {
     val context = LocalContext.current
+    val latestOnLoadStateChanged by rememberUpdatedState(onLoadStateChanged)
 
     val previewContent = remember(code, language) {
         prepareWebPreviewContent(code, language)
     }
+    val previewLoadToken = remember(
+        previewContent,
+        previewBackgroundColor,
+        previewTextColor,
+    ) {
+        UUID.randomUUID().toString()
+    }
+    val latestRequiresExplicitCompletionSignal by rememberUpdatedState(
+        previewContent.requiresExplicitCompletionSignal
+    )
 
     val isDarkPreview = previewBackgroundColor.luminance() < 0.5f
     val previewSurfaceColor = if (isDarkPreview) Color(0xFF1E1E1E) else Color.White
@@ -332,36 +479,97 @@ fun WebPreviewContent(
         ""
     }
 
-    val htmlContent = remember(previewContent, previewBackgroundColor, previewTextColor) {
+    val (htmlContent, previewBuildError) = remember(
+        previewContent,
+        previewBackgroundColor,
+        previewTextColor,
+        previewLoadToken,
+    ) {
         try {
-            val diagnosticsContent = injectWebPreviewDiagnostics(previewContent.content)
-            if (previewContent.templateFileName == null) {
-                diagnosticsContent
+            val document = if (previewContent.templateFileName == null) {
+                buildWebPreviewDocument(
+                    content = previewContent.content,
+                    template = null,
+                    completionToken = previewLoadToken,
+                )
             } else {
                 val assetManager = context.assets
-                val inputStream = assetManager.open(previewContent.templateFileName)
-                val reader = BufferedReader(InputStreamReader(inputStream))
-                val template = reader.readText()
-                reader.close()
-                template
+                val template = assetManager.open(previewContent.templateFileName)
+                    .bufferedReader(Charsets.UTF_8)
+                    .use { reader -> reader.readText() }
+                val themedTemplate = template
                     .replace("ET_COLOR_SCHEME", if (isDarkPreview) "dark" else "light")
                     .replace("ET_THEME_CLASS", if (isDarkPreview) "everytalk-dark" else "everytalk-light")
                     .replace("ET_BACKGROUND_COLOR", previewBackgroundColor.toCssHex())
                     .replace("ET_TEXT_COLOR", previewTextCssColor)
                     .replace("ET_DARK_MODE_OVERRIDES", darkModeOverrides)
-                    .replace("<!-- CONTENT_PLACEHOLDER -->", diagnosticsContent)
+                buildWebPreviewDocument(
+                    content = previewContent.content,
+                    template = themedTemplate,
+                    completionToken = previewLoadToken,
+                )
             }
+            document to null
         } catch (e: Exception) {
             e.printStackTrace()
-            "<html><body>Error loading template: ${e.message}</body></html>"
+            val errorMessage = e.message?.ifBlank { "Unknown preview error" } ?: "Unknown preview error"
+            buildWebPreviewDocument(
+                content = "<html><body>Error loading template: ${escapeHtml(errorMessage)}</body></html>",
+                template = null,
+                completionToken = previewLoadToken,
+            ) to "Template: $errorMessage"
         }
     }
 
     var previewWebView by remember { mutableStateOf<WebView?>(null) }
-    var latestPreviewError by remember { mutableStateOf<String?>(null) }
+    val previewLoadSession = remember(previewLoadToken, previewBuildError) {
+        WebPreviewLoadSession(
+            token = previewLoadToken,
+            initialError = previewBuildError,
+        )
+    }
+    val latestPreviewLoadSession by rememberUpdatedState(previewLoadSession)
 
-    LaunchedEffect(htmlContent) {
-        latestPreviewError = null
+    LaunchedEffect(
+        previewWebView,
+        htmlContent,
+        previewBuildError,
+        previewLoadToken,
+        previewContent.requiresExplicitCompletionSignal,
+    ) {
+        val webView = previewWebView ?: return@LaunchedEffect
+        latestOnLoadStateChanged(resolveInitialWebPreviewLoadState(previewBuildError))
+        if (webView.tag != htmlContent) {
+            val baseUrl = buildWebPreviewBaseUrl(previewLoadToken)
+            webView.tag = htmlContent
+            webView.loadDataWithBaseURL(
+                baseUrl,
+                htmlContent,
+                "text/html",
+                "UTF-8",
+                baseUrl,
+            )
+        }
+        if (previewBuildError != null) return@LaunchedEffect
+
+        if (previewContent.requiresExplicitCompletionSignal) {
+            delay(WEB_PREVIEW_COMPLETION_TIMEOUT_MILLIS)
+            if (
+                shouldMarkWebPreviewCompletionTimeoutError(
+                    requiresExplicitCompletionSignal = previewContent.requiresExplicitCompletionSignal,
+                    completionReported = previewLoadSession.completionReported,
+                    hasError = previewLoadSession.error != null,
+                )
+            ) {
+                webView.evaluateJavascript(
+                    "window.__everytalkPreviewError && window.__everytalkPreviewError('Render timed out');",
+                    null,
+                )
+                previewLoadSession.error = "Preview: Render timed out"
+                previewLoadSession.completionReported = true
+                latestOnLoadStateChanged(WebPreviewLoadState.ERROR)
+            }
+        }
     }
 
     DisposableEffect(Unit) {
@@ -397,15 +605,81 @@ fun WebPreviewContent(
                         settings.forceDark = WebSettings.FORCE_DARK_OFF
                     }
                     setBackgroundColor(previewBackgroundColor.toArgb())
-                    webViewClient = WebViewClient()
+                    webViewClient = object : WebViewClient() {
+                        override fun onPageFinished(view: WebView?, url: String?) {
+                            super.onPageFinished(view, url)
+                            val loadSession = latestPreviewLoadSession
+                            if (!shouldHandleWebPreviewPageFinished(url, loadSession.token)) return
+                            if (
+                                shouldMarkWebPreviewReadyOnPageFinished(
+                                    requiresExplicitCompletionSignal = latestRequiresExplicitCompletionSignal,
+                                    hasError = loadSession.error != null,
+                                )
+                            ) {
+                                loadSession.completionReported = true
+                                latestOnLoadStateChanged(WebPreviewLoadState.READY)
+                            }
+                        }
+
+                        override fun onReceivedError(
+                            view: WebView?,
+                            request: WebResourceRequest?,
+                            error: WebResourceError?,
+                        ) {
+                            super.onReceivedError(view, request, error)
+                            val loadSession = latestPreviewLoadSession
+                            if (
+                                !shouldMarkWebPreviewLoadError(
+                                    isForMainFrame = request?.isForMainFrame == true,
+                                    requestUrl = request?.url?.toString(),
+                                    expectedToken = loadSession.token,
+                                )
+                            ) return
+                            loadSession.error = "Web: ${error?.description ?: "Unknown preview error"}"
+                            loadSession.completionReported = true
+                            latestOnLoadStateChanged(WebPreviewLoadState.ERROR)
+                        }
+                    }
                     webChromeClient = object : WebChromeClient() {
                         override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
-                            if (consoleMessage?.messageLevel() == ConsoleMessage.MessageLevel.ERROR) {
-                                latestPreviewError = formatWebPreviewConsoleMessage(
+                            val loadSession = latestPreviewLoadSession
+                            val completionSignal = parseWebPreviewCompletionSignal(
+                                message = consoleMessage?.message(),
+                                expectedToken = loadSession.token,
+                            )
+                            when (completionSignal) {
+                                WebPreviewCompletionSignal.Ready -> {
+                                    if (
+                                        latestRequiresExplicitCompletionSignal &&
+                                        loadSession.error == null
+                                    ) {
+                                        loadSession.completionReported = true
+                                        latestOnLoadStateChanged(WebPreviewLoadState.READY)
+                                    }
+                                }
+                                is WebPreviewCompletionSignal.Error -> {
+                                    loadSession.error = "Preview: ${completionSignal.message}"
+                                    loadSession.completionReported = true
+                                    latestOnLoadStateChanged(WebPreviewLoadState.ERROR)
+                                }
+                                null -> Unit
+                            }
+
+                            if (
+                                completionSignal == null &&
+                                consoleMessage?.messageLevel() == ConsoleMessage.MessageLevel.ERROR &&
+                                shouldMarkWebPreviewConsoleError(
+                                    sourceId = consoleMessage.sourceId(),
+                                    expectedToken = loadSession.token,
+                                )
+                            ) {
+                                loadSession.error = formatWebPreviewConsoleMessage(
                                     message = consoleMessage.message(),
                                     lineNumber = consoleMessage.lineNumber(),
                                     sourceId = consoleMessage.sourceId(),
                                 )
+                                loadSession.completionReported = true
+                                latestOnLoadStateChanged(WebPreviewLoadState.ERROR)
                             }
                             return true
                         }
@@ -414,27 +688,19 @@ fun WebPreviewContent(
                     isVerticalScrollBarEnabled = false
                     isHorizontalScrollBarEnabled = false
                     setOnTouchListener { v, event ->
+                        if (event.action == MotionEvent.ACTION_UP) v.performClick()
                         // 返回 false 允许事件冒泡到外层 Compose 点击监听器
                         false
                     }
                 }
             },
             update = { webView ->
-                if (webView.tag != htmlContent) {
-                    webView.tag = htmlContent
-                    webView.loadDataWithBaseURL(
-                        "file:///android_asset/templates/",
-                        htmlContent,
-                        "text/html",
-                        "UTF-8",
-                        null
-                    )
-                }
+                webView.setBackgroundColor(previewBackgroundColor.toArgb())
             },
             modifier = Modifier.fillMaxSize()
         )
 
-        latestPreviewError?.let { errorText ->
+        previewLoadSession.error?.let { errorText ->
             Surface(
                 modifier = Modifier
                     .align(Alignment.TopCenter)
@@ -463,8 +729,7 @@ fun FullScreenCodeViewerDialog(
     onDismiss: () -> Unit
 ) {
     val clipboard = LocalClipboard.current
-    val density = LocalDensity.current
-    val configuration = LocalConfiguration.current
+    val windowSize = LocalWindowInfo.current.containerSize
     val scope = rememberCoroutineScope()
     val isDarkTheme = androidx.compose.foundation.isSystemInDarkTheme()
     val bgColor = MaterialTheme.colorScheme.background
@@ -505,15 +770,21 @@ fun FullScreenCodeViewerDialog(
         animationSpec = tween(durationMillis = CODE_VIEWER_DIALOG_ALPHA_MILLIS),
         label = "dialogEntryAlpha"
     )
-    val transformOrigin = remember(sourceBounds, configuration.screenWidthDp, configuration.screenHeightDp) {
-        if (sourceBounds == androidx.compose.ui.geometry.Rect.Zero) {
+    val transformOrigin = remember(sourceBounds, windowSize) {
+        if (
+            sourceBounds == androidx.compose.ui.geometry.Rect.Zero ||
+            windowSize.width <= 0 ||
+            windowSize.height <= 0
+        ) {
             TransformOrigin.Center
         } else {
-            val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
-            val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
             TransformOrigin(
-                pivotFractionX = ((sourceBounds.left + sourceBounds.width / 2f) / screenWidthPx).coerceIn(0f, 1f),
-                pivotFractionY = ((sourceBounds.top + sourceBounds.height / 2f) / screenHeightPx).coerceIn(0f, 1f)
+                pivotFractionX = (
+                    (sourceBounds.left + sourceBounds.width / 2f) / windowSize.width
+                    ).coerceIn(0f, 1f),
+                pivotFractionY = (
+                    (sourceBounds.top + sourceBounds.height / 2f) / windowSize.height
+                    ).coerceIn(0f, 1f),
             )
         }
     }
@@ -586,9 +857,6 @@ fun FullScreenCodeViewerDialog(
                         if (canPreview) {
                             val capsuleWidth = 140.dp
                             val indicatorWidth = 70.dp
-                            val indicatorProgress =
-                                (pagerState.currentPage + pagerState.currentPageOffsetFraction).coerceIn(0f, 1f)
-                            val indicatorOffset = indicatorWidth * indicatorProgress
 
                             Surface(
                                 shape = RoundedCornerShape(50),
@@ -600,7 +868,16 @@ fun FullScreenCodeViewerDialog(
                                     Box(
                                         modifier = Modifier
                                             .padding(2.dp)
-                                            .offset(x = indicatorOffset)
+                                            .offset {
+                                                val progress = (
+                                                    pagerState.currentPage +
+                                                        pagerState.currentPageOffsetFraction
+                                                    ).coerceIn(0f, 1f)
+                                                IntOffset(
+                                                    x = (indicatorWidth * progress).roundToPx(),
+                                                    y = 0,
+                                                )
+                                            }
                                             .size(width = indicatorWidth - 4.dp, height = 32.dp)
                                             .background(capsuleSelectedBgColor, RoundedCornerShape(50))
                                     )

@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.components.content
 
+import com.android.everytalk.ui.components.WebPreviewLoadState
 import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -16,6 +17,19 @@ class CodeBlockCardScrollTest {
     @Test
     fun `non streaming code block resets to top`() {
         assertEquals(0, resolveCodeBlockScrollTarget(isStreaming = false, maxValue = 320))
+    }
+
+    @Test
+    fun `inline web preview height follows loading result`() {
+        val loadingHeight = resolveInlineWebPreviewHeightDp(WebPreviewLoadState.LOADING)
+        val errorHeight = resolveInlineWebPreviewHeightDp(WebPreviewLoadState.ERROR)
+        val readyHeight = resolveInlineWebPreviewHeightDp(WebPreviewLoadState.READY)
+
+        assertEquals(160f, loadingHeight)
+        assertEquals(220f, errorHeight)
+        assertEquals(450f, readyHeight)
+        assertTrue(loadingHeight < readyHeight)
+        assertTrue(errorHeight < readyHeight)
     }
 
     @Test

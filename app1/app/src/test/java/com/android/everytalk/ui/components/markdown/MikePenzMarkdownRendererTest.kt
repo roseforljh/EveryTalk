@@ -1,6 +1,9 @@
 package com.android.everytalk.ui.components.markdown
 
+import androidx.compose.foundation.relocation.BringIntoViewRequester
 import com.android.everytalk.ui.components.streaming.BLOCK_FORMULA_FENCE_LANGUAGE
+import com.android.everytalk.ui.components.streaming.DETAILS_FENCE_LANGUAGE
+import com.android.everytalk.ui.components.streaming.DetailsRequest
 import com.android.everytalk.ui.components.streaming.FormulaDisplayMode
 import com.android.everytalk.ui.components.streaming.FormulaRequest
 import com.android.everytalk.ui.components.streaming.INLINE_FORMULA_SCHEME
@@ -16,6 +19,87 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MikePenzMarkdownRendererTest {
+
+    @Test
+    fun `脚注导航目标只识别预处理器生成的内部链接`() {
+        val referenceParagraph =
+            "正文[¹](${footnoteDefinitionUri(1, 2)})，字面量 $FOOTNOTE_DEFINITION_SCHEME" +
+                "2 不应注册。"
+        val definitionList =
+            "[¹](${footnoteReferenceUri(1)}) 第一项\n\n" +
+                "[²](${footnoteReferenceUri(2)}) 第二项"
+
+        assertEquals(
+            setOf(footnoteReferenceUri(1, 2)),
+            footnoteReferenceTargets(referenceParagraph),
+        )
+        assertEquals(
+            setOf(footnoteDefinitionUri(1), footnoteDefinitionUri(2)),
+            footnoteDefinitionTargets(definitionList),
+        )
+        assertTrue(
+            footnoteTargets(
+                "`[¹](${footnoteDefinitionUri(9, 1)})` " +
+                    "[普通链接](${footnoteDefinitionUri(9, 1)})"
+            ).isEmpty()
+        )
+    }
+
+    @Test
+    fun `脚注返回入口跟随最近一次点击的重复引用`() {
+        val navigation = FootnoteNavigationState()
+        val definition = BringIntoViewRequester()
+        val firstReference = BringIntoViewRequester()
+        val secondReference = BringIntoViewRequester()
+        val collapsedDetailsFallback = BringIntoViewRequester()
+        navigation.register(footnoteDefinitionUri(1), definition)
+        navigation.register(footnoteReferenceUri(1, 1), firstReference)
+        navigation.register(
+            uri = footnoteReferenceUri(1, 2),
+            requester = collapsedDetailsFallback,
+            priority = 0,
+        )
+        navigation.register(footnoteReferenceUri(1, 2), secondReference)
+
+        assertSame(definition, navigation.requesterFor(footnoteDefinitionUri(1, 2)))
+        assertSame(secondReference, navigation.requesterFor(footnoteReferenceUri(1)))
+
+        navigation.unregister(footnoteReferenceUri(1, 2), secondReference)
+        assertSame(collapsedDetailsFallback, navigation.requesterFor(footnoteReferenceUri(1)))
+
+        navigation.unregister(footnoteReferenceUri(1, 2), collapsedDetailsFallback)
+        assertSame(firstReference, navigation.requesterFor(footnoteReferenceUri(1)))
+    }
+
+    @Test
+    fun `收起的外层details包含内层脚注回跳目标`() {
+        val outerId = "a".repeat(64)
+        val innerId = "b".repeat(64)
+        val inner = DetailsRequest(
+            id = innerId,
+            summary = "内层",
+            markdown = "正文[¹](${footnoteDefinitionUri(1, 1)})",
+            contentVersion = 25L,
+        )
+        val outer = DetailsRequest(
+            id = outerId,
+            summary = "外层",
+            markdown = """
+                ```$DETAILS_FENCE_LANGUAGE
+                $innerId
+                ```
+            """.trimIndent(),
+            contentVersion = 25L,
+        )
+
+        assertEquals(
+            setOf(footnoteReferenceUri(1, 1)),
+            detailsSubtreeFootnoteReferenceTargets(
+                root = outer,
+                detailsById = mapOf(outerId to outer, innerId to inner),
+            ),
+        )
+    }
 
     @Test
     fun `行内公式链接只按64位小写SHA256查PreparedMessage映射`() {
@@ -75,6 +159,78 @@ class MikePenzMarkdownRendererTest {
                 "b".repeat(64),
                 prepared,
             )
+        )
+    }
+
+    @Test
+    fun `details必须同时通过内部语言ID映射和版本校验`() {
+        val id = "d".repeat(64)
+        val details = DetailsRequest(
+            id = id,
+            summary = "详情",
+            markdown = "正文",
+            contentVersion = 8L,
+        )
+        val prepared = PreparedMessage(
+            markdown = "",
+            formulas = emptyMap(),
+            hasPendingFormula = false,
+            contentVersion = 8L,
+            details = mapOf(id to details),
+        )
+
+        assertSame(details, resolveDetailsRequest(DETAILS_FENCE_LANGUAGE, id, prepared))
+        assertNull(resolveDetailsRequest("kotlin", id, prepared))
+        assertNull(resolveDetailsRequest(DETAILS_FENCE_LANGUAGE, "not-an-id", prepared))
+        assertNull(
+            resolveDetailsRequest(
+                DETAILS_FENCE_LANGUAGE,
+                id,
+                prepared.copy(contentVersion = 9L),
+            )
+        )
+    }
+
+    @Test
+    fun `每层details只提交当前Markdown实际引用的公式`() {
+        val outerId = "a".repeat(64)
+        val summaryId = "b".repeat(64)
+        val bodyId = "c".repeat(64)
+        val detailsAssetId = "d".repeat(64)
+        val formulas = listOf(outerId, summaryId, bodyId).associateWith { id ->
+            FormulaRequest(
+                id = id,
+                latex = id.first().toString(),
+                displayMode = FormulaDisplayMode.INLINE,
+                contentVersion = 10L,
+            )
+        }
+        val details = DetailsRequest(
+            id = detailsAssetId,
+            summary = "![math]($INLINE_FORMULA_SCHEME$summaryId)",
+            markdown = "![math]($INLINE_FORMULA_SCHEME$bodyId)",
+            contentVersion = 10L,
+        )
+        val prepared = PreparedMessage(
+            markdown = """
+                ![math]($INLINE_FORMULA_SCHEME$outerId)
+
+                ```$DETAILS_FENCE_LANGUAGE
+                $detailsAssetId
+                ```
+            """.trimIndent(),
+            formulas = formulas,
+            hasPendingFormula = false,
+            contentVersion = 10L,
+            details = mapOf(detailsAssetId to details),
+        )
+
+        assertEquals(setOf(outerId, summaryId), resolveVisibleFormulaRequests(prepared).keys)
+        assertEquals(
+            setOf(bodyId),
+            resolveVisibleFormulaRequests(
+                prepared.copy(markdown = details.markdown)
+            ).keys,
         )
     }
 

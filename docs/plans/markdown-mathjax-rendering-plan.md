@@ -32,6 +32,8 @@
 已落地：
 
 - `PreparedMessage` 唯一解析契约、稳定公式 ID、流式 `contentVersion`。
+- MikePenz 官方 `typography`、`padding`、`colors` 接口集中管理正文、标题、链接和块间距。
+- 脚注作为唯一受控 Markdown 扩展，提供上标引用、双向页内跳转和文末返回入口，不再注入分隔线。
 - MathJax `4.1.3`、NewCM `4.1.3` 全部 SVG 动态字体、本地资产完整性校验。
 - 全应用唯一不可见 WebView、批量 JSON 转换、进程退出重试和安全来源限制。
 - MikePenz `MarkdownAnnotator + InlineTextContent` 行内公式接入。
@@ -52,7 +54,7 @@
 
 | 内容类型 | 唯一负责人 | 说明 |
 |---|---|---|
-| 普通 Markdown | MikePenz | 标题、列表、引用、表格、图片、强调和链接均使用库的 Material 3 原生实现 |
+| 普通 Markdown | MikePenz | 标题、列表、引用、表格、图片、强调和链接均使用库的 Material 3 原生组件，视觉参数通过库的官方主题接口集中配置 |
 | `markdown` / `md` 外层围栏 | `StreamBlockParser` | 仅移除模型附加的传输围栏，内部内容继续按普通 Markdown、真实代码块和公式统一分流 |
 | fenced code | `CodeBlockCard` | 保留复制、语言标识、预览和现有交互 |
 | 行内数学公式 | MathJax 4 SVG | 通过 MikePenz 内联图片插槽嵌入正文 |
@@ -67,7 +69,8 @@
 - 不恢复 jLaTeXMath。
 - 不保留 KaTeX 运行时。
 - 不建立数学引擎运行时切换开关。
-- 不修改 MikePenz 标准 Markdown 样式。
+- 不重写 MikePenz 标准 Markdown 组件。
+- 不为标题、链接、列表或表格建立第二套渲染器。
 - 不修改 `CodeBlockCard` 的视觉和功能。
 - 不修改页面上下阴影及 `ScrollFadeEdge.kt`。
 - 不修改数据库结构和历史消息原文格式。
@@ -687,7 +690,9 @@ Agent不连接、不控制、不安装、不截图用户手机。手机端最终
 
 实施日期：2026-07-19。
 
-- Markdown：MikePenz `0.43.0` 唯一生产入口，标准样式未额外覆盖。
+- Markdown：MikePenz `0.43.0` 唯一生产入口，标准元素继续使用库原生组件；正文、H1 至 H6、链接和块间距通过官方主题接口集中配置。
+- Markdown 视觉：正文 `16sp/24sp`；H1 至 H6 为 `24/22/20/18/17/16sp`；MikePenz `block=3dp`，典型双换行块间距约 `9dp`；列表上下 `4dp`、列表项间距 `6dp`、缩进 `22dp`；链接使用主题主色、中等字重和下划线。
+- 脚注：每次引用生成唯一来源地址，定义提供返回入口并回到最近一次点击来源；正文与 `details` 共享编号和跳转状态；已有 Markdown 链接内不生成嵌套脚注链接；脚注不再追加 `---`；fenced code、缩进代码、行内代码、HTML 注释、`pre/code/style/textarea/title` 内的定义和扩展语法保持原文，`script` 继续按安全策略删除。
 - 普通代码块：继续使用 EveryTalk `CodeBlockCard`。
 - Markdown 传输围栏：`markdown` 和 `md` 围栏统一移除；内部标题、列表、表格交给 MikePenz，公式交给 MathJax，真实语言代码块仍交给 `CodeBlockCard`。
 - 数学：MathJax `4.1.3` 单例 WebView 批量转 SVG，Compose + Coil 绘制。
@@ -697,12 +702,12 @@ Agent不连接、不控制、不安装、不截图用户手机。手机端最终
 - 缓存：16 MiB 内存 LRU、64 MiB 磁盘缓存、32 px 宽度桶、60 秒语法错误缓存。
 - 安全：公式长度 4096 字符、宏替换 1000 次、SVG 1 MiB、8192 节点；超长公式在 Kotlin 入口和 WebView 页面双层拦截，SVG 在 WebView 和 Kotlin 双层校验。
 - Debug APK：`C:\Users\33039\.everytalk-gradle-build\app1\app\outputs\apk\debug\app-debug.apk`。
-- Debug APK 大小：50,688,785 字节，48.34 MiB。
-- Debug APK SHA-256：`63409767FFEB3272E284382B079027EA605FF8C229EC5979FE05BF992313B5A0`。
-- 全量 Debug 单元测试：446 项，0 失败、0 错误、0 跳过；Gradle 总耗时 30 秒，测试用例累计耗时 26.010 秒。
-- Kotlin Debug 编译：1 秒，成功。
-- Debug APK 构建：3 秒，成功。
-- Lint：1 分 20 秒，成功；新增数学和解析文件命中 0 条 Lint 结果。
+- Debug APK 大小：51,243,906 字节，48.87 MiB。
+- Debug APK SHA-256：`F322DC4280AFC8388FC1F68E0A6FB72394937BD50762B81B589AA056C54DF61B`。
+- 全量 Debug 单元测试：542 项，0 失败、0 错误、0 跳过；Gradle 总耗时 1 分 19 秒，测试用例累计耗时 19.180 秒。
+- Kotlin Debug 编译：10 秒，成功。
+- Debug APK 构建：6 秒，成功。
+- Lint：1 分 20 秒，成功；本轮 Markdown、代码块和 Web 预览修改文件命中 0 条 Lint 结果。
 - MathJax 自动化边界：消息取消释放队列并传播取消状态，超长公式在 WebView 前拒绝，队列溢出立即失败，单批转换超时明确分类。
 - Playwright 离线页面验证：`pmatrix`、`aligned`、`cases`、`\mathbb`、`\mathfrak`、`\mathcal` 均返回有效 SVG；递归宏被 `maxMacros` 拒绝为语法错误。
 - 旧生产符号扫描：`ContentParser`、`ContentPart`、`ContentParseCache`、`TableUtils`、`MathParser`、`MathStreamingPolicy`、`MathDelimiterNormalizer`、`ContentCoordinator`、Streamdown、FallbackRaw、Markwon、jLaTeXMath 和聊天 KaTeX 路径均为 0。
@@ -736,3 +741,5 @@ Agent不连接、不控制、不安装、不截图用户手机。手机端最终
 | 2026-07-19 | 删除第二套 Markdown 分块与自定义表格解析，修复内容替换增量复用 |
 | 2026-07-19 | 补齐消息取消、超长公式、队列溢出和单批超时自动化边界，完成阶段 7 最终复核 |
 | 2026-07-19 | 修正错误的 Markdown 源码围栏契约，统一渲染 `markdown` / `md` 围栏内容并保护内部真实代码块 |
+| 2026-07-19 | 统一 MikePenz 移动端视觉主题，完成脚注上标、双向跳转和多余分隔线清理 |
+| 2026-07-19 | 补齐 HTML 注释及 raw-text 元素保护边界，阻止隐藏脚注定义泄漏或扩展语法误改写 |

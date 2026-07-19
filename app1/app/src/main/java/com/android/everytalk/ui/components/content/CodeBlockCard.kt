@@ -42,6 +42,7 @@ import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.input.pointer.pointerInput
@@ -51,6 +52,7 @@ import com.android.everytalk.ui.theme.chatColors
 import com.android.everytalk.ui.components.syntax.SyntaxHighlighter
 import com.android.everytalk.ui.components.syntax.SyntaxHighlightTheme
 import com.android.everytalk.ui.components.FullScreenCodeViewerDialog
+import com.android.everytalk.ui.components.WebPreviewLoadState
 import com.android.everytalk.ui.components.WebPreviewContent
 import com.android.everytalk.ui.components.syntax.HighlightCache
 import kotlinx.coroutines.launch
@@ -62,6 +64,15 @@ import kotlinx.coroutines.launch
 val LocalStickyHeaderTop = compositionLocalOf { Float.NaN }
 
 internal const val GPT_CODE_BLOCK_CONTENT_PADDING_DP = 16f
+internal const val INLINE_WEB_PREVIEW_LOADING_HEIGHT_DP = 160f
+internal const val INLINE_WEB_PREVIEW_ERROR_HEIGHT_DP = 220f
+internal const val INLINE_WEB_PREVIEW_READY_HEIGHT_DP = 450f
+
+internal fun resolveInlineWebPreviewHeightDp(state: WebPreviewLoadState): Float = when (state) {
+    WebPreviewLoadState.LOADING -> INLINE_WEB_PREVIEW_LOADING_HEIGHT_DP
+    WebPreviewLoadState.ERROR -> INLINE_WEB_PREVIEW_ERROR_HEIGHT_DP
+    WebPreviewLoadState.READY -> INLINE_WEB_PREVIEW_READY_HEIGHT_DP
+}
 
 internal fun resolveCodeBlockScrollTarget(isStreaming: Boolean, maxValue: Int): Int {
     return if (isStreaming) maxValue.coerceAtLeast(0) else 0
@@ -148,6 +159,9 @@ fun CodeBlockCard(
     
     // 预览模式状态
     var isPreviewMode by remember { mutableStateOf(false) }
+    var previewLoadState by remember(code, language) {
+        mutableStateOf(WebPreviewLoadState.LOADING)
+    }
     var showFullScreenPreview by remember { mutableStateOf(false) }
     var cardBoundsInWindow by remember { mutableStateOf(androidx.compose.ui.geometry.Rect.Zero) }
     // 吸顶逻辑状态
@@ -288,7 +302,12 @@ fun CodeBlockCard(
                                 Box(
                                     modifier = Modifier
                                         .padding(2.dp)
-                                        .offset(x = indicatorOffset)
+                                        .offset {
+                                            IntOffset(
+                                                x = indicatorOffset.roundToPx(),
+                                                y = 0,
+                                            )
+                                        }
                                         .size(36.dp)
                                         .background(capsuleSelectedBgColor, RoundedCornerShape(50))
                                 )
@@ -325,7 +344,10 @@ fun CodeBlockCard(
                                             .clickable(
                                                 interactionSource = remember { MutableInteractionSource() },
                                                 indication = null
-                                            ) { isPreviewMode = true },
+                                            ) {
+                                                previewLoadState = WebPreviewLoadState.LOADING
+                                                isPreviewMode = true
+                                            },
                                         contentAlignment = Alignment.Center
                                     ) {
                                         Icon(
@@ -384,7 +406,7 @@ fun CodeBlockCard(
                     Surface(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(450.dp)
+                            .height(resolveInlineWebPreviewHeightDp(previewLoadState).dp)
                             .padding(horizontal = 0.dp, vertical = 0.dp)
                             .graphicsLayer {
                                 alpha = previewRevealAlpha
@@ -399,7 +421,8 @@ fun CodeBlockCard(
                                 language = language ?: "",
                                 previewBackgroundColor = previewBgColor,
                                 previewTextColor = previewTextColor,
-                                modifier = Modifier.fillMaxSize()
+                                modifier = Modifier.fillMaxSize(),
+                                onLoadStateChanged = { previewLoadState = it },
                             )
                             // 拦截层，位于 WebView 之上
                             Box(

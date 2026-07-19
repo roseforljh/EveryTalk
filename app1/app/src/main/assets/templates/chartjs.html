@@ -17,28 +17,51 @@
         <canvas id="myChart"></canvas>
     </div>
     <script>
-        var ctx = document.getElementById('myChart').getContext('2d');
-        var rawCode = `<!-- CONTENT_PLACEHOLDER -->`;
-        var config;
-        
-        try {
-            config = eval('(' + rawCode + ')');
-        } catch (e) {
-            try {
-                eval(rawCode);
-            } catch (e2) {
-                console.error("Failed to parse chartjs config", e, e2);
-            }
+        var completionReported = false;
+        function reportReady() {
+            if (completionReported) return;
+            completionReported = true;
+            window.__everytalkPreviewReady();
+        }
+        function reportError(error) {
+            if (completionReported) return;
+            completionReported = true;
+            window.__everytalkPreviewError(error);
         }
 
-        // Auto-detect theme colors if not specified
-        if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
-            Chart.defaults.color = '#ffffff';
-            Chart.defaults.borderColor = '#444444';
-        }
-        
-        if (config && typeof config === 'object') {
+        try {
+            var ctx = document.getElementById('myChart').getContext('2d');
+            var rawCode = `<!-- CONTENT_PLACEHOLDER -->`;
+            var config;
+
+            try {
+                config = eval('(' + rawCode + ')');
+            } catch (parseError) {
+                try {
+                    eval(rawCode);
+                } catch (executionError) {
+                    throw new Error('Failed to parse Chart.js config: ' + executionError.message);
+                }
+            }
+
+            if (!config || typeof config !== 'object') {
+                throw new Error('Chart.js config must be an object');
+            }
+
+            if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+                Chart.defaults.color = '#ffffff';
+                Chart.defaults.borderColor = '#444444';
+            }
+
+            var plugins = Array.isArray(config.plugins) ? config.plugins.slice() : [];
+            plugins.push({
+                id: 'everytalk-preview-completion',
+                afterRender: reportReady
+            });
+            config.plugins = plugins;
             new Chart(ctx, config);
+        } catch (error) {
+            reportError(error);
         }
     </script>
 </body>

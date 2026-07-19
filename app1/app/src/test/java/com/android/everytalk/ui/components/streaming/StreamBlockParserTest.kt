@@ -30,6 +30,249 @@ class StreamBlockParserTest {
     }
 
     @Test
+    fun `closed escaped block math with explicit math content may appear inside prose`() {
+        val result = StreamBlockParser.parse("公式：\\[x^2+y^2\\]。", "msg-inline-block-math")
+
+        assertEquals(3, result.blocks.size)
+        assertTrue(result.blocks[1] is StreamBlock.MathBlock)
+        assertEquals("\\[x^2+y^2\\]", result.blocks[1].text)
+        assertFalse(result.hasPendingMath)
+    }
+
+    @Test
+    fun `escaped brackets inside prose stay plain text`() {
+        val content = "普通文本 \\[这不是链接\\]，继续说明。"
+        val result = StreamBlockParser.parse(content, "msg-escaped-brackets-prose")
+
+        assertEquals(1, result.blocks.size)
+        assertTrue(result.blocks.single() is StreamBlock.PlainText)
+        assertEquals(content, result.blocks.single().text)
+        assertFalse(result.hasPendingMath)
+    }
+
+    @Test
+    fun `escaped prose brackets with weak separators stay plain text`() {
+        listOf(
+            "\\[not-a-link\\]",
+            "\\[read/write\\]",
+            "\\[draft_v2\\]",
+        ).forEachIndexed { index, content ->
+            val result = StreamBlockParser.parse(content, "msg-escaped-weak-$index")
+            val prepared = StreamBlockParser.prepareMessage(
+                content = content,
+                messageId = "msg-escaped-weak-$index",
+                contentVersion = index.toLong(),
+            )
+
+            assertEquals(1, result.blocks.size)
+            assertTrue(result.blocks.single() is StreamBlock.PlainText)
+            assertEquals(content, result.blocks.single().text)
+            assertFalse(result.hasPendingMath)
+            assertEquals(content, prepared.markdown)
+            assertTrue(prepared.formulas.isEmpty())
+        }
+    }
+
+    @Test
+    fun `escaped block math keeps strong and numeric expressions`() {
+        val content = "\\[x^2+y^2\\] \\[E=mc^2\\] \\[\\frac{1}{2}\\] \\[1+2\\]"
+        val prepared = StreamBlockParser.prepareMessage(
+            content = content,
+            messageId = "msg-escaped-strong",
+            contentVersion = 20L,
+        )
+
+        assertEquals(
+            setOf("x^2+y^2", "E=mc^2", "\\frac{1}{2}", "1+2"),
+            prepared.formulas.values.mapTo(mutableSetOf()) { it.latex },
+        )
+        assertFalse(prepared.hasPendingFormula)
+    }
+
+    @Test
+    fun `escaped block math syntax inside code and link destinations stays non math`() {
+        val content = """
+            `\[x^2\]`
+            [链接](https://example.com/\[x^2\])
+            ```text
+            \[x^2\]
+            ```
+        """.trimIndent()
+        val result = StreamBlockParser.parse(content, "msg-escaped-block-code-link")
+
+        assertTrue(result.blocks.none { it is StreamBlock.MathBlock })
+        assertFalse(result.hasPendingMath)
+    }
+
+    @Test
+    fun `unclosed container fences protect their code without swallowing outside prose`() {
+        val contents = listOf(
+            "> ```text\n> ${'$'}x${'$'}\n正文 ${'$'}y${'$'}",
+            "- ```text\n  ${'$'}x${'$'}\n正文 ${'$'}y${'$'}",
+            "- 项目\n    ```text\n    ${'$'}x${'$'}\n正文 ${'$'}y${'$'}",
+        )
+
+        contents.forEachIndexed { index, content ->
+            val result = StreamBlockParser.parse(content, "msg-unclosed-container-fence-$index")
+            val codeBlock = result.blocks.filterIsInstance<StreamBlock.CodeBlock>().single()
+            val mathBlocks = result.blocks.filterIsInstance<StreamBlock.MathInline>()
+            val prepared = StreamBlockParser.prepareMessage(
+                content = content,
+                messageId = "msg-unclosed-container-fence-$index",
+                contentVersion = 25L + index,
+            )
+
+            assertTrue(codeBlock.text.contains("${'$'}x${'$'}"))
+            assertFalse(codeBlock.text.contains("${'$'}y${'$'}"))
+            assertEquals(listOf("${'$'}y${'$'}"), mathBlocks.map { it.text })
+            assertEquals(listOf("y"), prepared.formulas.values.map { it.latex })
+            assertTrue(prepared.markdown.contains("${'$'}x${'$'}"))
+            assertFalse(prepared.hasPendingFormula)
+        }
+    }
+
+    @Test
+    fun `top level indented code protects every math delimiter across blank lines`() {
+        val contents = listOf(
+            listOf(
+                "    ${'$'}x${'$'}",
+                "    ${'$'}${'$'}y+1${'$'}${'$'}",
+                "",
+                "    \\(z+1\\)",
+                "    \\[x^2+y^2\\]",
+            ).joinToString("\n"),
+            listOf(
+                "\t${'$'}x${'$'}",
+                "\t${'$'}${'$'}y+1${'$'}${'$'}",
+                "",
+                "\t\\(z+1\\)",
+                "\t\\[x^2+y^2\\]",
+            ).joinToString("\n"),
+        )
+
+        contents.forEachIndexed { index, content ->
+            val result = StreamBlockParser.parse(content, "msg-indented-code-$index")
+            val prepared = StreamBlockParser.prepareMessage(
+                content = content,
+                messageId = "msg-indented-code-$index",
+                contentVersion = 30L + index,
+            )
+
+            assertTrue(result.blocks.none { it is StreamBlock.MathInline || it is StreamBlock.MathBlock })
+            assertFalse(result.hasPendingMath)
+            assertEquals(content, prepared.markdown)
+            assertTrue(prepared.formulas.isEmpty())
+            assertFalse(prepared.hasPendingFormula)
+        }
+    }
+
+    @Test
+    fun `indented list continuation remains markdown and parses its real formula`() {
+        val content = "- 项目\n\n    续行公式 ${'$'}x+1${'$'}"
+        val prepared = StreamBlockParser.prepareMessage(
+            content = content,
+            messageId = "msg-list-continuation",
+            contentVersion = 32L,
+        )
+
+        assertEquals(listOf("x+1"), prepared.formulas.values.map { it.latex })
+        assertTrue(prepared.markdown.startsWith("- 项目\n\n    续行公式 "))
+        assertFalse(prepared.hasPendingFormula)
+    }
+
+    @Test
+    fun `list and block quote indented code protect formulas at their container baseline`() {
+        val content = listOf(
+            "- 项目",
+            "",
+            "    续行公式 ${'$'}a+1${'$'}",
+            "",
+            "      ${'$'}b+1${'$'}",
+            "",
+            ">     ${'$'}c+1${'$'}",
+        ).joinToString("\n")
+        val prepared = StreamBlockParser.prepareMessage(
+            content = content,
+            messageId = "msg-container-indented-code",
+            contentVersion = 35L,
+        )
+
+        assertEquals(listOf("a+1"), prepared.formulas.values.map { it.latex })
+        assertTrue(prepared.markdown.contains("      ${'$'}b+1${'$'}"))
+        assertTrue(prepared.markdown.contains(">     ${'$'}c+1${'$'}"))
+        assertFalse(prepared.hasPendingFormula)
+    }
+
+    @Test
+    fun `html tags and attributes protect delimiters while body math still parses`() {
+        val content =
+            "<span style=\"color:${'$'}red${'$'}\" data-inline=\"\\(attr\\)\" data-block=\"\\[x^2\\]\">正文 ${'$'}x+1${'$'}</span>"
+        val prepared = StreamBlockParser.prepareMessage(
+            content = content,
+            messageId = "msg-html-attributes",
+            contentVersion = 33L,
+        )
+
+        assertEquals(listOf("x+1"), prepared.formulas.values.map { it.latex })
+        assertTrue(prepared.markdown.contains("color:${'$'}red${'$'}"))
+        assertTrue(prepared.markdown.contains("data-inline=\"\\(attr\\)\""))
+        assertTrue(prepared.markdown.contains("data-block=\"\\[x^2\\]\""))
+        assertFalse(prepared.hasPendingFormula)
+    }
+
+    @Test
+    fun `raw html code elements never create pending math`() {
+        val content = """
+            <script>const value = '${'$'}unfinished';</script>
+            <style>.price::after { content: '${'$'}raw'; }</style>
+            正文 ${'$'}x+1${'$'}
+        """.trimIndent()
+        val prepared = StreamBlockParser.prepareMessage(
+            content = content,
+            messageId = "msg-raw-html-code",
+            contentVersion = 36L,
+        )
+
+        assertEquals(listOf("x+1"), prepared.formulas.values.map { it.latex })
+        assertFalse(prepared.hasPendingFormula)
+        assertFalse(prepared.markdown.contains("<script>"))
+        assertTrue(prepared.markdown.contains("${'$'}raw"))
+    }
+
+    @Test
+    fun `bare urls and angle autolinks protect delimiters while prose math still parses`() {
+        val bareUrl = "https://example.com/${'$'}value${'$'}/\\(slug\\)/\\[x^2\\]"
+        val angleAutolink = "<https://example.com/${'$'}id${'$'}/\\(node\\)/\\[a+b\\]>"
+        val emailAutolink = "<user+${'$'}x${'$'}@example.com>"
+        val content = "$bareUrl $angleAutolink $emailAutolink 正文 ${'$'}z+1${'$'}"
+        val prepared = StreamBlockParser.prepareMessage(
+            content = content,
+            messageId = "msg-url-delimiters",
+            contentVersion = 34L,
+        )
+
+        assertEquals(listOf("z+1"), prepared.formulas.values.map { it.latex })
+        assertTrue(prepared.markdown.contains(bareUrl))
+        assertTrue(prepared.markdown.contains(angleAutolink))
+        assertTrue(
+            prepared.markdown.contains(
+                "[user+${'$'}x${'$'}@example.com](mailto:user+${'$'}x${'$'}@example.com)"
+            )
+        )
+        assertFalse(prepared.hasPendingFormula)
+    }
+
+    @Test
+    fun `unclosed explicit escaped block math inside prose remains pending`() {
+        val result = StreamBlockParser.parse("公式：\\[x^2+y^2", "msg-pending-inline-block-math")
+
+        assertEquals(2, result.blocks.size)
+        assertTrue(result.blocks[1] is StreamBlock.MathBlock)
+        assertEquals(MathBlockState.RAW, (result.blocks[1] as StreamBlock.MathBlock).state)
+        assertTrue(result.hasPendingMath)
+    }
+
+    @Test
     fun `keeps unclosed escaped inline math as raw pending block`() {
         val result = StreamBlockParser.parse("结果是 \\(x+1", "msg-3")
 
@@ -131,6 +374,51 @@ class StreamBlockParserTest {
             "```kotlin\nval x = 1\n```",
             extractFencedCodeBlockContent(result.blocks.first().text).code,
         )
+    }
+
+    @Test
+    fun `indented markdown fences stay code and are not unwrapped`() {
+        val cases = listOf(
+            "    ```markdown\n    ${'$'}x+1${'$'}\n    ```" to "markdown",
+            "\t~~~md\n\t\\[x^2\\]\n\t~~~" to "md",
+        )
+
+        cases.forEachIndexed { index, (content, language) ->
+            val prepared = StreamBlockParser.prepareMessage(
+                content = content,
+                messageId = "msg-indented-markdown-fence-$index",
+                contentVersion = 40L + index,
+            )
+            val codeBlocks = StreamBlockParser.parse(prepared.markdown, "msg-indented-markdown-result-$index")
+                .blocks
+                .filterIsInstance<StreamBlock.CodeBlock>()
+
+            assertEquals(content, prepared.markdown)
+            assertTrue(prepared.formulas.isEmpty())
+            assertEquals(1, codeBlocks.size)
+            assertEquals(language, extractFencedCodeBlockContent(codeBlocks.single().text).language)
+        }
+    }
+
+    @Test
+    fun `zero to three space markdown fences still unwrap as renderable markdown`() {
+        val cases = listOf(
+            "```markdown\n公式 ${'$'}x+1${'$'}\n```" to "x+1",
+            "   ~~~md\n公式 ${'$'}y+1${'$'}\n   ~~~" to "y+1",
+        )
+
+        cases.forEachIndexed { index, (content, latex) ->
+            val prepared = StreamBlockParser.prepareMessage(
+                content = content,
+                messageId = "msg-renderable-markdown-fence-$index",
+                contentVersion = 50L + index,
+            )
+
+            assertEquals(listOf(latex), prepared.formulas.values.map { it.latex })
+            assertFalse(prepared.markdown.contains("```markdown"))
+            assertFalse(prepared.markdown.contains("~~~md"))
+            assertFalse(prepared.hasPendingFormula)
+        }
     }
 
     @Test

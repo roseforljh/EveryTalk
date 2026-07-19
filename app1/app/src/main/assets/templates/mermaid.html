@@ -34,7 +34,20 @@
         <!-- CONTENT_PLACEHOLDER -->
     </div>
     <script>
-        mermaid.initialize({ startOnLoad: true, theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default' });
+        Promise.resolve()
+            .then(function() {
+                mermaid.initialize({
+                    startOnLoad: false,
+                    theme: window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default'
+                });
+                return mermaid.run({ nodes: [document.getElementById('container')] });
+            })
+            .then(function() {
+                window.__everytalkPreviewReady();
+            })
+            .catch(function(error) {
+                window.__everytalkPreviewError(error);
+            });
     </script>
 </body>
 </html>

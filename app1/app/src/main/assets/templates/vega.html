@@ -19,7 +19,16 @@
     <script>
         var spec = <!-- CONTENT_PLACEHOLDER -->;
         var theme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'default';
-        vegaEmbed('#vis', spec, { theme: theme, actions: false }).catch(console.warn);
+        Promise.resolve()
+            .then(function() {
+                return vegaEmbed('#vis', spec, { theme: theme, actions: false });
+            })
+            .then(function() {
+                window.__everytalkPreviewReady();
+            })
+            .catch(function(error) {
+                window.__everytalkPreviewError(error);
+            });
     </script>
 </body>
 </html>

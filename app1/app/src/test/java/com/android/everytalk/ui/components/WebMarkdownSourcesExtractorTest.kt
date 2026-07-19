@@ -96,7 +96,35 @@ class WebMarkdownSourcesExtractorTest {
     }
 
     @Test
-    fun `extracts footnote urls as sources`() {
+    fun `keeps ordinary markdown footnotes in display text`() {
+        val input = """
+            这是回答正文。[^note]
+
+            [^note]: 这是普通脚注说明。
+        """.trimIndent()
+
+        val result = WebMarkdownSourcesExtractor.extract(input)
+
+        assertEquals(input, result.displayText)
+        assertTrue(result.sources.isEmpty())
+    }
+
+    @Test
+    fun `keeps markdown link footnotes in display text`() {
+        val input = """
+            这是回答正文。[^2]
+
+            [^2]: 参见 [完整文档](https://example.com/docs)。
+        """.trimIndent()
+
+        val result = WebMarkdownSourcesExtractor.extract(input)
+
+        assertEquals(input, result.displayText)
+        assertTrue(result.sources.isEmpty())
+    }
+
+    @Test
+    fun `keeps numeric pure url footnotes in display text`() {
         val input = """
             这是回答正文。[^1]
 
@@ -105,7 +133,222 @@ class WebMarkdownSourcesExtractorTest {
 
         val result = WebMarkdownSourcesExtractor.extract(input)
 
+        assertEquals(input, result.displayText)
+        assertTrue(result.sources.isEmpty())
+    }
+
+    @Test
+    fun `extracts footnote shaped urls inside explicit sources section`() {
+        val input = """
+            这是回答正文。
+
+            ## Sources
+            [^1]: https://example.com/source
+        """.trimIndent()
+
+        val result = WebMarkdownSourcesExtractor.extract(input)
+
+        assertEquals("这是回答正文。", result.displayText)
         assertEquals(1, result.sources.size)
-        assertFalse(result.displayText.contains("[^1]"))
+        assertEquals("https://example.com/source", result.sources.single().href)
+    }
+
+    @Test
+    fun `keeps sources shaped text inside fenced code`() {
+        val input = """
+            正文。
+
+            ```markdown
+            ## Sources
+            [1] https://example.com/code
+            ```
+        """.trimIndent()
+
+        val result = WebMarkdownSourcesExtractor.extract(input)
+
+        assertEquals(input, result.displayText)
+        assertTrue(result.sources.isEmpty())
+    }
+
+    @Test
+    fun `keeps sources shaped text inside indented code`() {
+        val input = "正文。\n\n    ## Sources\n    [1] https://example.com/code"
+
+        val result = WebMarkdownSourcesExtractor.extract(input)
+
+        assertEquals(input, result.displayText)
+        assertTrue(result.sources.isEmpty())
+    }
+
+    @Test
+    fun `keeps sources shaped text inside details`() {
+        val input = """
+            正文。
+
+            <details>
+            <summary>引用示例</summary>
+            ## Sources
+            [1] https://example.com/details
+            </details>
+        """.trimIndent()
+
+        val result = WebMarkdownSourcesExtractor.extract(input)
+
+        assertEquals(input, result.displayText)
+        assertTrue(result.sources.isEmpty())
+    }
+
+    @Test
+    fun `extracts real sources section after fenced code`() {
+        val input = """
+            ```text
+            ## Sources
+            [1] https://example.com/code
+            ```
+
+            ## Sources
+            [真实来源](https://example.com/real)
+        """.trimIndent()
+
+        val result = WebMarkdownSourcesExtractor.extract(input)
+
+        assertEquals(1, result.sources.size)
+        assertEquals("https://example.com/real", result.sources.single().href)
+        assertTrue(result.displayText.contains("https://example.com/code"))
+        assertFalse(result.displayText.contains("https://example.com/real"))
+    }
+
+    @Test
+    fun `extracts real sources section after details`() {
+        val input = """
+            <details>
+            <summary>引用示例</summary>
+            [1] https://example.com/details
+            </details>
+
+            ## Sources
+            [真实来源](https://example.com/real)
+        """.trimIndent()
+
+        val result = WebMarkdownSourcesExtractor.extract(input)
+
+        assertEquals(1, result.sources.size)
+        assertEquals("https://example.com/real", result.sources.single().href)
+        assertTrue(result.displayText.contains("https://example.com/details"))
+        assertFalse(result.displayText.contains("https://example.com/real"))
+    }
+
+    @Test
+    fun `inline code details literal does not hide later sources section`() {
+        val input = """
+            字面标签 `<details>` 只是示例。
+
+            ## Sources
+            [真实来源](https://example.com/real)
+        """.trimIndent()
+
+        val result = WebMarkdownSourcesExtractor.extract(input)
+
+        assertEquals("https://example.com/real", result.sources.single().href)
+        assertEquals("字面标签 `<details>` 只是示例。", result.displayText)
+    }
+
+    @Test
+    fun `escaped details literal does not hide later sources section`() {
+        val input = """
+            字面标签 \<details> 只是示例。
+
+            ## Sources
+            [真实来源](https://example.com/real)
+        """.trimIndent()
+
+        val result = WebMarkdownSourcesExtractor.extract(input)
+
+        assertEquals("https://example.com/real", result.sources.single().href)
+        assertEquals("字面标签 \\<details> 只是示例。", result.displayText)
+    }
+
+    @Test
+    fun `keeps explicit sources section when ordinary body follows it`() {
+        val input = """
+            ## Sources
+            [来源](https://example.com/source)
+
+            这是来源之后仍需保留的正文。
+        """.trimIndent()
+
+        val result = WebMarkdownSourcesExtractor.extract(input)
+
+        assertEquals(input, result.displayText)
+        assertTrue(result.sources.isEmpty())
+    }
+
+    @Test
+    fun `keeps explicit sources section when fenced code follows it`() {
+        val input = """
+            ## Sources
+            [来源](https://example.com/source)
+
+            ```text
+            这是仍需保留的代码。
+            ```
+        """.trimIndent()
+
+        val result = WebMarkdownSourcesExtractor.extract(input)
+
+        assertEquals(input, result.displayText)
+        assertTrue(result.sources.isEmpty())
+    }
+
+    @Test
+    fun `keeps sources shaped text inside mixed space tab indented code`() {
+        val input = "正文。\n\n \t## Sources\n \t[1] https://example.com/code"
+
+        val result = WebMarkdownSourcesExtractor.extract(input)
+
+        assertEquals(input, result.displayText)
+        assertTrue(result.sources.isEmpty())
+    }
+
+    @Test
+    fun `keeps all content after unclosed fence`() {
+        val input = """
+            正文。
+
+            ```markdown
+            ## Sources
+            [1] https://example.com/code
+        """.trimIndent()
+
+        val result = WebMarkdownSourcesExtractor.extract(input)
+
+        assertEquals(input, result.displayText)
+        assertTrue(result.sources.isEmpty())
+    }
+
+    @Test
+    fun `keeps all content after unclosed details`() {
+        val input = """
+            正文。
+
+            <details>
+            ## Sources
+            [1] https://example.com/details
+        """.trimIndent()
+
+        val result = WebMarkdownSourcesExtractor.extract(input)
+
+        assertEquals(input, result.displayText)
+        assertTrue(result.sources.isEmpty())
+    }
+
+    @Test
+    fun `keeps crlf content unchanged after unclosed fence`() {
+        val input = "正文第一行。\r\n正文第二行。\r\n\r\n```markdown\r\n[1] https://example.com/code"
+
+        val result = WebMarkdownSourcesExtractor.extract(input)
+
+        assertEquals(input, result.displayText)
+        assertTrue(result.sources.isEmpty())
     }
 }

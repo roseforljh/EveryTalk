@@ -16,27 +16,48 @@
     <div id="container"></div>
     <script>
         var chart = echarts.init(document.getElementById('container'), window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : null);
+        var completionReported = false;
+        var renderRequested = false;
+        var originalSetOption = chart.setOption;
+        chart.setOption = function() {
+            renderRequested = true;
+            return originalSetOption.apply(chart, arguments);
+        };
+        chart.on('finished', function() {
+            if (completionReported) return;
+            completionReported = true;
+            window.__everytalkPreviewReady();
+        });
+
         var rawCode = `<!-- CONTENT_PLACEHOLDER -->`;
         var option;
         try {
-            // 尝试解析为对象字面量
-            option = eval('(' + rawCode + ')');
-        } catch (e) {
             try {
-                // 如果失败，尝试作为完整代码执行（可能包含 option = ...）
-                eval(rawCode);
-            } catch (e2) {
-                console.error("Failed to parse echarts option", e, e2);
+                option = eval('(' + rawCode + ')');
+            } catch (parseError) {
+                try {
+                    eval(rawCode);
+                } catch (executionError) {
+                    throw new Error('Failed to parse ECharts option: ' + executionError.message);
+                }
+            }
+
+            if (option && typeof option === 'object') {
+                chart.setOption(option);
+            } else if (typeof option !== 'undefined') {
+                throw new Error('ECharts option must be an object');
+            }
+
+            if (!renderRequested) {
+                throw new Error('ECharts code did not request a render');
+            }
+        } catch (error) {
+            if (!completionReported) {
+                completionReported = true;
+                window.__everytalkPreviewError(error);
             }
         }
-        
-        if (option && typeof option === 'object') {
-            chart.setOption(option);
-        } else if (typeof option === 'undefined') {
-            // 如果 option 未定义，可能是代码中定义了但没有赋值给 option 变量，或者代码有误
-            // 这种情况下 eval(rawCode) 已经执行，如果它调用了 chart.setOption 也可以
-        }
-        
+
         window.onresize = function() {
             chart.resize();
         };
