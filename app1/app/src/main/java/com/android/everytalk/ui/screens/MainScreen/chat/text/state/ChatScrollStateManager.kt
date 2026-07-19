@@ -252,6 +252,37 @@ class ChatScrollStateManager(
         jumpToBottomInternal(isUserAction = isUserAction, smooth = true)
     }
 
+    /**
+     * 停止回答时先到达包含锚点占位的虚拟底部，再清理占位并落到真实底部。
+     * 直接先删占位会让 LazyColumn 在旧布局坐标上钳制位置，最终停在真实底部上方。
+     */
+    fun stopStreamingAndJumpToRealBottom() {
+        if (autoScrollJob?.isActive == true) autoScrollJob?.cancel()
+        preventAutoScroll = false
+        suppressTopAnchorBottomScroll = false
+
+        autoScrollJob = coroutineScope.launch {
+            isProgrammaticScroll = true
+            try {
+                listState.layoutInfo.totalItemsCount.takeIf { it > 0 }?.let { totalItems ->
+                    listState.scrollToItem(totalItems - 1)
+                }
+                topAnchorRuntimeClearer?.invoke()
+
+                repeat(2) {
+                    withFrameNanos { }
+                    listState.layoutInfo.totalItemsCount.takeIf { it > 0 }?.let { totalItems ->
+                        listState.scrollToItem(totalItems - 1)
+                    }
+                }
+                _showScrollToBottomButton.value = false
+                cancelHideButtonJob()
+            } finally {
+                isProgrammaticScroll = false
+            }
+        }
+    }
+
     private fun jumpToBottomInternal(isUserAction: Boolean, smooth: Boolean) {
         val reason = if (isUserAction) {
             BottomScrollReason.Button

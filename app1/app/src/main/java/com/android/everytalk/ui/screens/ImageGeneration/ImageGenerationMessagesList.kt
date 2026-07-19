@@ -503,7 +503,7 @@ fun ImageGenerationMessagesList(
                     tallAnchorVisibleHeightPx = with(density) { 96.dp.toPx().toInt() },
                     topInsetPx = topPaddingPx,
                     stableWindowNanos = 50_000_000L,
-                    keepReserveAfterRunEnd = false,
+                    keepReserveAfterRunEnd = true,
                 ),
                 enabled = topAnchorEngine.runtime.hasRuntime
             )

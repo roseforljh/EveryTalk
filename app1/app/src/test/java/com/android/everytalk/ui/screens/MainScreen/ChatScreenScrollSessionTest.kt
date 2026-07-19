@@ -9,6 +9,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 class ChatScreenScrollSessionTest {
 
@@ -125,5 +126,27 @@ class ChatScreenScrollSessionTest {
         )
 
         assertEquals("first_user_id", stableId)
+    }
+
+    @Test
+    fun `explicit stop cancels api and scrolls conversation to real bottom`() {
+        val source = chatScreenSource()
+        val stopHandler = source
+            .substringAfter("onStopApiCall = {")
+            .substringBefore("},")
+
+        assertTrue(stopHandler.contains("viewModel.onCancelAPICall()"))
+        assertTrue(stopHandler.contains("scrollStateManager.stopStreamingAndJumpToRealBottom()"))
+    }
+
+    private fun chatScreenSource(): String {
+        val candidates = listOf(
+            File("src/main/java/com/android/everytalk/ui/screens/MainScreen/ChatScreen.kt"),
+            File("app/src/main/java/com/android/everytalk/ui/screens/MainScreen/ChatScreen.kt"),
+            File("app1/app/src/main/java/com/android/everytalk/ui/screens/MainScreen/ChatScreen.kt"),
+        )
+        val sourceFile = candidates.firstOrNull { it.isFile }
+        requireNotNull(sourceFile) { "找不到 ChatScreen.kt" }
+        return sourceFile.readText(Charsets.UTF_8)
     }
 }

@@ -32,6 +32,26 @@ class ChatMessagesListRenderRouteTest {
     }
 
     @Test
+    fun `natural stream completion keeps reserve so user scroll position does not jump`() {
+        val source = chatMessagesListSource()
+
+        assertTrue(source.contains("keepReserveAfterRunEnd = true"))
+        assertFalse(source.contains("keepReserveAfterRunEnd = false"))
+    }
+
+    @Test
+    fun `streaming height guard stays in layout phase without compose state writes`() {
+        val source = chatMessagesListSource()
+
+        assertTrue(retainedStreamingHeightPx(120, 0, isStreaming = true) == 120)
+        assertTrue(retainedStreamingHeightPx(80, 120, isStreaming = true) == 120)
+        assertTrue(retainedStreamingHeightPx(80, 120, isStreaming = false) == 80)
+        assertTrue(source.contains("retainGrowingHeightWhileStreaming("))
+        assertFalse(source.contains("lastMeasuredHeightPx"))
+        assertFalse(source.contains(".onSizeChanged { size ->"))
+    }
+
+    @Test
     fun `source stripped ai answer should rebuild stream blocks for display content`() {
         val effectiveContent = """
             正文第一段。

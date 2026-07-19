@@ -736,7 +736,10 @@ fun ChatScreen(
                 onToggleCodeExecution = {
                     viewModel.toggleCodeExecutionEnabled()
                 },
-                onStopApiCall = { viewModel.onCancelAPICall() },
+                onStopApiCall = {
+                    viewModel.onCancelAPICall()
+                    scrollStateManager.stopStreamingAndJumpToRealBottom()
+                },
                 focusRequester = focusRequester,
                 selectedApiConfig = selectedApiConfig,
                 onShowSnackbar = { viewModel.showSnackbar(it) },

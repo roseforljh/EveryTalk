@@ -404,6 +404,8 @@ fun AttachmentsContent(
             }
         } else if (imageAttachments.isNotEmpty()) {
             val imageStripHeight = 100.dp
+            val imageShape = RoundedCornerShape(12.dp)
+            val imageBorderColor = MaterialTheme.colorScheme.outlineVariant
             val scrollState = rememberScrollState()
             val isUser = message.sender == Sender.User
 
@@ -415,7 +417,7 @@ fun AttachmentsContent(
 
             Box(modifier = Modifier.fillMaxWidth()) {
                 Row(
-                    horizontalArrangement = if (isUser) Arrangement.spacedBy(4.dp, Alignment.End) else Arrangement.spacedBy(4.dp),
+                    horizontalArrangement = if (isUser) Arrangement.spacedBy(2.dp, Alignment.End) else Arrangement.spacedBy(2.dp),
                     modifier = Modifier
                         .height(imageStripHeight)
                         .fillMaxWidth()
@@ -435,8 +437,9 @@ fun AttachmentsContent(
                             onSuccess = { onImageLoaded() },
                             modifier = Modifier
                                 .size(imageStripHeight)
-                                .background(MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(12.dp))
-                                .clip(RoundedCornerShape(12.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant, imageShape)
+                                .border(1.dp, imageBorderColor, imageShape)
+                                .clip(imageShape)
                                 .onGloballyPositioned { imageGlobalPosition = it.localToRoot(Offset.Zero) }
                                 .pointerInput(message.id, idx) {
                                     detectTapGestures(

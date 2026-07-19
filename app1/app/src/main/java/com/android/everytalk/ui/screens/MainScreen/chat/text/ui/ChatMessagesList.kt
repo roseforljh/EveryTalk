@@ -45,7 +45,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.layout.layout
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.*
 import androidx.compose.ui.res.stringResource
@@ -101,8 +101,29 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import coil3.compose.AsyncImage
-import androidx.compose.ui.layout.onSizeChanged
 import java.net.URI
+
+internal fun retainedStreamingHeightPx(
+    naturalHeightPx: Int,
+    cachedHeightPx: Int,
+    isStreaming: Boolean,
+): Int = if (isStreaming) maxOf(naturalHeightPx, cachedHeightPx) else naturalHeightPx
+
+private fun Modifier.retainGrowingHeightWhileStreaming(
+    isStreaming: Boolean,
+    heightCachePx: IntArray,
+): Modifier = layout { measurable, constraints ->
+    val placeable = measurable.measure(constraints)
+    val retainedHeight = retainedStreamingHeightPx(
+        naturalHeightPx = placeable.height,
+        cachedHeightPx = heightCachePx[0],
+        isStreaming = isStreaming,
+    ).coerceIn(constraints.minHeight, constraints.maxHeight)
+    heightCachePx[0] = if (isStreaming) retainedHeight else 0
+    layout(placeable.width, retainedHeight) {
+        placeable.placeRelative(0, 0)
+    }
+}
 
 internal fun shouldBuildSourceStrippedRenderBlocks(
     messageOutputType: String,
@@ -319,7 +340,7 @@ fun ChatMessagesList(
                         tallAnchorVisibleHeightPx = with(density) { 96.dp.toPx().toInt() },
                         topInsetPx = topPaddingPx,
                         stableWindowNanos = 50_000_000L,
-                        keepReserveAfterRunEnd = false,
+                        keepReserveAfterRunEnd = true,
                     ),
                     enabled = topAnchorEngine.runtime.hasRuntime
                 )
@@ -992,8 +1013,7 @@ fun AiMessageItem(
         )
     }
 
-    val density = LocalDensity.current
-    var lastMeasuredHeightPx by remember(message.id) { mutableStateOf(0) }
+    val streamingHeightCachePx = remember(message.id) { intArrayOf(0) }
 
     Row(
         modifier = modifier.fillMaxWidth(),
@@ -1053,12 +1073,6 @@ fun AiMessageItem(
                 renderMessage.copy(text = displayContent)
             }
 
-            // 流式期间保持 minHeight 只增不减，防止向上跳；流式结束后不再约束
-            val minHeightModifier = if (isStreaming && lastMeasuredHeightPx > 0) {
-                Modifier.heightIn(min = with(density) { lastMeasuredHeightPx.toDp() })
-            } else {
-                Modifier
-            }
             Column(modifier = Modifier.fillMaxWidth()) {
                 if (pageSources.isNotEmpty()) {
                     PageSourcesButton(
@@ -1073,7 +1087,11 @@ fun AiMessageItem(
                 }
 
                 Box(
-                    modifier = minHeightModifier
+                    modifier = Modifier
+                        .retainGrowingHeightWhileStreaming(
+                            isStreaming = isStreaming,
+                            heightCachePx = streamingHeightCachePx,
+                        )
                         .fillMaxWidth()
                         .padding(
                             start = ChatMarkdownTextStyle.ASSISTANT_CONTENT_START_PADDING_DP.dp,
@@ -1081,14 +1099,6 @@ fun AiMessageItem(
                             end = ChatMarkdownTextStyle.ASSISTANT_CONTENT_END_PADDING_DP.dp,
                             bottom = ChatMarkdownTextStyle.ASSISTANT_CONTENT_BOTTOM_PADDING_DP.dp
                         )
-                        .onSizeChanged { size ->
-                            if (isStreaming && size.height > lastMeasuredHeightPx) {
-                                lastMeasuredHeightPx = size.height
-                            }
-                            if (!isStreaming) {
-                                lastMeasuredHeightPx = size.height
-                            }
-                        }
                 ) {
 
                 val useStreamingBlocks =
