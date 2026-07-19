@@ -271,6 +271,47 @@ class HistoryManagerCustomPromptPersistenceTest {
     }
 
     @Test
+    fun `force save keeps unchanged existing conversation at its original position`() = runBlocking {
+        val stateHolder = ViewModelStateHolder()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        var historyModifiedCount = 0
+        val historyManager = HistoryManager(
+            stateHolder = stateHolder,
+            persistenceManager = mockk(relaxed = true),
+            compareMessageLists = { left, right -> left == right },
+            onHistoryModified = { historyModifiedCount++ },
+            scope = scope
+        )
+
+        val newerConversation = listOf(
+            Message(id = "user-newer", text = "newer question", sender = Sender.User),
+            Message(id = "ai-newer", text = "newer answer", sender = Sender.AI),
+        )
+        val unchangedOlderConversation = listOf(
+            Message(id = "user-older", text = "older question", sender = Sender.User),
+            Message(id = "ai-older", text = "older answer", sender = Sender.AI),
+        )
+
+        stateHolder._historicalConversations.value =
+            listOf(newerConversation, unchangedOlderConversation)
+        stateHolder._loadedHistoryIndex.value = 1
+        stateHolder.setCurrentConversationId("user-older")
+        stateHolder.messages.addAll(unchangedOlderConversation)
+        stateHolder.isTextConversationDirty.value = false
+
+        try {
+            historyManager.saveCurrentChatToHistoryNow(forceSave = true)
+
+            assertEquals(newerConversation, stateHolder._historicalConversations.value[0])
+            assertEquals(unchangedOlderConversation, stateHolder._historicalConversations.value[1])
+            assertEquals(1, stateHolder._loadedHistoryIndex.value)
+            assertEquals(0, historyModifiedCount)
+        } finally {
+            scope.coroutineContext[Job]?.cancelAndJoin()
+        }
+    }
+
+    @Test
     fun `force save merges ai reply into loaded user only conversation when stable id changes`() = runBlocking {
         val stateHolder = ViewModelStateHolder()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)

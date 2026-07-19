@@ -420,11 +420,14 @@ class HistoryManager(
             }
 
             if (currentLoadedIdx != null && currentLoadedIdx >= 0 && currentLoadedIdx < mutableHistory.size) {
-                val isDirty = if (isImageGeneration) stateHolder.isImageConversationDirty.value else stateHolder.isTextConversationDirty.value
-                if (forceSave || isDirty) {
+                val existingMessages = filterMessagesForSaving(mutableHistory[currentLoadedIdx])
+                val contentChanged = runBlocking {
+                    !compareMessageLists(existingMessages, messagesToSave)
+                }
+                if ((forceSave || isDirty) && contentChanged) {
                     Log.d(
                         TAG_HM,
-                        "Updating history index $currentLoadedIdx. Force: $forceSave. isDirty: $isDirty"
+                        "Updating history index $currentLoadedIdx. Force: $forceSave. isDirty: $isDirty. contentChanged: true"
                     )
                     if (messagesToSave.isNotEmpty()) {
                         mutableHistory[currentLoadedIdx] = messagesToSave
@@ -443,8 +446,13 @@ class HistoryManager(
                             "Save is forced but there are no messages to save for index $currentLoadedIdx. Skipping update to prevent data loss."
                         )
                     }
+                } else if (!contentChanged) {
+                    Log.d(
+                        TAG_HM,
+                        "History index $currentLoadedIdx content unchanged; preserving its original position."
+                    )
                 } else {
-                    Log.d(TAG_HM, "History index $currentLoadedIdx content unchanged and not force saving.")
+                    Log.d(TAG_HM, "History index $currentLoadedIdx changed but is not marked dirty and not force saving.")
                 }
             } else {
                 if (messagesToSave.isNotEmpty()) {
