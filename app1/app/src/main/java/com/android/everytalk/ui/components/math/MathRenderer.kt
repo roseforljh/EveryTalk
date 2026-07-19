@@ -12,7 +12,6 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -34,6 +33,7 @@ import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import coil3.request.CachePolicy
 import coil3.request.ImageRequest
+import com.android.everytalk.ui.components.EveryTalkLoadingIndicator
 import com.android.everytalk.ui.components.streaming.FormulaDisplayMode
 import com.android.everytalk.ui.components.streaming.FormulaRequest
 import kotlinx.coroutines.CancellationException
@@ -57,6 +57,9 @@ internal enum class MathFormulaErrorKind {
     ENGINE,
 }
 
+internal fun mathFormulaRequestVersion(formula: FormulaRequest): Long =
+    formula.id.hashCode().toLong()
+
 @Composable
 internal fun rememberMathFormulaRenderStates(
     renderer: MathJaxSvgRenderer,
@@ -77,7 +80,9 @@ internal fun rememberMathFormulaRenderStates(
                 maxWidthPx = blockMaxWidthPx.takeIf {
                     formula.displayMode == FormulaDisplayMode.BLOCK
                 },
-                requestVersion = formula.contentVersion,
+                // 公式 ID 已由 LaTeX 与显示模式生成。后续只追加普通文本时保持请求身份稳定，
+                // 防止已经完成的公式反复回到 Loading。
+                requestVersion = mathFormulaRequestVersion(formula),
             )
         }
     }
@@ -93,7 +98,6 @@ internal fun rememberMathFormulaRenderStates(
             return@LaunchedEffect
         }
 
-        renderer.prewarm().join()
         states = try {
             MathFormulaSvgCache.render(cacheRoot, renderer, requests).associate { (cacheKey, result) ->
                 val request = requests.first { it.id == result.id }
@@ -136,13 +140,13 @@ internal fun MathInline(
     when (state) {
         MathFormulaRenderState.Loading -> Box(
             modifier = modifier
-                .fillMaxSize()
-                .semantics { contentDescription = "数学公式转换中：${formula.latex}" },
+                .fillMaxSize(),
             contentAlignment = Alignment.Center,
         ) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(10.dp),
+            EveryTalkLoadingIndicator(
+                size = 10.dp,
                 strokeWidth = 1.dp,
+                contentDescription = "数学公式转换中：${formula.latex}",
             )
         }
 
@@ -181,13 +185,13 @@ internal fun MathBlock(
         MathFormulaRenderState.Loading -> Box(
             modifier = modifier
                 .fillMaxWidth()
-                .height(40.dp)
-                .semantics { contentDescription = "数学公式转换中：${formula.latex}" },
+                .height(40.dp),
             contentAlignment = Alignment.Center,
         ) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(18.dp),
+            EveryTalkLoadingIndicator(
+                size = 18.dp,
                 strokeWidth = 1.5.dp,
+                contentDescription = "数学公式转换中：${formula.latex}",
             )
         }
 

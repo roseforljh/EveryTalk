@@ -14,16 +14,16 @@ object PerformanceConfig {
     const val BATCH_UPDATE_DELAY_MS = 16L // 一帧时间
     
     // ===== StreamingBuffer 配置 =====
-    /** 默认更新间隔（毫秒）- 60fps */
-    const val STREAMING_BUFFER_UPDATE_INTERVAL_MS = 16L
-    /** 默认批处理阈值（字符数） */
-    const val STREAMING_BUFFER_BATCH_THRESHOLD = 1
+    /** 默认更新间隔（毫秒），限制完整 Markdown 重排频率 */
+    const val STREAMING_BUFFER_UPDATE_INTERVAL_MS = 120L
+    /** 默认批处理阈值（字符数），高速流中优先按块合并 */
+    const val STREAMING_BUFFER_BATCH_THRESHOLD = 64
     /** 自适应模式下的最小更新间隔（毫秒） */
-    const val STREAMING_BUFFER_MIN_INTERVAL_MS = 8L
+    const val STREAMING_BUFFER_MIN_INTERVAL_MS = 80L
     /** 自适应模式下的最大更新间隔（毫秒） */
-    const val STREAMING_BUFFER_MAX_INTERVAL_MS = 100L
+    const val STREAMING_BUFFER_MAX_INTERVAL_MS = 180L
     /** 自适应调整步长（毫秒） */
-    const val STREAMING_BUFFER_ADAPTIVE_STEP_MS = 8L
+    const val STREAMING_BUFFER_ADAPTIVE_STEP_MS = 20L
     /** 触发调整的累积字符阈值 */
     const val STREAMING_BUFFER_ADAPTIVE_CHAR_THRESHOLD = 500
     /** 日志采样间隔（每 N 次 flush 记录一次） */

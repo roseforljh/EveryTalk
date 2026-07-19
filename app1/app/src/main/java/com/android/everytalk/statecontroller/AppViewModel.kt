@@ -25,6 +25,7 @@ import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.network.openclaw.OpenClawRuntimeStatusService
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
+import com.android.everytalk.ui.components.math.MathJaxSvgRenderer
 import com.android.everytalk.ui.screens.viewmodel.ConfigManager
 import com.android.everytalk.ui.screens.viewmodel.DataPersistenceManager
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
@@ -288,6 +289,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val fileManager: FileManager by lazy { 
         org.koin.java.KoinJavaComponent.getKoin().get() 
     }
+    private val mathJaxSvgRenderer: MathJaxSvgRenderer by lazy {
+        org.koin.java.KoinJavaComponent.getKoin().get()
+    }
     
     private val cacheController by lazy { CacheController(cacheManager, viewModelScope) }
     
@@ -424,6 +428,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         get() = stateHolder._loadedImageGenerationHistoryIndex.asStateFlow()
     val isLoadingHistory: StateFlow<Boolean>
         get() = stateHolder._isLoadingHistory.asStateFlow()
+    val historyLoadGeneration: StateFlow<Long>
+        get() = stateHolder._historyLoadGeneration.asStateFlow()
     val isLoadingHistoryData: StateFlow<Boolean>
         get() = stateHolder._isLoadingHistoryData.asStateFlow()
     val currentConversationId: StateFlow<String>
@@ -448,13 +454,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         get() = stateHolder._isImageApiCalling.asStateFlow()
     val lastSentUserMessageId: StateFlow<String?>
         get() = stateHolder._lastSentUserMessageId.asStateFlow()
-    fun consumeLastSentUserMessageId() {
-        stateHolder._lastSentUserMessageId.value = null
+    fun consumeLastSentUserMessageId(messageId: String) {
+        stateHolder._lastSentUserMessageId.compareAndSet(messageId, null)
     }
     val lastSentImageUserMessageId: StateFlow<String?>
         get() = stateHolder._lastSentImageUserMessageId.asStateFlow()
-    fun consumeLastSentImageUserMessageId() {
-        stateHolder._lastSentImageUserMessageId.value = null
+    fun consumeLastSentImageUserMessageId(messageId: String) {
+        stateHolder._lastSentImageUserMessageId.compareAndSet(messageId, null)
     }
     val currentTextStreamingAiMessageId: StateFlow<String?>
         get() = stateHolder._currentTextStreamingAiMessageId.asStateFlow()
@@ -911,6 +917,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             // 历史数据加载完成后的处理
             if (initialHistoryPresent) {
                 Log.d("AppViewModel", "历史数据已加载，共 ${stateHolder._historicalConversations.value.size} 条对话")
+
+                // 提前完成唯一 MathJax WebView 的冷启动，避免首次打开公式会话时阻塞加载动画。
+                mathJaxSvgRenderer.prewarm()
                 
                 // 预热缓存系统
                 viewModelScope.launch(Dispatchers.Default) {
@@ -1747,6 +1756,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         dismissEditDialog()
         dismissSourcesDialog()
         apiHandler.cancelCurrentApiJob("加载文本模式历史索引 $index", isNewMessageSend = false, isImageGeneration = false)
+        stateHolder._historyLoadGeneration.value += 1L
         stateHolder._isLoadingHistory.value = true
         // 先同步保存当前会话，确保切换前最新 AI 回复已写入历史列表
         viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {

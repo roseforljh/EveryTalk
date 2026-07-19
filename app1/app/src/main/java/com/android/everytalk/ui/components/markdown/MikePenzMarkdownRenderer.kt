@@ -18,7 +18,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -61,6 +60,7 @@ import androidx.compose.ui.semantics.collectionInfo
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.ui.components.EveryTalkLoadingIndicator
 import com.android.everytalk.ui.components.content.CodeBlockCard
 import com.android.everytalk.ui.components.math.MathBlock
 import com.android.everytalk.ui.components.math.MathFormulaErrorKind
@@ -264,13 +264,10 @@ internal fun MarkdownImageLoading(modifier: Modifier = Modifier) {
         modifier = modifier.fillMaxSize(),
         contentAlignment = androidx.compose.ui.Alignment.Center,
     ) {
-        CircularProgressIndicator(
-            modifier = Modifier
-                .size(MARKDOWN_IMAGE_LOADING_INDICATOR_SIDE_DP.dp)
-                .semantics { contentDescription = "图片加载中" },
-            color = MaterialTheme.colorScheme.primary,
-            trackColor = MaterialTheme.colorScheme.surfaceVariant,
+        EveryTalkLoadingIndicator(
+            size = MARKDOWN_IMAGE_LOADING_INDICATOR_SIDE_DP.dp,
             strokeWidth = 2.dp,
+            contentDescription = "图片加载中",
         )
     }
 }

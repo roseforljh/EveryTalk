@@ -1,5 +1,7 @@
 package com.android.everytalk.ui.components.math
 
+import com.android.everytalk.ui.components.streaming.FormulaDisplayMode
+import com.android.everytalk.ui.components.streaming.FormulaRequest
 import java.nio.file.Files
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -9,6 +11,25 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MathRendererTest {
+
+    @Test
+    fun `公式请求版本只随公式身份变化`() {
+        val formula = FormulaRequest(
+            id = "a".repeat(64),
+            latex = "x^2",
+            displayMode = FormulaDisplayMode.INLINE,
+            contentVersion = 1L,
+        )
+
+        assertEquals(
+            mathFormulaRequestVersion(formula),
+            mathFormulaRequestVersion(formula.copy(contentVersion = 99L)),
+        )
+        assertNotEquals(
+            mathFormulaRequestVersion(formula),
+            mathFormulaRequestVersion(formula.copy(id = "b".repeat(64))),
+        )
+    }
 
     @Test
     fun `SVG缓存键忽略内容版本并包含全部渲染配置`() {
