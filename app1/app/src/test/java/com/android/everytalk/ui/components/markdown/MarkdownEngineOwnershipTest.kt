@@ -82,7 +82,7 @@ class MarkdownEngineOwnershipTest {
             "com/android/everytalk/ui/components/markdown/MikePenzMarkdownRenderer.kt"
         )
 
-        assertTrue(adapter.contains("colors = markdownColor("))
+        assertTrue(adapter.contains("val markdownColors = markdownColor("))
         assertTrue(adapter.contains("inlineCodeBackground = Color.Transparent"))
         assertTrue(adapter.contains("val bodyStyle = MaterialTheme.typography.bodyLarge.copy("))
         assertTrue(adapter.contains("fontSize = 16.sp"))
@@ -104,6 +104,7 @@ class MarkdownEngineOwnershipTest {
         assertTrue(adapter.contains("annotator = annotator"))
         assertTrue(adapter.contains("typography = typography"))
         assertTrue(adapter.contains("padding = padding"))
+        assertTrue(adapter.contains("retainState = true"))
         assertTrue(adapter.contains("CodeBlockCard("))
         assertTrue(adapter.contains("MarkdownHeader("))
         assertTrue(adapter.contains("MarkdownParagraph("))
@@ -131,6 +132,28 @@ class MarkdownEngineOwnershipTest {
         assertFalse(adapter.contains("unwrapMarkdownDocumentFences"))
         assertFalse(adapter.contains("normalizeInProgressTaskMarkers"))
         assertFalse(adapter.contains("StreamBlockParser"))
+    }
+
+    @Test
+    fun `AI流式Markdown使用MikePenz稳定AST并保留安全回退`() {
+        val adapter = mainSource(
+            "com/android/everytalk/ui/components/markdown/MikePenzMarkdownRenderer.kt"
+        )
+
+        assertTrue(adapter.contains("rememberStreamingMarkdownState("))
+        assertTrue(adapter.contains("streamingMarkdownState = streamingMarkdownState"))
+        assertTrue(adapter.contains("appendOnlyMarkdownDelta("))
+        assertTrue(adapter.contains("streamingMarkdownState.append(delta)"))
+        assertTrue(adapter.contains("retainState = true"))
+    }
+
+    @Test
+    fun `流式Markdown只接受严格追加内容`() {
+        assertTrue(appendOnlyMarkdownDelta("", "第一段") == "第一段")
+        assertTrue(appendOnlyMarkdownDelta("第一段", "第一段\n\n第二段") == "\n\n第二段")
+        assertTrue(appendOnlyMarkdownDelta("完整内容", "完整内容") == "")
+        assertTrue(appendOnlyMarkdownDelta("原始公式 ${'$'}x", "公式占位") == null)
+        assertTrue(appendOnlyMarkdownDelta("更长内容", "短") == null)
     }
 
     @Test

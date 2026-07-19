@@ -24,10 +24,17 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.compositionLocalOf
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
@@ -107,7 +114,9 @@ import com.mikepenz.markdown.model.markdownAnnotator
 import com.mikepenz.markdown.model.markdownInlineContent
 import com.mikepenz.markdown.model.markdownPadding
 import com.mikepenz.markdown.model.parseMarkdown
+import com.mikepenz.markdown.model.rememberStreamingMarkdownState
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import org.intellij.markdown.IElementType
 import org.intellij.markdown.MarkdownElementTypes
@@ -137,6 +146,19 @@ private const val MARKDOWN_IMAGE_ERROR_WIDTH_DP = 160f
 private const val MARKDOWN_IMAGE_ERROR_HEIGHT_DP = 32f
 private const val MARKDOWN_TABLE_EDGE_SHADOW_WIDTH_DP = 20f
 private val MARKDOWN_IMAGE_ERROR_INTRINSIC_SIZE = Size(-1f, -1f)
+
+private class AppendOnlyMarkdownBridge {
+    var appendedContent: String = ""
+}
+
+internal fun appendOnlyMarkdownDelta(
+    appendedContent: String,
+    nextContent: String,
+): String? = if (nextContent.startsWith(appendedContent)) {
+    nextContent.substring(appendedContent.length)
+} else {
+    null
+}
 
 internal data class MarkdownTableEdgeVisibility(
     val showLeft: Boolean,
@@ -494,6 +516,15 @@ fun MikePenzMarkdownRenderer(
     onCodeCopied: (() -> Unit)? = null,
     enableSelectionContainer: Boolean = true,
 ) {
+    val committedStreamEpoch = remember { mutableIntStateOf(0) }
+    val wasStreaming = remember { mutableStateOf(false) }
+    val startsNewStream = sender == Sender.AI && isStreaming && !wasStreaming.value
+    val streamEpoch = committedStreamEpoch.intValue + if (startsNewStream) 1 else 0
+    SideEffect {
+        if (startsNewStream) committedStreamEpoch.intValue = streamEpoch
+        wasStreaming.value = sender == Sender.AI && isStreaming
+    }
+
     val mathRenderer = koinInject<MathJaxSvgRenderer>()
     val density = LocalDensity.current
     val formulaColor = MaterialTheme.colorScheme.onSurface.toMathJaxCssColor()
@@ -627,10 +658,25 @@ fun MikePenzMarkdownRenderer(
                         }
                     }
             }
-            val annotator = remember(preparedMessage.formulas, preparedMessage.contentVersion) {
+            val annotatorVersion = if (preparedMessage.formulas.isEmpty()) {
+                0L
+            } else {
+                preparedMessage.contentVersion
+            }
+            val annotator = remember(preparedMessage.formulas, annotatorVersion) {
                 createPreparedMessageMarkdownAnnotator(preparedMessage)
             }
-            val components = markdownComponents(
+            val currentPreparedMessage = rememberUpdatedState(preparedMessage)
+            val currentFormulaStates = rememberUpdatedState(formulaStates)
+            val currentInlineContentMap = rememberUpdatedState(inlineContentMap)
+            val currentAnnotator = rememberUpdatedState(annotator)
+            val currentBodyStyle = rememberUpdatedState(bodyStyle)
+            val currentSender = rememberUpdatedState(sender)
+            val currentIsStreaming = rememberUpdatedState(isStreaming)
+            val currentCodePreviewCallback = rememberUpdatedState(onCodePreviewRequested)
+            val currentCodeCopiedCallback = rememberUpdatedState(onCodeCopied)
+            val components = remember(footnoteNavigation) {
+                markdownComponents(
                 inlineImage = { model ->
                     MarkdownInlineImageWithFailure(model)
                 },
@@ -757,33 +803,53 @@ fun MikePenzMarkdownRenderer(
                 },
                 codeFence = { model ->
                     MarkdownCodeFence(model.content, model.node, model.typography.code) { code, language, _ ->
-                        val formula = resolveBlockFormula(language, code, preparedMessage)
-                        val details = resolveDetailsRequest(language, code, preparedMessage)
-                        when {
-                            formula != null -> {
+                        when (language) {
+                            BLOCK_FORMULA_FENCE_LANGUAGE -> {
+                                val activeMessage = currentPreparedMessage.value
+                                val formula = resolveBlockFormula(language, code, activeMessage)
+                                if (formula == null) {
+                                    CodeBlockCard(
+                                        language = language,
+                                        code = code,
+                                        isStreaming = currentIsStreaming.value,
+                                        onCopy = currentCodeCopiedCallback.value,
+                                    )
+                                } else {
                                 MathBlock(
                                     formula = formula,
-                                    state = formulaStates[formula.id]
+                                    state = currentFormulaStates.value[formula.id]
                                         ?: MathFormulaRenderState.Error(
                                             MathFormulaErrorKind.ENGINE
                                         ),
                                     modifier = Modifier.fillMaxWidth(),
                                 )
+                                }
                             }
 
-                            details != null -> {
+                            DETAILS_FENCE_LANGUAGE -> {
+                                val activeMessage = currentPreparedMessage.value
+                                val details = resolveDetailsRequest(language, code, activeMessage)
+                                if (details == null) {
+                                    CodeBlockCard(
+                                        language = language,
+                                        code = code,
+                                        isStreaming = currentIsStreaming.value,
+                                        onCopy = currentCodeCopiedCallback.value,
+                                    )
+                                    return@MarkdownCodeFence
+                                }
                                 val nestedMessage = remember(
                                     details,
-                                    preparedMessage.formulas,
-                                    preparedMessage.details,
+                                    activeMessage.formulas,
+                                    activeMessage.details,
                                 ) {
-                                    preparedMessage.copy(markdown = details.markdown)
+                                    activeMessage.copy(markdown = details.markdown)
                                 }
-                                val summaryStyle = bodyStyle.copy(
+                                val summaryStyle = currentBodyStyle.value.copy(
                                     fontWeight = FontWeight.Medium,
                                 )
                                 val summaryAnnotatorSettings = annotatorSettings(
-                                    annotator = annotator,
+                                    annotator = currentAnnotator.value,
                                 )
                                 val summary = remember(
                                     details.summary,
@@ -800,11 +866,11 @@ fun MikePenzMarkdownRenderer(
                                 }
                                 val bodyFootnoteFallbackTargets = remember(
                                     details,
-                                    preparedMessage.details,
+                                    activeMessage.details,
                                 ) {
                                     detailsSubtreeFootnoteReferenceTargets(
                                         root = details,
-                                        detailsById = preparedMessage.details,
+                                        detailsById = activeMessage.details,
                                     )
                                 }
                                 FootnoteTarget(
@@ -815,16 +881,16 @@ fun MikePenzMarkdownRenderer(
                                     MarkdownDetailsBlock(
                                         request = details,
                                         summary = summary,
-                                        summaryInlineContent = inlineContentMap,
+                                        summaryInlineContent = currentInlineContentMap.value,
                                         modifier = targetModifier,
                                     ) {
                                         MikePenzMarkdownRenderer(
                                             preparedMessage = nestedMessage,
                                             modifier = Modifier,
-                                            sender = sender,
-                                            isStreaming = isStreaming,
-                                            onCodePreviewRequested = onCodePreviewRequested,
-                                            onCodeCopied = onCodeCopied,
+                                            sender = currentSender.value,
+                                            isStreaming = currentIsStreaming.value,
+                                            onCodePreviewRequested = currentCodePreviewCallback.value,
+                                            onCodeCopied = currentCodeCopiedCallback.value,
                                             enableSelectionContainer = false,
                                         )
                                     }
@@ -835,9 +901,9 @@ fun MikePenzMarkdownRenderer(
                                 CodeBlockCard(
                                     language = language,
                                     code = code,
-                                    isStreaming = isStreaming,
-                                    onCopy = onCodeCopied,
-                                    onPreviewRequested = onCodePreviewRequested?.let { callback ->
+                                    isStreaming = currentIsStreaming.value,
+                                    onCopy = currentCodeCopiedCallback.value,
+                                    onPreviewRequested = currentCodePreviewCallback.value?.let { callback ->
                                         { callback(language.orEmpty(), code) }
                                     },
                                 )
@@ -850,30 +916,79 @@ fun MikePenzMarkdownRenderer(
                         CodeBlockCard(
                             language = language,
                             code = code,
-                            isStreaming = isStreaming,
-                            onCopy = onCodeCopied,
-                            onPreviewRequested = onCodePreviewRequested?.let { callback ->
+                            isStreaming = currentIsStreaming.value,
+                            onCopy = currentCodeCopiedCallback.value,
+                            onPreviewRequested = currentCodePreviewCallback.value?.let { callback ->
                                 { callback(language.orEmpty(), code) }
                             },
                         )
                     }
                 },
             )
+            }
 
-            Markdown(
-                content = preparedMessage.markdown,
-                colors = markdownColor(
-                    inlineCodeBackground = Color.Transparent,
-                    tableBackground = Color.Transparent,
-                ),
-                typography = typography,
-                padding = padding,
-                modifier = Modifier.markdownWidth(sender),
-                imageTransformer = EveryTalkMarkdownImageTransformer,
-                annotator = annotator,
-                inlineContent = markdownInlineContent(inlineContentMap),
-                components = components,
+            val markdownColors = markdownColor(
+                inlineCodeBackground = Color.Transparent,
+                tableBackground = Color.Transparent,
             )
+            val markdownInlineContent = markdownInlineContent(inlineContentMap)
+            val renderStaticMarkdown: @Composable () -> Unit = {
+                Markdown(
+                    content = preparedMessage.markdown,
+                    colors = markdownColors,
+                    typography = typography,
+                    padding = padding,
+                    modifier = Modifier.markdownWidth(sender),
+                    imageTransformer = EveryTalkMarkdownImageTransformer,
+                    annotator = annotator,
+                    inlineContent = markdownInlineContent,
+                    components = components,
+                    retainState = true,
+                )
+            }
+
+            key(streamEpoch) {
+                if (sender == Sender.AI && streamEpoch > 0) {
+                    val streamingMarkdownState = rememberStreamingMarkdownState()
+                    val latestMarkdown = rememberUpdatedState(preparedMessage.markdown)
+                    val appendBridge = remember { AppendOnlyMarkdownBridge() }
+                    val useStaticFallback = remember { mutableStateOf(false) }
+
+                    LaunchedEffect(streamingMarkdownState) {
+                        snapshotFlow { latestMarkdown.value }.collect { nextContent ->
+                            if (useStaticFallback.value) return@collect
+                            val delta = appendOnlyMarkdownDelta(
+                                appendedContent = appendBridge.appendedContent,
+                                nextContent = nextContent,
+                            )
+                            if (delta == null) {
+                                useStaticFallback.value = true
+                            } else {
+                                if (delta.isNotEmpty()) streamingMarkdownState.append(delta)
+                                appendBridge.appendedContent = nextContent
+                            }
+                        }
+                    }
+
+                    if (useStaticFallback.value) {
+                        renderStaticMarkdown()
+                    } else {
+                        Markdown(
+                            streamingMarkdownState = streamingMarkdownState,
+                            colors = markdownColors,
+                            typography = typography,
+                            padding = padding,
+                            modifier = Modifier.markdownWidth(sender),
+                            imageTransformer = EveryTalkMarkdownImageTransformer,
+                            annotator = annotator,
+                            inlineContent = markdownInlineContent,
+                            components = components,
+                        )
+                    }
+                } else {
+                    renderStaticMarkdown()
+                }
+            }
             }
         }
     }
