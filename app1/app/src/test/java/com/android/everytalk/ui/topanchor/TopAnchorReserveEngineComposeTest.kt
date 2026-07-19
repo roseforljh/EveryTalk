@@ -17,6 +17,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
@@ -600,14 +601,38 @@ class TopAnchorReserveEngineComposeTest {
     fun `stopping stream removes reserve and reaches real bottom`() {
         composeRule.mainClock.autoAdvance = false
         val turn = TopAnchorTurn("u2", "a2", "s1", 2L)
-        val items = List(6) { index -> HarnessItem("item_$index", 120.dp) }
+        val items = List(5) { index -> HarnessItem("item_$index", 120.dp) } +
+            HarnessItem("item_5", 900.dp)
         lateinit var engineState: TopAnchorReserveEngineState
         lateinit var listState: LazyListState
         lateinit var scrollStateManager: ChatScrollStateManager
+        lateinit var appendDelayedTerminalLayout: () -> Unit
+        lateinit var releasePinAndScrollUp: () -> Unit
+        lateinit var expandAfterRelease: () -> Unit
 
         composeRule.setContent {
             val density = LocalDensity.current
+            val coroutineScope = rememberCoroutineScope()
+            var showFooter by remember { mutableStateOf(false) }
+            var answerHeight by remember { mutableStateOf(900.dp) }
             listState = rememberLazyListState()
+            appendDelayedTerminalLayout = {
+                coroutineScope.launch {
+                    repeat(12) { frame ->
+                        withFrameNanos { }
+                        if (frame == 2) showFooter = true
+                    }
+                    answerHeight = 1200.dp
+                }
+            }
+            releasePinAndScrollUp = {
+                scrollStateManager.nestedScrollConnection.onPreScroll(
+                    available = Offset(0f, 1f),
+                    source = NestedScrollSource.UserInput,
+                )
+                coroutineScope.launch { listState.scrollBy(-120f) }
+            }
+            expandAfterRelease = { answerHeight = 1500.dp }
             engineState = remember {
                 TopAnchorReserveEngineState().also {
                     it.updateRuntime(
@@ -621,7 +646,7 @@ class TopAnchorReserveEngineComposeTest {
             }
             scrollStateManager = rememberChatScrollStateManager(
                 listState = listState,
-                coroutineScope = rememberCoroutineScope(),
+                coroutineScope = coroutineScope,
             )
             DisposableEffect(scrollStateManager, engineState) {
                 scrollStateManager.setTopAnchorRuntimeClearer(engineState::clearRuntime)
@@ -631,9 +656,14 @@ class TopAnchorReserveEngineComposeTest {
             LazyColumn(
                 state = listState,
                 modifier = Modifier.height(320.dp),
+                contentPadding = PaddingValues(top = 96.dp, bottom = 100.dp),
+                verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp),
             ) {
                 itemsIndexed(items, key = { _, item -> item.id }) { _, item ->
-                    Box(Modifier.height(item.heightDp))
+                    Box(Modifier.height(if (item.id == "item_5") answerHeight else item.heightDp))
+                }
+                if (showFooter) {
+                    item(key = "answer_footer") { Box(Modifier.height(36.dp)) }
                 }
                 if (engineState.reservePx > 0) {
                     item(key = "top_anchor_reserve") {
@@ -648,9 +678,10 @@ class TopAnchorReserveEngineComposeTest {
         composeRule.runOnIdle {
             assertTrue(engineState.runtime.hasRuntime)
             assertTrue(engineState.reservePx > 0)
+            appendDelayedTerminalLayout()
             scrollStateManager.stopStreamingAndJumpToRealBottom()
         }
-        repeat(6) {
+        repeat(28) {
             composeRule.mainClock.advanceTimeByFrame()
             composeRule.waitForIdle()
         }
@@ -659,8 +690,23 @@ class TopAnchorReserveEngineComposeTest {
             assertFalse(engineState.runtime.hasRuntime)
             assertEquals(0, engineState.reservePx)
             assertFalse(listState.canScrollForward)
-            assertEquals("item_5", listState.layoutInfo.visibleItemsInfo.last().key)
+            assertEquals("answer_footer", listState.layoutInfo.visibleItemsInfo.last().key)
         }
+
+        composeRule.runOnIdle { releasePinAndScrollUp() }
+        repeat(4) {
+            composeRule.mainClock.advanceTimeByFrame()
+            composeRule.waitForIdle()
+        }
+        composeRule.runOnIdle {
+            assertTrue(listState.canScrollForward)
+            expandAfterRelease()
+        }
+        repeat(4) {
+            composeRule.mainClock.advanceTimeByFrame()
+            composeRule.waitForIdle()
+        }
+        composeRule.runOnIdle { assertTrue(listState.canScrollForward) }
     }
 
     @Test

@@ -18,6 +18,11 @@ import kotlinx.coroutines.isActive
 import kotlin.math.abs
 import kotlin.math.roundToInt
 
+internal fun isTopAnchorCorrectionCurrent(
+    runtime: TopAnchorRuntimeState,
+    expectedTurn: TopAnchorTurn,
+): Boolean = runtime.hasRuntime && runtime.currentTurn == expectedTurn
+
 @Stable
 class TopAnchorReserveEngineState {
     var runtime by mutableStateOf(TopAnchorRuntimeState())
@@ -86,6 +91,7 @@ fun RunTopAnchorReserveEngine(
                 correctTopAnchorOnce(
                     state = state,
                     listState = listState,
+                    expectedTurn = turn,
                     anchorKey = anchorKey,
                     targetAnchorY = targetAnchorY,
                     config = config
@@ -100,6 +106,7 @@ fun RunTopAnchorReserveEngine(
                     correctTopAnchorOnce(
                         state = state,
                         listState = listState,
+                        expectedTurn = turn,
                         anchorKey = anchorKey,
                         targetAnchorY = targetAnchorY,
                         config = config,
@@ -154,10 +161,12 @@ fun RunTopAnchorReserveEngine(
 private suspend fun correctTopAnchorOnce(
     state: TopAnchorReserveEngineState,
     listState: LazyListState,
+    expectedTurn: TopAnchorTurn,
     anchorKey: Any?,
     targetAnchorY: Int,
     config: TopAnchorConfig
 ): Boolean {
+    if (!isTopAnchorCorrectionCurrent(state.runtime, expectedTurn)) return false
     val snapshot = listState.layoutInfo.toTopAnchorSnapshot(
         firstVisibleItemIndex = listState.firstVisibleItemIndex,
         firstVisibleItemScrollOffset = listState.firstVisibleItemScrollOffset
@@ -176,6 +185,7 @@ private suspend fun correctTopAnchorOnce(
     if (abs(driftPx) <= 1) return false
 
     val consumedPx = listState.scrollBy(driftPx.toFloat()).roundToInt()
+    if (!isTopAnchorCorrectionCurrent(state.runtime, expectedTurn)) return false
     val nextReserve = computeTopAnchorReservePx(
         viewportHeightPx = snapshot.viewportHeightPx,
         driftPx = driftPx,
@@ -220,7 +230,14 @@ private suspend fun runTopAnchorCorrectionLoop(
         val corrected = if (state.runtime.phase == TopAnchorPhase.UserControlled) {
             false
         } else {
-            correctTopAnchorOnce(state, listState, anchorKey, targetAnchorY, config)
+            correctTopAnchorOnce(
+                state = state,
+                listState = listState,
+                expectedTurn = turn,
+                anchorKey = anchorKey,
+                targetAnchorY = targetAnchorY,
+                config = config,
+            )
         }
         // 本帧发生过滚动或增加占位时，snapshot 仍是校正前的旧布局。
         // 用旧快照收缩会立即撤销刚完成的校正，造成 reserve 与锚点位置逐帧抖动。

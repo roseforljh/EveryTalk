@@ -55,4 +55,29 @@ class TopAnchorModelsTest {
         assertEquals(120, state.reservePx)
         assertEquals(turn, state.currentTurn)
     }
+
+    @Test
+    fun `cleared runtime rejects stale correction even if a ghost reserve exists`() {
+        val turn = TopAnchorTurn("u2", "a2", "s1", 2L)
+
+        assertTrue(
+            isTopAnchorCorrectionCurrent(
+                runtime = TopAnchorRuntimeState(
+                    phase = TopAnchorPhase.AnchoredRunning,
+                    activeTurn = turn,
+                    reservePx = 120,
+                ),
+                expectedTurn = turn,
+            )
+        )
+        assertFalse(
+            isTopAnchorCorrectionCurrent(
+                runtime = TopAnchorRuntimeState(
+                    phase = TopAnchorPhase.Idle,
+                    reservePx = 120,
+                ),
+                expectedTurn = turn,
+            )
+        )
+    }
 }
