@@ -1,23 +1,43 @@
 package com.android.everytalk.ui.components.markdown
 
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredWidth
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.compositionLocalOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.geometry.isUnspecified
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
@@ -29,10 +49,17 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.isSpecified
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.unit.times
+import androidx.compose.ui.semantics.CollectionInfo
+import androidx.compose.ui.semantics.collectionInfo
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.ui.components.content.CodeBlockCard
 import com.android.everytalk.ui.components.math.MathBlock
@@ -53,22 +80,28 @@ import com.android.everytalk.ui.components.streaming.FormulaDisplayMode
 import com.android.everytalk.ui.components.streaming.FormulaRequest
 import com.android.everytalk.ui.components.streaming.INLINE_FORMULA_SCHEME
 import com.android.everytalk.ui.components.streaming.PreparedMessage
+import coil3.compose.AsyncImagePainter
 import com.mikepenz.markdown.coil3.Coil3ImageTransformerImpl
 import com.mikepenz.markdown.annotator.annotatorSettings
 import com.mikepenz.markdown.annotator.buildMarkdownAnnotatedString
 import com.mikepenz.markdown.compose.Markdown
+import com.mikepenz.markdown.compose.LocalMarkdownDimens
 import com.mikepenz.markdown.compose.components.MarkdownComponentModel
 import com.mikepenz.markdown.compose.components.markdownComponents
 import com.mikepenz.markdown.compose.elements.MarkdownCodeBlock
 import com.mikepenz.markdown.compose.elements.MarkdownCodeFence
+import com.mikepenz.markdown.compose.elements.MarkdownDivider
 import com.mikepenz.markdown.compose.elements.MarkdownHeader
 import com.mikepenz.markdown.compose.elements.MarkdownParagraph
-import com.mikepenz.markdown.compose.elements.MarkdownTable
 import com.mikepenz.markdown.compose.elements.MarkdownTableHeader
 import com.mikepenz.markdown.compose.elements.MarkdownTableRow
+import com.mikepenz.markdown.compose.elements.LocalTableRowIndex
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
+import com.mikepenz.markdown.model.ImageTransformer
+import com.mikepenz.markdown.model.ImageWidth
 import com.mikepenz.markdown.model.MarkdownAnnotator
+import com.mikepenz.markdown.model.PlaceholderConfig
 import com.mikepenz.markdown.model.State
 import com.mikepenz.markdown.model.markdownAnnotator
 import com.mikepenz.markdown.model.markdownInlineContent
@@ -80,7 +113,10 @@ import org.intellij.markdown.IElementType
 import org.intellij.markdown.MarkdownElementTypes
 import org.intellij.markdown.MarkdownTokenTypes
 import org.intellij.markdown.ast.ASTNode
+import org.intellij.markdown.ast.findChildOfType
 import org.intellij.markdown.ast.getTextInNode
+import org.intellij.markdown.flavours.gfm.GFMElementTypes
+import org.intellij.markdown.flavours.gfm.GFMTokenTypes
 import org.koin.compose.koinInject
 
 private val contentAddressPattern = Regex("^[0-9a-f]{64}$")
@@ -93,6 +129,282 @@ private val footnoteReferenceTargetUriPattern =
 private val LocalFootnoteNavigation = compositionLocalOf<FootnoteNavigationState?> { null }
 private const val FOOTNOTE_TARGET_PRIORITY_FALLBACK = 0
 private const val FOOTNOTE_TARGET_PRIORITY_EXACT = 1
+private const val MARKDOWN_IMAGE_MIN_SIDE_DP = 1f
+private const val MARKDOWN_IMAGE_LOADING_SIDE_DP = 48f
+private const val MARKDOWN_IMAGE_LOADING_INDICATOR_SIDE_DP = 22f
+private const val MARKDOWN_IMAGE_ONLY_TEXT_SIZE_SP = 1f
+private const val MARKDOWN_IMAGE_ERROR_WIDTH_DP = 160f
+private const val MARKDOWN_IMAGE_ERROR_HEIGHT_DP = 32f
+private const val MARKDOWN_TABLE_EDGE_SHADOW_WIDTH_DP = 20f
+private val MARKDOWN_IMAGE_ERROR_INTRINSIC_SIZE = Size(-1f, -1f)
+
+internal data class MarkdownTableEdgeVisibility(
+    val showLeft: Boolean,
+    val showRight: Boolean,
+)
+
+internal fun markdownTableEdgeVisibility(
+    scrollValue: Int,
+    maxValue: Int,
+): MarkdownTableEdgeVisibility {
+    val scrollable = maxValue > 0
+    return MarkdownTableEdgeVisibility(
+        showLeft = scrollable && scrollValue > 0,
+        showRight = scrollable && scrollValue < maxValue,
+    )
+}
+
+internal fun markdownTableEdgeFadeColor(surfaceColor: Color): Color =
+    if (surfaceColor.luminance() < 0.5f) Color.Black else Color.White
+
+internal fun shouldFillMarkdownWidth(sender: Sender): Boolean = sender != Sender.User
+
+private fun Modifier.markdownWidth(sender: Sender): Modifier = if (shouldFillMarkdownWidth(sender)) {
+    fillMaxWidth()
+} else {
+    wrapContentWidth()
+}
+
+internal object EveryTalkMarkdownImageTransformer : ImageTransformer by Coil3ImageTransformerImpl {
+    override fun placeholderConfig(
+        link: String,
+        density: Density,
+        containerSize: Size,
+        imageWidth: ImageWidth,
+        imageSize: Size,
+        imageSizeChanged: ((link: String, Size) -> Unit)?,
+    ): PlaceholderConfig {
+        if (imageSize == MARKDOWN_IMAGE_ERROR_INTRINSIC_SIZE) {
+            val containerWidthDp = if (containerSize.isUnspecified) {
+                MARKDOWN_IMAGE_ERROR_WIDTH_DP
+            } else {
+                with(density) { containerSize.width.toDp().value }
+            }
+            return PlaceholderConfig(
+                size = Size(
+                    width = minOf(MARKDOWN_IMAGE_ERROR_WIDTH_DP, containerWidthDp)
+                        .coerceAtLeast(MARKDOWN_IMAGE_MIN_SIDE_DP),
+                    height = MARKDOWN_IMAGE_ERROR_HEIGHT_DP,
+                )
+            )
+        }
+        if (imageSize.isUnspecified) {
+            return PlaceholderConfig(
+                size = Size(MARKDOWN_IMAGE_LOADING_SIDE_DP, MARKDOWN_IMAGE_LOADING_SIDE_DP)
+            )
+        }
+        return Coil3ImageTransformerImpl.placeholderConfig(
+            link = link,
+            density = density,
+            containerSize = containerSize,
+            imageWidth = imageWidth,
+            imageSize = imageSize,
+            imageSizeChanged = imageSizeChanged,
+        )
+    }
+
+    @Composable
+    override fun intrinsicSize(painter: Painter): Size {
+        val painterState = (painter as? AsyncImagePainter)?.state?.collectAsState()?.value
+        return markdownImageIntrinsicSize(
+            hasError = painterState is AsyncImagePainter.State.Error,
+            intrinsicSize = Coil3ImageTransformerImpl.intrinsicSize(painter),
+        )
+    }
+}
+
+internal fun markdownParagraphStyle(
+    content: String,
+    node: ASTNode,
+    baseStyle: TextStyle,
+): TextStyle {
+    val image = node.children.singleOrNull { child ->
+        child.type == MarkdownElementTypes.IMAGE
+    } ?: return baseStyle
+    if (node.getTextInNode(content).toString().trim() != image.getTextInNode(content).toString().trim()) {
+        return baseStyle
+    }
+    return baseStyle.copy(
+        fontSize = MARKDOWN_IMAGE_ONLY_TEXT_SIZE_SP.sp,
+        lineHeight = MARKDOWN_IMAGE_ONLY_TEXT_SIZE_SP.sp,
+    )
+}
+
+internal fun markdownImageIntrinsicSize(
+    hasError: Boolean,
+    intrinsicSize: Size,
+): Size = if (hasError) MARKDOWN_IMAGE_ERROR_INTRINSIC_SIZE else intrinsicSize
+
+@Composable
+internal fun MarkdownImageFailure(modifier: Modifier = Modifier) {
+    Surface(
+        modifier = modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer,
+        shape = MaterialTheme.shapes.small,
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 8.dp),
+            contentAlignment = androidx.compose.ui.Alignment.Center,
+        ) {
+            Text(
+                text = "图片加载失败",
+                style = MaterialTheme.typography.labelMedium,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+@Composable
+internal fun MarkdownImageLoading(modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier.fillMaxSize(),
+        contentAlignment = androidx.compose.ui.Alignment.Center,
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier
+                .size(MARKDOWN_IMAGE_LOADING_INDICATOR_SIDE_DP.dp)
+                .semantics { contentDescription = "图片加载中" },
+            color = MaterialTheme.colorScheme.primary,
+            trackColor = MaterialTheme.colorScheme.surfaceVariant,
+            strokeWidth = 2.dp,
+        )
+    }
+}
+
+@Composable
+private fun MarkdownInlineImageWithFailure(model: MarkdownComponentModel) {
+    val imageData = EveryTalkMarkdownImageTransformer.transform(model.content)
+    val painterState = (imageData?.painter as? AsyncImagePainter)?.state?.collectAsState()?.value
+    when {
+        imageData == null || painterState is AsyncImagePainter.State.Error -> {
+            MarkdownImageFailure(modifier = Modifier.fillMaxSize())
+        }
+
+        painterState is AsyncImagePainter.State.Empty || painterState is AsyncImagePainter.State.Loading -> {
+            MarkdownImageLoading(modifier = Modifier.fillMaxSize())
+        }
+
+        else -> {
+            Image(
+                painter = imageData.painter,
+                contentDescription = imageData.contentDescription,
+                modifier = Modifier.fillMaxSize().then(imageData.modifier),
+                alignment = imageData.alignment,
+                contentScale = imageData.contentScale,
+                alpha = imageData.alpha,
+                colorFilter = imageData.colorFilter,
+            )
+        }
+    }
+}
+
+@Composable
+private fun EveryTalkMarkdownTable(
+    content: String,
+    node: ASTNode,
+    style: TextStyle,
+    headerBlock: @Composable (String, ASTNode, Dp, TextStyle) -> Unit,
+    rowBlock: @Composable (String, ASTNode, Dp, TextStyle) -> Unit,
+) {
+    val tableMaxWidth = LocalMarkdownDimens.current.tableMaxWidth
+    val tableCellWidth = LocalMarkdownDimens.current.tableCellWidth
+    val columnsCount = remember(node) {
+        node.findChildOfType(GFMElementTypes.HEADER)
+            ?.children
+            ?.count { it.type == GFMTokenTypes.CELL }
+            ?: 0
+    }
+    val rowsCount = remember(node) {
+        node.children.count { it.type == GFMElementTypes.ROW } + 1
+    }
+    val tableWidth = columnsCount * tableCellWidth
+
+    BoxWithConstraints(
+        modifier = Modifier
+            .widthIn(max = tableMaxWidth)
+            .semantics {
+                collectionInfo = CollectionInfo(
+                    rowCount = rowsCount,
+                    columnCount = columnsCount,
+                )
+            },
+    ) {
+        val scrollable = tableWidth > maxWidth
+        val scrollState = rememberScrollState()
+        val edgeColor = markdownTableEdgeFadeColor(MaterialTheme.colorScheme.surface)
+        val transparentEdgeColor = edgeColor.copy(alpha = 0f)
+
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .drawWithContent {
+                    drawContent()
+                    if (!scrollable) return@drawWithContent
+
+                    val visibility = markdownTableEdgeVisibility(
+                        scrollValue = scrollState.value,
+                        maxValue = scrollState.maxValue,
+                    )
+                    val edgeWidth = minOf(
+                        MARKDOWN_TABLE_EDGE_SHADOW_WIDTH_DP.dp.toPx(),
+                        size.width / 3f,
+                    )
+                    if (edgeWidth <= 0f) return@drawWithContent
+
+                    if (visibility.showLeft) {
+                        drawRect(
+                            brush = Brush.horizontalGradient(
+                                colors = listOf(edgeColor, transparentEdgeColor),
+                                startX = 0f,
+                                endX = edgeWidth,
+                            ),
+                            topLeft = Offset.Zero,
+                            size = Size(edgeWidth, size.height),
+                        )
+                    }
+                    if (visibility.showRight) {
+                        drawRect(
+                            brush = Brush.horizontalGradient(
+                                colors = listOf(transparentEdgeColor, edgeColor),
+                                startX = size.width - edgeWidth,
+                                endX = size.width,
+                            ),
+                            topLeft = Offset(size.width - edgeWidth, 0f),
+                            size = Size(edgeWidth, size.height),
+                        )
+                    }
+                },
+        ) {
+            Column(
+                modifier = if (scrollable) {
+                    Modifier
+                        .horizontalScroll(scrollState)
+                        .requiredWidth(tableWidth)
+                } else {
+                    Modifier.fillMaxWidth()
+                },
+            ) {
+                var rowIndex = 1
+                node.children.forEach { child ->
+                    when (child.type) {
+                        GFMElementTypes.HEADER -> headerBlock(content, child, tableWidth, style)
+                        GFMElementTypes.ROW -> {
+                            CompositionLocalProvider(LocalTableRowIndex provides rowIndex) {
+                                rowBlock(content, child, tableWidth, style)
+                            }
+                            rowIndex++
+                        }
+                        GFMTokenTypes.TABLE_SEPARATOR -> MarkdownDivider()
+                    }
+                }
+            }
+        }
+    }
+}
 
 private data class RegisteredFootnoteRequester(
     val requester: BringIntoViewRequester,
@@ -280,7 +592,7 @@ fun MikePenzMarkdownRenderer(
             LocalFootnoteNavigation provides footnoteNavigation,
             LocalUriHandler provides footnoteUriHandler,
         ) {
-            BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
+            BoxWithConstraints(modifier = modifier.markdownWidth(sender)) {
             val blockMaxWidthPx = constraints.maxWidth
                 .takeIf { constraints.hasBoundedWidth }
                 ?.toFloat()
@@ -322,6 +634,9 @@ fun MikePenzMarkdownRenderer(
                 createPreparedMessageMarkdownAnnotator(preparedMessage)
             }
             val components = markdownComponents(
+                inlineImage = { model ->
+                    MarkdownInlineImageWithFailure(model)
+                },
                 paragraph = { model ->
                     FootnoteTarget(
                         targetUris = footnoteTargets(
@@ -334,7 +649,11 @@ fun MikePenzMarkdownRenderer(
                             content = model.content,
                             node = model.node,
                             modifier = targetModifier,
-                            style = model.typography.paragraph,
+                            style = markdownParagraphStyle(
+                                content = model.content,
+                                node = model.node,
+                                baseStyle = model.typography.paragraph,
+                            ),
                         )
                     }
                 },
@@ -397,7 +716,7 @@ fun MikePenzMarkdownRenderer(
                     )
                 },
                 table = { model ->
-                    MarkdownTable(
+                    EveryTalkMarkdownTable(
                         content = model.content,
                         node = model.node,
                         style = model.typography.table,
@@ -504,7 +823,7 @@ fun MikePenzMarkdownRenderer(
                                     ) {
                                         MikePenzMarkdownRenderer(
                                             preparedMessage = nestedMessage,
-                                            modifier = Modifier.fillMaxWidth(),
+                                            modifier = Modifier,
                                             sender = sender,
                                             isStreaming = isStreaming,
                                             onCodePreviewRequested = onCodePreviewRequested,
@@ -548,11 +867,12 @@ fun MikePenzMarkdownRenderer(
                 content = preparedMessage.markdown,
                 colors = markdownColor(
                     inlineCodeBackground = Color.Transparent,
+                    tableBackground = Color.Transparent,
                 ),
                 typography = typography,
                 padding = padding,
-                modifier = Modifier.fillMaxWidth(),
-                imageTransformer = Coil3ImageTransformerImpl,
+                modifier = Modifier.markdownWidth(sender),
+                imageTransformer = EveryTalkMarkdownImageTransformer,
                 annotator = annotator,
                 inlineContent = markdownInlineContent(inlineContentMap),
                 components = components,

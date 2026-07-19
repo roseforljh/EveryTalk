@@ -692,6 +692,9 @@ Agent不连接、不控制、不安装、不截图用户手机。手机端最终
 
 - Markdown：MikePenz `0.43.0` 唯一生产入口，标准元素继续使用库原生组件；正文、H1 至 H6、链接和块间距通过官方主题接口集中配置。
 - Markdown 视觉：正文 `16sp/24sp`；H1 至 H6 为 `24/22/20/18/17/16sp`；MikePenz `block=3dp`，典型双换行块间距约 `9dp`；列表上下 `4dp`、列表项间距 `6dp`、缩进 `22dp`；链接使用主题主色、中等字重和下划线。
+- Markdown 图片：继续使用 MikePenz 图片组件与 Coil3 加载器；加载中且尺寸未知时使用 `48dp × 48dp` 占位并显示主题化旋转进度环，加载失败时显示最大 `160dp × 32dp` 的“图片加载失败”提示；仅包含图片的段落使用 `1sp` 临时行高，加载成功后继续使用 MikePenz 原生宽高缩放；普通段落和正文内行内图片仍使用正文行高。
+- 用户气泡：Markdown 根容器按内容宽度收缩，保留原有最大宽度上限，长文本继续在上限内换行。
+- Markdown 表格：背景保持透明；表头、数据行和单元格继续复用 MikePenz 组件；仅滚动容器由 EveryTalk 接管，存在横向溢出时按滚动位置显示边缘遮罩，浅色主题使用纯白到透明渐变，深色主题使用纯黑到透明渐变。
 - 脚注：每次引用生成唯一来源地址，定义提供返回入口并回到最近一次点击来源；正文与 `details` 共享编号和跳转状态；已有 Markdown 链接内不生成嵌套脚注链接；脚注不再追加 `---`；fenced code、缩进代码、行内代码、HTML 注释、`pre/code/style/textarea/title` 内的定义和扩展语法保持原文，`script` 继续按安全策略删除。
 - 普通代码块：继续使用 EveryTalk `CodeBlockCard`。
 - Markdown 传输围栏：`markdown` 和 `md` 围栏统一移除；内部标题、列表、表格交给 MikePenz，公式交给 MathJax，真实语言代码块仍交给 `CodeBlockCard`。
@@ -702,12 +705,13 @@ Agent不连接、不控制、不安装、不截图用户手机。手机端最终
 - 缓存：16 MiB 内存 LRU、64 MiB 磁盘缓存、32 px 宽度桶、60 秒语法错误缓存。
 - 安全：公式长度 4096 字符、宏替换 1000 次、SVG 1 MiB、8192 节点；超长公式在 Kotlin 入口和 WebView 页面双层拦截，SVG 在 WebView 和 Kotlin 双层校验。
 - Debug APK：`C:\Users\33039\.everytalk-gradle-build\app1\app\outputs\apk\debug\app-debug.apk`。
-- Debug APK 大小：51,243,906 字节，48.87 MiB。
-- Debug APK SHA-256：`F322DC4280AFC8388FC1F68E0A6FB72394937BD50762B81B589AA056C54DF61B`。
-- 全量 Debug 单元测试：542 项，0 失败、0 错误、0 跳过；Gradle 总耗时 1 分 19 秒，测试用例累计耗时 19.180 秒。
-- Kotlin Debug 编译：10 秒，成功。
-- Debug APK 构建：6 秒，成功。
-- Lint：1 分 20 秒，成功；本轮 Markdown、代码块和 Web 预览修改文件命中 0 条 Lint 结果。
+- Debug APK 大小：51,262,930 字节，48.89 MiB。
+- Debug APK SHA-256：`9BB5D6E6131FF28D377F489B7F884FD85BCA238844E8AA034E96006795E13791`。
+- 上一次全量 Debug 单元测试：550 项，0 失败、0 错误、0 跳过；Gradle 总耗时 1 分 12 秒，测试用例累计耗时 17.161 秒。
+- 本轮定向单元测试：Markdown 图片、宽度策略、表格边缘状态和渲染职责测试 12 秒通过；用户气泡相关测试 3 秒通过。
+- Kotlin Debug 编译：随本轮定向单元测试成功。
+- Debug APK 构建：本轮增量构建 4 秒，成功。
+- Lint：本轮按小范围 UI 修改的分级验证策略未重复执行；上一次全工程 Lint 8 分 7 秒通过。
 - MathJax 自动化边界：消息取消释放队列并传播取消状态，超长公式在 WebView 前拒绝，队列溢出立即失败，单批转换超时明确分类。
 - Playwright 离线页面验证：`pmatrix`、`aligned`、`cases`、`\mathbb`、`\mathfrak`、`\mathcal` 均返回有效 SVG；递归宏被 `maxMacros` 拒绝为语法错误。
 - 旧生产符号扫描：`ContentParser`、`ContentPart`、`ContentParseCache`、`TableUtils`、`MathParser`、`MathStreamingPolicy`、`MathDelimiterNormalizer`、`ContentCoordinator`、Streamdown、FallbackRaw、Markwon、jLaTeXMath 和聊天 KaTeX 路径均为 0。
@@ -743,3 +747,10 @@ Agent不连接、不控制、不安装、不截图用户手机。手机端最终
 | 2026-07-19 | 修正错误的 Markdown 源码围栏契约，统一渲染 `markdown` / `md` 围栏内容并保护内部真实代码块 |
 | 2026-07-19 | 统一 MikePenz 移动端视觉主题，完成脚注上标、双向跳转和多余分隔线清理 |
 | 2026-07-19 | 补齐 HTML 注释及 raw-text 元素保护边界，阻止隐藏脚注定义泄漏或扩展语法误改写 |
+| 2026-07-19 | 收敛 Markdown 失败图片的未知尺寸占位，消除链接后方 `200dp` 大块空白 |
+| 2026-07-19 | 压缩仅图片段落的临时行高，清除失败图片留下的一整行正文高度 |
+| 2026-07-19 | 为 Markdown 图片加载失败增加紧凑的前端可见提示，避免静默留白 |
+| 2026-07-19 | 为 Markdown 图片加载过程增加适配明暗主题的旋转进度环 |
+| 2026-07-19 | 修复用户 Markdown 根容器强制铺满最大宽度，恢复气泡内容自适应 |
+| 2026-07-19 | 将 Markdown 表格背景改为透明，并增加跟随横向滚动位置变化的双侧渐变阴影 |
+| 2026-07-19 | 将表格边缘灰色阴影修正为浅色纯白、深色纯黑的同色透明渐变遮罩 |

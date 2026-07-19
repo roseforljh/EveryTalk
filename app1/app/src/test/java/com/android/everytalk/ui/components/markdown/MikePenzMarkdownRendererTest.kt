@@ -1,6 +1,12 @@
 package com.android.everytalk.ui.components.markdown
 
 import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.sp
+import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.ui.components.streaming.BLOCK_FORMULA_FENCE_LANGUAGE
 import com.android.everytalk.ui.components.streaming.DETAILS_FENCE_LANGUAGE
 import com.android.everytalk.ui.components.streaming.DetailsRequest
@@ -10,7 +16,9 @@ import com.android.everytalk.ui.components.streaming.INLINE_FORMULA_SCHEME
 import com.android.everytalk.ui.components.streaming.PreparedMessage
 import com.android.everytalk.ui.components.streaming.StreamBlockParser
 import com.mikepenz.markdown.model.State
+import com.mikepenz.markdown.model.ImageWidth
 import com.mikepenz.markdown.model.parseMarkdown
+import org.intellij.markdown.MarkdownElementTypes
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -19,6 +27,140 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MikePenzMarkdownRendererTest {
+
+    @Test
+    fun `图片加载错误使用紧凑提示尺寸`() {
+        val errorSize = markdownImageIntrinsicSize(
+            hasError = true,
+            intrinsicSize = Size.Unspecified,
+        )
+        val config = EveryTalkMarkdownImageTransformer.placeholderConfig(
+            link = "https://invalid.example/image.png",
+            density = Density(1f),
+            containerSize = Size(360f, 640f),
+            imageWidth = ImageWidth.IMAGE_WIDTH,
+            imageSize = Size(-1f, -1f),
+        )
+
+        assertEquals(Size(-1f, -1f), errorSize)
+        assertEquals(Size(160f, 32f), config.size)
+    }
+
+    @Test
+    fun `正常图片内在尺寸保持原值`() {
+        assertEquals(
+            Size(150f, 100f),
+            markdownImageIntrinsicSize(
+                hasError = false,
+                intrinsicSize = Size(150f, 100f),
+            ),
+        )
+    }
+
+    @Test
+    fun `仅图片段落不保留正文行高`() {
+        val state = parseMarkdown("![替代文字](https://invalid.example/image.png)") as State.Success
+        val paragraph = state.node.children.single { it.type == MarkdownElementTypes.PARAGRAPH }
+        val style = markdownParagraphStyle(
+            content = state.content,
+            node = paragraph,
+            baseStyle = TextStyle(fontSize = 16.sp, lineHeight = 24.sp),
+        )
+
+        assertEquals(1.sp, style.fontSize)
+        assertEquals(1.sp, style.lineHeight)
+    }
+
+    @Test
+    fun `普通段落继续使用正文行高`() {
+        val state = parseMarkdown("普通正文") as State.Success
+        val paragraph = state.node.children.single { it.type == MarkdownElementTypes.PARAGRAPH }
+        val baseStyle = TextStyle(fontSize = 16.sp, lineHeight = 24.sp)
+
+        assertEquals(
+            baseStyle,
+            markdownParagraphStyle(
+                content = state.content,
+                node = paragraph,
+                baseStyle = baseStyle,
+            ),
+        )
+    }
+
+    @Test
+    fun `正文中的行内图片继续使用正文行高`() {
+        val state = parseMarkdown("前缀 ![图标](https://example.com/icon.png) 后缀") as State.Success
+        val paragraph = state.node.children.single { it.type == MarkdownElementTypes.PARAGRAPH }
+        val baseStyle = TextStyle(fontSize = 16.sp, lineHeight = 24.sp)
+
+        assertEquals(
+            baseStyle,
+            markdownParagraphStyle(
+                content = state.content,
+                node = paragraph,
+                baseStyle = baseStyle,
+            ),
+        )
+    }
+
+    @Test
+    fun `未知尺寸Markdown图片不保留200dp空白`() {
+        val config = EveryTalkMarkdownImageTransformer.placeholderConfig(
+            link = "https://invalid.example/image.png",
+            density = Density(1f),
+            containerSize = Size(360f, 640f),
+            imageWidth = ImageWidth.IMAGE_WIDTH,
+            imageSize = Size.Unspecified,
+        )
+
+        assertEquals(Size(48f, 48f), config.size)
+    }
+
+    @Test
+    fun `用户Markdown根布局按内容收缩`() {
+        assertFalse(shouldFillMarkdownWidth(Sender.User))
+        assertTrue(shouldFillMarkdownWidth(Sender.AI))
+        assertTrue(shouldFillMarkdownWidth(Sender.System))
+    }
+
+    @Test
+    fun `表格滚动阴影只显示仍可滚动的方向`() {
+        assertEquals(
+            MarkdownTableEdgeVisibility(showLeft = false, showRight = false),
+            markdownTableEdgeVisibility(scrollValue = 0, maxValue = 0),
+        )
+        assertEquals(
+            MarkdownTableEdgeVisibility(showLeft = false, showRight = true),
+            markdownTableEdgeVisibility(scrollValue = 0, maxValue = 100),
+        )
+        assertEquals(
+            MarkdownTableEdgeVisibility(showLeft = true, showRight = true),
+            markdownTableEdgeVisibility(scrollValue = 40, maxValue = 100),
+        )
+        assertEquals(
+            MarkdownTableEdgeVisibility(showLeft = true, showRight = false),
+            markdownTableEdgeVisibility(scrollValue = 100, maxValue = 100),
+        )
+    }
+
+    @Test
+    fun `表格边缘遮罩浅色用白色深色用黑色`() {
+        assertEquals(Color.White, markdownTableEdgeFadeColor(Color(0xFFF8F8F8)))
+        assertEquals(Color.Black, markdownTableEdgeFadeColor(Color(0xFF121212)))
+    }
+
+    @Test
+    fun `已知尺寸Markdown图片继续使用MikePenz原生缩放`() {
+        val config = EveryTalkMarkdownImageTransformer.placeholderConfig(
+            link = "https://example.com/image.png",
+            density = Density(1f),
+            containerSize = Size(360f, 640f),
+            imageWidth = ImageWidth.IMAGE_WIDTH,
+            imageSize = Size(150f, 100f),
+        )
+
+        assertEquals(Size(150f, 100f), config.size)
+    }
 
     @Test
     fun `脚注导航目标只识别预处理器生成的内部链接`() {
