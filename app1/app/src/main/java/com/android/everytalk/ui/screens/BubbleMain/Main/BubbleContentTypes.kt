@@ -94,6 +94,35 @@ private val CONTEXT_MENU_ITEM_ICON_SIZE = 22.dp
 internal fun attachmentStripHorizontalAlignment(sender: Sender): Alignment.Horizontal =
     if (sender == Sender.User) Alignment.End else Alignment.Start
 
+internal data class AttachmentThumbnailSize(
+    val widthDp: Float,
+    val heightDp: Float,
+)
+
+internal fun fitAttachmentThumbnail(
+    sourceWidth: Float,
+    sourceHeight: Float,
+    maxWidthDp: Float = 160f,
+    maxHeightDp: Float = 100f,
+): AttachmentThumbnailSize {
+    if (
+        !sourceWidth.isFinite() ||
+        !sourceHeight.isFinite() ||
+        sourceWidth <= 0f ||
+        sourceHeight <= 0f
+    ) {
+        return AttachmentThumbnailSize(maxHeightDp, maxHeightDp)
+    }
+    val scale = minOf(maxWidthDp / sourceWidth, maxHeightDp / sourceHeight)
+    return AttachmentThumbnailSize(
+        widthDp = sourceWidth * scale,
+        heightDp = sourceHeight * scale,
+    )
+}
+
+internal fun attachmentImageBorderColor(onSurface: Color): Color =
+    onSurface.copy(alpha = 0.45f)
+
 internal const val USER_BUBBLE_COLLAPSED_MAX_HEIGHT_RATIO = 0.32f
 internal const val USER_BUBBLE_EXPANDED_MAX_HEIGHT_RATIO = 0.56f
 
@@ -405,11 +434,11 @@ fun AttachmentsContent(
         } else if (imageAttachments.isNotEmpty()) {
             val imageStripHeight = 100.dp
             val imageShape = RoundedCornerShape(12.dp)
-            val imageBorderColor = MaterialTheme.colorScheme.outlineVariant
+            val imageBorderColor = attachmentImageBorderColor(MaterialTheme.colorScheme.onSurface)
             val scrollState = rememberScrollState()
             val isUser = message.sender == Sender.User
 
-            LaunchedEffect(isUser, imageAttachments.size) {
+            LaunchedEffect(isUser, imageAttachments.size, scrollState.maxValue) {
                 if (isUser) scrollState.scrollTo(scrollState.maxValue)
             }
 
@@ -418,6 +447,7 @@ fun AttachmentsContent(
             Box(modifier = Modifier.fillMaxWidth()) {
                 Row(
                     horizontalArrangement = if (isUser) Arrangement.spacedBy(2.dp, Alignment.End) else Arrangement.spacedBy(2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                     modifier = Modifier
                         .height(imageStripHeight)
                         .fillMaxWidth()
@@ -425,21 +455,32 @@ fun AttachmentsContent(
                 ) {
                     imageAttachments.forEachIndexed { idx, attachment ->
                         var imageGlobalPosition by remember { mutableStateOf(Offset.Zero) }
-                        val imageModel: Any = when (attachment) {
-                            is SelectedMediaItem.ImageFromUri -> if (attachment.uri.scheme == "data") attachment.uri.toString() else attachment.uri
-                            is SelectedMediaItem.ImageFromBitmap -> attachment.bitmap as Any
-                            else -> ""
+                        var thumbnailSize by remember(attachment.id) {
+                            mutableStateOf(AttachmentThumbnailSize(100f, 100f))
                         }
+                        val imageModel: Any = remember(attachment) { when (attachment) {
+                            is SelectedMediaItem.ImageFromUri -> if (attachment.uri.scheme == "data") attachment.uri.toString() else attachment.uri
+                            is SelectedMediaItem.ImageFromBitmap -> attachment.bitmap ?: ""
+                            else -> ""
+                        } }
                         coil3.compose.AsyncImage(
                             model = imageModel,
                             contentDescription = "Image attachment",
                             contentScale = androidx.compose.ui.layout.ContentScale.Fit,
-                            onSuccess = { onImageLoaded() },
+                            onSuccess = { state ->
+                                val intrinsicSize = state.painter.intrinsicSize
+                                thumbnailSize = fitAttachmentThumbnail(
+                                    sourceWidth = intrinsicSize.width,
+                                    sourceHeight = intrinsicSize.height,
+                                )
+                                onImageLoaded()
+                            },
                             modifier = Modifier
-                                .size(imageStripHeight)
-                                .background(MaterialTheme.colorScheme.surfaceVariant, imageShape)
-                                .border(1.dp, imageBorderColor, imageShape)
+                                .width(thumbnailSize.widthDp.dp)
+                                .height(thumbnailSize.heightDp.dp)
                                 .clip(imageShape)
+                                .background(MaterialTheme.colorScheme.surfaceVariant)
+                                .border(1.dp, imageBorderColor, imageShape)
                                 .onGloballyPositioned { imageGlobalPosition = it.localToRoot(Offset.Zero) }
                                 .pointerInput(message.id, idx) {
                                     detectTapGestures(

@@ -25,12 +25,12 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sign
-import androidx.compose.runtime.withFrameNanos
 
 @Composable
 fun rememberChatScrollStateManager(
@@ -57,6 +57,7 @@ class ChatScrollStateManager(
     private var lastStreamingTransitionTime = 0L
     private val BOTTOM_DETECTION_THRESHOLD = 2
     private val STREAMING_TRANSITION_FREEZE_MS = 150L
+    private val STOP_BOTTOM_PIN_TIMEOUT_MS = 30_000L
 
     private val _isAtBottom = mutableStateOf(true)
     val isAtBottom: State<Boolean> = _isAtBottom
@@ -69,12 +70,18 @@ class ChatScrollStateManager(
 
     private var preventAutoScroll = false
     private var isProgrammaticScroll = false
+    private var isStopBottomPinActive = false
+    private var stopBottomPinGeneration = 0L
     private var suppressTopAnchorBottomScroll by mutableStateOf(false)
     private var topAnchorRuntimeClearer: (() -> Unit)? = null
     private var topAnchorUserScrollReleaser: (() -> Unit)? = null
 
     val nestedScrollConnection = object : NestedScrollConnection {
         override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+            if (source == NestedScrollSource.UserInput && isStopBottomPinActive) {
+                cancelAutoScrollJob()
+                preventAutoScroll = true
+            }
             if (source == NestedScrollSource.UserInput && suppressTopAnchorBottomScroll) {
                 topAnchorUserScrollReleaser?.invoke()
                 suppressTopAnchorBottomScroll = false
@@ -163,6 +170,15 @@ class ChatScrollStateManager(
         val firstVisibleOffset: Int
     )
 
+    private data class BottomLayoutSignature(
+        val totalItems: Int,
+        val canScrollForward: Boolean,
+        val lastVisibleKey: Any?,
+        val lastVisibleOffset: Int,
+        val lastVisibleSize: Int,
+        val viewportEndOffset: Int,
+    )
+
     private fun onReachedBottom() {
         // Grok 风格：到达底部时无需额外处理
     }
@@ -195,6 +211,8 @@ class ChatScrollStateManager(
     }
 
     private fun cancelAutoScrollJob() {
+        stopBottomPinGeneration++
+        isStopBottomPinActive = false
         autoScrollJob?.cancel()
         autoScrollJob = null
     }
@@ -205,9 +223,7 @@ class ChatScrollStateManager(
      */
     fun scrollToUserMessage(index: Int) {
         logger.debug("Scrolling to user message at index $index")
-        if (autoScrollJob?.isActive == true) {
-            autoScrollJob?.cancel()
-        }
+        cancelAutoScrollJob()
         preventAutoScroll = true
         
         autoScrollJob = coroutineScope.launch {
@@ -229,9 +245,7 @@ class ChatScrollStateManager(
      */
     fun animateScrollToTop() {
         logger.debug("Animating scroll to top (Grok-style)")
-        if (autoScrollJob?.isActive == true) {
-            autoScrollJob?.cancel()
-        }
+        cancelAutoScrollJob()
         preventAutoScroll = true
         
         autoScrollJob = coroutineScope.launch {
@@ -253,31 +267,46 @@ class ChatScrollStateManager(
     }
 
     /**
-     * 停止回答时先到达包含锚点占位的虚拟底部，再清理占位并落到真实底部。
-     * 直接先删占位会让 LazyColumn 在旧布局坐标上钳制位置，最终停在真实底部上方。
+     * 停止回答后清理锚点占位，并在终态内容继续重排时守住真实底部。
+     * 用户主动滑动、开始下一次滚动操作或超时后会立即释放守护。
      */
     fun stopStreamingAndJumpToRealBottom() {
-        if (autoScrollJob?.isActive == true) autoScrollJob?.cancel()
+        cancelAutoScrollJob()
         preventAutoScroll = false
         suppressTopAnchorBottomScroll = false
+        val pinGeneration = ++stopBottomPinGeneration
+        isStopBottomPinActive = true
 
         autoScrollJob = coroutineScope.launch {
             isProgrammaticScroll = true
             try {
-                listState.layoutInfo.totalItemsCount.takeIf { it > 0 }?.let { totalItems ->
-                    listState.scrollToItem(totalItems - 1)
-                }
                 topAnchorRuntimeClearer?.invoke()
-
-                repeat(2) {
-                    withFrameNanos { }
-                    listState.layoutInfo.totalItemsCount.takeIf { it > 0 }?.let { totalItems ->
-                        listState.scrollToItem(totalItems - 1)
-                    }
-                }
                 _showScrollToBottomButton.value = false
                 cancelHideButtonJob()
+                withTimeoutOrNull(STOP_BOTTOM_PIN_TIMEOUT_MS) {
+                    snapshotFlow {
+                        val layoutInfo = listState.layoutInfo
+                        val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
+                        BottomLayoutSignature(
+                            totalItems = layoutInfo.totalItemsCount,
+                            canScrollForward = listState.canScrollForward,
+                            lastVisibleKey = lastVisibleItem?.key,
+                            lastVisibleOffset = lastVisibleItem?.offset ?: 0,
+                            lastVisibleSize = lastVisibleItem?.size ?: 0,
+                            viewportEndOffset = layoutInfo.viewportEndOffset,
+                        )
+                    }.distinctUntilChanged().collect { layout ->
+                        if (pinGeneration != stopBottomPinGeneration) return@collect
+                        if (layout.totalItems > 0 && layout.canScrollForward) {
+                            listState.scrollToItem(layout.totalItems - 1)
+                            listState.scrollBy(Float.MAX_VALUE)
+                        }
+                    }
+                }
             } finally {
+                if (pinGeneration == stopBottomPinGeneration) {
+                    isStopBottomPinActive = false
+                }
                 isProgrammaticScroll = false
             }
         }
@@ -312,9 +341,7 @@ class ChatScrollStateManager(
         }
 
         logger.debug("Jumping to bottom (smooth=$smooth).")
-        if (autoScrollJob?.isActive == true) {
-            autoScrollJob?.cancel()
-        }
+        cancelAutoScrollJob()
         autoScrollJob = coroutineScope.launch {
             val totalItems = listState.layoutInfo.totalItemsCount
             if (totalItems > 0) {
@@ -339,9 +366,7 @@ class ChatScrollStateManager(
      */
     fun scrollItemToTop(index: Int, scrollDurationMs: Int = 300) {
         logger.debug("Scrolling item $index to top.")
-        if (autoScrollJob?.isActive == true) {
-            autoScrollJob?.cancel()
-        }
+        cancelAutoScrollJob()
         
         preventAutoScroll = true
         
@@ -366,9 +391,7 @@ class ChatScrollStateManager(
 
     fun scrollToTop(smooth: Boolean = true) {
         logger.debug("Scrolling to top (Intercom style, smooth=$smooth).")
-        if (autoScrollJob?.isActive == true) {
-            autoScrollJob?.cancel()
-        }
+        cancelAutoScrollJob()
         
         preventAutoScroll = true
         
