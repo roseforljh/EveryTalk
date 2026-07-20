@@ -58,7 +58,6 @@ class MessageProcessor {
                     val eventText = when (event) {
                         is AppStreamEvent.Text -> event.text
                         is AppStreamEvent.Content -> event.text
-                        else -> ""
                     }
                     if (eventText.isNotEmpty()) {
                         // 对每个chunk进行轻量级清理（仅转换全角符号）
@@ -66,7 +65,7 @@ class MessageProcessor {
                         
                         // 记录是否发生了清理
                         if (cleanedChunk != eventText) {
-                            logger.debug("Chunk cleaned: '${eventText.take(20)}...' -> '${cleanedChunk.take(20)}...' (${eventText.length} -> ${cleanedChunk.length} chars)")
+                            logger.debug("Chunk cleaned: ${eventText.length} -> ${cleanedChunk.length} chars")
                         }
                         
                         currentTextBuilder.get().append(cleanedChunk)
@@ -78,7 +77,7 @@ class MessageProcessor {
                     ProcessedEventResult.ContentUpdated
                 }
                 is AppStreamEvent.CodeExecutionResult -> {
-                    // 处理代码执行结果：优先显示图片；若前面有未闭合代码块，先补一个围栏以避免图片被包进代码块
+                    // 图片由 ApiHandler 在落盘后统一写入消息状态，这里只处理文本执行结果。
                     val builder = currentTextBuilder.get()
                     val textSoFar = builder.toString()
 
@@ -88,25 +87,12 @@ class MessageProcessor {
                         builder.append("\n```\n")
                     }
 
-                    // 若包含图片URL，优先渲染图片；并清理 data:image 中的所有空白，避免换行破坏 Markdown 链接
-                    if (!event.imageUrl.isNullOrBlank()) {
-                        // 1) 移除一切空白(空格/制表/换行)，防止被Markdown当作多段文本
-                        val cleanUrl = event.imageUrl.replace(Regex("\\s+"), "")
-                        // 2) 直接拼接 URL，不使用尖括号，保持标准 Markdown 图片语法。
-                        // Base64 字符集不包含空格或括号，因此不使用尖括号也是安全的
-                        val imageMarkdown = "\n\n![Generated Image](" + cleanUrl + ")\n\n"
-                        builder.append(imageMarkdown)
-                        logger.debug("Appended image markdown. url.len=${cleanUrl.length}, md.len=${imageMarkdown.length}")
+                    if (!event.codeExecutionOutput.isNullOrBlank()) {
+                        val outputMarkdown = "\n\n```\n${event.codeExecutionOutput}\n```\n\n"
+                        builder.append(outputMarkdown)
                         ProcessedEventResult.ContentUpdated
                     } else {
-                        // 兜底：仅文本输出时以代码块形式追加，并显式闭合
-                        if (!event.codeExecutionOutput.isNullOrBlank()) {
-                            val outputMarkdown = "\n\n```\n${event.codeExecutionOutput}\n```\n\n"
-                            builder.append(outputMarkdown)
-                            ProcessedEventResult.ContentUpdated
-                        } else {
-                            ProcessedEventResult.NoChange
-                        }
+                        ProcessedEventResult.NoChange
                     }
                 }
                 is AppStreamEvent.Reasoning -> {

@@ -8,6 +8,7 @@ import io.mockk.every
 import io.mockk.mockkStatic
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Before
 import org.junit.Test
 
@@ -111,5 +112,24 @@ class MessageProcessorFinalizePartsTest {
         )
 
         assertEquals("第一段第二段", finalized.reasoning)
+    }
+
+    @Test
+    fun `代码执行图片事件不把数据 URI 拼入处理器正文`() = runBlocking {
+        val processor = MessageProcessor().apply { initialize("session", "image-result") }
+
+        processor.processStreamEvent(
+            AppStreamEvent.CodeExecutionResult(
+                codeExecutionOutput = "执行完成",
+                imageUrl = "data:image/png;base64,QUJDRA==",
+            ),
+            "image-result",
+        )
+        val finalized = processor.finalizeMessageProcessing(
+            Message(id = "image-result", text = "", sender = Sender.AI),
+        )
+
+        assertFalse(finalized.text.contains("data:image", ignoreCase = true))
+        assertEquals("\n\n```\n执行完成\n```\n\n", finalized.text)
     }
 }

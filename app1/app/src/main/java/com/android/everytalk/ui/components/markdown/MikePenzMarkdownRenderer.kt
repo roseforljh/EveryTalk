@@ -1,6 +1,7 @@
 package com.android.everytalk.ui.components.markdown
 
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -396,7 +397,10 @@ internal fun MarkdownImageLoading(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun MarkdownInlineImageWithFailure(model: MarkdownComponentModel) {
+private fun MarkdownInlineImageWithFailure(
+    model: MarkdownComponentModel,
+    onImageClick: ((String) -> Unit)?,
+) {
     val imageData = EveryTalkMarkdownImageTransformer.transform(model.content)
     val painterState = (imageData?.painter as? AsyncImagePainter)?.state?.collectAsState()?.value
     when {
@@ -412,7 +416,10 @@ private fun MarkdownInlineImageWithFailure(model: MarkdownComponentModel) {
             Image(
                 painter = imageData.painter,
                 contentDescription = imageData.contentDescription,
-                modifier = Modifier.fillMaxSize().then(imageData.modifier),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .then(imageData.modifier)
+                    .markdownImageClick(model.content, onImageClick),
                 alignment = imageData.alignment,
                 contentScale = imageData.contentScale,
                 alpha = imageData.alpha,
@@ -420,6 +427,18 @@ private fun MarkdownInlineImageWithFailure(model: MarkdownComponentModel) {
             )
         }
     }
+}
+
+internal fun Modifier.markdownImageClick(
+    source: String,
+    onImageClick: ((String) -> Unit)?,
+): Modifier = if (onImageClick == null) {
+    this
+} else {
+    clickable(
+        onClickLabel = "预览图片",
+        onClick = { onImageClick(source) },
+    )
 }
 
 @Composable
@@ -615,6 +634,7 @@ fun MikePenzMarkdownRenderer(
     isStreaming: Boolean = false,
     onCodePreviewRequested: ((String, String) -> Unit)? = null,
     onCodeCopied: (() -> Unit)? = null,
+    onImageClick: ((String) -> Unit)? = null,
     enableSelectionContainer: Boolean = true,
 ) {
     val committedStreamEpoch = remember { mutableIntStateOf(0) }
@@ -791,10 +811,14 @@ fun MikePenzMarkdownRenderer(
             val currentIsStreaming = rememberUpdatedState(isStreaming)
             val currentCodePreviewCallback = rememberUpdatedState(onCodePreviewRequested)
             val currentCodeCopiedCallback = rememberUpdatedState(onCodeCopied)
+            val currentImageClickCallback = rememberUpdatedState(onImageClick)
             val components = remember(footnoteNavigation) {
                 markdownComponents(
                 inlineImage = { model ->
-                    MarkdownInlineImageWithFailure(model)
+                    MarkdownInlineImageWithFailure(
+                        model = model,
+                        onImageClick = currentImageClickCallback.value,
+                    )
                 },
                 paragraph = { model ->
                     FootnoteTarget(

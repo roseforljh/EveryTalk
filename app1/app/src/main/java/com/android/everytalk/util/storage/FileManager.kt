@@ -12,6 +12,7 @@ import androidx.core.content.FileProvider
 import com.android.everytalk.util.AppLogger
 import com.android.everytalk.util.image.ImageScaleCalculator
 import com.android.everytalk.util.image.ImageScaleConfig
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
@@ -23,6 +24,9 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.TimeUnit
+import okhttp3.OkHttpClient
+import okhttp3.Request
 
 /**
  * 统一的文件管理类，用于处理所有文件操作
@@ -30,10 +34,15 @@ import java.util.UUID
  */
 class FileManager(private val context: Context) {
     private val logger = AppLogger.forComponent("FileManager")
+    private val imageDownloadClient = OkHttpClient.Builder()
+        .followRedirects(true)
+        .followSslRedirects(true)
+        .build()
     
     companion object {
         private const val CHAT_ATTACHMENTS_DIR = "chat_attachments"
         private const val MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024 // 100MB 最大文件大小
+        const val MAX_MESSAGE_IMAGE_BYTES = 16L * 1024L * 1024L
         
         // 保留兼容性的常量，但标记为过时
         @Deprecated("Use ImageScaleConfig instead", ReplaceWith("ImageScaleConfig.CHAT_MODE.maxFileSize"))
@@ -52,8 +61,10 @@ class FileManager(private val context: Context) {
             "image/png" -> "png"
             "image/jpeg", "image/jpg" -> "jpg"
             "image/webp" -> "webp"
+            "image/gif" -> "gif"
             "image/heic" -> "heic"
             "image/heif" -> "heif"
+            "image/avif" -> "avif"
             else -> "bin"
         }
     }
@@ -776,15 +787,23 @@ class FileManager(private val context: Context) {
      * - content://
      * - file:// 或 绝对路径
      */
-    suspend fun loadBytesFromFlexibleSource(source: String): Pair<ByteArray, String>? = withContext(Dispatchers.IO) {
+    suspend fun loadBytesFromFlexibleSource(
+        source: String,
+        maxBytes: Long = MAX_FILE_SIZE_BYTES.toLong(),
+        networkTimeoutMillis: Int = 30_000,
+    ): Pair<ByteArray, String>? = withContext(Dispatchers.IO) {
         try {
             if (source.startsWith("data:image", ignoreCase = true)) {
-                val headerEnd = source.indexOf(";base64,")
-                if (headerEnd > 5) {
-                    val mime = source.substring(5, headerEnd)
+                val headerEnd = source.indexOf(";base64,", ignoreCase = true)
+                if (headerEnd in 6..256) {
+                    val mime = source.substring(5, headerEnd).substringBefore(';').trim().lowercase(Locale.ROOT)
                     val base64Part = source.substringAfter(",", "")
                     if (base64Part.isNotBlank()) {
+                        val encodedLength = base64Part.count { !it.isWhitespace() }.toLong()
+                        val estimatedBytes = ((encodedLength + 3L) / 4L) * 3L
+                        if (estimatedBytes > maxBytes + 2L) return@withContext null
                         val bytes = Base64.decode(base64Part, Base64.DEFAULT)
+                        if (bytes.size.toLong() > maxBytes) return@withContext null
                         return@withContext bytes to mime
                     }
                 }
@@ -797,14 +816,14 @@ class FileManager(private val context: Context) {
             fun readAllBytesFromContent(u: Uri): Pair<ByteArray, String>? {
                 val cr = context.contentResolver
                 val mime = cr.getType(u) ?: "application/octet-stream"
-                val bytes = cr.openInputStream(u)?.use { readAtMost(it, MAX_FILE_SIZE_BYTES.toLong()) } ?: return null
+                val bytes = cr.openInputStream(u)?.use { readAtMost(it, maxBytes) } ?: return null
                 return bytes to mime
             }
 
             fun readAllBytesFromFile(path: String): Pair<ByteArray, String>? {
                 val f = File(path)
                 if (!f.exists()) return null
-                val bytes = f.readAtMost(MAX_FILE_SIZE_BYTES.toLong())
+                val bytes = f.readAtMost(maxBytes)
                 val mime = when {
                     path.endsWith(".png", true) -> "image/png"
                     path.endsWith(".jpg", true) || path.endsWith(".jpeg", true) -> "image/jpeg"
@@ -817,30 +836,74 @@ class FileManager(private val context: Context) {
             }
 
             if (scheme == "http" || scheme == "https") {
-                val conn = (URL(source).openConnection() as HttpURLConnection).apply {
-                    connectTimeout = 30000
-                    readTimeout = 30000
-                    instanceFollowRedirects = true
+                val request = Request.Builder()
+                    .url(source)
+                    .header("User-Agent", "EveryTalk/1.0 (Android)")
+                    .header("Accept", "image/*")
+                    .build()
+                val call = imageDownloadClient.newCall(request)
+                call.timeout().timeout(networkTimeoutMillis.toLong(), TimeUnit.MILLISECONDS)
+                return@withContext call.execute().use { response ->
+                    if (!response.isSuccessful) return@use null
+                    val body = response.body
+                    val declaredLength = body.contentLength()
+                    if (declaredLength > maxBytes) return@use null
+                    val bytes = body.byteStream().use { readAtMost(it, maxBytes) }
+                    bytes to (response.header("Content-Type") ?: "application/octet-stream")
                 }
-                conn.connect()
-                if (conn.responseCode !in 200..299) return@withContext null
-                val mime = conn.contentType ?: "application/octet-stream"
-                val declaredLength = conn.contentLengthLong
-                if (declaredLength > MAX_FILE_SIZE_BYTES) return@withContext null
-                val bytes = conn.inputStream.use { readAtMost(it, MAX_FILE_SIZE_BYTES.toLong()) }
-                return@withContext bytes to mime
             } else if (scheme == "content") {
-                return@withContext readAllBytesFromContent(uri!!)
+                return@withContext readAllBytesFromContent(uri)
             } else if (scheme == "file") {
-                return@withContext readAllBytesFromFile(uri?.path ?: return@withContext null)
+                return@withContext readAllBytesFromFile(uri.path ?: return@withContext null)
             } else if (scheme.isNullOrBlank()) {
                 // 绝对路径
                 return@withContext readAllBytesFromFile(source)
             }
 
             null
+        } catch (exception: CancellationException) {
+            throw exception
         } catch (e: Exception) {
-            logger.error("Failed to load original bytes from source: $source", e)
+            val scheme = runCatching { Uri.parse(source).scheme?.lowercase(Locale.ROOT) }.getOrNull() ?: "path"
+            logger.error("Failed to load original bytes: scheme=$scheme, chars=${source.length}", e)
+            null
+        }
+    }
+
+    /**
+     * 将消息图片来源校验并归档到内部存储。返回值只包含短本地路径。
+     */
+    suspend fun persistMessageImageSource(
+        source: String,
+        messageIdHint: String,
+        index: Int,
+        maxBytes: Long = MAX_MESSAGE_IMAGE_BYTES,
+        networkTimeoutMillis: Int = 15_000,
+    ): String? = withContext(Dispatchers.IO) {
+        try {
+            val loaded = loadBytesFromFlexibleSource(source, maxBytes, networkTimeoutMillis)
+                ?: return@withContext null
+            val declaredMime = loaded.second.substringBefore(';').trim().lowercase(Locale.ROOT)
+            if (!declaredMime.startsWith("image/")) return@withContext null
+
+            val detectedMime = detectImageMime(loaded.first) ?: return@withContext null
+            if (!imageMimeMatches(declaredMime, detectedMime)) return@withContext null
+
+            saveBytesToInternalImages(
+                bytes = loaded.first,
+                mime = detectedMime,
+                baseName = "img",
+                messageIdHint = messageIdHint,
+                index = index,
+            )
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            val scheme = runCatching { Uri.parse(source).scheme?.lowercase(Locale.ROOT) }.getOrNull() ?: "path"
+            logger.error(
+                "Failed to persist message image: scheme=$scheme, chars=${source.length}, messageId=$messageIdHint",
+                exception,
+            )
             null
         }
     }
@@ -855,20 +918,63 @@ class FileManager(private val context: Context) {
         messageIdHint: String,
         index: Int
     ): String? = withContext(Dispatchers.IO) {
+        var temporaryFile: File? = null
         try {
             val ext = guessExtensionFromMime(mime)
             val timeStamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
-            val safeBase = baseName.filter { it.isLetterOrDigit() || it in "._-" }.take(30)
-            val uniqueName = "${safeBase}_${messageIdHint}_${index}_${timeStamp}_${UUID.randomUUID().toString().take(4)}.$ext"
+            val safeBase = baseName.filter { it.isLetterOrDigit() || it in "._-" }.take(30).ifBlank { "img" }
+            val safeMessageId = messageIdHint.filter { it.isLetterOrDigit() || it in "_-" }
+                .take(48)
+                .ifBlank { "message" }
+            val uniqueName = "${safeBase}_${safeMessageId}_${index.coerceAtLeast(0)}_${timeStamp}_${UUID.randomUUID().toString().take(4)}.$ext"
 
             val dir = getChatAttachmentsDir()
             val file = File(dir, uniqueName)
-            FileOutputStream(file).use { it.write(bytes) }
+            temporaryFile = File(dir, ".$uniqueName.tmp")
+            FileOutputStream(temporaryFile).use {
+                it.write(bytes)
+                it.fd.sync()
+            }
+            if (!temporaryFile.renameTo(file)) return@withContext null
             if (file.exists() && file.length() > 0) file.absolutePath else null
+        } catch (exception: CancellationException) {
+            throw exception
         } catch (e: Exception) {
             logger.error("Failed to save original bytes to internal storage", e)
             null
+        } finally {
+            temporaryFile?.takeIf(File::exists)?.delete()
         }
+    }
+
+    private fun detectImageMime(bytes: ByteArray): String? = when {
+        bytes.size >= 8 && bytes.copyOfRange(0, 8).contentEquals(
+            byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A)
+        ) -> "image/png"
+        bytes.size >= 3 && bytes[0] == 0xFF.toByte() && bytes[1] == 0xD8.toByte() && bytes[2] == 0xFF.toByte() -> "image/jpeg"
+        bytes.size >= 12 &&
+            bytes.copyOfRange(0, 4).decodeToString() == "RIFF" &&
+            bytes.copyOfRange(8, 12).decodeToString() == "WEBP" -> "image/webp"
+        bytes.size >= 6 && bytes.copyOfRange(0, 6).decodeToString() in setOf("GIF87a", "GIF89a") -> "image/gif"
+        bytes.size >= 12 && bytes.copyOfRange(4, 8).decodeToString() == "ftyp" -> when (
+            bytes.copyOfRange(8, 12).decodeToString()
+        ) {
+            "heic", "heix", "hevc", "hevx" -> "image/heic"
+            "mif1", "msf1" -> "image/heif"
+            "avif", "avis" -> "image/avif"
+            else -> null
+        }
+        else -> null
+    }
+
+    private fun imageMimeMatches(declaredMime: String, detectedMime: String): Boolean {
+        val normalizedDeclared = when (declaredMime) {
+            "image/jpg" -> "image/jpeg"
+            else -> declaredMime
+        }
+        return normalizedDeclared == detectedMime ||
+            (normalizedDeclared in setOf("image/heic", "image/heif") &&
+                detectedMime in setOf("image/heic", "image/heif"))
     }
 
     /**

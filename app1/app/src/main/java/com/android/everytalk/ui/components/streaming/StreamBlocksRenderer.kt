@@ -13,6 +13,7 @@ fun UnifiedMarkdownRenderer(
     isStreaming: Boolean = false,
     onCodePreviewRequested: ((String, String) -> Unit)? = null,
     onCodeCopied: (() -> Unit)? = null,
+    onImageClick: ((String) -> Unit)? = null,
 ) {
     MikePenzMarkdownRenderer(
         preparedMessage = preparedMessage,
@@ -21,6 +22,7 @@ fun UnifiedMarkdownRenderer(
         isStreaming = isStreaming,
         onCodePreviewRequested = onCodePreviewRequested,
         onCodeCopied = onCodeCopied,
+        onImageClick = onImageClick,
     )
 }
 
