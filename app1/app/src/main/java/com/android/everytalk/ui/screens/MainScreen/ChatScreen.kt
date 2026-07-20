@@ -71,6 +71,7 @@ import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.ChatInputArea
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.ChatMessagesList
 import com.android.everytalk.ui.components.content.LocalStickyHeaderTop
+import com.android.everytalk.ui.components.image.buildImagePreviewSelection
 import com.android.everytalk.ui.screens.MainScreen.chat.dialog.EditMessageDialog
 import com.android.everytalk.ui.screens.MainScreen.chat.dialog.SystemPromptDialog
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.EmptyChatView
@@ -764,28 +765,15 @@ fun ChatScreen(
                                     }
                                 },
                                 onImageClick = { imageUrl ->
-                                    val allUrls = chatListItems.flatMap { item ->
-                                        when (item) {
-                                            is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage -> {
-                                                item.attachments.mapNotNull { att ->
-                                                    when (att) {
-                                                        is com.android.everytalk.models.SelectedMediaItem.ImageFromUri ->
-                                                            att.uri.toString()
-                                                        else -> null
-                                                    }
-                                                }
-                                            }
-                                            is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage -> {
-                                                viewModel.getMessageById(item.messageId)?.imageUrls ?: emptyList()
-                                            }
-                                            else -> emptyList()
+                                    val messageSnapshot = messages.toList()
+                                    coroutineScope.launch {
+                                        val selection = withContext(Dispatchers.Default) {
+                                            buildImagePreviewSelection(imageUrl, messageSnapshot)
                                         }
-                                    }
-                                    val index = allUrls.indexOf(imageUrl).coerceAtLeast(0)
-                                    if (allUrls.size > 1) {
-                                        viewModel.showImageViewer(allUrls, index)
-                                    } else {
-                                        viewModel.showImageViewer(imageUrl)
+                                        viewModel.showImageViewer(
+                                            urls = selection.candidates,
+                                            index = selection.initialIndex,
+                                        )
                                     }
                                 },
                                 additionalBottomPadding = inputAreaHeightDp

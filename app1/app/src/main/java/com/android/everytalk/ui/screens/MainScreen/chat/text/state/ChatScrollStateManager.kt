@@ -86,30 +86,7 @@ class ChatScrollStateManager(
                 topAnchorUserScrollReleaser?.invoke()
                 suppressTopAnchorBottomScroll = false
             }
-            if (source == NestedScrollSource.UserInput || source == NestedScrollSource.SideEffect) {
-                updateScrollToBottomButton(available.y)
-            }
             return Offset.Zero
-        }
-        
-        private fun updateScrollToBottomButton(availableY: Float) {
-            val layoutInfo = listState.layoutInfo
-            val totalItems = layoutInfo.totalItemsCount
-            val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
-            
-            val isCloseToBottom = if (lastVisibleItem != null && totalItems > 0) {
-                lastVisibleItem.index >= totalItems - 1
-            } else {
-                true
-            }
-
-            if (isCloseToBottom) {
-                _showScrollToBottomButton.value = false
-            } else {
-                if (abs(availableY) > 1f) {
-                    _showScrollToBottomButton.value = true
-                }
-            }
         }
     }
 
@@ -133,6 +110,7 @@ class ChatScrollStateManager(
                 )
         }.collect { snapshot ->
                 _isScrollInProgress.value = snapshot.isScrollInProgress
+                _showScrollToBottomButton.value = !snapshot.isStrictlyAtBottom
 
                 val now = System.currentTimeMillis()
                 val inFreezeWindow = now - lastStreamingTransitionTime < STREAMING_TRANSITION_FREEZE_MS
@@ -152,7 +130,6 @@ class ChatScrollStateManager(
                 )
 
                 if (confirmedAtBottom) {
-                    _showScrollToBottomButton.value = false
                     cancelHideButtonJob()
                     onReachedBottom()
                 }

@@ -290,7 +290,7 @@ class ChatScreenScrollSessionTest {
         assertTrue(historyJoinAt > historyJobAt)
         assertTrue(loadingFinishedAt > historyJoinAt)
         assertTrue(source.contains("historyLoadingJob?.cancelAndJoin()"))
-        assertTrue(source.contains("ConversationNameHelper.resolveStableId(lastOpenChat)"))
+        assertTrue(source.contains("ConversationNameHelper.resolveStableId(loadedMessages)"))
         assertEquals(loadingStartedAt, source.lastIndexOf("stateHolder._isLoadingHistoryData.value = true"))
         assertEquals(loadingFinishedAt, source.indexOf("stateHolder._isLoadingHistoryData.value = false"))
     }

@@ -1,5 +1,6 @@
 @file:OptIn(ExperimentalFoundationApi::class)
 package com.android.everytalk.ui.screens.MainScreen.chat.text.ui
+import android.annotation.SuppressLint
 import com.android.everytalk.R
 import androidx.compose.ui.res.painterResource
 
@@ -39,6 +40,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import android.content.Context
 import android.content.Intent
 import android.os.SystemClock
 import androidx.compose.ui.graphics.Brush
@@ -97,9 +99,13 @@ import com.android.everytalk.ui.topanchor.TopAnchorPhase
 import com.android.everytalk.ui.topanchor.TopAnchorReserveEngineState
 import com.android.everytalk.ui.topanchor.mapChatItemsToTopAnchorItems
 import com.android.everytalk.ui.topanchor.resolveActiveTopAnchorTurn
+import com.android.everytalk.util.message.prepareTextForExternalTransfer
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import coil3.compose.AsyncImage
 import java.net.URI
 
@@ -108,6 +114,29 @@ internal fun retainedStreamingHeightPx(
     cachedHeightPx: Int,
     isStreaming: Boolean,
 ): Int = if (isStreaming) maxOf(naturalHeightPx, cachedHeightPx) else naturalHeightPx
+
+internal suspend fun shareMessageText(
+    context: Context,
+    text: String,
+    onFailure: () -> Unit,
+) {
+    val safeText = withContext(Dispatchers.Default) {
+        prepareTextForExternalTransfer(text)
+    }
+    withContext(Dispatchers.Main.immediate) {
+        try {
+            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(Intent.EXTRA_TEXT, safeText)
+            }
+            context.startActivity(Intent.createChooser(shareIntent, "分享"))
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (_: RuntimeException) {
+            onFailure()
+        }
+    }
+}
 
 private fun Modifier.retainGrowingHeightWhileStreaming(
     isStreaming: Boolean,
@@ -204,6 +233,7 @@ internal fun HistoryLoadingBubblePlaceholderItem(
 }
 
 @Composable
+@SuppressLint("StateFlowValueCalledInComposition")
 fun ChatMessagesList(
     chatItems: List<ChatListItem>,
     viewModel: AppViewModel,
@@ -985,6 +1015,7 @@ private fun PageSourceIconStack(
 
 
 @Composable
+@SuppressLint("StateFlowValueCalledInComposition")
 fun AiMessageItem(
     message: Message,
     text: String,
@@ -1230,6 +1261,7 @@ fun AiMessageItem(
                         onCodeCopied = {
                             viewModel.showSnackbar("已复制代码")
                         },
+                        onImageClick = onImageClick,
                     )
                 }
                 }
@@ -1246,6 +1278,7 @@ fun AiMessageFooterItem(
 ) {
     var showPopupMenu by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
 
     Column(
         modifier = Modifier
@@ -1274,11 +1307,13 @@ fun AiMessageFooterItem(
             IconButton(
                 onClick = {
                     val latestMessage = viewModel.getMessageById(message.id) ?: message
-                    val shareIntent = Intent(Intent.ACTION_SEND).apply {
-                        type = "text/plain"
-                        putExtra(Intent.EXTRA_TEXT, latestMessage.text)
+                    coroutineScope.launch {
+                        shareMessageText(
+                            context = context,
+                            text = latestMessage.text,
+                            onFailure = { viewModel.showSnackbar("分享失败") },
+                        )
                     }
-                    context.startActivity(Intent.createChooser(shareIntent, "分享"))
                 },
                 modifier = Modifier.size(36.dp)
             ) {
