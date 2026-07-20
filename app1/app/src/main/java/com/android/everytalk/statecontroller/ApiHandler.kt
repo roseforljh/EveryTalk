@@ -1,9 +1,6 @@
 package com.android.everytalk.statecontroller
 
 import android.content.Context
-import com.android.everytalk.util.storage.FileManager
-import java.io.File
-import java.util.Locale
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.ChatRequest
@@ -26,24 +23,35 @@ import com.android.everytalk.util.text.TextSanitizer
 import io.ktor.client.statement.HttpResponse
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.onStart
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.channels.Channel
-import kotlinx.coroutines.flow.consumeAsFlow
-import kotlinx.coroutines.flow.sample
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.IOException
+import java.security.MessageDigest
+import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.CancellationException
 
 @Serializable
 private data class BackendErrorContent(val message: String? = null, val code: Int? = null)
+
+private sealed interface PreparedGeneratedImage {
+    data class Ready(val source: String) : PreparedGeneratedImage
+    data object Failed : PreparedGeneratedImage
+    data object Duplicate : PreparedGeneratedImage
+}
+
+private data class ArchivedImageUrlsResult(
+    val urls: List<String>,
+    val failedCount: Int,
+)
+
+private const val MAX_REMOTE_IMAGE_SOURCE_CHARS = 16 * 1024
 
 internal fun shouldReturnEarlyForNetworkRetry(
     allowRetry: Boolean,
@@ -122,6 +130,28 @@ internal fun applyReasoningChunk(currentMessage: Message, reasoningChunk: String
     }
 }
 
+internal fun applyGeneratedImageToMessage(
+    message: Message,
+    persistedSource: String,
+): Message {
+    val normalizedSource = persistedSource.trim().replace('\\', '/')
+    if (normalizedSource.isBlank()) return message
+
+    val existingUrls = message.imageUrls.orEmpty()
+    if (existingUrls.any { it.trim().replace('\\', '/') == normalizedSource }) return message
+
+    val markdown = "![Generated Image]($normalizedSource)"
+    val updatedText = when {
+        message.text.isBlank() -> markdown
+        else -> message.text.trimEnd() + "\n\n" + markdown
+    }
+    return message.copy(
+        text = updatedText,
+        imageUrls = existingUrls + normalizedSource,
+        contentStarted = true,
+    )
+}
+
 internal fun addAiMessageAfterUserMessage(
     messageList: MutableList<Message>,
     newAiMessage: Message,
@@ -150,13 +180,12 @@ class ApiHandler(
     private val executeMcpTool: (suspend (toolName: String, arguments: kotlinx.serialization.json.JsonObject) -> kotlinx.serialization.json.JsonElement)? = null,
     private val isMcpTool: (toolName: String) -> Boolean = { false }
 ) {
-    // Note: Do not hold a FileManager with appContext here; pass Context when needed
     private val logger = AppLogger.forComponent("ApiHandler")
     private val jsonParserForError = Json { ignoreUnknownKeys = true }
     // 为每个会话创建独立的MessageProcessor实例，确保会话隔离
     private val messageProcessorMap = mutableMapOf<String, MessageProcessor>()
-    private var eventChannel: Channel<AppStreamEvent>? = null
     private val processedMessageIds = mutableSetOf<String>()
+    private val generatedImageSourceFingerprints = mutableMapOf<String, MutableSet<String>>()
     
     // 🛡️ 防 prompt 泄露：为每个消息创建独立的流式检测器
     private val promptLeakDetectors = mutableMapOf<String, PromptLeakGuard.StreamingDetector>()
@@ -284,6 +313,9 @@ class ApiHandler(
             messageProcessorMap.remove(messageIdBeingCancelled)
             // 🛡️ 清理 prompt 泄露检测器
             promptLeakDetectors.remove(messageIdBeingCancelled)
+            synchronized(generatedImageSourceFingerprints) {
+                generatedImageSourceFingerprints.remove(messageIdBeingCancelled)
+            }
         }
 
         if (messageIdBeingCancelled != null) {
@@ -328,7 +360,6 @@ class ApiHandler(
         }
     }
 
-    @OptIn(FlowPreview::class)
     fun streamChatResponse(
         requestBody: ChatRequest,
         attachmentsToPassToApiClient: List<SelectedMediaItem>,
@@ -417,19 +448,6 @@ class ApiHandler(
             logger.debug("🔧 Using pre-created AI message ID: $aiMessageId")
         }
 
-        eventChannel?.close()
-        val newEventChannel = Channel<AppStreamEvent>(Channel.CONFLATED)
-        eventChannel = newEventChannel
-
-        viewModelScope.launch(Dispatchers.Default) {
-            newEventChannel.consumeAsFlow()
-                .sample(100)
-                .collect {
-                    val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
-                    // No-op in the new model, updates are driven by block list changes
-                }
-        }
-
         val job = viewModelScope.launch {
             val thisJob = coroutineContext[Job]
             var finalSyncDone = false
@@ -452,7 +470,9 @@ class ApiHandler(
                if (isImageGeneration) {
                     try {
                         val response = ApiClient.generateImage(requestBody)
-                        logger.debug("[ImageGen] Response received: $response")
+                        logger.debug(
+                            "[ImageGen] Response received: images=${response.images.size}, textChars=${response.text?.length ?: 0}"
+                        )
 
                         val imageUrls = response.images.mapNotNull { it.url.takeIf(String::isNotBlank) }
                         val responseText = response.text
@@ -467,21 +487,10 @@ class ApiHandler(
                             // 先在 IO 线程完成归档，再更新消息，避免异步导致的数据不一致
                             logger.debug("[ImageGen] 🖼️ Starting synchronous image archival for ${imageUrls.size} images")
                             
-                            val archivedUrls = withContext(Dispatchers.IO) {
-                                try {
-                                    val archived = archiveImageUrlsForMessage(applicationContextForApiClient, aiMessageId, imageUrls)
-                                    if (archived.isNotEmpty()) {
-                                        logger.debug("[ImageGen] 🖼️ Successfully archived ${archived.size} images to local storage")
-                                        archived
-                                    } else {
-                                        logger.warn("[ImageGen] 🖼️ Archive returned empty, falling back to original URLs")
-                                        imageUrls
-                                    }
-                                } catch (e: Exception) {
-                                    logger.warn("[ImageGen] 🖼️ Archive failed: ${e.message}, falling back to original URLs")
-                                    imageUrls
-                                }
+                            val archiveResult = withContext(Dispatchers.IO) {
+                                archiveImageUrlsForMessage(aiMessageId, imageUrls)
                             }
+                            val archivedUrls = archiveResult.urls
                             
                             // 使用归档后的本地路径（或回退到原始URL）更新消息
                             withContext(Dispatchers.Main.immediate) {
@@ -491,13 +500,20 @@ class ApiHandler(
                                 
                                 if (index != -1) {
                                     val currentMessage = messageList[index]
-                                    logger.debug("[ImageGen] 🖼️ Current message - ID: ${currentMessage.id}, hasImageUrls: ${currentMessage.imageUrls?.isNotEmpty()}, text: '${currentMessage.text.take(50)}...'")
+                                    logger.debug(
+                                        "[ImageGen] Current message: id=${currentMessage.id}, hasImageUrls=${currentMessage.imageUrls?.isNotEmpty()}, textChars=${currentMessage.text.length}"
+                                    )
                                     
+                                    val archiveFailureText = if (archiveResult.failedCount > 0) {
+                                        "\n\n> 图片生成成功，但本地保存失败。"
+                                    } else {
+                                        ""
+                                    }
                                     val updatedMessage = currentMessage.copy(
-                                        imageUrls = archivedUrls, // 使用归档后的本地路径
-                                        text = responseText ?: currentMessage.text,
+                                        imageUrls = archivedUrls,
+                                        text = (responseText ?: currentMessage.text) + archiveFailureText,
                                         contentStarted = true,
-                                        isError = false,
+                                        isError = archivedUrls.isEmpty(),
                                         currentWebSearchStage = null,
                                         executionStatus = null
                                     )
@@ -507,7 +523,6 @@ class ApiHandler(
                                     messageList.add(index, updatedMessage)
                                     
                                     logger.debug("[ImageGen] 🖼️ Updated message with ${archivedUrls.size} archived image URLs at index $index")
-                                    logger.debug("[ImageGen] 🖼️ Archived URLs: ${archivedUrls.map { it.take(50) + "..." }}")
                                     logger.debug("[ImageGen] 🖼️ Message list size after update: ${messageList.size}")
                                     
                                     // 🔥 强制触发状态变化，确保Flow重新计算
@@ -534,6 +549,8 @@ class ApiHandler(
                             val error = IOException(responseText ?: "图像生成失败，且未返回明确错误信息。")
                             updateMessageWithError(aiMessageId, error, isImageGeneration = true)
                         }
+                    } catch (exception: CancellationException) {
+                        throw exception
                     } catch (e: Exception) {
                         // 网络请求失败或任何其他异常
                         logger.error("[ImageGen] Exception during image generation for message $aiMessageId", e)
@@ -561,8 +578,6 @@ class ApiHandler(
                     }
                         .onCompletion { cause ->
                             logger.debug("Stream completed for message $aiMessageId, cause: ${cause?.message}")
-                            newEventChannel.close()
-                            
                             // 🎯 无论成功还是取消/错误，都必须在此处进行最终的同步
                             // 确保流式缓冲区中的残余内容被刷新并写入消息列表
                             ensureFinalStreamingSync("flow.onCompletion")
@@ -611,7 +626,6 @@ class ApiHandler(
                             }
                             
                             processStreamEvent(appEvent, aiMessageId, isImageGeneration)
-                            newEventChannel.trySend(appEvent)
 
                             // 🎯 如果收到终止事件，主动结束流收集，确保触发 onCompletion 从而重置按钮状态
                             if (appEvent is AppStreamEvent.Finish || appEvent is AppStreamEvent.StreamEnd || appEvent is AppStreamEvent.Error) {
@@ -686,10 +700,75 @@ class ApiHandler(
             }
         }
     }
+
+    private fun generatedImageSource(event: AppStreamEvent): String? = when (event) {
+        is AppStreamEvent.CodeExecutionResult -> event.imageUrl
+        is AppStreamEvent.ImageGeneration -> event.imageUrl
+        else -> null
+    }?.takeIf { it.isNotBlank() }
+
+    private fun claimGeneratedImageIndex(messageId: String, source: String): Int? {
+        val digest = MessageDigest.getInstance("SHA-256")
+        if (source.startsWith("data:image", ignoreCase = true)) {
+            val commaIndex = source.indexOf(',')
+            source.forEachIndexed { index, character ->
+                if (!character.isWhitespace()) {
+                    val normalized = if (commaIndex < 0 || index < commaIndex) {
+                        character.lowercaseChar()
+                    } else {
+                        character
+                    }
+                    digest.update(normalized.code.toByte())
+                }
+            }
+        } else {
+            digest.update(source.toByteArray(Charsets.UTF_8))
+        }
+        val fingerprint = digest.digest().joinToString("") { byte -> "%02x".format(byte) }
+        return synchronized(generatedImageSourceFingerprints) {
+            val fingerprints = generatedImageSourceFingerprints.getOrPut(messageId) { linkedSetOf() }
+            if (!fingerprints.add(fingerprint)) null else fingerprints.size - 1
+        }
+    }
+
+    private suspend fun prepareGeneratedImage(
+        source: String,
+        messageId: String,
+    ): PreparedGeneratedImage {
+        val trimmedSource = source.trim()
+        val index = withContext(Dispatchers.Default) {
+            claimGeneratedImageIndex(messageId, trimmedSource)
+        }
+            ?: return PreparedGeneratedImage.Duplicate
+        val isDataImage = trimmedSource.startsWith("data:image", ignoreCase = true)
+        val isRemote = trimmedSource.startsWith("http://", ignoreCase = true) ||
+            trimmedSource.startsWith("https://", ignoreCase = true)
+        if (isRemote && trimmedSource.length > MAX_REMOTE_IMAGE_SOURCE_CHARS) {
+            logger.warn("Rejected generated image source: scheme=remote, chars=${trimmedSource.length}, messageId=$messageId")
+            return PreparedGeneratedImage.Failed
+        }
+        if (!isDataImage && !isRemote) {
+            logger.warn("Rejected generated image source: scheme=unsupported, chars=${trimmedSource.length}, messageId=$messageId")
+            return PreparedGeneratedImage.Failed
+        }
+
+        val persisted = withContext(Dispatchers.IO) {
+            historyManager.persistMessageImageSource(trimmedSource, messageId, index)
+        }
+        return when {
+            !persisted.isNullOrBlank() -> PreparedGeneratedImage.Ready(persisted)
+            isRemote -> PreparedGeneratedImage.Ready(trimmedSource)
+            else -> PreparedGeneratedImage.Failed
+        }
+    }
+
 private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: String, isImageGeneration: Boolean = false) {
         // 获取当前消息ID对应的处理器和块管理器，若不存在则创建并加入映射
         val currentMessageProcessor = synchronized(messageProcessorMap) {
             messageProcessorMap.getOrPut(aiMessageId) { MessageProcessor() }
+        }
+        val preparedGeneratedImage = generatedImageSource(appEvent)?.let { source ->
+            prepareGeneratedImage(source, aiMessageId)
         }
         // 首先，让MessageProcessor处理事件并获取返回结果
         val processedResult = currentMessageProcessor.processStreamEvent(appEvent, aiMessageId)
@@ -700,13 +779,62 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
             val messageIndex = messageList.indexOfFirst { it.id == aiMessageId }
 
             if (messageIndex == -1) {
-                logger.warn("Message with id $aiMessageId not found in the list for event $appEvent")
+                logger.warn(
+                    "Message with id $aiMessageId not found for event ${appEvent::class.simpleName}"
+                )
                 return@withContext
             }
 
             val currentMessage = messageList[messageIndex]
             var updatedMessage = currentMessage
             fun latestMessageForUpdate(): Message = messageList.getOrNull(messageIndex) ?: updatedMessage
+            fun applyPreparedGeneratedImage(preparedImage: PreparedGeneratedImage?) {
+                when (preparedImage) {
+                    is PreparedGeneratedImage.Ready -> {
+                        val latestMessage = latestMessageForUpdate()
+                        val projectedMessage = applyGeneratedImageToMessage(latestMessage, preparedImage.source)
+                        if (projectedMessage == latestMessage) return
+
+                        messageList[messageIndex] = latestMessage.copy(
+                            imageUrls = projectedMessage.imageUrls,
+                            contentStarted = true,
+                            currentWebSearchStage = null,
+                            executionStatus = null,
+                        )
+                        stateHolder.appendContentToMessage(
+                            aiMessageId,
+                            "\n\n![Generated Image](${preparedImage.source})\n\n",
+                            isImageGeneration,
+                        )
+                        stateHolder.syncStreamingSnapshotToList(aiMessageId, isImageGeneration)
+                        updatedMessage = messageList[messageIndex]
+                    }
+                    PreparedGeneratedImage.Failed -> {
+                        stateHolder.appendContentToMessage(
+                            aiMessageId,
+                            "\n\n> 图片生成成功，但本地保存失败。\n\n",
+                            isImageGeneration,
+                        )
+                        stateHolder.syncStreamingSnapshotToList(aiMessageId, isImageGeneration)
+                        updatedMessage = messageList[messageIndex].copy(
+                            contentStarted = true,
+                            currentWebSearchStage = null,
+                            executionStatus = null,
+                        )
+                        messageList[messageIndex] = updatedMessage
+                    }
+                    PreparedGeneratedImage.Duplicate, null -> return
+                }
+
+                if (isImageGeneration) {
+                    stateHolder.isImageConversationDirty.value = true
+                } else {
+                    stateHolder.isTextConversationDirty.value = true
+                }
+                viewModelScope.launch(Dispatchers.IO) {
+                    historyManager.saveCurrentChatToHistoryIfNeeded(isImageGeneration = isImageGeneration)
+                }
+            }
 
             when (appEvent) {
                 is AppStreamEvent.Content -> {
@@ -775,22 +903,9 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                             executionStatus = null
                         )
                     }
-                    // 如果有图片结果（虽然目前后端通过ImageGeneration事件发送，但保留兼容性）
-                    if (!appEvent.imageUrl.isNullOrBlank()) {
-                        // 处理图片：构建 Markdown 图片链接并追加到消息
-                        // 1) 移除一切空白(空格/制表/换行)，防止被Markdown当作多段文本
-                        val cleanUrl = appEvent.imageUrl.replace(Regex("\\s+"), "")
-                        // 2) 构建 Markdown 图片链接 (无尖括号，兼容性最好)
-                        val imageMarkdown = "\n\n![Generated Image]($cleanUrl)\n\n"
-                        stateHolder.appendContentToMessage(aiMessageId, imageMarkdown, isImageGeneration)
-                        updatedMessage = latestMessageForUpdate().copy(
-                            contentStarted = true,
-                            currentWebSearchStage = null,
-                            executionStatus = null
-                        )
-                        logger.debug("Appended image markdown to UI state. url.len=${cleanUrl.length}")
-                    }
+                    applyPreparedGeneratedImage(preparedGeneratedImage)
                 }
+                is AppStreamEvent.ImageGeneration -> applyPreparedGeneratedImage(preparedGeneratedImage)
                 is AppStreamEvent.Text -> {
                     if (processedResult is com.android.everytalk.util.messageprocessor.ProcessedEventResult.ContentUpdated) {
                         val deltaChunk = TextSanitizer.removeUnicodeReplacementCharacters(appEvent.text)
@@ -1163,56 +1278,34 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
         }
     }
  
-    /**
-     * Archive image URLs (http/https or data:image) to internal storage and return local absolute paths.
-     * Keeps original URL on failure for each item to avoid breaking UI.
-     */
+    /** 将图像模式返回的来源统一归档，危险数据 URI 失败时不会回填原值。 */
     private suspend fun archiveImageUrlsForMessage(
-        applicationContext: Context,
         messageId: String,
         urls: List<String>
-    ): List<String> {
-        if (urls.isEmpty()) return emptyList()
-        // 使用 historyManager.persistenceManager 来进行即时保存
-        // 注意：HistoryManager 的 persistenceManager 是 public 的（如果不是，需要改为 public 或添加访问器）
-        // 假设 HistoryManager 暴露了 persistenceManager 或我们通过依赖注入获取
-        // 由于这里无法直接访问 persistenceManager，我们使用原有的 FileManager 逻辑，但增强其稳定性
-        
-        val fm = com.android.everytalk.util.storage.FileManager(applicationContext)
+    ): ArchivedImageUrlsResult {
+        if (urls.isEmpty()) return ArchivedImageUrlsResult(emptyList(), 0)
         val out = mutableListOf<String>()
+        var failedCount = 0
         for ((idx, url) in urls.withIndex()) {
-            val lower = url.lowercase(java.util.Locale.ROOT)
-            // Already a local path or file://
-            if (lower.startsWith("file://") || lower.startsWith("/")) {
-                out.add(url)
+            val source = url.trim()
+            val lower = source.lowercase(Locale.ROOT)
+            val isDataImage = lower.startsWith("data:image")
+            val isRemote = lower.startsWith("http://") || lower.startsWith("https://")
+            if ((!isDataImage && !isRemote) || (isRemote && source.length > MAX_REMOTE_IMAGE_SOURCE_CHARS)) {
+                failedCount++
                 continue
             }
-            
-            // 如果是 data:image，尝试使用我们新加的高效保存方法（如果能访问到）
-            // 这里我们复用 FileManager 的通用逻辑，它已经很健壮了
-            // 关键在于这个方法现在是在接收到响应后立即调用的（在 streamChatResponse 中）
-            
-            // Load original bytes from flexible source
-            val pair = try { fm.loadBytesFromFlexibleSource(url) } catch (_: Exception) { null }
-            if (pair == null) {
-                out.add(url)
-                continue
-            }
-            val bytes = pair.first
-            val mime = pair.second ?: "application/octet-stream"
-            val baseName = "img_${messageId}_${idx}"
-            // 使用 saveBytesToInternalImages 确保保存到 filesDir/chat_attachments
-            val saved = try { fm.saveBytesToInternalImages(bytes, mime, baseName, messageId, idx) } catch (_: Exception) { null }
-            
+
+            val saved = historyManager.persistMessageImageSource(source, messageId, idx)
             if (!saved.isNullOrBlank()) {
-                logger.debug("Archived image [$idx] to local file: $saved")
-                out.add(saved)
+                out += saved
+            } else if (isRemote) {
+                out += source
             } else {
-                logger.warn("Failed to archive image [$idx], keeping original URL")
-                out.add(url)
+                failedCount++
             }
         }
-        return out
+        return ArchivedImageUrlsResult(out, failedCount)
     }
 
     // 预编译的正则表达式，避免重复编译
@@ -1419,6 +1512,9 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
             }
             // 🛡️ 清理 prompt 泄露检测器
             promptLeakDetectors.remove(messageId)
+            synchronized(generatedImageSourceFingerprints) {
+                generatedImageSourceFingerprints.remove(messageId)
+            }
         }
         
         // 清理已处理的消息ID集合
@@ -1478,6 +1574,9 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
             }
             // 🛡️ 清理 prompt 泄露检测器
             promptLeakDetectors.remove(messageId)
+            synchronized(generatedImageSourceFingerprints) {
+                generatedImageSourceFingerprints.remove(messageId)
+            }
         }
         
         // 清理已处理的消息ID集合
@@ -1571,7 +1670,10 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                 messageProcessorMap.remove(messageId)?.let {
                     removedCount++
                 }
-                // (removed) local archiveImageUrlsForMessage() definitions moved to class scope
+                promptLeakDetectors.remove(messageId)
+                synchronized(generatedImageSourceFingerprints) {
+                    generatedImageSourceFingerprints.remove(messageId)
+                }
             }
             
             // 清理已处理的消息ID集合

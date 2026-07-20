@@ -920,7 +920,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
         // 优化：分阶段初始化，优先加载关键配置
         // 调整：启用"上次打开会话"的恢复，保证多轮上下文在重启后延续（含图像模式）
-        persistenceManager.loadInitialData(loadLastChat = true) {
+        persistenceManager.loadInitialData(
+            loadLastChat = true,
+            onLoadWarning = ::showSnackbar,
+        ) {
                 initialConfigPresent,
                 initialHistoryPresent ->
             if (!initialConfigPresent) {
@@ -1913,6 +1916,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val imageViewerIndex: StateFlow<Int> = _imageViewerIndex.asStateFlow()
 
     fun showImageViewer(url: String) {
+        if (url.isBlank()) return
         _imageViewerUrl.value = url
         _imageViewerUrls.value = listOf(url)
         _imageViewerIndex.value = 0
@@ -1920,9 +1924,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun showImageViewer(urls: List<String>, index: Int = 0) {
-        _imageViewerUrl.value = urls.getOrNull(index)
+        if (urls.isEmpty()) return
+        val safeIndex = index.coerceIn(urls.indices)
+        _imageViewerUrl.value = urls[safeIndex]
         _imageViewerUrls.value = urls
-        _imageViewerIndex.value = index
+        _imageViewerIndex.value = safeIndex
         _showImageViewer.value = true
     }
 

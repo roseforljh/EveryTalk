@@ -76,6 +76,30 @@ class ApiHandlerStreamCompletionMergeTest {
     }
 
     @Test
+    fun `完成事件合并保留已归档图片正文和元数据`() {
+        val localImage = "/data/user/0/com.android.everytalk/files/chat_attachments/image.png"
+        val syncedMessage = Message(
+            id = "msg-image",
+            text = "正文\n\n![Generated Image]($localImage)",
+            sender = Sender.AI,
+            imageUrls = listOf(localImage),
+            contentStarted = true,
+        )
+        val finalizedMessage = syncedMessage.copy(
+            text = "正文",
+            imageUrls = null,
+            parts = listOf(MarkdownPart.Text(id = "text_0", content = "正文")),
+        )
+
+        val merged = mergeStreamingCompletionMessage(syncedMessage, finalizedMessage)
+
+        assertEquals(syncedMessage.text, merged.text)
+        assertEquals(listOf(localImage), merged.imageUrls)
+        assertTrue(merged.parts.single() is MarkdownPart.Text)
+        assertEquals(syncedMessage.text, (merged.parts.single() as MarkdownPart.Text).content)
+    }
+
+    @Test
     fun `merge streaming completion message should replace synced text when think block was extracted`() {
         val syncedMessage = Message(
             id = "msg-1",
