@@ -169,31 +169,26 @@ class HistoryController(
         }
     }
 
-    fun loadTextHistory(index: Int) {
-        scope.launch {
-            stateHolder._isLoadingHistory.value = true
-            stateHolder._isTextApiCalling.value = false
-            stateHolder._currentTextStreamingAiMessageId.value = null
-            stateHolder._lastSentUserMessageId.value = null
-            try {
-                simpleModeSwitcher.loadTextHistory(index)
-                val loadedMessages = stateHolder.messages.toList()
-                val sessionId = stateHolder._currentConversationId.value
-                val repaired = withContext(Dispatchers.Default) {
-                    repairHistoryMessageParts(processLoadedMessages(loadedMessages), sessionId)
-                }
-                if (loadedMessages != repaired) {
-                    stateHolder.messages.clear()
-                    stateHolder.messages.addAll(repaired)
-                }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.e("HistoryController", "Error loading text history", e)
-                showSnackbar("加载文本历史对话失败: ${e.message}")
-            } finally {
-                stateHolder._isLoadingHistory.value = false
+    suspend fun loadTextHistory(index: Int) {
+        stateHolder._isTextApiCalling.value = false
+        stateHolder._currentTextStreamingAiMessageId.value = null
+        stateHolder._lastSentUserMessageId.value = null
+        try {
+            simpleModeSwitcher.loadTextHistory(index)
+            val loadedMessages = stateHolder.messages.toList()
+            val sessionId = stateHolder._currentConversationId.value
+            val repaired = withContext(Dispatchers.Default) {
+                repairHistoryMessageParts(processLoadedMessages(loadedMessages), sessionId)
             }
+            if (loadedMessages != repaired) {
+                stateHolder.messages.clear()
+                stateHolder.messages.addAll(repaired)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e("HistoryController", "Error loading text history", e)
+            showSnackbar("加载文本历史对话失败: ${e.message}")
         }
     }
 

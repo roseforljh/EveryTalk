@@ -33,8 +33,11 @@ import com.android.everytalk.util.cache.CacheManager
 import android.graphics.Bitmap
 import android.net.Uri
 import android.widget.Toast
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -132,6 +135,11 @@ internal fun shouldSkipReloadingLoadedHistory(
 ): Boolean {
     return requestedIndex == loadedIndex && hasLoadedMessages
 }
+
+internal fun isCurrentHistoryLoad(
+    requestGeneration: Long,
+    currentGeneration: Long,
+): Boolean = requestGeneration == currentGeneration
 
 internal suspend fun executeSharedToolCall(
     toolName: String,
@@ -641,6 +649,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
        triggerScrollToBottom = { triggerScrollToBottom() },
        simpleModeSwitcher = simpleModeBridge
    )
+   private var textHistoryLoadJob: Job? = null
+
+   private fun cancelPendingTextHistoryLoad() {
+       textHistoryLoadJob?.cancel()
+       textHistoryLoadJob = null
+       stateHolder._isLoadingHistory.value = false
+   }
 
    // 控制器：媒体下载/保存
    private val mediaController = MediaController(
@@ -1702,6 +1717,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun startNewChat() {
         dismissEditDialog()
         dismissSourcesDialog()
+        cancelPendingTextHistoryLoad()
         apiHandler.cancelCurrentApiJob("开始新聊天")
         viewModelScope.launch {
             try {
@@ -1724,6 +1740,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun startNewImageGeneration() {
         dismissEditDialog()
         dismissSourcesDialog()
+        cancelPendingTextHistoryLoad()
         apiHandler.cancelCurrentApiJob("开始新的图像生成")
         viewModelScope.launch {
             try {
@@ -1756,26 +1773,36 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         dismissEditDialog()
         dismissSourcesDialog()
         apiHandler.cancelCurrentApiJob("加载文本模式历史索引 $index", isNewMessageSend = false, isImageGeneration = false)
-        stateHolder._historyLoadGeneration.value += 1L
+        val historyBeforeSave = stateHolder._historicalConversations.value
+        val loadGeneration = stateHolder._historyLoadGeneration.value + 1L
+        stateHolder._historyLoadGeneration.value = loadGeneration
         stateHolder._isLoadingHistory.value = true
+        val previousHistoryLoadJob = textHistoryLoadJob
+        textHistoryLoadJob?.cancel()
         // 先同步保存当前会话，确保切换前最新 AI 回复已写入历史列表
-        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+        textHistoryLoadJob = viewModelScope.launch {
             try {
-                val historyBeforeSave = stateHolder._historicalConversations.value
-                historyManager.saveCurrentChatToHistoryNow(forceSave = true, isImageGeneration = false)
+                previousHistoryLoadJob?.cancelAndJoin()
+                withContext(Dispatchers.IO) {
+                    historyManager.saveCurrentChatToHistoryNow(forceSave = true, isImageGeneration = false)
+                }
                 val resolvedIndex = resolveHistoryIndexAfterSave(
                     requestedIndex = index,
                     historyBeforeSave = historyBeforeSave,
                     historyAfterSave = stateHolder._historicalConversations.value,
                 )
-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                    historyController.loadTextHistory(resolvedIndex)
-                }
+                if (!isCurrentHistoryLoad(loadGeneration, stateHolder._historyLoadGeneration.value)) return@launch
+                historyController.loadTextHistory(resolvedIndex)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e("AppViewModel", "Error preparing text history load", e)
-                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                    stateHolder._isLoadingHistory.value = false
+                if (isCurrentHistoryLoad(loadGeneration, stateHolder._historyLoadGeneration.value)) {
                     showSnackbar("加载文本历史对话失败: ${e.message}")
+                }
+            } finally {
+                if (isCurrentHistoryLoad(loadGeneration, stateHolder._historyLoadGeneration.value)) {
+                    stateHolder._isLoadingHistory.value = false
                 }
             }
         }
@@ -1793,6 +1820,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
         dismissEditDialog()
         dismissSourcesDialog()
+        cancelPendingTextHistoryLoad()
         apiHandler.cancelCurrentApiJob("加载图像模式历史索引 $index", isNewMessageSend = false, isImageGeneration = true)
         historyController.loadImageHistory(index)
     }
@@ -1811,6 +1839,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun clearAllConversations() {
         dismissEditDialog()
         dismissSourcesDialog()
+        cancelPendingTextHistoryLoad()
         apiHandler.cancelCurrentApiJob("清除所有历史记录")
         historyController.clearAllConversations(isImageGeneration = false)
         conversationPreviewController.clearAllCaches()

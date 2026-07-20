@@ -286,7 +286,6 @@ class SimpleModeManager(
         val conversationList = stateHolder._historicalConversations.value
         if (index < 0 || index >= conversationList.size) {
             Log.e(TAG, "🔥 [ERROR] Invalid TEXT history index: $index (size: ${conversationList.size})")
-            stateHolder._isLoadingHistory.value = false
             return
         }
 

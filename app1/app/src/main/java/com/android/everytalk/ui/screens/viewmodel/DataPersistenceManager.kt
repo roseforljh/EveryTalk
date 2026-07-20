@@ -14,9 +14,14 @@ import com.android.everytalk.statecontroller.safeApiConfigSummary
 import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.DataClass.VoiceBackendConfig
 import com.android.everytalk.ui.components.toRecoveredMarkdown
+import com.android.everytalk.util.ConversationNameHelper
 import com.android.everytalk.util.storage.readAtMost
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
@@ -263,10 +268,12 @@ class DataPersistenceManager(
         loadLastChat: Boolean = true,
         onLoadingComplete: (initialConfigPresent: Boolean, initialHistoryPresent: Boolean) -> Unit
     ) {
+        stateHolder._isLoadingHistoryData.value = true
         viewModelScope.launch(Dispatchers.IO) {
             Log.d(TAG, "loadInitialData: 开始加载初始数据 (IO Thread)... loadLastChat: $loadLastChat")
             var initialConfigPresent = false
             var initialHistoryPresent = false
+            var historyLoadingJob: Job? = null
 
             try {
                 // 第一阶段：快速加载API配置（优先级最高）
@@ -459,14 +466,9 @@ class DataPersistenceManager(
                 Log.i(TAG, "loadInitialData: 已加载 ${loadedVoiceConfigs.size} 个语音配置")
 
                 // 第二阶段：异步加载历史数据（延迟加载）
-                launch {
+                historyLoadingJob = launch {
                     Log.d(TAG, "loadInitialData: 阶段2 - 开始异步加载历史数据...")
-                    
-                    // 设置加载状态
-                    withContext(Dispatchers.Main.immediate) {
-                        stateHolder._isLoadingHistoryData.value = true
-                    }
-                    
+
                     try {
                         // 检查是否需要加载历史数据
                         val shouldLoadHistory = stateHolder._historicalConversations.value.isEmpty()
@@ -496,6 +498,8 @@ class DataPersistenceManager(
                                 stateHolder.conversationApiConfigIds.value = mapping
                             }
                             Log.d(TAG, "loadInitialData: 会话配置映射已加载 - 共 ${mapping.size} 条")
+                        } catch (e: CancellationException) {
+                            throw e
                         } catch (e: Exception) {
                             Log.w(TAG, "Failed to load conversation api config mapping", e)
                         }
@@ -531,19 +535,19 @@ class DataPersistenceManager(
                             Log.d(TAG, "loadInitialData: 阶段2完成 - 更新历史数据到UI...")
                             stateHolder._historicalConversations.value = repairedHistory
                             repairedHistory.forEach { conversation ->
-                                val id = conversation.firstOrNull()?.id
+                                val id = ConversationNameHelper.resolveStableId(conversation)
                                 if (id != null) {
                                     val prompt = conversation.firstOrNull { it.sender == com.android.everytalk.data.DataClass.Sender.System }?.text ?: ""
                                     stateHolder.systemPrompts[id] = prompt
                                 }
                             }
-                            stateHolder._isLoadingHistoryData.value = false
                         }
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         Log.e(TAG, "loadInitialData: 加载历史数据时发生错误", e)
                         withContext(Dispatchers.Main.immediate) {
                             stateHolder._historicalConversations.value = emptyList()
-                            stateHolder._isLoadingHistoryData.value = false
                         }
                     }
 
@@ -593,6 +597,8 @@ class DataPersistenceManager(
                        try {
                            roomDataSource.saveImageGenerationHistory(convertedImageGenHistory)
                            Log.i(TAG, "Image generation history integrity check and persistence completed")
+                       } catch (e: CancellationException) {
+                           throw e
                        } catch (e: Exception) {
                            Log.w(TAG, "Failed to persist converted image generation history", e)
                        }
@@ -616,6 +622,8 @@ class DataPersistenceManager(
                     launch(Dispatchers.IO) {
                         try {
                             roomDataSource.saveLastOpenImageGenerationChat(finalLastOpenImageGen)
+                        } catch (e: CancellationException) {
+                            throw e
                         } catch (e: Exception) {
                             Log.w(TAG, "Failed to persist converted last-open image chat", e)
                         }
@@ -646,7 +654,8 @@ class DataPersistenceManager(
                         }
 
                         // 为"文本模式/图像模式"恢复稳定的会话ID，保证后端多轮会话可延续
-                        val textConvId = lastOpenChat.firstOrNull()?.id ?: "new_chat_${System.currentTimeMillis()}"
+                        val textConvId = ConversationNameHelper.resolveStableId(lastOpenChat)
+                            ?: "new_chat_${System.currentTimeMillis()}"
                         val imageConvId = lastOpenImageGenChat.firstOrNull()?.id ?: "image_resume_${System.currentTimeMillis()}"
                         stateHolder._currentConversationId.value = textConvId
                         stateHolder.applyCurrentConversationFunctionToggleState()
@@ -669,10 +678,16 @@ class DataPersistenceManager(
                     }
                     Log.i(TAG, "loadInitialData: Skipped loading last open chats.")
                 }
+                historyLoadingJob.join()
                 onLoadingComplete(initialConfigPresent, initialHistoryPresent)
 
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e(TAG, "loadInitialData: 加载初始数据时发生严重错误", e)
+                withContext(NonCancellable) {
+                    historyLoadingJob?.cancelAndJoin()
+                }
                 withContext(Dispatchers.Main.immediate) {
                     stateHolder._apiConfigs.value = emptyList()
                     stateHolder._selectedApiConfig.value = null
@@ -682,6 +697,12 @@ class DataPersistenceManager(
                     onLoadingComplete(false, false)
                 }
             } finally {
+                withContext(NonCancellable) {
+                    historyLoadingJob?.cancelAndJoin()
+                    withContext(Dispatchers.Main.immediate) {
+                        stateHolder._isLoadingHistoryData.value = false
+                    }
+                }
                 Log.d(TAG, "loadInitialData: 初始数据加载的IO线程任务结束。")
             }
         }
