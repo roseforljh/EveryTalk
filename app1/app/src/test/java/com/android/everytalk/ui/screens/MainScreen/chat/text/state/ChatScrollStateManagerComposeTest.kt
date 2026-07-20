@@ -5,8 +5,14 @@ import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.unit.dp
@@ -68,6 +74,67 @@ class ChatScrollStateManagerComposeTest {
         composeRule.runOnIdle {
             assertEquals(0, listState.layoutInfo.visibleItemsInfo.last().index)
             assertTrue(scrollStateManager.showScrollToBottomButton.value)
+        }
+    }
+
+    @Test
+    fun `单次返回底部会跟随多轮延迟重组抵达真实底部`() {
+        composeRule.mainClock.autoAdvance = false
+        lateinit var listState: androidx.compose.foundation.lazy.LazyListState
+        lateinit var scrollStateManager: ChatScrollStateManager
+        lateinit var appendDelayedTurns: () -> Unit
+        var currentItemCount = 0
+
+        composeRule.setContent {
+            val coroutineScope = rememberCoroutineScope()
+            var itemCount by remember { mutableIntStateOf(12) }
+            currentItemCount = itemCount
+            listState = rememberLazyListState()
+            scrollStateManager = rememberChatScrollStateManager(listState, coroutineScope)
+            appendDelayedTurns = {
+                coroutineScope.launch {
+                    repeat(3) {
+                        repeat(2) { withFrameNanos { } }
+                        itemCount += 4
+                    }
+                }
+            }
+
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.height(320.dp),
+            ) {
+                items(itemCount, key = { "message_$it" }) {
+                    Spacer(Modifier.height(180.dp))
+                }
+            }
+        }
+
+        composeRule.mainClock.advanceTimeByFrame()
+        composeRule.waitForIdle()
+        composeRule.runOnIdle {
+            scrollStateManager.jumpToBottom(isUserAction = true)
+        }
+        repeat(4) {
+            composeRule.mainClock.advanceTimeByFrame()
+            composeRule.waitForIdle()
+        }
+        composeRule.runOnIdle {
+            assertFalse(listState.canScrollForward)
+            appendDelayedTurns()
+        }
+        repeat(20) {
+            composeRule.mainClock.advanceTimeByFrame()
+            composeRule.waitForIdle()
+        }
+
+        composeRule.runOnIdle {
+            assertEquals(24, currentItemCount)
+            assertFalse(listState.canScrollForward)
+            assertEquals(
+                currentItemCount - 1,
+                listState.layoutInfo.visibleItemsInfo.last().index,
+            )
         }
     }
 }

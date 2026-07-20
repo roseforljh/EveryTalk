@@ -236,6 +236,10 @@ class ChatScrollStateManager(
     }
 
     fun jumpToBottom(isUserAction: Boolean = false) {
+        if (isUserAction) {
+            pinToRealBottomUntilUserScroll(clearTopAnchorRuntime = true)
+            return
+        }
         jumpToBottomInternal(isUserAction = isUserAction, smooth = false)
     }
 

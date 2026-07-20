@@ -9,30 +9,9 @@ import org.junit.Test
 
 class ScrollToBottomButtonVisibilityTest {
     @Test
-    fun `button is visible only after scrolling stops during idle hold`() {
-        assertFalse(
-            shouldShowScrollToBottomButtonForFrame(
-                baseVisible = true,
-                isScrollInProgress = true,
-                idleHoldVisible = true
-            )
-        )
-
-        assertTrue(
-            shouldShowScrollToBottomButtonForFrame(
-                baseVisible = true,
-                isScrollInProgress = false,
-                idleHoldVisible = true
-            )
-        )
-
-        assertFalse(
-            shouldShowScrollToBottomButtonForFrame(
-                baseVisible = true,
-                isScrollInProgress = false,
-                idleHoldVisible = false
-            )
-        )
+    fun `button remains visible whenever list can scroll forward`() {
+        assertTrue(shouldShowScrollToBottomButtonForFrame(baseVisible = true))
+        assertFalse(shouldShowScrollToBottomButtonForFrame(baseVisible = false))
     }
 
     @Test
@@ -42,8 +21,7 @@ class ScrollToBottomButtonVisibilityTest {
     }
 
     @Test
-    fun `button waits after scroll stops and fades in slower`() {
-        assertEquals(1000L, scrollToBottomButtonAppearDelayMillis())
+    fun `button uses stable fade in duration`() {
         assertEquals(360, scrollToBottomButtonFadeInMillis())
     }
 }
