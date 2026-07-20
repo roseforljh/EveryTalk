@@ -56,6 +56,42 @@ class StreamingMessageStateManagerRenderStateTest {
     }
 
     @Test
+    fun `流式公式从未闭合到闭合保持Markdown投影严格追加`() {
+        val messageId = "math-monotonic"
+
+        subject.startStreaming(messageId)
+        subject.updateContent(messageId, "前文 ${'$'}x+1")
+        val pending = subject.getCurrentRenderState(messageId)
+
+        subject.updateContent(messageId, "前文 ${'$'}x+1${'$'} 后文")
+        val closed = subject.getCurrentRenderState(messageId)
+
+        assertEquals("前文 ", pending.preparedMessage.markdown)
+        assertTrue(pending.preparedMessage.hasPendingFormula)
+        assertTrue(closed.preparedMessage.markdown.startsWith(pending.preparedMessage.markdown))
+        assertFalse(closed.preparedMessage.hasPendingFormula)
+        assertEquals(listOf("x+1"), closed.preparedMessage.formulas.values.map { it.latex })
+    }
+
+    @Test
+    fun `完成态恢复未闭合公式原文`() {
+        val messageId = "math-pending-complete"
+        val content = "前文 ${'$'}x+1"
+
+        subject.startStreaming(messageId)
+        subject.updateContent(messageId, content)
+        assertEquals("前文 ", subject.getCurrentRenderState(messageId).preparedMessage.markdown)
+
+        subject.finalizeMessage(messageId)
+        val completed = subject.getCurrentRenderState(messageId)
+
+        assertTrue(completed.isComplete)
+        assertFalse(completed.isStreaming)
+        assertEquals(content, completed.preparedMessage.markdown)
+        assertTrue(completed.preparedMessage.hasPendingFormula)
+    }
+
+    @Test
     fun `finalizeMessage会把渲染状态标记为完成`() {
         val messageId = "done-msg"
 

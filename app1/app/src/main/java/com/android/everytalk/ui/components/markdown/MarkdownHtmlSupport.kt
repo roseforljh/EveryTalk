@@ -66,6 +66,10 @@ internal fun AnnotatedString.Builder.annotateMarkdownHtmlCompatibility(
     content: String,
     child: ASTNode,
 ): Boolean {
+    // 流式重建期间 AST 与正文可能短暂来自不同代次。
+    // 消费该无效节点并等待下一快照重绘，避免库继续按越界偏移截取字符串。
+    if (!child.hasValidContentRange(content)) return true
+
     if (
         child.type == MarkdownTokenTypes.TEXT &&
         !child.hasAncestorOfType(MarkdownElementTypes.CODE_SPAN)
@@ -104,7 +108,8 @@ private fun ASTNode.hasAncestorOfType(type: org.intellij.markdown.IElementType):
 private fun ASTNode.resolveSafeSpanAction(content: String): SafeSpanTag? {
     val siblings = parent?.children ?: return null
     val index = siblings.indexOf(this).takeIf { it >= 0 } ?: return null
-    return when (val tag = parseSafeSpanTag(getTextInNode(content).toString())) {
+    val rawTag = safeTextInNode(content) ?: return null
+    return when (val tag = parseSafeSpanTag(rawTag)) {
         is SafeSpanTag.Open -> tag.takeIf {
             siblings.findMatchingSafeSpanClose(index, content) != null
         }
@@ -124,7 +129,8 @@ private fun List<ASTNode>.findMatchingSafeSpanClose(
 ): Int? {
     var depth = 0
     for (index in openIndex + 1 until size) {
-        when (parseSafeSpanTag(this[index].getTextInNode(content).toString())) {
+        val rawTag = this[index].safeTextInNode(content) ?: return null
+        when (parseSafeSpanTag(rawTag)) {
             is SafeSpanTag.Open -> depth++
             SafeSpanTag.Close -> {
                 if (depth == 0) return index
@@ -144,7 +150,8 @@ private fun List<ASTNode>.findMatchingSafeSpanOpen(
 ): Int? {
     var depth = 0
     for (index in closeIndex - 1 downTo 0) {
-        when (parseSafeSpanTag(this[index].getTextInNode(content).toString())) {
+        val rawTag = this[index].safeTextInNode(content) ?: return null
+        when (parseSafeSpanTag(rawTag)) {
             SafeSpanTag.Close -> depth++
             is SafeSpanTag.Open -> {
                 if (depth == 0) return index
@@ -157,6 +164,14 @@ private fun List<ASTNode>.findMatchingSafeSpanOpen(
     }
     return null
 }
+
+internal fun ASTNode.hasValidContentRange(content: String): Boolean =
+    startOffset >= 0 && endOffset >= startOffset && endOffset <= content.length
+
+internal fun ASTNode.safeTextInNode(content: String): String? =
+    takeIf { it.hasValidContentRange(content) }
+        ?.getTextInNode(content)
+        ?.toString()
 
 private fun parseSafeSpanTag(raw: String): SafeSpanTag? {
     val tag = raw.trim()

@@ -74,6 +74,7 @@ import com.android.everytalk.ui.components.math.MathFormulaErrorKind
 import com.android.everytalk.ui.components.math.MathFormulaRenderState
 import com.android.everytalk.ui.components.math.MathInline
 import com.android.everytalk.ui.components.math.MathJaxSvgRenderer
+import com.android.everytalk.ui.components.math.formulaRenderIdentities
 import com.android.everytalk.ui.components.math.rememberMathFormulaRenderStates
 import com.android.everytalk.ui.components.math.mathWidthBucketPx
 import com.android.everytalk.ui.components.math.requireDepthPx
@@ -110,11 +111,14 @@ import com.mikepenz.markdown.model.ImageWidth
 import com.mikepenz.markdown.model.MarkdownAnnotator
 import com.mikepenz.markdown.model.PlaceholderConfig
 import com.mikepenz.markdown.model.State
+import com.mikepenz.markdown.model.StreamingMarkdownState
 import com.mikepenz.markdown.model.markdownAnnotator
 import com.mikepenz.markdown.model.markdownInlineContent
 import com.mikepenz.markdown.model.markdownPadding
 import com.mikepenz.markdown.model.parseMarkdown
 import com.mikepenz.markdown.model.rememberStreamingMarkdownState
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
@@ -123,7 +127,6 @@ import org.intellij.markdown.MarkdownElementTypes
 import org.intellij.markdown.MarkdownTokenTypes
 import org.intellij.markdown.ast.ASTNode
 import org.intellij.markdown.ast.findChildOfType
-import org.intellij.markdown.ast.getTextInNode
 import org.intellij.markdown.flavours.gfm.GFMElementTypes
 import org.intellij.markdown.flavours.gfm.GFMTokenTypes
 import org.koin.compose.koinInject
@@ -149,7 +152,20 @@ private val MARKDOWN_IMAGE_ERROR_INTRINSIC_SIZE = Size(-1f, -1f)
 
 private class AppendOnlyMarkdownBridge {
     var appendedContent: String = ""
+    var nextRebaseGeneration: Int = 0
 }
+
+internal class StreamingMarkdownRebaseRequest(
+    val generation: Int,
+    val content: String,
+    val beforePrepare: suspend () -> Unit = {},
+    val result: CompletableDeferred<StreamingMarkdownState> = CompletableDeferred(),
+)
+
+internal data class StreamingMarkdownBundle(
+    val state: StreamingMarkdownState,
+    val preparedMessage: PreparedMessage,
+)
 
 internal fun appendOnlyMarkdownDelta(
     appendedContent: String,
@@ -158,6 +174,89 @@ internal fun appendOnlyMarkdownDelta(
     nextContent.substring(appendedContent.length)
 } else {
     null
+}
+
+@Composable
+internal fun PrepareStreamingMarkdownRebase(request: StreamingMarkdownRebaseRequest?) {
+    if (request == null) return
+    key(request.generation) {
+        val state = rememberStreamingMarkdownState()
+        LaunchedEffect(state, request) {
+            try {
+                request.beforePrepare()
+                if (request.content.isNotEmpty()) state.append(request.content)
+                request.result.complete(state)
+            } catch (error: CancellationException) {
+                request.result.cancel(error)
+                throw error
+            } catch (error: Throwable) {
+                request.result.completeExceptionally(error)
+            }
+        }
+    }
+}
+
+@Composable
+internal fun rememberStreamingMarkdownBundle(
+    preparedMessage: PreparedMessage,
+    streamEpoch: Int,
+    enabled: Boolean,
+    beforeRebase: suspend (generation: Int) -> Unit = {},
+): StreamingMarkdownBundle? {
+    val activeBundle = remember(streamEpoch) {
+        mutableStateOf<StreamingMarkdownBundle?>(null)
+    }
+    val pendingRebaseRequest = remember(streamEpoch) {
+        mutableStateOf<StreamingMarkdownRebaseRequest?>(null)
+    }
+    val latestPreparedMessage = rememberUpdatedState(preparedMessage)
+    val appendBridge = remember(streamEpoch) { AppendOnlyMarkdownBridge() }
+
+    LaunchedEffect(streamEpoch, enabled) {
+        if (!enabled) return@LaunchedEffect
+        snapshotFlow { latestPreparedMessage.value }.collect { nextPreparedMessage ->
+            val nextContent = nextPreparedMessage.markdown
+            val currentBundle = activeBundle.value
+            val delta = appendOnlyMarkdownDelta(
+                appendedContent = appendBridge.appendedContent,
+                nextContent = nextContent,
+            )
+            if (currentBundle == null || delta == null) {
+                val generation = ++appendBridge.nextRebaseGeneration
+                val request = StreamingMarkdownRebaseRequest(
+                    generation = generation,
+                    content = nextContent,
+                    beforePrepare = { beforeRebase(generation) },
+                )
+                pendingRebaseRequest.value = request
+                val rebasedState = try {
+                    request.result.await()
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Throwable) {
+                    null
+                } finally {
+                    if (pendingRebaseRequest.value === request) {
+                        pendingRebaseRequest.value = null
+                    }
+                }
+                if (rebasedState != null) {
+                    appendBridge.appendedContent = nextContent
+                    activeBundle.value = StreamingMarkdownBundle(
+                        state = rebasedState,
+                        preparedMessage = nextPreparedMessage,
+                    )
+                }
+            } else {
+                if (delta.isNotEmpty()) currentBundle.state.append(delta)
+                appendBridge.appendedContent = nextContent
+                activeBundle.value = currentBundle.copy(preparedMessage = nextPreparedMessage)
+            }
+        }
+    }
+
+    if (enabled) PrepareStreamingMarkdownRebase(pendingRebaseRequest.value)
+    return if (enabled) activeBundle.value else null
 }
 
 internal data class MarkdownTableEdgeVisibility(
@@ -243,7 +342,9 @@ internal fun markdownParagraphStyle(
     val image = node.children.singleOrNull { child ->
         child.type == MarkdownElementTypes.IMAGE
     } ?: return baseStyle
-    if (node.getTextInNode(content).toString().trim() != image.getTextInNode(content).toString().trim()) {
+    val paragraphText = node.safeTextInNode(content) ?: return baseStyle
+    val imageText = image.safeTextInNode(content) ?: return baseStyle
+    if (paragraphText.trim() != imageText.trim()) {
         return baseStyle
     }
     return baseStyle.copy(
@@ -524,6 +625,13 @@ fun MikePenzMarkdownRenderer(
         if (startsNewStream) committedStreamEpoch.intValue = streamEpoch
         wasStreaming.value = sender == Sender.AI && isStreaming
     }
+    val usesStreamingMarkdownState = sender == Sender.AI && streamEpoch > 0
+    val visibleStreamingBundle = rememberStreamingMarkdownBundle(
+        preparedMessage = preparedMessage,
+        streamEpoch = streamEpoch,
+        enabled = usesStreamingMarkdownState,
+    )
+    val visiblePreparedMessage = visibleStreamingBundle?.preparedMessage ?: preparedMessage
 
     val mathRenderer = koinInject<MathJaxSvgRenderer>()
     val density = LocalDensity.current
@@ -608,12 +716,24 @@ fun MikePenzMarkdownRenderer(
         ?: MaterialTheme.typography.bodyLarge.fontSize
     val formulaFontSizePx = with(density) { formulaFontSize.toPx() }
     val validFormulas = remember(
-        preparedMessage.markdown,
-        preparedMessage.formulas,
-        preparedMessage.contentVersion,
+        visiblePreparedMessage.markdown,
+        visiblePreparedMessage.formulas,
+        visiblePreparedMessage.contentVersion,
     ) {
-        resolveVisibleFormulaRequests(preparedMessage)
+        resolveVisibleFormulaRequests(visiblePreparedMessage)
     }
+    val renderIdentities = remember(validFormulas) { formulaRenderIdentities(validFormulas) }
+    val renderFormulaMessage = remember(renderIdentities) {
+        val renderVersion = validFormulas.values.firstOrNull()?.contentVersion
+            ?: visiblePreparedMessage.contentVersion
+        PreparedMessage(
+            markdown = "",
+            formulas = validFormulas,
+            hasPendingFormula = false,
+            contentVersion = renderVersion,
+        )
+    }
+    val renderFormulas = renderFormulaMessage.formulas
 
     val markdownContent: @Composable () -> Unit = {
         CompositionLocalProvider(
@@ -627,17 +747,17 @@ fun MikePenzMarkdownRenderer(
                 .let(::mathWidthBucketPx)
             val formulaStates = rememberMathFormulaRenderStates(
                 renderer = mathRenderer,
-                formulas = validFormulas,
+                formulas = renderFormulas,
                 fontSizePx = formulaFontSizePx,
                 color = formulaColor,
                 blockMaxWidthPx = blockMaxWidthPx,
             )
             val inlineContentMap = remember(
-                validFormulas,
+                renderFormulas,
                 formulaStates,
                 formulaFontSizePx,
             ) {
-                validFormulas.values
+                renderFormulas.values
                     .filter { it.displayMode == FormulaDisplayMode.INLINE }
                     .associate { formula ->
                         val link = INLINE_FORMULA_SCHEME + formula.id
@@ -658,15 +778,11 @@ fun MikePenzMarkdownRenderer(
                         }
                     }
             }
-            val annotatorVersion = if (preparedMessage.formulas.isEmpty()) {
-                0L
-            } else {
-                preparedMessage.contentVersion
+            val annotator = remember(renderFormulaMessage) {
+                createPreparedMessageMarkdownAnnotator(renderFormulaMessage)
             }
-            val annotator = remember(preparedMessage.formulas, annotatorVersion) {
-                createPreparedMessageMarkdownAnnotator(preparedMessage)
-            }
-            val currentPreparedMessage = rememberUpdatedState(preparedMessage)
+            val currentPreparedMessage = rememberUpdatedState(visiblePreparedMessage)
+            val currentFormulaMessage = rememberUpdatedState(renderFormulaMessage)
             val currentFormulaStates = rememberUpdatedState(formulaStates)
             val currentInlineContentMap = rememberUpdatedState(inlineContentMap)
             val currentAnnotator = rememberUpdatedState(annotator)
@@ -805,7 +921,7 @@ fun MikePenzMarkdownRenderer(
                     MarkdownCodeFence(model.content, model.node, model.typography.code) { code, language, _ ->
                         when (language) {
                             BLOCK_FORMULA_FENCE_LANGUAGE -> {
-                                val activeMessage = currentPreparedMessage.value
+                                val activeMessage = currentFormulaMessage.value
                                 val formula = resolveBlockFormula(language, code, activeMessage)
                                 if (formula == null) {
                                     CodeBlockCard(
@@ -934,7 +1050,7 @@ fun MikePenzMarkdownRenderer(
             val markdownInlineContent = markdownInlineContent(inlineContentMap)
             val renderStaticMarkdown: @Composable () -> Unit = {
                 Markdown(
-                    content = preparedMessage.markdown,
+                    content = visiblePreparedMessage.markdown,
                     colors = markdownColors,
                     typography = typography,
                     padding = padding,
@@ -947,46 +1063,51 @@ fun MikePenzMarkdownRenderer(
                 )
             }
 
-            key(streamEpoch) {
-                if (sender == Sender.AI && streamEpoch > 0) {
-                    val streamingMarkdownState = rememberStreamingMarkdownState()
-                    val latestMarkdown = rememberUpdatedState(preparedMessage.markdown)
-                    val appendBridge = remember { AppendOnlyMarkdownBridge() }
-                    val useStaticFallback = remember { mutableStateOf(false) }
-
-                    LaunchedEffect(streamingMarkdownState) {
-                        snapshotFlow { latestMarkdown.value }.collect { nextContent ->
-                            if (useStaticFallback.value) return@collect
-                            val delta = appendOnlyMarkdownDelta(
-                                appendedContent = appendBridge.appendedContent,
-                                nextContent = nextContent,
-                            )
-                            if (delta == null) {
-                                useStaticFallback.value = true
-                            } else {
-                                if (delta.isNotEmpty()) streamingMarkdownState.append(delta)
-                                appendBridge.appendedContent = nextContent
+            Column {
+                key(streamEpoch) {
+                    if (usesStreamingMarkdownState) {
+                        val visibleStreamingMarkdownState = visibleStreamingBundle?.state
+                        if (visibleStreamingMarkdownState == null) {
+                            if (visiblePreparedMessage.markdown.isNotEmpty()) {
+                                Box(modifier = Modifier.size(18.dp)) {
+                                    EveryTalkLoadingIndicator(
+                                        size = 14.dp,
+                                        strokeWidth = 1.5.dp,
+                                        contentDescription = "Markdown 渲染中",
+                                    )
+                                }
+                            }
+                        } else {
+                            key(visibleStreamingMarkdownState) {
+                                Markdown(
+                                    streamingMarkdownState = visibleStreamingMarkdownState,
+                                    colors = markdownColors,
+                                    typography = typography,
+                                    padding = padding,
+                                    modifier = Modifier.markdownWidth(sender),
+                                    imageTransformer = EveryTalkMarkdownImageTransformer,
+                                    annotator = annotator,
+                                    inlineContent = markdownInlineContent,
+                                    components = components,
+                                )
                             }
                         }
-                    }
-
-                    if (useStaticFallback.value) {
-                        renderStaticMarkdown()
                     } else {
-                        Markdown(
-                            streamingMarkdownState = streamingMarkdownState,
-                            colors = markdownColors,
-                            typography = typography,
-                            padding = padding,
-                            modifier = Modifier.markdownWidth(sender),
-                            imageTransformer = EveryTalkMarkdownImageTransformer,
-                            annotator = annotator,
-                            inlineContent = markdownInlineContent,
-                            components = components,
+                        renderStaticMarkdown()
+                    }
+                }
+                if (sender == Sender.AI && isStreaming && preparedMessage.hasPendingFormula) {
+                    Box(
+                        modifier = Modifier
+                            .padding(top = 3.dp)
+                            .size(18.dp),
+                    ) {
+                        EveryTalkLoadingIndicator(
+                            size = 14.dp,
+                            strokeWidth = 1.5.dp,
+                            contentDescription = "数学公式输入中",
                         )
                     }
-                } else {
-                    renderStaticMarkdown()
                 }
             }
             }
@@ -1140,10 +1261,9 @@ private fun ASTNode.collectInlineLinks(
             parentNode.type == MarkdownElementTypes.INLINE_LINK
         }
         if (link != null) {
-            onLink(
-                link.getTextInNode(content).toString(),
-                getTextInNode(content).toString(),
-            )
+            val rawLink = link.safeTextInNode(content)
+            val destination = safeTextInNode(content)
+            if (rawLink != null && destination != null) onLink(rawLink, destination)
         }
     }
     children.forEach { child -> child.collectInlineLinks(content, onLink) }
@@ -1254,11 +1374,10 @@ internal fun resolveDetailsRequest(
     }
 }
 
-private fun ASTNode.inlineImageDestination(content: String): String? {
+internal fun ASTNode.inlineImageDestination(content: String): String? {
     if (type != MarkdownElementTypes.IMAGE) return null
     return findDescendant(MarkdownElementTypes.LINK_DESTINATION)
-        ?.getTextInNode(content)
-        ?.toString()
+        ?.safeTextInNode(content)
 }
 
 private fun ASTNode.findDescendant(type: org.intellij.markdown.IElementType): ASTNode? {

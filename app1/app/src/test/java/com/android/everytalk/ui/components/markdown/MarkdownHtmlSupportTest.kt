@@ -1,10 +1,12 @@
 package com.android.everytalk.ui.components.markdown
 
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 import com.mikepenz.markdown.annotator.DefaultAnnotatorSettings
 import com.mikepenz.markdown.annotator.buildMarkdownAnnotatedString
 import com.mikepenz.markdown.model.State
@@ -15,6 +17,8 @@ import com.android.everytalk.ui.components.streaming.FormulaRequest
 import com.android.everytalk.ui.components.streaming.INLINE_FORMULA_SCHEME
 import com.android.everytalk.ui.components.streaming.PreparedMessage
 import org.intellij.markdown.MarkdownElementTypes
+import org.intellij.markdown.MarkdownTokenTypes
+import org.intellij.markdown.ast.ASTNode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -110,6 +114,83 @@ class MarkdownHtmlSupportTest {
         )
     }
 
+    @Test
+    fun `streaming tail node outside current snapshot is consumed without crashing`() {
+        val builder = AnnotatedString.Builder()
+        val staleTailNode = TestAstNode(
+            type = MarkdownTokenTypes.TEXT,
+            startOffset = 3,
+            endOffset = 5,
+        )
+
+        assertTrue(
+            builder.annotateMarkdownHtmlCompatibility(
+                content = "abc",
+                child = staleTailNode,
+            )
+        )
+        assertEquals("", builder.toAnnotatedString().text)
+    }
+
+    @Test
+    fun `inline image destination outside current snapshot is ignored`() {
+        val staleDestination = TestAstNode(
+            type = MarkdownElementTypes.LINK_DESTINATION,
+            startOffset = 3,
+            endOffset = 5,
+        )
+        val image = TestAstNode(
+            type = MarkdownElementTypes.IMAGE,
+            startOffset = 0,
+            endOffset = 5,
+            children = listOf(staleDestination),
+        )
+
+        assertNull(image.inlineImageDestination("abc"))
+    }
+
+    @Test
+    fun `image paragraph outside current snapshot keeps base style`() {
+        val image = TestAstNode(
+            type = MarkdownElementTypes.IMAGE,
+            startOffset = 0,
+            endOffset = 5,
+        )
+        val paragraph = TestAstNode(
+            type = MarkdownElementTypes.PARAGRAPH,
+            startOffset = 0,
+            endOffset = 5,
+            children = listOf(image),
+        )
+        val baseStyle = TextStyle(fontSize = 16.sp, lineHeight = 24.sp)
+
+        assertEquals(baseStyle, markdownParagraphStyle("abc", paragraph, baseStyle))
+    }
+
+    @Test
+    fun `inline link outside current snapshot is ignored`() {
+        val destination = TestAstNode(
+            type = MarkdownElementTypes.LINK_DESTINATION,
+            startOffset = 3,
+            endOffset = 5,
+        )
+        val link = TestAstNode(
+            type = MarkdownElementTypes.INLINE_LINK,
+            startOffset = 0,
+            endOffset = 5,
+            children = listOf(destination),
+        )
+        destination.parent = link
+        val root = TestAstNode(
+            type = MarkdownElementTypes.MARKDOWN_FILE,
+            startOffset = 0,
+            endOffset = 5,
+            children = listOf(link),
+        )
+
+        assertTrue(footnoteTargets(content = "abc", node = root).isEmpty())
+    }
+
     private fun renderInline(input: String) = input.buildMarkdownAnnotatedString(
         style = TextStyle.Default,
         annotatorSettings = DefaultAnnotatorSettings(
@@ -124,4 +205,12 @@ class MarkdownHtmlSupportTest {
     private fun org.intellij.markdown.ast.ASTNode.containsType(
         type: org.intellij.markdown.IElementType,
     ): Boolean = this.type == type || children.any { it.containsType(type) }
+
+    private class TestAstNode(
+        override val type: org.intellij.markdown.IElementType,
+        override val startOffset: Int,
+        override val endOffset: Int,
+        override var parent: ASTNode? = null,
+        override val children: List<ASTNode> = emptyList(),
+    ) : ASTNode
 }

@@ -37,7 +37,9 @@ import com.android.everytalk.ui.components.EveryTalkLoadingIndicator
 import com.android.everytalk.ui.components.streaming.FormulaDisplayMode
 import com.android.everytalk.ui.components.streaming.FormulaRequest
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 internal sealed interface MathFormulaRenderState {
@@ -60,6 +62,37 @@ internal enum class MathFormulaErrorKind {
 internal fun mathFormulaRequestVersion(formula: FormulaRequest): Long =
     formula.id.hashCode().toLong()
 
+/** Compose 渲染身份不包含消息版本；消息版本仍由 FormulaRequest 保留并用于过期校验。 */
+internal data class FormulaRenderIdentity(
+    val id: String,
+    val latex: String,
+    val displayMode: FormulaDisplayMode,
+)
+
+internal fun FormulaRequest.renderIdentity(): FormulaRenderIdentity = FormulaRenderIdentity(
+    id = id,
+    latex = latex,
+    displayMode = displayMode,
+)
+
+internal fun formulaRenderIdentities(
+    formulas: Map<String, FormulaRequest>,
+): List<FormulaRenderIdentity> = formulas.values.map(FormulaRequest::renderIdentity)
+
+internal data class MathFormulaRenderSnapshot(
+    val requestsById: Map<String, MathJaxRenderRequest> = emptyMap(),
+    val statesById: Map<String, MathFormulaRenderState> = emptyMap(),
+)
+
+internal fun reconcileMathFormulaRenderStates(
+    previous: MathFormulaRenderSnapshot,
+    requests: List<MathJaxRenderRequest>,
+): Map<String, MathFormulaRenderState> = requests.associate { request ->
+    val retainedState = previous.statesById[request.id]
+        ?.takeIf { previous.requestsById[request.id] == request }
+    request.id to (retainedState ?: MathFormulaRenderState.Loading)
+}
+
 @Composable
 internal fun rememberMathFormulaRenderStates(
     renderer: MathJaxSvgRenderer,
@@ -69,8 +102,10 @@ internal fun rememberMathFormulaRenderStates(
     blockMaxWidthPx: Float?,
 ): Map<String, MathFormulaRenderState> {
     val cacheRoot = LocalContext.current.applicationContext.cacheDir
-    val requests = remember(formulas, fontSizePx, color, blockMaxWidthPx) {
-        formulas.values.map { formula ->
+    val renderIdentities = remember(formulas) { formulaRenderIdentities(formulas) }
+    val stableFormulas = remember(renderIdentities) { formulas }
+    val requests = remember(renderIdentities, fontSizePx, color, blockMaxWidthPx) {
+        stableFormulas.values.map { formula ->
             MathJaxRenderRequest(
                 id = formula.id,
                 latex = formula.latex,
@@ -86,21 +121,35 @@ internal fun rememberMathFormulaRenderStates(
             )
         }
     }
-    var states by remember(requests) {
-        mutableStateOf<Map<String, MathFormulaRenderState>>(
-            requests.associate { it.id to MathFormulaRenderState.Loading }
-        )
+    var snapshot by remember(renderer) { mutableStateOf(MathFormulaRenderSnapshot()) }
+    val states = remember(requests, snapshot) {
+        reconcileMathFormulaRenderStates(snapshot, requests)
     }
 
     LaunchedEffect(renderer, requests) {
         if (requests.isEmpty()) {
-            states = emptyMap()
+            snapshot = MathFormulaRenderSnapshot()
             return@LaunchedEffect
         }
 
-        states = try {
-            MathFormulaSvgCache.render(cacheRoot, renderer, requests).associate { (cacheKey, result) ->
-                val request = requests.first { it.id == result.id }
+        val requestsById = requests.associateBy(MathJaxRenderRequest::id)
+        val retainedStates = reconcileMathFormulaRenderStates(snapshot, requests)
+        val pendingRequests = requests.filter { request ->
+            retainedStates[request.id] == MathFormulaRenderState.Loading
+        }
+        snapshot = MathFormulaRenderSnapshot(
+            requestsById = requestsById,
+            statesById = retainedStates,
+        )
+        if (pendingRequests.isEmpty()) return@LaunchedEffect
+
+        val renderedStates = try {
+            // WebView 会自行切回主线程；缓存、SVG 安全校验与 XML 解析留在后台线程。
+            val renderedResults = withContext(Dispatchers.Default) {
+                MathFormulaSvgCache.render(cacheRoot, renderer, pendingRequests)
+            }
+            renderedResults.associate { (cacheKey, result) ->
+                val request = requestsById.getValue(result.id)
                 val state = when {
                     result.requestVersion != request.requestVersion ->
                         MathFormulaRenderState.Error(MathFormulaErrorKind.ENGINE)
@@ -116,16 +165,20 @@ internal fun rememberMathFormulaRenderStates(
                 result.id to state
             }
         } catch (_: TimeoutCancellationException) {
-            requests.associate { request ->
+            pendingRequests.associate { request ->
                 request.id to MathFormulaRenderState.Error(MathFormulaErrorKind.TIMEOUT)
             }
         } catch (error: CancellationException) {
             throw error
         } catch (_: Throwable) {
-            requests.associate { request ->
+            pendingRequests.associate { request ->
                 request.id to MathFormulaRenderState.Error(MathFormulaErrorKind.ENGINE)
             }
         }
+        snapshot = MathFormulaRenderSnapshot(
+            requestsById = requestsById,
+            statesById = retainedStates + renderedStates,
+        )
     }
 
     return states

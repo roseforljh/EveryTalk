@@ -358,6 +358,7 @@ object StreamBlockParser {
         content: String,
         messageId: String,
         contentVersion: Long,
+        includePendingMathRaw: Boolean = true,
     ): PreparedMessage {
         val parsed = parse(content, messageId)
         return prepareMessage(
@@ -365,6 +366,7 @@ object StreamBlockParser {
             blocks = parsed.blocks,
             hasPendingFormula = parsed.hasPendingMath,
             contentVersion = contentVersion,
+            includePendingMathRaw = includePendingMathRaw,
         )
     }
 
@@ -373,6 +375,7 @@ object StreamBlockParser {
         blocks: List<StreamBlock>,
         hasPendingFormula: Boolean,
         contentVersion: Long,
+        includePendingMathRaw: Boolean = true,
     ): PreparedMessage {
         val renderableContent = unwrapRenderableMarkdownFences(content)
         val renderBlocks: List<StreamBlock>
@@ -412,7 +415,7 @@ object StreamBlockParser {
                             append(INLINE_FORMULA_SCHEME)
                             append(formula.id)
                             append(')')
-                        } else {
+                        } else if (includePendingMathRaw) {
                             append(block.text)
                         }
                     }
@@ -427,7 +430,7 @@ object StreamBlockParser {
                             append(formula.id)
                             append("\n```")
                             if (block.endExclusive < renderableContent.length) append("\n\n")
-                        } else {
+                        } else if (includePendingMathRaw) {
                             append(block.text)
                         }
                     }

@@ -40,6 +40,7 @@ internal fun buildStreamingRenderState(
         blocks = parseResult.blocks,
         hasPendingFormula = parseResult.hasPendingMath,
         contentVersion = contentVersion,
+        includePendingMathRaw = !isStreaming || isComplete,
     )
     return StreamingRenderState(
         messageId = messageId,
@@ -88,6 +89,7 @@ internal fun buildStreamingRenderStateIncremental(
         blocks = allBlocks,
         hasPendingFormula = hasPendingMath,
         contentVersion = contentVersion,
+        includePendingMathRaw = !isStreaming || isComplete,
     )
     val state = StreamingRenderState(
         messageId = messageId,

@@ -422,6 +422,75 @@ class StreamBlockParserTest {
     }
 
     @Test
+    fun `流式投影隐藏未闭合公式并在闭合时保持严格追加`() {
+        data class ProjectionCase(
+            val pending: String,
+            val closed: String,
+            val expectedStablePrefix: String,
+        )
+
+        val cases = listOf(
+            ProjectionCase(
+                pending = "前文 ${'$'}x+1",
+                closed = "前文 ${'$'}x+1${'$'} 后文",
+                expectedStablePrefix = "前文 ",
+            ),
+            ProjectionCase(
+                pending = "前文 \\(x+1",
+                closed = "前文 \\(x+1\\) 后文",
+                expectedStablePrefix = "前文 ",
+            ),
+            ProjectionCase(
+                pending = "前文\n\n${'$'}${'$'}\nx+1",
+                closed = "前文\n\n${'$'}${'$'}\nx+1\n${'$'}${'$'}\n\n后文",
+                expectedStablePrefix = "前文\n\n",
+            ),
+            ProjectionCase(
+                pending = "前文\n\n\\[x+1",
+                closed = "前文\n\n\\[x+1\\]\n\n后文",
+                expectedStablePrefix = "前文\n\n",
+            ),
+        )
+
+        cases.forEachIndexed { index, case ->
+            val messageId = "monotonic-$index"
+            val pending = StreamBlockParser.prepareMessage(
+                content = case.pending,
+                messageId = messageId,
+                contentVersion = 1L,
+                includePendingMathRaw = false,
+            )
+            val closed = StreamBlockParser.prepareMessage(
+                content = case.closed,
+                messageId = messageId,
+                contentVersion = 2L,
+                includePendingMathRaw = false,
+            )
+
+            assertEquals(case.expectedStablePrefix, pending.markdown)
+            assertTrue(pending.hasPendingFormula)
+            assertTrue(closed.markdown.startsWith(pending.markdown))
+            assertFalse(closed.hasPendingFormula)
+            assertEquals(1, closed.formulas.size)
+        }
+    }
+
+    @Test
+    fun `非流式准备默认保留未闭合公式原文`() {
+        val content = "前文 ${'$'}x+1"
+
+        val prepared = StreamBlockParser.prepareMessage(
+            content = content,
+            messageId = "pending-history",
+            contentVersion = 1L,
+        )
+
+        assertEquals(content, prepared.markdown)
+        assertTrue(prepared.hasPendingFormula)
+        assertTrue(prepared.formulas.isEmpty())
+    }
+
+    @Test
     fun `top level code block closes with up to three spaces indentation`() {
         val result = StreamBlockParser.parse(
             "```bash\nopencode web\n   ```",

@@ -7,6 +7,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -28,6 +29,81 @@ class MathRendererTest {
         assertNotEquals(
             mathFormulaRequestVersion(formula),
             mathFormulaRequestVersion(formula.copy(id = "b".repeat(64))),
+        )
+    }
+
+    @Test
+    fun `公式领域对象保留内容版本而渲染身份忽略内容版本`() {
+        val first = FormulaRequest(
+            id = "a".repeat(64),
+            latex = "x^2",
+            displayMode = FormulaDisplayMode.INLINE,
+            contentVersion = 1L,
+        )
+        val second = first.copy(contentVersion = 99L)
+
+        assertNotEquals(first, second)
+        assertEquals(first.renderIdentity(), second.renderIdentity())
+        assertEquals(
+            formulaRenderIdentities(mapOf(first.id to first)),
+            formulaRenderIdentities(mapOf(second.id to second)),
+        )
+    }
+
+    @Test
+    fun `新增公式只进入Loading并保留旧公式Ready和Error状态`() {
+        val readyRequest = MathJaxRenderRequest(
+            id = "a".repeat(64),
+            latex = "x^2",
+            display = false,
+            fontSizePx = 32f,
+            color = "#112233",
+        )
+        val errorRequest = readyRequest.copy(
+            id = "b".repeat(64),
+            latex = "y^2",
+        )
+        val addedRequest = readyRequest.copy(
+            id = "c".repeat(64),
+            latex = "z^2",
+        )
+        val readyState = MathFormulaRenderState.Ready(
+            result = MathJaxRenderResult(
+                id = readyRequest.id,
+                status = MathJaxRenderStatus.READY,
+                svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 20 10\"><path d=\"M0 0h20v10z\"/></svg>",
+                widthPx = 20f,
+                heightPx = 10f,
+                depthPx = 2f,
+            ),
+            cacheKey = cacheKeyOf(readyRequest),
+        )
+        val errorState = MathFormulaRenderState.Error(MathFormulaErrorKind.SYNTAX)
+        val previous = MathFormulaRenderSnapshot(
+            requestsById = mapOf(
+                readyRequest.id to readyRequest,
+                errorRequest.id to errorRequest,
+            ),
+            statesById = mapOf(
+                readyRequest.id to readyState,
+                errorRequest.id to errorState,
+            ),
+        )
+
+        val reconciled = reconcileMathFormulaRenderStates(
+            previous = previous,
+            requests = listOf(readyRequest, errorRequest, addedRequest),
+        )
+
+        assertSame(readyState, reconciled[readyRequest.id])
+        assertSame(errorState, reconciled[errorRequest.id])
+        assertSame(MathFormulaRenderState.Loading, reconciled[addedRequest.id])
+        assertSame(
+            MathFormulaRenderState.Loading,
+            reconcileMathFormulaRenderStates(
+                previous = previous,
+                requests = listOf(readyRequest.copy(color = "#ffffff")),
+            )[readyRequest.id],
         )
     }
 

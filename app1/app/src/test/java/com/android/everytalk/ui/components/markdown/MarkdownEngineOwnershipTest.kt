@@ -67,6 +67,7 @@ class MarkdownEngineOwnershipTest {
         assertTrue(mathRenderer.contains("AsyncImage("))
         assertTrue(mathRenderer.contains("MathJaxRenderResult"))
         assertTrue(mathRenderer.contains("catch (_: TimeoutCancellationException)"))
+        assertTrue(mathRenderer.contains("withContext(Dispatchers.Default)"))
         assertTrue(mathJaxRuntime.contains("class MathJaxSvgRenderer("))
         assertTrue(mathJaxRuntime.contains("private var webView: WebView?"))
         assertFalse(mathRenderer.contains("androidx.compose.ui.viewinterop.AndroidView"))
@@ -135,16 +136,24 @@ class MarkdownEngineOwnershipTest {
     }
 
     @Test
-    fun `AI流式Markdown使用MikePenz稳定AST并保留安全回退`() {
+    fun `AI流式Markdown使用MikePenz稳定AST并可从非追加改写恢复`() {
         val adapter = mainSource(
             "com/android/everytalk/ui/components/markdown/MikePenzMarkdownRenderer.kt"
         )
 
         assertTrue(adapter.contains("rememberStreamingMarkdownState("))
-        assertTrue(adapter.contains("streamingMarkdownState = streamingMarkdownState"))
+        assertTrue(adapter.contains("PrepareStreamingMarkdownRebase("))
+        assertTrue(adapter.contains("mutableStateOf<StreamingMarkdownBundle?>(null)"))
+        assertTrue(adapter.contains("request.result.await()"))
+        assertTrue(adapter.contains("activeBundle.value = StreamingMarkdownBundle("))
+        assertTrue(adapter.contains("visibleStreamingBundle?.preparedMessage ?: preparedMessage"))
+        assertTrue(adapter.contains("key(visibleStreamingMarkdownState)"))
+        assertTrue(adapter.contains("streamingMarkdownState = visibleStreamingMarkdownState"))
         assertTrue(adapter.contains("appendOnlyMarkdownDelta("))
-        assertTrue(adapter.contains("streamingMarkdownState.append(delta)"))
+        assertTrue(adapter.contains("currentBundle.state.append(delta)"))
+        assertTrue(adapter.contains("currentBundle.copy(preparedMessage = nextPreparedMessage)"))
         assertTrue(adapter.contains("retainState = true"))
+        assertFalse(adapter.contains("useStaticFallback"))
     }
 
     @Test
@@ -154,6 +163,21 @@ class MarkdownEngineOwnershipTest {
         assertTrue(appendOnlyMarkdownDelta("完整内容", "完整内容") == "")
         assertTrue(appendOnlyMarkdownDelta("原始公式 ${'$'}x", "公式占位") == null)
         assertTrue(appendOnlyMarkdownDelta("更长内容", "短") == null)
+    }
+
+    @Test
+    fun `非追加改写重建基线后继续接受后续增量`() {
+        var appendedContent = "原始公式 ${'$'}x"
+        val rebasedContent = "公式占位"
+
+        assertTrue(appendOnlyMarkdownDelta(appendedContent, rebasedContent) == null)
+        appendedContent = rebasedContent
+
+        repeat(20) { index ->
+            val nextContent = "$appendedContent 追加$index"
+            assertTrue(appendOnlyMarkdownDelta(appendedContent, nextContent) == " 追加$index")
+            appendedContent = nextContent
+        }
     }
 
     @Test
