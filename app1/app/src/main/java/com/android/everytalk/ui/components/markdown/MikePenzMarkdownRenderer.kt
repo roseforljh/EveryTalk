@@ -78,7 +78,6 @@ import com.android.everytalk.ui.components.math.MathJaxSvgRenderer
 import com.android.everytalk.ui.components.math.formulaRenderIdentities
 import com.android.everytalk.ui.components.math.rememberMathFormulaRenderStates
 import com.android.everytalk.ui.components.math.mathWidthBucketPx
-import com.android.everytalk.ui.components.math.requireDepthPx
 import com.android.everytalk.ui.components.math.requireHeightPx
 import com.android.everytalk.ui.components.math.requireWidthPx
 import com.android.everytalk.ui.components.math.toMathJaxCssColor
@@ -786,8 +785,8 @@ fun MikePenzMarkdownRenderer(
                         link to InlineTextContent(
                             placeholder = Placeholder(
                                 width = metrics.widthEm.em,
-                                height = metrics.heightAboveBaselineEm.em,
-                                placeholderVerticalAlign = PlaceholderVerticalAlign.AboveBaseline,
+                                height = metrics.heightEm.em,
+                                placeholderVerticalAlign = metrics.verticalAlign,
                             ),
                         ) {
                             MathInline(
@@ -1293,30 +1292,32 @@ private fun ASTNode.collectInlineLinks(
     children.forEach { child -> child.collectInlineLinks(content, onLink) }
 }
 
-private data class InlineFormulaMetrics(
+internal data class InlineFormulaMetrics(
     val widthEm: Float,
-    val heightAboveBaselineEm: Float,
+    val heightEm: Float,
+    val verticalAlign: PlaceholderVerticalAlign,
 )
 
-private fun inlineFormulaMetrics(
+internal fun inlineFormulaMetrics(
     state: MathFormulaRenderState,
     fontSizePx: Float,
 ): InlineFormulaMetrics = when (state) {
     MathFormulaRenderState.Loading -> InlineFormulaMetrics(
         widthEm = 1f,
-        heightAboveBaselineEm = 1f,
+        heightEm = 1f,
+        verticalAlign = PlaceholderVerticalAlign.TextCenter,
     )
 
     is MathFormulaRenderState.Error -> InlineFormulaMetrics(
         widthEm = 3.5f,
-        heightAboveBaselineEm = 1.15f,
+        heightEm = 1.15f,
+        verticalAlign = PlaceholderVerticalAlign.TextCenter,
     )
 
     is MathFormulaRenderState.Ready -> InlineFormulaMetrics(
         widthEm = (state.result.requireWidthPx() / fontSizePx).coerceAtLeast(0.01f),
-        heightAboveBaselineEm = (
-            (state.result.requireHeightPx() - state.result.requireDepthPx()) / fontSizePx
-        ).coerceAtLeast(0.01f),
+        heightEm = (state.result.requireHeightPx() / fontSizePx).coerceAtLeast(0.01f),
+        verticalAlign = PlaceholderVerticalAlign.TextCenter,
     )
 }
 

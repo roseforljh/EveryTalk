@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -204,27 +203,11 @@ internal fun MathInline(
         }
 
         is MathFormulaRenderState.Error -> InlineMathError(formula, modifier)
-        is MathFormulaRenderState.Ready -> {
-            BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-                val targetWidth = maxWidth
-                val targetHeight = targetWidth * (
-                    state.result.requireHeightPx() / state.result.requireWidthPx()
-                )
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.TopStart,
-                ) {
-                    MathSvgImage(
-                        formula = formula,
-                        state = state,
-                        modifier = Modifier
-                            .wrapContentSize(Alignment.TopStart, unbounded = true)
-                            .width(targetWidth)
-                            .height(targetHeight),
-                    )
-                }
-            }
-        }
+        is MathFormulaRenderState.Ready -> MathSvgImage(
+            formula = formula,
+            state = state,
+            modifier = modifier.fillMaxSize(),
+        )
     }
 }
 

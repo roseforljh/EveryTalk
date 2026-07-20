@@ -3,10 +3,16 @@ package com.android.everytalk.ui.components.markdown
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.sp
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.ui.components.math.MathFormulaRenderState
+import com.android.everytalk.ui.components.math.MathJaxRenderRequest
+import com.android.everytalk.ui.components.math.MathJaxRenderResult
+import com.android.everytalk.ui.components.math.MathJaxRenderStatus
+import com.android.everytalk.ui.components.math.cacheKeyOf
 import com.android.everytalk.ui.components.streaming.BLOCK_FORMULA_FENCE_LANGUAGE
 import com.android.everytalk.ui.components.streaming.DETAILS_FENCE_LANGUAGE
 import com.android.everytalk.ui.components.streaming.DetailsRequest
@@ -27,6 +33,34 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MikePenzMarkdownRendererTest {
+
+    @Test
+    fun `行内公式占位框保留MathJax下降区`() {
+        val request = MathJaxRenderRequest(
+            id = "a".repeat(64),
+            latex = "\\boxed{36^{37}}",
+            display = false,
+            fontSizePx = 10f,
+            color = "#000000",
+        )
+        val state = MathFormulaRenderState.Ready(
+            result = MathJaxRenderResult(
+                id = request.id,
+                status = MathJaxRenderStatus.READY,
+                svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 20 10\"/>",
+                widthPx = 20f,
+                heightPx = 10f,
+                depthPx = 2f,
+            ),
+            cacheKey = cacheKeyOf(request),
+        )
+
+        val metrics = inlineFormulaMetrics(state, fontSizePx = 10f)
+
+        assertEquals(2f, metrics.widthEm, 0f)
+        assertEquals(1f, metrics.heightEm, 0f)
+        assertEquals(PlaceholderVerticalAlign.TextCenter, metrics.verticalAlign)
+    }
 
     @Test
     fun `图片加载错误使用紧凑提示尺寸`() {
