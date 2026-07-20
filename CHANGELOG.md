@@ -1,5 +1,39 @@
 # Changelog
 
+## [1.21.0](https://github.com/roseforljh/EveryTalk/compare/v1.20.3...v1.21.0) (2026-07-20)
+
+
+### Features
+
+* ApiHandler 图片流处理与 ClipboardController 优化 ([f435f8c](https://github.com/roseforljh/EveryTalk/commit/f435f8ced3c77dcbd84f582b93c5a1b0390be41a))
+* ChatMessagesList UI 与测试补充 ([1c25a4b](https://github.com/roseforljh/EveryTalk/commit/1c25a4b6c3172c71a7dedc6c923836ff2f4f6b7a))
+* MikePenzMarkdownRenderer 与 MessageProcessor 优化 ([52c3da3](https://github.com/roseforljh/EveryTalk/commit/52c3da3af93da775490ed5346fe959f841f8a488))
+* MikePenzMarkdownRenderer 渲染增强 ([eeec7ff](https://github.com/roseforljh/EveryTalk/commit/eeec7ff31a71af30f6094c76b4baec6391c5846c))
+* TopAnchorReserveEngine 增强与测试扩展 ([1baebda](https://github.com/roseforljh/EveryTalk/commit/1baebda8c8bdc8eb76af77c5d781cc8f3f48bdd5))
+* 优化 BubbleContentTypes 气泡内容与 ChatScrollStateManager 滚动状态 ([2ab56c3](https://github.com/roseforljh/EveryTalk/commit/2ab56c3bbb56b7e26e2ecebe9f8d96281434c1c8))
+* 优化 ChatScreen UI 与滚动交互 ([d3a3c14](https://github.com/roseforljh/EveryTalk/commit/d3a3c143c784d35c6c57cd49c43e55c64a5713dd))
+* 优化 ChatScreen 与 BubbleContentTypes 渲染 ([d26fcc8](https://github.com/roseforljh/EveryTalk/commit/d26fcc8c35c1f11bee5bbdc8f8d9f83d5c182c71))
+* 优化 ChatScreen 与 ChatMessagesList UI ([c632cf0](https://github.com/roseforljh/EveryTalk/commit/c632cf0427e4fabdf157fba52b7455543107202a))
+* 升级全部技术栈并统一渲染链路 ([97c3bfd](https://github.com/roseforljh/EveryTalk/commit/97c3bfd989e1d9f0a228f0ec9d32eeeb0dc12f92))
+* 增强 Markdown 渲染器图片与表格支持 ([13fa768](https://github.com/roseforljh/EveryTalk/commit/13fa768efa490d5c4e928a210ed44a243104233b))
+* 增强 Markdown 渲染核心与流式解析能力 ([9124e2e](https://github.com/roseforljh/EveryTalk/commit/9124e2ebeaf3290909ec694509b3c45761324ee1))
+* 增强 Markdown/Math/Streaming 渲染层 ([608095f](https://github.com/roseforljh/EveryTalk/commit/608095fe5a31e3ebcf17ccc6f11e7cabe731ac42))
+* 实现 Streaming 流式暂停机制与状态管理重构 ([9e7ea2e](https://github.com/roseforljh/EveryTalk/commit/9e7ea2e08ae39fa3a9c2343d75f6ae901bdfe970))
+* 新增 EveryTalkLoadingIndicator 并优化渲染配置 ([4d08e31](https://github.com/roseforljh/EveryTalk/commit/4d08e31b82863eb40dc219c4fd564d5685a8a0e1))
+* 新增图片消息模型与 ImagePreviewSelection 组件 ([be0bf25](https://github.com/roseforljh/EveryTalk/commit/be0bf251967dc48d8e133ffdf835f7c29293cb41))
+* 统一 Markdown 与 MathJax 渲染链路 ([5a9b7de](https://github.com/roseforljh/EveryTalk/commit/5a9b7de00e1be14098a7c91c326361c769cedf6d))
+* 统一 Markdown 渲染为 MikePenz 与 KaTeX ([c54057e](https://github.com/roseforljh/EveryTalk/commit/c54057ea47431ff99591e32a16596030dc0a8640))
+* 迁移当前改动到 like-gpt 分支 ([59497fe](https://github.com/roseforljh/EveryTalk/commit/59497feb54f6aa3f325c6b9f0693720053570092))
+
+
+### Bug Fixes
+
+* ChatScrollStateManager 未暂存修改 ([ca275fe](https://github.com/roseforljh/EveryTalk/commit/ca275fe1b2571f0f82a83be98dea2457edab9eef))
+* HistoryManager 避免无变更时的重复保存 ([6dca7a5](https://github.com/roseforljh/EveryTalk/commit/6dca7a5916dd316621f4c54d8aeb433127500ee3))
+* MathJax 资产校验增加换行符归一化处理 ([269997a](https://github.com/roseforljh/EveryTalk/commit/269997abee106caf848379bef91fd931c39b4662))
+* MikePenzMarkdownRenderer 与 MathRenderer 渲染优化 ([051cc9f](https://github.com/roseforljh/EveryTalk/commit/051cc9f5185ff52bbf85fbb38c4f8769934fae14))
+* TopAnchorReserveEngineComposeTest 增加等待避免断言竞争 ([d4be8b4](https://github.com/roseforljh/EveryTalk/commit/d4be8b4dd551030821db259e6805d72602b501a0))
+
 ## [1.20.3](https://github.com/roseforljh/EveryTalk/compare/v1.20.2...v1.20.3) (2026-06-16)
 
 
