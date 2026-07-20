@@ -43,6 +43,10 @@ class HistoryManager(
 ) {
     private val TAG_HM = "HistoryManager"
 
+    suspend fun persistMessageImageSource(source: String, messageId: String, index: Int): String? {
+        return persistenceManager.persistMessageImageSource(source, messageId, index)
+    }
+
     // -------- 新增：持久化防抖与串行化 --------
     private val saveRequestChannel = Channel<SaveRequest>(Channel.BUFFERED)
     private var debouncedTextSaveJob: Job? = null
@@ -888,15 +892,15 @@ class HistoryManager(
             }
             Log.d(TAG_HM, "In-memory history cleared, loadedHistoryIndex reset to null.")
 
-            persistenceManager.saveChatHistory(emptyList(), isImageGeneration)
-            persistenceManager.clearLastOpenChat(isImageGeneration)
+            persistenceManager.clearHistoryExplicitly(isImageGeneration)
             
             // 清理所有孤立文件
             persistenceManager.cleanupOrphanedAttachments()
             
             Log.d(TAG_HM, "Persisted history list cleared. \"Last open chat\" cleared.")
         } else {
-            Log.d(TAG_HM, "No history to clear.")
+            persistenceManager.clearHistoryExplicitly(isImageGeneration)
+            Log.d(TAG_HM, "没有可见历史，已按用户操作清除受保护的持久化历史。")
         }
     }
 }

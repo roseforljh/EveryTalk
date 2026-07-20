@@ -14,8 +14,11 @@ import com.android.everytalk.statecontroller.safeApiConfigSummary
 import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.DataClass.VoiceBackendConfig
 import com.android.everytalk.ui.components.toRecoveredMarkdown
+import com.android.everytalk.ui.components.MarkdownPart
 import com.android.everytalk.util.ConversationNameHelper
-import com.android.everytalk.util.storage.readAtMost
+import com.android.everytalk.util.message.findMarkdownImageReferences
+import com.android.everytalk.util.message.replaceMarkdownImageSources
+import com.android.everytalk.util.storage.FileManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -24,16 +27,102 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import coil3.ImageLoader
-import android.util.Base64
-import java.io.FileOutputStream
-import java.util.Locale
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
 
-private const val MAX_PERSISTED_IMAGE_DOWNLOAD_BYTES = 50L * 1024L * 1024L
+internal data class InlineImageMigrationResult(
+    val messages: List<Message>,
+    val changed: Boolean,
+    val failed: Boolean,
+    val persistedSources: Set<String> = emptySet(),
+)
+
+internal suspend fun migrateConversationInlineImages(
+    messages: List<Message>,
+    persistSource: suspend (source: String, messageId: String, index: Int) -> String?,
+    deletePersistedSource: (String) -> Unit = {},
+): InlineImageMigrationResult {
+    val createdSources = linkedSetOf<String>()
+    var completed = false
+    try {
+        val migratedMessages = mutableListOf<Message>()
+        var changed = false
+
+        messages.forEach { message ->
+            val partSources = message.parts.filterIsInstance<MarkdownPart.InlineImage>()
+                .map { part -> "data:${part.mimeType};base64,${part.base64Data}" }
+            val sources = linkedSetOf<String>().apply {
+                findMarkdownImageReferences(message.text)
+                    .map { it.source }
+                    .filterTo(this) { it.startsWith("data:image", ignoreCase = true) }
+                message.imageUrls.orEmpty()
+                    .filterTo(this) { it.startsWith("data:image", ignoreCase = true) }
+                addAll(partSources)
+            }
+            if (sources.isEmpty()) {
+                migratedMessages += message
+                return@forEach
+            }
+
+            val replacements = linkedMapOf<String, String>()
+            sources.forEachIndexed { index, source ->
+                val persisted = persistSource(source, message.id, index)
+                if (persisted.isNullOrBlank()) {
+                    return InlineImageMigrationResult(messages, changed = false, failed = true)
+                }
+                replacements[source] = persisted
+                createdSources += persisted
+            }
+
+            var migratedText = replaceMarkdownImageSources(message.text, replacements)
+            partSources.forEach { source ->
+                val persisted = replacements.getValue(source)
+                if (!migratedText.contains(persisted)) {
+                    migratedText = when {
+                        migratedText.isBlank() -> "![Generated Image]($persisted)"
+                        else -> migratedText.trimEnd() + "\n\n![Generated Image]($persisted)"
+                    }
+                }
+            }
+            val migratedParts = message.parts.mapNotNull { part ->
+                when (part) {
+                    is MarkdownPart.Text -> part.copy(
+                        content = replaceMarkdownImageSources(part.content, replacements),
+                    )
+                    is MarkdownPart.InlineImage -> null
+                    else -> part
+                }
+            }
+            val migratedUrls = buildList {
+                message.imageUrls.orEmpty().forEach { source -> add(replacements[source] ?: source) }
+                replacements.values.forEach(::add)
+            }.distinct()
+            val migratedMessage = message.copy(
+                text = migratedText,
+                imageUrls = migratedUrls.takeIf { it.isNotEmpty() },
+                parts = migratedParts,
+            )
+            changed = changed || migratedMessage != message
+            migratedMessages += migratedMessage
+        }
+
+        completed = true
+        return InlineImageMigrationResult(
+            messages = migratedMessages,
+            changed = changed,
+            failed = false,
+            persistedSources = createdSources,
+        )
+    } finally {
+        if (!completed) {
+            createdSources.forEach { source -> runCatching { deletePersistedSource(source) } }
+        }
+    }
+}
 
 class DataPersistenceManager(
     private val context: Context,
@@ -47,6 +136,11 @@ class DataPersistenceManager(
     
     // Room 数据源
     private val roomDataSource by lazy { RoomDataSource(context) }
+    private val fileManager by lazy { FileManager(context) }
+    private val protectedTextSessionIds = linkedSetOf<String>()
+    private val protectedImageSessionIds = linkedSetOf<String>()
+    @Volatile private var protectLastOpenTextSession = false
+    @Volatile private var protectLastOpenImageSession = false
     
     // 默认配置初始化标志位 (存储在 Room 数据库中)
     private val KEY_DEFAULT_CONFIGS_INITIALIZED = "default_configs_initialized_v1"
@@ -84,188 +178,133 @@ class DataPersistenceManager(
         }
     }
 
-    /**
-     * 将消息中的 data:image;base64,... 图片落盘为本地文件，并将 URL 替换为 file:// 或绝对路径
-     * 这样可避免把巨大 Base64 串写入 SharedPreferences 导致超限/丢失，重启后可稳定恢复。
-     */
-    private fun persistInlineAndRemoteImages(messages: List<Message>): List<Message> {
-        if (messages.isEmpty()) return messages
-        val tempDir = File(context.filesDir, "chat_attachments").apply { mkdirs() }
- 
-        fun extFromMime(mime: String?): String {
-            val m = (mime ?: "").lowercase(Locale.ROOT)
-            return when {
-                m.contains("png") -> "png"
-                m.contains("jpeg") || m.contains("jpg") -> "jpg"
-                m.contains("webp") -> "webp"
-                m.contains("heic") -> "heic"
-                m.contains("heif") -> "heif"
-                else -> "png"
+    suspend fun persistMessageImageSource(
+        source: String,
+        messageId: String,
+        index: Int,
+    ): String? {
+        return if (source.startsWith("http://", ignoreCase = true) ||
+            source.startsWith("https://", ignoreCase = true)
+        ) {
+            withTimeoutOrNull(15_000L) {
+                fileManager.persistMessageImageSource(source, messageId, index)
             }
-        }
-
-        fun saveDataUri(dataUri: String, fileNameHint: String): String? {
-            return try {
-                // 解析形如 data:image/png;base64,AAAA... 的数据
-                val commaIndex = dataUri.indexOf(',')
-                if (commaIndex <= 0) return null
-                // 跳过前缀 "data:"
-                val header = dataUri.substring(5, commaIndex)
-                val mimePart = header.substringBefore(';', "")
-                val mime = if (mimePart.isNotBlank()) mimePart else "image/png"
-                val isBase64 = header.contains("base64", ignoreCase = true)
-                val payload = dataUri.substring(commaIndex + 1)
-
-                val bytes: ByteArray = if (isBase64) {
-                    Base64.decode(payload, Base64.DEFAULT)
-                } else {
-                    // 非 base64 的 data:payload（较少见），按 URL 编码处理
-                    Uri.decode(payload).toByteArray()
-                }
-
-                val ext = extFromMime(mime)
-                val file = File(tempDir, "${fileNameHint}_${System.currentTimeMillis()}.$ext")
-                FileOutputStream(file).use { fos ->
-                    fos.write(bytes)
-                }
-                if (file.exists() && file.length() > 0) file.absolutePath else null
-            } catch (e: Exception) {
-                Log.w(TAG, "persistImages: failed to save bytes for $fileNameHint", e)
-                null
-            }
-        }
-
-        fun tryDownload(url: String): Pair<ByteArray, String?>? {
-            return try {
-                val conn = (java.net.URL(url).openConnection() as java.net.HttpURLConnection).apply {
-                    connectTimeout = 30000
-                    readTimeout = 30000
-                    instanceFollowRedirects = true
-                }
-                try {
-                    conn.connect()
-                    if (conn.responseCode !in 200..299) return null
-                    val mime = conn.contentType
-                    val bytes = conn.inputStream.use { readAtMost(it, MAX_PERSISTED_IMAGE_DOWNLOAD_BYTES) }
-                    bytes to mime
-                } finally {
-                    conn.disconnect()
-                }
-            } catch (e: Exception) {
-                Log.w(TAG, "persistImages: download failed for $url", e)
-                null
-            }
-        }
-
-        return messages.map { msg ->
-            if (msg.imageUrls.isNullOrEmpty()) {
-                msg
-            } else {
-                // 统一保存到 chat_attachments，通过保留期控制清理时机
-                val currentDir = tempDir
-                currentDir.mkdirs()
-
-                val newUrls = msg.imageUrls.mapIndexed { idx, url ->
-                    if (url.startsWith("data:image", ignoreCase = true)) {
-                        val saved = saveDataUri(url, "img_${msg.id}_${idx}")
-                        saved ?: url
-                    } else if (url.startsWith("http", ignoreCase = true)) {
-                        // 修复：对于 http/https 图片，尝试下载并保存为本地文件
-                        // 这样可以避免远端 URL 过期导致图片无法显示
-                        val pair = tryDownload(url)
-                        if (pair != null) {
-                            val (bytes, mime) = pair
-                            val ext = extFromMime(mime)
-                            val fileName = "img_${msg.id}_${idx}_${System.currentTimeMillis()}.$ext"
-                            val file = File(tempDir, fileName)
-                            try {
-                                FileOutputStream(file).use { fos ->
-                                    fos.write(bytes)
-                                }
-                                if (file.exists() && file.length() > 0) {
-                                    Log.i(TAG, "Downloaded remote image to ${file.absolutePath}")
-                                    file.absolutePath
-                                } else {
-                                    url
-                                }
-                            } catch (e: Exception) {
-                                Log.w(TAG, "Failed to save downloaded image", e)
-                                url
-                            }
-                        } else {
-                            url
-                        }
-                    } else {
-                        url
-                    }
-                }
-                if (newUrls == msg.imageUrls) msg else msg.copy(imageUrls = newUrls)
-            }
+        } else {
+            fileManager.persistMessageImageSource(source, messageId, index)
         }
     }
 
-    /**
-     * 即时保存单张图片（data URI）到本地文件，用于流式响应时的即时落地
-     */
-    suspend fun persistImageImmediate(dataUri: String, messageId: String, index: Int): String? {
-        return withContext(Dispatchers.IO) {
-            try {
-                if (!dataUri.startsWith("data:image", ignoreCase = true)) {
-                    return@withContext null
-                }
-                
-                val tempDir = File(context.filesDir, "chat_attachments").apply { mkdirs() }
-                
-                // 解析形如 data:image/png;base64,AAAA... 的数据
-                val commaIndex = dataUri.indexOf(',')
-                if (commaIndex <= 0) return@withContext null
-                
-                val header = dataUri.substring(5, commaIndex)
-                val mimePart = header.substringBefore(';', "")
-                val mime = if (mimePart.isNotBlank()) mimePart else "image/png"
-                val isBase64 = header.contains("base64", ignoreCase = true)
-                val payload = dataUri.substring(commaIndex + 1)
+    /** 将历史消息中的图片来源统一归档；失败时保留原记录，交由后续迁移重试。 */
+    private suspend fun persistInlineAndRemoteImages(messages: List<Message>): List<Message> {
+        if (messages.isEmpty()) return messages
+        return messages.map { message ->
+            val originalUrls = message.imageUrls.orEmpty()
+            if (originalUrls.isEmpty()) return@map message
 
-                val bytes: ByteArray = if (isBase64) {
-                    Base64.decode(payload, Base64.DEFAULT)
-                } else {
-                    Uri.decode(payload).toByteArray()
-                }
-
-                fun extFromMime(m: String): String {
-                    val ml = m.lowercase(Locale.ROOT)
-                    return when {
-                        ml.contains("png") -> "png"
-                        ml.contains("jpeg") || ml.contains("jpg") -> "jpg"
-                        ml.contains("webp") -> "webp"
-                        else -> "png"
+            val persistedUrls = originalUrls.mapIndexed { index, source ->
+                when {
+                    source.startsWith("file://", ignoreCase = true) || source.startsWith("/") -> source
+                    source.startsWith("data:image", ignoreCase = true) ||
+                        source.startsWith("http://", ignoreCase = true) ||
+                        source.startsWith("https://", ignoreCase = true) ||
+                        source.startsWith("content://", ignoreCase = true) -> {
+                        persistMessageImageSource(source, message.id, index) ?: source
                     }
+                    else -> source
                 }
+            }
+            if (persistedUrls == originalUrls) message else message.copy(imageUrls = persistedUrls)
+        }
+    }
 
-                val ext = extFromMime(mime)
-                // 使用确定性的文件名，避免重复保存
-                val fileName = "img_${messageId}_${index}_${System.currentTimeMillis()}.$ext"
-                val file = File(tempDir, fileName)
-                
-                FileOutputStream(file).use { fos ->
-                    fos.write(bytes)
-                }
-                
-                if (file.exists() && file.length() > 0) {
-                    Log.i(TAG, "persistImageImmediate: Saved image to ${file.absolutePath}")
-                    file.absolutePath 
+    private fun protectedSessionIds(isImageGeneration: Boolean): Set<String> = synchronized(this) {
+        if (isImageGeneration) protectedImageSessionIds.toSet() else protectedTextSessionIds.toSet()
+    }
+
+    private fun protectSessions(isImageGeneration: Boolean, sessionIds: Collection<String>) {
+        synchronized(this) {
+            val target = if (isImageGeneration) protectedImageSessionIds else protectedTextSessionIds
+            target += sessionIds
+        }
+    }
+
+    private fun unprotectSession(isImageGeneration: Boolean, sessionId: String) {
+        synchronized(this) {
+            val target = if (isImageGeneration) protectedImageSessionIds else protectedTextSessionIds
+            target -= sessionId
+        }
+    }
+
+    private fun deleteMigratedImageFile(path: String) {
+        runCatching {
+            val attachmentDir = File(context.filesDir, "chat_attachments").canonicalFile
+            val file = File(path).canonicalFile
+            if (file.path.startsWith(attachmentDir.path + File.separator)) file.delete()
+        }
+    }
+
+    private suspend fun migrateLoadedHistorySessions(
+        loadResult: com.android.everytalk.data.database.SessionHistoryLoadResult,
+        isImageGeneration: Boolean,
+        onLoadWarning: suspend (String) -> Unit,
+    ): List<List<Message>> {
+        if (loadResult.failedSessionIds.isNotEmpty()) {
+            protectSessions(isImageGeneration, loadResult.failedSessionIds)
+            Log.w(
+                TAG,
+                "History load failed sessions: mode=${if (isImageGeneration) "image" else "text"}, ids=${loadResult.failedSessionIds}",
+            )
+            onLoadWarning("部分历史加载失败，原数据已保留")
+        }
+
+        var migrationWarningRequired = false
+        return loadResult.sessions.map { loadedSession ->
+            val migration = migrateConversationInlineImages(
+                messages = loadedSession.messages,
+                persistSource = ::persistMessageImageSource,
+                deletePersistedSource = ::deleteMigratedImageFile,
+            )
+            if (migration.failed) {
+                unprotectSession(isImageGeneration, loadedSession.sessionId)
+                migrationWarningRequired = true
+                loadedSession.messages
+            } else {
+                if (migration.changed) {
+                    try {
+                        roomDataSource.saveLoadedHistorySession(
+                            sessionId = loadedSession.sessionId,
+                            messages = migration.messages,
+                            isImageGeneration = isImageGeneration,
+                        )
+                        unprotectSession(isImageGeneration, loadedSession.sessionId)
+                        migration.messages
+                    } catch (exception: CancellationException) {
+                        throw exception
+                    } catch (exception: Exception) {
+                        migration.persistedSources.forEach(::deleteMigratedImageFile)
+                        unprotectSession(isImageGeneration, loadedSession.sessionId)
+                        migrationWarningRequired = true
+                        Log.w(
+                            TAG,
+                            "History image migration writeback failed: sessionId=${loadedSession.sessionId}, type=${exception::class.simpleName}",
+                        )
+                        loadedSession.messages
+                    }
                 } else {
-                    null
+                    unprotectSession(isImageGeneration, loadedSession.sessionId)
+                    migration.messages
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "persistImageImmediate: Failed", e)
-                null
+            }
+        }.also {
+            if (migrationWarningRequired) {
+                onLoadWarning("部分历史图片迁移失败，原数据已保留")
             }
         }
     }
 
     fun loadInitialData(
         loadLastChat: Boolean = true,
+        onLoadWarning: (String) -> Unit = {},
         onLoadingComplete: (initialConfigPresent: Boolean, initialHistoryPresent: Boolean) -> Unit
     ) {
         stateHolder._isLoadingHistoryData.value = true
@@ -274,6 +313,19 @@ class DataPersistenceManager(
             var initialConfigPresent = false
             var initialHistoryPresent = false
             var historyLoadingJob: Job? = null
+            var loadingCompleteNotified = false
+            val emittedLoadWarnings = mutableSetOf<String>()
+            fun notifyLoadingComplete(configPresent: Boolean, historyPresent: Boolean) {
+                if (loadingCompleteNotified) return
+                loadingCompleteNotified = true
+                onLoadingComplete(configPresent, historyPresent)
+            }
+            suspend fun warnOnce(message: String) {
+                val shouldEmit = synchronized(emittedLoadWarnings) { emittedLoadWarnings.add(message) }
+                if (shouldEmit) {
+                    withContext(Dispatchers.Main.immediate) { onLoadWarning(message) }
+                }
+            }
 
             try {
                 // 第一阶段：快速加载API配置（优先级最高）
@@ -465,6 +517,14 @@ class DataPersistenceManager(
                 }
                 Log.i(TAG, "loadInitialData: 已加载 ${loadedVoiceConfigs.size} 个语音配置")
 
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "loadInitialData: 加载配置时发生错误", e)
+                warnOnce("部分初始数据加载失败，原数据已保留")
+            }
+
+            try {
                 // 第二阶段：异步加载历史数据（延迟加载）
                 historyLoadingJob = launch {
                     Log.d(TAG, "loadInitialData: 阶段2 - 开始异步加载历史数据...")
@@ -474,15 +534,11 @@ class DataPersistenceManager(
                         val shouldLoadHistory = stateHolder._historicalConversations.value.isEmpty()
                         val loadedHistory = if (shouldLoadHistory) {
                             Log.d(TAG, "loadInitialData: 从 Room 加载历史数据...")
-                            // 优先从 Room 加载
-                            var historyRaw = roomDataSource.loadChatHistory()
-                            
-                            // 分批处理历史数据，避免一次性处理大量数据
-                            historyRaw.chunked(10).flatMap { chunk ->
-                                chunk.map { conversation ->
-                                    conversation.map { message -> message }
-                                }
-                            }
+                            migrateLoadedHistorySessions(
+                                loadResult = roomDataSource.loadChatHistoryResult(),
+                                isImageGeneration = false,
+                                onLoadWarning = ::warnOnce,
+                            )
                         } else {
                             Log.d(TAG, "loadInitialData: 使用缓存的历史数据。")
                             stateHolder._historicalConversations.value
@@ -546,126 +602,148 @@ class DataPersistenceManager(
                         throw e
                     } catch (e: Exception) {
                         Log.e(TAG, "loadInitialData: 加载历史数据时发生错误", e)
-                        withContext(Dispatchers.Main.immediate) {
-                            stateHolder._historicalConversations.value = emptyList()
-                        }
+                        warnOnce("部分历史加载失败，原数据已保留")
                     }
 
-                   // Load image generation history
-                   // 优先从 Room 加载
-                   var loadedImageGenHistory = roomDataSource.loadImageGenerationHistory()
-                   
-                   // 增强：启动时完整性检查与修复
-                   // 1. 将历史中的 data:image 与 http(s) 图片统一落盘并替换为本地路径
-                   // 2. 检查本地文件是否存在，如果不存在则尝试恢复或标记
-                   val convertedImageGenHistory = loadedImageGenHistory.map { conv ->
-                       // 先执行标准的归档逻辑
-                       val persistedConv = persistInlineAndRemoteImages(conv)
-                       
-                       // 再执行完整性检查
-                       persistedConv.map { msg ->
-                           if (!msg.imageUrls.isNullOrEmpty()) {
-                               val validatedUrls = msg.imageUrls.map { url ->
-                                   if (url.startsWith("/") || url.startsWith("file://")) {
-                                       val path = url.removePrefix("file://")
-                                       val file = File(path)
-                                       if (!file.exists()) {
-                                           Log.w(TAG, "Image file missing for message ${msg.id}: $path")
-                                           // 如果文件丢失，我们暂时保留路径，或许后续可以恢复
-                                           // 或者可以替换为一个错误占位图 URL
-                                           url
-                                       } else {
-                                           url
-                                       }
-                                   } else {
-                                       url
-                                   }
-                               }
-                               if (validatedUrls != msg.imageUrls) {
-                                   msg.copy(imageUrls = validatedUrls)
-                               } else {
-                                   msg
-                               }
-                           } else {
-                               msg
-                           }
-                       }
-                   }
-                   
-                   // 异步回写修复后的历史，避免后续重复转换
-                   launch(Dispatchers.IO) {
-                       try {
-                           roomDataSource.saveImageGenerationHistory(convertedImageGenHistory)
-                           Log.i(TAG, "Image generation history integrity check and persistence completed")
-                       } catch (e: CancellationException) {
-                           throw e
-                       } catch (e: Exception) {
-                           Log.w(TAG, "Failed to persist converted image generation history", e)
-                       }
-                   }
-                   withContext(Dispatchers.Main.immediate) {
-                       stateHolder._imageGenerationHistoricalConversations.value = convertedImageGenHistory
-                   }
+                    try {
+                        val convertedImageGenHistory = migrateLoadedHistorySessions(
+                            loadResult = roomDataSource.loadImageGenerationHistoryResult(),
+                            isImageGeneration = true,
+                            onLoadWarning = ::warnOnce,
+                        )
+                        withContext(Dispatchers.Main.immediate) {
+                            stateHolder._imageGenerationHistoricalConversations.value = convertedImageGenHistory
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Log.e(TAG, "loadInitialData: 加载图像历史时发生错误", e)
+                        warnOnce("部分历史加载失败，原数据已保留")
+                    }
                 }
 
                 // Phase 3: Load last open chats if needed
                 if (loadLastChat) {
                     Log.d(TAG, "loadInitialData: Phase 3 - Loading last open chats...")
-                    // 从 Room 加载最后打开的会话
-                    var lastOpenChat = roomDataSource.loadLastOpenChat()
-                    
-                    var lastOpenImageGenChat = roomDataSource.loadLastOpenImageGenerationChat()
-                    
-                    // 将"最后打开的图像会话"里的 data:image 与 http(s) 转为本地文件并替换
-                    val finalLastOpenImageGen = persistInlineAndRemoteImages(lastOpenImageGenChat)
-                    // 异步回写，确保下次启动直接使用文件路径
-                    launch(Dispatchers.IO) {
-                        try {
-                            roomDataSource.saveLastOpenImageGenerationChat(finalLastOpenImageGen)
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Failed to persist converted last-open image chat", e)
+                    var lastOpenChat: List<Message>? = null
+                    var lastOpenImageGenChat: List<Message>? = null
+
+                    var loadedOriginalTextChat: List<Message>? = null
+                    try {
+                        val original = roomDataSource.loadLastOpenChat()
+                        loadedOriginalTextChat = original
+                        val migration = migrateConversationInlineImages(
+                            messages = original,
+                            persistSource = ::persistMessageImageSource,
+                            deletePersistedSource = ::deleteMigratedImageFile,
+                        )
+                        if (migration.failed) {
+                            protectLastOpenTextSession = false
+                            lastOpenChat = original
+                            warnOnce("部分历史图片迁移失败，原数据已保留")
+                        } else {
+                            try {
+                                if (migration.changed) {
+                                    roomDataSource.saveLastOpenChat(migration.messages)
+                                }
+                                lastOpenChat = migration.messages
+                                protectLastOpenTextSession = false
+                            } catch (exception: CancellationException) {
+                                throw exception
+                            } catch (exception: Exception) {
+                                migration.persistedSources.forEach(::deleteMigratedImageFile)
+                                lastOpenChat = original
+                                protectLastOpenTextSession = false
+                                Log.w(TAG, "Last-open text migration writeback failed: type=${exception::class.simpleName}")
+                                warnOnce("部分历史图片迁移失败，原数据已保留")
+                            }
                         }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        lastOpenChat = loadedOriginalTextChat
+                        protectLastOpenTextSession = loadedOriginalTextChat == null
+                        Log.w(TAG, "Last-open text load or migration failed: type=${e::class.simpleName}")
+                        warnOnce("部分历史加载失败，原数据已保留")
                     }
+
+                    var loadedOriginalImageChat: List<Message>? = null
+                    try {
+                        val original = roomDataSource.loadLastOpenImageGenerationChat()
+                        loadedOriginalImageChat = original
+                        val migration = migrateConversationInlineImages(
+                            messages = original,
+                            persistSource = ::persistMessageImageSource,
+                            deletePersistedSource = ::deleteMigratedImageFile,
+                        )
+                        if (migration.failed) {
+                            protectLastOpenImageSession = false
+                            lastOpenImageGenChat = original
+                            warnOnce("部分历史图片迁移失败，原数据已保留")
+                        } else {
+                            try {
+                                if (migration.changed) {
+                                    roomDataSource.saveLastOpenImageGenerationChat(migration.messages)
+                                }
+                                lastOpenImageGenChat = migration.messages
+                                protectLastOpenImageSession = false
+                            } catch (exception: CancellationException) {
+                                throw exception
+                            } catch (exception: Exception) {
+                                migration.persistedSources.forEach(::deleteMigratedImageFile)
+                                lastOpenImageGenChat = original
+                                protectLastOpenImageSession = false
+                                Log.w(TAG, "Last-open image migration writeback failed: type=${exception::class.simpleName}")
+                                warnOnce("部分历史图片迁移失败，原数据已保留")
+                            }
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        lastOpenImageGenChat = loadedOriginalImageChat
+                        protectLastOpenImageSession = loadedOriginalImageChat == null
+                        Log.w(TAG, "Last-open image load or migration failed: type=${e::class.simpleName}")
+                        warnOnce("部分历史加载失败，原数据已保留")
+                    }
+
                     withContext(Dispatchers.Main.immediate) {
-                        // 恢复消息列表
-                        stateHolder.messages.clear()
-                        stateHolder.messages.addAll(lastOpenChat)
-                        stateHolder.imageGenerationMessages.clear()
-                        stateHolder.imageGenerationMessages.addAll(finalLastOpenImageGen)
-
-                        // 修复：为已恢复的对话补齐推理完成映射，保证"小白点"可见
-                        // 文本模式
-                        stateHolder.textReasoningCompleteMap.clear()
-                        stateHolder.messages.forEach { msg ->
-                            if (msg.sender == com.android.everytalk.data.DataClass.Sender.AI &&
-                                !msg.reasoning.isNullOrBlank()) {
-                                stateHolder.textReasoningCompleteMap[msg.id] = true
+                        lastOpenChat?.let { loadedMessages ->
+                            stateHolder.messages.clear()
+                            stateHolder.messages.addAll(loadedMessages)
+                            stateHolder.textReasoningCompleteMap.clear()
+                            loadedMessages.forEach { message ->
+                                if (message.sender == com.android.everytalk.data.DataClass.Sender.AI &&
+                                    !message.reasoning.isNullOrBlank()
+                                ) {
+                                    stateHolder.textReasoningCompleteMap[message.id] = true
+                                }
                             }
+                            stateHolder._currentConversationId.value =
+                                ConversationNameHelper.resolveStableId(loadedMessages)
+                                    ?: "new_chat_${System.currentTimeMillis()}"
+                            stateHolder.applyCurrentConversationFunctionToggleState()
+                            stateHolder._loadedHistoryIndex.value = null
                         }
-                        // 图像模式
-                        stateHolder.imageReasoningCompleteMap.clear()
-                        stateHolder.imageGenerationMessages.forEach { msg ->
-                            if (msg.sender == com.android.everytalk.data.DataClass.Sender.AI &&
-                                !msg.reasoning.isNullOrBlank()) {
-                                stateHolder.imageReasoningCompleteMap[msg.id] = true
+                        lastOpenImageGenChat?.let { loadedMessages ->
+                            stateHolder.imageGenerationMessages.clear()
+                            stateHolder.imageGenerationMessages.addAll(loadedMessages)
+                            stateHolder.imageReasoningCompleteMap.clear()
+                            loadedMessages.forEach { message ->
+                                if (message.sender == com.android.everytalk.data.DataClass.Sender.AI &&
+                                    !message.reasoning.isNullOrBlank()
+                                ) {
+                                    stateHolder.imageReasoningCompleteMap[message.id] = true
+                                }
                             }
+                            stateHolder._currentImageGenerationConversationId.value =
+                                loadedMessages.firstOrNull()?.id ?: "image_resume_${System.currentTimeMillis()}"
+                            stateHolder._loadedImageGenerationHistoryIndex.value = null
                         }
-
-                        // 为"文本模式/图像模式"恢复稳定的会话ID，保证后端多轮会话可延续
-                        val textConvId = ConversationNameHelper.resolveStableId(lastOpenChat)
-                            ?: "new_chat_${System.currentTimeMillis()}"
-                        val imageConvId = lastOpenImageGenChat.firstOrNull()?.id ?: "image_resume_${System.currentTimeMillis()}"
-                        stateHolder._currentConversationId.value = textConvId
-                        stateHolder.applyCurrentConversationFunctionToggleState()
-                        stateHolder._currentImageGenerationConversationId.value = imageConvId
-
-                        // 清空历史索引（处于"继续未存档会话"的状态）
-                        stateHolder._loadedHistoryIndex.value = null
-                        stateHolder._loadedImageGenerationHistoryIndex.value = null
                     }
-                    Log.i(TAG, "loadInitialData: Last open chats loaded. Text: ${lastOpenChat.size}, Image: ${lastOpenImageGenChat.size}")
+                    Log.i(
+                        TAG,
+                        "loadInitialData: Last open chats loaded. Text: ${lastOpenChat?.size ?: -1}, Image: ${lastOpenImageGenChat?.size ?: -1}",
+                    )
                 } else {
                     withContext(Dispatchers.Main.immediate) {
                         stateHolder.messages.clear()
@@ -679,7 +757,7 @@ class DataPersistenceManager(
                     Log.i(TAG, "loadInitialData: Skipped loading last open chats.")
                 }
                 historyLoadingJob.join()
-                onLoadingComplete(initialConfigPresent, initialHistoryPresent)
+                notifyLoadingComplete(initialConfigPresent, initialHistoryPresent)
 
             } catch (e: CancellationException) {
                 throw e
@@ -688,17 +766,12 @@ class DataPersistenceManager(
                 withContext(NonCancellable) {
                     historyLoadingJob?.cancelAndJoin()
                 }
-                withContext(Dispatchers.Main.immediate) {
-                    stateHolder._apiConfigs.value = emptyList()
-                    stateHolder._selectedApiConfig.value = null
-                    stateHolder._historicalConversations.value = emptyList()
-                    stateHolder.messages.clear()
-                    stateHolder._loadedHistoryIndex.value = null
-                    onLoadingComplete(false, false)
-                }
+                warnOnce("部分初始数据加载失败，原数据已保留")
+                notifyLoadingComplete(initialConfigPresent, initialHistoryPresent)
             } finally {
                 withContext(NonCancellable) {
                     historyLoadingJob?.cancelAndJoin()
+                    notifyLoadingComplete(initialConfigPresent, initialHistoryPresent)
                     withContext(Dispatchers.Main.immediate) {
                         stateHolder._isLoadingHistoryData.value = false
                     }
@@ -715,7 +788,29 @@ class DataPersistenceManager(
             // 清除 Room 数据库中的历史
             roomDataSource.clearChatHistory()
             roomDataSource.clearImageGenerationHistory()
+            synchronized(this@DataPersistenceManager) {
+                protectedTextSessionIds.clear()
+                protectedImageSessionIds.clear()
+            }
+            protectLastOpenTextSession = false
+            protectLastOpenImageSession = false
             Log.i(TAG, "clearAllChatHistory: Room 和 SP 中的聊天历史已清除。")
+        }
+    }
+
+    suspend fun clearHistoryExplicitly(isImageGeneration: Boolean) {
+        withContext(Dispatchers.IO) {
+            if (isImageGeneration) {
+                roomDataSource.clearImageGenerationHistory()
+                roomDataSource.saveLastOpenImageGenerationChat(emptyList())
+                synchronized(this@DataPersistenceManager) { protectedImageSessionIds.clear() }
+                protectLastOpenImageSession = false
+            } else {
+                roomDataSource.clearChatHistory()
+                roomDataSource.saveLastOpenChat(emptyList())
+                synchronized(this@DataPersistenceManager) { protectedTextSessionIds.clear() }
+                protectLastOpenTextSession = false
+            }
         }
     }
 
@@ -744,9 +839,15 @@ class DataPersistenceManager(
             }
             // 使用 Room 保存历史
             if (isImageGeneration) {
-                roomDataSource.saveImageGenerationHistory(finalHistory)
+                roomDataSource.saveImageGenerationHistory(
+                    history = finalHistory,
+                    protectedSessionIds = protectedSessionIds(isImageGeneration = true),
+                )
             } else {
-                roomDataSource.saveChatHistory(finalHistory)
+                roomDataSource.saveChatHistory(
+                    history = finalHistory,
+                    protectedSessionIds = protectedSessionIds(isImageGeneration = false),
+                )
             }
             Log.i(TAG, "saveChatHistory: 聊天历史已通过 Room 保存。")
         }
@@ -849,12 +950,13 @@ class DataPersistenceManager(
         }
     }
     suspend fun saveLastOpenChat(messages: List<Message>, isImageGeneration: Boolean = false) {
+        if (isImageGeneration && protectLastOpenImageSession) return
+        if (!isImageGeneration && protectLastOpenTextSession) return
         android.util.Log.d("DataPersistenceManager", "=== SAVE LAST OPEN CHAT START ===")
         android.util.Log.d("DataPersistenceManager", "Saving ${messages.size} messages, isImageGeneration: $isImageGeneration")
         
         messages.forEachIndexed { index, message -> 
             android.util.Log.d("DataPersistenceManager", "Message $index (${message.id}): text length=${message.text.length}, parts=${message.parts.size}, contentStarted=${message.contentStarted}")
-            android.util.Log.d("DataPersistenceManager", "  Text preview: '${message.text.take(50)}${if (message.text.length > 50) "..." else ""}'")
             android.util.Log.d("DataPersistenceManager", "  Sender: ${message.sender}, IsError: ${message.isError}")
             message.parts.forEachIndexed { partIndex, part -> 
                 android.util.Log.d("DataPersistenceManager", "  Part $partIndex: ${part::class.simpleName}")
@@ -903,6 +1005,8 @@ class DataPersistenceManager(
                     roomDataSource.saveLastOpenChat(finalMessages)
                     android.util.Log.d("DataPersistenceManager", "Text chat saved to Room successfully")
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 android.util.Log.e("DataPersistenceManager", "Failed to save last open chat to Room", e)
             }
@@ -911,6 +1015,8 @@ class DataPersistenceManager(
     }
 
     suspend fun clearLastOpenChat(isImageGeneration: Boolean = false) {
+        if (isImageGeneration && protectLastOpenImageSession) return
+        if (!isImageGeneration && protectLastOpenTextSession) return
         withContext(Dispatchers.IO) {
             // 使用 Room 清除最后打开的会话
             if (isImageGeneration) {
@@ -1037,10 +1143,11 @@ class DataPersistenceManager(
 
                 // 1) 收集当前所有会话中被引用的图片路径
                 val referencedPaths = mutableSetOf<String>()
-                
+
                 // 从文本历史会话收集
-                val textHistory = roomDataSource.loadChatHistory()
-                textHistory.forEach { conv ->
+                val textHistoryResult = roomDataSource.loadChatHistoryResult()
+                textHistoryResult.sessions.forEach { loadedSession ->
+                    val conv = loadedSession.messages
                     conv.forEach { msg ->
                         msg.imageUrls?.forEach { url ->
                             val path = url.removePrefix("file://")
@@ -1061,10 +1168,11 @@ class DataPersistenceManager(
                         }
                     }
                 }
-                
+
                 // 从图像生成历史会话收集
-                val imageHistory = roomDataSource.loadImageGenerationHistory()
-                imageHistory.forEach { conv ->
+                val imageHistoryResult = roomDataSource.loadImageGenerationHistoryResult()
+                imageHistoryResult.sessions.forEach { loadedSession ->
+                    val conv = loadedSession.messages
                     conv.forEach { msg ->
                         msg.imageUrls?.forEach { url ->
                             val path = url.removePrefix("file://")
@@ -1100,7 +1208,14 @@ class DataPersistenceManager(
 
                 // 2) 清理 chat_attachments 中不再被引用的文件
                 var orphanedCount = 0
-                if (chatAttachmentsDir.exists()) {
+                val hasUnloadedSessions = textHistoryResult.failedSessionIds.isNotEmpty() ||
+                    imageHistoryResult.failedSessionIds.isNotEmpty()
+                if (hasUnloadedSessions) {
+                    Log.w(
+                        TAG,
+                        "cleanupOrphanedAttachments: skipped persistent attachment deletion because some sessions could not be loaded",
+                    )
+                } else if (chatAttachmentsDir.exists()) {
                     chatAttachmentsDir.listFiles()?.forEach { file ->
                         if (file.isFile && file.absolutePath !in referencedPaths) {
                             try {

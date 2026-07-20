@@ -17,11 +17,27 @@ import com.android.everytalk.data.database.entities.toMessage
 import com.android.everytalk.data.database.entities.toVoiceBackendConfig
 import com.android.everytalk.data.network.ExternalWebSearchProviderConfig
 import com.android.everytalk.util.ConversationNameHelper
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
 import java.util.UUID
 import kotlinx.serialization.builtins.SetSerializer
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+
+data class LoadedHistorySession(
+    val sessionId: String,
+    val messages: List<Message>,
+)
+
+data class SessionHistoryLoadResult(
+    val sessions: List<LoadedHistorySession>,
+    val failedSessionIds: Set<String>,
+)
+
+private val LAST_OPEN_SESSION_IDS = setOf(
+    "last_open_chat_v1",
+    "last_open_image_generation_v1",
+)
 
 class RoomDataSource(context: Context) {
     private val database = AppDatabase.getDatabase(context)
@@ -153,19 +169,41 @@ class RoomDataSource(context: Context) {
 
     // --- Chat History ---
     suspend fun loadChatHistory(): List<List<Message>> {
-        return loadSessions(isImageGeneration = false)
+        return loadChatHistoryResult().sessions.map(LoadedHistorySession::messages)
     }
 
-    suspend fun saveChatHistory(history: List<List<Message>>) {
-        saveSessions(history, isImageGeneration = false)
+    suspend fun loadChatHistoryResult(): SessionHistoryLoadResult {
+        return loadSessionsResult(isImageGeneration = false)
+    }
+
+    suspend fun saveChatHistory(
+        history: List<List<Message>>,
+        protectedSessionIds: Set<String> = emptySet(),
+    ) {
+        saveSessions(
+            history = history,
+            isImageGeneration = false,
+            protectedSessionIds = protectedSessionIds,
+        )
     }
 
     suspend fun loadImageGenerationHistory(): List<List<Message>> {
-        return loadSessions(isImageGeneration = true)
+        return loadImageGenerationHistoryResult().sessions.map(LoadedHistorySession::messages)
     }
 
-    suspend fun saveImageGenerationHistory(history: List<List<Message>>) {
-        saveSessions(history, isImageGeneration = true)
+    suspend fun loadImageGenerationHistoryResult(): SessionHistoryLoadResult {
+        return loadSessionsResult(isImageGeneration = true)
+    }
+
+    suspend fun saveImageGenerationHistory(
+        history: List<List<Message>>,
+        protectedSessionIds: Set<String> = emptySet(),
+    ) {
+        saveSessions(
+            history = history,
+            isImageGeneration = true,
+            protectedSessionIds = protectedSessionIds,
+        )
     }
 
     suspend fun clearChatHistory() {
@@ -176,56 +214,70 @@ class RoomDataSource(context: Context) {
         chatDao.clearAllSessions(isImageGen = true)
     }
 
-    private suspend fun loadSessions(isImageGeneration: Boolean): List<List<Message>> {
-        val sessions = chatDao.getAllSessions(isImageGeneration)
-        return sessions.map { session ->
-            chatDao.getMessagesForSession(session.id).map { it.toMessage() }
-        }
+    private suspend fun loadSessionsResult(isImageGeneration: Boolean): SessionHistoryLoadResult {
+        val loadedSessions = mutableListOf<LoadedHistorySession>()
+        val failedSessionIds = linkedSetOf<String>()
+        chatDao.getAllSessions(isImageGeneration)
+            .filterNot { it.id in LAST_OPEN_SESSION_IDS }
+            .forEach { session ->
+                try {
+                    loadedSessions += LoadedHistorySession(
+                        sessionId = session.id,
+                        messages = chatDao.getMessagesForSession(session.id).map { it.toMessage() },
+                    )
+                } catch (exception: CancellationException) {
+                    throw exception
+                } catch (_: Exception) {
+                    failedSessionIds += session.id
+                }
+            }
+        return SessionHistoryLoadResult(loadedSessions, failedSessionIds)
     }
 
-    private suspend fun saveSessions(history: List<List<Message>>, isImageGeneration: Boolean) {
-        // Optimization: This might be slow if history is huge.
-        // Ideally we should only update changed sessions, but the interface takes the whole list.
-        // For now, mirroring SP behavior (overwrite).
-        // To be safer/faster, we could check IDs.
-        
-        // 1. Get existing session IDs to know what to delete if needed (optional, or just replace all?)
-        // SP implementation overwrites the whole list key. So if a session is removed from the list passed in, it's gone.
-        // So we should sync: delete sessions not in the new list, update/insert others.
-        
+    suspend fun saveLoadedHistorySession(
+        sessionId: String,
+        messages: List<Message>,
+        isImageGeneration: Boolean,
+    ) {
+        if (messages.isEmpty()) return
+        val session = ChatSessionEntity(
+            id = sessionId,
+            creationTimestamp = messages.first().timestamp,
+            lastModifiedTimestamp = messages.last().timestamp,
+            isImageGeneration = isImageGeneration,
+        )
+        chatDao.saveSessionWithMessages(session, messages.map { it.toEntity(sessionId) })
+    }
+
+    private suspend fun saveSessions(
+        history: List<List<Message>>,
+        isImageGeneration: Boolean,
+        protectedSessionIds: Set<String>,
+    ) {
         val newSessionIds = mutableSetOf<String>()
-        
+
         history.forEach { messages ->
             if (messages.isNotEmpty()) {
                 val stableId = ConversationNameHelper.resolveStableId(messages) ?: UUID.randomUUID().toString()
                 newSessionIds.add(stableId)
-                
-                val creationTime = messages.firstOrNull()?.timestamp ?: System.currentTimeMillis()
-                val lastModified = messages.lastOrNull()?.timestamp ?: System.currentTimeMillis()
-                
-                // We need to determine if it's new or existing to preserve creationTime if strictly needed,
-                // but usually first message timestamp is good proxy.
-                
+                if (stableId in protectedSessionIds) return@forEach
+
                 val session = ChatSessionEntity(
                     id = stableId,
-                    creationTimestamp = creationTime,
-                    lastModifiedTimestamp = lastModified,
+                    creationTimestamp = messages.firstOrNull()?.timestamp ?: System.currentTimeMillis(),
+                    lastModifiedTimestamp = messages.lastOrNull()?.timestamp ?: System.currentTimeMillis(),
                     isImageGeneration = isImageGeneration
                 )
-                
-                val messageEntities = messages.map { it.toEntity(stableId) }
-                chatDao.saveSessionWithMessages(session, messageEntities)
+
+                chatDao.saveSessionWithMessages(session, messages.map { it.toEntity(stableId) })
             }
         }
-
-        // Delete sessions that are no longer in the history list
-        // Note: getAllSessions returns all sessions for this mode.
         val existingSessions = chatDao.getAllSessions(isImageGeneration)
         existingSessions.forEach { existing ->
-            if (existing.id !in newSessionIds) {
-                // Determine if this session should really be deleted.
-                // The input 'history' is the "source of truth" for the visible list.
-                // So yes, delete.
+            if (existing.id !in newSessionIds &&
+                existing.id !in protectedSessionIds &&
+                existing.id !in LAST_OPEN_SESSION_IDS
+            ) {
                 chatDao.deleteSession(existing.id)
             }
         }
