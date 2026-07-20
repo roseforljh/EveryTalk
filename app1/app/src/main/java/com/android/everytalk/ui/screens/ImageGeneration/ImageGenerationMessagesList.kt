@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.screens.ImageGeneration
 
+import android.annotation.SuppressLint
 import com.android.everytalk.R
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.fadeIn
@@ -236,6 +237,7 @@ private fun ImageGenLoadingIndicator(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
+@SuppressLint("StateFlowValueCalledInComposition")
 fun ImageGenerationMessagesList(
     chatItems: List<ChatListItem>,
     viewModel: AppViewModel,
@@ -1865,6 +1867,7 @@ private fun BottomActionButton(
 }
 
 @Composable
+@SuppressLint("StateFlowValueCalledInComposition")
 private fun AiMessageItem(
     message: Message,
     text: String,
