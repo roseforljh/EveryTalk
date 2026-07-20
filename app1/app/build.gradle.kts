@@ -410,8 +410,12 @@ val verifyMathJaxAssets by tasks.registering {
         )
         expectedHashes.forEach { (name, expectedHash) ->
             val file = assetsDirectory.file(name).asFile
+            val normalizedBytes = file.readText(Charsets.UTF_8)
+                .replace("\r\n", "\n")
+                .replace('\r', '\n')
+                .toByteArray(Charsets.UTF_8)
             val actualHash = MessageDigest.getInstance("SHA-256")
-                .digest(file.readBytes())
+                .digest(normalizedBytes)
                 .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
             check(actualHash == expectedHash) {
                 "MathJax 资产校验失败：$name，期望 $expectedHash，实际 $actualHash"
