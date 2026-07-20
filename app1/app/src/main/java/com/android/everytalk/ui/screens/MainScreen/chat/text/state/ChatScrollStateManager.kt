@@ -271,6 +271,14 @@ class ChatScrollStateManager(
      * 用户主动滑动、开始下一次滚动操作或超时后会立即释放守护。
      */
     fun stopStreamingAndJumpToRealBottom() {
+        pinToRealBottomUntilUserScroll(clearTopAnchorRuntime = true)
+    }
+
+    /**
+     * 内容仍可能因公式或图片异步扩高时，持续守住真实底部。
+     * 用户主动滑动、开始下一次滚动操作或超时后会立即释放守护。
+     */
+    fun pinToRealBottomUntilUserScroll(clearTopAnchorRuntime: Boolean = false) {
         cancelAutoScrollJob()
         preventAutoScroll = false
         suppressTopAnchorBottomScroll = false
@@ -280,7 +288,16 @@ class ChatScrollStateManager(
         autoScrollJob = coroutineScope.launch {
             isProgrammaticScroll = true
             try {
-                topAnchorRuntimeClearer?.invoke()
+                if (clearTopAnchorRuntime) {
+                    // 先到达包含动态占位的虚拟底部，再清除占位。
+                    // 直接删除占位会让 LazyColumn 沿用旧坐标钳制位置，停在真实底部上方。
+                    scrollToRealBottom()
+                    topAnchorRuntimeClearer?.invoke()
+                    repeat(2) {
+                        withFrameNanos { }
+                        scrollToRealBottom()
+                    }
+                }
                 _showScrollToBottomButton.value = false
                 cancelHideButtonJob()
                 withTimeoutOrNull(STOP_BOTTOM_PIN_TIMEOUT_MS) {
@@ -297,9 +314,8 @@ class ChatScrollStateManager(
                         )
                     }.distinctUntilChanged().collect { layout ->
                         if (pinGeneration != stopBottomPinGeneration) return@collect
-                        if (layout.totalItems > 0 && layout.canScrollForward) {
-                            listState.scrollToItem(layout.totalItems - 1)
-                            listState.scrollBy(Float.MAX_VALUE)
+                        if (layout.totalItems > 0) {
+                            scrollToRealBottom()
                         }
                     }
                 }
@@ -313,6 +329,10 @@ class ChatScrollStateManager(
     }
 
     private fun jumpToBottomInternal(isUserAction: Boolean, smooth: Boolean) {
+        if (!isUserAction && isStopBottomPinActive) {
+            logger.debug("Ignoring external bottom scroll because real-bottom pin is active")
+            return
+        }
         val reason = if (isUserAction) {
             BottomScrollReason.Button
         } else {
@@ -343,18 +363,25 @@ class ChatScrollStateManager(
         logger.debug("Jumping to bottom (smooth=$smooth).")
         cancelAutoScrollJob()
         autoScrollJob = coroutineScope.launch {
-            val totalItems = listState.layoutInfo.totalItemsCount
-            if (totalItems > 0) {
-                val lastIndex = totalItems - 1
+            val lastIndex = listState.layoutInfo.totalItemsCount - 1
+            if (lastIndex >= 0) {
                 if (smooth) {
                     listState.animateScrollToItem(index = lastIndex)
+                    listState.scrollBy(Float.MAX_VALUE)
                 } else {
-                    listState.scrollToItem(index = lastIndex)
+                    scrollToRealBottom()
                 }
             }
             _showScrollToBottomButton.value = false
             cancelHideButtonJob()
         }
+    }
+
+    private suspend fun scrollToRealBottom() {
+        val lastIndex = listState.layoutInfo.totalItemsCount - 1
+        if (lastIndex < 0) return
+        listState.scrollToItem(index = lastIndex)
+        listState.scrollBy(Float.MAX_VALUE)
     }
 
     /**

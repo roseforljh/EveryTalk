@@ -609,6 +609,8 @@ class TopAnchorReserveEngineComposeTest {
         lateinit var appendDelayedTerminalLayout: () -> Unit
         lateinit var releasePinAndScrollUp: () -> Unit
         lateinit var expandAfterRelease: () -> Unit
+        var wasAtVirtualBottomWhenReserveCleared = false
+        var lastVisibleKeyWhenReserveCleared: Any? = null
 
         composeRule.setContent {
             val density = LocalDensity.current
@@ -649,7 +651,12 @@ class TopAnchorReserveEngineComposeTest {
                 coroutineScope = coroutineScope,
             )
             DisposableEffect(scrollStateManager, engineState) {
-                scrollStateManager.setTopAnchorRuntimeClearer(engineState::clearRuntime)
+                scrollStateManager.setTopAnchorRuntimeClearer {
+                    wasAtVirtualBottomWhenReserveCleared = !listState.canScrollForward
+                    lastVisibleKeyWhenReserveCleared =
+                        listState.layoutInfo.visibleItemsInfo.lastOrNull()?.key
+                    engineState.clearRuntime()
+                }
                 onDispose { scrollStateManager.setTopAnchorRuntimeClearer(null) }
             }
 
@@ -687,10 +694,18 @@ class TopAnchorReserveEngineComposeTest {
         }
 
         composeRule.runOnIdle {
+            assertTrue(wasAtVirtualBottomWhenReserveCleared)
+            assertEquals("top_anchor_reserve", lastVisibleKeyWhenReserveCleared)
             assertFalse(engineState.runtime.hasRuntime)
             assertEquals(0, engineState.reservePx)
             assertFalse(listState.canScrollForward)
             assertEquals("answer_footer", listState.layoutInfo.visibleItemsInfo.last().key)
+            val layoutInfo = listState.layoutInfo
+            val lastVisibleItem = layoutInfo.visibleItemsInfo.last()
+            val expectedContentBottom = layoutInfo.viewportEndOffset - layoutInfo.afterContentPadding
+            assertTrue(
+                abs(lastVisibleItem.offset + lastVisibleItem.size - expectedContentBottom) <= 1
+            )
         }
 
         composeRule.runOnIdle { releasePinAndScrollUp() }
@@ -707,6 +722,95 @@ class TopAnchorReserveEngineComposeTest {
             composeRule.waitForIdle()
         }
         composeRule.runOnIdle { assertTrue(listState.canScrollForward) }
+    }
+
+    @Test
+    fun `late bottom event after stopping still reaches bottom of a tall final item`() {
+        composeRule.mainClock.autoAdvance = false
+        val turn = TopAnchorTurn("u2", "a2", "s1", 2L)
+        val items = List(5) { index -> HarnessItem("item_$index", 120.dp) } +
+            HarnessItem("tall_answer", 1200.dp)
+        lateinit var engineState: TopAnchorReserveEngineState
+        lateinit var listState: LazyListState
+        lateinit var scrollStateManager: ChatScrollStateManager
+        lateinit var expandAfterLateBottomEvent: () -> Unit
+
+        composeRule.setContent {
+            val density = LocalDensity.current
+            val coroutineScope = rememberCoroutineScope()
+            var answerHeight by remember { mutableStateOf(1200.dp) }
+            expandAfterLateBottomEvent = { answerHeight = 1600.dp }
+            listState = rememberLazyListState()
+            engineState = remember {
+                TopAnchorReserveEngineState().also {
+                    it.updateRuntime(
+                        TopAnchorRuntimeState(
+                            phase = TopAnchorPhase.Retained,
+                            retainedTurn = turn,
+                            reservePx = with(density) { 480.dp.toPx().toInt() },
+                        )
+                    )
+                }
+            }
+            scrollStateManager = rememberChatScrollStateManager(
+                listState = listState,
+                coroutineScope = coroutineScope,
+            )
+            DisposableEffect(scrollStateManager, engineState) {
+                scrollStateManager.setTopAnchorRuntimeClearer(engineState::clearRuntime)
+                onDispose { scrollStateManager.setTopAnchorRuntimeClearer(null) }
+            }
+
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.height(320.dp),
+                contentPadding = PaddingValues(top = 96.dp, bottom = 100.dp),
+                verticalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp),
+            ) {
+                itemsIndexed(items, key = { _, item -> item.id }) { _, item ->
+                    Box(
+                        Modifier.height(
+                            if (item.id == "tall_answer") answerHeight else item.heightDp
+                        )
+                    )
+                }
+                if (engineState.reservePx > 0) {
+                    item(key = "top_anchor_reserve") {
+                        Spacer(Modifier.height(with(density) { engineState.reservePx.toDp() }))
+                    }
+                }
+            }
+        }
+
+        composeRule.mainClock.advanceTimeByFrame()
+        composeRule.waitForIdle()
+        composeRule.runOnIdle {
+            scrollStateManager.stopStreamingAndJumpToRealBottom()
+        }
+        repeat(12) {
+            composeRule.mainClock.advanceTimeByFrame()
+            composeRule.waitForIdle()
+        }
+        composeRule.runOnIdle {
+            // 模拟停止后图片、公式或终态重排触发的普通落底事件。
+            scrollStateManager.jumpToBottom()
+        }
+        repeat(4) {
+            composeRule.mainClock.advanceTimeByFrame()
+            composeRule.waitForIdle()
+        }
+        composeRule.runOnIdle { expandAfterLateBottomEvent() }
+        repeat(8) {
+            composeRule.mainClock.advanceTimeByFrame()
+            composeRule.waitForIdle()
+        }
+
+        composeRule.runOnIdle {
+            assertFalse(
+                "延迟落底事件把超高末项对齐到了顶部，仍可继续向下滚动",
+                listState.canScrollForward,
+            )
+        }
     }
 
     @Test

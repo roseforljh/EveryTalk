@@ -4,6 +4,7 @@ import androidx.compose.ui.graphics.Color
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.ui.components.everyTalkLoadingIndicatorColor
+import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
 import com.android.everytalk.ui.screens.viewmodel.resolveHistoryExpectedStableConversationId
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -66,7 +67,138 @@ class ChatScreenScrollSessionTest {
     }
 
     @Test
-    fun `preserves scroll session when conversation id migrates from temporary id to first user message id`() {
+    fun `history initial bottom waits for current conversation items instead of stale equal sized list`() {
+        val currentMessages = listOf(
+            Message(id = "new-user", text = "新会话", sender = Sender.User),
+            Message(id = "new-ai", text = "新回复", sender = Sender.AI, contentStarted = true),
+        )
+        val staleItems = listOf(
+            ChatListItem.UserMessage("old-user", "旧会话", emptyList()),
+            ChatListItem.AiMessageFooter(
+                Message(id = "old-ai", text = "旧回复", sender = Sender.AI, contentStarted = true)
+            ),
+        )
+
+        assertFalse(
+            isHistoryConversationReadyForInitialBottom(
+                currentConversationId = "new-user",
+                scrollSessionKey = "new-user",
+                isLoadingHistory = false,
+                messages = currentMessages,
+                chatItems = staleItems,
+                laidOutItemCount = staleItems.size,
+            )
+        )
+    }
+
+    @Test
+    fun `history initial bottom waits for new lazy list session then accepts synchronized items`() {
+        val currentMessages = listOf(
+            Message(id = "new-user", text = "新会话", sender = Sender.User),
+            Message(id = "new-ai", text = "新回复", sender = Sender.AI, contentStarted = true),
+        )
+        val currentItems = listOf(
+            ChatListItem.UserMessage("new-user", "新会话", emptyList()),
+            ChatListItem.AiMessageFooter(currentMessages.last()),
+        )
+
+        assertFalse(
+            isHistoryConversationReadyForInitialBottom(
+                currentConversationId = "new-user",
+                scrollSessionKey = "old-user",
+                isLoadingHistory = false,
+                messages = currentMessages,
+                chatItems = currentItems,
+                laidOutItemCount = currentItems.size,
+            )
+        )
+        assertTrue(
+            isHistoryConversationReadyForInitialBottom(
+                currentConversationId = "new-user",
+                scrollSessionKey = "new-user",
+                isLoadingHistory = false,
+                messages = currentMessages,
+                chatItems = currentItems,
+                laidOutItemCount = currentItems.size,
+            )
+        )
+    }
+
+    @Test
+    fun `startup hydration cannot finish initial bottom on the temporary empty conversation`() {
+        assertFalse(
+            isHistoryConversationReadyForInitialBottom(
+                currentConversationId = "new_chat_startup",
+                scrollSessionKey = "new_chat_startup",
+                isLoadingHistory = false,
+                isLoadingHistoryData = true,
+                requireMatchingScrollSession = false,
+                messages = emptyList(),
+                chatItems = emptyList(),
+                laidOutItemCount = 0,
+            )
+        )
+    }
+
+    @Test
+    fun `startup last open conversation waits for rendered items then reaches bottom once`() {
+        val messages = listOf(
+            Message(id = "restored-user", text = "恢复会话", sender = Sender.User),
+            Message(id = "restored-ai", text = "恢复回复", sender = Sender.AI, contentStarted = true),
+        )
+        val items = listOf(
+            ChatListItem.UserMessage("restored-user", "恢复会话", emptyList()),
+            ChatListItem.AiMessageFooter(messages.last()),
+        )
+
+        assertFalse(
+            isHistoryConversationReadyForInitialBottom(
+                currentConversationId = "restored-user",
+                scrollSessionKey = "new_chat_startup",
+                isLoadingHistory = false,
+                isLoadingHistoryData = false,
+                requireMatchingScrollSession = false,
+                messages = messages,
+                chatItems = emptyList(),
+                laidOutItemCount = 0,
+            )
+        )
+        assertTrue(
+            isHistoryConversationReadyForInitialBottom(
+                currentConversationId = "restored-user",
+                scrollSessionKey = "new_chat_startup",
+                isLoadingHistory = false,
+                isLoadingHistoryData = false,
+                requireMatchingScrollSession = false,
+                messages = messages,
+                chatItems = items,
+                laidOutItemCount = items.size,
+            )
+        )
+    }
+
+    @Test
+    fun `completed history load cannot clear a newer loading overlay`() {
+        assertFalse(
+            shouldClearHistoryLoadingOverlay(
+                completedGeneration = 8L,
+                currentGeneration = 9L,
+                completedOverlayKey = "history-load-8",
+                currentOverlayKey = "history-load-9",
+            )
+        )
+        assertTrue(
+            shouldClearHistoryLoadingOverlay(
+                completedGeneration = 9L,
+                currentGeneration = 9L,
+                completedOverlayKey = "history-load-9",
+                currentOverlayKey = "history-load-9",
+            )
+        )
+    }
+
+    @Test
+    fun `preserves scroll session only when temporary conversation id migrates to first user message id`() {
         val stableConversationId = "user_message_1"
         val messages = listOf(
             Message(
@@ -76,13 +208,91 @@ class ChatScreenScrollSessionTest {
             )
         )
 
-        val result = shouldPreserveScrollSessionOnConversationIdChange(
-            previousConversationId = "user_temp_123",
-            newConversationId = stableConversationId,
-            messages = messages
+        listOf("new_chat_123", "chat_123", "user_temp_123").forEach { temporaryId ->
+            val result = shouldPreserveScrollSessionOnConversationIdChange(
+                previousConversationId = temporaryId,
+                newConversationId = stableConversationId,
+                messages = messages
+            )
+
+            assertTrue("临时会话 ID $temporaryId 应保留滚动会话", result)
+        }
+    }
+
+    @Test
+    fun `history conversation switch never preserves previous lazy list session`() {
+        val stableConversationId = "history-user-message"
+        val messages = listOf(
+            Message(
+                id = stableConversationId,
+                text = "历史会话",
+                sender = Sender.User
+            )
         )
 
-        assertTrue(result)
+        val result = shouldPreserveScrollSessionOnConversationIdChange(
+            previousConversationId = "previous-user-message",
+            newConversationId = stableConversationId,
+            messages = messages,
+        )
+
+        assertFalse(result)
+    }
+
+    @Test
+    fun `history load from temporary empty conversation still creates a new scroll session`() {
+        val stableConversationId = "history-user-message"
+        val messages = listOf(
+            Message(
+                id = stableConversationId,
+                text = "历史会话",
+                sender = Sender.User,
+            )
+        )
+
+        listOf("new_chat_123", "chat_123", "user_temp_123").forEach { temporaryId ->
+            assertFalse(
+                shouldPreserveScrollSessionOnConversationIdChange(
+                    previousConversationId = temporaryId,
+                    newConversationId = stableConversationId,
+                    messages = messages,
+                    isHistoryConversationLoad = true,
+                )
+            )
+        }
+    }
+
+    @Test
+    fun `initial bottom handling follows scroll session instead of mutable conversation id`() {
+        val source = chatScreenSource()
+
+        assertTrue(source.contains("var initialScrollHandled by remember(scrollSessionKey)"))
+        assertTrue(source.contains("LaunchedEffect(scrollSessionKey, listState, historyLoadGeneration)"))
+        assertTrue(source.contains("val isLoadingHistoryDataState = rememberUpdatedState(isLoadingHistoryData)"))
+        assertTrue(source.contains("scrollStateManager.pinToRealBottomUntilUserScroll()"))
+        assertFalse(source.contains("var initialScrollHandled by remember(conversationId)"))
+        assertFalse(source.contains("LaunchedEffect(conversationId, scrollSessionKey, listState)"))
+        assertFalse(source.contains("lastSendAt"))
+    }
+
+    @Test
+    fun `startup history loading flag spans last open restoration`() {
+        val source = dataPersistenceSource()
+        val loadingStartedAt = source.indexOf("stateHolder._isLoadingHistoryData.value = true")
+        val outerLaunchAt = source.indexOf("viewModelScope.launch(Dispatchers.IO)", loadingStartedAt)
+        val historyJobAt = source.indexOf("historyLoadingJob = launch", outerLaunchAt)
+        val historyJoinAt = source.indexOf("historyLoadingJob.join()", historyJobAt)
+        val loadingFinishedAt = source.lastIndexOf("stateHolder._isLoadingHistoryData.value = false")
+
+        assertTrue(loadingStartedAt >= 0)
+        assertTrue(loadingStartedAt < outerLaunchAt)
+        assertTrue(historyJobAt > outerLaunchAt)
+        assertTrue(historyJoinAt > historyJobAt)
+        assertTrue(loadingFinishedAt > historyJoinAt)
+        assertTrue(source.contains("historyLoadingJob?.cancelAndJoin()"))
+        assertTrue(source.contains("ConversationNameHelper.resolveStableId(lastOpenChat)"))
+        assertEquals(loadingStartedAt, source.lastIndexOf("stateHolder._isLoadingHistoryData.value = true"))
+        assertEquals(loadingFinishedAt, source.indexOf("stateHolder._isLoadingHistoryData.value = false"))
     }
 
     @Test
@@ -147,6 +357,17 @@ class ChatScreenScrollSessionTest {
         )
         val sourceFile = candidates.firstOrNull { it.isFile }
         requireNotNull(sourceFile) { "找不到 ChatScreen.kt" }
+        return sourceFile.readText(Charsets.UTF_8)
+    }
+
+    private fun dataPersistenceSource(): String {
+        val candidates = listOf(
+            File("src/main/java/com/android/everytalk/ui/screens/viewmodel/DataPersistenceManager.kt"),
+            File("app/src/main/java/com/android/everytalk/ui/screens/viewmodel/DataPersistenceManager.kt"),
+            File("app1/app/src/main/java/com/android/everytalk/ui/screens/viewmodel/DataPersistenceManager.kt"),
+        )
+        val sourceFile = candidates.firstOrNull { it.isFile }
+        requireNotNull(sourceFile) { "找不到 DataPersistenceManager.kt" }
         return sourceFile.readText(Charsets.UTF_8)
     }
 }

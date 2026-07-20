@@ -85,8 +85,10 @@ import kotlinx.coroutines.delay
 internal fun shouldPreserveScrollSessionOnConversationIdChange(
     previousConversationId: String?,
     newConversationId: String,
-    messages: List<Message>
+    messages: List<Message>,
+    isHistoryConversationLoad: Boolean = false,
 ): Boolean {
+    if (isHistoryConversationLoad) return false
     if (previousConversationId.isNullOrBlank()) {
         return false
     }
@@ -98,7 +100,10 @@ internal fun shouldPreserveScrollSessionOnConversationIdChange(
         ?: messages.firstOrNull { it.sender == Sender.System && !it.isPlaceholderName }?.id
         ?: messages.firstOrNull()?.id
 
-    return derivedStableConversationId == newConversationId
+    val previousIdWasTemporary = previousConversationId.startsWith("new_chat_") ||
+        previousConversationId.startsWith("chat_") ||
+        previousConversationId.startsWith("user_temp_")
+    return previousIdWasTemporary && derivedStableConversationId == newConversationId
 }
 
 internal fun buildHistoryLoadingBubblePlaceholders(conversationId: String): List<ChatListItem> {
@@ -159,6 +164,55 @@ internal fun shouldStartHistoryConversationLoadingOverlay(
     observedLoadGeneration: Long,
     currentLoadGeneration: Long,
 ): Boolean = currentLoadGeneration > 0L && currentLoadGeneration != observedLoadGeneration
+
+internal fun shouldClearHistoryLoadingOverlay(
+    completedGeneration: Long,
+    currentGeneration: Long,
+    completedOverlayKey: String?,
+    currentOverlayKey: String?,
+): Boolean = completedOverlayKey != null &&
+    completedGeneration == currentGeneration &&
+    completedOverlayKey == currentOverlayKey
+
+internal fun isHistoryConversationReadyForInitialBottom(
+    currentConversationId: String,
+    scrollSessionKey: String,
+    isLoadingHistory: Boolean,
+    isLoadingHistoryData: Boolean = false,
+    requireMatchingScrollSession: Boolean = true,
+    messages: List<Message>,
+    chatItems: List<ChatListItem>,
+    laidOutItemCount: Int,
+): Boolean {
+    if (isLoadingHistory || isLoadingHistoryData) return false
+    if (requireMatchingScrollSession && currentConversationId != scrollSessionKey) return false
+
+    val expectedMessageIds = messages
+        .dropWhile { message ->
+            message.sender == Sender.System && !message.isPlaceholderName && message.text.isNotBlank()
+        }
+        .filter { message -> message.sender != Sender.Tool || message.isError }
+        .mapTo(mutableSetOf()) { message -> message.id }
+    val renderedMessageIds = chatItems.mapNotNullTo(mutableSetOf()) { item ->
+        when (item) {
+            is ChatListItem.UserMessage -> item.messageId
+            is ChatListItem.SystemMessage -> item.messageId
+            is ChatListItem.AiMessage -> item.messageId
+            is ChatListItem.AiMessageCode -> item.messageId
+            is ChatListItem.AiMessageStreaming -> item.messageId
+            is ChatListItem.AiMessageCodeStreaming -> item.messageId
+            is ChatListItem.AiMessageReasoning -> item.message.id
+            is ChatListItem.AiMessageFooter -> item.message.id
+            is ChatListItem.ErrorMessage -> item.messageId
+            is ChatListItem.LoadingIndicator -> item.messageId
+            is ChatListItem.StatusIndicator -> item.messageId
+            is ChatListItem.LoadingBubblePlaceholder -> null
+        }
+    }
+
+    return expectedMessageIds == renderedMessageIds &&
+        laidOutItemCount >= chatItems.size
+}
 
 @Composable
 internal fun HistoryConversationLoadingOverlay(
@@ -305,6 +359,9 @@ fun ChatScreen(
     val observedHistoryLoadGenerationState = rememberUpdatedState(observedHistoryLoadGeneration)
     val historyLoadGenerationState = rememberUpdatedState(historyLoadGeneration)
     val chatListItemsState = rememberUpdatedState(chatListItems)
+    val messagesState = rememberUpdatedState(messages.toList())
+    val conversationIdState = rememberUpdatedState(conversationId)
+    val isLoadingHistoryDataState = rememberUpdatedState(isLoadingHistoryData)
 
     // 获取抽屉和搜索相关状态
     val isDrawerOpen = !viewModel.drawerState.isClosed
@@ -330,16 +387,20 @@ fun ChatScreen(
     }
 
 
-    val lastSendAt = remember { mutableStateOf(0L) }
-
     var scrollSessionKey by remember { mutableStateOf(conversationId) }
     var previousConversationIdForScroll by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(conversationId, messages.size, messages.firstOrNull()?.id) {
+    LaunchedEffect(
+        conversationId,
+        messages.size,
+        messages.firstOrNull()?.id,
+        isHistoryLoadingOverlayVisible,
+    ) {
         val shouldPreserveScrollSession = shouldPreserveScrollSessionOnConversationIdChange(
             previousConversationId = previousConversationIdForScroll,
             newConversationId = conversationId,
-            messages = messages.toList()
+            messages = messages.toList(),
+            isHistoryConversationLoad = isHistoryLoadingOverlayVisible,
         )
 
         if (!shouldPreserveScrollSession) {
@@ -352,41 +413,76 @@ fun ChatScreen(
     val listState = remember(scrollSessionKey) {
         LazyListState(0, 0)
     }
+    val scrollStateManager = rememberChatScrollStateManager(listState, coroutineScope)
 
-    var initialScrollHandled by remember(conversationId) { mutableStateOf(false) }
+    var initialScrollHandled by remember(scrollSessionKey) { mutableStateOf(false) }
 
-    LaunchedEffect(conversationId, listState) {
+    LaunchedEffect(scrollSessionKey, listState, historyLoadGeneration) {
         if (initialScrollHandled) return@LaunchedEffect
 
-        val skipScrollToBottom = System.currentTimeMillis() - lastSendAt.value < 1200
+        val effectGeneration = historyLoadGeneration
+        while (!initialScrollHandled) {
+            val readyToken = snapshotFlow {
+                val currentGeneration = historyLoadGenerationState.value
+                if (currentGeneration != effectGeneration) return@snapshotFlow null
 
-        snapshotFlow {
-            val generationObserved = !shouldStartHistoryConversationLoadingOverlay(
-                observedLoadGeneration = observedHistoryLoadGenerationState.value,
-                currentLoadGeneration = historyLoadGenerationState.value,
-            )
-            if (!generationObserved) return@snapshotFlow false
-            if (!isHistoryLoadingOverlayVisibleState.value) return@snapshotFlow true
-            val realItemCount = chatListItemsState.value.size
-            !isLoadingHistoryState.value &&
-                realItemCount > 0 &&
-                listState.layoutInfo.totalItemsCount >= realItemCount
-        }
-            .filter { it }
-            .first()
+                val generationObserved = !shouldStartHistoryConversationLoadingOverlay(
+                    observedLoadGeneration = observedHistoryLoadGenerationState.value,
+                    currentLoadGeneration = currentGeneration,
+                )
+                if (!generationObserved) return@snapshotFlow null
 
-        if (!skipScrollToBottom) {
+                val overlayVisible = isHistoryLoadingOverlayVisibleState.value
+                val ready = isHistoryConversationReadyForInitialBottom(
+                    currentConversationId = conversationIdState.value,
+                    scrollSessionKey = scrollSessionKey,
+                    isLoadingHistory = isLoadingHistoryState.value,
+                    isLoadingHistoryData = isLoadingHistoryDataState.value,
+                    requireMatchingScrollSession = overlayVisible,
+                    messages = messagesState.value,
+                    chatItems = chatListItemsState.value,
+                    laidOutItemCount = listState.layoutInfo.totalItemsCount,
+                )
+                if (ready) currentGeneration to historyLoadingOverlayKeyState.value else null
+            }
+                .filterNotNull()
+                .first()
+
             withFrameNanos { }
-            val targetIndex = chatListItemsState.value.lastIndex
+            if (historyLoadGenerationState.value != readyToken.first) {
+                return@LaunchedEffect
+            }
+
+            val stillReady = isHistoryConversationReadyForInitialBottom(
+                currentConversationId = conversationIdState.value,
+                scrollSessionKey = scrollSessionKey,
+                isLoadingHistory = isLoadingHistoryState.value,
+                isLoadingHistoryData = isLoadingHistoryDataState.value,
+                requireMatchingScrollSession = readyToken.second != null ||
+                    isHistoryLoadingOverlayVisibleState.value,
+                messages = messagesState.value,
+                chatItems = chatListItemsState.value,
+                laidOutItemCount = listState.layoutInfo.totalItemsCount,
+            )
+            if (!stillReady) continue
+
+            val targetIndex = listState.layoutInfo.totalItemsCount - 1
             if (targetIndex >= 0) {
                 listState.scrollToItem(targetIndex)
                 listState.scrollBy(Float.MAX_VALUE)
             }
+            scrollStateManager.pinToRealBottomUntilUserScroll()
+            if (shouldClearHistoryLoadingOverlay(
+                    completedGeneration = readyToken.first,
+                    currentGeneration = historyLoadGenerationState.value,
+                    completedOverlayKey = readyToken.second,
+                    currentOverlayKey = historyLoadingOverlayKeyState.value,
+                )
+            ) {
+                historyLoadingOverlayKey = null
+            }
+            initialScrollHandled = true
         }
-        if (historyLoadingOverlayKeyState.value != null) {
-            historyLoadingOverlayKey = null
-        }
-        initialScrollHandled = true
     }
 
     val density = LocalDensity.current
@@ -394,7 +490,6 @@ fun ChatScreen(
     val keyboardController = LocalSoftwareKeyboardController.current
 
 
-    val scrollStateManager = rememberChatScrollStateManager(listState, coroutineScope)
     val isAtBottom by scrollStateManager.isAtBottom
     
     LaunchedEffect(scrollStateManager, currentStreamingAiMessageId) {
@@ -714,7 +809,6 @@ fun ChatScreen(
                 },
                 onSendMessageRequest = { messageText, _, attachments, mimeType ->
                     scrollStateManager.lockAutoScroll()
-                    lastSendAt.value = System.currentTimeMillis()
                     viewModel.onSendMessage(messageText = messageText, attachments = attachments, audioBase64 = null, mimeType = mimeType)
                     keyboardController?.hide()
                 },
@@ -750,7 +844,6 @@ fun ChatScreen(
                     scrollStateManager.jumpToBottom()
                 },
                 onSendMessage = { messageText, isFromRegeneration, attachments, audioBase64, mimeType ->
-                    lastSendAt.value = System.currentTimeMillis()
                     viewModel.onSendMessage(
                         messageText = messageText,
                         isFromRegeneration = isFromRegeneration,

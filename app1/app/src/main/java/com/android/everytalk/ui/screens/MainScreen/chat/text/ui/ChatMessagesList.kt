@@ -1199,7 +1199,10 @@ fun AiMessageItem(
                     selectedRenderState?.blocks ?: emptyList()
                 }
 
-                val preparedFromBlocks = remember(displayMessage.text, effectiveRenderBlocks) {
+                val preparedMessage = selectedRenderState?.preparedMessage ?: remember(
+                    displayMessage.text,
+                    effectiveRenderBlocks,
+                ) {
                     val hasPendingFormula = effectiveRenderBlocks.any { block ->
                         when (block) {
                             is StreamBlock.MathInline -> block.state != MathBlockState.RENDERED
@@ -1214,7 +1217,6 @@ fun AiMessageItem(
                         contentVersion = contentVersionForRendering(displayMessage.text),
                     )
                 }
-                val preparedMessage = selectedRenderState?.preparedMessage ?: preparedFromBlocks
 
                 if (effectiveRenderBlocks.isNotEmpty()) {
                     UnifiedMarkdownRenderer(

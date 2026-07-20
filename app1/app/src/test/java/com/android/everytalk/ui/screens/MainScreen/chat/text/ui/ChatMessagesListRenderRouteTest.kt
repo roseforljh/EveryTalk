@@ -15,6 +15,14 @@ class ChatMessagesListRenderRouteTest {
     }
 
     @Test
+    fun `selected render state should bypass fallback message preparation`() {
+        val source = chatMessagesListSource()
+
+        assertTrue(source.contains("val preparedMessage = selectedRenderState?.preparedMessage ?: remember("))
+        assertFalse(source.contains("val preparedFromBlocks = remember("))
+    }
+
+    @Test
     fun `text chat top anchor always uses configured top inset`() {
         val source = chatMessagesListSource()
 

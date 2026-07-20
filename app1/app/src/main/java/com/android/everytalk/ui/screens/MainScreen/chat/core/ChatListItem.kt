@@ -45,7 +45,7 @@ sealed interface ChatListItem {
         val text: String,
         val hasReasoning: Boolean
     ) : ChatListItem {
-        override val stableId: String = "${messageId}_code"
+        override val stableId: String = messageId
     }
 
     // 新增：流式渲染专用项（文本/数学/代码）
@@ -61,7 +61,7 @@ sealed interface ChatListItem {
         val messageId: String,
         val hasReasoning: Boolean
     ) : ChatListItem {
-        override val stableId: String = "${messageId}_code"
+        override val stableId: String = messageId
     }
     // 新增结束
 
