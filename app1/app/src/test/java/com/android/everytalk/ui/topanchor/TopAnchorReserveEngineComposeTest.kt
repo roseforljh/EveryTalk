@@ -593,6 +593,11 @@ class TopAnchorReserveEngineComposeTest {
         composeRule.runOnIdle {
             assertTrue(engineState.runtime.hasRuntime)
             scrollStateManager.jumpToBottom(isUserAction = true)
+        }
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            !engineState.runtime.hasRuntime
+        }
+        composeRule.runOnIdle {
             assertFalse(engineState.runtime.hasRuntime)
         }
     }
