@@ -40,11 +40,32 @@ class ChatMessagesListRenderRouteTest {
     }
 
     @Test
-    fun `natural stream completion keeps reserve so user scroll position does not jump`() {
+    fun `natural stream completion removes top anchor reserve`() {
         val source = chatMessagesListSource()
 
-        assertTrue(source.contains("keepReserveAfterRunEnd = true"))
-        assertFalse(source.contains("keepReserveAfterRunEnd = false"))
+        assertTrue(source.contains("keepReserveAfterRunEnd = false"))
+        assertFalse(source.contains("keepReserveAfterRunEnd = true"))
+    }
+
+    @Test
+    fun `ai footer regenerate locks competing auto scroll before starting`() {
+        val source = chatMessagesListSource()
+        val footerStart = source.indexOf("fun AiMessageFooterItem(")
+        val footerEnd = source.indexOf("private fun AiMessagePopupMenu(", startIndex = footerStart)
+        require(footerStart >= 0 && footerEnd > footerStart) { "找不到 AI 消息底部操作区" }
+        val footerSource = source.substring(footerStart, footerEnd)
+
+        assertTrue(footerSource.contains("scrollStateManager: ChatScrollStateManager"))
+        assertTrue(
+            footerSource.contains(
+                "scrollStateManager.lockAutoScroll()\n                        viewModel.regenerateAiResponse("
+            )
+        )
+        assertTrue(
+            footerSource.contains(
+                "scrollStateManager.lockAutoScroll()\n                        viewModel.regenerateAiResponseWithConfig("
+            )
+        )
     }
 
     @Test

@@ -75,6 +75,7 @@ import com.android.everytalk.ui.screens.BubbleMain.Main.resolveUserBubbleMaxHeig
 import com.android.everytalk.ui.screens.BubbleMain.Main.MessageContextMenu
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
 import com.android.everytalk.ui.screens.MainScreen.chat.core.PlaceholderRole
+import com.android.everytalk.ui.screens.MainScreen.chat.text.state.ChatScrollStateManager
 import com.android.everytalk.ui.theme.ChatDimensions
 import com.android.everytalk.ui.theme.chatColors
 
@@ -370,7 +371,7 @@ fun ChatMessagesList(
                         tallAnchorVisibleHeightPx = with(density) { 96.dp.toPx().toInt() },
                         topInsetPx = topPaddingPx,
                         stableWindowNanos = 50_000_000L,
-                        keepReserveAfterRunEnd = true,
+                        keepReserveAfterRunEnd = false,
                     ),
                     enabled = topAnchorEngine.runtime.hasRuntime
                 )
@@ -653,6 +654,7 @@ fun ChatMessagesList(
                             AiMessageFooterItem(
                                 message = item.message,
                                 viewModel = viewModel,
+                                scrollStateManager = scrollStateManager,
                             )
                         }
 
@@ -1274,6 +1276,7 @@ fun AiMessageItem(
 fun AiMessageFooterItem(
     message: Message,
     viewModel: AppViewModel,
+    scrollStateManager: ChatScrollStateManager,
     onShowOptions: (Message) -> Unit = {},
 ) {
     var showPopupMenu by remember { mutableStateOf(false) }
@@ -1341,6 +1344,7 @@ fun AiMessageFooterItem(
                     onDismiss = { showPopupMenu = false },
                     onRegenerate = {
                         val latestMessage = viewModel.getMessageById(message.id) ?: message
+                        scrollStateManager.lockAutoScroll()
                         viewModel.regenerateAiResponse(latestMessage, scrollToNewMessage = true)
                     },
                     modelName = message.modelName,
@@ -1348,6 +1352,7 @@ fun AiMessageFooterItem(
                     selectedModelId = viewModel.selectedApiConfig.collectAsState().value?.id,
                     onChangeModelConfirm = { config ->
                         val latestMessage = viewModel.getMessageById(message.id) ?: message
+                        scrollStateManager.lockAutoScroll()
                         viewModel.regenerateAiResponseWithConfig(latestMessage, config, scrollToNewMessage = true)
                     },
                     onExport = {
