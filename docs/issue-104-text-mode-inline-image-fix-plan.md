@@ -3,18 +3,18 @@
 | 项目 | 内容 |
 |---|---|
 | Issue | [#104 生成图像无法正常放大预览切导致应用崩溃](https://github.com/roseforljh/EveryTalk/issues/104) |
-| 文档状态 | 已完成代码链路核查和工程自审，等待人工审查，尚未实施业务代码 |
+| 文档状态 | 已完成代码实施、独立对抗审查和自动化验证，等待人工审查与真机验收 |
 | 制定日期 | 2026-07-20 |
 | 目标分支 | `like-gpt`，基线提交 `1baebda8`，同时考虑当前未提交的 Markdown 渲染和历史加载并发改动 |
 | Android 工程 | `app1/` |
 | 问题主路径 | 文本模式中的 Gemini 代码执行图片和其他流式图片事件 |
-| 评审结论 | 修复方案通过架构、代码质量、测试、性能四项自审，无未解决决策 |
+| 评审结论 | 修复实现通过架构、代码质量、测试、性能和独立对抗审查，无未解决决策 |
 
 ## 1. 文档目的
 
 本文档给出 Issue #104 的完整修复计划，覆盖问题事实、证据等级、根因、目标数据流、职责边界、实施顺序、文件级改动、历史兼容、异常处理、安全限制、性能预算、测试矩阵、真机验收、回滚和自审结果。
 
-本轮只制定和审查方案，不修改业务代码，不执行 Git 提交。
+本轮已按方案完成业务代码、测试和自动化验证，不执行 Git 提交。
 
 ## 2. 最终结论
 
@@ -886,21 +886,21 @@ adb logcat | Select-String -Pattern "TransactionTooLargeException|SQLiteBlobTooB
 
 只有同时满足以下条件才能关闭 Issue：
 
-- [ ] 文本模式生成图进入本地文件和 `imageUrls`。
-- [ ] 新消息的 `text`、`parts`、`imageUrls` 和 Room 记录均不含 `data:image`。
-- [ ] 点击生成图打开自身。
-- [ ] 多图预览初始索引准确。
-- [ ] 当前 MikePenz 图片节点能够传播点击回调。
-- [ ] 复制、分享和文本导出不包含 Base64 图片。
-- [ ] 复制和分享 UTF-8 载荷不超过 256KiB。
-- [ ] 旧消息迁移幂等，失败不破坏原数据库记录。
-- [ ] 单阶段加载失败不清空其他已成功加载状态。
-- [ ] 所有图片 I/O 不在主线程执行。
-- [ ] 所有新增协程路径传播 `CancellationException`。
-- [ ] 日志没有图片 payload。
-- [ ] 相关定向测试通过。
-- [ ] 全量单元测试通过。
-- [ ] `assembleDebug` 和 `lintDebug` 通过。
+- [x] 文本模式生成图进入本地文件和 `imageUrls`。
+- [x] 新消息的 `text`、`parts`、`imageUrls` 和 Room 记录均不含 `data:image`。
+- [x] 点击生成图打开自身。
+- [x] 多图预览初始索引准确。
+- [x] 当前 MikePenz 图片节点能够传播点击回调。
+- [x] 复制、分享和文本导出不包含 Base64 图片。
+- [x] 复制和分享 UTF-8 载荷不超过 256KiB。
+- [x] 旧消息迁移幂等，失败不破坏原数据库记录。
+- [x] 单阶段加载失败不清空其他已成功加载状态。
+- [x] 所有图片 I/O 和大 Base64 指纹扫描不在主线程执行。
+- [x] 所有新增协程路径传播 `CancellationException`，迁移取消会清理本轮文件。
+- [x] 新增路径日志不输出图片 payload。
+- [x] 相关定向测试通过。
+- [x] 全量 656 项单元测试通过。
+- [x] `assembleDebug` 和 `lintDebug` 通过。
 - [ ] 文本模式和图像模式真机回归通过。
 - [ ] logcat 没有超大 Binder 事务异常。
 
@@ -1038,7 +1038,7 @@ Sequential implementation, no parallelization opportunity.
 | What already exists | 已写明并优先复用 |
 | TODOS.md updates | 0 项，未把必要修复延后 |
 | Failure modes | 0 个未覆盖关键缺口 |
-| Outside voice | 跳过，用户要求当前模型先完成自审，且本任务禁止启动子代理 |
+| Outside voice | 已运行 1 次独立只读对抗审查，发现 6 项真实问题，全部修复并复核 |
 | Parallelization | 顺序实施 |
 | Autoplan JSONL | 本机未安装 `jq`，按评审工具规则跳过；不影响方案文档和 Review Log |
 | 完整方案选择 | 26 项审查发现全部进入实施计划 |
@@ -1047,30 +1047,57 @@ Sequential implementation, no parallelization opportunity.
 
 以下任务由工程自审发现直接生成。
 
-- [ ] **T1（P1，人工约 1 小时，Codex 约 15 分钟）**：外部传输安全，加入图片净化和 256KiB 上限
+- [x] **T1（P1，人工约 1 小时，Codex 约 15 分钟）**：外部传输安全，加入图片净化和 256KiB 上限
   - 来源：代码质量审查第 3 项，性能审查第 3、5 项
   - 文件：`MessageImageContent.kt`、`ClipboardController.kt`、`ChatMessagesList.kt`
   - 验证：`./gradlew :app:testDebugUnitTest --tests "*MessageImageContentTest*"`
-- [ ] **T2（P1，人工约 3 小时，Codex 约 30 分钟）**：存储层，统一图片来源校验和归档
+- [x] **T2（P1，人工约 3 小时，Codex 约 30 分钟）**：存储层，统一图片来源校验和归档
   - 来源：架构审查第 3 项，代码质量审查第 1、4、5 项
   - 文件：`FileManager.kt`、`DataPersistenceManager.kt`、`HistoryManager.kt`
   - 验证：`./gradlew :app:testDebugUnitTest --tests "*GeneratedImagePersistenceTest*"`
-- [ ] **T3（P1，人工约 3 小时，Codex 约 30 分钟）**：流式状态，图片先落盘并在同一主线程状态段更新消息
+- [x] **T3（P1，人工约 3 小时，Codex 约 30 分钟）**：流式状态，图片先落盘并在同一主线程状态段更新消息
   - 来源：架构审查第 1、2 项，代码质量审查第 7 项
   - 文件：`ApiHandler.kt`、`MessageProcessor.kt`
   - 验证：`./gradlew :app:testDebugUnitTest --tests "*ApiHandlerGeneratedImageTest*" --tests "*ApiHandlerStreamCompletionMergeTest*" --tests "*MessageProcessorFinalizePartsTest*"`
-- [ ] **T4（P1，人工约 2 小时，Codex 约 20 分钟）**：图片交互，恢复点击回调并修正预览索引
+- [x] **T4（P1，人工约 2 小时，Codex 约 20 分钟）**：图片交互，恢复点击回调并修正预览索引
   - 来源：架构审查第 4 项，代码质量审查第 2、6 项
   - 文件：`StreamBlocksRenderer.kt`、`MikePenzMarkdownRenderer.kt`、`ChatMessagesList.kt`、`ChatScreen.kt`、`AppViewModel.kt`
   - 验证：`./gradlew :app:testDebugUnitTest --tests "*MarkdownImageClickTest*" --tests "*ChatScreenImagePreviewSelectionTest*"`
-- [ ] **T5（P2，人工约 4 小时，Codex 约 40 分钟）**：历史兼容，迁移旧 Base64 图片并隔离加载错误
+- [x] **T5（P2，人工约 4 小时，Codex 约 40 分钟）**：历史兼容，迁移旧 Base64 图片并隔离加载错误
   - 来源：架构审查第 5 项，测试审查第 8、9 项
   - 文件：`DataPersistenceManager.kt`、`RoomDataSource.kt`、`AppViewModel.kt`
   - 验证：`./gradlew :app:testDebugUnitTest --tests "*DataPersistenceInlineImageMigrationTest*" --tests "*RoomDataSourcePartialHistoryLoadTest*"`
-- [ ] **T6（P1，人工约 3 小时，Codex 约 30 分钟）**：回归验证，运行定向、全量、构建、Lint 和真机用例
+- [x] **T6A（P1）**：自动化回归验证，运行定向、全量、构建和 Lint
   - 来源：测试审查全部缺口
   - 文件：相关测试文件，不修改无关生产代码
   - 验证：`./gradlew :app:testDebugUnitTest :app:assembleDebug :app:lintDebug`
+- [ ] **T6B（P1）**：真机执行文本模式、图像模式、旧数据库和 logcat 验收
+  - 状态：尚未执行，不以自动化结果代替真机结论
+
+## 21.1 实施后二次审查修正
+
+独立只读对抗审查发现以下 6 项问题，均已修复：
+
+1. 坏会话加载失败后，孤儿附件清理可能误删该会话引用的图片。现在任一历史会话未成功加载时跳过持久附件删除，临时缓存仍正常清理。
+2. 图片迁移或回写失败后会话被永久保护，后续编辑无法保存。现在只有真正读取失败的会话进入保护；迁移失败恢复原消息，回写失败恢复原消息并清理本轮文件。
+3. 复制和分享在 256KiB 限制前仍会分配完整 Base64 中间字符串。现在使用有界单次扫描，输出缓冲不超过 256KiB。
+4. 图像模式曾接受后端提供的任意本地路径。现在远端响应只接受 `data:image` 和 HTTP(S)，统一经过归档校验。
+5. 历史迁移取消时已生成文件不会清理。现在通过 `finally` 清理并继续传播取消。
+6. 每张远程图片创建独立 OkHttp 连接池。现在 `FileManager` 复用一个客户端并对每次调用设置超时。
+
+## 21.2 自动化验证记录
+
+| 验证项 | 结果 |
+|---|---|
+| Issue 专项测试 | 通过 |
+| 全量单元测试 | 656 项，0 failure，0 error，0 skipped |
+| Debug APK | 构建通过 |
+| APK 路径 | `C:\Users\33039\.everytalk-gradle-build\app1\app\outputs\apk\debug\app-debug.apk` |
+| APK 大小 | 51,112,528 字节 |
+| Lint | 0 error，175 warning，27 hint |
+| 残留扫描 | 无 `eventChannel`、无 `persistImageImmediate`、无图片索引 `coerceAtLeast(0)` 回退、`MessageProcessor` 不再拼接图片 Base64 |
+| `git diff --check` | 无内容错误，仅存在工作区 LF/CRLF 提示 |
+| 真机与 logcat | 尚未执行 |
 
 ## 22. 参考资料
 
@@ -1085,11 +1112,11 @@ Sequential implementation, no parallelization opportunity.
 | Review | Trigger | Why | Runs | Status | Findings |
 |---|---|---|---:|---|---|
 | CEO Review | `/plan-ceo-review` | 范围和产品策略 | 0 | 未运行 | Bug 修复未改变产品方向 |
-| Codex Review | `/codex review` | 独立第二意见 | 0 | 未运行 | 本轮由当前 Codex 完成内部自审，没有启动外部代理 |
-| Eng Review | `/plan-eng-review` | 架构、代码、测试和性能 | 1 | CLEAR | 26 项问题全部纳入方案，0 个关键缺口 |
+| Codex Review | `/codex review` | 独立第二意见 | 1 | CLEAR | 独立对抗审查发现 6 项实现问题，全部修复并复核 |
+| Eng Review | `/plan-eng-review` | 架构、代码、测试和性能 | 2 | CLEAR | 方案审查和实施后二次审查均通过，0 个未解决关键缺口 |
 | Design Review | `/plan-design-review` | UI 和交互 | 0 | 未运行 | 只恢复现有图片点击和正确预览，不改变视觉设计 |
 | DX Review | `/plan-devex-review` | 开发体验 | 0 | 未运行 | 本修复没有开发者工作流变更 |
 
-**VERDICT:** ENG CLEARED，方案可以进入用户审查，尚未实施业务代码。
+**VERDICT:** ENG CLEARED，实施完成，自动化验证通过；真机与 logcat 尚未执行。
 
 NO UNRESOLVED DECISIONS
