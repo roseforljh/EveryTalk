@@ -82,6 +82,7 @@ import com.android.everytalk.ui.theme.chatColors
 import com.android.everytalk.ui.components.ChatMarkdownTextStyle
 import com.android.everytalk.ui.components.FullScreenCodeViewerDialog
 import com.android.everytalk.ui.components.WebMarkdownSourcesExtractor
+import com.android.everytalk.ui.components.everyTalkLoadingElapsedText
 import com.android.everytalk.ui.components.dialog.AppDialogShape
 import com.android.everytalk.ui.components.dialog.appDialogBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogContainerColor
@@ -793,6 +794,9 @@ internal fun splitLoadingStageDisplayText(text: String): LoadingStageDisplayPart
     }
 }
 
+internal fun loadingStageElapsedText(elapsedMs: Long): String =
+    everyTalkLoadingElapsedText(elapsedMs)
+
 internal fun loadingStageViewportHeightDp(): Float = 34f
 
 internal fun loadingStageMaskHeightDp(): Float = 10f
@@ -811,6 +815,20 @@ internal fun LoadingStageIndicator(
     modifier: Modifier = Modifier,
 ) {
     val displayParts = remember(text) { splitLoadingStageDisplayText(text) }
+    val stageStartedAt = remember(text) { SystemClock.elapsedRealtime() }
+    var liveElapsedMs by remember(text) { mutableLongStateOf(0L) }
+    if (displayParts.elapsed == null && displayParts.label.isNotBlank()) {
+        LaunchedEffect(text) {
+            while (true) {
+                liveElapsedMs = SystemClock.elapsedRealtime() - stageStartedAt
+                delay(1000L)
+            }
+        }
+    }
+    val elapsed = displayParts.elapsed
+        ?: displayParts.label.takeIf { it.isNotBlank() }?.let {
+            loadingStageElapsedText(liveElapsedMs)
+        }
     val viewportHeight = loadingStageViewportHeightDp().dp
     val maskHeight = loadingStageMaskHeightDp().dp
     val breathingDotSize = loadingStageBreathingDotSizeDp().dp
@@ -872,13 +890,13 @@ internal fun LoadingStageIndicator(
                             color = textColor,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = if (displayParts.elapsed == null) {
+                            modifier = if (elapsed == null) {
                                 Modifier.fillMaxWidth()
                             } else {
                                 Modifier.weight(1f, fill = false)
                             },
                         )
-                        displayParts.elapsed?.let { elapsed ->
+                        elapsed?.let { elapsed ->
                             Text(
                                 text = " · ",
                                 style = textStyle,

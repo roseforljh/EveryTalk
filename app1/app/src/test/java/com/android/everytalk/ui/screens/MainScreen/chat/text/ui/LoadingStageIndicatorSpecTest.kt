@@ -35,6 +35,13 @@ class LoadingStageIndicatorSpecTest {
     }
 
     @Test
+    fun `loading stage creates live elapsed text for statuses without timer`() {
+        assertEquals("0s", loadingStageElapsedText(0L))
+        assertEquals("1s", loadingStageElapsedText(1_999L))
+        assertEquals("6s", loadingStageElapsedText(6_000L))
+    }
+
+    @Test
     fun `loading stage visual spec uses stable fixed height`() {
         assertTrue(loadingStageViewportHeightDp() > 0f)
     }

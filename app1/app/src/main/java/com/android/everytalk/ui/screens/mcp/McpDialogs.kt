@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
 import com.android.everytalk.data.mcp.*
+import com.android.everytalk.ui.components.EveryTalkTimedLoadingStatus
 import com.android.everytalk.ui.components.dialog.AppDialogShape
 import com.android.everytalk.ui.components.dialog.appDialogBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogContainerColor
@@ -335,36 +336,47 @@ private fun McpServerItem(
                     
                     Spacer(modifier = Modifier.height(4.dp))
                     
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(CircleShape)
-                                .background(
-                                    when (status) {
-                                        is McpStatus.Connected -> iconColor
-                                        is McpStatus.Connecting -> MaterialTheme.colorScheme.tertiary
-                                        is McpStatus.Error -> MaterialTheme.colorScheme.error
-                                        is McpStatus.Idle -> MaterialTheme.colorScheme.outline
-                                    }
-                                )
+                    if (status is McpStatus.Connecting) {
+                        EveryTalkTimedLoadingStatus(
+                            text = "正在连接",
+                            size = 12.dp,
+                            strokeWidth = 1.5.dp,
+                            textStyle = MaterialTheme.typography.labelMedium,
+                            textColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                            contentDescription = "MCP 正在连接",
                         )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = when (status) {
-                                is McpStatus.Connected -> "${serverState.tools.size} 个可用工具"
-                                is McpStatus.Connecting -> "正在连接..."
-                                is McpStatus.Error -> "连接失败"
-                                is McpStatus.Idle -> "已暂停"
-                            },
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = if (status is McpStatus.Connected && serverState.tools.isNotEmpty()) {
-                                Modifier.clickable(onClick = onToolsClick)
-                            } else {
-                                Modifier
-                            }
-                        )
+                    } else {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        when (status) {
+                                            is McpStatus.Connected -> iconColor
+                                            is McpStatus.Error -> MaterialTheme.colorScheme.error
+                                            is McpStatus.Idle -> MaterialTheme.colorScheme.outline
+                                            is McpStatus.Connecting -> MaterialTheme.colorScheme.tertiary
+                                        }
+                                    )
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = when (status) {
+                                    is McpStatus.Connected -> "${serverState.tools.size} 个可用工具"
+                                    is McpStatus.Connecting -> "正在连接"
+                                    is McpStatus.Error -> "连接失败"
+                                    is McpStatus.Idle -> "已暂停"
+                                },
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = if (status is McpStatus.Connected && serverState.tools.isNotEmpty()) {
+                                    Modifier.clickable(onClick = onToolsClick)
+                                } else {
+                                    Modifier
+                                }
+                            )
+                        }
                     }
                 }
 

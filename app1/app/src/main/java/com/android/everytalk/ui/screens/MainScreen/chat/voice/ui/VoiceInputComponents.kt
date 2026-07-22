@@ -5,13 +5,10 @@ import androidx.compose.animation.expandVertically
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
-import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
@@ -37,7 +34,7 @@ import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.android.everytalk.ui.components.EveryTalkLoadingIndicator
+import com.android.everytalk.ui.components.EveryTalkTimedLoadingStatus
 import com.android.everytalk.data.network.VoiceChatSession
 import kotlinx.coroutines.delay
 
@@ -194,16 +191,13 @@ fun VoiceContentDisplay(
         // 处理状态指示器
         if (isProcessing) {
             Spacer(modifier = Modifier.height(32.dp))
-            EveryTalkLoadingIndicator(
+            EveryTalkTimedLoadingStatus(
+                text = "正在处理",
                 size = 32.dp,
                 strokeWidth = 3.dp,
+                textStyle = MaterialTheme.typography.bodyMedium,
+                textColor = contentColor,
                 contentDescription = "语音处理中",
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                text = "正在处理...",
-                color = contentColor,
-                style = MaterialTheme.typography.bodyMedium
             )
         }
         
@@ -343,18 +337,7 @@ fun WebSocketStatusIndicator(
     contentColor: Color,
     modifier: Modifier = Modifier
 ) {
-    val infiniteTransition = rememberInfiniteTransition(label = "wsIndicator")
-    
-    // 连接中时的脉冲动画
-    val pulseAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.4f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(800),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "pulseAlpha"
-    )
+    val isConnecting = state == VoiceChatSession.WebSocketState.CONNECTING
     
     val (icon, text, color) = when (state) {
         VoiceChatSession.WebSocketState.DISCONNECTED -> Triple(
@@ -364,7 +347,7 @@ fun WebSocketStatusIndicator(
         )
         VoiceChatSession.WebSocketState.CONNECTING -> Triple(
             Icons.Default.CloudSync,
-            "正在连接...",
+            "正在连接",
             Color(0xFFFF9800) // 橙色
         )
         VoiceChatSession.WebSocketState.CONNECTED -> Triple(
@@ -379,35 +362,47 @@ fun WebSocketStatusIndicator(
         )
     }
     
-    Row(
-        modifier = modifier
-            .background(
-                color = Color.Black.copy(alpha = 0.6f),
-                shape = RoundedCornerShape(16.dp)
-            )
-            .padding(horizontal = 12.dp, vertical = 6.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = text,
-            modifier = Modifier.size(16.dp),
-            tint = if (state == VoiceChatSession.WebSocketState.CONNECTING) {
-                color.copy(alpha = pulseAlpha)
-            } else {
-                color
-            }
+    val statusShape = RoundedCornerShape(16.dp)
+    val statusModifier = modifier
+        .background(
+            color = MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.94f),
+            shape = statusShape,
         )
-        Text(
+        .border(
+            width = 1.dp,
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.7f),
+            shape = statusShape,
+        )
+        .padding(horizontal = 12.dp, vertical = 6.dp)
+
+    if (isConnecting) {
+        EveryTalkTimedLoadingStatus(
             text = text,
-            color = if (state == VoiceChatSession.WebSocketState.CONNECTING) {
-                color.copy(alpha = pulseAlpha)
-            } else {
-                color
-            },
-            style = MaterialTheme.typography.labelSmall,
-            fontWeight = FontWeight.Medium
+            modifier = statusModifier,
+            size = 16.dp,
+            strokeWidth = 2.dp,
+            textStyle = MaterialTheme.typography.labelSmall,
+            textColor = color,
+            contentDescription = text,
         )
+    } else {
+        Row(
+            modifier = statusModifier,
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = text,
+                modifier = Modifier.size(16.dp),
+                tint = color,
+            )
+            Text(
+                text = text,
+                color = color,
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = FontWeight.Medium
+            )
+        }
     }
 }
