@@ -35,7 +35,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
-import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
@@ -121,6 +120,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 import org.intellij.markdown.IElementType
 import org.intellij.markdown.MarkdownElementTypes
@@ -176,6 +176,17 @@ internal fun appendOnlyMarkdownDelta(
     null
 }
 
+internal fun shouldRebaseStreamingMarkdownDelta(delta: String): Boolean {
+    if (delta.isBlank()) return false
+    if (delta.contains("\n\n")) return true
+
+    return delta.lineSequence().any { line ->
+        val trimmed = line.trimStart()
+        trimmed.startsWith("```") ||
+            trimmed.startsWith("~~~")
+    }
+}
+
 @Composable
 internal fun PrepareStreamingMarkdownRebase(request: StreamingMarkdownRebaseRequest?) {
     if (request == null) return
@@ -201,6 +212,7 @@ internal fun rememberStreamingMarkdownBundle(
     preparedMessage: PreparedMessage,
     streamEpoch: Int,
     enabled: Boolean,
+    isStreaming: Boolean = true,
     beforeRebase: suspend (generation: Int) -> Unit = {},
 ): StreamingMarkdownBundle? {
     val activeBundle = remember(streamEpoch) {
@@ -209,19 +221,31 @@ internal fun rememberStreamingMarkdownBundle(
     val pendingRebaseRequest = remember(streamEpoch) {
         mutableStateOf<StreamingMarkdownRebaseRequest?>(null)
     }
-    val latestPreparedMessage = rememberUpdatedState(preparedMessage)
+    val finalizedEpoch = remember(streamEpoch) { mutableIntStateOf(-1) }
+    val latestPreparedMessage = remember(streamEpoch) {
+        MutableStateFlow(preparedMessage)
+    }
     val appendBridge = remember(streamEpoch) { AppendOnlyMarkdownBridge() }
+    SideEffect {
+        latestPreparedMessage.value = preparedMessage
+    }
 
-    LaunchedEffect(streamEpoch, enabled) {
+    LaunchedEffect(streamEpoch, enabled, isStreaming) {
         if (!enabled) return@LaunchedEffect
-        snapshotFlow { latestPreparedMessage.value }.collect { nextPreparedMessage ->
+        val shouldFinalizeAfterFirstUpdate = !isStreaming
+        latestPreparedMessage.collect { nextPreparedMessage ->
             val nextContent = nextPreparedMessage.markdown
             val currentBundle = activeBundle.value
             val delta = appendOnlyMarkdownDelta(
                 appendedContent = appendBridge.appendedContent,
                 nextContent = nextContent,
             )
-            if (currentBundle == null || delta == null) {
+            val shouldFinalize = shouldFinalizeAfterFirstUpdate && finalizedEpoch.intValue != streamEpoch
+            val shouldRebase = currentBundle == null ||
+                delta == null ||
+                shouldFinalize ||
+                shouldRebaseStreamingMarkdownDelta(delta.orEmpty())
+            if (shouldRebase) {
                 val generation = ++appendBridge.nextRebaseGeneration
                 val request = StreamingMarkdownRebaseRequest(
                     generation = generation,
@@ -246,11 +270,14 @@ internal fun rememberStreamingMarkdownBundle(
                         state = rebasedState,
                         preparedMessage = nextPreparedMessage,
                     )
+                    if (shouldFinalize) finalizedEpoch.intValue = streamEpoch
                 }
             } else {
-                if (delta.isNotEmpty()) currentBundle.state.append(delta)
+                val bundle = requireNotNull(currentBundle)
+                val appendedDelta = requireNotNull(delta)
+                if (appendedDelta.isNotEmpty()) bundle.state.append(appendedDelta)
                 appendBridge.appendedContent = nextContent
-                activeBundle.value = currentBundle.copy(preparedMessage = nextPreparedMessage)
+                activeBundle.value = bundle.copy(preparedMessage = nextPreparedMessage)
             }
         }
     }
@@ -649,6 +676,7 @@ fun MikePenzMarkdownRenderer(
         preparedMessage = preparedMessage,
         streamEpoch = streamEpoch,
         enabled = usesStreamingMarkdownState,
+        isStreaming = isStreaming,
     )
     val visiblePreparedMessage = visibleStreamingBundle?.preparedMessage ?: preparedMessage
 
@@ -1101,19 +1129,17 @@ fun MikePenzMarkdownRenderer(
                                 }
                             }
                         } else {
-                            key(visibleStreamingMarkdownState) {
-                                Markdown(
-                                    streamingMarkdownState = visibleStreamingMarkdownState,
-                                    colors = markdownColors,
-                                    typography = typography,
-                                    padding = padding,
-                                    modifier = Modifier.markdownWidth(sender),
-                                    imageTransformer = EveryTalkMarkdownImageTransformer,
-                                    annotator = annotator,
-                                    inlineContent = markdownInlineContent,
-                                    components = components,
-                                )
-                            }
+                            Markdown(
+                                streamingMarkdownState = visibleStreamingMarkdownState,
+                                colors = markdownColors,
+                                typography = typography,
+                                padding = padding,
+                                modifier = Modifier.markdownWidth(sender),
+                                imageTransformer = EveryTalkMarkdownImageTransformer,
+                                annotator = annotator,
+                                inlineContent = markdownInlineContent,
+                                components = components,
+                            )
                         }
                     } else {
                         renderStaticMarkdown()

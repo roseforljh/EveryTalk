@@ -1,8 +1,10 @@
 package com.android.everytalk.ui.components.markdown
 
 import android.app.Application
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.android.everytalk.ui.components.streaming.FormulaDisplayMode
@@ -12,12 +14,14 @@ import com.android.everytalk.ui.components.streaming.PreparedMessage
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicBoolean
 
 @RunWith(AndroidJUnit4::class)
 @Config(sdk = [34], application = Application::class)
@@ -101,5 +105,71 @@ class StreamingMarkdownRebaseComposeTest {
             visiblePair.get() == (secondMarkdown to secondMarkdown)
         }
         assertEquals(0, mixedGenerationCount.get())
+    }
+
+    @Test
+    fun `流式结束时最终内容在同一bundle内原子校准且不中断可见状态`() {
+        val first = PreparedMessage(
+            markdown = "第一段\n\n第二段",
+            formulas = emptyMap(),
+            hasPendingFormula = false,
+            contentVersion = 1L,
+        )
+        val final = PreparedMessage(
+            markdown = "第一段\n\n第二段\n\n第三段\n\n第四段",
+            formulas = emptyMap(),
+            hasPendingFormula = false,
+            contentVersion = 2L,
+        )
+        val advanceToFinal = CompletableDeferred<Unit>()
+        val finishStreaming = CompletableDeferred<Unit>()
+        val visiblePair = AtomicReference<Pair<String, String>?>(null)
+        val rebaseCount = AtomicInteger(0)
+        val ready = AtomicBoolean(false)
+        val observedNullAfterReady = AtomicBoolean(false)
+
+        composeRule.setContent {
+            val currentMessage = remember { mutableStateOf(first) }
+            val streamingState = remember { mutableStateOf(true) }
+            LaunchedEffect(Unit) {
+                advanceToFinal.await()
+                currentMessage.value = final
+                finishStreaming.await()
+                streamingState.value = false
+            }
+            val bundle = rememberStreamingMarkdownBundle(
+                preparedMessage = currentMessage.value,
+                streamEpoch = 1,
+                enabled = true,
+                isStreaming = streamingState.value,
+                beforeRebase = { rebaseCount.incrementAndGet() },
+            )
+            SideEffect {
+                if (ready.get() && bundle == null) {
+                    observedNullAfterReady.set(true)
+                }
+                bundle?.let {
+                    visiblePair.set(it.state.content.toString() to it.preparedMessage.markdown)
+                }
+            }
+        }
+
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            visiblePair.get() == (first.markdown to first.markdown)
+        }
+        ready.set(true)
+
+        advanceToFinal.complete(Unit)
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            visiblePair.get() == (final.markdown to final.markdown)
+        }
+
+        finishStreaming.complete(Unit)
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            visiblePair.get() == (final.markdown to final.markdown) && rebaseCount.get() >= 2
+        }
+
+        assertFalse(observedNullAfterReady.get())
+        assertEquals(final.markdown to final.markdown, visiblePair.get())
     }
 }
