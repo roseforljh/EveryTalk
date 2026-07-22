@@ -70,6 +70,16 @@ class TopAnchorModelsTest {
                 expectedTurn = turn,
             )
         )
+        assertTrue(
+            isTopAnchorCorrectionCurrent(
+                runtime = TopAnchorRuntimeState(
+                    phase = TopAnchorPhase.AnchoredRunning,
+                    activeTurn = turn.copy(targetItemId = "loading-a2"),
+                    reservePx = 120,
+                ),
+                expectedTurn = turn.copy(targetItemId = null),
+            )
+        )
         assertFalse(
             isTopAnchorCorrectionCurrent(
                 runtime = TopAnchorRuntimeState(
@@ -79,5 +89,22 @@ class TopAnchorModelsTest {
                 expectedTurn = turn,
             )
         )
+    }
+
+    @Test
+    fun `same anchor activations receive unique generations and reject stale targets`() {
+        val state = TopAnchorReserveEngineState()
+        val candidate = TopAnchorTurn("u2", null, "s1", 0L)
+
+        state.activateTurn(candidate)
+        val firstTurn = requireNotNull(state.runtime.currentTurn)
+        state.activateTurn(candidate)
+        val secondTurn = requireNotNull(state.runtime.currentTurn)
+
+        assertTrue(secondTurn.generation > firstTurn.generation)
+        state.attachResponseTarget(firstTurn, "stale-target")
+        assertEquals(null, state.runtime.currentTurn?.targetItemId)
+        state.attachResponseTarget(secondTurn, "fresh-target")
+        assertEquals("fresh-target", state.runtime.currentTurn?.targetItemId)
     }
 }

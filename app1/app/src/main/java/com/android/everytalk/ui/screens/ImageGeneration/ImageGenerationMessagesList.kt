@@ -121,10 +121,11 @@ import com.android.everytalk.ui.components.scrollFadeEdge
 import com.android.everytalk.ui.topanchor.BottomScrollReason
 import com.android.everytalk.ui.topanchor.RunTopAnchorReserveEngine
 import com.android.everytalk.ui.topanchor.TopAnchorConfig
-import com.android.everytalk.ui.topanchor.TopAnchorPhase
 import com.android.everytalk.ui.topanchor.TopAnchorReserveEngineState
+import com.android.everytalk.ui.topanchor.appendTopAnchorReserve
 import com.android.everytalk.ui.topanchor.mapChatItemsToTopAnchorItems
 import com.android.everytalk.ui.topanchor.resolveActiveTopAnchorTurn
+import com.android.everytalk.ui.topanchor.resolveTopAnchorResponseTargetId
 import com.android.everytalk.ui.topanchor.shouldAllowBottomScroll
 import com.android.everytalk.util.storage.readAtMost
 import kotlinx.coroutines.launch
@@ -424,13 +425,17 @@ fun ImageGenerationMessagesList(
         )
     }
     val engineTurn = topAnchorEngine.runtime.currentTurn
+    val engineResponseTargetId = remember(topAnchorItems, engineTurn?.anchorMessageId) {
+        engineTurn?.let { turn ->
+            resolveTopAnchorResponseTargetId(topAnchorItems, turn.anchorMessageId)
+        }
+    }
     val engineAnchorInfo = remember(chatItems, engineTurn) {
         val turn = engineTurn ?: return@remember null
         chatItems.mapIndexedNotNull { index, item ->
             if (item.stableId == turn.anchorMessageId) index to item.stableId else null
         }.firstOrNull()
     }
-    val engineReserveDp = with(density) { topAnchorEngine.reservePx.toDp() }
     val guardedOnImageLoaded = {
         if (shouldAllowBottomScroll(
                 isUserAction = false,
@@ -465,14 +470,14 @@ fun ImageGenerationMessagesList(
 
     LaunchedEffect(activeTurn?.anchorMessageId, activeTurn?.targetItemId, activeTurn?.generation) {
         val turn = activeTurn ?: return@LaunchedEffect
-        topAnchorEngine.updateRuntime(
-            topAnchorEngine.runtime.copy(
-                phase = TopAnchorPhase.InitialSnap,
-                activeTurn = turn,
-                retainedTurn = null
-            )
-        )
+        topAnchorEngine.activateTurn(turn)
         viewModel.consumeLastSentImageUserMessageId(turn.anchorMessageId)
+    }
+
+    LaunchedEffect(engineTurn?.anchorMessageId, engineResponseTargetId) {
+        val turn = engineTurn ?: return@LaunchedEffect
+        val targetId = engineResponseTargetId ?: return@LaunchedEffect
+        topAnchorEngine.attachResponseTarget(turn, targetId)
     }
 
     LaunchedEffect(engineTurn, engineAnchorInfo) {
@@ -506,8 +511,10 @@ fun ImageGenerationMessagesList(
                     topInsetPx = topPaddingPx,
                     stableWindowNanos = 50_000_000L,
                     keepReserveAfterRunEnd = true,
+                    reserveInsideTrailingItem = true,
                 ),
-                enabled = topAnchorEngine.runtime.hasRuntime
+                enabled = topAnchorEngine.runtime.hasRuntime,
+                hasResponseTarget = engineResponseTargetId != null,
             )
         }
 
@@ -528,7 +535,7 @@ fun ImageGenerationMessagesList(
                     start = 6.dp,
                     end = 16.dp,
                     top = topPadding,
-                    bottom = additionalBottomPadding + 12.dp
+                    bottom = additionalBottomPadding + 25.dp
                 ),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
@@ -561,6 +568,9 @@ fun ImageGenerationMessagesList(
                             this.alpha = alpha.value
                             this.translationY = translationY.value
                         }
+                        .appendTopAnchorReserve(
+                            if (index == chatItems.lastIndex) topAnchorEngine.reservePx else 0
+                        )
                 ) {
                     when (item) {
                         is ChatListItem.UserMessage -> {
@@ -706,14 +716,6 @@ fun ImageGenerationMessagesList(
                     }
                 }
             }
-                item(key = "chat_screen_footer_spacer_in_list") {
-                    Spacer(modifier = Modifier.height(1.dp))
-                }
-                if (engineReserveDp > 0.dp) {
-                    item(key = "image_dynamic_padding_spacer") {
-                        Spacer(modifier = Modifier.height(engineReserveDp))
-                    }
-                }
             }
         }
 

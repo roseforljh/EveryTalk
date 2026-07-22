@@ -29,7 +29,8 @@ data class TopAnchorConfig(
     val tallAnchorVisibleHeightPx: Int,
     val topInsetPx: Int,
     val stableWindowNanos: Long = 50_000_000L,
-    val keepReserveAfterRunEnd: Boolean = true
+    val keepReserveAfterRunEnd: Boolean = true,
+    val reserveInsideTrailingItem: Boolean = false,
 )
 
 data class TopAnchorItem(

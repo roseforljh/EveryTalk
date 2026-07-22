@@ -97,10 +97,11 @@ import com.android.everytalk.ui.components.streaming.buildStreamingRenderState
 import com.android.everytalk.ui.components.streaming.contentVersionForRendering
 import com.android.everytalk.ui.topanchor.RunTopAnchorReserveEngine
 import com.android.everytalk.ui.topanchor.TopAnchorConfig
-import com.android.everytalk.ui.topanchor.TopAnchorPhase
 import com.android.everytalk.ui.topanchor.TopAnchorReserveEngineState
+import com.android.everytalk.ui.topanchor.appendTopAnchorReserve
 import com.android.everytalk.ui.topanchor.mapChatItemsToTopAnchorItems
 import com.android.everytalk.ui.topanchor.resolveActiveTopAnchorTurn
+import com.android.everytalk.ui.topanchor.resolveTopAnchorResponseTargetId
 import com.android.everytalk.util.message.prepareTextForExternalTransfer
 import com.android.everytalk.util.web.linkFaviconInitial
 import com.android.everytalk.util.web.linkFaviconUrl
@@ -303,13 +304,17 @@ fun ChatMessagesList(
         )
     }
     val engineTurn = topAnchorEngine.runtime.currentTurn
+    val engineResponseTargetId = remember(topAnchorItems, engineTurn?.anchorMessageId) {
+        engineTurn?.let { turn ->
+            resolveTopAnchorResponseTargetId(topAnchorItems, turn.anchorMessageId)
+        }
+    }
     val engineAnchorInfo = remember(chatItems, engineTurn) {
         val turn = engineTurn ?: return@remember null
         chatItems.mapIndexedNotNull { index, item ->
             if (item.stableId == turn.anchorMessageId) index to item.stableId else null
         }.firstOrNull()
     }
-    val engineReserveDp = with(density) { topAnchorEngine.reservePx.toDp() }
 
     LaunchedEffect(scrollSessionKey) {
         topAnchorEngine.clearRuntime()
@@ -333,14 +338,14 @@ fun ChatMessagesList(
 
     LaunchedEffect(activeTurn?.anchorMessageId, activeTurn?.targetItemId, activeTurn?.generation) {
         val turn = activeTurn ?: return@LaunchedEffect
-        topAnchorEngine.updateRuntime(
-            topAnchorEngine.runtime.copy(
-                phase = TopAnchorPhase.InitialSnap,
-                activeTurn = turn,
-                retainedTurn = null
-            )
-        )
+        topAnchorEngine.activateTurn(turn)
         viewModel.consumeLastSentUserMessageId(turn.anchorMessageId)
+    }
+
+    LaunchedEffect(engineTurn?.anchorMessageId, engineResponseTargetId) {
+        val turn = engineTurn ?: return@LaunchedEffect
+        val targetId = engineResponseTargetId ?: return@LaunchedEffect
+        topAnchorEngine.attachResponseTarget(turn, targetId)
     }
 
     LaunchedEffect(engineTurn, engineAnchorInfo) {
@@ -373,9 +378,11 @@ fun ChatMessagesList(
                         tallAnchorVisibleHeightPx = with(density) { 96.dp.toPx().toInt() },
                         topInsetPx = topPaddingPx,
                         stableWindowNanos = 50_000_000L,
-                        keepReserveAfterRunEnd = false,
+                        keepReserveAfterRunEnd = true,
+                        reserveInsideTrailingItem = true,
                     ),
-                    enabled = topAnchorEngine.runtime.hasRuntime
+                    enabled = topAnchorEngine.runtime.hasRuntime,
+                    hasResponseTarget = engineResponseTargetId != null,
                 )
             }
             
@@ -413,12 +420,7 @@ fun ChatMessagesList(
                 }
             }
         ) { index, item ->
-            // 判断是否为用户消息，用于决定布局和对齐方式
-            val isUserMessage = item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage ||
-                (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.ErrorMessage &&
-                 viewModel.getMessageById((item as com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.ErrorMessage).messageId)?.sender == com.android.everytalk.data.DataClass.Sender.User)
-            
-                    // 根据消息类型决定对齐方式和气泡布局
+            // 根据消息类型决定对齐方式和气泡布局
             val itemAlignment = when (item) {
                 is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage -> Alignment.CenterEnd
                 is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.ErrorMessage -> {
@@ -433,11 +435,11 @@ fun ChatMessagesList(
             }
 
             Box(
-                modifier = if (isUserMessage) {
-                    Modifier.fillMaxWidth()
-                } else {
-                    Modifier.fillMaxWidth()
-                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .appendTopAnchorReserve(
+                        if (index == chatItems.lastIndex) topAnchorEngine.reservePx else 0
+                    ),
                 contentAlignment = itemAlignment
             ) {
 
@@ -722,11 +724,6 @@ fun ChatMessagesList(
                 }
             }
                 
-            if (engineReserveDp > 0.dp) {
-                item(key = "dynamic_padding_spacer") {
-                    Spacer(modifier = Modifier.height(engineReserveDp))
-                }
-            }
         }
 
         contextMenuMessage?.let { message ->

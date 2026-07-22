@@ -384,7 +384,10 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                     onRemoveMediaItemAtIndex = { viewModel.removeMediaItemAtIndex(it) },
                     onClearMediaItems = { viewModel.clearMediaItems() },
                     isApiCalling = isApiCalling,
-                    onStopApiCall = { viewModel.onCancelAPICall() },
+                    onStopApiCall = {
+                        viewModel.onCancelAPICall()
+                        scrollStateManager.stopStreamingAndJumpToRealBottom()
+                    },
                     focusRequester = focusRequester,
                     selectedApiConfig = selectedApiConfig,
                     onShowSnackbar = { viewModel.showSnackbar(it) },

@@ -40,11 +40,21 @@ class ChatMessagesListRenderRouteTest {
     }
 
     @Test
-    fun `natural stream completion removes top anchor reserve`() {
+    fun `natural stream completion retains exact anchor reserve`() {
         val source = chatMessagesListSource()
 
-        assertTrue(source.contains("keepReserveAfterRunEnd = false"))
-        assertFalse(source.contains("keepReserveAfterRunEnd = true"))
+        assertTrue(source.contains("keepReserveAfterRunEnd = true"))
+        assertTrue(source.contains("hasResponseTarget = engineResponseTargetId != null"))
+        assertTrue(source.contains("topAnchorEngine.attachResponseTarget"))
+        assertFalse(source.contains("pinToRealBottomAfterAutomaticRun()"))
+        assertTrue(source.contains("reserveInsideTrailingItem = true"))
+        assertTrue(source.contains("appendTopAnchorReserve("))
+        assertTrue(source.contains("trailingRealItemIndex = chatItems.lastIndex"))
+        assertFalse(source.contains("dynamic_padding_spacer"))
+        assertFalse(source.contains("topAnchorEngine.reservePx.toDp()"))
+        assertFalse(source.contains("translationY = -retainedVisualOffsetPx.toFloat()"))
+        assertTrue(source.contains("LaunchedEffect(scrollSessionKey)"))
+        assertTrue(source.contains("topAnchorEngine.clearRuntime()"))
     }
 
     @Test
@@ -57,14 +67,12 @@ class ChatMessagesListRenderRouteTest {
 
         assertTrue(footerSource.contains("scrollStateManager: ChatScrollStateManager"))
         assertTrue(
-            footerSource.contains(
-                "scrollStateManager.lockAutoScroll()\n                        viewModel.regenerateAiResponse("
-            )
+            Regex("""scrollStateManager\.lockAutoScroll\(\)\s+viewModel\.regenerateAiResponse\(""")
+                .containsMatchIn(footerSource)
         )
         assertTrue(
-            footerSource.contains(
-                "scrollStateManager.lockAutoScroll()\n                        viewModel.regenerateAiResponseWithConfig("
-            )
+            Regex("""scrollStateManager\.lockAutoScroll\(\)\s+viewModel\.regenerateAiResponseWithConfig\(""")
+                .containsMatchIn(footerSource)
         )
     }
 

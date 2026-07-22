@@ -75,6 +75,21 @@ class TopAnchorTurnPolicyTest {
     }
 
     @Test
+    fun `response target lookup stops at the next user turn`() {
+        val targetId = resolveTopAnchorResponseTargetId(
+            items = listOf(
+                TopAnchorItem("u1", TopAnchorItemRole.User),
+                TopAnchorItem("system", TopAnchorItemRole.NonTarget),
+                TopAnchorItem("u2", TopAnchorItemRole.User),
+                TopAnchorItem("a2", TopAnchorItemRole.AssistantTarget),
+            ),
+            anchorMessageId = "u1",
+        )
+
+        assertNull(targetId)
+    }
+
+    @Test
     fun `does not fall back to another user when sent id is absent`() {
         val turn = resolveActiveTopAnchorTurn(
             items = listOf(

@@ -13,15 +13,29 @@ fun resolveActiveTopAnchorTurn(
         it.id == sentUserMessageId && it.role == TopAnchorItemRole.User
     }
     if (anchorIndex < 0) return null
-    val target = items.drop(anchorIndex + 1).firstOrNull {
-        it.role == TopAnchorItemRole.AssistantTarget ||
-            it.role == TopAnchorItemRole.LoadingTarget ||
-            it.role == TopAnchorItemRole.StatusTarget
-    }
     return TopAnchorTurn(
         anchorMessageId = sentUserMessageId,
-        targetItemId = target?.id,
+        targetItemId = resolveTopAnchorResponseTargetId(items, sentUserMessageId),
         sessionKey = sessionKey,
         generation = generation,
     )
+}
+
+fun resolveTopAnchorResponseTargetId(
+    items: List<TopAnchorItem>,
+    anchorMessageId: String,
+): String? {
+    val anchorIndex = items.indexOfFirst {
+        it.id == anchorMessageId && it.role == TopAnchorItemRole.User
+    }
+    if (anchorIndex < 0) return null
+    return items
+        .drop(anchorIndex + 1)
+        .takeWhile { it.role != TopAnchorItemRole.User }
+        .firstOrNull {
+            it.role == TopAnchorItemRole.AssistantTarget ||
+                it.role == TopAnchorItemRole.LoadingTarget ||
+                it.role == TopAnchorItemRole.StatusTarget
+        }
+        ?.id
 }

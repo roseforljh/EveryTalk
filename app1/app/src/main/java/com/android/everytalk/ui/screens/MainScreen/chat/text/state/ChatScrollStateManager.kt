@@ -58,6 +58,8 @@ class ChatScrollStateManager(
     private val BOTTOM_DETECTION_THRESHOLD = 2
     private val STREAMING_TRANSITION_FREEZE_MS = 150L
     private val STOP_BOTTOM_PIN_TIMEOUT_MS = 30_000L
+    private val BOTTOM_SETTLE_MAX_FRAMES = 8
+    private val BOTTOM_SETTLE_REQUIRED_STABLE_FRAMES = 3
 
     private val _isAtBottom = mutableStateOf(true)
     val isAtBottom: State<Boolean> = _isAtBottom
@@ -75,16 +77,30 @@ class ChatScrollStateManager(
     private var suppressTopAnchorBottomScroll by mutableStateOf(false)
     private var topAnchorRuntimeClearer: (() -> Unit)? = null
     private var topAnchorUserScrollReleaser: (() -> Unit)? = null
+    private var lastLoggedStrictBottom: Boolean? = null
 
     val nestedScrollConnection = object : NestedScrollConnection {
         override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+            if (source == NestedScrollSource.UserInput) {
+                logger.debug(
+                    "User scroll input: dy=${available.y}, " +
+                        "pinActive=$isStopBottomPinActive, " +
+                        "anchorSuppressed=$suppressTopAnchorBottomScroll, " +
+                        "preventAutoScroll=$preventAutoScroll, ${scrollDebugSnapshot()}"
+                )
+            }
             if (source == NestedScrollSource.UserInput && isStopBottomPinActive) {
                 cancelAutoScrollJob()
                 preventAutoScroll = true
+                logger.debug(
+                    "User scroll took control from bottom pin: generation=$stopBottomPinGeneration, " +
+                        scrollDebugSnapshot()
+                )
             }
             if (source == NestedScrollSource.UserInput && suppressTopAnchorBottomScroll) {
                 topAnchorUserScrollReleaser?.invoke()
                 suppressTopAnchorBottomScroll = false
+                logger.debug("User scroll released top-anchor runtime: ${scrollDebugSnapshot()}")
             }
             return Offset.Zero
         }
@@ -111,6 +127,17 @@ class ChatScrollStateManager(
         }.collect { snapshot ->
                 _isScrollInProgress.value = snapshot.isScrollInProgress
                 _showScrollToBottomButton.value = !snapshot.isStrictlyAtBottom
+
+                if (lastLoggedStrictBottom != snapshot.isStrictlyAtBottom) {
+                    lastLoggedStrictBottom = snapshot.isStrictlyAtBottom
+                    logger.debug(
+                        "Bottom state changed: strictlyAtBottom=${snapshot.isStrictlyAtBottom}, " +
+                            "scrollInProgress=${snapshot.isScrollInProgress}, " +
+                            "first=${snapshot.firstVisibleIndex}:${snapshot.firstVisibleOffset}, " +
+                            "last=${snapshot.lastIndex}:${snapshot.lastSize}, " +
+                            "total=${snapshot.totalItems}, ${scrollDebugSnapshot()}"
+                    )
+                }
 
                 val now = System.currentTimeMillis()
                 val inFreezeWindow = now - lastStreamingTransitionTime < STREAMING_TRANSITION_FREEZE_MS
@@ -169,6 +196,12 @@ class ChatScrollStateManager(
     }
 
     fun updateTopAnchorBottomScrollSuppression(suppressed: Boolean) {
+        if (suppressTopAnchorBottomScroll != suppressed) {
+            logger.debug(
+                "Top-anchor bottom-scroll suppression changed: $suppressTopAnchorBottomScroll -> $suppressed, " +
+                    scrollDebugSnapshot()
+            )
+        }
         suppressTopAnchorBottomScroll = suppressed
         if (suppressed) cancelAutoScrollJob()
     }
@@ -184,14 +217,23 @@ class ChatScrollStateManager(
     fun lockAutoScroll() {
         cancelAutoScrollJob()
         preventAutoScroll = true
-        logger.debug("Auto-scroll locked")
+        logger.debug("Auto-scroll locked: generation=$stopBottomPinGeneration, ${scrollDebugSnapshot()}")
     }
 
     private fun cancelAutoScrollJob() {
+        val hadActivePin = isStopBottomPinActive
+        val hadJob = autoScrollJob != null
+        val previousGeneration = stopBottomPinGeneration
         stopBottomPinGeneration++
         isStopBottomPinActive = false
         autoScrollJob?.cancel()
         autoScrollJob = null
+        if (hadActivePin || hadJob) {
+            logger.debug(
+                "Auto-scroll job cancelled: generation=$previousGeneration->$stopBottomPinGeneration, " +
+                    "hadPin=$hadActivePin, ${scrollDebugSnapshot()}"
+            )
+        }
     }
 
     /**
@@ -236,6 +278,11 @@ class ChatScrollStateManager(
     }
 
     fun jumpToBottom(isUserAction: Boolean = false) {
+        logger.debug(
+            "jumpToBottom requested: userAction=$isUserAction, " +
+                "pinActive=$isStopBottomPinActive, preventAutoScroll=$preventAutoScroll, " +
+                "anchorSuppressed=$suppressTopAnchorBottomScroll, ${scrollDebugSnapshot()}"
+        )
         if (isUserAction) {
             pinToRealBottomUntilUserScroll(clearTopAnchorRuntime = true)
             return
@@ -244,6 +291,10 @@ class ChatScrollStateManager(
     }
 
     fun smoothScrollToBottom(isUserAction: Boolean = false) {
+        logger.debug(
+            "smoothScrollToBottom requested: userAction=$isUserAction, " +
+                "pinActive=$isStopBottomPinActive, ${scrollDebugSnapshot()}"
+        )
         jumpToBottomInternal(isUserAction = isUserAction, smooth = true)
     }
 
@@ -265,6 +316,10 @@ class ChatScrollStateManager(
         suppressTopAnchorBottomScroll = false
         val pinGeneration = ++stopBottomPinGeneration
         isStopBottomPinActive = true
+        logger.debug(
+            "Bottom pin requested: clearTopAnchorRuntime=$clearTopAnchorRuntime, " +
+                "generation=$pinGeneration, ${scrollDebugSnapshot()}"
+        )
 
         autoScrollJob = coroutineScope.launch {
             isProgrammaticScroll = true
@@ -273,45 +328,124 @@ class ChatScrollStateManager(
                     // 先到达包含动态占位的虚拟底部，再清除占位。
                     // 直接删除占位会让 LazyColumn 沿用旧坐标钳制位置，停在真实底部上方。
                     scrollToRealBottom()
+                    val virtualItemCount = listState.layoutInfo.totalItemsCount
+                    logger.debug(
+                        "Manual/stop pin reached virtual bottom before reserve clear: " +
+                            "generation=$pinGeneration, ${scrollDebugSnapshot()}"
+                    )
                     topAnchorRuntimeClearer?.invoke()
-                    repeat(2) {
-                        withFrameNanos { }
-                        scrollToRealBottom()
-                    }
+                    logger.debug(
+                        "Manual/stop pin invoked top-anchor runtime clear: " +
+                            "generation=$pinGeneration, ${scrollDebugSnapshot()}"
+                    )
+                    settleRealBottomAfterAnchorClear(
+                        pinGeneration = pinGeneration,
+                        virtualItemCount = virtualItemCount,
+                        source = "Manual/stop pin",
+                    )
                 }
                 _showScrollToBottomButton.value = false
                 cancelHideButtonJob()
-                withTimeoutOrNull(STOP_BOTTOM_PIN_TIMEOUT_MS) {
-                    snapshotFlow {
-                        val layoutInfo = listState.layoutInfo
-                        val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
-                        BottomLayoutSignature(
-                            totalItems = layoutInfo.totalItemsCount,
-                            canScrollForward = listState.canScrollForward,
-                            lastVisibleKey = lastVisibleItem?.key,
-                            lastVisibleOffset = lastVisibleItem?.offset ?: 0,
-                            lastVisibleSize = lastVisibleItem?.size ?: 0,
-                            viewportEndOffset = layoutInfo.viewportEndOffset,
-                        )
-                    }.distinctUntilChanged().collect { layout ->
-                        if (pinGeneration != stopBottomPinGeneration) return@collect
-                        if (layout.totalItems > 0) {
-                            scrollToRealBottom()
-                        }
-                    }
-                }
+                keepRealBottomPinned(pinGeneration)
             } finally {
                 if (pinGeneration == stopBottomPinGeneration) {
                     isStopBottomPinActive = false
                 }
                 isProgrammaticScroll = false
+                logger.debug(
+                    "Bottom pin job ended: generation=$pinGeneration, " +
+                        "pinActive=$isStopBottomPinActive, ${scrollDebugSnapshot()}"
+                )
+            }
+        }
+    }
+
+    private suspend fun settleRealBottomAfterAnchorClear(
+        pinGeneration: Long,
+        virtualItemCount: Int,
+        source: String,
+    ) {
+        var observedClearedLayout = virtualItemCount <= 0
+        var stableBottomFrames = 0
+
+        repeat(BOTTOM_SETTLE_MAX_FRAMES) { frameIndex ->
+            withFrameNanos { }
+            if (
+                pinGeneration != stopBottomPinGeneration ||
+                !isStopBottomPinActive
+            ) {
+                logger.debug(
+                    "$source bottom settle interrupted: generation=$pinGeneration, " +
+                        "currentGeneration=$stopBottomPinGeneration, " +
+                        "pinActive=$isStopBottomPinActive"
+                )
+                return
+            }
+
+            if (listState.layoutInfo.totalItemsCount < virtualItemCount) {
+                observedClearedLayout = true
+            }
+            scrollToRealBottom()
+            val atRealBottom = !listState.canScrollForward
+            val layoutReady = observedClearedLayout || frameIndex >= 1
+            stableBottomFrames = if (layoutReady && atRealBottom) {
+                stableBottomFrames + 1
+            } else {
+                0
+            }
+
+            logger.debug(
+                "$source post-clear settle #${frameIndex + 1}: generation=$pinGeneration, " +
+                    "clearedLayout=$observedClearedLayout, " +
+                    "stableBottomFrames=$stableBottomFrames, ${scrollDebugSnapshot()}"
+            )
+            if (stableBottomFrames >= BOTTOM_SETTLE_REQUIRED_STABLE_FRAMES) return
+        }
+
+        if (listState.canScrollForward) {
+            logger.warn(
+                "$source bottom settle exhausted while content can still scroll forward: " +
+                    "generation=$pinGeneration, ${scrollDebugSnapshot()}"
+            )
+        }
+    }
+
+    private suspend fun keepRealBottomPinned(pinGeneration: Long) {
+        withTimeoutOrNull(STOP_BOTTOM_PIN_TIMEOUT_MS) {
+            snapshotFlow {
+                val layoutInfo = listState.layoutInfo
+                val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
+                BottomLayoutSignature(
+                    totalItems = layoutInfo.totalItemsCount,
+                    canScrollForward = listState.canScrollForward,
+                    lastVisibleKey = lastVisibleItem?.key,
+                    lastVisibleOffset = lastVisibleItem?.offset ?: 0,
+                    lastVisibleSize = lastVisibleItem?.size ?: 0,
+                    viewportEndOffset = layoutInfo.viewportEndOffset,
+                )
+            }.distinctUntilChanged().collect { layout ->
+                if (pinGeneration != stopBottomPinGeneration) return@collect
+                if (layout.totalItems > 0) {
+                    logger.debug(
+                        "Bottom pin observed layout: generation=$pinGeneration, " +
+                            "total=${layout.totalItems}, canScrollForward=${layout.canScrollForward}, " +
+                            "last=${layout.lastVisibleKey}@${layout.lastVisibleOffset}+${layout.lastVisibleSize}, " +
+                            "viewportEnd=${layout.viewportEndOffset}"
+                    )
+                }
+                if (layout.totalItems > 0 && layout.canScrollForward) {
+                    scrollToRealBottom()
+                }
             }
         }
     }
 
     private fun jumpToBottomInternal(isUserAction: Boolean, smooth: Boolean) {
         if (!isUserAction && isStopBottomPinActive) {
-            logger.debug("Ignoring external bottom scroll because real-bottom pin is active")
+            logger.debug(
+                "Ignoring external bottom scroll because real-bottom pin is active: " +
+                    "${scrollDebugSnapshot()}"
+            )
             return
         }
         val reason = if (isUserAction) {
@@ -326,12 +460,18 @@ class ChatScrollStateManager(
                 reason = reason
             )
         ) {
-            logger.debug("Ignoring bottom scroll because top anchor is active")
+            logger.debug(
+                "Ignoring bottom scroll because top anchor is active: " +
+                    "reason=$reason, ${scrollDebugSnapshot()}"
+            )
             return
         }
 
         if (!isUserAction && preventAutoScroll) {
-            logger.debug("Ignoring auto jumpToBottom because preventAutoScroll is active")
+            logger.debug(
+                "Ignoring auto jumpToBottom because preventAutoScroll is active: " +
+                    "${scrollDebugSnapshot()}"
+            )
             return
         }
         
@@ -363,6 +503,17 @@ class ChatScrollStateManager(
         if (lastIndex < 0) return
         listState.scrollToItem(index = lastIndex)
         listState.scrollBy(Float.MAX_VALUE)
+    }
+
+    private fun scrollDebugSnapshot(): String {
+        val layoutInfo = listState.layoutInfo
+        val firstVisible = layoutInfo.visibleItemsInfo.firstOrNull()
+        val lastVisible = layoutInfo.visibleItemsInfo.lastOrNull()
+        return "total=${layoutInfo.totalItemsCount}, " +
+            "first=${firstVisible?.index}:${firstVisible?.offset}, " +
+            "last=${lastVisible?.index}:${lastVisible?.offset}+${lastVisible?.size}, " +
+            "canBack=${listState.canScrollBackward}, canForward=${listState.canScrollForward}, " +
+            "viewport=${layoutInfo.viewportStartOffset}..${layoutInfo.viewportEndOffset}"
     }
 
     /**
