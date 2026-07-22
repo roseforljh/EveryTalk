@@ -105,6 +105,34 @@ class TopAnchorTurnPolicyTest {
     }
 
     @Test
+    fun `waits until regenerated historical user becomes the last user turn`() {
+        val staleTurn = resolveActiveTopAnchorTurn(
+            items = listOf(
+                TopAnchorItem("u1", TopAnchorItemRole.User),
+                TopAnchorItem("u2", TopAnchorItemRole.User),
+                TopAnchorItem("a2", TopAnchorItemRole.AssistantTarget),
+            ),
+            sentUserMessageId = "u1",
+            sessionKey = "s1",
+            generation = 1L,
+        )
+        val committedTurn = resolveActiveTopAnchorTurn(
+            items = listOf(
+                TopAnchorItem("u2", TopAnchorItemRole.User),
+                TopAnchorItem("a2", TopAnchorItemRole.AssistantTarget),
+                TopAnchorItem("u1", TopAnchorItemRole.User),
+            ),
+            sentUserMessageId = "u1",
+            sessionKey = "s1",
+            generation = 2L,
+        )
+
+        assertNull(staleTurn)
+        assertEquals("u1", committedTurn?.anchorMessageId)
+        assertNull(committedTurn?.targetItemId)
+    }
+
+    @Test
     fun `pending sent id is sufficient even before api running state`() {
         val turn = resolveActiveTopAnchorTurn(
             items = listOf(

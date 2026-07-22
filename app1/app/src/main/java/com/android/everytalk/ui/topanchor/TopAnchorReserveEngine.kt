@@ -67,10 +67,30 @@ class TopAnchorReserveEngineState {
 
     fun activateTurn(turn: TopAnchorTurn) {
         nextTurnGeneration += 1
-        runtime = TopAnchorRuntimeState(
-            phase = TopAnchorPhase.InitialSnap,
-            activeTurn = turn.copy(generation = nextTurnGeneration),
-        )
+        val activatedTurn = turn.copy(generation = nextTurnGeneration)
+        val previousTurn = runtime.currentTurn
+        val reusesCurrentAnchor = runtime.hasRuntime &&
+            previousTurn?.anchorMessageId == activatedTurn.anchorMessageId &&
+            previousTurn.sessionKey == activatedTurn.sessionKey
+
+        runtime = if (reusesCurrentAnchor) {
+            runtime.copy(
+                phase = when (runtime.phase) {
+                    // 用户已经离开旧锚点时，新一轮重答仍需重新执行置顶。
+                    TopAnchorPhase.UserControlled -> TopAnchorPhase.InitialSnap
+                    TopAnchorPhase.InitialSnap,
+                    TopAnchorPhase.AnchorRecorded -> TopAnchorPhase.InitialSnap
+                    else -> TopAnchorPhase.AnchoredRunning
+                },
+                activeTurn = activatedTurn,
+                retainedTurn = null,
+            )
+        } else {
+            TopAnchorRuntimeState(
+                phase = TopAnchorPhase.InitialSnap,
+                activeTurn = activatedTurn,
+            )
+        }
     }
 
     fun releaseForUserScroll() {
@@ -120,8 +140,8 @@ fun RunTopAnchorReserveEngine(
             return@LaunchedEffect
         }
         if (
-            state.runtime.phase != TopAnchorPhase.Retained &&
-            state.runtime.phase != TopAnchorPhase.UserControlled
+            state.runtime.phase == TopAnchorPhase.InitialSnap ||
+            state.runtime.phase == TopAnchorPhase.AnchorRecorded
         ) {
             state.updateRuntime(state.runtime.copy(phase = TopAnchorPhase.InitialSnap))
             try {
@@ -176,6 +196,7 @@ fun RunTopAnchorReserveEngine(
             state = state,
             listState = listState,
             turn = turn,
+            anchorIndex = anchorIndex,
             anchorKey = anchorKey,
             targetAnchorY = targetAnchorY,
             trailingRealItemIndex = { trailingRealItemIndexState.value },
@@ -279,12 +300,22 @@ private suspend fun runTopAnchorCorrectionLoop(
     state: TopAnchorReserveEngineState,
     listState: LazyListState,
     turn: TopAnchorTurn,
+    anchorIndex: Int,
     anchorKey: Any?,
     targetAnchorY: Int,
     trailingRealItemIndex: () -> Int,
     config: TopAnchorConfig
 ) {
     var stableSinceNanos = 0L
+    var previousLoopSnapshot = listState.layoutInfo.toTopAnchorSnapshot(
+        firstVisibleItemIndex = listState.firstVisibleItemIndex,
+        firstVisibleItemScrollOffset = listState.firstVisibleItemScrollOffset
+    )
+    var previousLoopReservePx = state.reservePx
+    var previousLoopTrailingIndex = trailingRealItemIndex()
+    var previousUserControlledSnapshot: TopAnchorLayoutSnapshot? = null
+    var previousUserControlledReservePx = 0
+    var previousUserControlledTrailingIndex = -1
     var lastLayoutVersion = listState.layoutInfo.toTopAnchorSnapshot(
         firstVisibleItemIndex = listState.firstVisibleItemIndex,
         firstVisibleItemScrollOffset = listState.firstVisibleItemScrollOffset
@@ -303,7 +334,8 @@ private suspend fun runTopAnchorCorrectionLoop(
         val layoutChanged = snapshot.layoutVersion != lastLayoutVersion
         lastLayoutVersion = snapshot.layoutVersion
 
-        // 用户接管后停止自动纠偏，并冻结占位，确保下滑后仍能上滑回原置顶位置。
+        // 用户接管后停止自动纠偏。占位仍需随回复内容增长而收缩，
+        // 使真实内容逐步替代虚拟空间，同时保持可上滑回原锚点的总滚动范围不变。
         val corrected = if (state.runtime.phase == TopAnchorPhase.UserControlled) {
             false
         } else {
@@ -319,8 +351,56 @@ private suspend fun runTopAnchorCorrectionLoop(
         }
         // 本帧发生过滚动或增加占位时，snapshot 仍是校正前的旧布局。
         // 用旧快照收缩会立即撤销刚完成的校正，造成 reserve 与锚点位置逐帧抖动。
-        if (!corrected && state.runtime.phase != TopAnchorPhase.UserControlled) {
-            shrinkReserveIfPossible(state, snapshot, trailingRealItemIndex(), config)
+        if (!corrected) {
+            val currentTrailingIndex = trailingRealItemIndex()
+            val reserveRepresentedBySnapshot = state.reservePx
+            if (state.runtime.phase == TopAnchorPhase.UserControlled) {
+                val reserveBeforeShrink = reserveRepresentedBySnapshot
+                val previousSnapshot = previousUserControlledSnapshot ?: previousLoopSnapshot
+                val previousReservePx = if (previousUserControlledSnapshot == null) {
+                    previousLoopReservePx
+                } else {
+                    previousUserControlledReservePx
+                }
+                val previousTrailingIndex = if (previousUserControlledSnapshot == null) {
+                    previousLoopTrailingIndex
+                } else {
+                    previousUserControlledTrailingIndex
+                }
+                if (
+                    previousSnapshot.layoutVersion != snapshot.layoutVersion
+                ) {
+                    val contentGrowthPx = computeVisibleResponseContentGrowthPx(
+                        previous = previousSnapshot,
+                        current = snapshot,
+                        anchorIndex = anchorIndex,
+                        previousTrailingRealItemIndex = previousTrailingIndex,
+                        currentTrailingRealItemIndex = currentTrailingIndex,
+                        previousReservePx = previousReservePx,
+                        currentReservePx = reserveBeforeShrink,
+                        reserveInsideTrailingItem = config.reserveInsideTrailingItem,
+                    )
+                    if (contentGrowthPx > 0) {
+                        state.updateRuntime(
+                            state.runtime.copy(
+                                reservePx = (reserveBeforeShrink - contentGrowthPx).coerceAtLeast(0)
+                            )
+                        )
+                    }
+                }
+                // snapshot 对应本帧收缩前的 reserve，保留该值供下一次布局做真实高度差分。
+                previousUserControlledSnapshot = snapshot
+                previousUserControlledReservePx = reserveBeforeShrink
+                previousUserControlledTrailingIndex = currentTrailingIndex
+            } else {
+                previousUserControlledSnapshot = null
+                previousUserControlledReservePx = 0
+                previousUserControlledTrailingIndex = -1
+                shrinkReserveIfPossible(state, snapshot, currentTrailingIndex, config)
+            }
+            previousLoopSnapshot = snapshot
+            previousLoopReservePx = reserveRepresentedBySnapshot
+            previousLoopTrailingIndex = currentTrailingIndex
         }
         if (
             state.runtime.phase == TopAnchorPhase.UserControlled &&
@@ -351,13 +431,66 @@ private suspend fun runTopAnchorCorrectionLoop(
     }
 }
 
+private fun computeVisibleResponseContentGrowthPx(
+    previous: TopAnchorLayoutSnapshot,
+    current: TopAnchorLayoutSnapshot,
+    anchorIndex: Int,
+    previousTrailingRealItemIndex: Int,
+    currentTrailingRealItemIndex: Int,
+    previousReservePx: Int,
+    currentReservePx: Int,
+    reserveInsideTrailingItem: Boolean,
+): Int {
+    if (anchorIndex < 0) return 0
+    val previousByIndex = previous.visibleItems.associateBy { it.index }
+    var sizeDeltaPx = 0
+
+    current.visibleItems.forEach { currentItem ->
+        if (currentItem.index <= anchorIndex || currentItem.index > currentTrailingRealItemIndex) {
+            return@forEach
+        }
+        val currentRealSize = currentItem.size - if (
+            reserveInsideTrailingItem && currentItem.index == currentTrailingRealItemIndex
+        ) {
+            currentReservePx
+        } else {
+            0
+        }
+        val previousItem = previousByIndex[currentItem.index]
+        if (previousItem != null) {
+            val previousRealSize = previousItem.size - if (
+                reserveInsideTrailingItem && previousItem.index == previousTrailingRealItemIndex
+            ) {
+                previousReservePx
+            } else {
+                0
+            }
+            sizeDeltaPx += currentRealSize.coerceAtLeast(0) - previousRealSize.coerceAtLeast(0)
+        } else if (current.totalItemsCount > previous.totalItemsCount) {
+            sizeDeltaPx += currentRealSize.coerceAtLeast(0)
+        }
+    }
+
+    return sizeDeltaPx.coerceAtLeast(0)
+}
+
 private fun shrinkReserveIfPossible(
     state: TopAnchorReserveEngineState,
     snapshot: TopAnchorLayoutSnapshot,
     trailingRealItemIndex: Int,
     config: TopAnchorConfig,
 ) {
-    val trailing = snapshot.visibleItems.firstOrNull { it.index == trailingRealItemIndex } ?: return
+    if (state.reservePx <= 0 || trailingRealItemIndex !in 0 until snapshot.totalItemsCount) return
+    val trailing = snapshot.visibleItems.firstOrNull { it.index == trailingRealItemIndex }
+    if (trailing == null) {
+        val lastVisibleIndex = snapshot.visibleItems.lastOrNull()?.index ?: return
+        if (config.reserveInsideTrailingItem && trailingRealItemIndex > lastVisibleIndex) {
+            // 末尾真实项已经被增长后的回复推到视口下方，真实内容本身已覆盖全部 slack。
+            // reserve 内嵌在末项时可直接归零，避免不可见的末项永久携带大块底部空白。
+            state.updateRuntime(state.runtime.copy(reservePx = 0))
+        }
+        return
+    }
     val reserveInTrailingItem = if (config.reserveInsideTrailingItem) state.reservePx else 0
     val contentBottom = trailing.offset + (trailing.size - reserveInTrailingItem).coerceAtLeast(0)
     val gapPx = (snapshot.viewportEndOffset - contentBottom - snapshot.afterContentPadding)

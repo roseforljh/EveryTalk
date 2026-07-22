@@ -8,6 +8,7 @@ import android.graphics.BitmapFactory
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Log
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.core.content.FileProvider
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.util.storage.FileManager
@@ -383,20 +384,22 @@ internal fun addOrReplaceRegeneratedUserMessage(
     isFromRegeneration: Boolean,
     manualMessageId: String?,
 ): Int {
-    if (isFromRegeneration && !manualMessageId.isNullOrBlank()) {
-        val existingIndex = messageList.indexOfFirst { it.id == manualMessageId }
-        if (existingIndex >= 0) {
-            if (existingIndex == messageList.lastIndex) {
-                messageList[existingIndex] = newUserMessage
-                return existingIndex
+    return Snapshot.withMutableSnapshot {
+        if (isFromRegeneration && !manualMessageId.isNullOrBlank()) {
+            val existingIndex = messageList.indexOfFirst { it.id == manualMessageId }
+            if (existingIndex >= 0) {
+                if (existingIndex == messageList.lastIndex) {
+                    messageList[existingIndex] = newUserMessage
+                    return@withMutableSnapshot existingIndex
+                }
+                messageList.removeAt(existingIndex)
+                messageList.add(newUserMessage)
+                return@withMutableSnapshot messageList.lastIndex
             }
-            messageList.removeAt(existingIndex)
-            messageList.add(newUserMessage)
-            return messageList.lastIndex
         }
+        messageList.add(newUserMessage)
+        messageList.lastIndex
     }
-    messageList.add(newUserMessage)
-    return messageList.lastIndex
 }
 
 internal fun safeApiConfigSummary(config: ApiConfig?): String {

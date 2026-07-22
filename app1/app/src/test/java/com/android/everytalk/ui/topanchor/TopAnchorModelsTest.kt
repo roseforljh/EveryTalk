@@ -107,4 +107,50 @@ class TopAnchorModelsTest {
         state.attachResponseTarget(secondTurn, "fresh-target")
         assertEquals("fresh-target", state.runtime.currentTurn?.targetItemId)
     }
+
+    @Test
+    fun `same retained anchor activation preserves reserve without a second initial snap`() {
+        val state = TopAnchorReserveEngineState()
+        val candidate = TopAnchorTurn("u2", null, "s1", 0L)
+
+        state.activateTurn(candidate)
+        val firstTurn = requireNotNull(state.runtime.currentTurn)
+        state.updateRuntime(
+            state.runtime.copy(
+                phase = TopAnchorPhase.Retained,
+                activeTurn = null,
+                retainedTurn = firstTurn.copy(targetItemId = "old-target"),
+                reservePx = 480,
+            )
+        )
+
+        state.activateTurn(candidate)
+
+        val reloadedTurn = requireNotNull(state.runtime.currentTurn)
+        assertEquals(TopAnchorPhase.AnchoredRunning, state.runtime.phase)
+        assertEquals(480, state.reservePx)
+        assertEquals(null, reloadedTurn.targetItemId)
+        assertTrue(reloadedTurn.generation > firstTurn.generation)
+    }
+
+    @Test
+    fun `same user controlled anchor starts a fresh initial snap while preserving reserve`() {
+        val state = TopAnchorReserveEngineState()
+        val candidate = TopAnchorTurn("u2", null, "s1", 0L)
+
+        state.activateTurn(candidate)
+        val firstTurn = requireNotNull(state.runtime.currentTurn)
+        state.updateRuntime(
+            state.runtime.copy(
+                phase = TopAnchorPhase.UserControlled,
+                reservePx = 360,
+            )
+        )
+
+        state.activateTurn(candidate)
+
+        assertEquals(TopAnchorPhase.InitialSnap, state.runtime.phase)
+        assertEquals(360, state.reservePx)
+        assertTrue(requireNotNull(state.runtime.currentTurn).generation > firstTurn.generation)
+    }
 }

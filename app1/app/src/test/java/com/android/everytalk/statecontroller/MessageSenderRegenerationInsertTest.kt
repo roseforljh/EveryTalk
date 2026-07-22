@@ -1,5 +1,6 @@
 package com.android.everytalk.statecontroller
 
+import androidx.compose.runtime.mutableStateListOf
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
@@ -12,7 +13,7 @@ class MessageSenderRegenerationInsertTest {
 
     @Test
     fun `regenerated user message moves to bottom without duplicating its key`() {
-        val messages = mutableListOf(
+        val messages = mutableStateListOf(
             Message(id = "user-1", text = "old question", sender = Sender.User),
             Message(id = "user-2", text = "second question", sender = Sender.User),
         )
