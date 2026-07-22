@@ -101,6 +101,8 @@ import com.android.everytalk.ui.topanchor.TopAnchorReserveEngineState
 import com.android.everytalk.ui.topanchor.mapChatItemsToTopAnchorItems
 import com.android.everytalk.ui.topanchor.resolveActiveTopAnchorTurn
 import com.android.everytalk.util.message.prepareTextForExternalTransfer
+import com.android.everytalk.util.web.linkFaviconInitial
+import com.android.everytalk.util.web.linkFaviconUrl
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -108,7 +110,6 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import coil3.compose.AsyncImage
-import java.net.URI
 
 internal fun retainedStreamingHeightPx(
     naturalHeightPx: Int,
@@ -909,25 +910,12 @@ internal fun LoadingStageIndicator(
     }
 }
 
-private fun pageSourceHost(href: String): String {
-    return runCatching {
-        URI(href).host?.removePrefix("www.") ?: ""
-    }.getOrDefault("")
-}
-
 private fun pageSourceFaviconUrl(href: String): String {
-    val host = pageSourceHost(href)
-    return if (host.isBlank()) {
-        ""
-    } else {
-        "https://www.google.com/s2/favicons?domain=$host&sz=64"
-    }
+    return linkFaviconUrl(href)
 }
 
 private fun pageSourceInitial(source: WebSearchResult): String {
-    val host = pageSourceHost(source.href)
-    val raw = host.ifBlank { source.title }.trim()
-    return raw.firstOrNull()?.uppercaseChar()?.toString() ?: "?"
+    return linkFaviconInitial(source.href, fallback = source.title)
 }
 
 @Composable

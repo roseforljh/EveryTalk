@@ -66,7 +66,8 @@ import com.android.everytalk.ui.components.dialog.appDialogBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.components.dialog.appDialogSubtextColor
-import java.net.URI
+import com.android.everytalk.util.web.linkFaviconInitial
+import com.android.everytalk.util.web.linkFaviconUrl
 
 internal val WebSourcesDialogEdgeGap = 8.dp
 internal val WebSourcesDialogUrlMaxWidth = 360.dp
@@ -74,20 +75,12 @@ internal val WebSourcesDialogPreviewMaxWidth = WebSourcesDialogUrlMaxWidth
 internal const val WebSourcesDialogUrlMaxLines = 1
 internal const val WebSourcesDialogSnippetMaxLines = 2
 
-private fun sourceHost(href: String): String {
-    return runCatching {
-        URI(href).host?.removePrefix("www.") ?: ""
-    }.getOrDefault("")
-}
-
 private fun sourceFaviconUrl(href: String): String {
-    val host = sourceHost(href)
-    return if (host.isBlank()) "" else "https://www.google.com/s2/favicons?domain=$host&sz=64"
+    return linkFaviconUrl(href)
 }
 
 private fun sourceInitial(source: WebSearchResult): String {
-    val raw = sourceHost(source.href).ifBlank { source.title }.trim()
-    return raw.firstOrNull()?.uppercaseChar()?.toString() ?: "?"
+    return linkFaviconInitial(source.href, fallback = source.title)
 }
 
 @Composable
