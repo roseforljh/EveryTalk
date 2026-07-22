@@ -6,6 +6,7 @@ import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.statecontroller.ApiHandler
 import com.android.everytalk.statecontroller.ViewModelStateHolder
+import com.android.everytalk.statecontroller.addOrReplaceRegeneratedUserMessage
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkStatic
@@ -53,7 +54,7 @@ class RegenerateControllerTest {
     }
 
     @Test
-    fun `text regenerate appends new user message and keeps conversation identity`() = scope.runTest {
+    fun `text regenerate keeps user key continuous and conversation identity`() = scope.runTest {
         val stateHolder = stateHolderWithTextConfig()
         stateHolder.setCurrentConversationId("user-1")
         stateHolder._loadedHistoryIndex.value = 0
@@ -65,6 +66,7 @@ class RegenerateControllerTest {
         )
 
         var sentManualId: String? = null
+        var userKeyPresentBeforeResend = false
         val cleanupIds = mutableListOf<String>()
         val sentLatch = CountDownLatch(1)
         val controller = createController(
@@ -75,8 +77,9 @@ class RegenerateControllerTest {
         ) { text, _, _, isImageGeneration, manualMessageId ->
             sentManualId = manualMessageId
             val target = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
+            userKeyPresentBeforeResend = target.any { it.id == manualMessageId }
             val userMessage = Message(id = manualMessageId ?: "user-new", text = text, sender = Sender.User)
-            target.add(userMessage)
+            addOrReplaceRegeneratedUserMessage(target, userMessage, true, manualMessageId)
             sentLatch.countDown()
         }
 
@@ -88,6 +91,7 @@ class RegenerateControllerTest {
         assertEquals("user-1", sentManualId)
         assertEquals("user-1", stateHolder._currentConversationId.value)
         assertEquals(listOf("user-1"), stateHolder.messages.map { it.id })
+        assertTrue(userKeyPresentBeforeResend)
         assertFalse(cleanupIds.contains("user-1"))
         assertTrue(cleanupIds.contains("ai-1"))
     }
@@ -107,10 +111,12 @@ class RegenerateControllerTest {
         )
 
         val sentLatch = CountDownLatch(1)
+        var userKeyPresentBeforeResend = false
         val controller = createController(stateHolder) { text, _, _, isImageGeneration, manualMessageId ->
             val target = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
+            userKeyPresentBeforeResend = target.any { it.id == manualMessageId }
             val userMessage = Message(id = manualMessageId ?: "user-new", text = text, sender = Sender.User)
-            target.add(userMessage)
+            addOrReplaceRegeneratedUserMessage(target, userMessage, true, manualMessageId)
             target.add(Message(id = "new-ai-1", text = "new answer one", sender = Sender.AI))
             sentLatch.countDown()
         }
@@ -121,6 +127,7 @@ class RegenerateControllerTest {
         advanceUntilIdle()
 
         assertEquals(listOf("user-2", "ai-2", "user-1", "new-ai-1"), stateHolder.messages.map { it.id })
+        assertTrue(userKeyPresentBeforeResend)
     }
 
     @Test
@@ -152,23 +159,7 @@ class RegenerateControllerTest {
     }
 
     @Test
-    fun `media cleanup for regenerate excludes reused base user message`() {
-        val messagesToRemove = listOf(
-            Message(id = "user-1", text = "带附件的问题", sender = Sender.User),
-            Message(id = "ai-1", text = "旧回答", sender = Sender.AI),
-        )
-
-        val cleanupIds = filterRegenerationMediaCleanupMessages(
-            messagesToRemove = messagesToRemove,
-            baseUserMessageId = "user-1"
-        ).map { it.id }
-
-        assertFalse(cleanupIds.contains("user-1"))
-        assertTrue(cleanupIds.contains("ai-1"))
-    }
-
-    @Test
-    fun `image regenerate from error appends new user message and keeps conversation identity`() = scope.runTest {
+    fun `image regenerate from error keeps user key continuous and conversation identity`() = scope.runTest {
         val stateHolder = stateHolderWithImageConfig()
         stateHolder._currentImageGenerationConversationId.value = "image-user-1"
         stateHolder.imageGenerationMessages.addAll(
@@ -179,12 +170,14 @@ class RegenerateControllerTest {
         )
 
         var sentManualId: String? = null
+        var userKeyPresentBeforeResend = false
         val sentLatch = CountDownLatch(1)
         val controller = createController(stateHolder) { text, _, _, isImageGeneration, manualMessageId ->
             sentManualId = manualMessageId
             val target = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
+            userKeyPresentBeforeResend = target.any { it.id == manualMessageId }
             val userMessage = Message(id = manualMessageId ?: "image-user-new", text = text, sender = Sender.User)
-            target.add(userMessage)
+            addOrReplaceRegeneratedUserMessage(target, userMessage, true, manualMessageId)
             sentLatch.countDown()
         }
 
@@ -196,6 +189,7 @@ class RegenerateControllerTest {
         assertEquals("image-user-1", sentManualId)
         assertEquals("image-user-1", stateHolder._currentImageGenerationConversationId.value)
         assertEquals(listOf("image-user-1"), stateHolder.imageGenerationMessages.map { it.id })
+        assertTrue(userKeyPresentBeforeResend)
     }
 
     private fun stateHolderWithTextConfig(): ViewModelStateHolder {

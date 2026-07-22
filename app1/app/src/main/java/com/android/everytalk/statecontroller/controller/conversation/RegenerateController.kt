@@ -21,11 +21,6 @@ internal fun collectRegenerationBranch(messages: List<Message>, userMessageIndex
         .takeWhile { it.sender != Sender.User }
 }
 
-internal fun filterRegenerationMediaCleanupMessages(
-    messagesToRemove: List<Message>,
-    baseUserMessageId: String
-): List<Message> = messagesToRemove.filter { it.id != baseUserMessageId }
-
 /**
  * RegenerateController
  * 负责将“从某条用户消息重新生成 AI 回答”的流程从 ViewModel 中抽离：
@@ -103,11 +98,7 @@ class RegenerateController(
                     return@withContext false
                 }
 
-                val messagesToRemove = listOf(listRef[userMsgIndex]) + collectRegenerationBranch(listRef, userMsgIndex)
-                val messagesForMediaCleanup = filterRegenerationMediaCleanupMessages(
-                    messagesToRemove = messagesToRemove,
-                    baseUserMessageId = originalUserMessageId
-                )
+                val messagesToRemove = collectRegenerationBranch(listRef, userMsgIndex)
 
                 messagesMutex.withLock {
                     withContext(Dispatchers.Main.immediate) {
@@ -137,17 +128,17 @@ class RegenerateController(
                         }
 
                         // 先异步删除关联媒体
-                        if (messagesForMediaCleanup.isNotEmpty()) {
+                        if (messagesToRemove.isNotEmpty()) {
                             scope.launch {
                                 try {
-                                    persistenceDeleteMediaFor(listOf(messagesForMediaCleanup))
+                                    persistenceDeleteMediaFor(listOf(messagesToRemove))
                                 } catch (e: Exception) {
                                     Log.w("RegenerateController", "删除媒体失败: ${e.message}")
                                 }
                             }
                         }
 
-                        // 截断从基准用户消息开始的整条后续分支，再以原用户消息ID重新发送。
+                        // 仅移除旧 AI 分支，保留用户项直到新消息原位替换或移动，避免锚点 key 中断。
                         listRef.removeAll(messagesToRemove.toSet())
                     }
                 }

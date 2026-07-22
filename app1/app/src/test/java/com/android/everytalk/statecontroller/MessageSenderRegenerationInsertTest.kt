@@ -11,12 +11,12 @@ import org.junit.Test
 class MessageSenderRegenerationInsertTest {
 
     @Test
-    fun `regenerated user message is appended to the bottom`() {
+    fun `regenerated user message moves to bottom without duplicating its key`() {
         val messages = mutableListOf(
             Message(id = "user-1", text = "old question", sender = Sender.User),
             Message(id = "user-2", text = "second question", sender = Sender.User),
         )
-        val regenerated = Message(id = "user-new", text = "old question", sender = Sender.User)
+        val regenerated = Message(id = "user-1", text = "old question", sender = Sender.User)
 
         val writtenIndex = addOrReplaceRegeneratedUserMessage(
             messageList = messages,
@@ -25,9 +25,28 @@ class MessageSenderRegenerationInsertTest {
             manualMessageId = "user-1",
         )
 
-        assertEquals(2, writtenIndex)
-        assertEquals(listOf("user-1", "user-2", "user-new"), messages.map { it.id })
-        assertEquals(regenerated, messages[2])
+        assertEquals(1, writtenIndex)
+        assertEquals(listOf("user-2", "user-1"), messages.map { it.id })
+        assertEquals(regenerated, messages[1])
+    }
+
+    @Test
+    fun `latest regenerated user message is replaced in place`() {
+        val messages = mutableListOf(
+            Message(id = "user-1", text = "old question", sender = Sender.User),
+        )
+        val regenerated = Message(id = "user-1", text = "updated question", sender = Sender.User)
+
+        val writtenIndex = addOrReplaceRegeneratedUserMessage(
+            messageList = messages,
+            newUserMessage = regenerated,
+            isFromRegeneration = true,
+            manualMessageId = "user-1",
+        )
+
+        assertEquals(0, writtenIndex)
+        assertEquals(listOf("user-1"), messages.map { it.id })
+        assertEquals(regenerated, messages.single())
     }
 
     @Test
