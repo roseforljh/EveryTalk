@@ -55,6 +55,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -944,6 +945,8 @@ fun MikePenzMarkdownRenderer(
                                         header = header,
                                         tableWidth = tableWidth,
                                         style = style,
+                                        maxLines = Int.MAX_VALUE,
+                                        overflow = TextOverflow.Clip,
                                     )
                                 }
                             }
@@ -962,6 +965,8 @@ fun MikePenzMarkdownRenderer(
                                         header = row,
                                         tableWidth = tableWidth,
                                         style = style,
+                                        maxLines = Int.MAX_VALUE,
+                                        overflow = TextOverflow.Clip,
                                     )
                                 }
                             }

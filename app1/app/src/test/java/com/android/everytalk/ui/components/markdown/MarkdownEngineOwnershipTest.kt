@@ -112,6 +112,8 @@ class MarkdownEngineOwnershipTest {
         assertTrue(adapter.contains("EveryTalkMarkdownTable("))
         assertTrue(adapter.contains("MarkdownTableHeader("))
         assertTrue(adapter.contains("MarkdownTableRow("))
+        assertTrue(adapter.contains("maxLines = Int.MAX_VALUE"))
+        assertTrue(adapter.contains("overflow = TextOverflow.Clip"))
         assertTrue(adapter.contains("tableBackground = Color.Transparent"))
         assertTrue(adapter.contains("markdownTableEdgeVisibility("))
         assertTrue(adapter.contains("bodyFootnoteFallbackTargets"))
