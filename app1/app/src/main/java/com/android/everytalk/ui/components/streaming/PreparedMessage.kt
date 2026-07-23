@@ -1,5 +1,8 @@
 package com.android.everytalk.ui.components.streaming
 
+import com.mikepenz.markdown.model.State
+import org.intellij.markdown.ast.ASTNode
+
 enum class FormulaDisplayMode {
     INLINE,
     BLOCK,
@@ -25,6 +28,12 @@ data class PreparedMessage(
     val hasPendingFormula: Boolean,
     val contentVersion: Long,
     val details: Map<String, DetailsRequest> = emptyMap(),
+)
+
+data class PreparedMarkdownDocument(
+    val state: State.Success,
+    val nodes: List<ASTNode>,
+    val targetNodeIndexByUri: Map<String, Int> = emptyMap(),
 )
 
 internal const val INLINE_FORMULA_SCHEME = "everytalk-math-inline:"

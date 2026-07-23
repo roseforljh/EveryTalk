@@ -92,6 +92,7 @@ import com.android.everytalk.ui.components.streaming.DetailsRequest
 import com.android.everytalk.ui.components.streaming.FormulaDisplayMode
 import com.android.everytalk.ui.components.streaming.FormulaRequest
 import com.android.everytalk.ui.components.streaming.INLINE_FORMULA_SCHEME
+import com.android.everytalk.ui.components.streaming.PreparedMarkdownDocument
 import com.android.everytalk.ui.components.streaming.PreparedMessage
 import coil3.compose.AsyncImagePainter
 import coil3.compose.rememberAsyncImagePainter
@@ -99,8 +100,10 @@ import com.mikepenz.markdown.coil3.Coil3ImageTransformerImpl
 import com.mikepenz.markdown.annotator.annotatorSettings
 import com.mikepenz.markdown.annotator.buildMarkdownAnnotatedString
 import com.mikepenz.markdown.compose.Markdown
+import com.mikepenz.markdown.compose.MarkdownElement
 import com.mikepenz.markdown.compose.LocalMarkdownDimens
 import com.mikepenz.markdown.compose.components.MarkdownComponentModel
+import com.mikepenz.markdown.compose.components.MarkdownComponents
 import com.mikepenz.markdown.compose.components.markdownComponents
 import com.mikepenz.markdown.compose.elements.MarkdownCodeBlock
 import com.mikepenz.markdown.compose.elements.MarkdownCodeFence
@@ -786,10 +789,17 @@ private data class RegisteredFootnoteRequester(
     val priority: Int,
 )
 
-internal class FootnoteNavigationState {
+class FootnoteNavigationState {
     private val requestersByUri =
         linkedMapOf<String, LinkedHashSet<RegisteredFootnoteRequester>>()
     private val lastReferenceUriByNumber = mutableMapOf<Int, String>()
+    private var fallbackNavigator: ((String) -> Boolean)? = null
+
+    fun setFallbackNavigator(navigator: ((String) -> Boolean)?) {
+        fallbackNavigator = navigator
+    }
+
+    fun navigateFallback(uri: String): Boolean = fallbackNavigator?.invoke(uri) == true
 
     fun register(
         uri: String,
@@ -855,7 +865,7 @@ private class FootnoteUriHandler(
         when {
             requester != null -> coroutineScope.launch { requester.bringIntoView() }
             uri.startsWith(FOOTNOTE_DEFINITION_SCHEME) ||
-                uri.startsWith(FOOTNOTE_REFERENCE_SCHEME) -> Unit
+                uri.startsWith(FOOTNOTE_REFERENCE_SCHEME) -> navigation.navigateFallback(uri)
 
             else -> fallback.openUri(uri)
         }
@@ -872,6 +882,9 @@ fun MikePenzMarkdownRenderer(
     onCodeCopied: (() -> Unit)? = null,
     onImageClick: ((String) -> Unit)? = null,
     enableSelectionContainer: Boolean = true,
+    preparedMarkdownDocument: PreparedMarkdownDocument? = null,
+    markdownNode: ASTNode? = null,
+    footnoteNavigationState: FootnoteNavigationState? = null,
 ) {
     val committedStreamEpoch = remember { mutableIntStateOf(0) }
     val wasStreaming = remember { mutableStateOf(false) }
@@ -960,7 +973,9 @@ fun MikePenzMarkdownRenderer(
         listIndent = 22.dp,
     )
     val inheritedFootnoteNavigation = LocalFootnoteNavigation.current
-    val footnoteNavigation = inheritedFootnoteNavigation ?: remember { FootnoteNavigationState() }
+    val footnoteNavigation = footnoteNavigationState
+        ?: inheritedFootnoteNavigation
+        ?: remember { FootnoteNavigationState() }
     val fallbackUriHandler = LocalUriHandler.current
     val coroutineScope = rememberCoroutineScope()
     val footnoteUriHandler = if (inheritedFootnoteNavigation == null) {
@@ -1078,10 +1093,13 @@ fun MikePenzMarkdownRenderer(
             val currentFormulaStates = rememberUpdatedState(formulaStates)
             val currentInlineContentMap = rememberUpdatedState(markdownInlineContentMap)
             val currentAnnotator = rememberUpdatedState(annotator)
-            val currentBodyStyle = rememberUpdatedState(bodyStyle)
-            val currentSender = rememberUpdatedState(sender)
-            val currentIsStreaming = rememberUpdatedState(isStreaming)
-            val currentCodePreviewCallback = rememberUpdatedState(onCodePreviewRequested)
+    val currentBodyStyle = rememberUpdatedState(bodyStyle)
+    val currentSender = rememberUpdatedState(sender)
+    val currentIsStreaming = rememberUpdatedState(isStreaming)
+    val currentSuppressInitialCodeBlockResizeAnimation = rememberUpdatedState(
+        preparedMarkdownDocument != null && markdownNode != null && !isStreaming
+    )
+    val currentCodePreviewCallback = rememberUpdatedState(onCodePreviewRequested)
             val currentCodeCopiedCallback = rememberUpdatedState(onCodeCopied)
             val currentImageClickCallback = rememberUpdatedState(onImageClick)
             val components = remember(footnoteNavigation) {
@@ -1228,6 +1246,8 @@ fun MikePenzMarkdownRenderer(
                                         language = language,
                                         code = code,
                                         isStreaming = currentIsStreaming.value,
+                                        suppressInitialAsyncResizeAnimation =
+                                            currentSuppressInitialCodeBlockResizeAnimation.value,
                                         onCopy = currentCodeCopiedCallback.value,
                                     )
                                 } else {
@@ -1250,6 +1270,8 @@ fun MikePenzMarkdownRenderer(
                                         language = language,
                                         code = code,
                                         isStreaming = currentIsStreaming.value,
+                                        suppressInitialAsyncResizeAnimation =
+                                            currentSuppressInitialCodeBlockResizeAnimation.value,
                                         onCopy = currentCodeCopiedCallback.value,
                                     )
                                     return@MarkdownCodeFence
@@ -1318,6 +1340,8 @@ fun MikePenzMarkdownRenderer(
                                     language = language,
                                     code = code,
                                     isStreaming = currentIsStreaming.value,
+                                    suppressInitialAsyncResizeAnimation =
+                                        currentSuppressInitialCodeBlockResizeAnimation.value,
                                     onCopy = currentCodeCopiedCallback.value,
                                     onPreviewRequested = currentCodePreviewCallback.value?.let { callback ->
                                         { callback(language.orEmpty(), code) }
@@ -1333,6 +1357,8 @@ fun MikePenzMarkdownRenderer(
                             language = language,
                             code = code,
                             isStreaming = currentIsStreaming.value,
+                            suppressInitialAsyncResizeAnimation =
+                                currentSuppressInitialCodeBlockResizeAnimation.value,
                             onCopy = currentCodeCopiedCallback.value,
                             onPreviewRequested = currentCodePreviewCallback.value?.let { callback ->
                                 { callback(language.orEmpty(), code) }
@@ -1349,18 +1375,40 @@ fun MikePenzMarkdownRenderer(
             )
             val markdownInlineContent = markdownInlineContent(markdownInlineContentMap)
             val renderStaticMarkdown: @Composable () -> Unit = {
-                Markdown(
-                    content = visiblePreparedMessage.markdown,
-                    colors = markdownColors,
-                    typography = typography,
-                    padding = padding,
-                    modifier = Modifier.markdownWidth(sender),
-                    imageTransformer = EveryTalkMarkdownImageTransformer,
-                    annotator = annotator,
-                    inlineContent = markdownInlineContent,
-                    components = components,
-                    retainState = true,
-                )
+                if (preparedMarkdownDocument != null && markdownNode != null) {
+                    Markdown(
+                        state = preparedMarkdownDocument.state,
+                        colors = markdownColors,
+                        typography = typography,
+                        padding = padding,
+                        modifier = Modifier.markdownWidth(sender),
+                        imageTransformer = EveryTalkMarkdownImageTransformer,
+                        annotator = annotator,
+                        inlineContent = markdownInlineContent,
+                        components = components,
+                        success = { state, nodeComponents, nodeModifier ->
+                            MarkdownNodeSuccess(
+                                state = state,
+                                components = nodeComponents,
+                                modifier = nodeModifier,
+                                node = markdownNode,
+                            )
+                        },
+                    )
+                } else {
+                    Markdown(
+                        content = visiblePreparedMessage.markdown,
+                        colors = markdownColors,
+                        typography = typography,
+                        padding = padding,
+                        modifier = Modifier.markdownWidth(sender),
+                        imageTransformer = EveryTalkMarkdownImageTransformer,
+                        annotator = annotator,
+                        inlineContent = markdownInlineContent,
+                        components = components,
+                        retainState = true,
+                    )
+                }
             }
 
             Column {
@@ -1416,6 +1464,44 @@ fun MikePenzMarkdownRenderer(
         SelectionContainer { markdownContent() }
     } else {
         markdownContent()
+    }
+}
+
+@Composable
+fun MikePenzMarkdownNodeRenderer(
+    preparedMessage: PreparedMessage,
+    preparedMarkdownDocument: PreparedMarkdownDocument,
+    node: ASTNode,
+    modifier: Modifier = Modifier,
+    sender: Sender = Sender.AI,
+    onCodePreviewRequested: ((String, String) -> Unit)? = null,
+    onCodeCopied: (() -> Unit)? = null,
+    onImageClick: ((String) -> Unit)? = null,
+    footnoteNavigationState: FootnoteNavigationState? = null,
+) {
+    MikePenzMarkdownRenderer(
+        preparedMessage = preparedMessage,
+        modifier = modifier,
+        sender = sender,
+        isStreaming = false,
+        onCodePreviewRequested = onCodePreviewRequested,
+        onCodeCopied = onCodeCopied,
+        onImageClick = onImageClick,
+        preparedMarkdownDocument = preparedMarkdownDocument,
+        markdownNode = node,
+        footnoteNavigationState = footnoteNavigationState,
+    )
+}
+
+@Composable
+private fun MarkdownNodeSuccess(
+    state: State.Success,
+    components: MarkdownComponents,
+    modifier: Modifier,
+    node: ASTNode,
+) {
+    Box(modifier = modifier) {
+        MarkdownElement(node, components, state.content)
     }
 }
 

@@ -3,11 +3,20 @@ package com.android.everytalk.statecontroller.facade
 import android.util.Log
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.statecontroller.StreamingMessageStateManager
 import com.android.everytalk.statecontroller.ViewModelStateHolder
 import com.android.everytalk.statecontroller.freezeWhileStreamingPaused
+import com.android.everytalk.ui.components.WebMarkdownSourcesExtractor
+import com.android.everytalk.ui.components.streaming.PreparedMessage
+import com.android.everytalk.ui.components.streaming.PreparedMarkdownDocument
 import com.android.everytalk.ui.components.streaming.StreamBlockParser
+import com.android.everytalk.ui.components.streaming.contentVersionForRendering
+import com.android.everytalk.ui.components.markdown.footnoteTargets
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
+import com.android.everytalk.ui.screens.MainScreen.chat.core.expandStaticAiMessageItem
+import com.mikepenz.markdown.model.State
+import com.mikepenz.markdown.model.parseMarkdown
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.SharingStarted
@@ -47,8 +56,17 @@ open class MessageItemsController(
         val items: List<ChatListItem>
     )
 
+    private data class StaticAiRenderPreparation(
+        val displayText: String,
+        val pageSources: List<WebSearchResult>,
+        val parseResult: StreamBlockParser.ParseResult,
+        val preparedMessage: PreparedMessage,
+        val preparedMarkdownDocument: PreparedMarkdownDocument?,
+    )
+
     private val chatListItemCache = ConcurrentHashMap<String, CacheEntry>()
     private val imageGenerationChatListItemCache = ConcurrentHashMap<String, CacheEntry>()
+    private val liveTextMessageIds = ConcurrentHashMap.newKeySet<String>()
 
     // 🔧 修复Loading不显示问题：记录每个消息开始流式传输的时间戳
     // 用于确保Loading状态至少显示一段时间（防止后端响应过快时跳过Connecting状态）
@@ -63,6 +81,47 @@ open class MessageItemsController(
         val hasStreamingContent = !renderState.content.isNullOrBlank()
         if (!hasStreamingContent || message.contentStarted) return message
         return message.copy(contentStarted = true)
+    }
+
+    private fun prepareStaticAiRender(
+        message: Message,
+        parseResult: StreamBlockParser.ParseResult,
+    ): StaticAiRenderPreparation? {
+        if (message.text.isBlank()) return null
+        val extraction = WebMarkdownSourcesExtractor.extract(message.text)
+        val displayText = extraction.displayText
+        val displayParseResult = if (displayText == message.text) {
+            parseResult
+        } else {
+            StreamBlockParser.parse(displayText, "${message.id}:sources-stripped")
+        }
+        val preparedMessage = StreamBlockParser.prepareMessage(
+            content = displayText,
+            blocks = displayParseResult.blocks,
+            hasPendingFormula = displayParseResult.hasPendingMath,
+            contentVersion = contentVersionForRendering(displayText),
+        )
+        val preparedMarkdownDocument = (parseMarkdown(preparedMessage.markdown) as? State.Success)
+            ?.let { state ->
+                PreparedMarkdownDocument(
+                    state = state,
+                    nodes = state.node.children,
+                    targetNodeIndexByUri = buildMap {
+                        state.node.children.forEachIndexed { index, node ->
+                            footnoteTargets(state.content, node).forEach { uri ->
+                                put(uri, index)
+                            }
+                        }
+                    },
+                )
+            }
+        return StaticAiRenderPreparation(
+            displayText = displayText,
+            pageSources = message.webSearchResults?.takeIf { it.isNotEmpty() } ?: extraction.sources,
+            parseResult = displayParseResult,
+            preparedMessage = preparedMessage,
+            preparedMarkdownDocument = preparedMarkdownDocument,
+        )
     }
 
     private fun resolveStreamingStageText(message: Message, _elapsedMs: Long, reasoningComplete: Boolean = false): String? {
@@ -134,6 +193,7 @@ open class MessageItemsController(
         ) { messages, isApiCalling, currentStreamingAiMessageId ->
             val renderableMessages = filterRenderableMessages(messages)
             retainCurrentMessageState(renderableMessages, chatListItemCache)
+            liveTextMessageIds.retainAll(renderableMessages.mapTo(HashSet()) { it.id })
             renderableMessages
                 .map { message ->
                     when (message.sender) {
@@ -141,6 +201,12 @@ open class MessageItemsController(
                             val cached = chatListItemCache[message.id]
                             val hasReasoning = !message.reasoning.isNullOrBlank()
                             val isCurrentlyStreaming = isApiCalling && message.id == currentStreamingAiMessageId
+                            if (
+                                isCurrentlyStreaming ||
+                                streamingMessageStateManager.isStreaming(message.id)
+                            ) {
+                                liveTextMessageIds.add(message.id)
+                            }
                             val effectiveMessage = buildEffectiveMessage(message, isCurrentlyStreaming)
                             val parseResult = resolveParseResult(
                                 message = effectiveMessage,
@@ -208,7 +274,8 @@ open class MessageItemsController(
                                     effectiveMessage,
                                     isApiCalling,
                                     currentStreamingAiMessageId,
-                                    parseResult = parseResult
+                                    parseResult = parseResult,
+                                    allowLazyStaticRender = message.id !in liveTextMessageIds,
                                 )
 
                                 chatListItemCache[message.id] = CacheEntry(
@@ -232,8 +299,8 @@ open class MessageItemsController(
                 }
                 .flatten()
         }
-        .flowOn(Dispatchers.Default)
         .distinctUntilChanged()
+        .flowOn(Dispatchers.Default)
         .freezeWhileStreamingPaused(stateHolder._isStreamingPaused)
         .stateIn(
             scope = scope,
@@ -320,8 +387,8 @@ open class MessageItemsController(
                 }
                 .flatten()
         }
-        .flowOn(Dispatchers.Default)
         .distinctUntilChanged()
+        .flowOn(Dispatchers.Default)
         .freezeWhileStreamingPaused(stateHolder._isStreamingPaused)
         .stateIn(
             scope = scope,
@@ -424,13 +491,20 @@ open class MessageItemsController(
         isApiCalling: Boolean,
         currentStreamingAiMessageId: String?,
         parseResult: StreamBlockParser.ParseResult? = null,
-        isImageGeneration: Boolean = false
+        isImageGeneration: Boolean = false,
+        allowLazyStaticRender: Boolean = true,
     ): List<ChatListItem> {
         val state = computeBubbleState(message, isApiCalling, currentStreamingAiMessageId, isImageGeneration)
         val resolvedParseResult = parseResult ?: resolveParseResult(
             message = message,
             preferStreamingState = isApiCalling && message.id == currentStreamingAiMessageId,
         )
+        val staticPreparation = if (state is com.android.everytalk.ui.state.AiBubbleState.Complete) {
+            prepareStaticAiRender(message, resolvedParseResult)
+        } else {
+            null
+        }
+        val completedParseResult = staticPreparation?.parseResult ?: resolvedParseResult
 
         val reasoningCompleteMap =
             if (isImageGeneration) stateHolder.imageReasoningCompleteMap else stateHolder.textReasoningCompleteMap
@@ -503,21 +577,40 @@ open class MessageItemsController(
                 }
 
                 val hasImageContent = !message.imageUrls.isNullOrEmpty()
-                val hasTextContent = message.text.isNotBlank() || resolvedParseResult.blocks.isNotEmpty()
+                val hasTextContent = message.text.isNotBlank() || completedParseResult.blocks.isNotEmpty()
 
                 if (hasTextContent || (isImageGeneration && hasImageContent)) {
-                    items.add(
-                        when (message.outputType) {
-                            "code" -> ChatListItem.AiMessageCode(message, message.id, message.text, !message.reasoning.isNullOrBlank())
+                    val contentItem = when (message.outputType) {
+                            "code" -> ChatListItem.AiMessageCode(
+                                message = message,
+                                messageId = message.id,
+                                text = message.text,
+                                hasReasoning = !message.reasoning.isNullOrBlank(),
+                                blocks = completedParseResult.blocks,
+                                displayText = staticPreparation?.displayText ?: message.text,
+                                pageSources = staticPreparation?.pageSources.orEmpty(),
+                                preparedMessage = staticPreparation?.preparedMessage,
+                                preparedMarkdownDocument = staticPreparation?.preparedMarkdownDocument,
+                            )
                             else -> ChatListItem.AiMessage(
                                 message = message,
                                 messageId = message.id,
                                 text = message.text,
                                 hasReasoning = !message.reasoning.isNullOrBlank(),
-                                blocksHash = resolvedParseResult.blocksHash,
-                                hasPendingMath = resolvedParseResult.hasPendingMath,
-                                blocks = resolvedParseResult.blocks
+                                blocksHash = completedParseResult.blocksHash,
+                                hasPendingMath = completedParseResult.hasPendingMath,
+                                blocks = completedParseResult.blocks,
+                                displayText = staticPreparation?.displayText ?: message.text,
+                                pageSources = staticPreparation?.pageSources.orEmpty(),
+                                preparedMessage = staticPreparation?.preparedMessage,
+                                preparedMarkdownDocument = staticPreparation?.preparedMarkdownDocument,
                             )
+                        }
+                    items.addAll(
+                        if (isImageGeneration || !allowLazyStaticRender) {
+                            listOf(contentItem)
+                        } else {
+                            expandStaticAiMessageItem(contentItem)
                         }
                     )
                 }
@@ -607,6 +700,7 @@ open class MessageItemsController(
             android.util.Log.d("MessageItemsController", "Cleared TEXT cache for message: ${messageId.take(8)}")
         }
         streamingStartTimestamps.remove(messageId)
+        liveTextMessageIds.remove(messageId)
     }
 
     /**
@@ -616,6 +710,7 @@ open class MessageItemsController(
         chatListItemCache.clear()
         imageGenerationChatListItemCache.clear()
         streamingStartTimestamps.clear()
+        liveTextMessageIds.clear()
         android.util.Log.d("MessageItemsController", "Cleared all caches and streaming timestamps")
     }
     

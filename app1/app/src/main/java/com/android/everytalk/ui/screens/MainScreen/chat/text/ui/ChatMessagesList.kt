@@ -89,10 +89,13 @@ import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.components.dialog.appDialogSubtextColor
 import com.android.everytalk.ui.components.scrollFadeEdge
+import com.android.everytalk.ui.components.markdown.FootnoteNavigationState
+import com.android.everytalk.ui.components.streaming.PreparedMessage
 import com.android.everytalk.ui.components.streaming.StreamBlock
 import com.android.everytalk.ui.components.streaming.MathBlockState
 import com.android.everytalk.ui.components.streaming.StreamBlockParser
 import com.android.everytalk.ui.components.streaming.UnifiedMarkdownRenderer
+import com.android.everytalk.ui.components.streaming.UnifiedMarkdownNodeRenderer
 import com.android.everytalk.ui.components.streaming.buildStreamingRenderState
 import com.android.everytalk.ui.components.streaming.contentVersionForRendering
 import com.android.everytalk.ui.topanchor.RunTopAnchorReserveEngine
@@ -185,6 +188,21 @@ internal fun shouldBuildLocalRenderBlocks(
         !hasExtractedSources
 }
 
+internal fun shouldUsePreparedStaticAiRender(
+    shouldPreferStreamingContent: Boolean,
+    hasPreparedMessage: Boolean,
+    itemText: String,
+    effectiveContent: String,
+): Boolean = !shouldPreferStreamingContent &&
+    hasPreparedMessage &&
+    itemText == effectiveContent
+
+internal fun shouldAddConversationGapAfter(item: ChatListItem): Boolean = when (item) {
+    is ChatListItem.AiMessageSources -> false
+    is ChatListItem.AiMarkdownNode -> item.isLastNode
+    else -> true
+}
+
 @Composable
 private fun rememberHistoryLoadingShimmerBrush(): Brush {
     val transition = rememberInfiniteTransition(label = "historyLoadingShimmer")
@@ -258,6 +276,10 @@ fun ChatMessagesList(
     var contextMenuPressOffset by remember { mutableStateOf(Offset.Zero) }
     // 防重复触发：在极短时间内只允许一次预览弹出
     var lastImagePreviewAt by remember { mutableLongStateOf(0L) }
+    val listCoroutineScope = rememberCoroutineScope()
+    val footnoteNavigationByMessage = remember(scrollSessionKey) {
+        mutableMapOf<String, FootnoteNavigationState>()
+    }
 
     val pauseAwareApiCalling = remember(viewModel) {
         viewModel.isTextApiCalling.freezeWhileStreamingPaused(viewModel.isStreamingPaused)
@@ -400,7 +422,7 @@ fun ChatMessagesList(
                     top = topPadding,
                     bottom = additionalBottomPadding + 12.dp
                 ),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
+                verticalArrangement = Arrangement.Top
             ) {
                 itemsIndexed(
             items = chatItems,
@@ -411,6 +433,8 @@ fun ChatMessagesList(
                     // Merge all AI message types into a single contentType to prevent
                     // item recreation when switching between Streaming/Non-Streaming states.
                     // This allows the inner Composable to handle state transitions smoothly.
+                    is ChatListItem.AiMessageSources -> "AiMessageSources"
+                    is ChatListItem.AiMarkdownNode -> item.node.type
                     is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage,
                     is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageStreaming,
                     is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCode,
@@ -436,6 +460,15 @@ fun ChatMessagesList(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .padding(
+                        bottom = if (
+                            index < chatItems.lastIndex && shouldAddConversationGapAfter(item)
+                        ) {
+                            12.dp
+                        } else {
+                            0.dp
+                        }
+                    )
                     .appendTopAnchorReserve(
                         if (index == chatItems.lastIndex) topAnchorEngine.reservePx else 0
                     ),
@@ -451,6 +484,45 @@ fun ChatMessagesList(
                                 role = item.role,
                                 widthFraction = item.widthFraction,
                                 estimatedHeight = item.estimatedHeightDp.dp,
+                            )
+                        }
+
+                        is ChatListItem.AiMessageSources -> {
+                            StaticAiMessageSourcesItem(
+                                item = item,
+                                maxWidth = bubbleMaxWidth,
+                                viewModel = viewModel,
+                            )
+                        }
+
+                        is ChatListItem.AiMarkdownNode -> {
+                            val footnoteNavigation = footnoteNavigationByMessage.getOrPut(item.messageId) {
+                                FootnoteNavigationState()
+                            }
+                            SideEffect {
+                                footnoteNavigation.setFallbackNavigator { uri ->
+                                    val targetNodeIndex = item.preparedMarkdownDocument
+                                        .targetNodeIndexByUri[uri]
+                                        ?: return@setFallbackNavigator false
+                                    val targetListIndex = index - item.nodeIndex + targetNodeIndex
+                                    listCoroutineScope.launch {
+                                        listState.animateScrollToItem(targetListIndex)
+                                    }
+                                    true
+                                }
+                            }
+                            StaticAiMarkdownNodeItem(
+                                item = item,
+                                maxWidth = bubbleMaxWidth,
+                                viewModel = viewModel,
+                                footnoteNavigationState = footnoteNavigation,
+                                onImageClick = { url ->
+                                    val now = SystemClock.elapsedRealtime()
+                                    if (now - lastImagePreviewAt > 500) {
+                                        lastImagePreviewAt = now
+                                        onImageClick(url)
+                                    }
+                                },
                             )
                         }
 
@@ -607,6 +679,21 @@ fun ChatMessagesList(
                                         } else {
                                             emptyList()
                                         },
+                                        staticDisplayText = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage) {
+                                            item.displayText
+                                        } else {
+                                            null
+                                        },
+                                        staticPageSources = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage) {
+                                            item.pageSources
+                                        } else {
+                                            emptyList()
+                                        },
+                                        staticPreparedMessage = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage) {
+                                            item.preparedMessage
+                                        } else {
+                                            null
+                                        },
                                         maxWidth = bubbleMaxWidth,
                                         isStreaming = isStreaming,
                                         messageOutputType = message.outputType,
@@ -637,6 +724,26 @@ fun ChatMessagesList(
                                     AiMessageItem(
                                         message = message,
                                         text = text,
+                                        blocks = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCode) {
+                                            item.blocks
+                                        } else {
+                                            emptyList()
+                                        },
+                                        staticDisplayText = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCode) {
+                                            item.displayText
+                                        } else {
+                                            null
+                                        },
+                                        staticPageSources = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCode) {
+                                            item.pageSources
+                                        } else {
+                                            emptyList()
+                                        },
+                                        staticPreparedMessage = if (item is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCode) {
+                                            item.preparedMessage
+                                        } else {
+                                            null
+                                        },
                                         maxWidth = bubbleMaxWidth,
                                         isStreaming = isStreaming,
                                         messageOutputType = message.outputType,
@@ -1010,6 +1117,116 @@ private fun PageSourceIconStack(
 
 
 @Composable
+private fun StaticAiMessageSourcesItem(
+    item: ChatListItem.AiMessageSources,
+    maxWidth: Dp,
+    viewModel: AppViewModel,
+) {
+    val aiReplyMessageDescription = stringResource(id = R.string.ai_reply_message)
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Start,
+    ) {
+        Surface(
+            modifier = Modifier
+                .widthIn(max = maxWidth)
+                .fillMaxWidth()
+                .semantics { contentDescription = aiReplyMessageDescription },
+            shape = RectangleShape,
+            color = Color.Transparent,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            shadowElevation = 0.dp,
+        ) {
+            PageSourcesButton(
+                pageSources = item.pageSources,
+                viewModel = viewModel,
+                modifier = Modifier.padding(
+                    start = ChatMarkdownTextStyle.ASSISTANT_CONTENT_START_PADDING_DP.dp,
+                    top = ChatMarkdownTextStyle.ASSISTANT_CONTENT_TOP_PADDING_DP.dp,
+                    bottom = 6.dp,
+                ),
+            )
+        }
+    }
+}
+
+@Composable
+private fun StaticAiMarkdownNodeItem(
+    item: ChatListItem.AiMarkdownNode,
+    maxWidth: Dp,
+    viewModel: AppViewModel,
+    footnoteNavigationState: FootnoteNavigationState,
+    onImageClick: ((String) -> Unit)?,
+) {
+    val aiReplyMessageDescription = stringResource(id = R.string.ai_reply_message)
+    var previewCode by remember { mutableStateOf<String?>(null) }
+    var previewLanguage by remember { mutableStateOf("text") }
+
+    previewCode?.let { code ->
+        FullScreenCodeViewerDialog(
+            code = code,
+            language = previewLanguage,
+            onDismiss = {
+                previewCode = null
+                previewLanguage = "text"
+            },
+        )
+    }
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Start,
+    ) {
+        Surface(
+            modifier = Modifier
+                .widthIn(max = maxWidth)
+                .fillMaxWidth()
+                .semantics { contentDescription = aiReplyMessageDescription },
+            shape = RectangleShape,
+            color = Color.Transparent,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            shadowElevation = 0.dp,
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(
+                        start = ChatMarkdownTextStyle.ASSISTANT_CONTENT_START_PADDING_DP.dp,
+                        top = if (item.isFirstNode) {
+                            ChatMarkdownTextStyle.ASSISTANT_CONTENT_TOP_PADDING_DP.dp
+                        } else {
+                            0.dp
+                        },
+                        end = ChatMarkdownTextStyle.ASSISTANT_CONTENT_END_PADDING_DP.dp,
+                        bottom = if (item.isLastNode) {
+                            ChatMarkdownTextStyle.ASSISTANT_CONTENT_BOTTOM_PADDING_DP.dp
+                        } else {
+                            0.dp
+                        },
+                    )
+            ) {
+                UnifiedMarkdownNodeRenderer(
+                    preparedMessage = item.preparedMessage,
+                    preparedMarkdownDocument = item.preparedMarkdownDocument,
+                    node = item.node,
+                    sender = item.message.sender,
+                    onCodePreviewRequested = { language, code ->
+                        previewLanguage = language
+                        previewCode = code
+                    },
+                    onCodeCopied = {
+                        viewModel.showSnackbar("已复制代码")
+                    },
+                    onImageClick = onImageClick,
+                    footnoteNavigationState = footnoteNavigationState,
+                )
+            }
+        }
+    }
+}
+
+
+@Composable
 @SuppressLint("StateFlowValueCalledInComposition")
 fun AiMessageItem(
     message: Message,
@@ -1020,6 +1237,9 @@ fun AiMessageItem(
     viewModel: AppViewModel,
     modifier: Modifier = Modifier,
     blocks: List<StreamBlock> = emptyList(),
+    staticDisplayText: String? = null,
+    staticPageSources: List<WebSearchResult> = emptyList(),
+    staticPreparedMessage: PreparedMessage? = null,
     onImageClick: ((String) -> Unit)? = null
 ) {
     val shape = RectangleShape
@@ -1082,17 +1302,32 @@ fun AiMessageItem(
                     message.text
                 }
             }
+            val usePreparedStaticRender = shouldUsePreparedStaticAiRender(
+                shouldPreferStreamingContent = shouldPreferStreamingContent,
+                hasPreparedMessage = staticPreparedMessage != null,
+                itemText = text,
+                effectiveContent = effectiveContent,
+            )
 
             val renderMessage = if (effectiveContent == message.text) {
                 message
             } else {
                 message.copy(text = effectiveContent)
             }
-            val sourcesExtraction = remember(effectiveContent) {
-                WebMarkdownSourcesExtractor.extract(effectiveContent)
+            val dynamicSourcesExtraction = remember(effectiveContent, usePreparedStaticRender) {
+                if (usePreparedStaticRender) null else WebMarkdownSourcesExtractor.extract(effectiveContent)
             }
-            val pageSources = message.webSearchResults?.takeIf { it.isNotEmpty() } ?: sourcesExtraction.sources
-            val displayContent = sourcesExtraction.displayText
+            val extractedSources = dynamicSourcesExtraction?.sources.orEmpty()
+            val pageSources = if (usePreparedStaticRender) {
+                staticPageSources
+            } else {
+                message.webSearchResults?.takeIf { it.isNotEmpty() } ?: extractedSources
+            }
+            val displayContent = if (usePreparedStaticRender) {
+                requireNotNull(staticDisplayText)
+            } else {
+                dynamicSourcesExtraction?.displayText ?: effectiveContent
+            }
             val displayMessage = if (displayContent == renderMessage.text) {
                 renderMessage
             } else {
@@ -1128,7 +1363,8 @@ fun AiMessageItem(
                 ) {
 
                 val useStreamingBlocks =
-                    sourcesExtraction.sources.isEmpty() &&
+                    !usePreparedStaticRender &&
+                        extractedSources.isEmpty() &&
                         streamingRenderState.content == effectiveContent &&
                         streamingRenderState.blocks.isNotEmpty()
 
@@ -1137,12 +1373,12 @@ fun AiMessageItem(
                     displayContent,
                     effectiveContent,
                     messageOutputType,
-                    sourcesExtraction.sources.size,
+                    extractedSources.size,
                     shouldPreferStreamingContent,
                 ) {
                     if (shouldBuildSourceStrippedRenderBlocks(
                             messageOutputType = messageOutputType,
-                            extractedSourceCount = sourcesExtraction.sources.size,
+                            extractedSourceCount = extractedSources.size,
                             effectiveContent = effectiveContent,
                             displayContent = displayContent,
                         )
@@ -1159,9 +1395,10 @@ fun AiMessageItem(
                 }
 
                 val renderBlocks = when {
+                    usePreparedStaticRender -> blocks
                     useStreamingBlocks -> streamingRenderState.blocks
                     sourceStrippedRenderState != null -> sourceStrippedRenderState.blocks
-                    sourcesExtraction.sources.isNotEmpty() -> emptyList()
+                    extractedSources.isNotEmpty() -> emptyList()
                     blocks.isNotEmpty() && (text == effectiveContent || message.text == effectiveContent) -> blocks
                     else -> emptyList()
                 }
@@ -1173,15 +1410,16 @@ fun AiMessageItem(
                     blocks.size,
                     streamingRenderState.blocks.size,
                     sourceStrippedRenderState?.blocks?.size ?: 0,
-                    sourcesExtraction.sources.size,
+                    extractedSources.size,
+                    usePreparedStaticRender,
                 ) {
-                    if (shouldBuildLocalRenderBlocks(
+                    if (!usePreparedStaticRender && shouldBuildLocalRenderBlocks(
                             messageOutputType = messageOutputType,
                             displayContent = displayContent,
                             hasUpstreamBlocks = blocks.isNotEmpty(),
                             hasStreamingBlocks = useStreamingBlocks,
                             hasSourceStrippedBlocks = sourceStrippedRenderState != null,
-                            hasExtractedSources = sourcesExtraction.sources.isNotEmpty(),
+                            hasExtractedSources = extractedSources.isNotEmpty(),
                         )
                     ) {
                         buildStreamingRenderState(
@@ -1200,8 +1438,14 @@ fun AiMessageItem(
                     displayContent,
                     renderBlocks.size,
                     localRenderState?.blocks?.size ?: 0,
+                    usePreparedStaticRender,
                 ) {
-                    if (displayContent.isNotBlank() && renderBlocks.isEmpty() && localRenderState == null) {
+                    if (
+                        !usePreparedStaticRender &&
+                        displayContent.isNotBlank() &&
+                        renderBlocks.isEmpty() &&
+                        localRenderState == null
+                    ) {
                         buildStreamingRenderState(
                             messageId = "${message.id}:fallback",
                             content = displayContent,
@@ -1225,23 +1469,32 @@ fun AiMessageItem(
                     selectedRenderState?.blocks ?: emptyList()
                 }
 
-                val preparedMessage = selectedRenderState?.preparedMessage ?: remember(
+                val preparedMessage = remember(
+                    usePreparedStaticRender,
+                    staticPreparedMessage,
+                    selectedRenderState?.preparedMessage,
                     displayMessage.text,
                     effectiveRenderBlocks,
                 ) {
-                    val hasPendingFormula = effectiveRenderBlocks.any { block ->
-                        when (block) {
-                            is StreamBlock.MathInline -> block.state != MathBlockState.RENDERED
-                            is StreamBlock.MathBlock -> block.state != MathBlockState.RENDERED
-                            else -> false
+                    when {
+                        usePreparedStaticRender -> requireNotNull(staticPreparedMessage)
+                        selectedRenderState != null -> selectedRenderState.preparedMessage
+                        else -> {
+                            val hasPendingFormula = effectiveRenderBlocks.any { block ->
+                                when (block) {
+                                    is StreamBlock.MathInline -> block.state != MathBlockState.RENDERED
+                                    is StreamBlock.MathBlock -> block.state != MathBlockState.RENDERED
+                                    else -> false
+                                }
+                            }
+                            StreamBlockParser.prepareMessage(
+                                content = displayMessage.text,
+                                blocks = effectiveRenderBlocks,
+                                hasPendingFormula = hasPendingFormula,
+                                contentVersion = contentVersionForRendering(displayMessage.text),
+                            )
                         }
                     }
-                    StreamBlockParser.prepareMessage(
-                        content = displayMessage.text,
-                        blocks = effectiveRenderBlocks,
-                        hasPendingFormula = hasPendingFormula,
-                        contentVersion = contentVersionForRendering(displayMessage.text),
-                    )
                 }
 
                 if (effectiveRenderBlocks.isNotEmpty()) {

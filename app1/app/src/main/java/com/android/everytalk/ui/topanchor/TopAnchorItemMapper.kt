@@ -17,6 +17,8 @@ fun mapChatItemsToTopAnchorItems(
                 is ChatListItem.AiMessageStreaming,
                 is ChatListItem.AiMessageCode,
                 is ChatListItem.AiMessageCodeStreaming,
+                is ChatListItem.AiMessageSources,
+                is ChatListItem.AiMarkdownNode,
                 is ChatListItem.AiMessageReasoning,
                 is ChatListItem.AiMessageFooter -> TopAnchorItemRole.AssistantTarget
                 is ChatListItem.LoadingIndicator -> TopAnchorItemRole.LoadingTarget
