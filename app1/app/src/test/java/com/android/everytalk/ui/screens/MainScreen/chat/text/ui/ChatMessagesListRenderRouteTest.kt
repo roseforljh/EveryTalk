@@ -1,11 +1,96 @@
 package com.android.everytalk.ui.screens.MainScreen.chat.text.ui
 
+import com.android.everytalk.data.DataClass.Message
+import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.data.DataClass.WebSearchResult
+import com.android.everytalk.ui.components.streaming.PreparedMarkdownDocument
+import com.android.everytalk.ui.components.streaming.PreparedMessage
+import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
+import com.android.everytalk.ui.screens.MainScreen.chat.core.expandStaticAiMessageItem
+import com.mikepenz.markdown.model.State
+import com.mikepenz.markdown.model.parseMarkdown
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
 
 class ChatMessagesListRenderRouteTest {
+
+    @Test
+    fun `历史Markdown节点之间不插入会话级间距`() {
+        val message = Message(
+            id = "history-spacing",
+            text = "第一段。\n\n第二段。",
+            sender = Sender.AI,
+        )
+        val preparedMessage = PreparedMessage(
+            markdown = message.text,
+            formulas = emptyMap(),
+            hasPendingFormula = false,
+            contentVersion = 1L,
+        )
+        val state = parseMarkdown(preparedMessage.markdown) as State.Success
+        val expanded = expandStaticAiMessageItem(
+            ChatListItem.AiMessage(
+                message = message,
+                messageId = message.id,
+                text = message.text,
+                hasReasoning = false,
+                pageSources = listOf(
+                    WebSearchResult(
+                        index = 1,
+                        title = "示例",
+                        href = "https://example.com",
+                        snippet = "",
+                    )
+                ),
+                preparedMessage = preparedMessage,
+                preparedMarkdownDocument = PreparedMarkdownDocument(state, state.node.children),
+            )
+        )
+        val sources = expanded.first()
+        val nodes = expanded.filterIsInstance<ChatListItem.AiMarkdownNode>()
+
+        assertFalse(shouldAddConversationGapAfter(sources))
+        assertFalse(shouldAddConversationGapAfter(nodes.first()))
+        assertTrue(shouldAddConversationGapAfter(nodes.last()))
+    }
+
+    @Test
+    fun `completed matching ai content uses background prepared render`() {
+        assertTrue(
+            shouldUsePreparedStaticAiRender(
+                shouldPreferStreamingContent = false,
+                hasPreparedMessage = true,
+                itemText = "完整回复",
+                effectiveContent = "完整回复",
+            )
+        )
+    }
+
+    @Test
+    fun `streaming ai content keeps incremental render path`() {
+        assertFalse(
+            shouldUsePreparedStaticAiRender(
+                shouldPreferStreamingContent = true,
+                hasPreparedMessage = true,
+                itemText = "旧完整回复",
+                effectiveContent = "正在追加的新回复",
+            )
+        )
+    }
+
+    @Test
+    fun `completion race with newer render text keeps fallback path`() {
+        assertFalse(
+            shouldUsePreparedStaticAiRender(
+                shouldPreferStreamingContent = false,
+                hasPreparedMessage = true,
+                itemText = "较短的数据库文本",
+                effectiveContent = "流式状态中的完整回复内容",
+            )
+        )
+    }
 
     @Test
     fun `chat messages list should not call enhanced markdown text directly`() {
@@ -18,7 +103,8 @@ class ChatMessagesListRenderRouteTest {
     fun `selected render state should bypass fallback message preparation`() {
         val source = chatMessagesListSource()
 
-        assertTrue(source.contains("val preparedMessage = selectedRenderState?.preparedMessage ?: remember("))
+        assertTrue(source.contains("usePreparedStaticRender -> requireNotNull(staticPreparedMessage)"))
+        assertTrue(source.contains("selectedRenderState != null -> selectedRenderState.preparedMessage"))
         assertFalse(source.contains("val preparedFromBlocks = remember("))
     }
 

@@ -20,6 +20,42 @@ class CodeBlockCardScrollTest {
     }
 
     @Test
+    fun `历史完成态代码块仅跳过首次异步高度动画`() {
+        assertFalse(
+            shouldAnimateCodeBlockContentSize(
+                isStreaming = false,
+                suppressInitialAsyncResizeAnimation = true,
+                initialAsyncResizeSettled = false,
+            )
+        )
+        assertTrue(
+            shouldAnimateCodeBlockContentSize(
+                isStreaming = false,
+                suppressInitialAsyncResizeAnimation = true,
+                initialAsyncResizeSettled = true,
+            )
+        )
+    }
+
+    @Test
+    fun `流式与普通代码块继续保留高度动画`() {
+        assertTrue(
+            shouldAnimateCodeBlockContentSize(
+                isStreaming = true,
+                suppressInitialAsyncResizeAnimation = true,
+                initialAsyncResizeSettled = false,
+            )
+        )
+        assertTrue(
+            shouldAnimateCodeBlockContentSize(
+                isStreaming = false,
+                suppressInitialAsyncResizeAnimation = false,
+                initialAsyncResizeSettled = false,
+            )
+        )
+    }
+
+    @Test
     fun `inline web preview height follows loading result`() {
         val loadingHeight = resolveInlineWebPreviewHeightDp(WebPreviewLoadState.LOADING)
         val errorHeight = resolveInlineWebPreviewHeightDp(WebPreviewLoadState.ERROR)

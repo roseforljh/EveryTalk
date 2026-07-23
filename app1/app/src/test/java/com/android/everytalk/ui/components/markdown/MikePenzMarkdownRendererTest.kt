@@ -248,6 +248,19 @@ class MikePenzMarkdownRendererTest {
     }
 
     @Test
+    fun `未组合的脚注目标交给外层懒列表定位`() {
+        val navigation = FootnoteNavigationState()
+        var openedUri: String? = null
+        navigation.setFallbackNavigator { uri ->
+            openedUri = uri
+            true
+        }
+
+        assertTrue(navigation.navigateFallback(footnoteDefinitionUri(3)))
+        assertEquals(footnoteDefinitionUri(3), openedUri)
+    }
+
+    @Test
     fun `收起的外层details包含内层脚注回跳目标`() {
         val outerId = "a".repeat(64)
         val innerId = "b".repeat(64)

@@ -2,6 +2,8 @@ package com.android.everytalk.statecontroller.facade
 
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.ui.components.markdown.footnoteDefinitionUri
+import com.android.everytalk.ui.components.markdown.footnoteReferenceUri
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
 import androidx.compose.runtime.snapshots.Snapshot
 import io.mockk.every
@@ -300,9 +302,93 @@ class MessageItemsControllerStatusTest {
 
         val items = controller.chatListItemsForTest()
 
-        assertTrue(items.any { it is ChatListItem.AiMessage })
+        assertTrue(items.any { it is ChatListItem.AiMarkdownNode })
         assertFalse(items.any { it is ChatListItem.LoadingIndicator })
         assertFalse(items.any { it is ChatListItem.StatusIndicator })
+    }
+
+    @Test
+    fun `completed ai item carries prepared markdown and extracted sources`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.stateHolder.messages.add(
+            Message(
+                id = "ai-prepared",
+                text = "# 标题\n\n正文\n\nSources:\n[示例](https://example.com)",
+                sender = Sender.AI,
+                contentStarted = true,
+            )
+        )
+
+        val items = controller.chatListItemsForTest()
+        val sources = items.filterIsInstance<ChatListItem.AiMessageSources>().single()
+        val firstNode = items.filterIsInstance<ChatListItem.AiMarkdownNode>().first()
+
+        assertEquals("https://example.com", sources.pageSources.single().href)
+        assertEquals("# 标题\n\n正文", firstNode.preparedMessage.markdown)
+        assertEquals(firstNode.preparedMessage.markdown, firstNode.preparedMarkdownDocument.state.content)
+    }
+
+    @Test
+    fun `completed ai item exposes lazy markdown nodes from the same prepared content`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.stateHolder.messages.add(
+            Message(
+                id = "ai-lazy-document",
+                text = "# 标题\n\n第一段\n\n- 项目一\n- 项目二",
+                sender = Sender.AI,
+                contentStarted = true,
+            )
+        )
+
+        val nodes = controller.chatListItemsForTest()
+            .filterIsInstance<ChatListItem.AiMarkdownNode>()
+        val document = nodes.first().preparedMarkdownDocument
+
+        assertEquals(nodes.first().preparedMessage.markdown, document.state.content)
+        assertTrue(document.nodes.size > 1)
+        assertEquals(document.nodes.size, nodes.size)
+    }
+
+    @Test
+    fun `lazy markdown document indexes footnote targets across nodes`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.stateHolder.messages.add(
+            Message(
+                id = "ai-lazy-footnote",
+                text = "正文[^note]。\n\n中间段落。\n\n[^note]: 脚注内容",
+                sender = Sender.AI,
+                contentStarted = true,
+            )
+        )
+
+        val document = controller.chatListItemsForTest()
+            .filterIsInstance<ChatListItem.AiMarkdownNode>()
+            .first()
+            .preparedMarkdownDocument
+
+        assertTrue(document.targetNodeIndexByUri.containsKey(footnoteDefinitionUri(1)))
+        assertTrue(document.targetNodeIndexByUri.containsKey(footnoteReferenceUri(1, 1)))
+    }
+
+    @Test
+    fun `completed code item also carries background prepared render`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.stateHolder.messages.add(
+            Message(
+                id = "ai-code-prepared",
+                text = "```kotlin\nprintln(\"hi\")\n```",
+                sender = Sender.AI,
+                outputType = "code",
+                contentStarted = true,
+            )
+        )
+
+        val item = controller.chatListItemsForTest()
+            .filterIsInstance<ChatListItem.AiMarkdownNode>()
+            .single()
+
+        assertEquals("```kotlin\nprintln(\"hi\")\n```", item.preparedMessage.markdown)
+        assertEquals(item.preparedMessage.markdown, item.preparedMarkdownDocument.state.content)
     }
 
     @Test
@@ -410,6 +496,7 @@ class MessageItemsControllerStatusTest {
             "完整回复",
             resumedItems.filterIsInstance<ChatListItem.AiMessage>().first().text,
         )
+        assertFalse(resumedItems.any { it is ChatListItem.AiMarkdownNode })
     }
 
     @Test
@@ -588,7 +675,11 @@ class MessageItemsControllerStatusTest {
 
         val items = updatedItems.await()
 
-        assertEquals("你好！请问有什么我可以帮你的吗？", items.filterIsInstance<ChatListItem.AiMessage>().first().text)
+        assertEquals(
+            "你好！请问有什么我可以帮你的吗？",
+            items.filterIsInstance<ChatListItem.AiMessage>().first().text,
+        )
+        assertFalse(items.any { it is ChatListItem.AiMarkdownNode })
     }
 
 }

@@ -21,6 +21,21 @@ class MarkdownEngineOwnershipTest {
     }
 
     @Test
+    fun `历史完成态Markdown节点继续复用MikePenz原生组件环境`() {
+        val entry = mainSource(
+            "com/android/everytalk/ui/components/streaming/StreamBlocksRenderer.kt"
+        )
+        val adapter = mainSource(
+            "com/android/everytalk/ui/components/markdown/MikePenzMarkdownRenderer.kt"
+        )
+
+        assertTrue(entry.contains("fun UnifiedMarkdownNodeRenderer("))
+        assertTrue(entry.contains("preparedMarkdownDocument: PreparedMarkdownDocument"))
+        assertTrue(adapter.contains("fun MikePenzMarkdownNodeRenderer("))
+        assertTrue(adapter.contains("MarkdownElement(node, components, state.content)"))
+    }
+
+    @Test
     fun `生产消息入口只调用统一Markdown入口`() {
         val entryPoints = listOf(
             "com/android/everytalk/ui/screens/MainScreen/chat/text/ui/ChatMessagesList.kt",

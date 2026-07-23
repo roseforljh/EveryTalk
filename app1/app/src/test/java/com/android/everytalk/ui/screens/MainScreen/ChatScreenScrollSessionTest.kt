@@ -49,6 +49,28 @@ class ChatScreenScrollSessionTest {
     }
 
     @Test
+    fun `initial conversation loading overlay remains until the first real bottom is shown`() {
+        assertTrue(
+            shouldShowInitialConversationLoadingOverlay(
+                isHistoryLoadingOverlayVisible = false,
+                initialScrollHandled = false,
+            )
+        )
+        assertTrue(
+            shouldShowInitialConversationLoadingOverlay(
+                isHistoryLoadingOverlayVisible = true,
+                initialScrollHandled = true,
+            )
+        )
+        assertFalse(
+            shouldShowInitialConversationLoadingOverlay(
+                isHistoryLoadingOverlayVisible = false,
+                initialScrollHandled = true,
+            )
+        )
+    }
+
+    @Test
     fun `persistent load generation catches a fast loading pulse`() {
         assertTrue(
             shouldStartHistoryConversationLoadingOverlay(
@@ -120,6 +142,28 @@ class ChatScreenScrollSessionTest {
                 messages = currentMessages,
                 chatItems = currentItems,
                 laidOutItemCount = currentItems.size,
+            )
+        )
+    }
+
+    @Test
+    fun `conversation content can be ready before the message list is composed`() {
+        val messages = listOf(
+            Message(id = "ready-user", text = "已准备", sender = Sender.User),
+        )
+        val items = listOf(
+            ChatListItem.UserMessage("ready-user", "已准备", emptyList()),
+        )
+
+        assertTrue(
+            isHistoryConversationReadyForInitialBottom(
+                currentConversationId = "ready-user",
+                scrollSessionKey = "ready-user",
+                isLoadingHistory = false,
+                messages = messages,
+                chatItems = items,
+                laidOutItemCount = 0,
+                requireLaidOutItemCount = false,
             )
         )
     }
@@ -267,9 +311,18 @@ class ChatScreenScrollSessionTest {
         val source = chatScreenSource()
 
         assertTrue(source.contains("var initialScrollHandled by remember(scrollSessionKey)"))
-        assertTrue(source.contains("LaunchedEffect(scrollSessionKey, listState, historyLoadGeneration)"))
+        assertTrue(source.contains("LaunchedEffect(scrollSessionKey, historyLoadGeneration)"))
+        assertTrue(source.contains("LaunchedEffect(scrollSessionKey, listState, initialReadyToken)"))
         assertTrue(source.contains("val isLoadingHistoryDataState = rememberUpdatedState(isLoadingHistoryData)"))
         assertTrue(source.contains("scrollStateManager.pinToRealBottomUntilUserScroll()"))
+        assertFalse(source.contains("scrollStateManager.settleToRealBottomForInitialLoad()"))
+        assertTrue(source.contains("isInitialConversationLoading = shouldShowInitialConversationLoadingOverlay("))
+        assertTrue(source.contains("val initialContentReady = initialListIndex != null"))
+        assertTrue(source.contains("LazyListState(firstVisibleItemIndex = initialListIndex ?: 0)"))
+        assertTrue(source.contains("requireLaidOutItemCount = false"))
+        assertTrue(source.contains("!initialContentReady ->"))
+        assertFalse(source.contains("val restoredScrollState = remember(scrollSessionKey)"))
+        assertFalse(source.contains("if (savedState != null)"))
         assertFalse(source.contains("var initialScrollHandled by remember(conversationId)"))
         assertFalse(source.contains("LaunchedEffect(conversationId, scrollSessionKey, listState)"))
         assertFalse(source.contains("lastSendAt"))

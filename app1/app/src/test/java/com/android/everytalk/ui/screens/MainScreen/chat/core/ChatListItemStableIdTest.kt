@@ -2,7 +2,13 @@ package com.android.everytalk.ui.screens.MainScreen.chat.core
 
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.ui.components.streaming.PreparedMarkdownDocument
+import com.android.everytalk.ui.components.streaming.PreparedMessage
+import com.mikepenz.markdown.model.State
+import com.mikepenz.markdown.model.parseMarkdown
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatListItemStableIdTest {
@@ -39,5 +45,41 @@ class ChatListItemStableIdTest {
         )
 
         assertEquals(listOf(messageId, messageId, messageId, messageId), stableIds)
+    }
+
+    @Test
+    fun `完成态历史AI正文展开为稳定的Markdown节点项`() {
+        val message = Message(
+            id = "history-assistant",
+            text = "# 标题\n\n第一段。\n\n第二段。",
+            sender = Sender.AI,
+        )
+        val preparedMessage = PreparedMessage(
+            markdown = message.text,
+            formulas = emptyMap(),
+            hasPendingFormula = false,
+            contentVersion = 1L,
+        )
+        val state = parseMarkdown(preparedMessage.markdown) as State.Success
+        val document = PreparedMarkdownDocument(
+            state = state,
+            nodes = state.node.children,
+        )
+        val item = ChatListItem.AiMessage(
+            message = message,
+            messageId = message.id,
+            text = message.text,
+            hasReasoning = false,
+            preparedMessage = preparedMessage,
+            preparedMarkdownDocument = document,
+        )
+
+        val expanded = expandStaticAiMessageItem(item)
+        val nodes = expanded.filterIsInstance<ChatListItem.AiMarkdownNode>()
+
+        assertEquals(document.nodes.size, nodes.size)
+        assertFalse(expanded.any { it is ChatListItem.AiMessage })
+        assertEquals(document.nodes.map { it.startOffset }, nodes.map { it.node.startOffset })
+        assertTrue(nodes.map { it.stableId }.distinct().size == nodes.size)
     }
 }
