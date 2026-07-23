@@ -2,14 +2,116 @@ package com.android.everytalk.data.network.direct
 
 import android.util.Base64
 import android.util.Log
+import com.android.everytalk.data.network.MAX_SSE_EVENT_BYTES
+import com.android.everytalk.data.network.BoundedSseLineReader
+import com.android.everytalk.data.network.ResponseBodyTooLargeException
+import com.android.everytalk.data.network.readBytesAtMost
+import com.android.everytalk.data.network.readErrorTextAtMost
+import com.android.everytalk.data.network.readTextAtMost
 import io.ktor.client.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
 import io.ktor.utils.io.*
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.serialization.json.*
+
+internal class BoundedJsonObjectByteBuffer(private val maxBytes: Long) {
+    init {
+        require(maxBytes in 1..Int.MAX_VALUE.toLong()) { "JSON 缓冲区上限无效" }
+    }
+
+    private var bytes = ByteArray(minOf(maxBytes.toInt(), 8192))
+    private var size = 0
+
+    internal val bufferedByteCount: Int
+        get() = size
+
+    fun append(source: ByteArray, length: Int): List<String> {
+        require(length in 0..source.size) { "追加字节长度无效" }
+        val requiredSize = size.toLong() + length
+        if (requiredSize > maxBytes) {
+            throw ResponseBodyTooLargeException(maxBytes)
+        }
+        ensureCapacity(requiredSize.toInt())
+        source.copyInto(bytes, destinationOffset = size, startIndex = 0, endIndex = length)
+        size = requiredSize.toInt()
+        return drainCompleteObjects()
+    }
+
+    private fun ensureCapacity(requiredSize: Int) {
+        if (requiredSize <= bytes.size) return
+        bytes = bytes.copyOf(minOf(maxBytes.toInt(), maxOf(requiredSize, bytes.size * 2)))
+    }
+
+    private fun drainCompleteObjects(): List<String> {
+        val objects = mutableListOf<String>()
+        var consumedBytes = 0
+        var braceCount = 0
+        var inString = false
+        var escaped = false
+        var jsonStart = -1
+
+        for (index in 0 until size) {
+            when (val value = bytes[index].toInt() and 0xff) {
+                '\\'.code -> if (inString) escaped = !escaped
+                '"'.code -> {
+                    if (!escaped) inString = !inString
+                    escaped = false
+                }
+                else -> {
+                    if (escaped) {
+                        escaped = false
+                    } else if (!inString) {
+                        when (value) {
+                            '{'.code -> {
+                                if (braceCount == 0) jsonStart = index
+                                braceCount++
+                            }
+                            '}'.code -> if (braceCount > 0) {
+                                braceCount--
+                                if (braceCount == 0 && jsonStart >= 0) {
+                                    objects += String(
+                                        bytes,
+                                        jsonStart,
+                                        index - jsonStart + 1,
+                                        Charsets.UTF_8,
+                                    )
+                                    consumedBytes = index + 1
+                                    jsonStart = -1
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if (consumedBytes > 0) {
+            bytes.copyInto(bytes, startIndex = consumedBytes, endIndex = size)
+            size -= consumedBytes
+        }
+        return objects
+    }
+}
+
+internal class AliyunTtsApiException(
+    errorCode: String,
+    errorMessage: String?,
+) : Exception("Aliyun TTS Error: $errorMessage ($errorCode)")
+
+internal fun parseAliyunTtsJsonOrNull(rawText: String): JsonObject? {
+    val json = try {
+        Json.parseToJsonElement(rawText).jsonObject
+    } catch (_: Exception) {
+        return null
+    }
+    val errorCode = json["code"]?.jsonPrimitive?.contentOrNull ?: return json
+    val errorMessage = json["message"]?.jsonPrimitive?.contentOrNull
+    throw AliyunTtsApiException(errorCode, errorMessage)
+}
 
 /**
  * TTS 直连客户端
@@ -24,6 +126,9 @@ import kotlinx.serialization.json.*
  */
 object TtsDirectClient {
     private const val TAG = "TtsDirectClient"
+    internal const val MAX_NON_STREAMING_AUDIO_BYTES = 64L * 1024L * 1024L
+    private const val MAX_ENCODED_AUDIO_RESPONSE_BYTES = 64L * 1024L * 1024L
+    private const val MAX_STREAM_RESPONSE_BYTES = 96L * 1024L * 1024L
     
     /**
      * TTS 配置
@@ -262,51 +367,46 @@ object TtsDirectClient {
             }
         }.toString()
         
-        try {
-            val response = client.post(apiUrl) {
+        return try {
+            client.preparePost(apiUrl) {
                 contentType(ContentType.Application.Json)
                 header(HttpHeaders.Authorization, "Bearer $apiKey")
                 setBody(payload)
-            }
-            
-            if (!response.status.isSuccess()) {
-                val errorBody = try { response.bodyAsText() } catch (_: Exception) { "(no body)" }
-                Log.e(TAG, "Minimax TTS failed: ${response.status} - $errorBody")
-                throw Exception("Minimax TTS failed: ${response.status}")
-            }
-            
-            val responseText = response.bodyAsText()
-            try {
+            }.execute { response ->
+                if (!response.status.isSuccess()) {
+                    val errorBody = response.readErrorTextAtMost() ?: "(no body)"
+                    Log.e(TAG, "Minimax TTS failed: ${response.status}, bodyChars=${errorBody.length}")
+                    throw Exception("Minimax TTS failed: ${response.status}")
+                }
+
+                val responseText = response.readTextAtMost(MAX_ENCODED_AUDIO_RESPONSE_BYTES)
                 val json = Json.parseToJsonElement(responseText).jsonObject
-                
+
                 // 检查错误
                 val baseResp = json["base_resp"]?.jsonObject
                 val statusCode = baseResp?.get("status_code")?.jsonPrimitive?.intOrNull
-                
+
                 if (statusCode != null && statusCode != 0) {
-                    val statusMsg = baseResp?.get("status_msg")?.jsonPrimitive?.contentOrNull
+                    val statusMsg = baseResp["status_msg"]?.jsonPrimitive?.contentOrNull
                     Log.e(TAG, "Minimax TTS API error: $statusCode - $statusMsg")
                     throw Exception("Minimax TTS API error: $statusMsg")
                 }
-                
+
                 // 提取音频数据 (hex string)
                 val audioHex = json["data"]?.jsonObject?.get("audio")?.jsonPrimitive?.contentOrNull
-                
+
                 if (audioHex.isNullOrEmpty()) {
                     Log.e(TAG, "Minimax TTS returned no audio data")
                     throw Exception("Minimax TTS returned no audio data")
                 }
-                
+
                 // Hex string to ByteArray
                 val pcmData = hexStringToByteArray(audioHex)
                 Log.i(TAG, "Minimax TTS completed: ${pcmData.size} bytes (from hex)")
-                return pcmData
-                
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to parse Minimax response", e)
-                throw e
+                pcmData
             }
-            
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "Minimax TTS error", e)
             throw e
@@ -351,14 +451,14 @@ object TtsDirectClient {
                 setBody(payload)
             }.execute { response ->
                 if (!response.status.isSuccess()) {
-                    val errorBody = try { response.bodyAsText() } catch (_: Exception) { "(no body)" }
-                    Log.e(TAG, "Minimax Stream TTS failed: ${response.status} - $errorBody")
+                    val errorBody = response.readErrorTextAtMost() ?: "(no body)"
+                    Log.e(TAG, "Minimax Stream TTS failed: ${response.status}, bodyChars=${errorBody.length}")
                     throw Exception("Minimax Stream TTS failed: ${response.status}")
                 }
                 
-                val channel = response.bodyAsChannel()
+                val channel = response.bodyAsChannel().counted()
                 var chunkCount = 0
-                var totalBytes = 0
+                var totalBytes = 0L
                 
                 // Minimax 流式响应是连续的 JSON 对象，可能没有换行符分隔，也可能有
                 // 这里我们需要逐个解析 JSON 对象
@@ -366,58 +466,24 @@ object TtsDirectClient {
                 // 观察示例，通常是 SSE 风格或者 JSON Lines
                 // 假设是 JSON Lines 或者连续 JSON
                 
-                // 使用 StringBuilder 缓冲数据
-                val buffer = StringBuilder()
+                val jsonBuffer = BoundedJsonObjectByteBuffer(MAX_SSE_EVENT_BYTES)
                 val readBuffer = ByteArray(4096)
                 
                 while (!channel.isClosedForRead) {
                     val bytesRead = channel.readAvailable(readBuffer)
                     if (bytesRead > 0) {
-                        val chunkText = String(readBuffer, 0, bytesRead)
-                        buffer.append(chunkText)
-                        
-                        // 尝试解析缓冲区中的 JSON 对象
-                        // Minimax 返回的是 SSE 格式: data: {...}
-                        // 我们需要处理 "data: " 前缀
-                        
-                        var startIndex = 0
-                        var braceCount = 0
-                        var inString = false
-                        var escape = false
-                        var jsonStartIndex = -1 // 记录 JSON 开始的 '{' 位置
-                        
-                        for (i in 0 until buffer.length) {
-                            val char = buffer[i]
-                            if (escape) {
-                                escape = false
-                            } else if (char == '\\') {
-                                escape = true
-                            } else if (char == '"') {
-                                inString = !inString
-                            } else if (!inString) {
-                                if (char == '{') {
-                                    if (braceCount == 0) {
-                                        jsonStartIndex = i
-                                    }
-                                    braceCount++
-                                } else if (char == '}') {
-                                    braceCount--
-                                    if (braceCount == 0 && jsonStartIndex != -1) {
-                                        // 找到一个完整的 JSON 对象
-                                        val jsonStr = buffer.substring(jsonStartIndex, i + 1)
-                                        
-                                        // 更新 startIndex 到当前位置之后，准备处理下一个
-                                        startIndex = i + 1
-                                        jsonStartIndex = -1
-                                        
-                                        try {
+                        if (channel.totalBytesRead > MAX_STREAM_RESPONSE_BYTES) {
+                            throw ResponseBodyTooLargeException(MAX_STREAM_RESPONSE_BYTES)
+                        }
+                        jsonBuffer.append(readBuffer, bytesRead).forEach { jsonStr ->
+                            try {
                                             val json = Json.parseToJsonElement(jsonStr).jsonObject
                                             
                                             // 检查错误
                                             val baseResp = json["base_resp"]?.jsonObject
                                             val statusCode = baseResp?.get("status_code")?.jsonPrimitive?.intOrNull
                                             if (statusCode != null && statusCode != 0) {
-                                                val statusMsg = baseResp?.get("status_msg")?.jsonPrimitive?.contentOrNull
+                                                val statusMsg = baseResp["status_msg"]?.jsonPrimitive?.contentOrNull
                                                 Log.e(TAG, "Minimax Stream TTS API error: $statusCode - $statusMsg")
                                                 throw Exception("Minimax TTS API error: $statusMsg")
                                             }
@@ -442,9 +508,9 @@ object TtsDirectClient {
                                                 } else {
                                                     val pcmData = hexStringToByteArray(audioHex)
                                                     if (pcmData.isNotEmpty()) {
+                                                        totalBytes = addAudioBytes(totalBytes, pcmData.size)
                                                         send(pcmData)
                                                         chunkCount++
-                                                        totalBytes += pcmData.size
                                                     }
                                                 }
                                             }
@@ -453,21 +519,17 @@ object TtsDirectClient {
                                                 // 结束
                                             }
                                             
-                                        } catch (e: Exception) {
-                                            // 如果是 API 错误，重新抛出以便上层处理（触发重试）
-                                            if (e.message?.contains("Minimax TTS API error") == true) {
-                                                throw e
-                                            }
-                                            Log.w(TAG, "Failed to parse Minimax stream chunk: ${jsonStr.take(50)}...", e)
-                                        }
-                                    }
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: ResponseBodyTooLargeException) {
+                                throw e
+                            } catch (e: Exception) {
+                                // 如果是 API 错误，重新抛出以便上层处理（触发重试）
+                                if (e.message?.contains("Minimax TTS API error") == true) {
+                                    throw e
                                 }
+                                Log.w(TAG, "Failed to parse Minimax stream chunk: chars=${jsonStr.length}", e)
                             }
-                        }
-                        
-                        // 移除已处理的部分
-                        if (startIndex > 0) {
-                            buffer.delete(0, startIndex)
                         }
                     }
                 }
@@ -475,6 +537,8 @@ object TtsDirectClient {
                 Log.i(TAG, "Minimax Stream TTS completed: $chunkCount chunks, $totalBytes bytes")
             }
             
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "Minimax Stream TTS error", e)
             throw e
@@ -525,37 +589,40 @@ object TtsDirectClient {
             }
         }.toString()
         
-        try {
-            val response = client.post(url) {
+        return try {
+            client.preparePost(url) {
                 contentType(ContentType.Application.Json)
                 setBody(payload)
+            }.execute { response ->
+                if (!response.status.isSuccess()) {
+                    val errorBody = response.readErrorTextAtMost() ?: "(no body)"
+                    Log.e(TAG, "Gemini TTS failed: ${response.status}, bodyChars=${errorBody.length}")
+                    throw Exception("Gemini TTS failed: ${response.status}")
+                }
+
+                val responseText = response.readTextAtMost(MAX_ENCODED_AUDIO_RESPONSE_BYTES)
+                val jsonResponse = Json.parseToJsonElement(responseText).jsonObject
+                val audioBase64 = jsonResponse["candidates"]?.jsonArray?.firstOrNull()?.jsonObject
+                    ?.get("content")?.jsonObject
+                    ?.get("parts")?.jsonArray?.firstOrNull()?.jsonObject
+                    ?.get("inlineData")?.jsonObject
+                    ?.get("data")?.jsonPrimitive?.contentOrNull
+
+                if (audioBase64.isNullOrEmpty()) {
+                    Log.w(TAG, "Gemini TTS returned no audio data")
+                    return@execute ByteArray(0)
+                }
+
+                ensureEncodedAudioWithinLimit(audioBase64)
+                val pcmData = Base64.decode(audioBase64, Base64.DEFAULT)
+                if (pcmData.size.toLong() > MAX_NON_STREAMING_AUDIO_BYTES) {
+                    throw ResponseBodyTooLargeException(MAX_NON_STREAMING_AUDIO_BYTES)
+                }
+                Log.i(TAG, "Gemini TTS completed: ${pcmData.size} bytes")
+                pcmData
             }
-            
-            if (!response.status.isSuccess()) {
-                val errorBody = try { response.bodyAsText() } catch (_: Exception) { "(no body)" }
-                Log.e(TAG, "Gemini TTS failed: ${response.status} - $errorBody")
-                throw Exception("Gemini TTS failed: ${response.status}")
-            }
-            
-            val responseText = response.bodyAsText()
-            val jsonResponse = Json.parseToJsonElement(responseText).jsonObject
-            
-            // 提取音频数据
-            val audioBase64 = jsonResponse["candidates"]?.jsonArray?.firstOrNull()?.jsonObject
-                ?.get("content")?.jsonObject
-                ?.get("parts")?.jsonArray?.firstOrNull()?.jsonObject
-                ?.get("inlineData")?.jsonObject
-                ?.get("data")?.jsonPrimitive?.contentOrNull
-            
-            if (audioBase64.isNullOrEmpty()) {
-                Log.w(TAG, "Gemini TTS returned no audio data")
-                return ByteArray(0)
-            }
-            
-            val pcmData = Base64.decode(audioBase64, Base64.DEFAULT)
-            Log.i(TAG, "Gemini TTS completed: ${pcmData.size} bytes")
-            return pcmData
-            
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "Gemini TTS error", e)
             throw e
@@ -590,23 +657,24 @@ object TtsDirectClient {
             put("response_format", responseFormat)
         }.toString()
         
-        try {
-            val response = client.post(targetUrl) {
+        return try {
+            client.preparePost(targetUrl) {
                 contentType(ContentType.Application.Json)
                 header(HttpHeaders.Authorization, "Bearer $apiKey")
                 setBody(payload)
+            }.execute { response ->
+                if (!response.status.isSuccess()) {
+                    val errorBody = response.readErrorTextAtMost() ?: "(no body)"
+                    Log.e(TAG, "OpenAI TTS failed: ${response.status}, bodyChars=${errorBody.length}")
+                    throw Exception("OpenAI TTS failed: ${response.status}")
+                }
+
+                val audioData = response.readBytesAtMost(MAX_NON_STREAMING_AUDIO_BYTES)
+                Log.i(TAG, "OpenAI TTS completed: ${audioData.size} bytes")
+                audioData
             }
-            
-            if (!response.status.isSuccess()) {
-                val errorBody = try { response.bodyAsText() } catch (_: Exception) { "(no body)" }
-                Log.e(TAG, "OpenAI TTS failed: ${response.status} - $errorBody")
-                throw Exception("OpenAI TTS failed: ${response.status}")
-            }
-            
-            val audioData = response.readRawBytes()
-            Log.i(TAG, "OpenAI TTS completed: ${audioData.size} bytes")
-            return audioData
-            
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "OpenAI TTS error", e)
             throw e
@@ -644,23 +712,24 @@ object TtsDirectClient {
             put("stream", false)
         }.toString()
         
-        try {
-            val response = client.post(apiUrl) {
+        return try {
+            client.preparePost(apiUrl) {
                 contentType(ContentType.Application.Json)
                 header(HttpHeaders.Authorization, "Bearer $apiKey")
                 setBody(payload)
+            }.execute { response ->
+                if (!response.status.isSuccess()) {
+                    val errorBody = response.readErrorTextAtMost() ?: "(no body)"
+                    Log.e(TAG, "SiliconFlow TTS failed: ${response.status}, bodyChars=${errorBody.length}")
+                    throw Exception("SiliconFlow TTS failed: ${response.status}")
+                }
+
+                val audioData = response.readBytesAtMost(MAX_NON_STREAMING_AUDIO_BYTES)
+                Log.i(TAG, "SiliconFlow TTS completed: ${audioData.size} bytes")
+                audioData
             }
-            
-            if (!response.status.isSuccess()) {
-                val errorBody = try { response.bodyAsText() } catch (_: Exception) { "(no body)" }
-                Log.e(TAG, "SiliconFlow TTS failed: ${response.status} - $errorBody")
-                throw Exception("SiliconFlow TTS failed: ${response.status}")
-            }
-            
-            val audioData = response.readRawBytes()
-            Log.i(TAG, "SiliconFlow TTS completed: ${audioData.size} bytes")
-            return audioData
-            
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "SiliconFlow TTS error", e)
             throw e
@@ -709,22 +778,22 @@ object TtsDirectClient {
                 setBody(payload)
             }.execute { response ->
                 if (!response.status.isSuccess()) {
-                    val errorBody = try { response.bodyAsText() } catch (_: Exception) { "(no body)" }
-                    Log.e(TAG, "SiliconFlow Stream TTS failed: ${response.status} - $errorBody")
+                    val errorBody = response.readErrorTextAtMost() ?: "(no body)"
+                    Log.e(TAG, "SiliconFlow Stream TTS failed: ${response.status}, bodyChars=${errorBody.length}")
                     throw Exception("SiliconFlow Stream TTS failed: ${response.status}")
                 }
                 
                 val channel = response.bodyAsChannel()
                 var chunkCount = 0
-                var totalBytes = 0
+                var totalBytes = 0L
+                val buffer = ByteArray(8192)
                 
                 while (!channel.isClosedForRead) {
-                    val buffer = ByteArray(8192)
                     val bytesRead = channel.readAvailable(buffer)
                     if (bytesRead > 0) {
                         val chunk = buffer.copyOf(bytesRead)
+                        totalBytes = addAudioBytes(totalBytes, bytesRead)
                         chunkCount++
-                        totalBytes += bytesRead
                         send(chunk)
                     }
                 }
@@ -732,6 +801,8 @@ object TtsDirectClient {
                 Log.i(TAG, "SiliconFlow Stream TTS completed: $chunkCount chunks, $totalBytes bytes")
             }
             
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "SiliconFlow Stream TTS error", e)
             throw e
@@ -778,48 +849,48 @@ object TtsDirectClient {
             }
         }.toString()
         
-        Log.d(TAG, "Aliyun TTS request payload: $payload")
+        Log.d(TAG, "Aliyun TTS request payload: chars=${payload.length}")
         
-        try {
-            val response = client.post(targetUrl) {
+        return try {
+            client.preparePost(targetUrl) {
                 contentType(ContentType.Application.Json)
                 header(HttpHeaders.Authorization, "Bearer $apiKey")
                 header("X-DashScope-Data-Inspection", "enable")
                 setBody(payload)
+            }.execute { response ->
+                if (!response.status.isSuccess()) {
+                    val errorBody = response.readErrorTextAtMost() ?: "(no body)"
+                    Log.e(TAG, "Aliyun TTS failed: ${response.status}, bodyChars=${errorBody.length}")
+                    throw Exception("Aliyun TTS failed: ${response.status}")
+                }
+
+                val responseText = response.readTextAtMost(MAX_ENCODED_AUDIO_RESPONSE_BYTES)
+                val json = Json.parseToJsonElement(responseText).jsonObject
+                val output = json["output"]?.jsonObject
+                val audioObj = output?.get("audio")?.jsonObject
+                val audioData = audioObj?.get("data")?.jsonPrimitive?.contentOrNull
+
+                if (!audioData.isNullOrEmpty()) {
+                    ensureEncodedAudioWithinLimit(audioData)
+                    val pcmData = Base64.decode(audioData, Base64.DEFAULT)
+                    if (pcmData.size.toLong() > MAX_NON_STREAMING_AUDIO_BYTES) {
+                        throw ResponseBodyTooLargeException(MAX_NON_STREAMING_AUDIO_BYTES)
+                    }
+                    Log.i(TAG, "Aliyun TTS completed: ${pcmData.size} bytes")
+                    return@execute pcmData
+                }
+
+                val code = json["code"]?.jsonPrimitive?.contentOrNull
+                val message = json["message"]?.jsonPrimitive?.contentOrNull
+                if (code != null) {
+                    Log.e(TAG, "Aliyun TTS API error: code=$code, messageChars=${message?.length ?: 0}")
+                    throw Exception("Aliyun TTS API error: $message")
+                }
+
+                throw Exception("Aliyun TTS returned no audio data")
             }
-            
-            if (!response.status.isSuccess()) {
-                val errorBody = try { response.bodyAsText() } catch (_: Exception) { "(no body)" }
-                Log.e(TAG, "Aliyun TTS failed: ${response.status} - $errorBody")
-                throw Exception("Aliyun TTS failed: ${response.status}")
-            }
-            
-            val responseText = response.bodyAsText()
-            val json = Json.parseToJsonElement(responseText).jsonObject
-            
-            // 检查 output.audio
-            val output = json["output"]?.jsonObject
-            // 根据官方文档，audio 是一个对象，包含 data 和 url
-            val audioObj = output?.get("audio")?.jsonObject
-            val audioData = audioObj?.get("data")?.jsonPrimitive?.contentOrNull
-            
-            if (!audioData.isNullOrEmpty()) {
-                // Base64 decode
-                val pcmData = Base64.decode(audioData, Base64.DEFAULT)
-                Log.i(TAG, "Aliyun TTS completed: ${pcmData.size} bytes")
-                return pcmData
-            }
-            
-            // 检查是否有错误信息
-            val code = json["code"]?.jsonPrimitive?.contentOrNull
-            val message = json["message"]?.jsonPrimitive?.contentOrNull
-            if (code != null) {
-                Log.e(TAG, "Aliyun TTS API error: $code - $message")
-                throw Exception("Aliyun TTS API error: $message")
-            }
-            
-            throw Exception("Aliyun TTS returned no audio data")
-            
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "Aliyun TTS error", e)
             throw e
@@ -868,7 +939,7 @@ object TtsDirectClient {
             }
         }.toString()
         
-        Log.d(TAG, "Aliyun Stream TTS request payload: $payload")
+        Log.d(TAG, "Aliyun Stream TTS request payload: chars=${payload.length}")
         
         try {
             client.preparePost(targetUrl) {
@@ -880,27 +951,22 @@ object TtsDirectClient {
                 setBody(payload)
             }.execute { response ->
                 if (!response.status.isSuccess()) {
-                    val errorBody = try { response.bodyAsText() } catch (_: Exception) { "(no body)" }
-                    Log.e(TAG, "Aliyun Stream TTS failed: ${response.status} - $errorBody")
+                    val errorBody = response.readErrorTextAtMost() ?: "(no body)"
+                    Log.e(TAG, "Aliyun Stream TTS failed: ${response.status}, bodyChars=${errorBody.length}")
                     
-                    // 尝试解析错误信息
-                    try {
-                        val json = Json.parseToJsonElement(errorBody).jsonObject
-                        val code = json["code"]?.jsonPrimitive?.contentOrNull
-                        val message = json["message"]?.jsonPrimitive?.contentOrNull
-                        if (code != null) {
-                            throw Exception("Aliyun TTS Error: $message ($code)")
-                        }
-                    } catch (_: Exception) {}
+                    parseAliyunTtsJsonOrNull(errorBody)
                     
                     throw Exception("Aliyun Stream TTS failed: ${response.status}")
                 }
                 
-                val channel = response.bodyAsChannel()
+                val channel = BoundedSseLineReader(
+                    response.bodyAsChannel(),
+                    maxStreamBytes = MAX_STREAM_RESPONSE_BYTES,
+                )
                 var chunkCount = 0
-                var totalBytes = 0
+                var totalBytes = 0L
                 
-                while (!channel.isClosedForRead) {
+                while (true) {
                     val line = channel.readLine() ?: break
                     
                     if (line.startsWith("data:")) {
@@ -908,15 +974,8 @@ object TtsDirectClient {
                         if (jsonStr.isEmpty()) continue
                         
                         try {
-                            val json = Json.parseToJsonElement(jsonStr).jsonObject
-                            
-                            // 检查错误
-                            val code = json["code"]?.jsonPrimitive?.contentOrNull
-                            if (code != null) {
-                                val msg = json["message"]?.jsonPrimitive?.contentOrNull
-                                Log.e(TAG, "Aliyun Stream TTS error in stream: $code - $msg")
-                                throw Exception("Aliyun TTS Error: $msg ($code)")
-                            }
+                            val json = parseAliyunTtsJsonOrNull(jsonStr)
+                                ?: throw IllegalArgumentException("无效的阿里云 TTS JSON")
                             
                             // 检查 output.audio
                             val output = json["output"]?.jsonObject
@@ -927,11 +986,12 @@ object TtsDirectClient {
                                             ?: output?.get("audio")?.jsonPrimitive?.contentOrNull // 尝试直接获取
                             
                             if (!audioData.isNullOrEmpty()) {
+                                ensureEncodedAudioWithinLimit(audioData)
                                 val chunk = Base64.decode(audioData, Base64.DEFAULT)
                                 if (chunk.isNotEmpty()) {
+                                    totalBytes = addAudioBytes(totalBytes, chunk.size)
                                     send(chunk)
                                     chunkCount++
-                                    totalBytes += chunk.size
                                 }
                             }
                             
@@ -941,8 +1001,13 @@ object TtsDirectClient {
                                 break
                             }
                             
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: ResponseBodyTooLargeException) {
+                            throw e
+                        } catch (e: AliyunTtsApiException) {
+                            throw e
                         } catch (e: Exception) {
-                            if (e.message?.startsWith("Aliyun TTS Error") == true) throw e
                             // 忽略解析错误，继续处理下一行
                             Log.w(TAG, "Failed to parse Aliyun stream line: chars=${jsonStr.length}", e)
                         }
@@ -950,21 +1015,15 @@ object TtsDirectClient {
                         // 忽略 SSE 元数据
                     } else if (line.isNotEmpty()) {
                         // 尝试直接解析 JSON (有些响应可能不带 data: 前缀)
-                        try {
-                            val json = Json.parseToJsonElement(line).jsonObject
-                            val code = json["code"]?.jsonPrimitive?.contentOrNull
-                            if (code != null) {
-                                val msg = json["message"]?.jsonPrimitive?.contentOrNull
-                                Log.e(TAG, "Aliyun Stream TTS error: $code - $msg")
-                                throw Exception("Aliyun TTS Error: $msg ($code)")
-                            }
-                        } catch (_: Exception) {}
+                        parseAliyunTtsJsonOrNull(line)
                     }
                 }
                 
                 Log.i(TAG, "Aliyun Stream TTS completed: $chunkCount chunks, $totalBytes bytes")
             }
             
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "Aliyun Stream TTS error", e)
             throw e
@@ -976,13 +1035,39 @@ object TtsDirectClient {
      */
     private fun hexStringToByteArray(s: String): ByteArray {
         val len = s.length
+        require(len % 2 == 0) { "音频十六进制数据长度必须为偶数" }
+        if (len.toLong() / 2L > MAX_NON_STREAMING_AUDIO_BYTES) {
+            throw ResponseBodyTooLargeException(MAX_NON_STREAMING_AUDIO_BYTES)
+        }
         val data = ByteArray(len / 2)
         var i = 0
         while (i < len) {
-            data[i / 2] = ((Character.digit(s[i], 16) shl 4) + Character.digit(s[i + 1], 16)).toByte()
+            val high = Character.digit(s[i], 16)
+            val low = Character.digit(s[i + 1], 16)
+            require(high >= 0 && low >= 0) { "音频十六进制数据包含非法字符" }
+            data[i / 2] = ((high shl 4) + low).toByte()
             i += 2
         }
         return data
+    }
+
+    private fun addAudioBytes(currentBytes: Long, additionalBytes: Int): Long {
+        if (currentBytes > MAX_NON_STREAMING_AUDIO_BYTES - additionalBytes) {
+            throw ResponseBodyTooLargeException(MAX_NON_STREAMING_AUDIO_BYTES)
+        }
+        return currentBytes + additionalBytes
+    }
+
+    private fun ensureEncodedAudioWithinLimit(encoded: String) {
+        val encodedLength = encoded.count { !it.isWhitespace() }.toLong()
+        val estimatedBytes = (encodedLength / 4L) * 3L + when (encodedLength % 4L) {
+            2L -> 1L
+            3L -> 2L
+            else -> 0L
+        }
+        if (estimatedBytes > MAX_NON_STREAMING_AUDIO_BYTES) {
+            throw ResponseBodyTooLargeException(MAX_NON_STREAMING_AUDIO_BYTES)
+        }
     }
     /**
      * 解析并验证音色 ID

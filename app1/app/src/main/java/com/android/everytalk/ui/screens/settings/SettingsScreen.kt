@@ -49,27 +49,18 @@ import com.android.everytalk.ui.screens.settings.EditExternalWebSearchProviderDi
 import com.android.everytalk.data.network.ExternalWebSearchProvider
 import com.android.everytalk.ui.screens.settings.dialogs.AutoFetchModelsConfirmDialog
 import com.android.everytalk.ui.screens.settings.dialogs.ModelSelectionDialog
+import com.android.everytalk.util.storage.readAtMost
 import java.util.UUID
 
 private const val MAX_SETTINGS_IMPORT_BYTES = 50L * 1024L * 1024L
 private const val SETTINGS_IMPORT_TOO_LARGE_MESSAGE = "导入文件过大（最大支持50MB）"
 
 private fun readSettingsImportText(inputStream: java.io.InputStream): String {
-    val output = java.io.ByteArrayOutputStream()
-    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-    var totalBytes = 0L
-
-    while (true) {
-        val read = inputStream.read(buffer)
-        if (read == -1) break
-        totalBytes += read
-        if (totalBytes > MAX_SETTINGS_IMPORT_BYTES) {
-            throw IllegalStateException(SETTINGS_IMPORT_TOO_LARGE_MESSAGE)
-        }
-        output.write(buffer, 0, read)
+    return try {
+        readAtMost(inputStream, MAX_SETTINGS_IMPORT_BYTES).toString(Charsets.UTF_8)
+    } catch (e: IllegalArgumentException) {
+        throw IllegalStateException(SETTINGS_IMPORT_TOO_LARGE_MESSAGE, e)
     }
-
-    return output.toByteArray().toString(Charsets.UTF_8)
 }
 
 // 平台默认地址映射
@@ -126,7 +117,6 @@ fun SettingsScreen(
         viewModel.selectedApiConfig.collectAsState()
     }
     val allProviders by viewModel.allProviders.collectAsState()
-    val isFetchingModels by viewModel.isFetchingModels.collectAsState()
     val fetchedModels by viewModel.fetchedModels.collectAsState()
     val isRefreshingModels by viewModel.isRefreshingModels.collectAsState()
     val showAutoFetchConfirm by viewModel.showAutoFetchConfirmDialog.collectAsState()
@@ -138,7 +128,6 @@ fun SettingsScreen(
     val selectedExternalWebSearchProviderId by viewModel.selectedExternalWebSearchProviderId.collectAsState()
     var editingExternalProvider by remember { mutableStateOf<ExternalWebSearchProvider?>(null) }
     val scope = rememberCoroutineScope()
-    val coroutineScope = rememberCoroutineScope()
 
     val apiConfigsByApiKeyAndModality = remember(textConfigs, imageConfigs, isInImageMode) {
         val configsToShow = if (isInImageMode) {
@@ -165,21 +154,9 @@ fun SettingsScreen(
     var newFullConfigKey by remember { mutableStateOf("") }
 
     var showAddModelToKeyDialog by remember { mutableStateOf(false) }
-    var addModelToKeyTargetApiKey by remember { mutableStateOf("") }
-    var addModelToKeyTargetProvider by remember { mutableStateOf("") }
-    var addModelToKeyTargetAddress by remember { mutableStateOf("") }
-    var addModelToKeyTargetChannel by remember { mutableStateOf("") }
-    var addModelToKeyTargetModality by remember { mutableStateOf(ModalityType.TEXT) }
-    var addModelToKeyNewModelName by remember { mutableStateOf("") }
+    var addModelToKeyTarget by remember { mutableStateOf<ApiConfig?>(null) }
     
-    // 新增：手动输入模型对话框状态
     var showManualModelInputDialog by remember { mutableStateOf(false) }
-    var manualModelInputProvider by remember { mutableStateOf("") }
-    var manualModelInputAddress by remember { mutableStateOf("") }
-    var manualModelInputKey by remember { mutableStateOf("") }
-    var manualModelInputChannel by remember { mutableStateOf("") }
-    var manualModelInputIsImageGen by remember { mutableStateOf(false) }
-    var manualModelInputName by remember { mutableStateOf("") }
 
     var showAddCustomProviderDialog by remember { mutableStateOf(false) }
     var newCustomProviderNameInput by remember { mutableStateOf("") }
@@ -192,17 +169,17 @@ fun SettingsScreen(
     var providerToDelete by remember { mutableStateOf<String?>(null) }
     var showImportExportDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
-    var exportData by remember { mutableStateOf<Pair<String, String>?>(null) }
 
     val exportSettingsLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json"),
         onResult = { uri ->
+            val exportData = viewModel.consumeSettingsExport()
             if (uri == null) {
-                exportData = null
+                return@rememberLauncherForActivityResult
             } else {
                 val jsonContent = exportData?.second
                 if (jsonContent == null) {
-                    exportData = null
+                    viewModel.showToast("导出失败: 待导出内容已失效")
                 } else {
                     scope.launch {
                     try {
@@ -220,8 +197,6 @@ fun SettingsScreen(
                     } catch (e: Exception) {
                         Log.e("SettingsScreen", "导出失败", e)
                         viewModel.showToast("导出失败: ${e.message}")
-                    } finally {
-                        exportData = null
                     }
                 }
             }
@@ -261,21 +236,14 @@ fun SettingsScreen(
 
     LaunchedEffect(Unit) {
         viewModel.settingsExportRequest.collect { data ->
-            exportData = data
+            viewModel.stageSettingsExport(data)
             exportSettingsLauncher.launch(data.first)
         }
     }
     
-    // 新增：监听手动输入模型请求
-    LaunchedEffect(Unit) {
+    LaunchedEffect(isInImageMode) {
         viewModel.showManualModelInputRequest.collect { request ->
-            manualModelInputProvider = request.provider
-            manualModelInputAddress = request.address
-            manualModelInputKey = request.key
-            manualModelInputChannel = request.channel
-            manualModelInputIsImageGen = request.isImageGen
-            manualModelInputName = ""
-            showManualModelInputDialog = true
+            if (request.isImageGen == isInImageMode) showManualModelInputDialog = true
         }
     }
 
@@ -338,13 +306,8 @@ fun SettingsScreen(
                             viewModel.selectConfig(configToSelect, isInImageMode)
                         },
                         selectedConfigIdInApp = selectedConfigForApp?.id,
-                        onAddModelForApiKeyClick = { apiKey, existingProvider, existingAddress, existingChannel, existingModality ->
-                            addModelToKeyTargetApiKey = apiKey
-                            addModelToKeyTargetProvider = existingProvider
-                            addModelToKeyTargetAddress = existingAddress
-                            addModelToKeyTargetChannel = existingChannel
-                            addModelToKeyTargetModality = existingModality
-                            addModelToKeyNewModelName = ""
+                        onAddModelForApiKeyClick = { representativeConfig ->
+                            addModelToKeyTarget = representativeConfig
                             showAddModelToKeyDialog = true
                         },
                         onDeleteModelForApiKey = { configToDelete ->
@@ -401,13 +364,8 @@ fun SettingsScreen(
                                         viewModel.selectConfig(configToSelect, isInImageMode)
                                     },
                                     selectedConfigIdInApp = selectedConfigForApp?.id,
-                                    onAddModelForApiKeyClick = { apiKey, existingProvider, existingAddress, existingChannel, existingModality ->
-                                        addModelToKeyTargetApiKey = apiKey
-                                        addModelToKeyTargetProvider = existingProvider
-                                        addModelToKeyTargetAddress = existingAddress
-                                        addModelToKeyTargetChannel = existingChannel
-                                        addModelToKeyTargetModality = existingModality
-                                        addModelToKeyNewModelName = ""
+                                    onAddModelForApiKeyClick = { representativeConfig ->
+                                        addModelToKeyTarget = representativeConfig
                                         showAddModelToKeyDialog = true
                                     },
                                     onDeleteModelForApiKey = { configToDelete ->
@@ -669,7 +627,7 @@ fun SettingsScreen(
                 // 重置获取的模型列表
                 viewModel.clearFetchedModels()
             },
-            onConfirm = { provider, address, key, channel, _, _, _, enableCodeExecution, toolsJson ->
+            onConfirm = { provider, address, key, channel, imageSize, numInferenceSteps, guidanceScale, enableCodeExecution, toolsJson ->
                 val providerTrim = provider.trim()
                 val pLower = providerTrim.lowercase()
                 val isDefaultProvider = pLower in listOf("默认", "default")
@@ -683,7 +641,10 @@ fun SettingsScreen(
                         model = "Kwai-Kolors/Kolors",
                         modalityType = ModalityType.IMAGE,
                         channel = channel,
-                        isValid = true
+                        isValid = true,
+                        imageSize = imageSize,
+                        numInferenceSteps = numInferenceSteps,
+                        guidanceScale = guidanceScale,
                     )
                     viewModel.addConfig(config, isImageGen = true)
                     showAddFullConfigDialog = false
@@ -716,11 +677,18 @@ fun SettingsScreen(
                     showAddFullConfigDialog = false
                     viewModel.clearFetchedModels()
                 } else if (key.isNotBlank() && providerTrim.isNotBlank() && address.isNotBlank()) {
-                    // 改为启动"是否自动获取模型列表"的流程
-                    // 将 enableCodeExecution 和 toolsJson 暂时存储在 ViewModel 或通过 Flow 传递
-                    // 这里简单处理：直接传递给 startAddConfigFlow (需要修改 ViewModel)
-                    // 或者先简化：在确认自动获取后，手动更新 Config
-                    viewModel.startAddConfigFlow(providerTrim, address, key, channel, isInImageMode, enableCodeExecution, toolsJson)
+                    viewModel.startAddConfigFlow(
+                        provider = providerTrim,
+                        address = address,
+                        key = key,
+                        channel = channel,
+                        isImageGen = isInImageMode,
+                        enableCodeExecution = enableCodeExecution,
+                        toolsJson = toolsJson,
+                        imageSize = imageSize,
+                        numInferenceSteps = numInferenceSteps,
+                        guidanceScale = guidanceScale,
+                    )
                     showAddFullConfigDialog = false
                 }
             },
@@ -742,46 +710,30 @@ fun SettingsScreen(
 
     if (showAddModelToKeyDialog) {
         AddModelDialog(
-            onDismissRequest = { showAddModelToKeyDialog = false },
+            onDismissRequest = {
+                showAddModelToKeyDialog = false
+                addModelToKeyTarget = null
+            },
             onConfirm = { newModelName ->
-                if (newModelName.isNotBlank()) {
-                    viewModel.addModelToConfigGroup(
-                        apiKey = addModelToKeyTargetApiKey,
-                        provider = addModelToKeyTargetProvider,
-                        address = addModelToKeyTargetAddress,
-                        modelName = newModelName,
-                        channel = addModelToKeyTargetChannel,
-                        isImageGen = isInImageMode
-                    )
+                addModelToKeyTarget?.let { representativeConfig ->
+                    viewModel.addModelToConfigGroup(representativeConfig, newModelName)
                     showAddModelToKeyDialog = false
+                    addModelToKeyTarget = null
                 }
             }
         )
     }
     
-    // 新增：手动输入模型对话框
     if (showManualModelInputDialog) {
         AddModelDialog(
             onDismissRequest = {
                 showManualModelInputDialog = false
-                manualModelInputName = ""
+                viewModel.dismissManualModelInput()
             },
             onConfirm = { modelName ->
                 if (modelName.isNotBlank()) {
-                    val newConfig = ApiConfig(
-                        id = UUID.randomUUID().toString(),
-                        name = modelName,
-                        provider = manualModelInputProvider,
-                        address = manualModelInputAddress,
-                        key = manualModelInputKey,
-                        model = modelName,
-                        modalityType = if (manualModelInputIsImageGen) ModalityType.IMAGE else ModalityType.TEXT,
-                        channel = manualModelInputChannel,
-                        isValid = true
-                    )
-                    viewModel.addConfig(newConfig, manualModelInputIsImageGen)
+                    viewModel.submitManualModel(modelName)
                     showManualModelInputDialog = false
-                    manualModelInputName = ""
                 }
             }
         )

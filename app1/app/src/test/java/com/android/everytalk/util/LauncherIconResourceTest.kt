@@ -15,14 +15,12 @@ class LauncherIconResourceTest {
     fun `launcher resources use centered chat logo foreground assets`() {
         val resDir = findResDir()
         val lightLauncherFiles = listOf(
-            resDir.resolve("mipmap-anydpi-v26/ic_launcher.xml"),
-            resDir.resolve("mipmap-anydpi-v26/ic_launcher_round.xml"),
+            resDir.resolve("mipmap-anydpi-v33/ic_launcher.xml"),
+            resDir.resolve("mipmap-anydpi-v33/ic_launcher_round.xml"),
         )
         val nightLauncherFiles = listOf(
-            resDir.resolve("mipmap-anydpi-v26/ic_launcher_night.xml"),
-            resDir.resolve("mipmap-anydpi-v26/ic_launcher_night_round.xml"),
-            resDir.resolve("mipmap-night-anydpi-v26/ic_launcher.xml"),
-            resDir.resolve("mipmap-night-anydpi-v26/ic_launcher_round.xml"),
+            resDir.resolve("mipmap-night-anydpi-v33/ic_launcher.xml"),
+            resDir.resolve("mipmap-night-anydpi-v33/ic_launcher_round.xml"),
         )
 
         (lightLauncherFiles + nightLauncherFiles).forEach { file ->
@@ -44,10 +42,7 @@ class LauncherIconResourceTest {
                 "${file.path} must not use the old ET foreground",
                 text.contains("@drawable/ic_foreground_logo") || text.contains("@drawable/logo2"),
             )
-            assertFalse(
-                "${file.path} must not define monochrome because themed icons recolor the fixed launcher icon",
-                text.contains("<monochrome"),
-            )
+            assertTrue("${file.path} must provide a monochrome themed-icon layer", text.contains("<monochrome"))
         }
         lightLauncherFiles.forEach { file ->
             val text = file.readText()
@@ -61,23 +56,17 @@ class LauncherIconResourceTest {
             assertFalse("${file.path} must not switch launcher background by theme", text.contains("@color/ic_launcher_background_dark"))
         }
 
-        assertTrue(
-            "Missing transparent launcher foreground PNG",
-            resDir.resolve("drawable/launcher_logo_foreground_asset.png").isFile,
-        )
-        assertTrue(
-            "Missing fixed launcher preview PNG",
-            resDir.resolve("drawable/launcher_logo_asset.png").isFile,
-        )
+        val foregroundAsset = resDir.resolve("drawable-nodpi/launcher_logo_foreground_asset.png")
+        assertTrue("Missing transparent launcher foreground PNG", foregroundAsset.isFile)
         assertTrue(
             "Launcher foreground PNG must be valid",
-            resDir.resolve("drawable/launcher_logo_foreground_asset.png")
+            foregroundAsset
                 .readBytes()
                 .take(8)
                 .toByteArray()
                 .contentEquals(byteArrayOf(-119, 80, 78, 71, 13, 10, 26, 10)),
         )
-        val foregroundSize = resDir.resolve("drawable/launcher_logo_foreground_asset.png").readPngSize()
+        val foregroundSize = foregroundAsset.readPngSize()
         assertEquals("Launcher foreground width must stay high resolution", 1024, foregroundSize.width)
         assertEquals("Launcher foreground height must stay high resolution", 1024, foregroundSize.height)
         assertTrue(
@@ -144,49 +133,15 @@ class LauncherIconResourceTest {
     }
 
     @Test
-    fun `fixed launcher asset is a png and not the old opaque logo`() {
-        val asset = findResDir().resolve("drawable/launcher_logo_asset.png")
-        val bytes = asset.readBytes()
-        val pngSignature = byteArrayOf(-119, 80, 78, 71, 13, 10, 26, 10)
-
-        assertTrue("Launcher asset must be a valid PNG", bytes.take(8).toByteArray().contentEquals(pngSignature))
-        assertTrue("Launcher asset PNG must include an IHDR color type byte", bytes.size > 25)
-    }
-
-    @Test
-    fun `legacy launcher webp assets are fixed visible launcher logo`() {
-        val resDir = findResDir()
-        val launcherWebpFiles = listOf(
-            "mipmap-hdpi/ic_launcher.webp",
-            "mipmap-hdpi/ic_launcher_round.webp",
-            "mipmap-mdpi/ic_launcher.webp",
-            "mipmap-mdpi/ic_launcher_round.webp",
-            "mipmap-xhdpi/ic_launcher.webp",
-            "mipmap-xhdpi/ic_launcher_round.webp",
-            "mipmap-xxhdpi/ic_launcher.webp",
-            "mipmap-xxhdpi/ic_launcher_round.webp",
-            "mipmap-xxxhdpi/ic_launcher.webp",
-            "mipmap-xxxhdpi/ic_launcher_round.webp",
-        )
-
-        launcherWebpFiles.forEach { relative ->
-            val file = resDir.resolve(relative)
-            assertTrue("Missing launcher WebP: ${file.path}", file.isFile)
-        }
-    }
-
-    @Test
     fun `android 12 splash uses provided transparent logo scaled to four times current size`() {
         val resDir = findResDir()
         val v31Theme = resDir.resolve("values-v31/themes.xml")
         val lightSplash = resDir.resolve("drawable-nodpi/splash_logo.png")
-        val darkSplash = resDir.resolve("drawable-night-nodpi/splash_logo.png")
         val lightColors = resDir.resolve("values/colors.xml")
         val darkColors = resDir.resolve("values-night/colors.xml")
 
         assertTrue("Missing Android 12 theme", v31Theme.isFile)
         assertTrue("Missing light splash logo", lightSplash.isFile)
-        assertTrue("Missing dark splash logo", darkSplash.isFile)
         assertTrue("Missing light splash background color", lightColors.isFile)
         assertTrue("Missing dark splash background color", darkColors.isFile)
 
@@ -217,28 +172,14 @@ class LauncherIconResourceTest {
                 .toByteArray()
                 .contentEquals(byteArrayOf(-119, 80, 78, 71, 13, 10, 26, 10)),
         )
-        assertTrue(
-            "Dark splash logo must be a transparent pure-logo PNG",
-            darkSplash.readBytes()
-                .take(8)
-                .toByteArray()
-                .contentEquals(byteArrayOf(-119, 80, 78, 71, 13, 10, 26, 10)),
-        )
         assertEquals("Light splash PNG must use the provided pure-logo width", 718, lightSplash.readPngSize().width)
         assertEquals("Light splash PNG must use the provided pure-logo height", 730, lightSplash.readPngSize().height)
-        assertEquals("Dark splash PNG must use the provided pure-logo width", 718, darkSplash.readPngSize().width)
-        assertEquals("Dark splash PNG must use the provided pure-logo height", 730, darkSplash.readPngSize().height)
         assertTrue("Light splash PNG corners must stay transparent", lightSplash.hasTransparentCorners())
-        assertTrue("Dark splash PNG corners must stay transparent", darkSplash.hasTransparentCorners())
-        listOf(
-            "Light" to lightSplash.readVisibleAlphaBounds(),
-            "Dark" to darkSplash.readVisibleAlphaBounds(),
-        ).forEach { (label, bounds) ->
-            assertEquals("$label splash visible logo must be four times the previous width", 288, bounds.width)
-            assertEquals("$label splash visible logo must be four times the previous height", 292, bounds.height)
-            assertTrue("$label splash visible logo must stay centered with empty margins", bounds.minMargin >= 215)
-        }
-        assertTrue("Light and dark splash must share the same transparent logo asset", lightSplash.readBytes().contentEquals(darkSplash.readBytes()))
+        val bounds = lightSplash.readVisibleAlphaBounds()
+        assertEquals("Splash visible logo must be four times the previous width", 288, bounds.width)
+        assertEquals("Splash visible logo must be four times the previous height", 292, bounds.height)
+        assertTrue("Splash visible logo must stay centered with empty margins", bounds.minMargin >= 215)
+        assertFalse("Duplicate dark splash asset must be removed", resDir.resolve("drawable-night-nodpi/splash_logo.png").exists())
         assertFalse("Light splash XML wrapper must be deleted", resDir.resolve("drawable/splash_logo.xml").exists())
         assertFalse("Dark splash XML wrapper must be deleted", resDir.resolve("drawable-night/splash_logo.xml").exists())
         assertFalse("Old light splash intermediate PNG must be deleted", resDir.resolve("drawable/splash_logo_black_asset.png").exists())

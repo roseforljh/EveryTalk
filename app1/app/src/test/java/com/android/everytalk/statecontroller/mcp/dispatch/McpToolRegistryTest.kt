@@ -2,7 +2,6 @@ package com.android.everytalk.statecontroller.mcp.dispatch
 
 import com.android.everytalk.data.mcp.McpTool
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class McpToolRegistryTest {
@@ -10,12 +9,20 @@ class McpToolRegistryTest {
     @Test
     fun `context7 docs tools are classified as docs`() {
         val candidate = toMcpToolCandidate(
-            serverId = "context7",
             serverName = "Context7",
             tool = McpTool(name = "query-docs", description = "Query library docs")
         )
 
         assertEquals(McpToolCategory.DOCS, candidate.category)
-        assertTrue(candidate.capabilities.contains(McpCapability.LOOKUP_DOCS))
+    }
+
+    @Test
+    fun `web search tools are classified as search`() {
+        val candidate = toMcpToolCandidate(
+            serverName = "Exa",
+            tool = McpTool(name = "web_search_exa", description = "Search the web")
+        )
+
+        assertEquals(McpToolCategory.SEARCH, candidate.category)
     }
 }

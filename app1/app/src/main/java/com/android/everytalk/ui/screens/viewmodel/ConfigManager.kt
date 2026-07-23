@@ -8,6 +8,7 @@ import com.android.everytalk.statecontroller.safeApiConfigSummary
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
 import java.util.UUID
 
@@ -18,6 +19,35 @@ class ConfigManager(
     private val viewModelScope: CoroutineScope
 ) {
     private val TAG_CM = "ConfigManager"
+
+    private fun belongsToGroup(config: ApiConfig, representative: ApiConfig): Boolean =
+        config.key == representative.key &&
+            config.provider == representative.provider &&
+            config.address == representative.address &&
+            config.channel == representative.channel
+
+    private fun remapConversationConfigIds(
+        removedIds: Set<String>,
+        fallbackId: String?,
+    ): Map<String, String> {
+        if (removedIds.isEmpty()) return stateHolder.conversationApiConfigIds.value
+        val current = stateHolder.conversationApiConfigIds.value
+        val updated = if (fallbackId == null) {
+            current.filterValues { it !in removedIds }
+        } else {
+            current.mapValues { (_, configId) ->
+                if (configId in removedIds) fallbackId else configId
+            }
+        }
+        return if (updated != current) {
+            stateHolder.conversationApiConfigIds.updateAndGet { currentMapping ->
+                if (fallbackId == null) currentMapping.filterValues { it !in removedIds }
+                else currentMapping.mapValues { (_, configId) ->
+                    if (configId in removedIds) fallbackId else configId
+                }
+            }
+        } else current
+    }
 
     fun addConfig(configToAdd: ApiConfig, isImageGen: Boolean = false) {
         val configs = if (isImageGen) stateHolder._imageGenApiConfigs.value else stateHolder._apiConfigs.value
@@ -63,15 +93,15 @@ class ConfigManager(
                 // 绑定到当前会话
                 if (isImageGen) {
                     val currentImageConversationId = stateHolder._currentImageGenerationConversationId.value
-                    val currentMapping = stateHolder.conversationApiConfigIds.value.toMutableMap()
-                    currentMapping[currentImageConversationId] = finalConfig.id
-                    stateHolder.conversationApiConfigIds.value = currentMapping
+                    val currentMapping = stateHolder.conversationApiConfigIds.updateAndGet { mapping ->
+                        mapping + (currentImageConversationId to finalConfig.id)
+                    }
                     persistenceManager.saveConversationApiConfigIds(currentMapping)
                 } else {
                     val currentConversationId = stateHolder._currentConversationId.value
-                    val currentMapping = stateHolder.conversationApiConfigIds.value.toMutableMap()
-                    currentMapping[currentConversationId] = finalConfig.id
-                    stateHolder.conversationApiConfigIds.value = currentMapping
+                    val currentMapping = stateHolder.conversationApiConfigIds.updateAndGet { mapping ->
+                        mapping + (currentConversationId to finalConfig.id)
+                    }
                     persistenceManager.saveConversationApiConfigIds(currentMapping)
                 }
 
@@ -150,6 +180,17 @@ class ConfigManager(
         val updatedConfigs = currentConfigs.toMutableList().apply {
             removeAt(indexToDelete)
         }.toList()
+        val currentConversationMapping = stateHolder.conversationApiConfigIds.value
+        val fallbackConfig = updatedConfigs.firstOrNull { belongsToGroup(it, configToDelete) }
+            ?: selectedConfigFlow.value
+                ?.takeIf { selected -> updatedConfigs.any { it.id == selected.id } }
+                ?.let { selected -> updatedConfigs.first { it.id == selected.id } }
+            ?: updatedConfigs.firstOrNull()
+        val updatedConversationMapping = remapConversationConfigIds(
+            removedIds = setOf(configToDelete.id),
+            fallbackId = fallbackConfig?.id,
+        )
+        val conversationMappingChanged = updatedConversationMapping != currentConversationMapping
 
         configsFlow.value = updatedConfigs
         Log.d(TAG_CM, "Config removed from memory list: ${safeApiConfigSummary(configToDelete)}")
@@ -159,18 +200,24 @@ class ConfigManager(
                 apiHandler.cancelCurrentApiJob("Selected config ID ${configToDelete.id} was deleted")
             }
             
-            val newSelectedConfig = updatedConfigs.firstOrNull()
+            val newSelectedConfig = fallbackConfig
             selectedConfigFlow.value = newSelectedConfig
             Log.d(TAG_CM, "Deleted config was selected. New in-memory selection: ${safeApiConfigSummary(newSelectedConfig)}")
 
             viewModelScope.launch {
                 persistenceManager.saveApiConfigs(updatedConfigs, isImageGen)
                 persistenceManager.saveSelectedConfigIdentifier(newSelectedConfig?.id, isImageGen)
+                if (conversationMappingChanged) {
+                    persistenceManager.saveConversationApiConfigIds(updatedConversationMapping)
+                }
                 Log.d(TAG_CM, "Updated configs and new selection (${newSelectedConfig?.id ?: "null"}) saved to persistence.")
             }
         } else {
             viewModelScope.launch {
                 persistenceManager.saveApiConfigs(updatedConfigs, isImageGen)
+                if (conversationMappingChanged) {
+                    persistenceManager.saveConversationApiConfigIds(updatedConversationMapping)
+                }
                 Log.d(TAG_CM, "Updated API configs list (after deletion) saved to persistence.")
             }
         }
@@ -179,11 +226,18 @@ class ConfigManager(
     fun clearAllConfigs(isImageGen: Boolean = false) {
         if (isImageGen) {
             if (stateHolder._imageGenApiConfigs.value.isNotEmpty() || stateHolder._selectedImageGenApiConfig.value != null) {
+                val removedIds = stateHolder._imageGenApiConfigs.value.mapTo(mutableSetOf()) { it.id }
+                val currentConversationMapping = stateHolder.conversationApiConfigIds.value
                 stateHolder._imageGenApiConfigs.value = emptyList()
                 stateHolder._selectedImageGenApiConfig.value = null
+                val updatedConversationMapping = remapConversationConfigIds(removedIds, fallbackId = null)
+                val conversationMappingChanged = updatedConversationMapping != currentConversationMapping
                 viewModelScope.launch {
-                    persistenceManager.saveApiConfigs(emptyList(), true)
+                    persistenceManager.saveApiConfigs(emptyList(), isImageGen = true)
                     persistenceManager.saveSelectedConfigIdentifier(null, true)
+                    if (conversationMappingChanged) {
+                        persistenceManager.saveConversationApiConfigIds(updatedConversationMapping)
+                    }
                     stateHolder._snackbarMessage.emit("所有图像生成配置已清除")
                 }
             } else {
@@ -192,12 +246,19 @@ class ConfigManager(
         } else {
             if (stateHolder._apiConfigs.value.isNotEmpty() || stateHolder._selectedApiConfig.value != null) {
                 apiHandler.cancelCurrentApiJob("Clearing all configs")
+                val removedIds = stateHolder._apiConfigs.value.mapTo(mutableSetOf()) { it.id }
+                val currentConversationMapping = stateHolder.conversationApiConfigIds.value
                 stateHolder._apiConfigs.value = emptyList()
                 stateHolder._selectedApiConfig.value = null
+                val updatedConversationMapping = remapConversationConfigIds(removedIds, fallbackId = null)
+                val conversationMappingChanged = updatedConversationMapping != currentConversationMapping
                 Log.d(TAG_CM, "In-memory configs and selection cleared.")
 
                 viewModelScope.launch {
-                    persistenceManager.clearAllApiConfigData()
+                    persistenceManager.clearAllApiConfigData(isImageGen = false)
+                    if (conversationMappingChanged) {
+                        persistenceManager.saveConversationApiConfigIds(updatedConversationMapping)
+                    }
                     Log.d(TAG_CM, "Persistence layer notified to clear all config data.")
                     stateHolder._snackbarMessage.emit("所有配置已清除")
                     delay(250)
@@ -235,17 +296,17 @@ class ConfigManager(
                 if (!isImageGen) {
                     // 文本模式：绑定到当前文本会话ID
                     val currentConversationId = stateHolder._currentConversationId.value
-                    val currentMapping = stateHolder.conversationApiConfigIds.value.toMutableMap()
-                    currentMapping[currentConversationId] = config.id
-                    stateHolder.conversationApiConfigIds.value = currentMapping
+                    val currentMapping = stateHolder.conversationApiConfigIds.updateAndGet { mapping ->
+                        mapping + (currentConversationId to config.id)
+                    }
                     persistenceManager.saveConversationApiConfigIds(currentMapping)
                     Log.d(TAG_CM, "Bound config ${config.id} to text conversation $currentConversationId")
                 } else {
                     // 图像模式：绑定到当前图像会话ID
                     val currentImageConversationId = stateHolder._currentImageGenerationConversationId.value
-                    val currentMapping = stateHolder.conversationApiConfigIds.value.toMutableMap()
-                    currentMapping[currentImageConversationId] = config.id
-                    stateHolder.conversationApiConfigIds.value = currentMapping
+                    val currentMapping = stateHolder.conversationApiConfigIds.updateAndGet { mapping ->
+                        mapping + (currentImageConversationId to config.id)
+                    }
                     persistenceManager.saveConversationApiConfigIds(currentMapping)
                     Log.d(TAG_CM, "Bound config ${config.id} to image conversation $currentImageConversationId")
                 }
@@ -265,41 +326,44 @@ class ConfigManager(
         viewModelScope.launch {
             val originalConfigs = if (isImageGen) stateHolder._imageGenApiConfigs.value else stateHolder._apiConfigs.value
             val configsToKeep = originalConfigs.filterNot {
-                it.key == representativeConfig.key &&
-                it.provider == representativeConfig.provider &&
-                it.address == representativeConfig.address &&
-                it.channel == representativeConfig.channel
+                belongsToGroup(it, representativeConfig)
             }
 
             if (configsToKeep.size != originalConfigs.size) {
+                val removedIds = originalConfigs
+                    .filter { config -> configsToKeep.none { it.id == config.id } }
+                    .mapTo(mutableSetOf()) { it.id }
+                val selectedConfigFlow = if (isImageGen) {
+                    stateHolder._selectedImageGenApiConfig
+                } else {
+                    stateHolder._selectedApiConfig
+                }
+                val newSelectedConfig = selectedConfigFlow.value
+                    ?.takeIf { selected -> configsToKeep.any { it.id == selected.id } }
+                    ?.let { selected -> configsToKeep.first { it.id == selected.id } }
+                    ?: configsToKeep.firstOrNull()
+                val updatedConversationMapping = remapConversationConfigIds(
+                    removedIds = removedIds,
+                    fallbackId = newSelectedConfig?.id,
+                )
+
                 if (isImageGen) {
                     stateHolder._imageGenApiConfigs.value = configsToKeep
                     persistenceManager.saveApiConfigs(configsToKeep, isImageGen = true)
-                    val sel = stateHolder._selectedImageGenApiConfig.value
-                    if (sel != null &&
-                        sel.key == representativeConfig.key &&
-                        sel.provider == representativeConfig.provider &&
-                        sel.address == representativeConfig.address &&
-                        sel.channel == representativeConfig.channel) {
-                        val newSel = configsToKeep.firstOrNull()
-                        stateHolder._selectedImageGenApiConfig.value = newSel
-                        persistenceManager.saveSelectedConfigIdentifier(newSel?.id, isImageGen = true)
+                    if (stateHolder._selectedImageGenApiConfig.value?.id != newSelectedConfig?.id) {
+                        stateHolder._selectedImageGenApiConfig.value = newSelectedConfig
+                        persistenceManager.saveSelectedConfigIdentifier(newSelectedConfig?.id, isImageGen = true)
                     }
                 } else {
                     stateHolder._apiConfigs.value = configsToKeep
                     persistenceManager.saveApiConfigs(configsToKeep)
-                    val sel = stateHolder._selectedApiConfig.value
-                    if (sel != null &&
-                        sel.key == representativeConfig.key &&
-                        sel.provider == representativeConfig.provider &&
-                        sel.address == representativeConfig.address &&
-                        sel.channel == representativeConfig.channel) {
+                    if (stateHolder._selectedApiConfig.value?.id != newSelectedConfig?.id) {
                         apiHandler.cancelCurrentApiJob("Selected config group removed")
-                        val newSel = configsToKeep.firstOrNull()
-                        stateHolder._selectedApiConfig.value = newSel
-                        persistenceManager.saveSelectedConfigIdentifier(newSel?.id)
+                        stateHolder._selectedApiConfig.value = newSelectedConfig
+                        persistenceManager.saveSelectedConfigIdentifier(newSelectedConfig?.id)
                     }
                 }
+                persistenceManager.saveConversationApiConfigIds(updatedConversationMapping)
             }
         }
     }

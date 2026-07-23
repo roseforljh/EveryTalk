@@ -36,11 +36,16 @@ object SelectedMediaItemSerializer : KSerializer<SelectedMediaItem> {
             is SelectedMediaItem.ImageFromBitmap -> {
                 // Use the BitmapSerializer for the bitmap field
                 val bitmapSerializer = BitmapSerializer
-                encoder.encodeStructure(buildClassSerialDescriptor(TYPE_IMAGE_FROM_BITMAP)) {
-                    value.bitmap?.let { bitmap ->
-                        encodeSerializableElement(buildClassSerialDescriptor("bitmap"), 0, bitmapSerializer, bitmap)
+                val bitmap = value.bitmap
+                try {
+                    encoder.encodeStructure(buildClassSerialDescriptor(TYPE_IMAGE_FROM_BITMAP)) {
+                        bitmap?.let {
+                            encodeSerializableElement(buildClassSerialDescriptor("bitmap"), 0, bitmapSerializer, bitmap)
+                        }
+                        encodeStringElement(buildClassSerialDescriptor("id"), 1, value.id)
                     }
-                    encodeStringElement(buildClassSerialDescriptor("id"), 1, value.id)
+                } finally {
+                    bitmap?.takeIf { !it.isRecycled }?.recycle()
                 }
             }
             is SelectedMediaItem.GenericFile -> {

@@ -22,6 +22,7 @@ import androidx.webkit.WebViewStartupException
 import java.io.ByteArrayInputStream
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -138,7 +139,7 @@ class MathJaxSvgRenderer(
     private var startupDeferred: CompletableDeferred<Unit>? = null
     private var pageReadyDeferred: CompletableDeferred<Unit>? = null
     private var webView: WebView? = null
-    private var closed = false
+    private val closed = AtomicBoolean(false)
 
     /** 延迟预热 WebView，不阻塞调用线程。 */
     fun prewarm(): Job = scope.launch {
@@ -183,7 +184,7 @@ class MathJaxSvgRenderer(
         val renderedResults = requestQueue.withReservation(renderableRequests.size) {
             withContext(Dispatchers.Main.immediate) {
                 renderMutex.withLock {
-                    check(!closed) { "MathJaxSvgRenderer 已关闭" }
+                    check(!closed.get()) { "MathJaxSvgRenderer 已关闭" }
                     renderWithSingleRetry(renderableRequests)
                 }
             }
@@ -234,7 +235,7 @@ class MathJaxSvgRenderer(
     }
 
     private suspend fun ensurePageReady() {
-        check(!closed) { "MathJaxSvgRenderer 已关闭" }
+        check(!closed.get()) { "MathJaxSvgRenderer 已关闭" }
         val existingReady = pageReadyDeferred
         if (webView != null && existingReady != null) {
             withTimeout(pageLoadTimeoutMs) { existingReady.await() }
@@ -413,10 +414,9 @@ class MathJaxSvgRenderer(
     }
 
     override fun close() {
+        if (!closed.compareAndSet(false, true)) return
         scope.launch {
             renderMutex.withLock {
-                if (closed) return@withLock
-                closed = true
                 resetWebView(MathJaxEngineException("MathJaxSvgRenderer 已关闭"))
                 scope.cancel()
             }

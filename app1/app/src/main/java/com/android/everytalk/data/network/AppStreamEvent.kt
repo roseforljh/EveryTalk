@@ -94,23 +94,3 @@ sealed class AppStreamEvent {
         @SerialName("codeLanguage") val codeLanguage: String? = null
     ) : AppStreamEvent()
 }
-
-@Serializable
-data class OpenAiToolCall(
-    @SerialName("index")
-    val index: Int? = null,
-    @SerialName("id")
-    val id: String? = null,
-    @SerialName("type")
-    val type: String? = null,
-    @SerialName("function")
-    val function: OpenAiFunctionCall? = null
-)
-
-@Serializable
-data class OpenAiFunctionCall(
-    @SerialName("name")
-    val name: String? = null,
-    @SerialName("arguments")
-    val arguments: String? = null
-)

@@ -18,7 +18,6 @@ import com.android.everytalk.data.database.entities.toVoiceBackendConfig
 import com.android.everytalk.data.network.ExternalWebSearchProviderConfig
 import com.android.everytalk.util.ConversationNameHelper
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.runBlocking
 import java.util.UUID
 import kotlinx.serialization.builtins.SetSerializer
 import kotlinx.serialization.builtins.serializer
@@ -42,6 +41,7 @@ private val LAST_OPEN_SESSION_IDS = setOf(
 class RoomDataSource(context: Context) {
     private val database = AppDatabase.getDatabase(context)
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    private val converters = Converters()
     private val apiConfigDao = database.apiConfigDao()
     private val voiceConfigDao = database.voiceConfigDao()
     private val chatDao = database.chatDao()
@@ -58,9 +58,10 @@ class RoomDataSource(context: Context) {
     }
 
     suspend fun saveApiConfigs(configs: List<ApiConfig>) {
-        // 修复：先清除旧配置，确保删除操作生效
-        apiConfigDao.clearConfigs(isImageGen = false)
-        apiConfigDao.insertConfigs(configs.map { it.toEntity(isImageGenConfig = false) })
+        apiConfigDao.replaceConfigs(
+            isImageGen = false,
+            configs = configs.map { it.toEntity(isImageGenConfig = false) },
+        )
     }
 
     suspend fun loadImageGenApiConfigs(): List<ApiConfig> {
@@ -68,9 +69,10 @@ class RoomDataSource(context: Context) {
     }
 
     suspend fun saveImageGenApiConfigs(configs: List<ApiConfig>) {
-        // 修复：先清除旧配置，确保删除操作生效
-        apiConfigDao.clearConfigs(isImageGen = true)
-        apiConfigDao.insertConfigs(configs.map { it.toEntity(isImageGenConfig = true) })
+        apiConfigDao.replaceConfigs(
+            isImageGen = true,
+            configs = configs.map { it.toEntity(isImageGenConfig = true) },
+        )
     }
     
     suspend fun clearApiConfigs() {
@@ -87,9 +89,7 @@ class RoomDataSource(context: Context) {
     }
 
     suspend fun saveVoiceBackendConfigs(configs: List<VoiceBackendConfig>) {
-        // 修复：先清除旧配置，确保导入时完全替换，与 API 配置行为保持一致
-        voiceConfigDao.clearAll()
-        voiceConfigDao.insertAll(configs.map { it.toEntity() })
+        voiceConfigDao.replaceAll(configs.map { it.toEntity() })
     }
 
     suspend fun clearVoiceBackendConfigs() {
@@ -217,20 +217,22 @@ class RoomDataSource(context: Context) {
     private suspend fun loadSessionsResult(isImageGeneration: Boolean): SessionHistoryLoadResult {
         val loadedSessions = mutableListOf<LoadedHistorySession>()
         val failedSessionIds = linkedSetOf<String>()
-        chatDao.getAllSessions(isImageGeneration)
+        val sessions = chatDao.getAllSessions(isImageGeneration)
             .filterNot { it.id in LAST_OPEN_SESSION_IDS }
-            .forEach { session ->
-                try {
-                    loadedSessions += LoadedHistorySession(
-                        sessionId = session.id,
-                        messages = chatDao.getMessagesForSession(session.id).map { it.toMessage() },
-                    )
-                } catch (exception: CancellationException) {
-                    throw exception
-                } catch (_: Exception) {
-                    failedSessionIds += session.id
-                }
+        val rawMessagesBySession = chatDao.getRawMessagesForMode(isImageGeneration)
+            .groupBy { it.sessionId }
+        sessions.forEach { session ->
+            try {
+                loadedSessions += LoadedHistorySession(
+                    sessionId = session.id,
+                    messages = rawMessagesBySession[session.id].orEmpty().map { it.toMessage(converters) },
+                )
+            } catch (exception: CancellationException) {
+                throw exception
+            } catch (_: Exception) {
+                failedSessionIds += session.id
             }
+        }
         return SessionHistoryLoadResult(loadedSessions, failedSessionIds)
     }
 
@@ -249,18 +251,30 @@ class RoomDataSource(context: Context) {
         chatDao.saveSessionWithMessages(session, messages.map { it.toEntity(sessionId) })
     }
 
+    suspend fun deleteHistorySession(sessionId: String) {
+        if (sessionId !in LAST_OPEN_SESSION_IDS) chatDao.deleteSession(sessionId)
+    }
+
     private suspend fun saveSessions(
         history: List<List<Message>>,
         isImageGeneration: Boolean,
         protectedSessionIds: Set<String>,
     ) {
         val newSessionIds = mutableSetOf<String>()
+        val existingResult = loadSessionsResult(isImageGeneration)
+        val existingById = existingResult.sessions.associate { it.sessionId to it.messages }
+        val effectiveProtectedSessionIds = protectedSessionIds + existingResult.failedSessionIds
 
         history.forEach { messages ->
             if (messages.isNotEmpty()) {
                 val stableId = ConversationNameHelper.resolveStableId(messages) ?: UUID.randomUUID().toString()
                 newSessionIds.add(stableId)
-                if (stableId in protectedSessionIds) return@forEach
+                if (stableId in effectiveProtectedSessionIds) return@forEach
+
+                val existingMessages = existingById[stableId]
+                if (existingMessages != null && areMessagesStorageEquivalent(existingMessages, messages)) {
+                    return@forEach
+                }
 
                 val session = ChatSessionEntity(
                     id = stableId,
@@ -275,12 +289,20 @@ class RoomDataSource(context: Context) {
         val existingSessions = chatDao.getAllSessions(isImageGeneration)
         existingSessions.forEach { existing ->
             if (existing.id !in newSessionIds &&
-                existing.id !in protectedSessionIds &&
+                existing.id !in effectiveProtectedSessionIds &&
                 existing.id !in LAST_OPEN_SESSION_IDS
             ) {
                 chatDao.deleteSession(existing.id)
             }
         }
+    }
+
+    private fun areMessagesStorageEquivalent(first: List<Message>, second: List<Message>): Boolean {
+        fun Message.normalizedForStorage(): Message = copy(
+            imageUrls = imageUrls.orEmpty(),
+            webSearchResults = webSearchResults.orEmpty(),
+        )
+        return first.map { it.normalizedForStorage() } == second.map { it.normalizedForStorage() }
     }
 
     // --- Last Open Chat ---
@@ -338,9 +360,8 @@ class RoomDataSource(context: Context) {
     }
 
     private suspend fun savePinnedIds(ids: Set<String>, isImageGen: Boolean) {
-        settingsDao.clearPinnedItems(isImageGen)
         val entities = ids.map { PinnedItemEntity(it, isImageGen) }
-        settingsDao.insertPinnedItems(entities)
+        settingsDao.replacePinnedItems(isImageGen, entities)
     }
 
     // --- Groups ---
@@ -350,9 +371,8 @@ class RoomDataSource(context: Context) {
     }
 
     suspend fun saveConversationGroups(groups: Map<String, List<String>>) {
-        settingsDao.clearConversationGroups()
         val entities = groups.map { ConversationGroupEntity(it.key, it.value) }
-        settingsDao.insertConversationGroups(entities)
+        settingsDao.replaceConversationGroups(entities)
     }
 
     suspend fun loadExpandedGroupKeys(): Set<String> {
@@ -360,9 +380,8 @@ class RoomDataSource(context: Context) {
     }
 
     suspend fun saveExpandedGroupKeys(keys: Set<String>) {
-        settingsDao.clearExpandedGroups()
         val entities = keys.map { ExpandedGroupEntity(it) }
-        settingsDao.insertExpandedGroups(entities)
+        settingsDao.replaceExpandedGroups(entities)
     }
 
     // --- Conversation Params ---

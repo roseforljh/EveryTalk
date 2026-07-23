@@ -45,13 +45,13 @@ import kotlinx.coroutines.delay
 @Composable
 fun VoiceBottomControls(
     isRecording: Boolean,
-    isPlaying: Boolean = false,
     onStartRecording: () -> Unit,
     onStopRecording: () -> Unit,
     onCancel: () -> Unit,
-    onStopPlayback: () -> Unit = {},
     onClose: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isPlaying: Boolean = false,
+    onStopPlayback: () -> Unit = {}
 ) {
     var micClickAnim by remember { mutableStateOf(false) }
     val micScale by animateFloatAsState(

@@ -61,9 +61,9 @@ fun OptimizedSelectedItemPreview(
                     "application/vnd.ms-powerpoint", "application/vnd.openxmlformats-officedocument.presentationml.presentation" -> Icons.Outlined.Slideshow
                     "application/zip", "application/x-rar-compressed" -> Icons.Outlined.Archive
                     else -> when {
-                        mediaItem.mimeType?.startsWith("video/") == true -> Icons.Outlined.Videocam
-                        mediaItem.mimeType?.startsWith("audio/") == true -> Icons.Outlined.Audiotrack
-                        mediaItem.mimeType?.startsWith("image/") == true -> Icons.Outlined.Image
+                        mediaItem.mimeType.startsWith("video/") -> Icons.Outlined.Videocam
+                        mediaItem.mimeType.startsWith("audio/") -> Icons.Outlined.Audiotrack
+                        mediaItem.mimeType.startsWith("image/") -> Icons.Outlined.Image
                         else -> Icons.Outlined.AttachFile
                     }
                 }
@@ -88,14 +88,17 @@ fun OptimizedSelectedItemPreview(
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
             )
-            is SelectedMediaItem.ImageFromBitmap -> AsyncImage(
-                model = mediaItem.bitmap,
-                contentDescription = "Selected image from camera",
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop,
-            )
+            is SelectedMediaItem.ImageFromBitmap -> {
+                val imageModel = remember(mediaItem) { mediaItem.model }
+                AsyncImage(
+                    model = imageModel,
+                    contentDescription = "Selected image from camera",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            }
             is SelectedMediaItem.GenericFile -> {
-                if (mediaItem.mimeType?.startsWith("image/") == true) {
+                if (mediaItem.mimeType.startsWith("image/")) {
                     AsyncImage(
                         model = mediaItem.uri,
                         contentDescription = mediaItem.displayName,

@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedDeque
 import java.util.concurrent.locks.ReentrantReadWriteLock
 import kotlin.concurrent.read
 import kotlin.concurrent.write
@@ -75,6 +76,7 @@ class StreamingMessageStateManager {
     private val contentLengthTracker = ConcurrentHashMap<String, Int>()
     private val incrementalParseCaches = ConcurrentHashMap<String, IncrementalParseCache>()
     private val contentVersions = ConcurrentHashMap<String, Long>()
+    private val retainedRenderStateIds = ConcurrentLinkedDeque<String>()
 
     fun getOrCreateStreamingState(messageId: String): StateFlow<String> {
         return streamingStates.getOrPut(messageId) {
@@ -83,7 +85,7 @@ class StreamingMessageStateManager {
     }
 
     fun getOrCreateRenderState(messageId: String): StateFlow<StreamingRenderState> {
-        return streamingRenderStates.getOrPut(messageId) {
+        val state = streamingRenderStates.getOrPut(messageId) {
             MutableStateFlow(
                 buildStreamingRenderState(
                     messageId = messageId,
@@ -93,10 +95,18 @@ class StreamingMessageStateManager {
                     contentVersion = contentVersions[messageId] ?: 0L,
                 )
             )
-        }.asStateFlow()
+        }
+        // 历史消息也会经过此入口，限制非流式渲染状态的长期保留，避免长会话映射无界增长。
+        if (!activeStreamingMessages.contains(messageId)) {
+            retainCompletedRenderState(messageId)
+        }
+        return state.asStateFlow()
     }
 
     fun startStreaming(messageId: String) {
+        lifecycleLock.write {
+            retainedRenderStateIds.remove(messageId)
+        }
         val initialContent = synchronized(bufferLockFor(messageId)) {
             activeStreamingMessages.add(messageId)
             finalizedMessages.remove(messageId)
@@ -274,6 +284,7 @@ class StreamingMessageStateManager {
         }
 
         updateRenderState(messageId, finalContent, isComplete = true, contentVersion = contentVersion)
+        retainCompletedRenderState(messageId)
         Log.d(
             "StreamingMessageStateManager",
             "Finished streaming for message: $messageId, final length: ${finalContent.length}"
@@ -299,6 +310,7 @@ class StreamingMessageStateManager {
         // 不删除 streamingRenderStates：UI 侧仍在 collectAsState 订阅该 Flow，
         // 如果此时 remove，UI 会收到一个全新的空 RenderState，导致一帧内容空白和高度坍塌。
         // 保留最终态让 UI 自然过渡到 message.text；下次 startStreaming 时会覆盖。
+        retainCompletedRenderState(messageId)
         Log.d("StreamingMessageStateManager", "Cleared streaming state for message: $messageId (renderState retained)")
     }
 
@@ -318,6 +330,7 @@ class StreamingMessageStateManager {
                 contentVersions.clear()
                 streamingStates.clear()
                 streamingRenderStates.clear()
+                retainedRenderStateIds.clear()
             }
         }
         Log.d("StreamingMessageStateManager", "Cleared all streaming states (count: $count)")
@@ -382,6 +395,7 @@ class StreamingMessageStateManager {
                 activeStreamingMessages.clear()
                 streamingStates.clear()
                 streamingRenderStates.clear()
+                retainedRenderStateIds.clear()
             }
         }
 
@@ -410,7 +424,7 @@ class StreamingMessageStateManager {
         if (trimmed == "-" || trimmed == "*" || trimmed == "+" || trimmed == ">") {
             return true
         }
-        if (Regex("^\\d+\\.$").matches(trimmed)) {
+        if (ORDERED_LIST_PREFIX.matches(trimmed)) {
             return true
         }
         val isBareBacktickFence = trimmedEnd == "```" || trimmedEnd.startsWith("```") && !trimmedEnd.contains(' ')
@@ -426,10 +440,10 @@ class StreamingMessageStateManager {
 
     private fun hasUnclosedInlineMarkers(text: String): Boolean {
         val line = text.substringAfterLast('\n')
-        val doubleStarCount = Regex("(?<!\\\\)\\*\\*").findAll(line).count()
+        val doubleStarCount = DOUBLE_STAR_MARKER.findAll(line).count()
         if ((doubleStarCount % 2) == 1) return true
 
-        val backtickCount = Regex("(?<!\\\\)`").findAll(line).count()
+        val backtickCount = BACKTICK_MARKER.findAll(line).count()
         if ((backtickCount % 2) == 1) return true
 
         return false
@@ -443,7 +457,7 @@ class StreamingMessageStateManager {
         if (tableLikeCount == 0) return false
 
         val headerStarted = tail.firstOrNull()?.contains('|') == true
-        val hasSeparator = tail.any { Regex("^\\s*\\|?\\s*:?-{2,}:?\\s*(\\|\\s*:?-{2,}:?\\s*)+\\|?\\s*$").matches(it) }
+        val hasSeparator = tail.any { TABLE_SEPARATOR.matches(it) }
         if (!hasSeparator && headerStarted && current.length > previous.length) {
             return true
         }
@@ -524,6 +538,20 @@ class StreamingMessageStateManager {
         return contentVersions.merge(messageId, 1L) { current, _ -> current + 1L } ?: 1L
     }
 
+    private fun retainCompletedRenderState(messageId: String) {
+        lifecycleLock.write {
+            if (!streamingRenderStates.containsKey(messageId)) return@write
+            retainedRenderStateIds.remove(messageId)
+            retainedRenderStateIds.addLast(messageId)
+            while (retainedRenderStateIds.size > MAX_RETAINED_RENDER_STATES) {
+                val expiredId = retainedRenderStateIds.pollFirst() ?: break
+                if (!activeStreamingMessages.contains(expiredId)) {
+                    streamingRenderStates.remove(expiredId)
+                }
+            }
+        }
+    }
+
     private fun bufferLockFor(messageId: String): Any =
         bufferLocks[(messageId.hashCode() and Int.MAX_VALUE) % bufferLocks.size]
 
@@ -539,6 +567,11 @@ class StreamingMessageStateManager {
 
     private companion object {
         const val LOCK_STRIPE_COUNT = 32
+        const val MAX_RETAINED_RENDER_STATES = 64
+        val ORDERED_LIST_PREFIX = Regex("^\\d+\\.$")
+        val DOUBLE_STAR_MARKER = Regex("(?<!\\\\)\\*\\*")
+        val BACKTICK_MARKER = Regex("(?<!\\\\)`")
+        val TABLE_SEPARATOR = Regex("^\\s*\\|?\\s*:?-{2,}:?\\s*(\\|\\s*:?-{2,}:?\\s*)+\\|?\\s*$")
     }
 }
 

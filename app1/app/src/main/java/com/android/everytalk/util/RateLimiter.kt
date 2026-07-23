@@ -15,7 +15,7 @@ class RateLimiter(
     private val minIntervalMillis: Long
 ) {
     private val mutex = Mutex()
-    private var lastActionTime = 0L
+    private var lastActionTimeNanos = 0L
     
     // 动态退避时间
     private val backoffMillis = AtomicLong(0)
@@ -33,8 +33,8 @@ class RateLimiter(
             val currentBackoff = backoffMillis.get()
             val effectiveInterval = max(minIntervalMillis, currentBackoff)
             
-            val now = System.currentTimeMillis()
-            val timeSinceLast = now - lastActionTime
+            val now = System.nanoTime()
+            val timeSinceLast = (now - lastActionTimeNanos) / 1_000_000L
             val waitTime = max(0L, effectiveInterval - timeSinceLast)
 
             if (waitTime > 0) {
@@ -47,7 +47,7 @@ class RateLimiter(
                 backoffMillis.set(newBackoff)
             }
             
-            lastActionTime = System.currentTimeMillis()
+            lastActionTimeNanos = System.nanoTime()
         }
     }
     

@@ -4,8 +4,8 @@ import com.android.everytalk.statecontroller.controller.conversation.Conversatio
 import android.util.Log
 import com.android.everytalk.statecontroller.ViewModelStateHolder
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
-import com.android.everytalk.util.cache.CacheManager
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
@@ -22,7 +22,6 @@ import kotlinx.coroutines.launch
 class LifecycleCoordinator(
     private val stateHolder: ViewModelStateHolder,
     private val historyManager: HistoryManager,
-    private val cacheManager: CacheManager,
     private val conversationPreviewController: ConversationPreviewController,
     private val persistScrollStates: suspend () -> Unit,
     private val scope: CoroutineScope,
@@ -48,6 +47,8 @@ class LifecycleCoordinator(
                     persistScrollStates()
                 }
                 logger("App state saved on stop/pause")
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e("LifecycleCoordinator", "Failed to save app state on stop", e)
             }
@@ -58,9 +59,6 @@ class LifecycleCoordinator(
      * 在 ViewModel.onCleared 时调用：清理缓存与流式状态。
      */
     fun onCleared() {
-        // 清理缓存管理器（内部会停止自身协程等）
-        cacheManager.cleanup()
-        // 如未来 MessageContentController 等拥有内部资源，也应在其所在处清理
         // 清理流式消息状态管理器，防止协程泄漏
         try {
             stateHolder.streamingMessageStateManager.cleanup()
@@ -80,14 +78,10 @@ class LifecycleCoordinator(
     }
 
     /**
-     * 清理所有缓存：包含全局 CacheManager 与预览缓存。
+     * 清理所有会话预览缓存。
      */
     fun clearAllCaches() {
-        scope.launch {
-            cacheManager.clearAllCaches()
-            // 预览缓存交由控制器统一清理
-            conversationPreviewController.clearAllCaches()
-            logger("All caches cleared")
-        }
+        conversationPreviewController.clearAllCaches()
+        logger("All caches cleared")
     }
 }

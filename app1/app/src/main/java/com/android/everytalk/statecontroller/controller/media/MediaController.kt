@@ -10,6 +10,7 @@ import android.util.Log
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.util.storage.FileManager
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import android.widget.Toast
 import kotlinx.coroutines.Dispatchers
@@ -69,6 +70,8 @@ class MediaController(
                     else ->
                         showToast("保存失败：无法写入存储")
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e("MediaController", "原图保存失败", e)
                 showToast("保存失败: ${e.message}")
@@ -103,25 +106,31 @@ class MediaController(
             }
 
             val imageUri: Uri? = contentResolver.insert(imageCollection, contentDetails)
-            imageUri?.let {
+            imageUri?.let { uri ->
+                var completed = false
                 try {
-                    contentResolver.openOutputStream(it).use { outputStream ->
-                        if (outputStream != null) {
-                            bitmap.compress(Bitmap.CompressFormat.JPEG, 100, outputStream)
-                        } else {
-                            throw Exception("无法打开输出流")
-                        }
+                    val compressed = checkNotNull(contentResolver.openOutputStream(uri)) {
+                        "无法打开输出流"
+                    }.use { outputStream ->
+                        bitmap.compress(Bitmap.CompressFormat.JPEG, 100, outputStream)
                     }
+                    check(compressed) { "图片压缩失败" }
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                         contentDetails.clear()
                         contentDetails.put(MediaStore.Images.Media.IS_PENDING, 0)
-                        contentResolver.update(it, contentDetails, null, null)
+                        contentResolver.update(uri, contentDetails, null, null)
                     }
+                    completed = true
                     showToast("图片已保存")
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     Log.e("MediaController", "保存图片失败", e)
-                    contentResolver.delete(it, null, null) // 清理失败的条目
                     showToast("保存失败: ${e.message}")
+                } finally {
+                    if (!completed) {
+                        runCatching { contentResolver.delete(uri, null, null) }
+                    }
                 }
             } ?: run {
                 // throw Exception("无法创建MediaStore条目")

@@ -14,38 +14,6 @@ import kotlinx.serialization.json.JsonObject
 
 private const val TAG = "McpManager"
 
-private val MCP_SEARCH_TOOL_HINT_KEYWORDS = listOf("search", "exa", "news", "web", "query")
-private val MCP_BROWSER_TOOL_HINT_KEYWORDS = listOf("fetch", "browser", "page", "crawl", "scrape")
-private val MCP_FINANCE_TOOL_HINT_KEYWORDS = listOf("finance", "stock", "market", "price", "quote")
-private val MCP_LOCATION_TOOL_HINT_KEYWORDS = listOf("map", "location", "travel", "weather", "route")
-
-internal fun buildEnhancedMcpToolDescription(
-    toolName: String,
-    originalDescription: String?,
-): String {
-    val normalizedText = "$toolName ${originalDescription.orEmpty()}".lowercase()
-    val scenarioHint = when {
-        MCP_SEARCH_TOOL_HINT_KEYWORDS.any { it in normalizedText } ->
-            "适合查询最新新闻、热点事件、最近动态和网页信息检索。"
-        MCP_BROWSER_TOOL_HINT_KEYWORDS.any { it in normalizedText } ->
-            "适合打开网页、抓取页面内容和提取网页正文。"
-        MCP_FINANCE_TOOL_HINT_KEYWORDS.any { it in normalizedText } ->
-            "适合查询股价、市场数据和金融信息。"
-        MCP_LOCATION_TOOL_HINT_KEYWORDS.any { it in normalizedText } ->
-            "适合查询地点、本地信息、路线或天气。"
-        else -> null
-    }
-
-    val baseDescription = originalDescription?.trim().orEmpty()
-    return when {
-        baseDescription.isBlank() && scenarioHint.isNullOrBlank() -> "MCP tool: $toolName"
-        baseDescription.isBlank() -> scenarioHint!!
-        scenarioHint.isNullOrBlank() -> baseDescription
-        scenarioHint in baseDescription -> baseDescription
-        else -> "$baseDescription $scenarioHint"
-    }
-}
-
 class McpManager(context: Context) {
     private val database = AppDatabase.getDatabase(context)
     private val mcpDao = database.mcpConfigDao()
@@ -53,15 +21,6 @@ class McpManager(context: Context) {
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     val serverStates: StateFlow<Map<String, McpServerState>> = clientManager.serverStates
-    val syncingStatus: StateFlow<Map<String, McpStatus>> = clientManager.syncingStatus
-
-    private val _selectedTools = MutableStateFlow<Set<String>>(emptySet())
-    val selectedTools: StateFlow<Set<String>> = _selectedTools.asStateFlow()
-
-    private val _isLoading = MutableStateFlow(false)
-    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
-
-    private val _mcpToolNames = MutableStateFlow<Set<String>>(emptySet())
 
     init {
         scope.launch {
@@ -70,21 +29,16 @@ class McpManager(context: Context) {
                     val config = entity.toModel()
                     if (!serverStates.value.containsKey(config.id)) {
                         launch {
-                            runCatching { clientManager.addServer(config) }
-                                .onFailure { Log.e(TAG, "Failed to add server ${config.name}", it) }
+                            try {
+                                clientManager.addServer(config)
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                Log.e(TAG, "Failed to add server ${config.name}", e)
+                            }
                         }
                     }
                 }
-            }
-        }
-        scope.launch {
-            serverStates.collect { states ->
-                val toolNames = states.values
-                    .filter { it.status is McpStatus.Connected && it.config.enabled }
-                    .flatMap { it.tools.map { tool -> tool.name } }
-                    .toSet()
-                _mcpToolNames.value = toolNames
-                Log.d(TAG, "Updated MCP tool names: $toolNames")
             }
         }
     }
@@ -96,35 +50,22 @@ class McpManager(context: Context) {
     }
 
     suspend fun addServer(config: McpServerConfig) {
-        _isLoading.value = true
-        try {
-            mcpDao.insertConfig(McpServerConfigEntity.fromModel(config))
-            clientManager.addServer(config)
-        } finally {
-            _isLoading.value = false
-        }
+        mcpDao.insertConfig(McpServerConfigEntity.fromModel(config))
+        clientManager.addServer(config)
     }
 
     suspend fun updateServer(config: McpServerConfig) {
-        _isLoading.value = true
-        try {
-            mcpDao.updateConfig(McpServerConfigEntity.fromModel(config))
-            if (config.enabled) {
-                clientManager.addServer(config)
-            } else {
-                clientManager.disconnectServer(config.id)
-            }
-        } finally {
-            _isLoading.value = false
+        mcpDao.updateConfig(McpServerConfigEntity.fromModel(config))
+        if (config.enabled) {
+            clientManager.addServer(config)
+        } else {
+            clientManager.disconnectServer(config.id)
         }
     }
 
     suspend fun removeServer(serverId: String) {
         mcpDao.deleteConfigById(serverId)
         clientManager.removeServer(serverId)
-        _selectedTools.update { tools ->
-            tools.filterNot { it.startsWith("$serverId:") }.toSet()
-        }
     }
 
     suspend fun toggleServer(serverId: String, enabled: Boolean) {
@@ -136,100 +77,26 @@ class McpManager(context: Context) {
             }
         } else {
             clientManager.disconnectServer(serverId)
-            _selectedTools.update { tools ->
-                tools.filterNot { it.startsWith("$serverId:") }.toSet()
-            }
         }
-    }
-
-    fun getAllAvailableTools(): List<McpTool> {
-        return clientManager.getAllAvailableTools()
     }
 
     fun getDispatchCandidates(): List<McpToolCandidate> {
         return serverStates.value.values
             .filter { it.status is McpStatus.Connected && it.config.enabled }
             .flatMap { state ->
-                state.tools.map { tool ->
+                state.tools.filter { it.enable }.map { tool ->
                     toMcpToolCandidate(
-                        serverId = state.config.id,
                         serverName = state.config.name,
-                        tool = tool
+                        tool = tool,
+                        exposedToolName = buildMcpToolAlias(state.config.id, tool.name),
                     )
                 }
             }
-    }
-
-    fun getToolsForChatRequest(): List<Map<String, Any>> {
-        val states = serverStates.value
-        Log.d(TAG, "getToolsForChatRequest: serverStates count=${states.size}")
-        states.forEach { (id, state) ->
-            Log.d(TAG, "  Server[$id]: status=${state.status::class.simpleName}, enabled=${state.config.enabled}, tools=${state.tools.size}")
-        }
-        val tools = getAllAvailableTools()
-        Log.d(TAG, "getToolsForChatRequest: ${tools.size} tools available after filter")
-        tools.forEach { tool ->
-            Log.d(TAG, "  Tool: ${tool.name}, enable=${tool.enable}")
-        }
-        return tools.map { tool ->
-            buildToolDefinition(tool)
-        }
-    }
-
-    private fun buildToolDefinition(tool: McpTool): Map<String, Any> {
-        val functionDef = mutableMapOf<String, Any>(
-            "name" to tool.name,
-            "description" to buildEnhancedMcpToolDescription(
-                toolName = tool.name,
-                originalDescription = tool.description
-            )
-        )
-
-        tool.inputSchema?.let { schema ->
-            when (schema) {
-                is McpInputSchema.Obj -> {
-                    val parameters = mutableMapOf<String, Any>(
-                        "type" to "object",
-                        "properties" to schema.properties.toMap()
-                    )
-                    schema.required?.let { parameters["required"] = it }
-                    functionDef["parameters"] = parameters
-                }
-            }
-        } ?: run {
-            functionDef["parameters"] = mapOf(
-                "type" to "object",
-                "properties" to emptyMap<String, Any>()
-            )
-        }
-
-        return mapOf(
-            "type" to "function",
-            "function" to functionDef
-        )
-    }
-
-    fun isMcpTool(toolName: String): Boolean {
-        return _mcpToolNames.value.contains(toolName)
     }
 
     suspend fun callTool(toolName: String, arguments: JsonObject): JsonElement {
         Log.i(TAG, "Calling MCP tool: $toolName with args: $arguments")
         return clientManager.callTool(toolName, arguments)
-    }
-
-    fun toggleToolSelection(toolId: String) {
-        _selectedTools.update { current ->
-            if (current.contains(toolId)) {
-                current - toolId
-            } else {
-                current + toolId
-            }
-        }
-    }
-
-    fun clearToolSelection() {
-        _selectedTools.value = emptySet()
     }
 
     fun close() {

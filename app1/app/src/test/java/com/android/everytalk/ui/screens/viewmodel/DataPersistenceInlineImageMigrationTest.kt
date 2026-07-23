@@ -1,7 +1,10 @@
 package com.android.everytalk.ui.screens.viewmodel
 
+import android.net.Uri
+import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.components.MarkdownPart
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
@@ -9,8 +12,82 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.annotation.Config
+import java.io.File
 
+@RunWith(AndroidJUnit4::class)
+@Config(sdk = [34], application = android.app.Application::class)
 class DataPersistenceInlineImageMigrationTest {
+
+    @Test
+    fun `引用扫描覆盖图片地址和持久化附件路径且忽略内联音频`() {
+        val messages = listOf(
+            Message(
+                id = "message-1",
+                text = "附件",
+                sender = Sender.User,
+                imageUrls = listOf("file:///files/chat_attachments/url.png", "https://example.com/a.png"),
+                attachments = listOf(
+                    SelectedMediaItem.GenericFile(
+                        uri = Uri.parse("content://document/file"),
+                        id = "file",
+                        displayName = "file.pdf",
+                        mimeType = "application/pdf",
+                        filePath = "/files/chat_attachments/file.pdf",
+                    ),
+                    SelectedMediaItem.ImageFromUri(
+                        uri = Uri.parse("content://image/1"),
+                        id = "uri-image",
+                        filePath = "/files/chat_attachments/uri.png",
+                    ),
+                    SelectedMediaItem.ImageFromBitmap(
+                        bitmapData = "",
+                        id = "bitmap",
+                        filePath = "/files/chat_attachments/bitmap.png",
+                    ),
+                    SelectedMediaItem.Audio(
+                        id = "audio",
+                        mimeType = "audio/wav",
+                        data = "/files/chat_attachments/audio.wav",
+                    ),
+                ),
+            )
+        )
+
+        val expectedPaths = setOf(
+                "/files/chat_attachments/url.png",
+                "/files/chat_attachments/file.pdf",
+                "/files/chat_attachments/uri.png",
+                "/files/chat_attachments/bitmap.png",
+            ).mapTo(mutableSetOf()) { File(it).canonicalPath }
+
+        assertEquals(
+            expectedPaths,
+            collectReferencedAttachmentPaths(messages),
+        )
+    }
+
+    @Test
+    fun `图像配置去重后会话绑定迁移到保留配置ID`() {
+        val mapping = mapOf(
+            "text-history" to "text-config",
+            "image-history-a" to "duplicate-image-config",
+            "image-history-b" to "retained-image-config",
+        )
+
+        assertEquals(
+            mapOf(
+                "text-history" to "text-config",
+                "image-history-a" to "retained-image-config",
+                "image-history-b" to "retained-image-config",
+            ),
+            migrateApiConfigIds(
+                mapping,
+                mapOf("duplicate-image-config" to "retained-image-config"),
+            ),
+        )
+    }
 
     @Test
     fun `旧图片来源按消息去重归档并替换正文元数据和 parts`() = runTest {

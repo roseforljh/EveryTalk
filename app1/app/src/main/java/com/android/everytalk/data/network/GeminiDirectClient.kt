@@ -8,7 +8,7 @@ import com.android.everytalk.data.network.NetworkUtils.configureSSERequest
 import io.ktor.client.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
-import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import io.ktor.http.*
@@ -22,9 +22,31 @@ object GeminiDirectClient {
     private const val MAX_TOOL_LOOPS = 5
     
     private var mcpToolExecutor: (suspend (String, JsonObject, suspend (String?) -> Unit) -> JsonElement)? = null
-    
-    fun setMcpToolExecutor(executor: (suspend (String, JsonObject, suspend (String?) -> Unit) -> JsonElement)?) {
+    private var mcpToolExecutorOwner: Any? = null
+
+    @Synchronized
+    fun setMcpToolExecutor(
+        owner: Any,
+        executor: (suspend (String, JsonObject, suspend (String?) -> Unit) -> JsonElement)?,
+    ) {
+        mcpToolExecutorOwner = owner
         mcpToolExecutor = executor
+    }
+
+    @Synchronized
+    fun setMcpToolExecutor(
+        executor: (suspend (String, JsonObject, suspend (String?) -> Unit) -> JsonElement)?,
+    ) {
+        mcpToolExecutorOwner = null
+        mcpToolExecutor = executor
+    }
+
+    @Synchronized
+    fun clearMcpToolExecutor(owner: Any) {
+        if (mcpToolExecutorOwner === owner) {
+            mcpToolExecutorOwner = null
+            mcpToolExecutor = null
+        }
     }
     
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -32,6 +54,7 @@ object GeminiDirectClient {
         client: HttpClient,
         request: ChatRequest
     ): Flow<AppStreamEvent> = channelFlow {
+        var terminalSent = false
         try {
             Log.i(TAG, "🔄 启动 Gemini 直连模式")
             
@@ -66,8 +89,9 @@ object GeminiDirectClient {
                     configureSSERequest()
                 }.execute { response ->
                     if (!response.status.isSuccess()) {
-                        val errorBody = try { response.bodyAsText() } catch (_: Exception) { null }
+                        val errorBody = response.readErrorTextAtMost()
                         val result = NetworkUtils.handleApiError(response.status, errorBody, "Gemini")
+                        terminalSent = true
                         send(result.error)
                         send(result.finish)
                         return@execute
@@ -100,6 +124,8 @@ object GeminiDirectClient {
                         }
                     )
                 }
+
+                if (terminalSent) return@channelFlow
                 
                 Log.i(TAG, "循环 #$loopCount 结束, pendingToolCalls=${pendingToolCalls.size}, hasContent=$hasContent, hasToolCalls=${parseResult?.hasToolCalls}")
                 
@@ -118,11 +144,9 @@ object GeminiDirectClient {
                 val toolResponses = mutableListOf<JsonObject>()
                 for ((toolName, args) in pendingToolCalls) {
                     try {
-                        val result = withContext(NonCancellable) {
-                            Log.d(TAG, "🔧 开始执行工具: $toolName")
-                            mcpToolExecutor!!.invoke(toolName, args) { status ->
-                                send(AppStreamEvent.ExecutionStatusUpdate(status))
-                            }
+                        Log.d(TAG, "🔧 开始执行工具: $toolName")
+                        val result = mcpToolExecutor!!.invoke(toolName, args) { status ->
+                            send(AppStreamEvent.ExecutionStatusUpdate(status))
                         }
                         Log.i(TAG, "🔧 工具 $toolName 执行成功: resultChars=${result.toString().length}")
 
@@ -131,10 +155,11 @@ object GeminiDirectClient {
                             send(AppStreamEvent.WebSearchResults(webResults))
                         }
 
-                        val images = (result as? JsonObject)?.get("_images")?.let { it as? JsonArray }
+                        val resultObject = result as? JsonObject
+                        val images = resultObject?.get("_images") as? JsonArray
                         val textResult = if (images != null) {
                             buildJsonObject {
-                                (result as JsonObject).entries.forEach { (k, v) ->
+                                resultObject.entries.forEach { (k, v) ->
                                     if (k != "_images") put(k, v)
                                 }
                             }
@@ -159,6 +184,8 @@ object GeminiDirectClient {
                                 }
                             })
                         }
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         Log.e(TAG, "🔧 工具 $toolName 执行失败", e)
                         toolResponses.add(buildJsonObject {
@@ -197,14 +224,20 @@ object GeminiDirectClient {
             }
             
             Log.i(TAG, "🏁 工具循环完成，发送 Finish 事件")
-            send(AppStreamEvent.Finish("stop"))
+            if (!terminalSent) {
+                terminalSent = true
+                send(AppStreamEvent.Finish("stop"))
+            }
             
-        } catch (e: kotlinx.coroutines.CancellationException) {
+        } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            val result = NetworkUtils.handleConnectionError(e, "Gemini")
-            send(result.error)
-            send(result.finish)
+            if (!terminalSent) {
+                val result = NetworkUtils.handleConnectionError(e, "Gemini")
+                terminalSent = true
+                send(result.error)
+                send(result.finish)
+            }
         }
         
         return@channelFlow
@@ -360,7 +393,8 @@ object GeminiDirectClient {
             }
             
             // 添加工具（Web 搜索、代码执行、MCP 工具等）
-            val hasMcpTools = !request.tools.isNullOrEmpty()
+            val mcpTools = request.tools.orEmpty()
+            val hasMcpTools = mcpTools.isNotEmpty()
             if (enableWebSearch || enableCodeExecution || hasMcpTools) {
                 putJsonArray("tools") {
                     // Google Search 工具 - 使用 Gemini 原生 google_search (REST API 标准)
@@ -378,7 +412,7 @@ object GeminiDirectClient {
                     if (hasMcpTools) {
                         addJsonObject {
                             putJsonArray("functionDeclarations") {
-                                request.tools!!.forEach { tool ->
+                                mcpTools.forEach { tool ->
                                     val toolMap = tool as? Map<*, *> ?: return@forEach
                                     val functionMap = toolMap["function"] as? Map<*, *> ?: return@forEach
                                     val name = functionMap["name"] as? String ?: return@forEach
@@ -396,7 +430,7 @@ object GeminiDirectClient {
                                 }
                             }
                         }
-                        Log.i(TAG, "🔧 注入 ${request.tools!!.size} 个 MCP 工具到 functionDeclarations")
+                        Log.i(TAG, "🔧 注入 ${mcpTools.size} 个 MCP 工具到 functionDeclarations")
                     }
                 }
             }
@@ -592,9 +626,10 @@ object GeminiDirectClient {
         onToolCall: (String, JsonObject) -> Unit,
         emitEvent: suspend (AppStreamEvent) -> Unit
     ): ParseResult {
+        val boundedChannel = BoundedSseLineReader(channel)
         val lineBuffer = StringBuilder()
-        var fullText = ""
-        var fullReasoning = ""
+        val fullText = StringBuilder()
+        val fullReasoning = StringBuilder()
         var lineCount = 0
         var eventCount = 0
         var reasoningStarted = false
@@ -606,8 +641,8 @@ object GeminiDirectClient {
         try {
             Log.d(TAG, "开始解析 SSE 流（支持工具捕获）...")
             
-            while (!channel.isClosedForRead) {
-                val line = channel.readLine() ?: break
+            while (true) {
+                val line = boundedChannel.readLine() ?: break
                 lineCount++
                 
                 when {
@@ -628,14 +663,14 @@ object GeminiDirectClient {
                                         
                                         if (isThought && !textContent.isNullOrEmpty()) {
                                             if (!reasoningStarted) reasoningStarted = true
-                                            fullReasoning += textContent
+                                            fullReasoning.append(textContent)
                                             emitEvent(AppStreamEvent.Reasoning(textContent))
                                         } else if (!textContent.isNullOrEmpty()) {
                                             val routed = thinkRouter.feed(textContent)
                                             for (routedChunk in routed) {
                                                 if (routedChunk.isReasoning) {
                                                     if (!reasoningStarted) reasoningStarted = true
-                                                    fullReasoning += routedChunk.text
+                                                    fullReasoning.append(routedChunk.text)
                                                     emitEvent(AppStreamEvent.Reasoning(routedChunk.text))
                                                 } else {
                                                     if (reasoningStarted && !reasoningFinished) {
@@ -644,7 +679,7 @@ object GeminiDirectClient {
                                                     }
                                                     if (!contentStarted) contentStarted = true
                                                     eventCount++
-                                                    fullText += routedChunk.text
+                                                    fullText.append(routedChunk.text)
                                                     emitEvent(AppStreamEvent.Content(routedChunk.text, null, null))
                                                 }
                                             }
@@ -668,8 +703,11 @@ object GeminiDirectClient {
                                         Log.d(TAG, "Finish reason: $reason")
                                     }
                                 }
+                            } catch (e: CancellationException) {
+                                throw e
                             } catch (e: Exception) {
                                 Log.e(TAG, "解析数据块失败", e)
+                                throw e
                             }
                         }
                         lineBuffer.clear()
@@ -690,292 +728,34 @@ object GeminiDirectClient {
             for (routedChunk in routerRemaining) {
                 if (routedChunk.isReasoning) {
                     if (!reasoningStarted) reasoningStarted = true
-                    fullReasoning += routedChunk.text
+                    fullReasoning.append(routedChunk.text)
                     emitEvent(AppStreamEvent.Reasoning(routedChunk.text))
                 } else {
                     if (reasoningStarted && !reasoningFinished) {
                         emitEvent(AppStreamEvent.ReasoningFinish(null))
                         reasoningFinished = true
                     }
-                    fullText += routedChunk.text
+                    fullText.append(routedChunk.text)
                     emitEvent(AppStreamEvent.Content(routedChunk.text, null, null))
                 }
             }
 
-            // 只有当没有工具调用时才发送 ContentFinal
-            // 有工具调用时，等待整个循环完成后再发送最终内容
-            if (fullText.isNotEmpty() && !hasToolCalls) {
-                emitEvent(AppStreamEvent.ContentFinal(fullText))
-            }
-            
-            // 关键修复：不在这里发送 Finish 事件
-            // Finish 事件由 streamChatDirect 在整个工具循环完成后统一发送
-            // 这样就不会触发 ApiHandler 的 CancellationException
-            
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "SSE 流解析错误", e)
-            emitEvent(AppStreamEvent.Error(NetworkUtils.sanitizeMessage(e.message)))
-            // 错误时也不发送 Finish，让上层处理
+            throw e
         }
-        
-        return ParseResult(hasToolCalls = hasToolCalls, fullText = fullText)
-    }
-    
-    /**
-     * 解析 Gemini SSE 流 - 实时流式输出，支持思考过程
-     */
-    @OptIn(ExperimentalCoroutinesApi::class)
-    private fun parseGeminiSSEStream(channel: ByteReadChannel): Flow<AppStreamEvent> = channelFlow {
-        val lineBuffer = StringBuilder()
-        var fullText = ""
-        var fullReasoning = ""
-        var lineCount = 0
-        var eventCount = 0
-        var reasoningStarted = false
-        var reasoningFinished = false
-        var contentStarted = false
-        val thinkRouter = ThinkTagStreamRouter()
-        
-        // 用于存储 Grounding Metadata 以便最后添加引用
-        var capturedGroundingMetadata: JsonObject? = null
-        
-        try {
-            Log.d(TAG, "开始解析 SSE 流（支持思考过程）...")
-            
-            while (!channel.isClosedForRead) {
-                val line = channel.readLine() ?: break
-                lineCount++
-                
-                if (lineCount <= 10) {
-                    Log.d(TAG, "读取行 #$lineCount: chars=${line.length}")
-                }
-                
-                when {
-                    line.isEmpty() -> {
-                        // 空行表示一个 SSE 事件结束，解析累积的 data
-                        val chunk = lineBuffer.toString().trim()
-                        if (chunk.isNotEmpty()) {
-                            Log.d(TAG, "处理数据块 (长度=${chunk.length})")
-                            
-                            if (chunk.equals("[DONE]", ignoreCase = true)) {
-                                Log.d(TAG, "收到 [DONE] 标记")
-                                break
-                            }
-                            
-                            try {
-                                val jsonChunk = Json.parseToJsonElement(chunk).jsonObject
-                                
-                                // 解析 candidates - 和后端一样的逻辑
-                                jsonChunk["candidates"]?.jsonArray?.firstOrNull()?.let { candidate ->
-                                    val candidateObj = candidate.jsonObject
-                                    
-                                    // 提取内容（包括思考和正文）
-                                    candidateObj["content"]?.jsonObject?.get("parts")?.jsonArray?.forEach { part ->
-                                        val partObj = part.jsonObject
-                                        
-                                        // 检查是否为思考内容（thought 字段）
-                                        val isThought = partObj["thought"]?.jsonPrimitive?.booleanOrNull == true
-                                        val textContent = partObj["text"]?.jsonPrimitive?.contentOrNull
-                                        
-                                        if (isThought && !textContent.isNullOrEmpty()) {
-                                            // 这是思考内容
-                                            if (!reasoningStarted) {
-                                                reasoningStarted = true
-                                                Log.i(TAG, "🧠 开始接收思考过程")
-                                            }
-                                            fullReasoning += textContent
-                                            send(AppStreamEvent.Reasoning(textContent))
-                                            Log.d(TAG, "🧠 思考片段 (${textContent.length}字): ${textContent.take(50)}...")
-                                        } else if (!textContent.isNullOrEmpty()) {
-                                            // 通过 ThinkTagStreamRouter 检测 <think> 标签
-                                            val routed = thinkRouter.feed(textContent)
-                                            for (routedChunk in routed) {
-                                                if (routedChunk.isReasoning) {
-                                                    if (!reasoningStarted) {
-                                                        reasoningStarted = true
-                                                        Log.i(TAG, "🧠 开始接收思考过程 (via <think> tag)")
-                                                    }
-                                                    fullReasoning += routedChunk.text
-                                                    send(AppStreamEvent.Reasoning(routedChunk.text))
-                                                } else {
-                                                    if (reasoningStarted && !reasoningFinished) {
-                                                        send(AppStreamEvent.ReasoningFinish(null))
-                                                        reasoningFinished = true
-                                                        Log.i(TAG, "🧠 思考过程结束，开始输出正文")
-                                                    }
-                                                    if (!contentStarted) contentStarted = true
-                                                    eventCount++
-                                                    fullText += routedChunk.text
-                                                    send(AppStreamEvent.Content(routedChunk.text, null, null))
-                                                    Log.i(TAG, "✓ 流式输出 #$eventCount (${routedChunk.text.length}字): ${routedChunk.text.take(50)}...")
-                                                }
-                                            }
-                                        }
-                                        
-                                        // 检查代码执行相关内容
-                                        partObj["executableCode"]?.jsonObject?.let { codeObj ->
-                                            val code = codeObj["code"]?.jsonPrimitive?.contentOrNull ?: ""
-                                            val language = codeObj["language"]?.jsonPrimitive?.contentOrNull ?: "python"
-                                            if (code.isNotEmpty()) {
-                                                send(AppStreamEvent.CodeExecutable(code, language))
-                                                Log.i(TAG, "💻 收到可执行代码 ($language): ${code.take(50)}...")
-                                            }
-                                        }
-                                        
-                                        partObj["codeExecutionResult"]?.jsonObject?.let { resultObj ->
-                                            val output = resultObj["output"]?.jsonPrimitive?.contentOrNull
-                                            val outcome = resultObj["outcome"]?.jsonPrimitive?.contentOrNull
-                                            val outcomeNormalized = when (outcome?.uppercase()) {
-                                                "OUTCOME_OK", "SUCCESS", "OK" -> "success"
-                                                else -> if (outcome != null) "error" else null
-                                            }
-                                            send(AppStreamEvent.CodeExecutionResult(output, outcomeNormalized, null))
-                                            Log.i(TAG, "💻 代码执行结果: outcome=$outcomeNormalized, output=${output?.take(50)}...")
-                                        }
-                                        
-                                        // 检查内联图片（代码执行生成的图表）
-                                        partObj["inlineData"]?.jsonObject?.let { inlineData ->
-                                            val mimeType = inlineData["mimeType"]?.jsonPrimitive?.contentOrNull
-                                            val data = inlineData["data"]?.jsonPrimitive?.contentOrNull
-                                            if (mimeType != null && data != null && mimeType.startsWith("image/")) {
-                                                val imageUrl = "data:$mimeType;base64,$data"
-                                                send(AppStreamEvent.CodeExecutionResult(null, "success", imageUrl))
-                                                Log.i(TAG, "📊 收到代码执行生成的图片: $mimeType")
-                                            }
-                                        }
-                                        
-                                        partObj["functionCall"]?.jsonObject?.let { fcObj ->
-                                            val name = fcObj["name"]?.jsonPrimitive?.contentOrNull ?: return@let
-                                            val args = fcObj["args"]?.jsonObject ?: JsonObject(emptyMap())
-                                            send(AppStreamEvent.ToolCall(
-                                                id = "fc_${System.currentTimeMillis()}",
-                                                name = name,
-                                                argumentsObj = args
-                                            ))
-                                            Log.i(TAG, "🔧 收到 functionCall: $name, args=$args")
-                                        }
-                                    }
-                                    
-                                    // 检查搜索结果（grounding metadata）
-                                    candidateObj["groundingMetadata"]?.jsonObject?.let { groundingMeta ->
-                                        capturedGroundingMetadata = groundingMeta // 捕获元数据供后续处理引用
-                                        
-                                        groundingMeta["groundingChunks"]?.jsonArray?.let { chunks ->
-                                            val webResults = chunks.mapIndexedNotNull { index, chunkElement ->
-                                                try {
-                                                    val chunkObj = chunkElement.jsonObject
-                                                    val webObj = chunkObj["web"]?.jsonObject ?: return@mapIndexedNotNull null
-                                                    com.android.everytalk.data.DataClass.WebSearchResult(
-                                                        index = index + 1,
-                                                        title = webObj["title"]?.jsonPrimitive?.contentOrNull ?: "Unknown",
-                                                        href = webObj["uri"]?.jsonPrimitive?.contentOrNull ?: "#",
-                                                        snippet = ""
-                                                    )
-                                                } catch (e: Exception) {
-                                                    null
-                                                }
-                                            }
-                                            if (webResults.isNotEmpty()) {
-                                                send(AppStreamEvent.WebSearchResults(webResults))
-                                                Log.i(TAG, "🔍 收到 ${webResults.size} 个搜索结果")
-                                            }
-                                        }
-                                    }
-                                    
-                                    // 检查结束原因
-                                    candidateObj["finishReason"]?.jsonPrimitive?.contentOrNull?.let { reason ->
-                                        Log.d(TAG, "Finish reason: $reason")
-                                    }
-                                }
-                            } catch (e: Exception) {
-                                Log.e(TAG, "解析数据块失败: '$chunk'", e)
-                            }
-                        }
-                        lineBuffer.clear()
-                    }
-                    line.startsWith(":") -> {
-                        // SSE 注释/心跳，忽略
-                        Log.d(TAG, "SSE 注释行（忽略）: '$line'")
-                    }
-                    line.startsWith("data:") -> {
-                        // 累积 data 内容
-                        val dataContent = line.substring(5).trim()
-                        Log.d(TAG, "SSE data 行: '$dataContent'")
-                        if (lineBuffer.isNotEmpty()) lineBuffer.append('\n')
-                        lineBuffer.append(dataContent)
-                    }
-                    line.startsWith("event:") -> {
-                        // 事件类型
-                        Log.d(TAG, "SSE event 行: '${line.substring(6).trim()}'")
-                    }
-                    else -> {
-                        // 其他格式，尝试直接解析 JSON
-                        val trimmed = line.trim()
-                        if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
-                            Log.d(TAG, "非 SSE 格式行（JSON 回退）: '$trimmed'")
-                        }
-                    }
-                }
-            }
-            
-            Log.i(TAG, "SSE 流读取完成，共 $lineCount 行，$eventCount 个事件")
-            
-            // 冲刷 thinkRouter 剩余内容
-            val routerRemaining = thinkRouter.flush()
-            for (routedChunk in routerRemaining) {
-                if (routedChunk.isReasoning) {
-                    if (!reasoningStarted) reasoningStarted = true
-                    fullReasoning += routedChunk.text
-                    send(AppStreamEvent.Reasoning(routedChunk.text))
-                } else {
-                    if (reasoningStarted && !reasoningFinished) {
-                        send(AppStreamEvent.ReasoningFinish(null))
-                        reasoningFinished = true
-                    }
-                    fullText += routedChunk.text
-                    send(AppStreamEvent.Content(routedChunk.text, null, null))
-                }
-            }
 
-            // 如果思考过程开始了但还没结束，发送结束事件
-            if (reasoningStarted && !reasoningFinished) {
-                send(AppStreamEvent.ReasoningFinish(null))
-                Log.i(TAG, "🧠 思考过程结束（流结束时）")
-            }
-            
-            // 发送最终结果
-            if (fullText.isNotEmpty()) {
-                // 尝试添加引用
-                val finalText = if (capturedGroundingMetadata != null) {
-                    try {
-                        addCitations(fullText, capturedGroundingMetadata!!)
-                    } catch (e: Exception) {
-                        Log.e(TAG, "添加引用失败", e)
-                        fullText
-                    }
-                } else {
-                    fullText
-                }
-                
-                send(AppStreamEvent.ContentFinal(finalText, null, null))
-                Log.d(TAG, "发送最终内容，总长度: ${finalText.length} (原长度: ${fullText.length})")
-            }
-            send(AppStreamEvent.Finish("stop"))
-            Log.d(TAG, "流结束")
-            
-        } catch (e: Exception) {
-            Log.e(TAG, "解析 Gemini 流失败", e)
-            send(AppStreamEvent.Error("流解析失败: ${NetworkUtils.sanitizeMessage(e.message)}", null))
+        val completedText = fullText.toString()
+        if (completedText.isNotEmpty() && !hasToolCalls) {
+            emitEvent(AppStreamEvent.ContentFinal(completedText))
         }
-        
-        // 结束解析子流（返回即可完成 channelFlow）
-        return@channelFlow
+
+        return ParseResult(hasToolCalls = hasToolCalls, fullText = completedText)
     }
 
-    /**
-     * 根据 Grounding Metadata 为文本添加行内引用
-     * 参考官方 Python/JS 示例实现
-     */
+    /** 为 Gemini Grounding 结果补充引用标记。 */
     private fun addCitations(text: String, metadata: JsonObject): String {
         val supports = metadata["groundingSupports"]?.jsonArray ?: return text
         val chunks = metadata["groundingChunks"]?.jsonArray ?: return text

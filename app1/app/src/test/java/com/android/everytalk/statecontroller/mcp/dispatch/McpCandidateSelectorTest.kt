@@ -9,38 +9,73 @@ class McpCandidateSelectorTest {
 
     @Test
     fun `docs lookup keeps docs tools first`() {
-        val plan = selectMcpCandidates(
-            intent = McpDispatchIntent(
-                primaryIntent = QueryIntent.DOCS_LOOKUP,
-                shouldPreferMcp = true,
-                candidateCategories = setOf(McpToolCategory.DOCS, McpToolCategory.SEARCH)
-            ),
+        val selected = selectMcpCandidates(
+            intent = QueryIntent.DOCS_LOOKUP,
             candidates = listOf(
-                toMcpToolCandidate("docs", "Context7", McpTool("query-docs", "Query docs")),
-                toMcpToolCandidate("search", "Exa", McpTool("web_search_exa", "Search web")),
-                toMcpToolCandidate("browser", "Firecrawl", McpTool("crawl_page", "Read page"))
-            ),
-            strategy = McpDispatchStrategy.modelLedDefault()
+                toMcpToolCandidate("Context7", McpTool("query-docs", "Query docs")),
+                toMcpToolCandidate("Exa", McpTool("web_search_exa", "Search web")),
+                toMcpToolCandidate("Firecrawl", McpTool("crawl_page", "Read page"))
+            )
         )
 
-        assertEquals(McpToolCategory.DOCS, plan.exposedTools.first().category)
+        assertEquals(
+            listOf(McpToolCategory.DOCS, McpToolCategory.SEARCH, McpToolCategory.BROWSER),
+            selected.map { it.category }
+        )
     }
 
     @Test
-    fun `local reasoning hides external mcp tools`() {
-        val plan = selectMcpCandidates(
-            intent = McpDispatchIntent(
-                primaryIntent = QueryIntent.LOCAL_REASONING,
-                shouldPreferMcp = false,
-                candidateCategories = emptySet()
-            ),
+    fun `local reasoning keeps enabled mcp tools available`() {
+        val selected = selectMcpCandidates(
+            intent = QueryIntent.LOCAL_REASONING,
             candidates = listOf(
-                toMcpToolCandidate("docs", "Context7", McpTool("query-docs", "Query docs")),
-                toMcpToolCandidate("search", "Exa", McpTool("web_search_exa", "Search web"))
-            ),
-            strategy = McpDispatchStrategy.modelLedDefault()
+                toMcpToolCandidate("Context7", McpTool("query-docs", "Query docs")),
+                toMcpToolCandidate("Internal", McpTool("create_ticket", "Create ticket"))
+            )
         )
 
-        assertTrue(plan.exposedTools.isEmpty())
+        assertEquals(2, selected.size)
+    }
+
+    @Test
+    fun `disabled tools are never exposed`() {
+        val selected = selectMcpCandidates(
+            intent = QueryIntent.DOCS_LOOKUP,
+            candidates = listOf(
+                toMcpToolCandidate(
+                    "Context7",
+                    McpTool("query-docs", "Query docs", enable = false)
+                )
+            )
+        )
+
+        assertTrue(selected.isEmpty())
+    }
+
+    @Test
+    fun `duplicate tool names are exposed once`() {
+        val selected = selectMcpCandidates(
+            intent = QueryIntent.LOCAL_REASONING,
+            candidates = listOf(
+                toMcpToolCandidate("First", McpTool("lookup", "First lookup")),
+                toMcpToolCandidate("Second", McpTool("lookup", "Second lookup"))
+            )
+        )
+
+        assertEquals(1, selected.size)
+        assertEquals("First lookup", selected.single().description)
+    }
+
+    @Test
+    fun `intent preference does not remove tools needed by combined tasks`() {
+        val selected = selectMcpCandidates(
+            intent = QueryIntent.REALTIME_INFO,
+            candidates = listOf(
+                toMcpToolCandidate("Internal", McpTool("create_ticket", "Create ticket")),
+                toMcpToolCandidate("Exa", McpTool("web_search_exa", "Search web"))
+            )
+        )
+
+        assertEquals(listOf("web_search_exa", "create_ticket"), selected.map { it.toolName })
     }
 }

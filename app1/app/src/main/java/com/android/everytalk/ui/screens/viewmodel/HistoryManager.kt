@@ -6,16 +6,18 @@ import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.network.extractThinkTagContent
 import com.android.everytalk.statecontroller.ViewModelStateHolder
 import com.android.everytalk.util.ConversationNameHelper
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.runBlocking
 
 internal fun resolveHistoryExpectedStableConversationId(
     isImageGeneration: Boolean,
@@ -48,7 +50,7 @@ class HistoryManager(
     }
 
     // -------- 新增：持久化防抖与串行化 --------
-    private val saveRequestChannel = Channel<SaveRequest>(Channel.BUFFERED)
+    private val historyCommandChannel = Channel<HistoryCommand>(Channel.BUFFERED)
     private var debouncedTextSaveJob: Job? = null
     private var debouncedImageSaveJob: Job? = null
     private val DEBOUNCE_SAVE_MS = 1800L
@@ -68,12 +70,12 @@ class HistoryManager(
         }
         val text = msg.text.trim()
         val reasoning = (msg.reasoning ?: "").trim()
-        val hasImages = if (msg.imageUrls.isNullOrEmpty()) 0 else msg.imageUrls!!.size
+        val hasImages = if (msg.imageUrls.isNullOrEmpty()) 0 else msg.imageUrls.size
         val attachmentsSet = msg.attachments.mapNotNull {
             when (it) {
                 is com.android.everytalk.models.SelectedMediaItem.ImageFromUri -> it.uri.toString()
                 is com.android.everytalk.models.SelectedMediaItem.GenericFile -> it.uri.toString()
-                is com.android.everytalk.models.SelectedMediaItem.Audio -> it.data ?: ""
+                is com.android.everytalk.models.SelectedMediaItem.Audio -> it.data
                 is com.android.everytalk.models.SelectedMediaItem.ImageFromBitmap -> it.filePath ?: ""
             }
         }.toSet().sorted().joinToString("|")
@@ -102,7 +104,9 @@ class HistoryManager(
         }
     }
 
-    private suspend fun pruneOrphanConversationStateMappings() {
+    private suspend fun pruneOrphanConversationStateMappings(excludedIds: Set<String> = emptySet()) {
+        val canPruneAgainstAllHistory = stateHolder.isConversationStateCleanupReady()
+        if (!canPruneAgainstAllHistory && excludedIds.isEmpty()) return
         val retainedIds = buildSet {
             stateHolder._historicalConversations.value.forEach { conversation ->
                 stableConversationId(conversation)?.let { add(it) }
@@ -112,43 +116,50 @@ class HistoryManager(
             }
             stateHolder._currentConversationId.value.takeIf { it.isNotBlank() }?.let { add(it) }
             stateHolder._currentImageGenerationConversationId.value.takeIf { it.isNotBlank() }?.let { add(it) }
-        }
-        if (retainedIds.isEmpty()) return
+        } - excludedIds
 
-        fun <T> Map<String, T>.retainKnownKeys(): Map<String, T> = filterKeys { it in retainedIds }
+        fun shouldRetain(key: String): Boolean = if (canPruneAgainstAllHistory) {
+            key in retainedIds
+        } else {
+            key !in excludedIds
+        }
+        fun <T> Map<String, T>.retainKnownKeys(): Map<String, T> = filterKeys(::shouldRetain)
 
         val configIds = stateHolder.conversationApiConfigIds.value
-        val prunedConfigIds = configIds.retainKnownKeys()
+        val prunedConfigIds = stateHolder.conversationApiConfigIds.updateAndGet { current ->
+            current.retainKnownKeys()
+        }
         if (prunedConfigIds.size != configIds.size) {
-            stateHolder.conversationApiConfigIds.value = prunedConfigIds
             Log.d(TAG_HM, "Pruned ${configIds.size - prunedConfigIds.size} orphan config bindings")
         }
 
         val toggleStates = stateHolder.conversationFunctionToggleStates.value
-        val prunedToggleStates = toggleStates.retainKnownKeys()
+        val prunedToggleStates = stateHolder.conversationFunctionToggleStates.updateAndGet { current ->
+            current.retainKnownKeys()
+        }
         if (prunedToggleStates.size != toggleStates.size) {
-            stateHolder.conversationFunctionToggleStates.value = prunedToggleStates
             persistenceManager.saveConversationFunctionToggleStates(prunedToggleStates)
             Log.d(TAG_HM, "Pruned ${toggleStates.size - prunedToggleStates.size} orphan function toggle states")
         }
 
         val generationConfigs = stateHolder.conversationGenerationConfigs.value
-        val prunedGenerationConfigs = generationConfigs.retainKnownKeys()
+        val prunedGenerationConfigs = stateHolder.conversationGenerationConfigs.updateAndGet { current ->
+            current.retainKnownKeys()
+        }
         if (prunedGenerationConfigs.size != generationConfigs.size) {
-            stateHolder.conversationGenerationConfigs.value = prunedGenerationConfigs
             persistenceManager.saveConversationParameters(prunedGenerationConfigs)
             Log.d(TAG_HM, "Pruned ${generationConfigs.size - prunedGenerationConfigs.size} orphan generation configs")
         }
 
         val systemPromptKeys = stateHolder.systemPrompts.keys.toList()
-        systemPromptKeys.filterNot { it in retainedIds }.forEach { stateHolder.systemPrompts.remove(it) }
+        systemPromptKeys.filterNot(::shouldRetain).forEach { stateHolder.systemPrompts.remove(it) }
         val systemPromptEngagedKeys = stateHolder.systemPromptEngagedState.keys.toList()
-        systemPromptEngagedKeys.filterNot { it in retainedIds }.forEach { stateHolder.systemPromptEngagedState.remove(it) }
+        systemPromptEngagedKeys.filterNot(::shouldRetain).forEach { stateHolder.systemPromptEngagedState.remove(it) }
         val systemPromptExpandedKeys = stateHolder.systemPromptExpandedState.keys.toList()
-        systemPromptExpandedKeys.filterNot { it in retainedIds }.forEach { stateHolder.systemPromptExpandedState.remove(it) }
+        systemPromptExpandedKeys.filterNot(::shouldRetain).forEach { stateHolder.systemPromptExpandedState.remove(it) }
 
         val scrollStateKeys = stateHolder.conversationScrollStates.keys.toList()
-        val removedScrollStates = scrollStateKeys.filterNot { it in retainedIds }
+        val removedScrollStates = scrollStateKeys.filterNot(::shouldRetain)
         removedScrollStates.forEach { stateHolder.conversationScrollStates.remove(it) }
         if (removedScrollStates.isNotEmpty()) {
             persistenceManager.saveConversationScrollStates(stateHolder.conversationScrollStates.toMap())
@@ -158,11 +169,64 @@ class HistoryManager(
 
     init {
         scope.launch {
-            for (req in saveRequestChannel) {
-                if (!isActive) break
-                performSave(req)
+            try {
+                for (command in historyCommandChannel) {
+                    if (!isActive) break
+                    try {
+                        when (command) {
+                            is HistoryCommand.Save -> performSave(command.request)
+                            is HistoryCommand.Delete -> deleteConversationInternal(
+                                command.indexToDelete,
+                                command.isImageGeneration,
+                            )
+                            is HistoryCommand.PersistDirect -> persistHistoryListDirectlyInternal(
+                                command.isImageGeneration,
+                            )
+                            is HistoryCommand.Clear -> clearAllHistoryInternal(command.isImageGeneration)
+                        }
+                        command.completion?.complete(Unit)
+                    } catch (exception: CancellationException) {
+                        command.completion?.completeExceptionally(exception)
+                        throw exception
+                    } catch (exception: Exception) {
+                        command.completion?.completeExceptionally(exception)
+                            ?: Log.e(TAG_HM, "Queued history command failed", exception)
+                    }
+                }
+            } finally {
+                val exception = CancellationException("History command processor stopped")
+                historyCommandChannel.close(exception)
+                while (true) {
+                    val pending = historyCommandChannel.tryReceive().getOrNull() ?: break
+                    pending.completion?.completeExceptionally(exception)
+                }
             }
         }
+    }
+
+    private sealed interface HistoryCommand {
+        val completion: CompletableDeferred<Unit>?
+
+        data class Save(
+            val request: SaveRequest,
+            override val completion: CompletableDeferred<Unit>? = null,
+        ) : HistoryCommand
+
+        data class Delete(
+            val indexToDelete: Int,
+            val isImageGeneration: Boolean,
+            override val completion: CompletableDeferred<Unit>,
+        ) : HistoryCommand
+
+        data class PersistDirect(
+            val isImageGeneration: Boolean,
+            override val completion: CompletableDeferred<Unit>,
+        ) : HistoryCommand
+
+        data class Clear(
+            val isImageGeneration: Boolean,
+            override val completion: CompletableDeferred<Unit>,
+        ) : HistoryCommand
     }
 
     private data class SaveRequest(
@@ -203,6 +267,21 @@ class HistoryManager(
 
     private suspend fun performSave(req: SaveRequest) {
         saveCurrentChatToHistoryIfNeededInternal(req.force, req.isImageGen, req)
+    }
+
+    private fun cancelDebouncedSave(isImageGeneration: Boolean) {
+        if (isImageGeneration) {
+            debouncedImageSaveJob?.cancel()
+            debouncedImageSaveJob = null
+        } else {
+            debouncedTextSaveJob?.cancel()
+            debouncedTextSaveJob = null
+        }
+    }
+
+    private suspend fun enqueueAndAwait(command: HistoryCommand) {
+        historyCommandChannel.send(command)
+        command.completion?.await()
     }
 
     private fun filterMessagesForSaving(messagesToFilter: List<Message>): List<Message> {
@@ -274,24 +353,18 @@ class HistoryManager(
     }
 
     suspend fun saveCurrentChatToHistoryIfNeeded(forceSave: Boolean = false, isImageGeneration: Boolean = false) {
-        fun cancelDebouncedJob() {
-            if (isImageGeneration) {
-                debouncedImageSaveJob?.cancel()
-                debouncedImageSaveJob = null
-            } else {
-                debouncedTextSaveJob?.cancel()
-                debouncedTextSaveJob = null
-            }
-        }
-
         if (forceSave) {
-            cancelDebouncedJob()
-            saveRequestChannel.send(buildSaveRequest(force = true, isImageGeneration = isImageGeneration))
+            cancelDebouncedSave(isImageGeneration)
+            historyCommandChannel.send(
+                HistoryCommand.Save(buildSaveRequest(force = true, isImageGeneration = isImageGeneration))
+            )
         } else {
-            cancelDebouncedJob()
+            cancelDebouncedSave(isImageGeneration)
             val job = scope.launch {
                 delay(DEBOUNCE_SAVE_MS)
-                saveRequestChannel.send(buildSaveRequest(force = false, isImageGeneration = isImageGeneration))
+                historyCommandChannel.send(
+                    HistoryCommand.Save(buildSaveRequest(force = false, isImageGeneration = isImageGeneration))
+                )
             }
             if (isImageGeneration) {
                 debouncedImageSaveJob = job
@@ -307,8 +380,14 @@ class HistoryManager(
         forceSave: Boolean = false,
         isImageGeneration: Boolean = false
     ): Int? {
-        // 直接调用内部保存逻辑（同步），确保本次保存完成后再读取索引
-        saveCurrentChatToHistoryIfNeededInternal(forceSave = forceSave, isImageGeneration = isImageGeneration)
+        cancelDebouncedSave(isImageGeneration)
+        val completion = CompletableDeferred<Unit>()
+        enqueueAndAwait(
+            HistoryCommand.Save(
+                request = buildSaveRequest(forceSave, isImageGeneration),
+                completion = completion,
+            )
+        )
         return if (isImageGeneration) {
             stateHolder._loadedImageGenerationHistoryIndex.value
         } else {
@@ -375,216 +454,157 @@ class HistoryManager(
         }
 
         var finalNewLoadedIndex: Int? = loadedHistoryIndex
-        var needsPersistenceSaveOfHistoryList = false
+        var conversationToPersist: List<Message>? = null
         var addedNewConversation = false
         val newConversationFingerprint = conversationFingerprint(messagesToSave)
         val nowMs = System.currentTimeMillis()
 
         val historicalConversations = if (isImageGeneration) stateHolder._imageGenerationHistoricalConversations else stateHolder._historicalConversations
-        historicalConversations.update { currentHistory ->
-            val mutableHistory = currentHistory.toMutableList()
-            val requestedLoadedIdx = loadedHistoryIndex
-            val stableIdFromMessages = stableConversationId(messagesToSave)
-            val expectedStableId = resolveHistoryExpectedStableConversationId(
-                isImageGeneration = isImageGeneration,
-                loadedHistoryIndex = requestedLoadedIdx,
-                currentConversationId = currentConversationId,
-                stableIdFromMessages = stableIdFromMessages,
-                currentConversationIdInMessages = messagesToSave.any { it.id == currentConversationId },
+        val currentHistory = historicalConversations.value
+        val mutableHistory = currentHistory.toMutableList()
+        val requestedLoadedIdx = loadedHistoryIndex
+        val stableIdFromMessages = stableConversationId(messagesToSave)
+        val expectedStableId = resolveHistoryExpectedStableConversationId(
+            isImageGeneration = isImageGeneration,
+            loadedHistoryIndex = requestedLoadedIdx,
+            currentConversationId = currentConversationId,
+            stableIdFromMessages = stableIdFromMessages,
+            currentConversationIdInMessages = messagesToSave.any { it.id == currentConversationId },
+        )
+        val requestedHistoryFingerprint = requestedLoadedIdx
+            ?.takeIf { it >= 0 && it < mutableHistory.size }
+            ?.let { conversationFingerprint(mutableHistory[it]) }
+        val requestedLooksLikeDraftOfCurrent = !requestedHistoryFingerprint.isNullOrEmpty() &&
+            (newConversationFingerprint == requestedHistoryFingerprint ||
+                newConversationFingerprint.startsWith("$requestedHistoryFingerprint||"))
+        val currentLoadedIdx = if (
+            requestedLoadedIdx != null &&
+            requestedLoadedIdx >= 0 &&
+            requestedLoadedIdx < mutableHistory.size &&
+            (
+                expectedStableId == null ||
+                    stableConversationId(mutableHistory[requestedLoadedIdx]) == expectedStableId ||
+                    conversationContainsMessageId(mutableHistory[requestedLoadedIdx], expectedStableId) ||
+                    requestedLooksLikeDraftOfCurrent
             )
-            val requestedHistoryFingerprint = requestedLoadedIdx
-                ?.takeIf { it >= 0 && it < mutableHistory.size }
-                ?.let { conversationFingerprint(mutableHistory[it]) }
-            val requestedLooksLikeDraftOfCurrent = !requestedHistoryFingerprint.isNullOrEmpty() &&
-                (newConversationFingerprint == requestedHistoryFingerprint ||
-                    newConversationFingerprint.startsWith("$requestedHistoryFingerprint||"))
-            val currentLoadedIdx = if (
-                requestedLoadedIdx != null &&
-                requestedLoadedIdx >= 0 &&
-                requestedLoadedIdx < mutableHistory.size &&
-                (
-                    expectedStableId == null ||
-                        stableConversationId(mutableHistory[requestedLoadedIdx]) == expectedStableId ||
-                        conversationContainsMessageId(mutableHistory[requestedLoadedIdx], expectedStableId) ||
-                        requestedLooksLikeDraftOfCurrent
+        ) {
+            requestedLoadedIdx
+        } else {
+            val resolvedIndex = expectedStableId?.let { stableId ->
+                mutableHistory.indexOfFirst { stableConversationId(it) == stableId }
+            }?.takeIf { it >= 0 }
+            if (requestedLoadedIdx != null && resolvedIndex != null && resolvedIndex != requestedLoadedIdx) {
+                Log.w(
+                    TAG_HM,
+                    "Loaded index drift detected. requested=$requestedLoadedIdx, resolved=$resolvedIndex, stableId=$expectedStableId"
                 )
-            ) {
-                requestedLoadedIdx
-            } else {
-                val resolvedIndex = expectedStableId?.let { stableId ->
-                    mutableHistory.indexOfFirst { stableConversationId(it) == stableId }
-                }?.takeIf { it >= 0 }
-                if (requestedLoadedIdx != null && resolvedIndex != null && resolvedIndex != requestedLoadedIdx) {
-                    Log.w(
-                        TAG_HM,
-                        "Loaded index drift detected. requested=$requestedLoadedIdx, resolved=$resolvedIndex, stableId=$expectedStableId"
-                    )
-                }
-                resolvedIndex
             }
-
-            if (currentLoadedIdx != null && currentLoadedIdx >= 0 && currentLoadedIdx < mutableHistory.size) {
-                val existingMessages = filterMessagesForSaving(mutableHistory[currentLoadedIdx])
-                val contentChanged = runBlocking {
-                    !compareMessageLists(existingMessages, messagesToSave)
-                }
-                if ((forceSave || isDirty) && contentChanged) {
-                    Log.d(
-                        TAG_HM,
-                        "Updating history index $currentLoadedIdx. Force: $forceSave. isDirty: $isDirty. contentChanged: true"
-                    )
-                    if (messagesToSave.isNotEmpty()) {
-                        mutableHistory[currentLoadedIdx] = messagesToSave
-                        if (currentLoadedIdx > 0) {
-                            mutableHistory.add(0, mutableHistory.removeAt(currentLoadedIdx))
-                            finalNewLoadedIndex = 0
-                        } else {
-                            finalNewLoadedIndex = currentLoadedIdx
-                        }
-                        historyListModified = true
-                        needsPersistenceSaveOfHistoryList = true
-                        Log.d(TAG_HM, "Updated existing history at index=$currentLoadedIdx, fp=${newConversationFingerprint.take(64)}")
-                    } else {
-                        Log.d(
-                            TAG_HM,
-                            "Save is forced but there are no messages to save for index $currentLoadedIdx. Skipping update to prevent data loss."
-                        )
-                    }
-                } else if (!contentChanged) {
-                    Log.d(
-                        TAG_HM,
-                        "History index $currentLoadedIdx content unchanged; preserving its original position."
-                    )
-                } else {
-                    Log.d(TAG_HM, "History index $currentLoadedIdx changed but is not marked dirty and not force saving.")
-                }
-            } else {
-                if (messagesToSave.isNotEmpty()) {
-                    // 先与头部会话比较（指纹 + 深比较）双重护栏，幂等保护更强
-                    val headExists = mutableHistory.isNotEmpty()
-                    val headFingerprint = if (headExists) conversationFingerprint(mutableHistory.first()) else null
-                    val headDeepEqual = if (headExists) {
-                        runBlocking {
-                            compareMessageLists(
-                                filterMessagesForSaving(mutableHistory.first()),
-                                messagesToSave
-                            )
-                        }
-                    } else false
-
-                    if ((headFingerprint != null && headFingerprint == newConversationFingerprint) || headDeepEqual) {
-                        Log.i(TAG_HM, "Skip insert: head equals new conversation (fingerprint/deep head guard)")
-                        finalNewLoadedIndex = 0
-                    } else if (lastInsertFingerprint == newConversationFingerprint && (nowMs - lastInsertAtMs) < 3000L) {
-                        Log.i(TAG_HM, "Skip insert: same conversation within 3s window (force+debounce guard)")
-                        // 保持 loadedIndex 不变（仍然为空表示新会话未入库）
-                    } else {
-                        // 插入前最后防线：基于现有查找API的精确匹配检索
-                        val preInsertFound = runBlocking {
-                            try {
-                                findChatInHistory(messagesToSave, isImageGeneration)
-                            } catch (e: Exception) {
-                                Log.w(TAG_HM, "pre-insert findChatInHistory failed: ${e.message}")
-                                -1
-                            }
-                        }
-                        if (preInsertFound >= 0) {
-                            Log.i(TAG_HM, "Pre-insert duplicate found by findChatInHistory at index=$preInsertFound. Reusing instead of inserting.")
-                            finalNewLoadedIndex = preInsertFound
-                        } else {
-                            // 全量判重：先“无System指纹”快速判重，再回退到深比较
-                            var duplicateIndex = stableIdFromMessages?.let { stableId ->
-                                mutableHistory.indexOfFirst { historyChat -> stableConversationId(historyChat) == stableId }
-                            } ?: -1
-                            if (duplicateIndex == -1) {
-                                duplicateIndex = mutableHistory.indexOfFirst { historyChat ->
-                                    conversationFingerprint(historyChat) == newConversationFingerprint
-                                }
-                            }
-                            if (duplicateIndex == -1) {
-                                duplicateIndex = mutableHistory.indexOfFirst { historyChat ->
-                                    runBlocking { compareMessageLists(filterMessagesForSaving(historyChat), messagesToSave) }
-                                }
-                            }
-                            if (duplicateIndex == -1) {
-                                Log.d(
-                                    TAG_HM,
-                                    "Adding new conversation to start of history. Message count: ${messagesToSave.size}, fp=${newConversationFingerprint.take(64)}"
-                                )
-                                mutableHistory.add(0, messagesToSave)
-                                finalNewLoadedIndex = 0
-                                historyListModified = true
-                                needsPersistenceSaveOfHistoryList = true
-                                addedNewConversation = true
-                                // 相邻去重兜底（防极端竞态）
-                                if (mutableHistory.size >= 2) {
-                                    val fp0 = conversationFingerprint(mutableHistory[0])
-                                    val fp1 = conversationFingerprint(mutableHistory[1])
-                                    if (fp0 == fp1) {
-                                        Log.w(TAG_HM, "Adjacent duplicate detected after insert. Removing the second one to dedup.")
-                                        mutableHistory.removeAt(1)
-                                    }
-                                }
-                            } else {
-                                Log.d(
-                                    TAG_HM,
-                                    "Current conversation matches history index $duplicateIndex. Updating it instead of inserting."
-                                )
-                                mutableHistory[duplicateIndex] = messagesToSave
-                                if (duplicateIndex > 0) {
-                                    mutableHistory.add(0, mutableHistory.removeAt(duplicateIndex))
-                                    finalNewLoadedIndex = 0
-                                } else {
-                                    finalNewLoadedIndex = duplicateIndex
-                                }
-                                historyListModified = true
-                                needsPersistenceSaveOfHistoryList = true
-                            }
-                        }
-                    }
-                } else {
-                    Log.d(
-                        TAG_HM,
-                        "Current new conversation is empty, not adding to history."
-                    )
-                    return@update currentHistory
-                }
-            }
-            // 全局去重（按稳定指纹，忽略所有 System），保留首次出现顺序
-            val seenStableIds = mutableSetOf<String>()
-            val seenFingerprints = mutableSetOf<String>()
-            val deduped = mutableListOf<List<Message>>()
-            var removed = 0
-            for ((index, conv) in mutableHistory.withIndex()) {
-                val stableId = stableConversationId(conv)
-                val fp = conversationFingerprint(conv)
-                val duplicateByStableId = stableId != null && !seenStableIds.add(stableId)
-                val duplicateByFingerprint = fp.isNotEmpty() && !seenFingerprints.add(fp)
-                if (!duplicateByStableId && !duplicateByFingerprint) {
-                    deduped.add(conv)
-                } else {
-                    if (finalNewLoadedIndex == index) {
-                        val keptIndex = deduped.indexOfFirst { kept ->
-                            (stableId != null && stableConversationId(kept) == stableId) ||
-                                (fp.isNotEmpty() && conversationFingerprint(kept) == fp)
-                        }
-                        finalNewLoadedIndex = keptIndex.takeIf { it >= 0 }
-                        if (keptIndex >= 0) {
-                            deduped[keptIndex] = conv
-                        }
-                    } else if (finalNewLoadedIndex != null && index < finalNewLoadedIndex!!) {
-                        finalNewLoadedIndex = finalNewLoadedIndex!! - 1
-                    }
-                    removed++
-                }
-            }
-            if (removed > 0) {
-                Log.w(TAG_HM, "Global dedup removed $removed duplicate conversations (stableId/fingerprint-based)")
-                historyListModified = true
-                needsPersistenceSaveOfHistoryList = true
-            }
-            deduped
+            resolvedIndex
         }
+
+        if (currentLoadedIdx != null && currentLoadedIdx in mutableHistory.indices) {
+            val existingMessages = filterMessagesForSaving(mutableHistory[currentLoadedIdx])
+            val contentChanged = !compareMessageLists(existingMessages, messagesToSave)
+            if (messagesToSave.isNotEmpty() && (isDirty || forceSave && contentChanged)) {
+                if (contentChanged) {
+                    mutableHistory[currentLoadedIdx] = messagesToSave
+                    if (currentLoadedIdx > 0) {
+                        mutableHistory.add(0, mutableHistory.removeAt(currentLoadedIdx))
+                        finalNewLoadedIndex = 0
+                    } else {
+                        finalNewLoadedIndex = currentLoadedIdx
+                    }
+                    historyListModified = true
+                    Log.d(TAG_HM, "Updated existing history at index=$currentLoadedIdx, fp=${newConversationFingerprint.take(64)}")
+                }
+                conversationToPersist = messagesToSave
+            } else if (!contentChanged) {
+                Log.d(TAG_HM, "History index $currentLoadedIdx content unchanged; preserving its original position.")
+            } else {
+                Log.d(TAG_HM, "History index $currentLoadedIdx changed but is not marked dirty or contains no savable messages.")
+            }
+        } else if (messagesToSave.isNotEmpty()) {
+            val headDeepEqual = mutableHistory.firstOrNull()?.let { head ->
+                compareMessageLists(filterMessagesForSaving(head), messagesToSave)
+            } ?: false
+            val headFingerprint = mutableHistory.firstOrNull()?.let(::conversationFingerprint)
+
+            if (headFingerprint == newConversationFingerprint || headDeepEqual) {
+                Log.i(TAG_HM, "Skip insert: head equals new conversation (fingerprint/deep head guard)")
+                finalNewLoadedIndex = 0
+            } else if (lastInsertFingerprint == newConversationFingerprint && (nowMs - lastInsertAtMs) < 3000L) {
+                Log.i(TAG_HM, "Skip insert: same conversation within 3s window (force+debounce guard)")
+            } else {
+                var duplicateIndex = stableIdFromMessages?.let { stableId ->
+                    mutableHistory.indexOfFirst { historyChat -> stableConversationId(historyChat) == stableId }
+                } ?: -1
+                if (duplicateIndex == -1) {
+                    duplicateIndex = mutableHistory.indexOfFirst { historyChat ->
+                        conversationFingerprint(historyChat) == newConversationFingerprint
+                    }
+                }
+                if (duplicateIndex == -1) {
+                    for ((index, historyChat) in mutableHistory.withIndex()) {
+                        if (compareMessageLists(filterMessagesForSaving(historyChat), messagesToSave)) {
+                            duplicateIndex = index
+                            break
+                        }
+                    }
+                }
+                if (duplicateIndex == -1) {
+                    mutableHistory.add(0, messagesToSave)
+                    finalNewLoadedIndex = 0
+                    historyListModified = true
+                    conversationToPersist = messagesToSave
+                    addedNewConversation = true
+                } else {
+                    mutableHistory[duplicateIndex] = messagesToSave
+                    if (duplicateIndex > 0) {
+                        mutableHistory.add(0, mutableHistory.removeAt(duplicateIndex))
+                        finalNewLoadedIndex = 0
+                    } else {
+                        finalNewLoadedIndex = duplicateIndex
+                    }
+                    historyListModified = true
+                    conversationToPersist = messagesToSave
+                }
+            }
+        } else {
+            Log.d(TAG_HM, "Current new conversation is empty, not adding to history.")
+        }
+
+        val seenStableIds = mutableSetOf<String>()
+        val seenFingerprints = mutableSetOf<String>()
+        val deduped = mutableListOf<List<Message>>()
+        var removed = 0
+        for ((index, conversation) in mutableHistory.withIndex()) {
+            val stableId = stableConversationId(conversation)
+            val fingerprint = conversationFingerprint(conversation)
+            val duplicateByStableId = stableId != null && !seenStableIds.add(stableId)
+            val duplicateByFingerprint = fingerprint.isNotEmpty() && !seenFingerprints.add(fingerprint)
+            if (!duplicateByStableId && !duplicateByFingerprint) {
+                deduped += conversation
+            } else {
+                if (finalNewLoadedIndex == index) {
+                    val keptIndex = deduped.indexOfFirst { kept ->
+                        (stableId != null && stableConversationId(kept) == stableId) ||
+                            (fingerprint.isNotEmpty() && conversationFingerprint(kept) == fingerprint)
+                    }
+                    finalNewLoadedIndex = keptIndex.takeIf { it >= 0 }
+                    if (keptIndex >= 0) deduped[keptIndex] = conversation
+                } else if (finalNewLoadedIndex != null && index < finalNewLoadedIndex) {
+                    finalNewLoadedIndex -= 1
+                }
+                removed++
+            }
+        }
+        if (removed > 0) {
+            Log.w(TAG_HM, "Global dedup removed $removed duplicate conversations (stableId/fingerprint-based)")
+            historyListModified = true
+        }
+        if (deduped != currentHistory) historicalConversations.value = deduped
+        val removedSessionIds = currentHistory.mapNotNull(::stableConversationId).toSet() -
+            deduped.mapNotNull(::stableConversationId).toSet()
  
         if (isStillSavingLiveConversation() && loadedHistoryIndex != finalNewLoadedIndex) {
             if (isImageGeneration) {
@@ -596,9 +616,16 @@ class HistoryManager(
             Log.d(TAG_HM, "LoadedHistoryIndex updated to: $finalNewLoadedIndex")
         }
  
-        if (needsPersistenceSaveOfHistoryList) {
-            persistenceManager.saveChatHistory(historicalConversations.value, isImageGeneration)
-
+        conversationToPersist?.let { conversation ->
+            val sessionId = stableConversationId(conversation)
+            if (sessionId != null) {
+                persistenceManager.saveHistorySession(sessionId, conversation, isImageGeneration)
+            }
+        }
+        removedSessionIds.forEach { sessionId ->
+            persistenceManager.deleteHistorySession(sessionId)
+        }
+        if (conversationToPersist != null) {
             if (isStillSavingLiveConversation()) {
                 if (isImageGeneration) {
                     stateHolder.isImageConversationDirty.value = false
@@ -606,7 +633,7 @@ class HistoryManager(
                     stateHolder.isTextConversationDirty.value = false
                 }
             }
-            Log.d(TAG_HM, "Chat history list persisted and dirty flag reset.")
+            Log.d(TAG_HM, "Dirty history session persisted and dirty flag reset.")
         }
 
         // 更新最近一次插入指纹/时间（仅当本次实际新增时）
@@ -645,14 +672,18 @@ class HistoryManager(
             // 文本模式：迁移会话生成参数（如果存在）
             if (!isImageGeneration) {
                 val currentConfigs = stateHolder.conversationGenerationConfigs.value
-                val currentConfigForSession = currentConfigs[migrationSourceId]
-                if (currentConfigForSession != null) {
-                    val newMap = currentConfigs.toMutableMap()
-                    newMap[stableId] = currentConfigForSession
-                    if (migrationSourceId != stableId) {
-                        newMap.remove(migrationSourceId)
+                val newMap = stateHolder.conversationGenerationConfigs.updateAndGet { current ->
+                    val currentConfigForSession = current[migrationSourceId]
+                    if (currentConfigForSession == null) {
+                        current
+                    } else {
+                        current.toMutableMap().apply {
+                            this[stableId] = currentConfigForSession
+                            if (migrationSourceId != stableId) remove(migrationSourceId)
+                        }
                     }
-                    stateHolder.conversationGenerationConfigs.value = newMap
+                }
+                if (newMap != currentConfigs) {
                     persistenceManager.saveConversationParameters(newMap)
                     Log.d(TAG_HM, "Migrated generation parameters from '$migrationSourceId' to stable key '$stableId'")
                 }
@@ -662,21 +693,39 @@ class HistoryManager(
             // 这确保即使用户只选择了模型但没有发送消息，配置ID映射也能被正确迁移
             val currentConfigIds = stateHolder.conversationApiConfigIds.value
             if (currentConfigIds.containsKey(migrationSourceId) && migrationSourceId != stableId) {
-                val newConfigIds = currentConfigIds.toMutableMap()
-                newConfigIds[stableId] = currentConfigIds[migrationSourceId]!!
-                newConfigIds.remove(migrationSourceId)
-                stateHolder.conversationApiConfigIds.value = newConfigIds
-                Log.d(TAG_HM, "Migrated config binding from '$migrationSourceId' to stable key '$stableId' (${if (isImageGeneration) "IMAGE" else "TEXT"} mode)")
+                val newConfigIds = stateHolder.conversationApiConfigIds.updateAndGet { current ->
+                    val configId = current[migrationSourceId]
+                    if (configId == null) {
+                        current
+                    } else {
+                        current.toMutableMap().apply {
+                            this[stableId] = configId
+                            remove(migrationSourceId)
+                        }
+                    }
+                }
+                if (newConfigIds != currentConfigIds) {
+                    Log.d(TAG_HM, "Migrated config binding from '$migrationSourceId' to stable key '$stableId' (${if (isImageGeneration) "IMAGE" else "TEXT"} mode)")
+                }
             }
 
             val currentToggleStates = stateHolder.conversationFunctionToggleStates.value
             if (currentToggleStates.containsKey(migrationSourceId) && migrationSourceId != stableId) {
-                val newToggleStates = currentToggleStates.toMutableMap()
-                newToggleStates[stableId] = currentToggleStates[migrationSourceId]!!
-                newToggleStates.remove(migrationSourceId)
-                stateHolder.conversationFunctionToggleStates.value = newToggleStates
-                persistenceManager.saveConversationFunctionToggleStates(newToggleStates)
-                Log.d(TAG_HM, "Migrated function toggles from '$migrationSourceId' to stable key '$stableId'")
+                val newToggleStates = stateHolder.conversationFunctionToggleStates.updateAndGet { current ->
+                    val toggleState = current[migrationSourceId]
+                    if (toggleState == null) {
+                        current
+                    } else {
+                        current.toMutableMap().apply {
+                            this[stableId] = toggleState
+                            remove(migrationSourceId)
+                        }
+                    }
+                }
+                if (newToggleStates != currentToggleStates) {
+                    persistenceManager.saveConversationFunctionToggleStates(newToggleStates)
+                    Log.d(TAG_HM, "Migrated function toggles from '$migrationSourceId' to stable key '$stableId'")
+                }
             }
 
             // 迁移系统提示及其相关状态
@@ -758,106 +807,80 @@ class HistoryManager(
     }
 
     suspend fun deleteConversation(indexToDelete: Int, isImageGeneration: Boolean = false) {
+        cancelDebouncedSave(isImageGeneration)
+        enqueueAndAwait(
+            HistoryCommand.Delete(
+                indexToDelete = indexToDelete,
+                isImageGeneration = isImageGeneration,
+                completion = CompletableDeferred(),
+            )
+        )
+    }
+
+    private suspend fun deleteConversationInternal(indexToDelete: Int, isImageGeneration: Boolean) {
         Log.d(TAG_HM, "Requesting to delete history index $indexToDelete.")
-        var successfullyDeleted = false
         val historicalConversations = if (isImageGeneration) stateHolder._imageGenerationHistoricalConversations else stateHolder._historicalConversations
         val loadedHistoryIndex = if (isImageGeneration) stateHolder._loadedImageGenerationHistoryIndex else stateHolder._loadedHistoryIndex
+        val currentHistory = historicalConversations.value
+        if (indexToDelete !in currentHistory.indices) {
+            Log.w(TAG_HM, "Invalid delete request: Index $indexToDelete out of bounds (size ${currentHistory.size}).")
+            return
+        }
+
         var finalLoadedIndexAfterDelete: Int? = loadedHistoryIndex.value
-        var conversationToDelete: List<Message>? = null
-
-        historicalConversations.update { currentHistory ->
-            if (indexToDelete >= 0 && indexToDelete < currentHistory.size) {
-                val mutableHistory = currentHistory.toMutableList()
-                conversationToDelete = mutableHistory[indexToDelete]
-                mutableHistory.removeAt(indexToDelete)
-                successfullyDeleted = true
-                Log.d(TAG_HM, "Removed conversation at index $indexToDelete from memory.")
-
-                val currentLoadedIdx = loadedHistoryIndex.value
-                if (currentLoadedIdx == indexToDelete) {
-                    finalLoadedIndexAfterDelete = null
-                    Log.d(TAG_HM, "Deleted currently loaded conversation. New loadedIndex is null.")
-                } else if (currentLoadedIdx != null && currentLoadedIdx > indexToDelete) {
-                    finalLoadedIndexAfterDelete = currentLoadedIdx - 1
-                    Log.d(
-                        TAG_HM,
-                        "Deleted conversation before current. New loadedIndex is $finalLoadedIndexAfterDelete."
-                    )
-                }
-                mutableHistory
-            } else {
-                Log.w(
-                    TAG_HM,
-                    "Invalid delete request: Index $indexToDelete out of bounds (size ${currentHistory.size})."
-                )
-                currentHistory
-            }
+        val conversationToDelete = currentHistory[indexToDelete]
+        val updatedHistory = currentHistory.toMutableList().apply { removeAt(indexToDelete) }
+        val currentLoadedIdx = loadedHistoryIndex.value
+        if (currentLoadedIdx == indexToDelete) {
+            finalLoadedIndexAfterDelete = null
+        } else if (currentLoadedIdx != null && currentLoadedIdx > indexToDelete) {
+            finalLoadedIndexAfterDelete = currentLoadedIdx - 1
         }
 
-        if (successfullyDeleted) {
-            conversationToDelete?.let { conversation ->
-                persistenceManager.deleteMediaFilesForMessages(listOf(conversation))
-            }
-            if (loadedHistoryIndex.value != finalLoadedIndexAfterDelete) {
-                loadedHistoryIndex.value = finalLoadedIndexAfterDelete
-                Log.d(
-                        TAG_HM,
-                        "Due to deletion, LoadedHistoryIndex updated to: $finalLoadedIndexAfterDelete"
-                )
-            }
+        stableConversationId(conversationToDelete)?.let { sessionId ->
+            persistenceManager.deleteHistorySession(sessionId)
+        }
+        historicalConversations.value = updatedHistory
+        if (loadedHistoryIndex.value != finalLoadedIndexAfterDelete) {
+            loadedHistoryIndex.value = finalLoadedIndexAfterDelete
+        }
+        Log.d(TAG_HM, "Removed conversation at index $indexToDelete from memory and persistence.")
+
+        runCatching {
+            val currentHistoryFinal = historicalConversations.value
+
             // 修复：删除历史项后，重建 systemPrompts 映射，并保证当前加载会话的会话ID稳定
-            runCatching {
-                val currentHistoryFinal = historicalConversations.value
-    
-                // 1) 重建 systemPrompts（避免需要重进页面才能恢复）
-                stateHolder.systemPrompts.clear()
-                currentHistoryFinal.forEach { conversation ->
-                    val stableIdForConv =
-                        conversation.firstOrNull { it.sender == Sender.User }?.id
-                            ?: conversation.firstOrNull { it.sender == Sender.System && !it.isPlaceholderName }?.id
-                            ?: conversation.firstOrNull()?.id
-                    val promptForConv =
-                        conversation.firstOrNull { it.sender == Sender.System && !it.isPlaceholderName }?.text ?: ""
-                    if (stableIdForConv != null) {
-                        stateHolder.systemPrompts[stableIdForConv] = promptForConv
+            stateHolder.systemPrompts.clear()
+            currentHistoryFinal.forEach { conversation ->
+                val stableIdForConv = stableConversationId(conversation)
+                val promptForConv =
+                    conversation.firstOrNull { it.sender == Sender.System && !it.isPlaceholderName }?.text ?: ""
+                if (stableIdForConv != null) {
+                    stateHolder.systemPrompts[stableIdForConv] = promptForConv
+                }
+            }
+
+            if (finalLoadedIndexAfterDelete != null && finalLoadedIndexAfterDelete in currentHistoryFinal.indices) {
+                stableConversationId(currentHistoryFinal[finalLoadedIndexAfterDelete])?.let { stableIdLoaded ->
+                    if (isImageGeneration) {
+                        stateHolder._currentImageGenerationConversationId.value = stableIdLoaded
+                    } else {
+                        stateHolder.setCurrentConversationId(stableIdLoaded)
                     }
                 }
-    
-                // 2) 若仍存在“已加载的会话”，将 currentConversationId（或图像模式的ID）同步到该会话的稳定键
-                if (finalLoadedIndexAfterDelete != null &&
-                    finalLoadedIndexAfterDelete >= 0 &&
-                    finalLoadedIndexAfterDelete < currentHistoryFinal.size
-                ) {
-                    val conv = currentHistoryFinal[finalLoadedIndexAfterDelete]
-                    val stableIdLoaded =
-                        conv.firstOrNull { it.sender == Sender.User }?.id
-                            ?: conv.firstOrNull { it.sender == Sender.System && !it.isPlaceholderName }?.id
-                            ?: conv.firstOrNull()?.id
-    
-                    if (stableIdLoaded != null) {
-                        if (isImageGeneration) {
-                            stateHolder._currentImageGenerationConversationId.value = stableIdLoaded
-                        } else {
-                            stateHolder.setCurrentConversationId(stableIdLoaded)
-                        }
-                    }
-                }
-            }.onFailure { e ->
-                Log.w(TAG_HM, "Failed to rebuild prompts or adjust conversationId after deletion", e)
             }
-            persistenceManager.saveChatHistory(historicalConversations.value, isImageGeneration)
-            if (finalLoadedIndexAfterDelete == null) {
-                persistenceManager.clearLastOpenChat(isImageGeneration)
-            }
-            // 增强：单条删除后也做一次孤立/缓存清理，确保预览/分享缓存与Coil缓存及时释放
-            try {
-                persistenceManager.cleanupOrphanedAttachments()
-            } catch (e: Exception) {
-                Log.w(TAG_HM, "cleanupOrphanedAttachments after delete failed", e)
-            }
-            Log.d(TAG_HM, "Chat history list persisted after deletion. \"Last open chat\" cleared.")
-            onHistoryModified()
+        }.onFailure { exception ->
+            Log.w(TAG_HM, "Failed to rebuild prompts or adjust conversationId after deletion", exception)
         }
+        if (finalLoadedIndexAfterDelete == null) {
+            persistenceManager.clearLastOpenChat(isImageGeneration)
+        }
+        stableConversationId(conversationToDelete)?.let { deletedId ->
+            pruneOrphanConversationStateMappings(setOf(deletedId))
+            persistConversationApiConfigIdsIfChanged()
+        }
+        persistenceManager.cleanupOrphanedAttachments()
+        onHistoryModified()
     }
 
     /**
@@ -865,6 +888,16 @@ class HistoryManager(
      * 用于重命名等场景，确保包含标题消息的完整会话被保存。
      */
     suspend fun persistHistoryListDirectly(isImageGeneration: Boolean = false) {
+        cancelDebouncedSave(isImageGeneration)
+        enqueueAndAwait(
+            HistoryCommand.PersistDirect(
+                isImageGeneration = isImageGeneration,
+                completion = CompletableDeferred(),
+            )
+        )
+    }
+
+    private suspend fun persistHistoryListDirectlyInternal(isImageGeneration: Boolean) {
         val historicalConversations = if (isImageGeneration) {
             stateHolder._imageGenerationHistoricalConversations.value
         } else {
@@ -877,12 +910,22 @@ class HistoryManager(
     }
 
     suspend fun clearAllHistory(isImageGeneration: Boolean = false) {
+        cancelDebouncedSave(isImageGeneration)
+        enqueueAndAwait(
+            HistoryCommand.Clear(
+                isImageGeneration = isImageGeneration,
+                completion = CompletableDeferred(),
+            )
+        )
+    }
+
+    private suspend fun clearAllHistoryInternal(isImageGeneration: Boolean) {
         Log.d(TAG_HM, "Requesting to clear all history.")
         val historyToClear = if (isImageGeneration) stateHolder._imageGenerationHistoricalConversations.value else stateHolder._historicalConversations.value
+        val clearedSessionIds = historyToClear.mapNotNull(::stableConversationId).toSet()
         val loadedHistoryIndex = if (isImageGeneration) stateHolder._loadedImageGenerationHistoryIndex else stateHolder._loadedHistoryIndex
         if (historyToClear.isNotEmpty() || loadedHistoryIndex.value != null) {
-            persistenceManager.deleteMediaFilesForMessages(historyToClear)
-
+            persistenceManager.clearHistoryExplicitly(isImageGeneration)
             if (isImageGeneration) {
                 stateHolder._imageGenerationHistoricalConversations.value = emptyList()
                 loadedHistoryIndex.value = null
@@ -891,16 +934,15 @@ class HistoryManager(
                 loadedHistoryIndex.value = null
             }
             Log.d(TAG_HM, "In-memory history cleared, loadedHistoryIndex reset to null.")
-
-            persistenceManager.clearHistoryExplicitly(isImageGeneration)
-            
-            // 清理所有孤立文件
-            persistenceManager.cleanupOrphanedAttachments()
-            
+            persistenceManager.cleanupOrphanedAttachments(vacuumDatabase = true)
             Log.d(TAG_HM, "Persisted history list cleared. \"Last open chat\" cleared.")
         } else {
             persistenceManager.clearHistoryExplicitly(isImageGeneration)
             Log.d(TAG_HM, "没有可见历史，已按用户操作清除受保护的持久化历史。")
+        }
+        if (clearedSessionIds.isNotEmpty()) {
+            pruneOrphanConversationStateMappings(clearedSessionIds)
+            persistConversationApiConfigIdsIfChanged()
         }
     }
 }

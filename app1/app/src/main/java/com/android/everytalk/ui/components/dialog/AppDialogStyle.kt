@@ -1,6 +1,5 @@
 package com.android.everytalk.ui.components.dialog
 
-import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -33,9 +32,6 @@ fun appDialogSubtextColor(alpha: Float = 0.7f): Color = appDialogContentColor().
 
 @Composable
 fun appDialogCancelColor(): Color = if (isSystemInDarkTheme()) Color(0xFFFF5252) else Color(0xFFD32F2F)
-
-@Composable
-fun appDialogBorderStroke(): BorderStroke = BorderStroke(1.dp, appDialogBorderColor())
 
 @Composable
 fun appDialogTextFieldColors() = OutlinedTextFieldDefaults.colors(

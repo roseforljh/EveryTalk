@@ -91,7 +91,8 @@ class ChatScreenImagePreviewSelectionTest {
     }
 
     @Test
-    fun `点击本地生成图时不复制位图附件的 Base64 到候选集合`() {
+    fun `位图附件优先使用持久化路径加入候选集合`() {
+        val bitmapPath = "/data/user/0/com.android.everytalk/files/chat_attachments/reference.png"
         val generatedImage = "/data/user/0/com.android.everytalk/files/chat_attachments/generated.png"
         val messages = listOf(
             Message(
@@ -102,6 +103,7 @@ class ChatScreenImagePreviewSelectionTest {
                     SelectedMediaItem.ImageFromBitmap(
                         bitmapData = "A".repeat(1024 * 1024),
                         id = "bitmap",
+                        filePath = bitmapPath,
                     )
                 ),
             ),
@@ -115,7 +117,25 @@ class ChatScreenImagePreviewSelectionTest {
 
         val selection = buildImagePreviewSelection(generatedImage, messages)
 
-        assertEquals(listOf(generatedImage), selection.candidates)
-        assertEquals(0, selection.initialIndex)
+        assertEquals(listOf(bitmapPath, generatedImage), selection.candidates)
+        assertEquals(1, selection.initialIndex)
+    }
+
+    @Test
+    fun `位图展示源优先使用文件路径并回退到 data URI`() {
+        val persisted = SelectedMediaItem.ImageFromBitmap(
+            bitmapData = "QUJD",
+            id = "persisted",
+            mimeType = "image/png",
+            filePath = "/data/user/0/com.android.everytalk/files/reference.png",
+        )
+        val inMemory = SelectedMediaItem.ImageFromBitmap(
+            bitmapData = "REVG",
+            id = "memory",
+            mimeType = "image/jpeg",
+        )
+
+        assertEquals("/data/user/0/com.android.everytalk/files/reference.png", persisted.model)
+        assertEquals("data:image/jpeg;base64,REVG", inMemory.model)
     }
 }

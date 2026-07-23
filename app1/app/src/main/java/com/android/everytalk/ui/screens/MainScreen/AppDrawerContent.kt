@@ -33,7 +33,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
@@ -94,7 +95,6 @@ fun AppDrawerContent(
     getFullTextForIndex: (Int) -> String,
     onAboutClick: () -> Unit,
     onImageGenerationClick: () -> Unit,
-    isLoadingHistoryData: Boolean = false, // 新增：历史数据加载状态
     isImageGenerationMode: Boolean,
     expandedItemIndex: Int?, // 新增：展开项状态
     onExpandItem: (index: Int?) -> Unit, // 新增：展开项回调
@@ -107,8 +107,9 @@ fun AppDrawerContent(
     onMoveConversationToGroup: (Int, String?, Boolean) -> Unit,
     expandedGroups: Set<String>,
     onToggleGroup: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    isLoadingHistoryData: Boolean = false, // 新增：历史数据加载状态
     onShareConversation: (Int) -> Unit = {}, // 新增：分享会话回调
-    modifier: Modifier = Modifier
 ) {
     val selectedSet = remember { mutableStateListOf<Int>() }
     var showDeleteConfirm by remember { mutableStateOf(false) }
@@ -128,8 +129,7 @@ fun AppDrawerContent(
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
-    val configuration = LocalConfiguration.current
-    val screenWidth = configuration.screenWidthDp.dp
+    val screenWidth = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.width.toDp() }
 
     LaunchedEffect(loadedHistoryIndex) {
         if (loadedHistoryIndex == null) {
@@ -234,13 +234,9 @@ fun AppDrawerContent(
                 getPreviewForIndex = getPreviewForIndex,
                 onConversationClick = { index ->
                     selectedSet.clear()
-                    // 🐛 [DEBUG] 诊断日志：历史项点击 - 直接使用isImageGenerationMode,不缓存
-                    android.util.Log.d("AppDrawerContent", "🐛 [HISTORY_CLICK] index=$index, isImageMode=$isImageGenerationMode, loadedHistoryIndex=$loadedHistoryIndex")
                     if (isImageGenerationMode) {
-                        android.util.Log.d("AppDrawerContent", "🐛 [HISTORY_CLICK] Calling onImageGenerationConversationClick($index)")
                         onImageGenerationConversationClick(index)
                     } else {
-                        android.util.Log.d("AppDrawerContent", "🐛 [HISTORY_CLICK] Calling onConversationClick($index)")
                         onConversationClick(index)
                     }
                 },
@@ -278,7 +274,6 @@ fun AppDrawerContent(
                 onShareClick = { index ->
                     onShareConversation(index)
                 },
-                isImageGenerationMode = isImageGenerationMode
             )
         }
     }
@@ -686,7 +681,7 @@ fun AppDrawerContent(
                             if (isExpanded && groupItems.isNotEmpty()) {
                                 items(
                                     items = groupItems,
-                                    key = { itemData -> "custom_${itemData.originalIndex}_${itemData.stableId}_${isImageGenerationMode}" }
+                                    key = { itemData -> "custom_${itemData.stableId}_${isImageGenerationMode}" }
                                 ) { itemData ->
                                     androidx.compose.animation.AnimatedVisibility(
                                         visible = !deletingItems.contains(itemData.stableId),
@@ -799,7 +794,7 @@ fun AppDrawerContent(
                                 if (expandedGroups.contains("pinned")) {
                                     items(
                                         items = processedItems.pinned,
-                                        key = { itemData -> "pinned_${itemData.originalIndex}_${itemData.stableId}_${isImageGenerationMode}" }
+                                        key = { itemData -> "pinned_${itemData.stableId}_${isImageGenerationMode}" }
                                     ) { itemData ->
                                         androidx.compose.animation.AnimatedVisibility(
                                             visible = !deletingItems.contains(itemData.stableId),
@@ -817,7 +812,7 @@ fun AppDrawerContent(
                             if (processedItems.ungrouped.isNotEmpty()) {
                                 items(
                                     items = processedItems.ungrouped,
-                                    key = { item -> "ungrouped_${item.originalIndex}_${item.stableId}_${isImageGenerationMode}" }
+                                    key = { item -> "ungrouped_${item.stableId}_${isImageGenerationMode}" }
                                 ) { itemData ->
                                     androidx.compose.animation.AnimatedVisibility(
                                         visible = !deletingItems.contains(itemData.stableId),
@@ -1052,10 +1047,10 @@ fun CollapsibleGroupHeader(
     groupName: String,
     isExpanded: Boolean,
     onToggleExpand: () -> Unit,
+    modifier: Modifier = Modifier,
     onRename: ((String) -> Unit)? = null,
     onDelete: (() -> Unit)? = null,
-    isPinnedGroup: Boolean = false,
-    modifier: Modifier = Modifier
+    isPinnedGroup: Boolean = false
 ) {
     var showRenameDialog by remember { mutableStateOf(false) }
     var newName by remember { mutableStateOf(groupName) }

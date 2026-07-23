@@ -1,43 +1,17 @@
 package com.android.everytalk.statecontroller.mcp.dispatch
 
-data class McpDispatchPlan(
-    val intent: McpDispatchIntent,
-    val exposedTools: List<McpToolCandidate>,
-    val hiddenToolsCount: Int,
-    val budget: McpToolBudget,
-)
-
 fun selectMcpCandidates(
-    intent: McpDispatchIntent,
+    intent: QueryIntent,
     candidates: List<McpToolCandidate>,
-    strategy: McpDispatchStrategy,
-): McpDispatchPlan {
-    if (!intent.shouldPreferMcp) {
-        return McpDispatchPlan(
-            intent = intent,
-            exposedTools = emptyList(),
-            hiddenToolsCount = candidates.size,
-            budget = strategy.budget,
-        )
+): List<McpToolCandidate> {
+    val enabledCandidates = candidates.filter { it.enabled }.distinctBy { it.toolName }
+    val preferredCategories = when (intent) {
+        QueryIntent.DOCS_LOOKUP -> setOf(McpToolCategory.DOCS, McpToolCategory.SEARCH)
+        QueryIntent.REALTIME_INFO -> setOf(McpToolCategory.SEARCH, McpToolCategory.BROWSER)
+        QueryIntent.WEB_CONTENT_READ -> setOf(McpToolCategory.BROWSER)
+        QueryIntent.LOCAL_REASONING -> emptySet()
     }
-
-    val filtered = when (intent.primaryIntent) {
-        QueryIntent.DOCS_LOOKUP -> candidates.filter {
-            it.category == McpToolCategory.DOCS || it.category == McpToolCategory.SEARCH
-        }
-        QueryIntent.REALTIME_INFO -> candidates.filter {
-            it.category == McpToolCategory.SEARCH || it.category == McpToolCategory.BROWSER
-        }
-        QueryIntent.WEB_CONTENT_READ -> candidates.filter {
-            it.category == McpToolCategory.BROWSER
-        }
-        else -> candidates
-    }.sortedByDescending { it.reliabilityScore }
-
-    return McpDispatchPlan(
-        intent = intent,
-        exposedTools = filtered,
-        hiddenToolsCount = (candidates.size - filtered.size).coerceAtLeast(0),
-        budget = strategy.budget,
-    )
+    if (preferredCategories.isEmpty()) return enabledCandidates
+    val (preferred, remaining) = enabledCandidates.partition { it.category in preferredCategories }
+    return preferred + remaining
 }

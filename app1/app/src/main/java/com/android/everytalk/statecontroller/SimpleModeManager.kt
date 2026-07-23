@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 /**
@@ -168,6 +169,8 @@ class SimpleModeManager(
                     // 不改变意图模式，仅填充内容
                     loadTextHistory(0)
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.w(TAG, "Auto-load first TEXT history failed: ${e.message}")
             }
@@ -263,6 +266,8 @@ class SimpleModeManager(
                     // 不改变意图模式，仅填充内容
                     loadImageHistory(0)
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.w(TAG, "Auto-load first IMAGE history failed: ${e.message}")
             }
@@ -467,7 +472,7 @@ class SimpleModeManager(
                 if (hasImages && msg.text.isBlank() && msg.parts.isNotEmpty()) {
                     val rebuiltText = msg.parts.toRecoveredMarkdown()
                     if (rebuiltText.isNotBlank()) {
-                        android.util.Log.d(TAG, "Rebuilt text for image msg ${msg.id}, images=${msg.imageUrls?.size ?: 0}")
+                        android.util.Log.d(TAG, "Rebuilt text for image msg ${msg.id}, images=${msg.imageUrls.size}")
                         msg.copy(text = rebuiltText, contentStarted = updatedContentStarted)
                     } else {
                         msg.copy(contentStarted = updatedContentStarted)
@@ -549,15 +554,9 @@ class SimpleModeManager(
         _lastModeSwitch = System.currentTimeMillis()
         
         if (showToast && previousMode != mode && mode != ModeType.NONE) {
-            val message = when (mode) {
-                ModeType.TEXT -> "已切换到文本模式"
-                ModeType.IMAGE -> "已切换到图像模式"
-                else -> null
-            }
-            if (message != null) {
-                scope.launch {
-                    _modeSwitchMessage.emit(message)
-                }
+            val message = if (mode == ModeType.TEXT) "已切换到文本模式" else "已切换到图像模式"
+            scope.launch {
+                _modeSwitchMessage.emit(message)
             }
         }
     }

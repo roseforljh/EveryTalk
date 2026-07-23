@@ -10,7 +10,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import android.graphics.Bitmap
-import android.net.Uri
 import coil3.compose.AsyncImage
 import coil3.compose.AsyncImagePainter
 import coil3.request.ImageRequest
@@ -18,19 +17,55 @@ import coil3.request.crossfade
 import com.android.everytalk.util.AppLogger
 import com.android.everytalk.util.image.ImageScaleCalculator
 import com.android.everytalk.util.image.ImageScaleConfig
-import java.util.concurrent.ConcurrentHashMap
+import java.util.LinkedHashMap
+
+private const val IMAGE_SIZE_CACHE_MAX_ENTRIES = 64
+private const val MAX_IMAGE_SIZE_CACHE_KEY_CHARS = 4_096
+
+internal fun proportionalImageCacheKey(model: Any?): String? {
+    val value = model?.toString() ?: return null
+    return if (value.startsWith("data:", ignoreCase = true) || value.length > MAX_IMAGE_SIZE_CACHE_KEY_CHARS) {
+        // 组合阶段避免扫描或持有大字符串；同一模型实例仍可稳定命中缓存。
+        "opaque:${value.length}:${System.identityHashCode(value)}"
+    } else {
+        value
+    }
+}
+
+internal class ImageSizeLruCache(
+    private val maxEntries: Int = IMAGE_SIZE_CACHE_MAX_ENTRIES,
+) {
+    init {
+        require(maxEntries > 0) { "缓存容量必须大于 0" }
+    }
+
+    private val entries = object : LinkedHashMap<String, Pair<Int, Int>>(maxEntries, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Pair<Int, Int>>?): Boolean {
+            return size > maxEntries
+        }
+    }
+
+    @Synchronized
+    fun get(key: String?): Pair<Int, Int>? = key?.let(entries::get)
+
+    @Synchronized
+    fun put(key: String?, width: Int, height: Int) {
+        if (key == null || width <= 0 || height <= 0) return
+        entries[key] = width to height
+    }
+
+    @Synchronized
+    internal fun size(): Int = entries.size
+}
 
 /**
- * 轻量级全局尺寸缓存：避免滑出视口后重建导致的布局跳动
- * key 使用图片模型 toString()（对 URL/data:URI 均有效）
+ * 轻量级全局尺寸缓存：避免滑出视口后重建导致的布局跳动。
+ * data URI 只保留长度与哈希，避免缓存永久持有完整图片正文。
  */
 private object ImageSizeCache {
-    private val map = ConcurrentHashMap<String, Pair<Int, Int>>() // width to height
-    fun get(key: String?): Pair<Int, Int>? = key?.let { map[it] }
-    fun put(key: String?, w: Int, h: Int) {
-        if (key == null || w <= 0 || h <= 0) return
-        map[key] = w to h
-    }
+    private val cache = ImageSizeLruCache()
+    fun get(key: String?): Pair<Int, Int>? = cache.get(key)
+    fun put(key: String?, width: Int, height: Int) = cache.put(key, width, height)
 }
 
 /**
@@ -53,119 +88,25 @@ fun ProportionalAsyncImage(
     val context = LocalContext.current
     val density = LocalDensity.current
     val logger = remember { AppLogger.forComponent("ProportionalAsyncImage") }
-    
-    val cacheKey = remember(model) { model?.toString() }
-    val initialSize: Pair<Int, Int>? = remember(cacheKey) {
+
+    val cacheKey = remember(model) { proportionalImageCacheKey(model) }
+    val initialSize: Pair<Int, Int>? = remember(model, cacheKey, preserveAspectRatio) {
         if (!preserveAspectRatio) {
             null
         } else {
-            ImageSizeCache.get(cacheKey) ?: run {
-                when (model) {
-                    is Bitmap -> {
-                        val w = model.width
-                        val h = model.height
-                        if (w > 0 && h > 0) {
-                            ImageSizeCache.put(cacheKey, w, h)
-                            w to h
-                        } else {
-                            null
-                        }
-                    }
-                    is Uri -> {
-                        val scheme = model.scheme?.lowercase()
-                        if (scheme == "content" || scheme == "file" || scheme.isNullOrEmpty()) {
-                            try {
-                                val options = android.graphics.BitmapFactory.Options().apply {
-                                    inJustDecodeBounds = true
-                                }
-                                if (scheme == "content") {
-                                    context.contentResolver.openInputStream(model)?.use {
-                                        android.graphics.BitmapFactory.decodeStream(it, null, options)
-                                    }
-                                } else {
-                                    val path = model.path ?: model.toString()
-                                    android.graphics.BitmapFactory.decodeFile(path, options)
-                                }
-                                val w = options.outWidth
-                                val h = options.outHeight
-                                if (w > 0 && h > 0) {
-                                    ImageSizeCache.put(cacheKey, w, h)
-                                    w to h
-                                } else {
-                                    null
-                                }
-                            } catch (_: Exception) {
-                                null
-                            }
-                        } else {
-                            null
-                        }
-                    }
-                    is String -> {
-                        val s = model
-                        if (s.startsWith("data:", ignoreCase = true)) {
-                            val commaIndex = s.indexOf(',')
-                            if (commaIndex != -1) {
-                                val dataPart = s.substring(commaIndex + 1)
-                                val isBase64 = s.substring(0, commaIndex).contains(";base64", ignoreCase = true)
-                                if (isBase64 && dataPart.length < 2_000_000) {
-                                    try {
-                                        val bytes = android.util.Base64.decode(dataPart, android.util.Base64.DEFAULT)
-                                        val options = android.graphics.BitmapFactory.Options().apply {
-                                            inJustDecodeBounds = true
-                                        }
-                                        android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
-                                        val w = options.outWidth
-                                        val h = options.outHeight
-                                        if (w > 0 && h > 0) {
-                                            ImageSizeCache.put(cacheKey, w, h)
-                                            w to h
-                                        } else {
-                                            null
-                                        }
-                                    } catch (_: Exception) {
-                                        null
-                                    }
-                                } else {
-                                    null
-                                }
-                            } else {
-                                null
-                            }
-                        } else if (s.startsWith("file://", ignoreCase = true) || s.startsWith("/")) {
-                            try {
-                                val path = if (s.startsWith("file://", ignoreCase = true)) {
-                                    android.net.Uri.parse(s).path ?: s.removePrefix("file://")
-                                } else {
-                                    s
-                                }
-                                val options = android.graphics.BitmapFactory.Options().apply {
-                                    inJustDecodeBounds = true
-                                }
-                                android.graphics.BitmapFactory.decodeFile(path, options)
-                                val w = options.outWidth
-                                val h = options.outHeight
-                                if (w > 0 && h > 0) {
-                                    ImageSizeCache.put(cacheKey, w, h)
-                                    w to h
-                                } else {
-                                    null
-                                }
-                            } catch (_: Exception) {
-                                null
-                            }
-                        } else {
-                            null
-                        }
-                    }
-                    else -> null
+            ImageSizeCache.get(cacheKey) ?: (model as? Bitmap)?.let { bitmap ->
+                if (!bitmap.isRecycled && bitmap.width > 0 && bitmap.height > 0) {
+                    bitmap.width to bitmap.height
+                } else {
+                    null
                 }
             }
         }
     }
 
-    val initialModifier = if (preserveAspectRatio && initialSize != null) {
-        val (cw, ch) = initialSize
+    var imageSize by remember(model, cacheKey, preserveAspectRatio) { mutableStateOf(initialSize) }
+    val calculatedModifier = if (preserveAspectRatio && imageSize != null) {
+        val (cw, ch) = requireNotNull(imageSize)
         val aspect = cw.toFloat() / ch.toFloat()
         val targetWidthDp = with(density) { cw.toDp() }
         modifier
@@ -175,27 +116,28 @@ fun ProportionalAsyncImage(
         modifier
     }
 
-    var calculatedModifier by remember { mutableStateOf(initialModifier) }
-    var hasCalculatedSize by remember { mutableStateOf(initialSize != null) }
+    val imageRequest = remember(context, model) {
+        ImageRequest.Builder(context)
+            .data(model)
+            .crossfade(true)
+            .build()
+    }
 
     AsyncImage(
-        model = ImageRequest.Builder(context)
-            .data(model)
-            .crossfade(true) // 短暂淡入，避免突兀
-            .build(),
+        model = imageRequest,
         contentDescription = contentDescription,
         onSuccess = { state ->
             try {
-                // 修复：正确获取drawable信息
                 val painter = state.painter
                 val originalWidth = painter.intrinsicSize.width.toInt()
                 val originalHeight = painter.intrinsicSize.height.toInt()
-                
-                if (originalWidth > 0 && originalHeight > 0 && preserveAspectRatio && !hasCalculatedSize) {
-                    // 转换为像素进行计算
+
+                if (originalWidth > 0 && originalHeight > 0 && preserveAspectRatio) {
+                    val wasUnknown = imageSize == null
+                    imageSize = originalWidth to originalHeight
+                    ImageSizeCache.put(cacheKey, originalWidth, originalHeight)
+
                     val maxWidthPx = with(density) { maxWidth.toPx().toInt() }
-                    
-                    // 计算等比缩放尺寸
                     val (targetWidth, targetHeight) = ImageScaleCalculator.calculateProportionalScale(
                         originalWidth,
                         originalHeight,
@@ -205,24 +147,13 @@ fun ProportionalAsyncImage(
                             allowUpscale = false
                         )
                     )
-                    
-                    // 转换回Dp
-                    val targetWidthDp = with(density) { targetWidth.toDp() }
-                    val aspectRatio = originalWidth.toFloat() / originalHeight.toFloat()
-                    
-                    // 更新显示修饰符
-                    calculatedModifier = modifier
-                        .width(minOf(targetWidthDp, maxWidth))
-                        .aspectRatio(aspectRatio)
-                    
-                    hasCalculatedSize = true
-                    // 写入全局尺寸缓存（下次直接占位）
-                    ImageSizeCache.put(cacheKey, originalWidth, originalHeight)
-                    
-                    logger.debug("Image scaled from ${originalWidth}x${originalHeight} to ${targetWidth}x${targetHeight} (AI: $isAiGenerated)")
-                    onImageSizeCalculated?.invoke(targetWidth, targetHeight)
+
+                    if (wasUnknown) {
+                        logger.debug("Image scaled from ${originalWidth}x${originalHeight} to ${targetWidth}x${targetHeight} (AI: $isAiGenerated)")
+                        onImageSizeCalculated?.invoke(targetWidth, targetHeight)
+                    }
                 }
-                
+
                 onSuccess?.invoke(state)
             } catch (e: Exception) {
                 logger.error("Error calculating proportional image size", e)

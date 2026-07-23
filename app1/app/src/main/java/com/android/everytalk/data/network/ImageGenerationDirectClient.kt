@@ -13,6 +13,7 @@ import io.ktor.client.request.*
 import io.ktor.client.request.forms.*
 import io.ktor.client.statement.*
 import io.ktor.http.*
+import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.json.*
 import kotlin.random.Random
 
@@ -22,6 +23,10 @@ import kotlin.random.Random
  */
 object ImageGenerationDirectClient {
     private const val TAG = "ImageGenDirectClient"
+    internal const val MAX_GENERATED_IMAGE_BYTES = 32L * 1024L * 1024L
+    private const val MAX_REFERENCE_IMAGE_BYTES = 16L * 1024L * 1024L
+    private const val MAX_INLINE_IMAGE_JSON_BYTES = 64L * 1024L * 1024L
+    private const val MAX_IMAGE_URL_JSON_BYTES = 2L * 1024L * 1024L
     
     /**
      * 直连 Gemini 图像生成 API
@@ -50,18 +55,18 @@ object ImageGenerationDirectClient {
         
         val payload = buildGeminiImagePayload(request)
         
-        val response = client.post(url) {
+        return client.preparePost(url) {
             contentType(ContentType.Application.Json)
             setBody(payload)
+        }.execute { response ->
+            if (!response.status.isSuccess()) {
+                val errorBody = response.readErrorTextAtMost() ?: "(no body)"
+                Log.e(TAG, "Gemini 图像生成错误 ${response.status}: bodyChars=${errorBody.length}")
+                throw Exception("Gemini 图像生成错误 ${response.status}: $errorBody")
+            }
+
+            parseGeminiImageResponse(response.readTextAtMost(MAX_INLINE_IMAGE_JSON_BYTES))
         }
-        
-        if (!response.status.isSuccess()) {
-            val errorBody = try { response.bodyAsText() } catch (_: Exception) { "(no body)" }
-            Log.e(TAG, "Gemini 图像生成错误 ${response.status}: $errorBody")
-            throw Exception("Gemini 图像生成错误 ${response.status}: $errorBody")
-        }
-        
-        return parseGeminiImageResponse(response.bodyAsText())
     }
     
     /**
@@ -89,19 +94,19 @@ object ImageGenerationDirectClient {
         
         val payload = buildOpenAIImagePayload(request)
         
-        val response = client.post(url) {
+        return client.preparePost(url) {
             contentType(ContentType.Application.Json)
             header(HttpHeaders.Authorization, "Bearer ${request.apiKey}")
             setBody(payload)
+        }.execute { response ->
+            if (!response.status.isSuccess()) {
+                val errorBody = response.readErrorTextAtMost() ?: "(no body)"
+                Log.e(TAG, "OpenAI 图像生成错误 ${response.status}: bodyChars=${errorBody.length}")
+                throw Exception("OpenAI 图像生成错误 ${response.status}: $errorBody")
+            }
+
+            parseOpenAIImageResponse(response.readTextAtMost(MAX_INLINE_IMAGE_JSON_BYTES))
         }
-        
-        if (!response.status.isSuccess()) {
-            val errorBody = try { response.bodyAsText() } catch (_: Exception) { "(no body)" }
-            Log.e(TAG, "OpenAI 图像生成错误 ${response.status}: $errorBody")
-            throw Exception("OpenAI 图像生成错误 ${response.status}: $errorBody")
-        }
-        
-        return parseOpenAIImageResponse(response.bodyAsText())
     }
 
     /**
@@ -132,7 +137,7 @@ object ImageGenerationDirectClient {
 
         Log.d(TAG, "直连 URL: $url")
 
-        val response = client.post(url) {
+        return client.preparePost(url) {
             header(HttpHeaders.Authorization, "Bearer ${request.apiKey}")
             setBody(MultiPartFormDataContent(formData {
                 append("model", request.model)
@@ -141,6 +146,7 @@ object ImageGenerationDirectClient {
                 request.batchSize?.let { append("n", it.toString()) }
                 request.quality?.takeIf { it.isNotBlank() }?.let { append("quality", it) }
                 inputImages.forEachIndexed { index, (base64, mimeType) ->
+                    ensureGeneratedImageBase64WithinLimit(base64, maxBytes = MAX_REFERENCE_IMAGE_BYTES)
                     val bytes = Base64.decode(base64, Base64.DEFAULT)
                     append(
                         key = "image[]",
@@ -152,15 +158,15 @@ object ImageGenerationDirectClient {
                     )
                 }
             }))
-        }
+        }.execute { response ->
+            if (!response.status.isSuccess()) {
+                val errorBody = response.readErrorTextAtMost() ?: "(no body)"
+                Log.e(TAG, "OpenAI 图像编辑错误 ${response.status}: bodyChars=${errorBody.length}")
+                throw Exception("OpenAI 图像编辑错误 ${response.status}: $errorBody")
+            }
 
-        if (!response.status.isSuccess()) {
-            val errorBody = try { response.bodyAsText() } catch (_: Exception) { "(no body)" }
-            Log.e(TAG, "OpenAI 图像编辑错误 ${response.status}: $errorBody")
-            throw Exception("OpenAI 图像编辑错误 ${response.status}: $errorBody")
+            parseOpenAIImageResponse(response.readTextAtMost(MAX_INLINE_IMAGE_JSON_BYTES))
         }
-
-        return parseOpenAIImageResponse(response.bodyAsText())
     }
 
     /**
@@ -187,20 +193,20 @@ object ImageGenerationDirectClient {
         
         val payload = buildSeedreamPayload(request)
         
-        val response = client.post(baseUrl) {
+        return client.preparePost(baseUrl) {
             contentType(ContentType.Application.Json)
             header(HttpHeaders.Authorization, "Bearer ${request.apiKey}")
             setBody(payload)
+        }.execute { response ->
+            if (!response.status.isSuccess()) {
+                val errorBody = response.readErrorTextAtMost() ?: "(no body)"
+                Log.e(TAG, "Seedream 图像生成错误 ${response.status}: bodyChars=${errorBody.length}")
+                throw Exception("Seedream 图像生成错误 ${response.status}: $errorBody")
+            }
+
+            // Seedream 返回格式兼容 OpenAI (data[].url)
+            parseOpenAIImageResponse(response.readTextAtMost(MAX_IMAGE_URL_JSON_BYTES))
         }
-        
-        if (!response.status.isSuccess()) {
-            val errorBody = try { response.bodyAsText() } catch (_: Exception) { "(no body)" }
-            Log.e(TAG, "Seedream 图像生成错误 ${response.status}: $errorBody")
-            throw Exception("Seedream 图像生成错误 ${response.status}: $errorBody")
-        }
-        
-        // Seedream 返回格式兼容 OpenAI (data[].url)
-        return parseOpenAIImageResponse(response.bodyAsText())
     }
 
     /**
@@ -316,7 +322,7 @@ object ImageGenerationDirectClient {
                 Log.i(TAG, "尝试 Modal URL ${idx + 1}/${modalUrls.size}: $modalUrl")
                 Log.d(TAG, "请求参数: prompt='${prompt.take(50)}...', width=$width, height=$height, steps=$steps")
                 
-                val response = client.get(modalUrl) {
+                val generated = client.prepareGet(modalUrl) {
                     parameter("prompt", prompt)
                     parameter("width", width)
                     parameter("height", height)
@@ -326,37 +332,40 @@ object ImageGenerationDirectClient {
                         connectTimeoutMillis = 60_000
                         socketTimeoutMillis = 1800_000
                     }
+                }.execute { response ->
+                    if (!response.status.isSuccess()) {
+                        val errorText = response.readErrorTextAtMost()?.take(500) ?: "(empty)"
+                        Log.w(TAG, "Modal URL ${idx + 1} 返回 ${response.status}: $errorText")
+                        lastError = Exception("HTTP ${response.status}: $errorText")
+                        return@execute null
+                    }
+
+                    // 获取 JPEG 字节流
+                    val jpegBytes = response.readBytesAtMost(MAX_GENERATED_IMAGE_BYTES)
+                    if (jpegBytes.isEmpty()) {
+                        Log.w(TAG, "Modal URL ${idx + 1} 返回空内容")
+                        lastError = Exception("Empty response body")
+                        return@execute null
+                    }
+
+                    // 转为 Data URI
+                    val b64Str = Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
+                    val dataUri = "data:image/jpeg;base64,$b64Str"
+
+                    val elapsedMs = System.currentTimeMillis() - startTime
+                    Log.i(TAG, "✓ Modal 图像生成成功，大小=${jpegBytes.size} bytes，耗时=${elapsedMs}ms")
+
+                    ImageGenerationResponse(
+                        images = listOf(ImageUrl(url = dataUri)),
+                        text = prompt,
+                        timings = Timings(inference = elapsedMs.toInt()),
+                        seed = Random.nextInt()
+                    )
                 }
+                if (generated != null) return generated
                 
-                if (!response.status.isSuccess()) {
-                    val errorText = try { response.bodyAsText().take(500) } catch (_: Exception) { "(empty)" }
-                    Log.w(TAG, "Modal URL ${idx + 1} 返回 ${response.status}: $errorText")
-                    lastError = Exception("HTTP ${response.status}: $errorText")
-                    continue
-                }
-                
-                // 获取 JPEG 字节流
-                val jpegBytes = response.readRawBytes()
-                if (jpegBytes.isEmpty()) {
-                    Log.w(TAG, "Modal URL ${idx + 1} 返回空内容")
-                    lastError = Exception("Empty response body")
-                    continue
-                }
-                
-                // 转为 Data URI
-                val b64Str = Base64.encodeToString(jpegBytes, Base64.NO_WRAP)
-                val dataUri = "data:image/jpeg;base64,$b64Str"
-                
-                val elapsedMs = System.currentTimeMillis() - startTime
-                Log.i(TAG, "✓ Modal 图像生成成功，大小=${jpegBytes.size} bytes，耗时=${elapsedMs}ms")
-                
-                return ImageGenerationResponse(
-                    images = listOf(ImageUrl(url = dataUri)),
-                    text = prompt,
-                    timings = Timings(inference = elapsedMs.toInt()),
-                    seed = Random.nextInt()
-                )
-                
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.w(TAG, "Modal URL ${idx + 1} 异常: ${e.message}")
                 lastError = e
@@ -387,6 +396,10 @@ object ImageGenerationDirectClient {
         if (inputImageBase64.isBlank()) {
             throw Exception("请提供一张图片以进行编辑")
         }
+        ensureGeneratedImageBase64WithinLimit(
+            inputImageBase64,
+            maxBytes = MAX_REFERENCE_IMAGE_BYTES,
+        )
         
         val prompt = request.prompt.takeIf { it.isNotBlank() } ?: "Edit this image"
         val steps = request.numInferenceSteps ?: 30
@@ -406,7 +419,7 @@ object ImageGenerationDirectClient {
                     put("guidance_scale", guidanceScale)
                 }.toString()
                 
-                val response = client.post(qwenUrl) {
+                val generated = client.preparePost(qwenUrl) {
                     contentType(ContentType.Application.Json)
                     header("x-api-key", apiSecret)
                     setBody(payload)
@@ -415,42 +428,48 @@ object ImageGenerationDirectClient {
                         connectTimeoutMillis = 60_000
                         socketTimeoutMillis = 1800_000
                     }
+                }.execute { response ->
+                    if (!response.status.isSuccess()) {
+                        val errorText = response.readErrorTextAtMost()?.take(500) ?: "(empty)"
+                        Log.w(TAG, "Qwen URL ${idx + 1} 返回 ${response.status}: $errorText")
+                        lastError = Exception("HTTP ${response.status}: $errorText")
+                        return@execute null
+                    }
+
+                    val responseJson = Json.parseToJsonElement(
+                        response.readTextAtMost(MAX_INLINE_IMAGE_JSON_BYTES)
+                    ).jsonObject
+
+                    if (responseJson["status"]?.jsonPrimitive?.contentOrNull != "success") {
+                        val detail = responseJson["detail"]?.jsonPrimitive?.contentOrNull ?: "Unknown error"
+                        Log.w(TAG, "Qwen URL ${idx + 1} 状态非 success: $detail")
+                        lastError = Exception("API Error: $detail")
+                        return@execute null
+                    }
+
+                    val resultB64 = responseJson["image_base64"]?.jsonPrimitive?.contentOrNull
+                    if (resultB64.isNullOrBlank()) {
+                        lastError = Exception("Empty image_base64 in response")
+                        return@execute null
+                    }
+                    ensureGeneratedImageBase64WithinLimit(resultB64)
+
+                    val elapsedMs = System.currentTimeMillis() - startTime
+                    val dataUri = "data:image/png;base64,$resultB64"
+
+                    Log.i(TAG, "✓ Qwen 图像编辑成功，耗时=${elapsedMs}ms")
+
+                    ImageGenerationResponse(
+                        images = listOf(ImageUrl(url = dataUri)),
+                        text = prompt,
+                        timings = Timings(inference = elapsedMs.toInt()),
+                        seed = Random.nextInt()
+                    )
                 }
+                if (generated != null) return generated
                 
-                if (!response.status.isSuccess()) {
-                    val errorText = try { response.bodyAsText().take(500) } catch (_: Exception) { "(empty)" }
-                    Log.w(TAG, "Qwen URL ${idx + 1} 返回 ${response.status}: $errorText")
-                    lastError = Exception("HTTP ${response.status}: $errorText")
-                    continue
-                }
-                
-                val responseJson = Json.parseToJsonElement(response.bodyAsText()).jsonObject
-                
-                if (responseJson["status"]?.jsonPrimitive?.contentOrNull != "success") {
-                    val detail = responseJson["detail"]?.jsonPrimitive?.contentOrNull ?: "Unknown error"
-                    Log.w(TAG, "Qwen URL ${idx + 1} 状态非 success: $detail")
-                    lastError = Exception("API Error: $detail")
-                    continue
-                }
-                
-                val resultB64 = responseJson["image_base64"]?.jsonPrimitive?.contentOrNull
-                if (resultB64.isNullOrBlank()) {
-                    lastError = Exception("Empty image_base64 in response")
-                    continue
-                }
-                
-                val elapsedMs = System.currentTimeMillis() - startTime
-                val dataUri = "data:image/png;base64,$resultB64"
-                
-                Log.i(TAG, "✓ Qwen 图像编辑成功，耗时=${elapsedMs}ms")
-                
-                return ImageGenerationResponse(
-                    images = listOf(ImageUrl(url = dataUri)),
-                    text = prompt,
-                    timings = Timings(inference = elapsedMs.toInt()),
-                    seed = Random.nextInt()
-                )
-                
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.w(TAG, "Qwen URL ${idx + 1} 异常: ${e.message}")
                 lastError = e
@@ -487,21 +506,23 @@ object ImageGenerationDirectClient {
         val url = "$baseUrl/v1beta/models/$model:generateContent?key=${request.apiKey}"
         
         Log.d(TAG, "直连 URL: ${url.substringBefore("?key=")}")
-        
+        referenceImageBase64?.takeIf { it.isNotBlank() }?.let {
+            ensureGeneratedImageBase64WithinLimit(it, maxBytes = MAX_REFERENCE_IMAGE_BYTES)
+        }
         val payload = buildGeminiImagePayloadWithReference(request, referenceImageBase64, referenceImageMimeType)
         
-        val response = client.post(url) {
+        return client.preparePost(url) {
             contentType(ContentType.Application.Json)
             setBody(payload)
+        }.execute { response ->
+            if (!response.status.isSuccess()) {
+                val errorBody = response.readErrorTextAtMost() ?: "(no body)"
+                Log.e(TAG, "Gemini 图像生成错误 ${response.status}: bodyChars=${errorBody.length}")
+                throw Exception("Gemini 图像生成错误 ${response.status}: $errorBody")
+            }
+
+            parseGeminiImageResponse(response.readTextAtMost(MAX_INLINE_IMAGE_JSON_BYTES))
         }
-        
-        if (!response.status.isSuccess()) {
-            val errorBody = try { response.bodyAsText() } catch (_: Exception) { "(no body)" }
-            Log.e(TAG, "Gemini 图像生成错误 ${response.status}: $errorBody")
-            throw Exception("Gemini 图像生成错误 ${response.status}: $errorBody")
-        }
-        
-        return parseGeminiImageResponse(response.bodyAsText())
     }
     
     private fun buildGeminiImagePayloadWithReference(
@@ -549,10 +570,10 @@ object ImageGenerationDirectClient {
                 if (hasValidAspectRatio || hasImageSize) {
                     putJsonObject("imageConfig") {
                         if (hasValidAspectRatio) {
-                            put("aspectRatio", request.aspectRatio!!)
+                            put("aspectRatio", request.aspectRatio)
                         }
                         if (hasImageSize) {
-                            put("imageSize", request.geminiImageSize!!)
+                            put("imageSize", request.geminiImageSize)
                         }
                     }
                 } else if (!request.aspectRatio.isNullOrBlank() && !hasValidAspectRatio) {
@@ -587,19 +608,19 @@ object ImageGenerationDirectClient {
         
         val payload = buildSeedreamPayloadWithReference(request, referenceImages)
         
-        val response = client.post(baseUrl) {
+        return client.preparePost(baseUrl) {
             contentType(ContentType.Application.Json)
             header(HttpHeaders.Authorization, "Bearer ${request.apiKey}")
             setBody(payload)
+        }.execute { response ->
+            if (!response.status.isSuccess()) {
+                val errorBody = response.readErrorTextAtMost() ?: "(no body)"
+                Log.e(TAG, "Seedream 图像生成错误 ${response.status}: bodyChars=${errorBody.length}")
+                throw Exception("Seedream 图像生成错误 ${response.status}: $errorBody")
+            }
+
+            parseOpenAIImageResponse(response.readTextAtMost(MAX_IMAGE_URL_JSON_BYTES))
         }
-        
-        if (!response.status.isSuccess()) {
-            val errorBody = try { response.bodyAsText() } catch (_: Exception) { "(no body)" }
-            Log.e(TAG, "Seedream 图像生成错误 ${response.status}: $errorBody")
-            throw Exception("Seedream 图像生成错误 ${response.status}: $errorBody")
-        }
-        
-        return parseOpenAIImageResponse(response.bodyAsText())
     }
     
     private fun buildSeedreamPayloadWithReference(
@@ -662,10 +683,10 @@ object ImageGenerationDirectClient {
                 if (hasValidAspectRatio || hasImageSize) {
                     putJsonObject("imageConfig") {
                         if (hasValidAspectRatio) {
-                            put("aspectRatio", request.aspectRatio!!)
+                            put("aspectRatio", request.aspectRatio)
                         }
                         if (hasImageSize) {
-                            put("imageSize", request.geminiImageSize!!)
+                            put("imageSize", request.geminiImageSize)
                         }
                     }
                 } else if (!request.aspectRatio.isNullOrBlank() && !hasValidAspectRatio) {
@@ -767,6 +788,55 @@ object ImageGenerationDirectClient {
             else -> "2048x2048"
         }
     }
+
+    internal fun ensureGeneratedImageBase64WithinLimit(
+        encoded: String,
+        maxBytes: Long = MAX_GENERATED_IMAGE_BYTES,
+        startIndex: Int = 0,
+    ) {
+        require(maxBytes > 0) { "图片大小上限无效" }
+        require(startIndex in 0..encoded.length) { "Base64 起始位置无效" }
+
+        var encodedChars = 0L
+        var padding = 0
+        var sawPadding = false
+        for (index in startIndex until encoded.length) {
+            val char = encoded[index]
+            if (char.isWhitespace()) continue
+            when {
+                char == '=' -> {
+                    sawPadding = true
+                    padding++
+                    require(padding <= 2) { "Base64 填充无效" }
+                }
+
+                char in 'A'..'Z' || char in 'a'..'z' || char in '0'..'9' || char == '+' || char == '/' -> {
+                    require(!sawPadding) { "Base64 填充位置无效" }
+                }
+
+                else -> throw IllegalArgumentException("Base64 包含非法字符")
+            }
+            encodedChars++
+        }
+
+        require(encodedChars > 0 && encodedChars % 4L != 1L) { "Base64 长度无效" }
+        require(padding == 0 || encodedChars % 4L == 0L) { "Base64 填充长度无效" }
+        val decodedBytes = if (padding > 0) {
+            encodedChars / 4L * 3L - padding
+        } else {
+            encodedChars * 3L / 4L
+        }
+        if (decodedBytes > maxBytes) throw ResponseBodyTooLargeException(maxBytes)
+    }
+
+    private fun ensureInlineGeneratedImageWithinLimit(source: String) {
+        if (!source.startsWith("data:", ignoreCase = true)) return
+        val marker = ";base64,"
+        val markerIndex = source.indexOf(marker, ignoreCase = true)
+        if (markerIndex >= 0) {
+            ensureGeneratedImageBase64WithinLimit(source, startIndex = markerIndex + marker.length)
+        }
+    }
     
     private fun parseGeminiImageResponse(responseText: String): ImageGenerationResponse {
         val json = Json { ignoreUnknownKeys = true }
@@ -786,6 +856,7 @@ object ImageGenerationDirectClient {
                     val mimeType = inlineData["mimeType"]?.jsonPrimitive?.content ?: "image/png"
                     val data = inlineData["data"]?.jsonPrimitive?.content ?: ""
                     if (data.isNotEmpty()) {
+                        ensureGeneratedImageBase64WithinLimit(data)
                         images.add(ImageUrl(url = "data:$mimeType;base64,$data"))
                         Log.i(TAG, "✓ 解析到 Gemini 图片 (${data.length} chars base64)")
                     }
@@ -809,8 +880,17 @@ object ImageGenerationDirectClient {
         
         root["data"]?.jsonArray?.forEach { item ->
             val itemObj = item.jsonObject
-            val url = itemObj["url"]?.jsonPrimitive?.contentOrNull
-                ?: itemObj["b64_json"]?.jsonPrimitive?.contentOrNull?.let { "data:image/png;base64,$it" }
+            val responseUrl = itemObj["url"]?.jsonPrimitive?.contentOrNull
+            val base64 = itemObj["b64_json"]?.jsonPrimitive?.contentOrNull
+            val url = when {
+                responseUrl != null -> responseUrl.also(::ensureInlineGeneratedImageWithinLimit)
+                base64 != null -> {
+                    ensureGeneratedImageBase64WithinLimit(base64)
+                    "data:image/png;base64,$base64"
+                }
+
+                else -> null
+            }
             if (url != null) {
                 images.add(ImageUrl(url = url))
                 Log.i(TAG, "✓ 解析到 OpenAI 图片")

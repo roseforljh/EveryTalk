@@ -48,7 +48,7 @@ fun ModelSelectionDialog(
     var selectedModels by remember { mutableStateOf(setOf<String>()) }
     var searchText by remember { mutableStateOf("") }
 
-    LaunchedEffect(showDialog) {
+    LaunchedEffect(showDialog, models) {
         if (showDialog) {
             selectedModels = emptySet()
             searchText = ""
@@ -215,8 +215,14 @@ fun ModelSelectionDialog(
                     )
                 }
 
-                // 底部按钮（紧贴列表下方）
                 Spacer(modifier = Modifier.height(12.dp))
+                TextButton(
+                    onClick = onManualInput,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("手动输入模型", color = contentColor, fontWeight = FontWeight.SemiBold)
+                }
+                Spacer(modifier = Modifier.height(4.dp))
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -240,7 +246,6 @@ fun ModelSelectionDialog(
                             } else {
                                 onSelectAll()
                             }
-                            onDismiss()
                         },
                         enabled = selectedModels.isNotEmpty() || models.isNotEmpty(),
                         modifier = Modifier.weight(1f).height(44.dp),

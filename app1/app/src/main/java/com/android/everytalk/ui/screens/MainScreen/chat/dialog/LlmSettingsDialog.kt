@@ -13,6 +13,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.edit
 import com.android.everytalk.data.DataClass.VoiceBackendConfig
 import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.ui.screens.settings.DialogTextFieldColors
@@ -182,11 +183,11 @@ fun LlmSettingsDialog(
                                     text = { Text(platform, color = contentColor) },
                                     onClick = {
                                         // 切换前保存当前平台的配置
-                                        llmPrefs.edit()
-                                            .putString("${selectedPlatform}_apiKey", apiKey)
-                                            .putString("${selectedPlatform}_apiUrl", apiUrl)
-                                            .putString("${selectedPlatform}_model", model)
-                                            .apply()
+                                        llmPrefs.edit {
+                                            putString("${selectedPlatform}_apiKey", apiKey)
+                                            putString("${selectedPlatform}_apiUrl", apiUrl)
+                                            putString("${selectedPlatform}_model", model)
+                                        }
                                         
                                         selectedPlatform = platform
                                         expanded = false
@@ -271,14 +272,14 @@ fun LlmSettingsDialog(
                         if (newModel.isNotBlank() && !customModels.contains(newModel)) {
                             val newList = customModels + newModel.trim()
                             customModels = newList
-                            uiPrefs.edit().putString(customModelsKey, newList.joinToString(",")).apply()
+                            uiPrefs.edit { putString(customModelsKey, newList.joinToString(",")) }
                             model = newModel.trim()
                         }
                     },
                     onRemoveModel = { modelToRemove ->
                         val newList = customModels - modelToRemove
                         customModels = newList
-                        uiPrefs.edit().putString(customModelsKey, newList.joinToString(",")).apply()
+                        uiPrefs.edit { putString(customModelsKey, newList.joinToString(",")) }
                         if (model == modelToRemove) {
                             model = ""
                         }
@@ -307,11 +308,11 @@ fun LlmSettingsDialog(
                         onClick = {
                             coroutineScope.launch {
                                 // 1. 保存当前平台的配置到 SharedPreferences（独立存储）
-                                llmPrefs.edit()
-                                    .putString("${selectedPlatform}_apiKey", apiKey.trim())
-                                    .putString("${selectedPlatform}_apiUrl", apiUrl.trim())
-                                    .putString("${selectedPlatform}_model", model.trim())
-                                    .apply()
+                                llmPrefs.edit {
+                                    putString("${selectedPlatform}_apiKey", apiKey.trim())
+                                    putString("${selectedPlatform}_apiUrl", apiUrl.trim())
+                                    putString("${selectedPlatform}_model", model.trim())
+                                }
                                 
                                 android.util.Log.d("LlmSettingsDialog", "保存平台配置 - 平台: $selectedPlatform")
                                 android.util.Log.d("LlmSettingsDialog", "  API Key 非空: ${apiKey.isNotBlank()}, 长度: ${apiKey.length}")

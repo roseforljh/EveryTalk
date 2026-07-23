@@ -62,7 +62,7 @@ class MathRendererComposeTest {
 
         composeRule.setContent {
             var formulas by remember {
-                mutableStateOf(linkedMapOf(firstFormula.id to firstFormula))
+                mutableStateOf(mapOf(firstFormula.id to firstFormula))
             }
             addSecondFormula = {
                 captureAfterAddition = true

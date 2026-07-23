@@ -3,6 +3,7 @@ package com.android.everytalk.data.network.openclaw
 import com.android.everytalk.data.DataClass.ChatRequest
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import java.io.File
 import java.security.SecureRandom
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.bouncycastle.crypto.generators.Ed25519KeyPairGenerator
@@ -190,6 +191,22 @@ class OpenClawGatewayClientTest {
         assertNotEquals(signatureA, signatureB)
     }
 
+    @Test
+    fun `chat handshake timeout does not cover the response stream`() {
+        val source = gatewaySource()
+        val streamChat = source.substringAfter("override suspend fun streamChat")
+            .substringBefore("suspend fun queryModelsCatalog")
+        val handshake = streamChat.substringBefore("for (frame in session.incoming)")
+
+        assertTrue(handshake.contains("withTimeoutOrNull(30_000L)"))
+        assertTrue(handshake.contains("ensureConnected"))
+        assertTrue(handshake.contains("connect handshake timed out"))
+        assertFalse(
+            streamChat.substringAfter("for (frame in session.incoming)")
+                .contains("withTimeoutOrNull(30_000L)")
+        )
+    }
+
     private fun createIdentity(): OpenClawGatewayClient.DeviceIdentity {
         val generator = Ed25519KeyPairGenerator()
         generator.init(Ed25519KeyGenerationParameters(SecureRandom()))
@@ -225,5 +242,17 @@ class OpenClawGatewayClientTest {
             model = "",
             deviceId = "device-1"
         )
+    }
+
+    private fun gatewaySource(): String {
+        val relativePath = "data/network/openclaw/OpenClawGatewayClient.kt"
+        val candidates = listOf(
+            File("src/main/java/com/android/everytalk/$relativePath"),
+            File("app/src/main/java/com/android/everytalk/$relativePath"),
+            File("app1/app/src/main/java/com/android/everytalk/$relativePath"),
+        )
+        return requireNotNull(candidates.firstOrNull(File::isFile)) {
+            "找不到 $relativePath"
+        }.readText(Charsets.UTF_8)
     }
 }

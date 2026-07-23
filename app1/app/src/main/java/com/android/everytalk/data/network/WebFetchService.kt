@@ -6,12 +6,12 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.HttpRedirect
 import io.ktor.client.plugins.HttpTimeout
-import io.ktor.client.request.get
 import io.ktor.client.request.header
-import io.ktor.client.statement.bodyAsText
+import io.ktor.client.request.prepareGet
 import io.ktor.http.HttpHeaders
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import com.android.everytalk.util.text.TextSanitizer
 
@@ -19,6 +19,7 @@ object WebFetchService {
     private const val TAG = "WebFetchService"
     private const val JINA_TIMEOUT_MS = 30_000L
     private const val DEFAULT_MAX_CONTENT_CHARS = 24_000
+    private const val MAX_FETCH_RESPONSE_BYTES = 1L * 1024L * 1024L
 
     private val readerBaseUrl: String = BuildConfig.JINA_READER_BASE_URL.trimEnd('/')
 
@@ -64,44 +65,48 @@ object WebFetchService {
             val fetchUrl = "$readerBaseUrl/$url"
             Log.d(TAG, "通过 Reader API 抓取: $fetchUrl")
 
-            val response = jinaClient.get(fetchUrl) {
+            jinaClient.prepareGet(fetchUrl) {
                 header(HttpHeaders.Accept, "text/markdown")
                 header("X-Return-Format", "markdown")
                 header("X-No-Cache", "true")
-            }
+            }.execute { response ->
+                if (!response.status.isSuccess()) {
+                    Log.w(TAG, "Reader API 返回非成功状态: ${response.status.value}")
+                    return@execute WebFetchResult(
+                        success = false,
+                        requestedUrl = url,
+                        statusCode = response.status.value,
+                        error = "Reader API 返回 HTTP ${response.status.value}",
+                    )
+                }
 
-            if (!response.status.isSuccess()) {
-                Log.w(TAG, "Reader API 返回非成功状态: ${response.status.value}")
-                return WebFetchResult(
-                    success = false,
+                val content = TextSanitizer.removeUnicodeReplacementCharacters(
+                    response.readTextAtMost(MAX_FETCH_RESPONSE_BYTES)
+                )
+                if (content.isBlank()) {
+                    return@execute WebFetchResult(
+                        success = false,
+                        requestedUrl = url,
+                        error = "Reader API 返回空内容",
+                    )
+                }
+
+                val truncated = content.length > maxContentChars
+                val finalContent = if (truncated) content.take(maxContentChars).trimEnd() else content
+
+                WebFetchResult(
+                    success = true,
                     requestedUrl = url,
+                    finalUrl = url,
+                    title = extractTitleFromMarkdown(finalContent),
+                    content = finalContent,
+                    truncated = truncated,
+                    truncationReason = if (truncated) "content_truncated" else null,
                     statusCode = response.status.value,
-                    error = "Reader API 返回 HTTP ${response.status.value}",
                 )
             }
-
-            val content = TextSanitizer.removeUnicodeReplacementCharacters(response.bodyAsText())
-            if (content.isBlank()) {
-                return WebFetchResult(
-                    success = false,
-                    requestedUrl = url,
-                    error = "Reader API 返回空内容",
-                )
-            }
-
-            val truncated = content.length > maxContentChars
-            val finalContent = if (truncated) content.take(maxContentChars).trimEnd() else content
-
-            WebFetchResult(
-                success = true,
-                requestedUrl = url,
-                finalUrl = url,
-                title = extractTitleFromMarkdown(finalContent),
-                content = finalContent,
-                truncated = truncated,
-                truncationReason = if (truncated) "content_truncated" else null,
-                statusCode = response.status.value,
-            )
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.w(TAG, "Reader API 请求异常", e)
             WebFetchResult(

@@ -240,12 +240,15 @@ fun SelectedItemPreview(
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
             )
-            is SelectedMediaItem.ImageFromBitmap -> AsyncImage(
-                model = mediaItem.bitmap,
-                contentDescription = "Selected image from camera",
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Crop,
-            )
+            is SelectedMediaItem.ImageFromBitmap -> {
+                val imageModel = remember(mediaItem) { mediaItem.model }
+                AsyncImage(
+                    model = imageModel,
+                    contentDescription = "Selected image from camera",
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                )
+            }
             else -> {}
         }
         Box(
@@ -517,7 +520,7 @@ fun ImageGenerationInputArea(
     val isDarkTheme = isSystemInDarkTheme()
     var isFocused by remember { mutableStateOf(false) }
     var showFunctionPanel by remember { mutableStateOf(false) }
-    var lastFunctionPanelDismissAt by remember { mutableStateOf(0L) }
+    var lastFunctionPanelDismissAt by remember { mutableLongStateOf(0L) }
 
     BackHandler(enabled = showFunctionPanel) {
         lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()

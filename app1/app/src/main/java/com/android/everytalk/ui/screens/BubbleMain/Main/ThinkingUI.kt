@@ -29,8 +29,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -285,7 +285,11 @@ internal fun ReasoningToggleAndContent(
                 modifier = Modifier
                     .fillMaxWidth(0.9f)
                     .padding(vertical = 32.dp)
-                    .heightIn(max = LocalConfiguration.current.screenHeightDp.dp * 0.8f)
+                    .heightIn(
+                        max = with(LocalDensity.current) {
+                            LocalWindowInfo.current.containerSize.height.toDp() * 0.8f
+                        }
+                    )
                     .graphicsLayer {
                         this.alpha = alpha.value
                         this.scaleX = scale.value

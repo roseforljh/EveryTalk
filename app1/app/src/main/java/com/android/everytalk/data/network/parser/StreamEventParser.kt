@@ -43,7 +43,7 @@ object StreamEventParser {
                 }
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Failed to parse backend stream event: $jsonChunk", e)
+            Log.e(TAG, "Failed to parse backend stream event: chars=${jsonChunk.length}", e)
             return null
         }
     }

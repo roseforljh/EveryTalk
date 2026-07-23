@@ -4,7 +4,6 @@ import android.util.Log
 import com.android.everytalk.statecontroller.ApiHandler
 import com.android.everytalk.statecontroller.ViewModelStateHolder
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
-import com.android.everytalk.util.cache.CacheManager
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -21,14 +20,13 @@ import com.android.everytalk.data.network.extractThinkTagContent
  * 负责：
  * - 加载文本/图像历史
  * - 删除/清空会话（文本/图像）
- * - 预览/完整名称生成
+ * - 完整名称生成
  * - 重命名会话
  * - 辅助：修复历史消息 parts 与完整性处理
  */
 class HistoryController(
     private val stateHolder: ViewModelStateHolder,
     private val historyManager: HistoryManager,
-    private val cacheManager: CacheManager,
     private val apiHandler: ApiHandler,
     private val scope: CoroutineScope,
     private val showSnackbar: (String) -> Unit,
@@ -45,28 +43,6 @@ class HistoryController(
     }
 
     private val messagesMutex = Mutex()
-
-    // 名称预览缓存由上层持有，这里只负责使用 cacheManager 生成高质量名称
-    fun getConversationPreviewText(index: Int, isImageGeneration: Boolean): String {
-        val conversationList = if (isImageGeneration) {
-            stateHolder._imageGenerationHistoricalConversations.value
-        } else {
-            stateHolder._historicalConversations.value
-        }
-        val conversation = conversationList.getOrNull(index) ?: return getDefaultConversationName(index, isImageGeneration)
-        val preview = generateQuickPreview(conversation, isImageGeneration, index)
-
-        scope.launch {
-            try {
-                val cacheKey = "${if (isImageGeneration) "img" else "txt"}_$index"
-                val highQuality = cacheManager.getConversationPreview(cacheKey, conversation, isImageGeneration)
-                // 上层 ViewModel 维护的 LruCache 将被更新（此处不直接操作，以避免双重状态）
-            } catch (_: Exception) {
-                // 忽略异常
-            }
-        }
-        return preview
-    }
 
     fun getConversationFullText(index: Int, isImageGeneration: Boolean): String {
         val conversationList = if (isImageGeneration) {
@@ -336,24 +312,6 @@ class HistoryController(
                 else -> true
             }
         }
-    }
-
-    private fun generateQuickPreview(conversation: List<Message>, isImageGeneration: Boolean, index: Int): String {
-        // 优先使用用户自定义标题
-        val customTitle = conversation.firstOrNull {
-            it.sender == com.android.everytalk.data.DataClass.Sender.System && it.isPlaceholderName && it.text.isNotBlank()
-        }
-        if (customTitle != null) {
-            return customTitle.text.trim()
-        }
-        val firstUserMessage = conversation.firstOrNull {
-            it.sender == com.android.everytalk.data.DataClass.Sender.User && it.text.isNotBlank()
-        }
-        val rawText = firstUserMessage?.text?.trim()
-        if (rawText.isNullOrBlank()) {
-            return getDefaultConversationName(index, isImageGeneration)
-        }
-        return com.android.everytalk.util.ConversationNameHelper.cleanAndTruncateText(rawText, 40)
     }
 
     private fun getDefaultConversationName(index: Int, isImageGeneration: Boolean): String {

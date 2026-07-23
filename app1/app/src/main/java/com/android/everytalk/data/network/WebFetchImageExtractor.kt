@@ -4,16 +4,11 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.util.Base64
 import android.util.Log
-import io.ktor.client.HttpClient
-import io.ktor.client.engine.okhttp.OkHttp
-import io.ktor.client.plugins.HttpTimeout
-import io.ktor.client.request.get
-import io.ktor.client.statement.bodyAsChannel
-import io.ktor.http.isSuccess
-import io.ktor.utils.io.jvm.javaio.toInputStream
+import androidx.core.graphics.scale
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayOutputStream
+import com.android.everytalk.util.storage.CappedByteArrayOutputStream
 
 data class ExtractedImage(
     val url: String,
@@ -24,27 +19,22 @@ data class ExtractedImage(
 object WebFetchImageExtractor {
     private const val TAG = "WebFetchImageExtractor"
     private const val MAX_TOTAL_BASE64_BYTES = 10 * 1024 * 1024 // 10MB
+    private const val MAX_COMPRESSED_IMAGE_BYTES = MAX_TOTAL_BASE64_BYTES * 3L / 4L
+    internal const val MAX_IMAGE_URLS = 8
+    internal const val MAX_IMAGE_DOWNLOAD_BYTES = 8L * 1024L * 1024L
+    private const val MAX_SOURCE_PIXELS = 40_000_000L
     private const val IMAGE_DOWNLOAD_TIMEOUT_MS = 10_000L
     private const val MAX_DIMENSION = 512
     private const val JPEG_QUALITY = 75
 
     private val MARKDOWN_IMAGE_REGEX = Regex("""!\[.*?]\((https?://[^)]+)\)""")
 
-    private val imageClient by lazy {
-        HttpClient(OkHttp) {
-            install(HttpTimeout) {
-                requestTimeoutMillis = IMAGE_DOWNLOAD_TIMEOUT_MS
-                connectTimeoutMillis = IMAGE_DOWNLOAD_TIMEOUT_MS
-                socketTimeoutMillis = IMAGE_DOWNLOAD_TIMEOUT_MS
-            }
-        }
-    }
-
     fun extractImageUrls(markdown: String): List<String> {
         return MARKDOWN_IMAGE_REGEX.findAll(markdown)
             .map { it.groupValues[1] }
             .filter { url -> isLikelyContentImage(url) }
             .distinct()
+            .take(MAX_IMAGE_URLS)
             .toList()
     }
 
@@ -74,22 +64,30 @@ object WebFetchImageExtractor {
         }
 
     private suspend fun downloadAndCompress(url: String): ExtractedImage? {
+        var originalBitmap: Bitmap? = null
+        var scaledBitmap: Bitmap? = null
         return try {
-            val response = imageClient.get(url)
-            if (!response.status.isSuccess()) {
-                Log.d(TAG, "图片下载失败: $url, status=${response.status.value}")
-                return null
+            val bytes = SafeHttpDownloader.download(
+                url = url,
+                maxBytes = MAX_IMAGE_DOWNLOAD_BYTES,
+                timeoutMillis = IMAGE_DOWNLOAD_TIMEOUT_MS.toInt(),
+                accept = "image/*",
+            ).bytes
+
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0 ||
+                bounds.outWidth.toLong() * bounds.outHeight.toLong() > MAX_SOURCE_PIXELS
+            ) return null
+
+            val decodeOptions = BitmapFactory.Options().apply {
+                inSampleSize = calculateInSampleSize(bounds.outWidth, bounds.outHeight)
+                inPreferredConfig = Bitmap.Config.RGB_565
             }
-
-            val inputStream = response.bodyAsChannel().toInputStream()
-            val originalBitmap = BitmapFactory.decodeStream(inputStream) ?: return null
-
-            val scaled = scaleBitmap(originalBitmap)
-            val outputStream = ByteArrayOutputStream()
-            scaled.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, outputStream)
-
-            if (scaled !== originalBitmap) scaled.recycle()
-            originalBitmap.recycle()
+            originalBitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOptions) ?: return null
+            scaledBitmap = scaleBitmap(originalBitmap)
+            val outputStream = CappedByteArrayOutputStream(MAX_COMPRESSED_IMAGE_BYTES)
+            if (!scaledBitmap.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, outputStream)) return null
 
             val base64 = Base64.encodeToString(outputStream.toByteArray(), Base64.NO_WRAP)
             Log.d(TAG, "图片处理完成: $url, base64 size=${base64.length}")
@@ -99,10 +97,26 @@ object WebFetchImageExtractor {
                 base64Data = base64,
                 mimeType = "image/jpeg",
             )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: OutOfMemoryError) {
+            Log.d(TAG, "图片处理失败: $url, 内存不足")
+            null
         } catch (e: Exception) {
             Log.d(TAG, "图片处理失败: $url, error=${e.message}")
             null
+        } finally {
+            if (scaledBitmap !== originalBitmap) scaledBitmap?.recycle()
+            originalBitmap?.recycle()
         }
+    }
+
+    private fun calculateInSampleSize(width: Int, height: Int): Int {
+        var sampleSize = 1
+        while (width / sampleSize > MAX_DIMENSION * 2 || height / sampleSize > MAX_DIMENSION * 2) {
+            sampleSize *= 2
+        }
+        return sampleSize
     }
 
     private fun scaleBitmap(bitmap: Bitmap): Bitmap {
@@ -113,7 +127,7 @@ object WebFetchImageExtractor {
         val scale = MAX_DIMENSION.toFloat() / maxOf(width, height)
         val newWidth = (width * scale).toInt().coerceAtLeast(1)
         val newHeight = (height * scale).toInt().coerceAtLeast(1)
-        return Bitmap.createScaledBitmap(bitmap, newWidth, newHeight, true)
+        return bitmap.scale(newWidth, newHeight)
     }
 
     private fun isLikelyContentImage(url: String): Boolean {

@@ -8,6 +8,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Contextual
 import com.android.everytalk.util.serialization.UriSerializer
+import com.android.everytalk.util.storage.CappedByteArrayOutputStream
 
 interface IMediaItem {
     val id: String
@@ -68,22 +69,37 @@ sealed class SelectedMediaItem : IMediaItem {
     ) : SelectedMediaItem() {
         // 提供便捷方法来处理 Bitmap 和 Base64 的转换
         companion object {
+            private const val MAX_BITMAP_BYTES = 16L * 1024L * 1024L
+
             fun fromBitmap(bitmap: Bitmap, id: String, mimeType: String = "image/png", filePath: String? = null): ImageFromBitmap {
-                val baos = java.io.ByteArrayOutputStream()
+                val baos = CappedByteArrayOutputStream(MAX_BITMAP_BYTES)
                 val format = if (mimeType.contains("png")) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG
-                bitmap.compress(format, 100, baos)
+                check(bitmap.compress(format, 100, baos)) { "Bitmap 压缩失败" }
                 val base64 = android.util.Base64.encodeToString(baos.toByteArray(), android.util.Base64.NO_WRAP)
                 return ImageFromBitmap(base64, id, mimeType, filePath)
             }
         }
-        
+
+        /**
+         * 图片展示源优先使用持久化文件，避免 Compose 重组时反复解码 Base64。
+         */
+        val model: String
+            get() = filePath?.takeIf { it.isNotBlank() } ?: "data:$mimeType;base64,$bitmapData"
+
         // 获取 Bitmap 对象（从 Base64 解码）
+        // 仅保留给确实需要像素处理的调用方，普通展示和发送应使用 model/bitmapData。
         val bitmap: Bitmap?
-            get() = try {
+            get() {
+                return try {
+                val encodedLength = bitmapData.count { !it.isWhitespace() }.toLong()
+                val estimatedBytes = ((encodedLength + 3L) / 4L) * 3L
+                if (estimatedBytes > 16L * 1024L * 1024L) return null
                 val bytes = android.util.Base64.decode(bitmapData, android.util.Base64.NO_WRAP)
+                if (bytes.size > 16 * 1024 * 1024) return null
                 android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
             } catch (e: Exception) {
                 null
+            }
             }
     }
 

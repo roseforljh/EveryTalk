@@ -13,10 +13,16 @@ import io.ktor.http.URLProtocol
 import io.ktor.http.encodedPath
 import io.ktor.http.parseQueryString
 import io.ktor.websocket.Frame
+import io.ktor.websocket.close
 import io.ktor.websocket.readText
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -35,14 +41,6 @@ class OpenClawGatewayClient(
     private val deviceIdentityManager: OpenClawDeviceIdentityManager,
     private val json: Json = defaultJson
 ) : OpenClawChatTransport {
-
-    private enum class GatewayConnectionState {
-        DISCONNECTED,
-        SOCKET_CONNECTED,
-        CHALLENGE_RECEIVED,
-        CONNECT_SENT,
-        CONNECTED
-    }
 
     class PendingFrameQueue {
         private val frames = mutableListOf<String>()
@@ -65,9 +63,6 @@ class OpenClawGatewayClient(
     ) {
         fun publicKeyBase64Url(): String = OpenClawDeviceAuthSigner.base64Url(publicKeyRaw)
     }
-
-    private val pendingFrames = PendingFrameQueue()
-    private var connectionState: GatewayConnectionState = GatewayConnectionState.DISCONNECTED
 
     override suspend fun streamChat(request: ChatRequest): Flow<AppStreamEvent> = channelFlow {
         val rawAddress = request.apiAddress?.trim().orEmpty()
@@ -112,49 +107,83 @@ class OpenClawGatewayClient(
         }
         logDebug("WebSocket connected", "{\"gatewayUrl\":\"$rawAddress\",\"sessionKey\":\"$sessionKey\"}")
 
-        connectionState = GatewayConnectionState.SOCKET_CONNECTED
+        var terminalSent = false
+        var contentSeen = false
+        try {
+            val identity = deviceIdentityManager.getOrCreate().toClientIdentity()
+            val pendingFrames = PendingFrameQueue()
 
-        val identity = deviceIdentityManager.getOrCreate().toClientIdentity()
+            pendingFrames.enqueue(json.encodeToString(buildHistoryRequest(sessionKey = sessionKey)))
 
-        enqueuePending(json.encodeToString(buildHistoryRequest(sessionKey = sessionKey)))
+            val sendPayload = buildChatSendRequest(
+                request = request,
+                messageText = messageText,
+                requestId = requestId,
+                sessionKey = sessionKey,
+                idempotencyKey = idempotencyKey
+            )
+            pendingFrames.enqueue(json.encodeToString(sendPayload))
 
-        val sendPayload = buildChatSendRequest(
-            request = request,
-            messageText = messageText,
-            requestId = requestId,
-            sessionKey = sessionKey,
-            idempotencyKey = idempotencyKey
-        )
-        enqueuePending(json.encodeToString(sendPayload))
+            withTimeoutOrNull(30_000L) {
+                ensureConnected(session = session, request = request, identity = identity, pendingFrames = pendingFrames)
+            } ?: error("OpenClaw Gateway connect handshake timed out")
 
-        ensureConnected(session = session, request = request, identity = identity)
-
-        val readerJob = launch {
-            try {
-                for (frame in session.incoming) {
-                    when (frame) {
-                        is Frame.Text -> {
-                            val raw = frame.readText()
-                            logDebug("received frame", raw)
-                            OpenClawEventMapper.mapChatEvent(raw, json)?.let { send(it) }
+            for (frame in session.incoming) {
+                when (frame) {
+                    is Frame.Text -> {
+                        val raw = frame.readText()
+                        logDebug("received frame", raw)
+                        when (val event = OpenClawEventMapper.mapChatEvent(raw, json) ?: continue) {
+                            is AppStreamEvent.Content -> {
+                                contentSeen = true
+                                send(event)
+                            }
+                            is AppStreamEvent.OpenClawRuntimeFinal -> {
+                                send(event)
+                                if (!contentSeen && event.text.isNotBlank()) send(AppStreamEvent.Content(event.text))
+                                send(AppStreamEvent.Finish(event.state.ifBlank { "completed" }))
+                                terminalSent = true
+                                break
+                            }
+                            is AppStreamEvent.ContentFinal -> {
+                                send(event)
+                                if (!contentSeen && event.text.isNotBlank()) send(AppStreamEvent.Content(event.text))
+                                send(AppStreamEvent.Finish("completed"))
+                                terminalSent = true
+                                break
+                            }
+                            is AppStreamEvent.Finish -> {
+                                send(event)
+                                terminalSent = true
+                                break
+                            }
+                            is AppStreamEvent.Error -> {
+                                send(event)
+                                send(AppStreamEvent.Finish("error"))
+                                terminalSent = true
+                                break
+                            }
+                            else -> send(event)
                         }
-                        is Frame.Close -> {
-                            logDebug("close reason", "closed")
-                            break
-                        }
-                        else -> Unit
                     }
+                    is Frame.Close -> {
+                        logDebug("close reason", "closed")
+                        break
+                    }
+                    else -> Unit
                 }
-            } catch (e: Exception) {
-                logDebug("close reason / exception", e.message ?: "unknown")
-                send(AppStreamEvent.Error(NetworkUtils.sanitizeMessage(e.message ?: "OpenClaw Gateway stream failed.")))
-            } finally {
-                send(AppStreamEvent.Finish("completed"))
-                OpenClawRuntimeState.clear()
             }
+            if (!terminalSent) send(AppStreamEvent.Finish("completed"))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logDebug("close reason / exception", e.message ?: "unknown")
+            send(AppStreamEvent.Error(NetworkUtils.sanitizeMessage(e.message ?: "OpenClaw Gateway stream failed.")))
+            if (!terminalSent) send(AppStreamEvent.Finish("error"))
+        } finally {
+            withContext(NonCancellable) { session.close() }
+            OpenClawRuntimeState.clear()
         }
-
-        readerJob.join()
     }
 
     suspend fun queryModelsCatalog(request: ChatRequest, provider: String? = null): ModelsCatalogQueryResult {
@@ -172,56 +201,68 @@ class OpenClawGatewayClient(
         val path = uri.rawPath?.takeIf { it.isNotBlank() } ?: "/"
         val requestId = UUID.randomUUID().toString()
 
-        return runCatching {
-            val session = httpClient.webSocketSession {
-                url {
-                    protocol = scheme
-                    host = uri.host
-                    port = if (uri.port == -1) scheme.defaultPort else uri.port
-                    encodedPath = path
-                    uri.rawQuery?.let { parameters.appendAll(parseQueryString(it)) }
+        return try {
+            withTimeout(30_000L) {
+                val session = httpClient.webSocketSession {
+                    url {
+                        protocol = scheme
+                        host = uri.host
+                        port = if (uri.port == -1) scheme.defaultPort else uri.port
+                        encodedPath = path
+                        uri.rawQuery?.let { parameters.appendAll(parseQueryString(it)) }
+                    }
+                    if (request.apiKey.isNotBlank()) {
+                        headers.append(HttpHeaders.Authorization, "Bearer ${request.apiKey}")
+                    }
                 }
-                if (request.apiKey.isNotBlank()) {
-                    headers.append(HttpHeaders.Authorization, "Bearer ${request.apiKey}")
-                }
-            }
 
-            try {
-                connectionState = GatewayConnectionState.SOCKET_CONNECTED
-                val identity = deviceIdentityManager.getOrCreate().toClientIdentity()
-                ensureConnected(session = session, request = request, identity = identity)
+                try {
+                    val identity = deviceIdentityManager.getOrCreate().toClientIdentity()
+                    ensureConnected(
+                        session = session,
+                        request = request,
+                        identity = identity,
+                        pendingFrames = PendingFrameQueue(),
+                    )
 
-                val catalogRequest = buildModelsListRequest(requestId = requestId)
-                val encodedRequest = json.encodeToString(catalogRequest)
-                Log.d("OpenClawGateway", "models.list args=${provider.orEmpty()}")
-                session.send(Frame.Text(encodedRequest))
+                    val encodedRequest = json.encodeToString(buildModelsListRequest(requestId))
+                    Log.d("OpenClawGateway", "models.list args=${provider.orEmpty()}")
+                    session.send(Frame.Text(encodedRequest))
 
-                while (true) {
-                    when (val frame = session.incoming.receive()) {
-                        is Frame.Text -> {
-                            val raw = frame.readText()
-                            Log.d("OpenClawGateway", "models.list raw response=$raw")
-                            parseModelsCatalogResponse(raw, requestId, provider)?.let { return@runCatching it }
-                        }
-                        is Frame.Close -> {
-                            return@runCatching ModelsCatalogQueryResult(
+                    while (true) {
+                        when (val frame = session.incoming.receive()) {
+                            is Frame.Text -> {
+                                val raw = frame.readText()
+                                Log.d("OpenClawGateway", "models.list response chars=${raw.length}")
+                                parseModelsCatalogResponse(raw, requestId, provider)?.let { return@withTimeout it }
+                            }
+                            is Frame.Close -> return@withTimeout ModelsCatalogQueryResult(
                                 ok = false,
                                 supported = false,
                                 errorMessage = "Gateway closed before models.list response"
                             )
+                            else -> Unit
                         }
-                        else -> Unit
                     }
+                    @Suppress("UNREACHABLE_CODE")
+                    ModelsCatalogQueryResult(
+                        ok = false,
+                        supported = false,
+                        errorMessage = "Gateway does not expose models.list"
+                    )
+                } finally {
+                    withContext(NonCancellable) { session.close() }
                 }
-                ModelsCatalogQueryResult(
-                    ok = false,
-                    supported = false,
-                    errorMessage = "Gateway does not expose models.list"
-                )
-            } finally {
-                connectionState = GatewayConnectionState.DISCONNECTED
             }
-        }.getOrElse { error ->
+        } catch (_: TimeoutCancellationException) {
+            ModelsCatalogQueryResult(
+                ok = false,
+                supported = false,
+                errorMessage = "Gateway models.list request timed out"
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (error: Exception) {
             ModelsCatalogQueryResult(
                 ok = false,
                 supported = false,
@@ -398,12 +439,10 @@ class OpenClawGatewayClient(
     private suspend fun ensureConnected(
         session: io.ktor.websocket.WebSocketSession,
         request: ChatRequest,
-        identity: DeviceIdentity
+        identity: DeviceIdentity,
+        pendingFrames: PendingFrameQueue,
     ) {
-        if (connectionState == GatewayConnectionState.CONNECTED) return
-
         val challenge = awaitConnectChallenge(session)
-        connectionState = GatewayConnectionState.CHALLENGE_RECEIVED
 
         val connectPayload = buildConnectRequest(
             request = request,
@@ -413,18 +452,15 @@ class OpenClawGatewayClient(
         val connectFrame = json.encodeToString(connectPayload)
         logDebug("sent frame", connectFrame)
         session.send(Frame.Text(connectFrame))
-        connectionState = GatewayConnectionState.CONNECT_SENT
 
         awaitConnectHello(session)
-        connectionState = GatewayConnectionState.CONNECTED
-        sendPendingAfterHello(session)
+        sendPendingAfterHello(session, pendingFrames)
     }
 
-    private fun enqueuePending(frame: String) {
-        pendingFrames.enqueue(frame)
-    }
-
-    private suspend fun sendPendingAfterHello(session: io.ktor.websocket.WebSocketSession) {
+    private suspend fun sendPendingAfterHello(
+        session: io.ktor.websocket.WebSocketSession,
+        pendingFrames: PendingFrameQueue,
+    ) {
         pendingFrames.drain().forEach { frame ->
             logDebug("sent frame", frame)
             session.send(Frame.Text(frame))

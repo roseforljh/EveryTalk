@@ -9,11 +9,9 @@ import io.ktor.websocket.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.ClosedReceiveChannelException
-import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.*
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * 阿里云实时 STT 客户端
@@ -33,22 +31,21 @@ class AliyunRealtimeSttClient(
     companion object {
         private const val TAG = "AliyunRealtimeStt"
         private const val WS_URL = "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
-        private const val MAX_RECONNECT_ATTEMPTS = 3
-        private const val RECONNECT_DELAY_MS = 1000L
+        internal const val MAX_QUEUED_AUDIO_CHUNKS = 50
     }
     
     // 会话状态
     private var webSocketSession: DefaultClientWebSocketSession? = null
     private var receiveJob: Job? = null
-    private val closeScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var sendJob: Job? = null
     private var taskId: String = ""
     private val isConnected = AtomicBoolean(false)
     private val isTaskStarted = AtomicBoolean(false)
     private val isClosed = AtomicBoolean(false)
-    private val reconnectAttempts = AtomicInteger(0)
+    private val errorNotified = AtomicBoolean(false)
     
     // 音频数据队列
-    private val audioQueue = Channel<ByteArray>(Channel.UNLIMITED)
+    private val audioQueue = Channel<ByteArray>(MAX_QUEUED_AUDIO_CHUNKS)
     
     // 结果回调
     private var onReady: (() -> Unit)? = null
@@ -60,7 +57,7 @@ class AliyunRealtimeSttClient(
     private val finalTextBuilder = StringBuilder()
     
     // 用于通知 task-finished 的完成信号
-    private var finalResultDeferred: CompletableDeferred<String?>? = null
+    private var finalResultDeferred: CompletableDeferred<String>? = null
     
     /**
      * 启动实时 STT 会话
@@ -88,6 +85,7 @@ class AliyunRealtimeSttClient(
         
         taskId = UUID.randomUUID().toString()
         isClosed.set(false)
+        errorNotified.set(false)
         finalTextBuilder.clear()
         finalResultDeferred = CompletableDeferred()
         
@@ -132,14 +130,12 @@ class AliyunRealtimeSttClient(
                 Log.i(TAG, "Sent run-task message")
                 
                 // 等待 task-started 事件
-                val startTimeout = withTimeoutOrNull(10_000L) {
+                withTimeoutOrNull(10_000L) {
                     for (frame in incoming) {
                         if (frame is Frame.Text) {
-                            val text = frame.readText()
-                            val json = Json.parseToJsonElement(text).jsonObject
-                            val event = json["header"]?.jsonObject?.get("event")?.jsonPrimitive?.contentOrNull
+                            val event = parseAliyunSttEvent(frame.readText())
                             
-                            when (event) {
+                            when (event.name) {
                                 "task-started" -> {
                                     isTaskStarted.set(true)
                                     Log.i(TAG, "Task started successfully")
@@ -147,11 +143,6 @@ class AliyunRealtimeSttClient(
                                         onReady?.invoke()
                                     }
                                     break
-                                }
-                                "task-failed" -> {
-                                    val errorMsg = json["header"]?.jsonObject?.get("error_message")?.jsonPrimitive?.contentOrNull
-                                        ?: "Unknown error"
-                                    throw Exception("Task failed: $errorMsg")
                                 }
                             }
                         }
@@ -162,25 +153,27 @@ class AliyunRealtimeSttClient(
                     throw Exception("Timeout waiting for task-started")
                 }
                 
-                // 启动接收协程
-                receiveJob = launch {
-                    processIncomingMessages()
-                }
-                
                 // 启动发送协程
-                launch {
+                sendJob = launch {
                     processAudioQueue()
                 }
-                
-                // 等待会话结束
-                receiveJob?.join()
+
+                // 当前 WebSocket 会话协程直接接收，确保原始异常不会被 join 吞掉。
+                receiveJob = currentCoroutineContext()[Job]
+                processIncomingMessages()
+                if (finalResultDeferred?.isCompleted != true && !isClosed.get()) {
+                    throw IllegalStateException("阿里云 STT 连接在任务完成前结束")
+                }
             }
             
+        } catch (e: CancellationException) {
+            finalResultDeferred?.cancel(e)
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "STT session error: ${e.message}", e)
-            withContext(Dispatchers.Main) {
-                onError?.invoke(e.message ?: "Unknown error")
-            }
+            finalResultDeferred?.completeExceptionally(e)
+            notifyErrorOnce(e.message ?: "Unknown error")
+            throw e
         } finally {
             cleanup()
         }
@@ -200,8 +193,11 @@ class AliyunRealtimeSttClient(
         } catch (e: kotlinx.coroutines.channels.ClosedSendChannelException) {
             // 通道已关闭，忽略此音频块
             Log.d(TAG, "Audio queue closed, ignoring audio chunk")
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.w(TAG, "Failed to send audio: ${e.message}")
+            throw e
         }
     }
     
@@ -213,12 +209,18 @@ class AliyunRealtimeSttClient(
      */
     suspend fun finishAndWait(): String = withContext(Dispatchers.IO) {
         if (!isConnected.get()) {
-            return@withContext finalTextBuilder.toString()
+            val deferred = finalResultDeferred
+            return@withContext if (deferred?.isCompleted == true) {
+                deferred.await()
+            } else {
+                throw IllegalStateException("阿里云 STT 尚未连接或已提前断开")
+            }
         }
         
         try {
             // 关闭音频队列，停止继续发送音频
             audioQueue.close()
+            sendJob?.join()
             
             // 发送 finish-task 指令
             val finishTaskMessage = buildJsonObject {
@@ -237,12 +239,18 @@ class AliyunRealtimeSttClient(
             // 等待阿里云返回 task-finished 信号（通常在几百毫秒内）
             val deferred = finalResultDeferred
             if (deferred != null) {
-                withTimeoutOrNull(5_000L) {
+                val result = withTimeoutOrNull(5_000L) {
                     deferred.await()
                 }
+                if (result == null && !deferred.isCompleted) {
+                    throw IllegalStateException("等待阿里云 STT 最终结果超时")
+                }
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "Error finishing STT: ${e.message}", e)
+            throw e
         } finally {
             // 标记结束，不再处理后续消息
             isClosed.set(true)
@@ -255,23 +263,14 @@ class AliyunRealtimeSttClient(
      * 取消会话
      */
     fun cancel() {
+        val cancellation = CancellationException("Aliyun realtime STT cancelled")
         isClosed.set(true)
-        audioQueue.close()
-        receiveJob?.cancel()
-        
-        try {
-            // 不阻塞地关闭 WebSocket
-            webSocketSession?.let { session ->
-                closeScope.launch {
-                    try {
-                        session.close(CloseReason(CloseReason.Codes.NORMAL, "Cancelled"))
-                    } catch (_: Exception) {}
-                    finally {
-                        cleanup()
-                    }
-                }
-            } ?: cleanup()
-        } catch (_: Exception) {}
+        audioQueue.cancel(cancellation)
+        finalResultDeferred?.cancel(cancellation)
+        sendJob?.cancel(cancellation)
+        receiveJob?.cancel(cancellation)
+        webSocketSession?.cancel(cancellation)
+        cleanup()
 
         Log.i(TAG, "Session cancelled")
     }
@@ -290,8 +289,7 @@ class AliyunRealtimeSttClient(
                 
                 when (frame) {
                     is Frame.Text -> {
-                        val text = frame.readText()
-                        handleMessage(text)
+                        if (handleMessage(frame.readText())) break
                     }
                     is Frame.Close -> {
                         Log.i(TAG, "WebSocket closed by server")
@@ -302,20 +300,22 @@ class AliyunRealtimeSttClient(
             }
         } catch (e: ClosedReceiveChannelException) {
             Log.i(TAG, "Receive channel closed")
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "Error receiving messages: ${e.message}", e)
-            withContext(Dispatchers.Main) {
-                onError?.invoke(e.message ?: "Receive error")
-            }
+            finalResultDeferred?.completeExceptionally(e)
+            notifyErrorOnce(e.message ?: "Receive error")
+            throw e
         }
     }
     
-    private suspend fun handleMessage(text: String) {
+    private suspend fun handleMessage(text: String): Boolean {
         try {
-            val json = Json.parseToJsonElement(text).jsonObject
-            val event = json["header"]?.jsonObject?.get("event")?.jsonPrimitive?.contentOrNull
+            val event = parseAliyunSttEvent(text)
+            val json = event.payload
             
-            when (event) {
+            when (event.name) {
                 "result-generated" -> {
                     val output = json["payload"]?.jsonObject?.get("output")?.jsonObject
                     val sentence = output?.get("sentence")?.jsonObject
@@ -349,19 +349,15 @@ class AliyunRealtimeSttClient(
                     }
                     // 通知 finishAndWait() 可以返回了
                     finalResultDeferred?.complete(finalTextBuilder.toString())
-                }
-                "task-failed" -> {
-                    val errorCode = json["header"]?.jsonObject?.get("error_code")?.jsonPrimitive?.contentOrNull
-                    val errorMsg = json["header"]?.jsonObject?.get("error_message")?.jsonPrimitive?.contentOrNull
-                        ?: "Unknown error"
-                    Log.e(TAG, "Task failed: [$errorCode] $errorMsg")
-                    withContext(Dispatchers.Main) {
-                        onError?.invoke("[$errorCode] $errorMsg")
-                    }
+                    return true
                 }
             }
+            return false
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "Error parsing message: ${e.message}", e)
+            throw e
         }
     }
     
@@ -377,8 +373,20 @@ class AliyunRealtimeSttClient(
             }
         } catch (e: ClosedReceiveChannelException) {
             // 队列已关闭，正常退出
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "Error sending audio: ${e.message}", e)
+            finalResultDeferred?.completeExceptionally(e)
+            notifyErrorOnce(e.message ?: "Audio send error")
+            throw e
+        }
+    }
+
+    private suspend fun notifyErrorOnce(message: String) {
+        if (!errorNotified.compareAndSet(false, true)) return
+        withContext(Dispatchers.Main) {
+            onError?.invoke(message)
         }
     }
     
@@ -387,5 +395,10 @@ class AliyunRealtimeSttClient(
         isTaskStarted.set(false)
         webSocketSession = null
         receiveJob = null
+        sendJob = null
+        onReady = null
+        onPartialResult = null
+        onFinalResult = null
+        onError = null
     }
 }

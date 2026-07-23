@@ -11,32 +11,16 @@ private val REALTIME_KEYWORDS = listOf(
     "today", "latest", "recent", "real-time", "realtime", "news", "stock", "weather", "score"
 )
 
-fun classifyMcpIntent(messageText: String): McpDispatchIntent {
+fun classifyMcpIntent(messageText: String): QueryIntent {
     val normalizedText = messageText.lowercase()
 
     return when {
-        DOCS_KEYWORDS.any { it in normalizedText } -> McpDispatchIntent(
-            primaryIntent = QueryIntent.DOCS_LOOKUP,
-            shouldPreferMcp = true,
-            candidateCategories = setOf(McpToolCategory.DOCS, McpToolCategory.SEARCH),
-        )
+        DOCS_KEYWORDS.any { it in normalizedText } -> QueryIntent.DOCS_LOOKUP
 
-        REALTIME_KEYWORDS.any { it in normalizedText } -> McpDispatchIntent(
-            primaryIntent = QueryIntent.REALTIME_INFO,
-            shouldPreferMcp = true,
-            candidateCategories = setOf(McpToolCategory.SEARCH, McpToolCategory.BROWSER),
-        )
+        REALTIME_KEYWORDS.any { it in normalizedText } -> QueryIntent.REALTIME_INFO
 
-        "http://" in normalizedText || "https://" in normalizedText -> McpDispatchIntent(
-            primaryIntent = QueryIntent.WEB_CONTENT_READ,
-            shouldPreferMcp = true,
-            candidateCategories = setOf(McpToolCategory.BROWSER),
-        )
+        "http://" in normalizedText || "https://" in normalizedText -> QueryIntent.WEB_CONTENT_READ
 
-        else -> McpDispatchIntent(
-            primaryIntent = QueryIntent.LOCAL_REASONING,
-            shouldPreferMcp = false,
-            candidateCategories = emptySet(),
-        )
+        else -> QueryIntent.LOCAL_REASONING
     }
 }

@@ -64,6 +64,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -95,12 +96,14 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.android.everytalk.R
 import com.android.everytalk.ui.components.syntax.SyntaxHighlightTheme
-import com.android.everytalk.ui.components.syntax.SyntaxHighlighter
+import com.android.everytalk.ui.components.syntax.HighlightCache
 import com.android.everytalk.ui.components.content.isPreviewSupported
 import com.android.everytalk.ui.theme.chatColors
 import java.util.UUID
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 internal const val CODE_VIEWER_DIALOG_EDGE_SCALE = 0.72f
 internal const val CODE_VIEWER_DIALOG_TRANSITION_MILLIS = 260
@@ -511,7 +514,7 @@ fun WebPreviewContent(
             }
             document to null
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("WebPreview", "加载预览模板失败", e)
             val errorMessage = e.message?.ifBlank { "Unknown preview error" } ?: "Unknown preview error"
             buildWebPreviewDocument(
                 content = "<html><body>Error loading template: ${escapeHtml(errorMessage)}</body></html>",
@@ -1044,8 +1047,20 @@ private fun SelectableCodeTextView(
     modifier: Modifier = Modifier
 ) {
     val syntaxTheme = if (isDarkTheme) SyntaxHighlightTheme.Dark else SyntaxHighlightTheme.Light
-    val highlightedCode = remember(code, language, isDarkTheme) {
-        SyntaxHighlighter.highlight(code, language, syntaxTheme).toSpannableString(codeTextColor)
+    val highlightedCode by produceState<CharSequence>(
+        code,
+        code,
+        language,
+        isDarkTheme,
+        codeTextColor,
+    ) {
+        value = code
+        if (HighlightCache.shouldHighlight(code, isStreaming = false)) {
+            value = withContext(Dispatchers.Default) {
+                HighlightCache.highlight(code, language, isDarkTheme, syntaxTheme)
+                    .toSpannableString(codeTextColor)
+            }
+        }
     }
     val languageLabel = remember(language) { language.trim().ifBlank { "CODE" }.uppercase() }
     val headerArgb = headerColor.toArgb()

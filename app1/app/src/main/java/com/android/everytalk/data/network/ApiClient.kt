@@ -12,8 +12,6 @@ import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.plugins.*
 import io.ktor.client.plugins.HttpRequestTimeoutException
-import io.ktor.client.plugins.cache.HttpCache
-import io.ktor.client.plugins.cache.storage.FileStorage
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.plugins.websocket.*
 import io.ktor.client.request.*
@@ -23,7 +21,6 @@ import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import io.ktor.utils.io.*
 import io.ktor.utils.io.streams.asInput
-import java.io.File
 import java.io.IOException
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
@@ -34,11 +31,11 @@ import kotlinx.serialization.json.*
 import kotlinx.serialization.modules.SerializersModule
 import kotlinx.serialization.modules.polymorphic
 import kotlinx.serialization.modules.subclass
-import android.graphics.Bitmap.CompressFormat
 import android.util.Base64
 import kotlinx.coroutines.CancellationException as CoroutineCancellationException
 
 private const val MAX_INLINE_ATTACHMENT_BYTES = 10L * 1024L * 1024L
+private const val MAX_MODELS_RESPONSE_BYTES = 4L * 1024L * 1024L
 
 private class AttachmentTooLargeException(message: String) : IllegalStateException(message)
 
@@ -123,145 +120,6 @@ object ApiClient {
         return com.android.everytalk.data.network.parser.StreamEventParser.parseBackendStreamEvent(jsonChunk)
     }
     
-    // 保留原有解析逻辑作为备用（已迁移到 StreamEventParser）
-    @Deprecated("Use StreamEventParser.parseBackendStreamEvent instead")
-    private fun parseBackendStreamEventLegacy(jsonChunk: String): AppStreamEvent? {
-        try {
-            // Parse as JsonObject to avoid AnySerializer deserialization issues
-            val jsonObject = Json.parseToJsonElement(jsonChunk).jsonObject
-            
-            val type = jsonObject["type"]?.jsonPrimitive?.content
-            
-            return when (type) {
-                "content" -> {
-                    val text = jsonObject["text"]?.jsonPrimitive?.content ?: ""
-                    val outputType = jsonObject["output_type"]?.jsonPrimitive?.content
-                    val blockType = jsonObject["block_type"]?.jsonPrimitive?.content
-                    AppStreamEvent.Content(text, outputType, blockType)
-                }
-                "text" -> {
-                    val text = jsonObject["text"]?.jsonPrimitive?.content ?: ""
-                    AppStreamEvent.Text(text)
-                }
-                "content_final" -> {
-                    val text = jsonObject["text"]?.jsonPrimitive?.content ?: ""
-                    val outputType = jsonObject["output_type"]?.jsonPrimitive?.content
-                    val blockType = jsonObject["block_type"]?.jsonPrimitive?.content
-                    AppStreamEvent.ContentFinal(text, outputType, blockType)
-                }
-                "reasoning" -> {
-                    val text = jsonObject["text"]?.jsonPrimitive?.content ?: ""
-                    AppStreamEvent.Reasoning(text)
-                }
-                "reasoning_finish" -> {
-                    val ts = jsonObject["timestamp"]?.jsonPrimitive?.content
-                    AppStreamEvent.ReasoningFinish(ts)
-                }
-                "stream_end" -> {
-                    val messageId = jsonObject["messageId"]?.jsonPrimitive?.content ?: ""
-                    AppStreamEvent.StreamEnd(messageId)
-                }
-                "web_search_status" -> {
-                    val stage = jsonObject["stage"]?.jsonPrimitive?.content ?: ""
-                    AppStreamEvent.WebSearchStatus(stage)
-                }
-                "web_search_results" -> {
-                    val results = try {
-                        val resultsList = jsonObject["results"]?.jsonArray ?: JsonArray(emptyList())
-                        resultsList.mapIndexed { index, resultElement ->
-                            try {
-                                val resultObject = resultElement.jsonObject
-                                com.android.everytalk.data.DataClass.WebSearchResult(
-                                    index = index,
-                                    title = resultObject["title"]?.jsonPrimitive?.content ?: "",
-                                    snippet = resultObject["snippet"]?.jsonPrimitive?.content ?: "",
-                                    href = resultObject["href"]?.jsonPrimitive?.content ?: ""
-                                )
-                            } catch (e: Exception) {
-                                null
-                            }
-                        }.filterNotNull()
-                    } catch (e: Exception) {
-                        emptyList()
-                    }
-                    AppStreamEvent.WebSearchResults(results)
-                }
-                "status_update" -> {
-                    val stage = listOf("statusText", "progressText", "displayText", "message", "status", "stage", "text")
-                        .firstNotNullOfOrNull { key ->
-                            runCatching {
-                                jsonObject[key]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
-                            }.getOrNull()
-                        }.orEmpty()
-                    AppStreamEvent.StatusUpdate(stage)
-                }
-                "execution_status_update" -> {
-                    val status = listOf("statusText", "progressText", "displayText", "message", "status", "stage", "text")
-                        .firstNotNullOfOrNull { key ->
-                            runCatching {
-                                jsonObject[key]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
-                            }.getOrNull()
-                        }
-                    AppStreamEvent.ExecutionStatusUpdate(status)
-                }
-                "tool_call" -> {
-                    val id = jsonObject["id"]?.jsonPrimitive?.content ?: ""
-                    val name = jsonObject["name"]?.jsonPrimitive?.content ?: ""
-                    val argumentsObj = try {
-                        jsonObject["argumentsObj"]?.jsonObject ?: buildJsonObject { }
-                    } catch (e: Exception) {
-                        buildJsonObject { }
-                    }
-                    val isReasoningStep = jsonObject["isReasoningStep"]?.jsonPrimitive?.booleanOrNull
-                    val status = listOf("statusText", "progressText", "displayText", "message", "status", "stage", "text")
-                        .firstNotNullOfOrNull { key ->
-                            runCatching {
-                                jsonObject[key]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
-                            }.getOrNull()
-                        }
-                    AppStreamEvent.ToolCall(
-                        id = id,
-                        name = name,
-                        argumentsObj = argumentsObj,
-                        isReasoningStep = isReasoningStep,
-                        status = status
-                    )
-                }
-                "error" -> {
-                    val message = jsonObject["message"]?.jsonPrimitive?.content ?: ""
-                    val upstreamStatus = jsonObject["upstreamStatus"]?.jsonPrimitive?.intOrNull
-                    AppStreamEvent.Error(message, upstreamStatus)
-                }
-                "finish" -> {
-                    val reason = jsonObject["reason"]?.jsonPrimitive?.content ?: ""
-                    AppStreamEvent.Finish(reason)
-                }
-                "image_generation" -> {
-                    val imageUrl = jsonObject["imageUrl"]?.jsonPrimitive?.content ?: ""
-                    AppStreamEvent.ImageGeneration(imageUrl)
-                }
-                "code_execution_result" -> {
-                    val codeExecutionOutput = jsonObject["codeExecutionOutput"]?.jsonPrimitive?.contentOrNull
-                    val codeExecutionOutcome = jsonObject["codeExecutionOutcome"]?.jsonPrimitive?.contentOrNull
-                    val imageUrl = jsonObject["imageUrl"]?.jsonPrimitive?.contentOrNull
-                    AppStreamEvent.CodeExecutionResult(codeExecutionOutput, codeExecutionOutcome, imageUrl)
-                }
-                "code_executable" -> {
-                    val executableCode = jsonObject["executableCode"]?.jsonPrimitive?.contentOrNull
-                    val codeLanguage = jsonObject["codeLanguage"]?.jsonPrimitive?.contentOrNull
-                    AppStreamEvent.CodeExecutable(executableCode, codeLanguage)
-                }
-                else -> {
-                    android.util.Log.w("ApiClient", "Unknown stream event type: $type")
-                    null
-                }
-            }
-        } catch (e: Exception) {
-            android.util.Log.e("ApiClient", "Failed to parse backend stream event: $jsonChunk", e)
-            return null
-        }
-    }
-
     private val jsonParser: Json by lazy {
         Json {
             ignoreUnknownKeys = true
@@ -312,8 +170,6 @@ object ApiClient {
         if (isInitialized) return
         synchronized(this) {
             if (isInitialized) return
-            // 根据构建类型自动选择配置
-            val cacheFile = File(context.cacheDir, "ktor_http_cache")
             client = HttpClient(io.ktor.client.engine.okhttp.OkHttp) {
                 engine {
                     // 跨境延迟优化配置
@@ -342,14 +198,10 @@ object ApiClient {
                     connectTimeoutMillis = 60_000  // VPN环境下增加连接超时到120秒
                     socketTimeoutMillis = 1800_000
                 }
-                install(HttpCache) {
-                    // 更积极的缓存策略
-                    publicStorage(FileStorage(cacheFile))
-                    privateStorage(FileStorage(File(context.cacheDir, "ktor_private_cache")))
-                }
                 // WebSocket 支持（用于阿里云实时语音识别等）
                 install(WebSockets) {
                     pingIntervalMillis = 30_000  // 30秒心跳
+                    maxFrameSize = MAX_WEBSOCKET_FRAME_BYTES
                 }
                 // 添加更详细的日志记录
                 install(io.ktor.client.plugins.logging.Logging) {
@@ -375,7 +227,7 @@ object ApiClient {
         }
         val uri = try { java.net.URI(withScheme) } catch (_: Exception) { java.net.URI("https://$trimmedAddress") }
         val existingPath = uri.rawPath ?: ""
-        val basePath = if (existingPath.contains("/models")) existingPath else existingPath
+        val basePath = existingPath
             .replace(Regex("/v1/chat/completions/?$"), "/v1")
             .replace(Regex("/chat/completions/?$"), "")
             .replace(Regex("/v1/completions/?$"), "/v1")
@@ -428,8 +280,9 @@ object ApiClient {
         var lineCount = 0
         try {
             android.util.Log.d("ApiClient", "开始读取流数据通道")
+            val boundedLines = BoundedSseLineReader(channel)
             while (!channel.isClosedForRead) {
-                val raw = channel.readLine()
+                val raw = boundedLines.readLine()
                 lineCount++
 
                 if (lineCount <= 10) {
@@ -484,10 +337,12 @@ object ApiClient {
                                         // 顺序挂起发送，确保不丢尾部事件且保持事件顺序
                                         trySend(appEvent)
                                     } else {
-                                        android.util.Log.w("ApiClient", "无法解析的流数据块: '$chunk'")
+                                        android.util.Log.w("ApiClient", "无法解析的流数据块: chars=${chunk.length}")
                                     }
+                                } catch (e: CoroutineCancellationException) {
+                                    throw e
                                 } catch (e: Exception) {
-                                    android.util.Log.e("ApiClientStream", "Exception during event processing for chunk: '$chunk'", e)
+                                    android.util.Log.e("ApiClientStream", "Exception during event processing: chars=${chunk.length}", e)
                                     // 在这里添加容错逻辑，而不是让整个流失败
                                     // 例如，可以发送一个错误事件，或者简单地忽略这个损坏的数据块
                                     // runBlocking { trySend(AppStreamEvent.Error("无效的数据块: $chunk", null)) }
@@ -503,7 +358,7 @@ object ApiClient {
                         }
                         line.startsWith("data:") -> {
                             val dataContent = line.substring(5).trim()
-                            android.util.Log.d("ApiClient", "SSE data行: '$dataContent'")
+                            android.util.Log.d("ApiClient", "SSE data行: chars=${dataContent.length}")
                             if (lineBuffer.isNotEmpty()) lineBuffer.append('\n')
                             lineBuffer.append(dataContent)
                         }
@@ -527,6 +382,8 @@ object ApiClient {
                                         // 顺序挂起发送，确保不丢尾部事件且保持事件顺序
                                         trySend(appEvent)
                                     }
+                                } catch (e: CoroutineCancellationException) {
+                                    throw e
                                 } catch (e: Exception) {
                                     android.util.Log.e("ApiClient", "非SSE格式解析失败: '$trimmed'", e)
                                 }
@@ -597,6 +454,8 @@ object ApiClient {
             send(AppStreamEvent.Error(e.message ?: "附件过大", null))
             send(AppStreamEvent.Finish("attachment_too_large"))
             return@channelFlow
+        } catch (e: CoroutineCancellationException) {
+            throw e
         } catch (e: Exception) {
             android.util.Log.w("ApiClient", "Failed to build multimodal request, using original: ${e.message}")
             request
@@ -667,6 +526,8 @@ object ApiClient {
                     android.util.Log.d("ApiClient", "成功获取更新信息从: $url")
                     return response
                     
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     lastException = e
                     val isLastAttempt = attempt == maxRetries
@@ -754,7 +615,11 @@ object ApiClient {
                 header(HttpHeaders.UserAgent, "EveryTalk/1.0 (Android)")
             }
     
-            val responseBody = response.bodyAsText()
+            if (!response.status.isSuccess()) {
+                val errorBody = response.readErrorTextAtMost()?.take(500).orEmpty()
+                throw IOException("获取模型列表失败: HTTP ${response.status.value} $errorBody".trim())
+            }
+            val responseBody = response.readTextAtMost(MAX_MODELS_RESPONSE_BYTES)
     
             // Gemini格式响应优先解析(官方或反代)：{"models":[{"name":"models/gemini-1.5-pro", ...}, ...]}
             if (isGoogleOfficialDomain || isGeminiChannel) {
@@ -832,6 +697,8 @@ object ApiClient {
                     }
                 }
             }
+        } catch (e: CoroutineCancellationException) {
+            throw e
         } catch (e: Exception) {
             android.util.Log.e("ApiClient", "从 $url 获取模型列表失败", e)
             throw IOException("从 $url 获取模型列表失败: ${e.message}", e)
@@ -1009,6 +876,8 @@ object ApiClient {
                     }
                 }
             }
+        } catch (e: CoroutineCancellationException) {
+            throw e
         } catch (e: Exception) {
             android.util.Log.e("ApiClient", "❌ 图像生成直连失败", e)
             throw IOException("图像生成直连失败: ${e.message}", e)
@@ -1110,29 +979,20 @@ private suspend fun buildDirectMultimodalRequest(
                 }
             }
             is com.android.everytalk.models.SelectedMediaItem.ImageFromBitmap -> {
-                val hasAlpha = item.bitmap?.hasAlpha() == true
-                val mime = if (hasAlpha) "image/png" else "image/jpeg"
-                val baos = java.io.ByteArrayOutputStream()
-                val ok = item.bitmap?.compress(
-                    if (hasAlpha) CompressFormat.PNG else CompressFormat.JPEG,
-                    if (hasAlpha) 100 else 85,
-                    baos
-                ) == true
-                if (ok) {
-                    val bytes = baos.toByteArray()
-                    ensureInlineAttachmentSize("图片", bytes.size.toLong())
-                    val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                if (item.bitmapData.isNotBlank() && isImageMime(item.mimeType)) {
+                    val encodedLength = item.bitmapData.count { !it.isWhitespace() }.toLong()
+                    ensureInlineAttachmentSize("图片", ((encodedLength + 3L) / 4L) * 3L)
                     inlineParts.add(
                         com.android.everytalk.data.DataClass.ApiContentPart.InlineData(
-                            base64Data = b64,
-                            mimeType = mime
+                            base64Data = item.bitmapData,
+                            mimeType = item.mimeType
                         )
                     )
                 }
             }
             is com.android.everytalk.models.SelectedMediaItem.Audio -> {
                 // Audio item already contains base64 data
-                val mime = item.mimeType ?: "audio/3gpp"
+                val mime = item.mimeType
                 ensureInlineAttachmentSize("音频", item.data.length * 3L / 4L)
                 inlineParts.add(
                     com.android.everytalk.data.DataClass.ApiContentPart.InlineData(
@@ -1142,7 +1002,7 @@ private suspend fun buildDirectMultimodalRequest(
                 )
             }
             is com.android.everytalk.models.SelectedMediaItem.GenericFile -> {
-                val mime = item.mimeType ?: "application/octet-stream"
+                val mime = item.mimeType
                 if (isImageMime(mime) || isAudioMime(mime) || isVideoMime(mime)) {
                     val bytes = readInlineAttachmentBytes(context, item.uri, item.displayName)
                     if (bytes != null) {

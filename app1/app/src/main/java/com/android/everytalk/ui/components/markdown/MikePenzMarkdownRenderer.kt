@@ -370,9 +370,6 @@ internal fun markdownLinkLogoIndex(content: String): MarkdownLinkLogoIndex {
 internal fun markdownLinkLogoRequests(content: String): List<MarkdownLinkLogoRequest> =
     markdownLinkLogoIndex(content).requests
 
-internal fun markdownLinkLogoDefinitions(content: String): Map<String, String> =
-    markdownLinkLogoIndex(content).definitions
-
 internal fun markdownLinkLogoKey(host: String): String = MARKDOWN_LINK_LOGO_SCHEME + host
 
 private fun normalizeMarkdownLinkLabel(raw: String): String = raw

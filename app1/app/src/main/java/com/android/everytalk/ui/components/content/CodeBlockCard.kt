@@ -46,16 +46,20 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.foundation.gestures.detectTapGestures
 import com.android.everytalk.R
 import com.android.everytalk.ui.theme.chatColors
-import com.android.everytalk.ui.components.syntax.SyntaxHighlighter
 import com.android.everytalk.ui.components.syntax.SyntaxHighlightTheme
 import com.android.everytalk.ui.components.FullScreenCodeViewerDialog
 import com.android.everytalk.ui.components.WebPreviewLoadState
 import com.android.everytalk.ui.components.WebPreviewContent
 import com.android.everytalk.ui.components.syntax.HighlightCache
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * 提供列表顶部位置的 CompositionLocal，用于代码块吸顶计算
@@ -122,23 +126,17 @@ fun CodeBlockCard(
         if (isDarkTheme) SyntaxHighlightTheme.Dark else SyntaxHighlightTheme.Light
     }
     
-    // 语法高亮处理（带缓存）
-    // 流式模式：降低高亮频率，只在代码较短或变化较大时高亮
-    val highlightedCode = remember(code, language, isDarkTheme, isStreaming) {
-        // 流式模式下，代码较长时跳过高亮，直接返回纯文本
-        // 这样可以避免频繁高亮导致的闪烁
-        if (isStreaming && code.length > 500) {
-            AnnotatedString(code)
-        } else {
-            val cacheKey = HighlightCache.generateKey(code, language, isDarkTheme)
-
-            // 尝试从缓存获取
-            HighlightCache.get(cacheKey) ?: run {
-                // 缓存未命中，执行高亮
-                val result = SyntaxHighlighter.highlight(code, language, syntaxTheme)
-                // 存入缓存
-                HighlightCache.put(cacheKey, result)
-                result
+    val highlightedCode by produceState(
+        AnnotatedString(code),
+        code,
+        language,
+        isDarkTheme,
+        isStreaming,
+    ) {
+        value = AnnotatedString(code)
+        if (HighlightCache.shouldHighlight(code, isStreaming)) {
+            value = withContext(Dispatchers.Default) {
+                HighlightCache.highlight(code, language, isDarkTheme, syntaxTheme)
             }
         }
     }
@@ -416,21 +414,30 @@ fun CodeBlockCard(
                     ) {
                         // 在此表面叠加一个透明遮罩，用于统一捕获点击事件
                         Box(modifier = Modifier.fillMaxSize()) {
-                            WebPreviewContent(
-                                code = code,
-                                language = language ?: "",
-                                previewBackgroundColor = previewBgColor,
-                                previewTextColor = previewTextColor,
-                                modifier = Modifier.fillMaxSize(),
-                                onLoadStateChanged = { previewLoadState = it },
-                            )
-                            // 拦截层，位于 WebView 之上
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .background(Color.Transparent)
-                                    .clickable { showFullScreenPreview = true }
-                            )
+                            if (!showFullScreenPreview) {
+                                WebPreviewContent(
+                                    code = code,
+                                    language = language ?: "",
+                                    previewBackgroundColor = previewBgColor,
+                                    previewTextColor = previewTextColor,
+                                    modifier = Modifier.fillMaxSize(),
+                                    onLoadStateChanged = { previewLoadState = it },
+                                )
+                                // 拦截层，位于 WebView 之上
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(Color.Transparent)
+                                        .semantics {
+                                            contentDescription = "打开全屏网页预览"
+                                        }
+                                        .clickable(
+                                            role = Role.Button,
+                                            onClickLabel = "打开全屏网页预览",
+                                            onClick = { showFullScreenPreview = true },
+                                        )
+                                )
+                            }
                         }
                     }
                 } else {

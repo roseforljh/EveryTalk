@@ -11,6 +11,7 @@ import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -137,6 +138,7 @@ object ConversationExporter {
     ) {
         try {
             val (uri, effectiveTitle) = withContext(Dispatchers.IO) {
+                cleanupSharedFiles(context)
                 val markdown = convertToMarkdown(messages, title)
                 val effectiveTitle = title ?: generateTitle(messages)
 
@@ -184,6 +186,8 @@ object ConversationExporter {
             }
 
             Log.d(TAG, "Share intent launched for conversation: $effectiveTitle")
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "Failed to share conversation", e)
         }

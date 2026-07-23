@@ -14,6 +14,7 @@ import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.DataClass.VoiceBackendConfig
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.util.AppLogger
+import com.android.everytalk.util.ConversationNameHelper
 import com.android.everytalk.util.ScrollController
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CoroutineScope
@@ -21,6 +22,8 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.serialization.Serializable
 
 @Serializable
@@ -55,6 +58,9 @@ data class PendingConfigParams(
     val isImageGen: Boolean,
     val enableCodeExecution: Boolean? = null,
     val toolsJson: String? = null,
+    val imageSize: String? = null,
+    val numInferenceSteps: Int? = null,
+    val guidanceScale: Float? = null,
     val isRefresh: Boolean = false
 )
 
@@ -107,6 +113,10 @@ data class ConversationFunctionToggleState(
     
     // 持久化回调 - 由 AppViewModel 设置，用于保存会话参数
     private var onSaveConversationParams: ((Map<String, GenerationConfig>) -> Unit)? = null
+    @Volatile
+    private var isTextHistoryReadyForParameterCleanup = false
+    @Volatile
+    private var isImageHistoryReadyForStateCleanup = false
     
     /**
      * 初始化持久化回调
@@ -122,6 +132,17 @@ data class ConversationFunctionToggleState(
             conversationGenerationConfigs.value = initialParams
         }
     }
+
+    fun markTextHistoryReadyForParameterCleanup() {
+        isTextHistoryReadyForParameterCleanup = true
+    }
+
+    fun markImageHistoryReadyForStateCleanup() {
+        isImageHistoryReadyForStateCleanup = true
+    }
+
+    fun isConversationStateCleanupReady(): Boolean =
+        isTextHistoryReadyForParameterCleanup && isImageHistoryReadyForStateCleanup
 
     fun getStreamingReasoning(messageId: String): StateFlow<String> {
         return streamingReasoningStates.getOrPut(messageId) { MutableStateFlow("") }.asStateFlow()
@@ -183,10 +204,10 @@ val _isStreamingPaused = MutableStateFlow(false)
         update: (ConversationFunctionToggleState) -> ConversationFunctionToggleState
     ) {
         val conversationId = _currentConversationId.value
-        val currentMap = conversationFunctionToggleStates.value.toMutableMap()
-        val currentState = currentMap[conversationId] ?: ConversationFunctionToggleState()
-        currentMap[conversationId] = update(currentState)
-        conversationFunctionToggleStates.value = currentMap
+        conversationFunctionToggleStates.update { currentMap ->
+            val currentState = currentMap[conversationId] ?: ConversationFunctionToggleState()
+            currentMap + (conversationId to update(currentState))
+        }
     }
     
     // 获取当前会话的生成配置（仅按当前会话ID的内存映射读取）
@@ -209,9 +230,8 @@ val _isStreamingPaused = MutableStateFlow(false)
     fun updateCurrentConversationConfig(config: GenerationConfig) {
         val id = _currentConversationId.value
         // 立即更新内存映射（立刻生效）
-        val currentConfigs = conversationGenerationConfigs.value.toMutableMap()
-        currentConfigs[id] = config
-        conversationGenerationConfigs.value = currentConfigs
+        conversationGenerationConfigs.update { currentConfigs -> currentConfigs + (id to config) }
+        val currentConfigs = conversationGenerationConfigs.value
         
         // 仅非空会话才持久化
         if (messages.isNotEmpty()) {
@@ -233,10 +253,11 @@ val _isStreamingPaused = MutableStateFlow(false)
     fun abandonEmptyPendingConversation() {
         if (messages.isEmpty()) {
             val id = _currentConversationId.value
-            if (conversationGenerationConfigs.value.containsKey(id)) {
-                val newMap = conversationGenerationConfigs.value.toMutableMap()
-                newMap.remove(id)
-                conversationGenerationConfigs.value = newMap
+            val currentMap = conversationGenerationConfigs.value
+            val newMap = conversationGenerationConfigs.updateAndGet { configs ->
+                if (id in configs) configs - id else configs
+            }
+            if (newMap != currentMap) {
                 onSaveConversationParams?.invoke(newMap)
             }
         }
@@ -300,29 +321,21 @@ val _isStreamingPaused = MutableStateFlow(false)
         }
     }
     
-    // 清理未使用的会话参数（保留最近50个会话的参数）
+    // 仅保留现存历史及当前会话的参数，避免按数量裁剪仍有效的 UUID 会话。
     fun cleanupOldConversationParameters() {
-        val currentConfigs = conversationGenerationConfigs.value
-        if (currentConfigs.size > 50) {
-            // Keep only the 50 most recent conversation parameters
-            // For simplicity, we'll keep all history_chat_* and recent new_chat_* IDs
-            val sortedKeys = currentConfigs.keys.sortedByDescending { key ->
-                when {
-                    key.startsWith("history_chat_") -> {
-                        // Keep all history chats (they have stable IDs)
-                        Long.MAX_VALUE
-                    }
-                    key.startsWith("new_chat_") -> {
-                        // Extract timestamp from new_chat_TIMESTAMP
-                        key.substringAfter("new_chat_").toLongOrNull() ?: 0L
-                    }
-                    else -> 0L
-                }
+        if (!isTextHistoryReadyForParameterCleanup) return
+        val retainedIds = buildSet {
+            _historicalConversations.value.forEach { conversation ->
+                ConversationNameHelper.resolveStableId(conversation)?.let(::add)
             }
-            
-            val keysToKeep = sortedKeys.take(50).toSet()
-            val cleanedConfigs = currentConfigs.filterKeys { it in keysToKeep }
-            conversationGenerationConfigs.value = cleanedConfigs
+            _currentConversationId.value.takeIf { it.isNotBlank() }?.let(::add)
+        }
+        val currentConfigs = conversationGenerationConfigs.value
+        if (currentConfigs.isEmpty()) return
+        val cleanedConfigs = conversationGenerationConfigs.updateAndGet { current ->
+            current.filterKeys { it in retainedIds }
+        }
+        if (cleanedConfigs.size != currentConfigs.size) {
             onSaveConversationParams?.invoke(cleanedConfigs)
         }
     }
@@ -339,18 +352,22 @@ val _isStreamingPaused = MutableStateFlow(false)
             _currentConversationId.value = newId
             return
         }
-        val currentConfigs = conversationGenerationConfigs.value
-        val cfg = currentConfigs[oldId]
         // 切换ID
         _currentConversationId.value = newId
         // 若仍处于空会话（未开始发消息），则迁移已落库的旧ID参数到新ID；
         // 若参数尚未落库（pending），保持 pending 即可，由首次发消息时写入
-        if (cfg != null && messages.isEmpty()) {
-            val newMap = currentConfigs.toMutableMap()
-            newMap.remove(oldId)
-            newMap[newId] = cfg
-            conversationGenerationConfigs.value = newMap
-            onSaveConversationParams?.invoke(newMap)
+        if (messages.isEmpty()) {
+            var newMap = conversationGenerationConfigs.value
+            var changed = false
+            conversationGenerationConfigs.update { current ->
+                val cfg = current[oldId]
+                changed = cfg != null
+                newMap = cfg?.let { current - oldId + (newId to it) } ?: current
+                newMap
+            }
+            if (changed) {
+                onSaveConversationParams?.invoke(newMap)
+            }
         }
     }
 
@@ -520,14 +537,10 @@ val _isStreamingPaused = MutableStateFlow(false)
         selectedMediaItems.clear()
     }
 fun addMessage(message: Message, isImageGeneration: Boolean = false) {
-    // SnapshotStateList 操作需要在主线程执行
-    if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) {
-        kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.Main.immediate) {
-            addMessageInternal(message, isImageGeneration)
-        }
-    } else {
-        addMessageInternal(message, isImageGeneration)
+    check(Looper.myLooper() == Looper.getMainLooper()) {
+        "addMessage 必须在主线程调用，以保持消息写入与后续保存的顺序"
     }
+    addMessageInternal(message, isImageGeneration)
 }
 
 private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {

@@ -60,7 +60,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
@@ -84,9 +84,6 @@ import com.android.everytalk.ui.components.ImagePreviewDialog
 import com.android.everytalk.ui.components.streaming.StreamBlockParser
 import com.android.everytalk.ui.components.streaming.UnifiedMarkdownRenderer
 import com.android.everytalk.ui.components.streaming.contentVersionForRendering
-import android.graphics.Bitmap
-import android.util.Base64
-import java.io.ByteArrayOutputStream
 
 private val CONTEXT_MENU_CORNER_RADIUS = 28.dp
 private val CONTEXT_MENU_ITEM_ICON_SIZE = 22.dp
@@ -161,6 +158,8 @@ internal fun UserOrErrorMessageContent(
     scrollStateManager: com.android.everytalk.ui.screens.MainScreen.chat.text.state.ChatScrollStateManager
 ) {
     val haptic = LocalHapticFeedback.current
+    val currentMessage by rememberUpdatedState(message)
+    val currentOnLongPress by rememberUpdatedState(onLongPress)
     var globalPosition by remember { mutableStateOf(Offset.Zero) }
     val renderText = displayedText.ifBlank { message.text }
     val preparedMessage = remember(message.id, renderText) {
@@ -172,8 +171,9 @@ internal fun UserOrErrorMessageContent(
     }
 
     // 基于发送者动态计算最大宽度：用户71%，AI80%
-    val configuration = LocalConfiguration.current
-    val screenDp = configuration.screenWidthDp.dp
+    val windowSize = LocalWindowInfo.current.containerSize
+    val density = LocalDensity.current
+    val screenDp = with(density) { windowSize.width.toDp() }
     val bubbleShape = RoundedCornerShape(
         topStart = 18.dp,
         topEnd = 0.dp,
@@ -217,7 +217,7 @@ internal fun UserOrErrorMessageContent(
                             )
                             // localOffset 是相对于 Surface 的，加上 globalPosition 即可
                             val globalOffset = globalPosition + localOffset
-                            onLongPress(message, globalOffset)
+                            currentOnLongPress(currentMessage, globalOffset)
                         }
                     )
                 }
@@ -227,7 +227,7 @@ internal fun UserOrErrorMessageContent(
             var hasOverflow by remember(message.id) { mutableStateOf(false) }
             val contentScrollState = rememberScrollState()
             val maxUserBubbleHeight = resolveUserBubbleMaxHeightDp(
-                screenHeightDp = configuration.screenHeightDp.toFloat(),
+                screenHeightDp = with(density) { windowSize.height.toDp().value },
                 isExpanded = isExpanded,
             ).dp
             val constrainUserBubbleHeight = shouldConstrainUserBubbleHeight(
@@ -368,10 +368,13 @@ fun AttachmentsContent(
 ) {
     val context = LocalContext.current
     val haptic = LocalHapticFeedback.current
+    val currentMessage by rememberUpdatedState(message)
+    val currentOnImageClick by rememberUpdatedState(onImageClick)
+    val currentOnLongPress by rememberUpdatedState(onLongPress)
     var previewUrlInternal by remember(message.id) { mutableStateOf<String?>(null) }
 
     // 附件区域也跟随相同的最大宽度限制
-    val screenDp = LocalConfiguration.current.screenWidthDp.dp
+    val screenDp = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.width.toDp() }
     val roleMax = if (message.sender == Sender.User) screenDp * 0.6f else screenDp * 0.8f
     val attachmentsAppliedMax = roleMax.coerceAtMost(maxWidth)
 
@@ -395,12 +398,16 @@ fun AttachmentsContent(
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 imageAttachments.forEach { attachment ->
-                    var imageGlobalPosition by remember { mutableStateOf(Offset.Zero) }
-                    val imageModel: Any = when (attachment) {
-                        is SelectedMediaItem.ImageFromUri -> if (attachment.uri.scheme == "data") attachment.uri.toString() else attachment.uri
-                        is SelectedMediaItem.ImageFromBitmap -> attachment.bitmap as Any
-                        else -> ""
+                    var imageGlobalPosition by remember(attachment.id) { mutableStateOf(Offset.Zero) }
+                    val imageModel: Any = remember(attachment) {
+                        when (attachment) {
+                            is SelectedMediaItem.ImageFromUri -> attachment.filePath?.takeIf { it.isNotBlank() }
+                                ?: if (attachment.uri.scheme == "data") attachment.uri.toString() else attachment.uri
+                            is SelectedMediaItem.ImageFromBitmap -> attachment.model
+                            else -> ""
+                        }
                     }
+                    val currentImageModel by rememberUpdatedState(imageModel)
                     coil3.compose.AsyncImage(
                         model = imageModel,
                         contentDescription = "AI generated image",
@@ -410,21 +417,17 @@ fun AttachmentsContent(
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(12.dp))
                             .onGloballyPositioned { imageGlobalPosition = it.localToRoot(Offset.Zero) }
-                            .pointerInput(message.id) {
+                            .pointerInput(message.id, attachment.id) {
                                 detectTapGestures(
                                     onTap = {
-                                        val url = when (attachment) {
-                                            is SelectedMediaItem.ImageFromUri -> attachment.uri.toString()
-                                            is SelectedMediaItem.ImageFromBitmap -> attachment.bitmap?.let { bitmapToDataUri(it) } ?: ""
-                                            else -> ""
-                                        }
+                                        val url = currentImageModel.toString()
                                         if (url.isNotBlank()) {
-                                            if (onImageClick != null) onImageClick.invoke(url) else { previewUrlInternal = url }
+                                            currentOnImageClick?.invoke(url) ?: run { previewUrlInternal = url }
                                         }
                                     },
                                     onLongPress = { localOffset ->
                                         haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                        onLongPress(message, imageGlobalPosition + localOffset)
+                                        currentOnLongPress(currentMessage, imageGlobalPosition + localOffset)
                                     }
                                 )
                             }
@@ -436,6 +439,12 @@ fun AttachmentsContent(
             val imageShape = RoundedCornerShape(12.dp)
             val imageBorderColor = attachmentImageBorderColor(MaterialTheme.colorScheme.onSurface)
             val scrollState = rememberScrollState()
+            val canScrollBackward by remember {
+                derivedStateOf { scrollState.value > 0 }
+            }
+            val canScrollForward by remember {
+                derivedStateOf { scrollState.value < scrollState.maxValue }
+            }
             val isUser = message.sender == Sender.User
 
             LaunchedEffect(isUser, imageAttachments.size, scrollState.maxValue) {
@@ -453,16 +462,18 @@ fun AttachmentsContent(
                         .fillMaxWidth()
                         .horizontalScroll(scrollState)
                 ) {
-                    imageAttachments.forEachIndexed { idx, attachment ->
-                        var imageGlobalPosition by remember { mutableStateOf(Offset.Zero) }
+                    imageAttachments.forEach { attachment ->
+                        var imageGlobalPosition by remember(attachment.id) { mutableStateOf(Offset.Zero) }
                         var thumbnailSize by remember(attachment.id) {
                             mutableStateOf(AttachmentThumbnailSize(100f, 100f))
                         }
                         val imageModel: Any = remember(attachment) { when (attachment) {
-                            is SelectedMediaItem.ImageFromUri -> if (attachment.uri.scheme == "data") attachment.uri.toString() else attachment.uri
-                            is SelectedMediaItem.ImageFromBitmap -> attachment.bitmap ?: ""
+                            is SelectedMediaItem.ImageFromUri -> attachment.filePath?.takeIf { it.isNotBlank() }
+                                ?: if (attachment.uri.scheme == "data") attachment.uri.toString() else attachment.uri
+                            is SelectedMediaItem.ImageFromBitmap -> attachment.model
                             else -> ""
                         } }
+                        val currentImageModel by rememberUpdatedState(imageModel)
                         coil3.compose.AsyncImage(
                             model = imageModel,
                             contentDescription = "Image attachment",
@@ -482,21 +493,17 @@ fun AttachmentsContent(
                                 .background(MaterialTheme.colorScheme.surfaceVariant)
                                 .border(1.dp, imageBorderColor, imageShape)
                                 .onGloballyPositioned { imageGlobalPosition = it.localToRoot(Offset.Zero) }
-                                .pointerInput(message.id, idx) {
+                                .pointerInput(message.id, attachment.id) {
                                     detectTapGestures(
                                         onTap = {
-                                            val url = when (attachment) {
-                                                is SelectedMediaItem.ImageFromUri -> attachment.uri.toString()
-                                                is SelectedMediaItem.ImageFromBitmap -> attachment.bitmap?.let { bitmapToDataUri(it) } ?: ""
-                                                else -> ""
-                                            }
+                                            val url = currentImageModel.toString()
                                             if (url.isNotBlank()) {
-                                                if (onImageClick != null) onImageClick.invoke(url) else { previewUrlInternal = url }
+                                                currentOnImageClick?.invoke(url) ?: run { previewUrlInternal = url }
                                             }
                                         },
                                         onLongPress = { localOffset ->
                                             haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                            onLongPress(message, imageGlobalPosition + localOffset)
+                                            currentOnLongPress(currentMessage, imageGlobalPosition + localOffset)
                                         }
                                     )
                                 }
@@ -518,7 +525,7 @@ fun AttachmentsContent(
                         )
                     }
                 }
-                if (scrollState.value > 0) {
+                if (canScrollBackward) {
                     Box(
                         modifier = Modifier
                             .align(Alignment.CenterStart)
@@ -531,7 +538,7 @@ fun AttachmentsContent(
                             )
                     )
                 }
-                if (scrollState.value < scrollState.maxValue) {
+                if (canScrollForward) {
                     Box(
                         modifier = Modifier
                             .align(Alignment.CenterEnd)
@@ -550,7 +557,7 @@ fun AttachmentsContent(
         nonImageAttachments.forEach { attachment ->
             when (attachment) {
                 is SelectedMediaItem.GenericFile -> {
-                    var itemGlobalPosition by remember { mutableStateOf(Offset.Zero) }
+                    var itemGlobalPosition by remember(attachment.id) { mutableStateOf(Offset.Zero) }
                     Row(
                         modifier = Modifier
                             .widthIn(max = attachmentsAppliedMax)
@@ -569,7 +576,7 @@ fun AttachmentsContent(
                                     },
                                     onLongPress = { localOffset ->
                                         haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                        onLongPress(message, itemGlobalPosition + localOffset)
+                                        currentOnLongPress(currentMessage, itemGlobalPosition + localOffset)
                                     }
                                 )
                             }
@@ -584,14 +591,16 @@ fun AttachmentsContent(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = attachment.displayName ?: attachment.uri.path?.substringAfterLast('/') ?: "Attached File",
+                            text = attachment.displayName.ifBlank {
+                                attachment.uri.pathSegments.lastOrNull().orEmpty().ifBlank { "Attached File" }
+                            },
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
                 is SelectedMediaItem.Audio -> {
-                    var itemGlobalPosition by remember { mutableStateOf(Offset.Zero) }
+                    var itemGlobalPosition by remember(attachment.id) { mutableStateOf(Offset.Zero) }
                     Row(
                         modifier = Modifier
                             .widthIn(max = attachmentsAppliedMax)
@@ -599,12 +608,11 @@ fun AttachmentsContent(
                             .background(bubbleColor, RoundedCornerShape(12.dp))
                             .clip(RoundedCornerShape(12.dp))
                             .onGloballyPositioned { itemGlobalPosition = it.localToRoot(Offset.Zero) }
-                            .pointerInput(message.id, attachment) {
+                            .pointerInput(message.id, attachment.id) {
                                 detectTapGestures(
-                                    onTap = { },
                                     onLongPress = { localOffset ->
                                         haptic.performHapticFeedback(androidx.compose.ui.hapticfeedback.HapticFeedbackType.LongPress)
-                                        onLongPress(message, itemGlobalPosition + localOffset)
+                                        currentOnLongPress(currentMessage, itemGlobalPosition + localOffset)
                                     }
                                 )
                             }
@@ -693,13 +701,6 @@ private fun getIconForMimeType(mimeType: String?): androidx.compose.ui.graphics.
     }
 }
 
-private fun bitmapToDataUri(bitmap: Bitmap): String {
-    val output = ByteArrayOutputStream()
-    bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
-    val base64 = Base64.encodeToString(output.toByteArray(), Base64.NO_WRAP)
-    return "data:image/png;base64,$base64"
-}
-
 @Composable
 fun MessageContextMenu(
     isVisible: Boolean,
@@ -712,13 +713,13 @@ fun MessageContextMenu(
 ) {
     if (isVisible) {
         val density = LocalDensity.current
-        val configuration = LocalConfiguration.current
+        val windowSize = LocalWindowInfo.current.containerSize
         val isDark = isSystemInDarkTheme()
 
         val menuWidth = 160.dp
         val menuWidthPx = with(density) { menuWidth.toPx() }
-        val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
-        val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
+        val screenWidthPx = windowSize.width.toFloat()
+        val screenHeightPx = windowSize.height.toFloat()
         val estimatedMenuHeightPx = with(density) { (56.dp * 3 + 16.dp).toPx() }
 
         val rawX = pressOffset.x - menuWidthPx
@@ -808,13 +809,13 @@ fun ImageContextMenu(
 ) {
    if (isVisible) {
        val density = LocalDensity.current
-       val configuration = LocalConfiguration.current
+       val windowSize = LocalWindowInfo.current.containerSize
        val isDark = isSystemInDarkTheme()
 
        val menuWidth = 160.dp
        val menuWidthPx = with(density) { menuWidth.toPx() }
-       val screenWidthPx = with(density) { configuration.screenWidthDp.dp.toPx() }
-       val screenHeightPx = with(density) { configuration.screenHeightDp.dp.toPx() }
+       val screenWidthPx = windowSize.width.toFloat()
+       val screenHeightPx = windowSize.height.toFloat()
        val estimatedMenuHeightPx = with(density) { (56.dp * imageContextMenuItemCount(onEdit != null) + 16.dp).toPx() }
 
        val fingerVerticalOffsetPx = with(density) { 20.dp.toPx() }

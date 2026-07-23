@@ -15,6 +15,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.edit
 import com.android.everytalk.data.DataClass.VoiceBackendConfig
 import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.ui.screens.MainScreen.chat.models.DynamicModelSelector
@@ -311,14 +312,14 @@ fun SttSettingsDialog(
                         if (newModel.isNotBlank() && !customModels.contains(newModel)) {
                             val newList = customModels + newModel.trim()
                             customModels = newList
-                            uiPrefs.edit().putString(customModelsKey, newList.joinToString(",")).apply()
+                            uiPrefs.edit { putString(customModelsKey, newList.joinToString(",")) }
                             model = newModel.trim()
                         }
                     },
                     onRemoveModel = { modelToRemove ->
                         val newList = customModels - modelToRemove
                         customModels = newList
-                        uiPrefs.edit().putString(customModelsKey, newList.joinToString(",")).apply()
+                        uiPrefs.edit { putString(customModelsKey, newList.joinToString(",")) }
                         if (model == modelToRemove) {
                             model = ""
                         }

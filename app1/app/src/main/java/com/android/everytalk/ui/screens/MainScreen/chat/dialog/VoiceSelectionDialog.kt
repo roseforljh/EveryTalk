@@ -68,7 +68,7 @@ fun VoiceSelectionDialog(
     android.util.Log.d("VoiceSelectionDialog", "Dialog opened: ttsPlatform=$ttsPlatform, savedVoice=$savedVoice, selectedVoice=$selectedVoice")
     
     // 阿里云音色分类选项卡状态
-    var aliyunCategory by remember { mutableStateOf(0) } // 0=国内, 1=国外, 2=乡音
+    var aliyunCategory by remember { mutableIntStateOf(0) } // 0=国内, 1=国外, 2=乡音
     
     // Gemini 音色
     val geminiVoices = listOf(

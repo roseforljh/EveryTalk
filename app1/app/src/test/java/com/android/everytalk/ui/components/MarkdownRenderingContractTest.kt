@@ -1,6 +1,5 @@
 package com.android.everytalk.ui.components
 
-import com.android.everytalk.ui.components.markdown.markdownToPlainText
 import com.android.everytalk.ui.components.streaming.BLOCK_FORMULA_FENCE_LANGUAGE
 import com.android.everytalk.ui.components.streaming.DETAILS_FENCE_LANGUAGE
 import com.android.everytalk.ui.components.streaming.FormulaDisplayMode
@@ -244,7 +243,7 @@ class MarkdownRenderingContractTest {
     }
 
     @Test
-    fun `pricing dollars remain ordinary markdown and plain copy keeps their values`() {
+    fun `pricing dollars remain ordinary markdown`() {
         val markdown = """
             **Free** 套餐为 **${'$'}0/月**，每月包含 ${'$'}30 inference credit。
 
@@ -255,14 +254,9 @@ class MarkdownRenderingContractTest {
             messageId = "pricing",
             contentVersion = 27L,
         )
-        val plainText = markdownToPlainText(markdown)
-
         assertEquals(markdown, prepared.markdown)
         assertTrue(prepared.formulas.isEmpty())
         assertTrue(parseMarkdown(prepared.markdown) is State.Success)
-        assertTrue(plainText.contains("${'$'}0/月"))
-        assertTrue(plainText.contains("${'$'}30 inference credit"))
-        assertFalse(plainText.contains("**"))
     }
 
     @Test

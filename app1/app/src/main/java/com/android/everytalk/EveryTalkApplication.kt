@@ -3,7 +3,6 @@ package com.android.everytalk
 import android.app.Application
 import android.content.res.Configuration
 import com.android.everytalk.di.allModules
-import com.android.everytalk.ui.components.icons.MdiIconMap
 import com.android.everytalk.util.DynamicIconSwitcher
 import org.koin.android.ext.koin.androidContext
 import org.koin.android.ext.koin.androidLogger
@@ -14,11 +13,6 @@ class EveryTalkApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
-
-        try {
-            MdiIconMap.init(this)
-        } catch (_: Throwable) {
-        }
 
         startKoin {
             androidLogger(Level.ERROR)

@@ -2,11 +2,36 @@ package com.android.everytalk.util.storage
 
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.IOException
 import java.io.InputStream
+
+internal class CappedByteArrayOutputStream(
+    private val maxBytes: Long,
+) : ByteArrayOutputStream(minOf(maxBytes, 8192L).toInt()) {
+    init {
+        require(maxBytes >= 0L) { "maxBytes must be non-negative" }
+    }
+
+    private fun ensureCapacity(incomingBytes: Int) {
+        if (incomingBytes < 0 || count.toLong() + incomingBytes > maxBytes) {
+            throw IOException("Output exceeds maximum size: $maxBytes bytes")
+        }
+    }
+
+    override fun write(value: Int) {
+        ensureCapacity(1)
+        super.write(value)
+    }
+
+    override fun write(buffer: ByteArray, offset: Int, length: Int) {
+        ensureCapacity(length)
+        super.write(buffer, offset, length)
+    }
+}
 
 internal fun readAtMost(inputStream: InputStream, maxBytes: Long): ByteArray {
     require(maxBytes >= 0) { "maxBytes must be non-negative" }
-    val output = ByteArrayOutputStream()
+    val output = ByteArrayOutputStream(minOf(maxBytes, 8192L).toInt())
     val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
     var total = 0L
 

@@ -4,6 +4,7 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.size
 import androidx.compose.runtime.*
+import androidx.compose.runtime.snapshots.Snapshot
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -16,11 +17,11 @@ import kotlin.math.PI
 fun VoiceWaveAnimation(
     isRecording: Boolean,
     color: Color,
-    currentVolume: Float = 0f,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    currentVolume: Float = 0f
 ) {
     // 形变振幅：用于波形的不规则形变（保持原有逻辑）
-    var amplitudeTarget by remember { mutableStateOf(0.5f) }
+    var amplitudeTarget by remember { mutableFloatStateOf(0.5f) }
     val amplitude by animateFloatAsState(
         targetValue = amplitudeTarget,
         animationSpec = tween(durationMillis = 420, easing = FastOutSlowInEasing),
@@ -28,10 +29,10 @@ fun VoiceWaveAnimation(
     )
     
     // 连续相位：基于帧时间推进，不重启，避免周期性"卡顿"
-    var phase by remember { mutableStateOf(0f) }
+    var phase by remember { mutableFloatStateOf(0f) }
     
     // 🎤 音量缩放：根据实时音量大小控制整体缩放（新增）
-    var volumeScaleTarget by remember { mutableStateOf(1f) }
+    var volumeScaleTarget by remember { mutableFloatStateOf(1f) }
     val volumeScale by animateFloatAsState(
         targetValue = volumeScaleTarget,
         animationSpec = tween(durationMillis = 150, easing = FastOutSlowInEasing),
@@ -55,18 +56,14 @@ fun VoiceWaveAnimation(
                 val a = kotlin.math.sin(2f * PI.toFloat() * (tSec / 6f))
                 val b = kotlin.math.sin(2f * PI.toFloat() * (tSec / 7.8f))
                 val env = ((a + b) * 0.5f * 0.5f) + 0.5f // 归一到 0..1 并压缩
-                amplitudeTarget = 0.55f + 0.45f * env
-
-                // 🎤 音量缩放：根据实时麦克风音量调整（1.0 ~ 1.3，最小为默认大小）
-                val newScale = 1f + latestVolume * 0.3f
-                if (volumeScaleTarget != newScale) {
-                    android.util.Log.d("VoiceWaveAnimation", "🎨 Scale update: volume=$latestVolume, scale=$newScale")
-                }
-                volumeScaleTarget = newScale
-
-                // 匀速相位推进（不重启），保持连续
+                val newAmplitudeTarget = 0.55f + 0.45f * env
+                val newVolumeScaleTarget = 1f + latestVolume * 0.3f
                 val omega = 0.8f // rad/s
-                phase += omega * dt
+                Snapshot.withMutableSnapshot {
+                    amplitudeTarget = newAmplitudeTarget
+                    volumeScaleTarget = newVolumeScaleTarget
+                    phase += omega * dt
+                }
             }
         }
         
@@ -85,8 +82,10 @@ fun VoiceWaveAnimation(
                 // 使用缓动函数使过渡更自然
                 val rawProgress = (acc / duration).coerceIn(0f, 1f)
                 val easedProgress = rawProgress * rawProgress * (3f - 2f * rawProgress) // smoothstep
-                amplitudeTarget = startAmplitude + (0.5f - startAmplitude) * easedProgress
-                volumeScaleTarget = startVolumeScale + (1f - startVolumeScale) * easedProgress
+                Snapshot.withMutableSnapshot {
+                    amplitudeTarget = startAmplitude + (0.5f - startAmplitude) * easedProgress
+                    volumeScaleTarget = startVolumeScale + (1f - startVolumeScale) * easedProgress
+                }
             }
         }
     }

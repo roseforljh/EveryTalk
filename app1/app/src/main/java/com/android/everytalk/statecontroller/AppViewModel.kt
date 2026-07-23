@@ -3,15 +3,13 @@ package com.android.everytalk.statecontroller
 import android.app.Application
 import android.util.Log
 import androidx.annotation.Keep
-import androidx.collection.LruCache
 import androidx.compose.material3.DrawerState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import coil3.ImageLoader
-import coil3.util.DebugLogger
+import coil3.imageLoader
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.util.storage.FileManager
 import com.android.everytalk.data.DataClass.GitHubRelease
@@ -29,7 +27,6 @@ import com.android.everytalk.ui.components.math.MathJaxSvgRenderer
 import com.android.everytalk.ui.screens.viewmodel.ConfigManager
 import com.android.everytalk.ui.screens.viewmodel.DataPersistenceManager
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
-import com.android.everytalk.util.cache.CacheManager
 import android.graphics.Bitmap
 import android.net.Uri
 import android.widget.Toast
@@ -48,9 +45,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
-import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -64,6 +60,7 @@ import com.android.everytalk.statecontroller.viewmodel.ProviderManager
 import com.android.everytalk.statecontroller.viewmodel.ExportManager
 import com.android.everytalk.statecontroller.viewmodel.UpdateManager
 import com.android.everytalk.statecontroller.facade.MessageItemsController
+import com.android.everytalk.statecontroller.mcp.dispatch.McpToolCategory
 import com.android.everytalk.statecontroller.controller.systemprompt.SystemPromptController
 import com.android.everytalk.statecontroller.controller.config.SettingsController
 import com.android.everytalk.statecontroller.controller.conversation.HistoryController
@@ -81,9 +78,7 @@ import com.android.everytalk.statecontroller.controller.conversation.AnimationSt
 import com.android.everytalk.statecontroller.controller.conversation.EditMessageController
 import com.android.everytalk.statecontroller.controller.media.ClipboardController
 import com.android.everytalk.statecontroller.controller.config.ConfigFacade
-import com.android.everytalk.statecontroller.mcp.dispatch.McpUiStage
 import com.android.everytalk.statecontroller.controller.config.ProviderController
-import com.android.everytalk.statecontroller.controller.cache.CacheController
 import com.android.everytalk.statecontroller.viewmodel.McpManager
 import com.android.everytalk.data.mcp.McpServerConfig
 import com.android.everytalk.data.mcp.McpServerState
@@ -97,7 +92,6 @@ import com.android.everytalk.data.network.OpenAIDirectClient
 import com.android.everytalk.data.network.OpenAIResponsesClient
 import com.android.everytalk.data.network.WebSearchSupport
 import com.android.everytalk.data.network.WebFetchToolExecutor
-import com.android.everytalk.util.storage.IncrementalBackupManager
 import com.android.everytalk.util.storage.readAtMost
 import com.android.everytalk.util.ConversationNameHelper
 import kotlinx.serialization.json.JsonElement
@@ -115,6 +109,19 @@ import java.util.TimeZone
 
 private const val MAX_URI_BASE64_BYTES = 10L * 1024L * 1024L
 private const val TOOL_STATUS_TARGET_MAX_CHARS = 24
+
+internal fun Throwable.rethrowIfCancellation() {
+    if (this is CancellationException) throw this
+}
+
+internal inline fun <T> runCatchingPreservingCancellation(block: () -> T): Result<T> {
+    return try {
+        Result.success(block())
+    } catch (t: Throwable) {
+        t.rethrowIfCancellation()
+        Result.failure(t)
+    }
+}
 
 private fun compactToolStatusTarget(value: String, maxChars: Int = TOOL_STATUS_TARGET_MAX_CHARS): String {
     val normalized = value.replace(Regex("\\s+"), " ").trim()
@@ -279,10 +286,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _selectedExternalWebSearchProviderId = MutableStateFlow<String?>(null)
     val selectedExternalWebSearchProviderId: StateFlow<String?>
         get() = _selectedExternalWebSearchProviderId.asStateFlow()
-    private val _mcpUiStage = MutableStateFlow<McpUiStage?>(null)
-    val mcpUiStage: StateFlow<McpUiStage?>
-        get() = _mcpUiStage.asStateFlow()
-
     val selectedExternalWebSearchProvider: ExternalWebSearchProvider?
         get() = ExternalWebSearchProvider.fromId(_selectedExternalWebSearchProviderId.value)
 
@@ -291,9 +294,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             ?.let { provider -> _externalWebSearchConfigs.value[provider.providerId]?.apiKey.orEmpty() }
             .orEmpty()
 
-    private val cacheManager: CacheManager by lazy { 
-        org.koin.java.KoinJavaComponent.getKoin().get() 
-    }
     private val fileManager: FileManager by lazy { 
         org.koin.java.KoinJavaComponent.getKoin().get() 
     }
@@ -301,23 +301,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         org.koin.java.KoinJavaComponent.getKoin().get()
     }
     
-    private val cacheController by lazy { CacheController(cacheManager, viewModelScope) }
-    
-    val incrementalBackupManager by lazy { IncrementalBackupManager() }
-    
     private val messagesMutex = Mutex()
     private val historyMutex = Mutex()
-    private val textConversationPreviewCache get() = cacheController.getTextPreviewCache()
-    private val imageConversationPreviewCache get() = cacheController.getImagePreviewCache()
     internal val stateHolder = ViewModelStateHolder()
+    private val conversationPreviewController = ConversationPreviewController(stateHolder)
     
     val gestureManager = com.android.everytalk.ui.components.GestureConflictManager()
     
     val streamingMessageStateManager get() = stateHolder.streamingMessageStateManager
     
-    private val imageLoader = ImageLoader.Builder(application.applicationContext)
-        .logger(DebugLogger())
-        .build()
+    private val imageLoader = application.applicationContext.imageLoader
     val persistenceManager =
             DataPersistenceManager(
                     application.applicationContext,
@@ -332,7 +325,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     persistenceManager,
                     ::areMessageListsEffectivelyEqual,
                     onHistoryModified = {
-                        cacheController.evictAllPreviews()
+                        conversationPreviewController.clearAllCaches()
                     },
                     scope = viewModelScope
             )
@@ -372,9 +365,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 viewModelScope,
                 historyManager,
                 onAiMessageFullTextChanged = ::onAiMessageFullTextChanged,
-                ::triggerScrollToBottom,
-                executeMcpTool = { toolName, arguments -> mcpManager.callTool(toolName, arguments) },
-                isMcpTool = { toolName -> mcpManager.isMcpTool(toolName) }
+                triggerScrollToBottom = ::triggerScrollToBottom,
         )
     }
     private val configManager: ConfigManager by lazy {
@@ -392,13 +383,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 showSnackbar = ::showSnackbar,
                 triggerScrollToBottom = { triggerScrollToBottom() },
                 uriToBase64Encoder = { uri -> encodeUriAsBase64(uri) },
-                getMcpToolsForRequest = { mcpManager.getToolsForChatRequest() },
                 getMcpDispatchCandidates = { mcpManager.getDispatchCandidates() },
                 getSelectedExternalWebSearchProvider = { selectedExternalWebSearchProvider },
                 getSelectedExternalWebSearchProviderApiKey = { selectedExternalWebSearchProviderApiKey }
-        ).also {
-            _mcpUiStage.value = null
-        }
+        )
     }
 
     private val openClawRuntimeStatusService by lazy {
@@ -408,15 +396,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             json = org.koin.java.KoinJavaComponent.getKoin().get()
         )
     }
-
-    private val _markdownChunkToAppendFlow =
-            MutableSharedFlow<Pair<String, Pair<String, String>>>(
-                    replay = 0,
-                    extraBufferCapacity = 128
-            )
-    @Suppress("unused")
-    val markdownChunkToAppendFlow: SharedFlow<Pair<String, Pair<String, String>>> =
-             _markdownChunkToAppendFlow.asSharedFlow()
 
     val drawerState: DrawerState
         get() = stateHolder.drawerState
@@ -505,6 +484,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val exportManager = ExportManager()
     val exportRequest: Flow<Pair<String, String>> = exportManager.exportRequest
     val settingsExportRequest: Flow<Pair<String, String>> = exportManager.settingsExportRequest
+    private var pendingSettingsExport: Pair<String, String>? = null
+
+    fun stageSettingsExport(data: Pair<String, String>) {
+        pendingSettingsExport = data
+    }
+
+    fun consumeSettingsExport(): Pair<String, String>? = pendingSettingsExport.also {
+        pendingSettingsExport = null
+    }
 
     private val dialogManager = DialogManager()
     private val editMessageController = EditMessageController(
@@ -599,9 +587,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
    )
    val chatListItems: StateFlow<List<ChatListItem>> get() = messageItemsController.chatListItems
    val imageGenerationChatListItems: StateFlow<List<ChatListItem>> get() = messageItemsController.imageGenerationChatListItems
-   private val modelFetchManager = com.android.everytalk.statecontroller.viewmodel.ModelFetchManager()
-   val isFetchingModels: StateFlow<Boolean> = modelFetchManager.isFetchingModels
-   val fetchedModels: StateFlow<List<String>> = modelFetchManager.fetchedModels
+    private val modelFetchManager = com.android.everytalk.statecontroller.viewmodel.ModelFetchManager()
+    val fetchedModels: StateFlow<List<String>> = modelFetchManager.fetchedModels
    val isRefreshingModels: StateFlow<Set<String>> = modelFetchManager.isRefreshingModels
 
    // 控制器：设置导入/导出
@@ -609,6 +596,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
        context = application.applicationContext,
        stateHolder = stateHolder,
        persistenceManager = persistenceManager,
+       historyManager = historyManager,
        providerManager = providerManager,
        exportManager = exportManager,
        json = json,
@@ -641,7 +629,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
    private val historyController = HistoryController(
        stateHolder = stateHolder,
        historyManager = historyManager,
-       cacheManager = cacheManager,
        apiHandler = apiHandler,
        scope = viewModelScope,
        showSnackbar = ::showSnackbar,
@@ -673,15 +660,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
        triggerScrollToBottom = { triggerScrollToBottom() }
    )
 
-   // 控制器：会话预览/命名
-   private val conversationPreviewController = ConversationPreviewController(
-       stateHolder = stateHolder,
-       cacheManager = cacheManager,
-       scope = viewModelScope,
-       textConversationPreviewCache = textConversationPreviewCache,
-       imageConversationPreviewCache = imageConversationPreviewCache
-   )
-
    // 控制器：模型/配置 管理
    private val modelAndConfigController = ModelAndConfigController(
        stateHolder = stateHolder,
@@ -690,14 +668,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
        configManager = configManager,
        scope = viewModelScope,
        showSnackbar = { showToast(it) },
-       emitManualModelInputRequest = { provider, address, key, channel, isImageGen, enableCodeExecution, toolsJson ->
-           // 控制器请求显示“手动输入模型”对话框时，通过 SharedFlow 通知 UI
-           viewModelScope.launch {
-               _showManualModelInputRequest.emit(
-                   ManualModelInputRequest(provider, address, key, channel, isImageGen, enableCodeExecution, toolsJson)
-               )
-           }
-       }
    )
 
    // 控制器：从用户消息点重新生成流程
@@ -740,7 +710,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
    private val lifecycleCoordinator = LifecycleCoordinator(
        stateHolder = stateHolder,
        historyManager = historyManager,
-       cacheManager = cacheManager,
        conversationPreviewController = conversationPreviewController,
        persistScrollStates = {
            if (scrollStatesInitialized) {
@@ -749,10 +718,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
        },
        scope = viewModelScope
    )
-
-    private val mcpWebFetchToolNameKeywords = listOf(
-        "fetch", "crawl", "scrape", "reader", "browse", "firecrawl", "webfetch"
-    )
 
     private fun buildLocalWebSearchExecutor(): (suspend (String) -> JsonElement)? {
         if (!stateHolder._isWebSearchEnabled.value) return null
@@ -817,22 +782,22 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun buildMcpWebFetchFallback(): (suspend (JsonObject) -> JsonElement)? {
         if (!stateHolder._isMcpEnabledForNextRequest.value) return null
-        val allTools = mcpManager.getAllAvailableTools()
-        val webFetchTool = allTools.firstOrNull { tool ->
-            val name = tool.name.lowercase()
-            mcpWebFetchToolNameKeywords.any { keyword -> keyword in name }
-        } ?: return null
+        val webFetchTool = mcpManager.getDispatchCandidates()
+            .firstOrNull { it.category == McpToolCategory.BROWSER }
+            ?: return null
         return { arguments ->
             val url = arguments["url"]?.jsonPrimitive?.contentOrNull.orEmpty()
             val mcpArgs = buildJsonObject {
                 put("url", JsonPrimitive(url))
             }
-            mcpManager.callTool(webFetchTool.name, mcpArgs)
+            mcpManager.callTool(webFetchTool.toolName, mcpArgs)
         }
     }
 
+  private val mcpToolExecutorOwner = Any()
+
   init {
-         GeminiDirectClient.setMcpToolExecutor { toolName, arguments, updateStatus ->
+         GeminiDirectClient.setMcpToolExecutor(mcpToolExecutorOwner) { toolName, arguments, updateStatus ->
             executeSharedToolCall(
                 toolName = toolName,
                 arguments = arguments,
@@ -844,7 +809,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 }
             )
          }
-         OpenAIDirectClient.setMcpToolExecutor { toolName, arguments, updateStatus ->
+         OpenAIDirectClient.setMcpToolExecutor(mcpToolExecutorOwner) { toolName, arguments, updateStatus ->
             executeSharedToolCall(
                 toolName = toolName,
                 arguments = arguments,
@@ -856,7 +821,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 }
             )
          }
-         OpenAIResponsesClient.setMcpToolExecutor { toolName, arguments, updateStatus ->
+         OpenAIResponsesClient.setMcpToolExecutor(mcpToolExecutorOwner) { toolName, arguments, updateStatus ->
             executeSharedToolCall(
                 toolName = toolName,
                 arguments = arguments,
@@ -896,7 +861,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching {
+            try {
                 val configs = persistenceManager.loadExternalWebSearchConfigs()
                     .associateBy { it.providerId }
                 val selectedProviderId = persistenceManager.loadSelectedExternalWebSearchProviderId()
@@ -906,8 +871,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     _externalWebSearchConfigs.value = configs
                     _selectedExternalWebSearchProviderId.value = selectedProviderId
                 }
-            }.onFailure {
-                Log.e("AppViewModel", "加载外部联网搜索配置失败", it)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e("AppViewModel", "加载外部联网搜索配置失败", e)
             }
         }
         
@@ -939,11 +906,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 // 提前完成唯一 MathJax WebView 的冷启动，避免首次打开公式会话时阻塞加载动画。
                 mathJaxSvgRenderer.prewarm()
                 
-                // 预热缓存系统
-                viewModelScope.launch(Dispatchers.Default) {
-                    delay(1000) // 延迟预热，避免影响启动性能
-                    initializeCacheWarmup()
-                }
             }
             
             // 修复：始终加载分组信息，不依赖历史数据是否存在
@@ -961,6 +923,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         stateHolder.expandedGroups.value = expandedKeys
                     }
                     Log.d("AppViewModel", "分组展开状态已加载 - 共 ${expandedKeys.size} 个展开的分组")
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     Log.e("AppViewModel", "加载分组信息失败", e)
                 }
@@ -974,6 +938,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     stateHolder.pinnedTextConversationIds.value = pinnedTextIds
                     stateHolder.pinnedImageConversationIds.value = pinnedImageIds
                     Log.d("AppViewModel", "置顶集合已加载 - 文本: ${pinnedTextIds.size}, 图像: ${pinnedImageIds.size}")
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     Log.e("AppViewModel", "加载置顶集合失败", e)
                 }
@@ -989,6 +955,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         scrollStatesInitialized = true
                     }
                     Log.d("AppViewModel", "会话滚动位置已加载 - 共 ${states.size} 条")
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     Log.e("AppViewModel", "加载会话滚动位置失败", e)
                 }
@@ -1006,9 +974,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         messageSender
         stateHolder.setApiHandler(apiHandler)
         
-        // 启动缓存维护任务 - 使用 CacheController
-        cacheController.startCacheMaintenanceTask()
-       
        // Initialize buffer scope for StreamingBuffer operations
        stateHolder.initializeBufferScope(viewModelScope)
     }
@@ -1176,24 +1141,23 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         apiKey: String,
     ) {
         val normalizedApiKey = apiKey.trim()
-        val updatedConfigs = _externalWebSearchConfigs.value.toMutableMap().apply {
-            put(
-                provider.providerId,
-                ExternalWebSearchProviderConfig(
+        _externalWebSearchConfigs.update { current ->
+            current + (
+                provider.providerId to ExternalWebSearchProviderConfig(
                     providerId = provider.providerId,
                     apiKey = normalizedApiKey,
                 )
             )
         }
-        _externalWebSearchConfigs.value = updatedConfigs
-
-        if (normalizedApiKey.isNotBlank() && _selectedExternalWebSearchProviderId.value == null) {
-            _selectedExternalWebSearchProviderId.value = provider.providerId
+        if (normalizedApiKey.isNotBlank()) {
+            _selectedExternalWebSearchProviderId.update { it ?: provider.providerId }
         }
 
+        val updatedConfigs = _externalWebSearchConfigs.value
+        val selectedProviderId = _selectedExternalWebSearchProviderId.value
         viewModelScope.launch(Dispatchers.IO) {
             persistenceManager.saveExternalWebSearchConfigs(updatedConfigs.values.toList())
-            persistenceManager.saveSelectedExternalWebSearchProviderId(_selectedExternalWebSearchProviderId.value)
+            persistenceManager.saveSelectedExternalWebSearchProviderId(selectedProviderId)
         }
     }
 
@@ -1352,11 +1316,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         saveCurrentChatToHistory(forceSave = true, isImageGeneration = false)
 
         viewModelScope.launch {
-            val finalText = try {
-                loader()
-            } catch (t: Throwable) {
-                t.message ?: "命令执行失败"
-            }
+            val finalText = runCatchingPreservingCancellation { loader() }
+                .getOrElse { it.message ?: "命令执行失败" }
             Log.d("SlashCommand", "addLocalSlashReplyWithLoading finalTextChars=${finalText.length}")
             stateHolder.finishLocalSlashLoading(placeholderId, finalText)
             triggerScrollToBottom()
@@ -1475,7 +1436,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         )
 
         addLocalSlashReplyWithLoading(command) {
-            runCatching {
+            runCatchingPreservingCancellation {
                 val proxyRequest = ChatRequest(
                     messages = listOf(
                         com.android.everytalk.data.DataClass.SimpleTextApiMessage(
@@ -1608,6 +1569,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = forceSave, isImageGeneration = isImageGeneration)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e("AppViewModel", "Failed to save chat to history", e)
             }
@@ -1733,6 +1696,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     if (isSearchActiveInDrawer.value) setSearchActiveInDrawer(false)
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e("AppViewModel", "Error starting new chat", e)
                 showSnackbar("启动新聊天失败: ${e.message}")
@@ -1756,6 +1721,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     }
                     if (isSearchActiveInDrawer.value) setSearchActiveInDrawer(false)
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e("AppViewModel", "Error starting new image generation", e)
                 showSnackbar("启动新图像生成失败: ${e.message}")
@@ -1943,6 +1910,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 mediaController.downloadImage(url)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e("AppViewModel", "Download image失败", e)
                 showSnackbar("图片下载失败: ${e.message}")
@@ -2004,6 +1973,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             launch(Dispatchers.IO) {
                 try {
                     persistenceManager.saveApiConfigs(stateHolder._imageGenApiConfigs.value, isImageGen = true)
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     Log.e("AppViewModel", "Failed to persist updated image numInferenceSteps", e)
                 }
@@ -2043,6 +2014,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             launch(Dispatchers.IO) {
                 try {
                     persistenceManager.saveApiConfigs(stateHolder._imageGenApiConfigs.value, isImageGen = true)
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     Log.e("AppViewModel", "Failed to persist updated image params", e)
                 }
@@ -2074,6 +2047,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             launch(Dispatchers.IO) {
                 try {
                     persistenceManager.saveApiConfigs(stateHolder._imageGenApiConfigs.value, isImageGen = true)
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     Log.e("AppViewModel", "Failed to persist updated gemini image size", e)
                 }
@@ -2175,34 +2150,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         lifecycleCoordinator.saveOnStop()
     }
 
-    fun fetchModels(apiUrl: String, apiKey: String) {
-        modelAndConfigController.fetchModels(apiUrl, apiKey)
-    }
-
     fun clearFetchedModels() {
         modelAndConfigController.clearFetchedModels()
-    }
-
-    fun createMultipleConfigs(
-        provider: String,
-        address: String,
-        key: String,
-        modelNames: List<String>,
-        channel: String = "OpenAI兼容",
-        isImageGen: Boolean = false,
-        enableCodeExecution: Boolean? = null,
-        toolsJson: String? = null
-    ) {
-        modelAndConfigController.createMultipleConfigs(
-            provider,
-            address,
-            key,
-            modelNames,
-            channel,
-            isImageGen,
-            enableCodeExecution,
-            toolsJson
-        )
+        stateHolder._showAutoFetchConfirmDialog.value = false
+        stateHolder._pendingConfigParams.value = null
     }
 
     // 新增：用于通知UI显示添加模型对话框的 Flow
@@ -2210,29 +2161,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val showManualModelInputRequest: SharedFlow<ManualModelInputRequest> = _showManualModelInputRequest.asSharedFlow()
     
     data class ManualModelInputRequest(
-        val provider: String,
-        val address: String,
-        val key: String,
-        val channel: String,
         val isImageGen: Boolean,
-        val enableCodeExecution: Boolean? = null,
-        val toolsJson: String? = null
     )
 
-    fun createConfigAndFetchModels(provider: String, address: String, key: String, channel: String, isImageGen: Boolean = false, enableCodeExecution: Boolean? = null, toolsJson: String? = null) {
-        modelAndConfigController.createConfigAndFetchModels(provider, address, key, channel, isImageGen, enableCodeExecution, toolsJson)
-    }
-    
-    fun createConfigAndFetchModels(provider: String, address: String, key: String, channel: String) {
-        createConfigAndFetchModels(provider, address, key, channel, false)
-    }
-
-    fun addModelToConfigGroup(apiKey: String, provider: String, address: String, modelName: String, channel: String, isImageGen: Boolean = false) {
-        modelAndConfigController.addModelToConfigGroup(apiKey, provider, address, modelName, channel, isImageGen)
-    }
-    
-    fun addModelToConfigGroup(apiKey: String, provider: String, address: String, modelName: String) {
-        addModelToConfigGroup(apiKey, provider, address, modelName, "OpenAI兼容", false)
+    fun addModelToConfigGroup(representativeConfig: ApiConfig, modelName: String) {
+        modelAndConfigController.addModelToConfigGroup(representativeConfig, modelName)
     }
 
     fun refreshModelsForConfig(config: ApiConfig) {
@@ -2281,6 +2214,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 val bytes = readAtMost(stream, MAX_URI_BASE64_BYTES)
                 android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e("AppViewModel", "Failed to encode URI to Base64: $uri", e)
             null
@@ -2291,41 +2226,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      * 处理加载的消息列表，确保完整性
      */
     // 历史消息的完整性修复已移至 HistoryController
-    
-    /**
-     * 初始化缓存预热
-     */
-    private suspend fun initializeCacheWarmup() {
-        try {
-            val textHistory = stateHolder._historicalConversations.value
-            val imageHistory = stateHolder._imageGenerationHistoricalConversations.value
-            
-            // 预热会话预览缓存
-            cacheManager.warmupCache(textHistory + imageHistory)
-            
-            Log.d("AppViewModel", "缓存预热完成 - 文本会话: ${textHistory.size}, 图像会话: ${imageHistory.size}")
-        } catch (e: Exception) {
-            Log.w("AppViewModel", "缓存预热失败", e)
-        }
-    }
-    
-    /**
-     * 获取缓存统计信息（用于调试）
-     */
-    fun getCacheStats(): String {
-        val stats = cacheManager.getCacheStats()
-        val textStats = com.android.everytalk.ui.performance.OptimizedTextProcessor.getCacheStats()
-        
-        return """
-            |总体缓存命中率: ${"%.1f".format(stats.overallHitRate * 100)}%
-            |会话预览缓存: ${stats.conversationPreviewHits}/${stats.conversationPreviewHits + stats.conversationPreviewMisses}
-            |消息内容缓存: ${stats.messageContentHits}/${stats.messageContentHits + stats.messageContentMisses}
-            |Markdown缓存: ${stats.markdownHits}/${stats.markdownHits + stats.markdownMisses}
-            |API响应缓存: ${stats.apiResponseSize}
-            |文本处理缓存: ${textStats.textCacheSize} (命中率: ${"%.1f".format(textStats.textCacheHitRate * 100)}%)
-            |总缓存条目: ${stats.totalCacheSize}
-        """.trimMargin()
-    }
     
     /**
      * 清理所有缓存
@@ -2342,9 +2242,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         channel: String,
         isImageGen: Boolean = false,
         enableCodeExecution: Boolean? = null,
-        toolsJson: String? = null
+        toolsJson: String? = null,
+        imageSize: String? = null,
+        numInferenceSteps: Int? = null,
+        guidanceScale: Float? = null,
     ) {
-        // 1) 记录挂起参数，后续“自动获取/手动输入/选择模型”公用
+        clearFetchedModels()
         stateHolder._pendingConfigParams.value = PendingConfigParams(
             provider = provider.trim(),
             address = address.trim(),
@@ -2352,11 +2255,11 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             channel = channel.trim(),
             isImageGen = isImageGen,
             enableCodeExecution = enableCodeExecution,
-            toolsJson = toolsJson
+            toolsJson = toolsJson,
+            imageSize = imageSize,
+            numInferenceSteps = numInferenceSteps,
+            guidanceScale = guidanceScale,
         )
-        // 2) 清理上一次的模型获取结果，避免旧数据残留
-        clearFetchedModels()
-        // 3) 弹出“是否自动获取模型列表”的确认对话框
         stateHolder._showAutoFetchConfirmDialog.value = true
     }
 
@@ -2369,56 +2272,80 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        // 触发拉取
-        fetchModels(params.address, params.key)
+        modelAndConfigController.fetchModels(params.address, params.key, params.channel) { result ->
+            if (stateHolder._pendingConfigParams.value != params) return@fetchModels
 
-        // 等待结果并分支处理
-        viewModelScope.launch {
-            isFetchingModels
-                .flatMapLatest { fetching ->
-                    // 简单等待到false，再读取结果
-                    kotlinx.coroutines.flow.flow { if (!fetching) emit(Unit) }
-                }
-                .first()
-
-            val models = fetchedModels.value
-            if (models.isNotEmpty()) {
-                stateHolder._showModelSelectionDialog.value = true
-            } else {
-                showSnackbar("获取模型列表失败,请手动输入模型名称")
-                onManualInput()
-            }
+            result.fold(
+                onSuccess = { models ->
+                    if (models.isNotEmpty()) {
+                        showSnackbar("获取到 ${models.size} 个模型")
+                        stateHolder._showModelSelectionDialog.value = true
+                    } else {
+                        showSnackbar("未获取到模型，请手动输入模型名称")
+                        showManualModelInput(params)
+                    }
+                },
+                onFailure = { error ->
+                    showSnackbar("获取模型失败: ${error.message}")
+                    showManualModelInput(params)
+                },
+            )
         }
     }
 
     fun onManualInput() {
+        val params = stateHolder._pendingConfigParams.value ?: return
+        modelAndConfigController.clearFetchedModels()
+        showManualModelInput(params)
+    }
+
+    private fun showManualModelInput(params: PendingConfigParams) {
         stateHolder._showAutoFetchConfirmDialog.value = false
         stateHolder._showModelSelectionDialog.value = false
-
-        val params = stateHolder._pendingConfigParams.value ?: return
-        // 通知UI显示手动输入对话框（项目中已存在该Flow）
         viewModelScope.launch {
-            _showManualModelInputRequest.emit(
-                ManualModelInputRequest(
-                    provider = params.provider,
-                    address = params.address,
-                    key = params.key,
-                    channel = params.channel,
-                    isImageGen = params.isImageGen,
-                    enableCodeExecution = params.enableCodeExecution,
-                    toolsJson = params.toolsJson
-                )
+            if (stateHolder._pendingConfigParams.value != params) return@launch
+            _showManualModelInputRequest.emit(ManualModelInputRequest(isImageGen = params.isImageGen))
+        }
+    }
+
+    fun dismissManualModelInput() {
+        clearFetchedModels()
+    }
+
+    fun submitManualModel(modelName: String) {
+        val params = stateHolder._pendingConfigParams.value ?: return
+        val trimmedModelName = modelName.trim()
+        if (trimmedModelName.isEmpty()) {
+            showSnackbar("请输入模型名称")
+            return
+        }
+
+        if (params.isRefresh) {
+            modelAndConfigController.replaceModelsForConfigGroup(params, listOf(trimmedModelName))
+        } else {
+            modelAndConfigController.createMultipleConfigs(
+                provider = params.provider,
+                address = params.address,
+                key = params.key,
+                modelNames = listOf(trimmedModelName),
+                channel = params.channel,
+                isImageGen = params.isImageGen,
+                enableCodeExecution = params.enableCodeExecution,
+                toolsJson = params.toolsJson,
+                imageSize = params.imageSize,
+                numInferenceSteps = params.numInferenceSteps,
+                guidanceScale = params.guidanceScale,
             )
         }
-        // 不清理pending，等用户真正提交或取消后清理；保持上下文
+        clearFetchedModels()
     }
 
     fun dismissAutoFetchConfirmDialog() {
-        stateHolder._showAutoFetchConfirmDialog.value = false
+        clearFetchedModels()
     }
 
     fun dismissModelSelectionDialog() {
-        stateHolder._showModelSelectionDialog.value = false
+        clearFetchedModels()
     }
 
     /**
@@ -2441,7 +2368,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         if (params.isRefresh) {
             modelAndConfigController.replaceModelsForConfigGroup(params, models)
         } else {
-            createMultipleConfigs(
+            modelAndConfigController.createMultipleConfigs(
                 provider = params.provider,
                 address = params.address,
                 key = params.key,
@@ -2449,12 +2376,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 channel = params.channel,
                 isImageGen = params.isImageGen,
                 enableCodeExecution = params.enableCodeExecution,
-                toolsJson = params.toolsJson
+                toolsJson = params.toolsJson,
+                imageSize = params.imageSize,
+                numInferenceSteps = params.numInferenceSteps,
+                guidanceScale = params.guidanceScale,
             )
-            showSnackbar("已添加 ${models.size} 个模型配置")
         }
-        stateHolder._showModelSelectionDialog.value = false
-        stateHolder._pendingConfigParams.value = null
+        clearFetchedModels()
     }
 
     fun onSelectModels(selectedModels: List<String>) {
@@ -2467,7 +2395,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         if (params.isRefresh) {
             modelAndConfigController.replaceModelsForConfigGroup(params, selectedModels)
         } else {
-            createMultipleConfigs(
+            modelAndConfigController.createMultipleConfigs(
                 provider = params.provider,
                 address = params.address,
                 key = params.key,
@@ -2475,16 +2403,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 channel = params.channel,
                 isImageGen = params.isImageGen,
                 enableCodeExecution = params.enableCodeExecution,
-                toolsJson = params.toolsJson
+                toolsJson = params.toolsJson,
+                imageSize = params.imageSize,
+                numInferenceSteps = params.numInferenceSteps,
+                guidanceScale = params.guidanceScale,
             )
-            showSnackbar("已添加 ${selectedModels.size} 个模型配置")
         }
-        stateHolder._showModelSelectionDialog.value = false
-        stateHolder._pendingConfigParams.value = null
+        clearFetchedModels()
     }
 
     override fun onCleared() {
-        super.onCleared()
+        GeminiDirectClient.clearMcpToolExecutor(mcpToolExecutorOwner)
+        OpenAIDirectClient.clearMcpToolExecutor(mcpToolExecutorOwner)
+        OpenAIResponsesClient.clearMcpToolExecutor(mcpToolExecutorOwner)
         // 清理消息内容控制器（若未来扩展内部资源）
         messageContentController.cleanup()
         // 统一的生命周期清理
@@ -2499,6 +2430,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 mcpManager.addServer(config)
                 showSnackbar("已添加服务器: ${config.name}")
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 showSnackbar("添加服务器失败: ${e.message}")
             }
@@ -2510,6 +2443,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 mcpManager.removeServer(serverId)
                 showSnackbar("已移除服务器")
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 showSnackbar("移除服务器失败: ${e.message}")
             }
@@ -2521,6 +2456,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 mcpManager.updateServer(config)
                 showSnackbar("已更新服务器: ${config.name}")
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 showSnackbar("更新服务器失败: ${e.message}")
             }
@@ -2531,6 +2468,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             try {
                 mcpManager.toggleServer(serverId, enabled)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 showSnackbar("操作失败: ${e.message}")
             }
@@ -2614,6 +2553,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 persistenceManager.savePinnedIds(newSet, isImageGeneration)
                 Log.d("AppViewModel", "置顶状态已更新: id=$stableId, pinned=${newSet.contains(stableId)}, mode=${if (isImageGeneration) "IMAGE" else "TEXT"}")
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e("AppViewModel", "保存置顶状态失败", e)
             }
@@ -2652,6 +2593,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     persistenceManager.savePinnedIds(cleanedSet, isImageGeneration)
                     Log.d("AppViewModel", "置顶集合已清理: 移除 ${flow.value.size - cleanedSet.size} 个无效ID")
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e("AppViewModel", "清理置顶集合失败", e)
             }
@@ -2767,6 +2710,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 persistenceManager.saveExpandedGroupKeys(currentExpanded)
                 Log.d("AppViewModel", "分组展开状态已保存: groupKey=$groupKey, totalExpanded=${currentExpanded.size}")
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e("AppViewModel", "保存分组展开状态失败", e)
             }
@@ -2800,13 +2745,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             try {
-                val title = historyController.getConversationPreviewText(index, isImageGeneration)
+                val title = conversationPreviewController.getConversationPreviewText(index, isImageGeneration)
                 com.android.everytalk.util.share.ConversationExporter.shareConversation(
                     context = getApplication(),
                     messages = conversation,
                     title = title
                 )
                 Log.d("AppViewModel", "会话分享已启动: index=$index, isImageGen=$isImageGeneration")
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e("AppViewModel", "分享会话失败", e)
                 showSnackbar("分享失败: ${e.message}")

@@ -48,6 +48,7 @@ import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.ModalityType
 import com.android.everytalk.data.network.ExternalWebSearchProvider
 import com.android.everytalk.data.network.ExternalWebSearchProviderConfig
+import com.android.everytalk.statecontroller.controller.config.modelConfigGroupId
 
 @SuppressLint("ConfigurationScreenWidthHeight")
 @OptIn(ExperimentalMaterial3Api::class)
@@ -133,7 +134,7 @@ internal fun SettingsScreenContent(
     onAddFullConfigClick: () -> Unit,
     onSelectConfig: (config: ApiConfig) -> Unit,
     selectedConfigIdInApp: String?,
-    onAddModelForApiKeyClick: (apiKey: String, existingProvider: String, existingAddress: String, existingChannel: String, existingModality: ModalityType) -> Unit,
+    onAddModelForApiKeyClick: (representativeConfig: ApiConfig) -> Unit,
     onDeleteModelForApiKey: (configToDelete: ApiConfig) -> Unit,
     onEditConfigClick: (config: ApiConfig) -> Unit,
     onDeleteConfigGroup: (representativeConfig: ApiConfig) -> Unit,
@@ -194,20 +195,13 @@ internal fun SettingsScreenContent(
                     onSelectConfig = onSelectConfig,
                     selectedConfigIdInApp = selectedConfigIdInApp,
                     onAddModelForApiKeyClick = {
-                        val representativeConfig = configsForKeyAndModality.first()
-                        onAddModelForApiKeyClick(
-                            representativeConfig.key,
-                            representativeConfig.provider,
-                            representativeConfig.address,
-                            representativeConfig.channel,
-                            representativeConfig.modalityType
-                        )
+                        onAddModelForApiKeyClick(configsForKeyAndModality.first())
                     },
                     onDeleteModelForApiKey = onDeleteModelForApiKey,
                     onEditConfigClick = { onEditConfigClick(configsForKeyAndModality.first()) },
                     onDeleteGroup = { onDeleteConfigGroup(configsForKeyAndModality.first()) },
                     onRefreshModelsClick = { onRefreshModelsClick(configsForKeyAndModality.first()) },
-                    isRefreshing = isRefreshingModels.contains("${configsForKeyAndModality.first().key}-${modalityType}")
+                    isRefreshing = modelConfigGroupId(configsForKeyAndModality.first()) in isRefreshingModels
                 )
                 Spacer(Modifier.height(16.dp))
             }

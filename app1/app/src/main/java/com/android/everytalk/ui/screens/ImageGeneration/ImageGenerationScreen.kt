@@ -20,9 +20,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.LinkAnnotation
@@ -34,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.android.everytalk.navigation.Screen
 import com.android.everytalk.statecontroller.AppViewModel
+import com.android.everytalk.statecontroller.ConversationScrollState
 import com.android.everytalk.ui.components.AppTopBar
 import com.android.everytalk.statecontroller.SimpleModeManager
 import com.android.everytalk.data.DataClass.Message
@@ -49,6 +50,8 @@ import com.android.everytalk.ui.screens.MainScreen.chat.text.state.rememberChatS
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.HistoryLoadingBubblePlaceholderItem
 import com.android.everytalk.ui.screens.MainScreen.chat.dialog.EditMessageDialog
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import com.android.everytalk.ui.components.ScrollToBottomButton
@@ -74,10 +77,17 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
     val imageGenerationChatListItems by viewModel.imageGenerationChatListItems.collectAsState()
     // 当前图像会话ID：用于切换历史项时的过渡动画 key
     val currentImageConvId by viewModel.currentImageGenerationConversationId.collectAsState()
-    val listState = remember(currentImageConvId) { androidx.compose.foundation.lazy.LazyListState() }
+    val restoredScrollState = remember(currentImageConvId) {
+        viewModel.getScrollState(currentImageConvId)?.takeIf { it.userScrolledAway }
+    }
+    val listState = remember(currentImageConvId) {
+        androidx.compose.foundation.lazy.LazyListState(
+            firstVisibleItemIndex = restoredScrollState?.firstVisibleItemIndex ?: 0,
+            firstVisibleItemScrollOffset = restoredScrollState?.firstVisibleItemScrollOffset ?: 0,
+        )
+    }
     val scrollStateManager = rememberChatScrollStateManager(listState, coroutineScope)
-    val configuration = LocalConfiguration.current
-    val screenWidth = configuration.screenWidthDp.dp
+    val screenWidth = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.width.toDp() }
     val bubbleMaxWidth = remember(screenWidth) { screenWidth.coerceAtMost(600.dp) }
 
     // 统一振动反馈（与文本模式一致）
@@ -268,16 +278,74 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
             .first { it }
 
         withFrameNanos { }
-        val targetIndex = imageGenerationChatListItemsState.value.lastIndex
-        if (targetIndex >= 0) {
-            listState.scrollToItem(targetIndex)
-            listState.scrollBy(Float.MAX_VALUE)
+        val lastIndex = imageGenerationChatListItemsState.value.lastIndex
+        if (lastIndex >= 0) {
+            val savedState = restoredScrollState
+            if (savedState != null) {
+                listState.scrollToItem(
+                    index = savedState.firstVisibleItemIndex.coerceIn(0, lastIndex),
+                    scrollOffset = savedState.firstVisibleItemScrollOffset.coerceAtLeast(0),
+                )
+            } else {
+                listState.scrollToItem(lastIndex)
+                listState.scrollBy(Float.MAX_VALUE)
+                scrollStateManager.pinToRealBottomUntilUserScroll()
+            }
         }
         if (historySkeletonKeyState.value != null) {
             historySkeletonKey = null
             isHistorySkeletonReadyToReveal = false
         }
         initialScrollHandled = true
+    }
+
+    val isAtBottom by scrollStateManager.isAtBottom
+    val isAtBottomState = rememberUpdatedState(isAtBottom)
+
+    LaunchedEffect(currentImageConvId, listState) {
+        snapshotFlow {
+            Triple(
+                listState.firstVisibleItemIndex,
+                listState.firstVisibleItemScrollOffset,
+                listState.isScrollInProgress,
+            )
+        }
+            .distinctUntilChanged()
+            .filter { (_, _, isScrolling) ->
+                !isScrolling && !isLoadingHistoryState.value && !isHistorySkeletonVisibleState.value
+            }
+            .collect { (index, offset, _) ->
+                if (currentImageConvId.isNotBlank() && listState.layoutInfo.totalItemsCount > 0) {
+                    val existing = viewModel.getScrollState(currentImageConvId)
+                    viewModel.cacheScrollState(
+                        currentImageConvId,
+                        ConversationScrollState(
+                            firstVisibleItemIndex = index,
+                            firstVisibleItemScrollOffset = offset,
+                            userScrolledAway = !isAtBottomState.value,
+                            firstBubbleScreenY = existing?.firstBubbleScreenY ?: -1,
+                        ),
+                    )
+                }
+            }
+    }
+
+    DisposableEffect(currentImageConvId, listState) {
+        val idToSaveFor = currentImageConvId
+        onDispose {
+            if (idToSaveFor.isNotBlank()) {
+                val existing = viewModel.getScrollState(idToSaveFor)
+                viewModel.saveScrollState(
+                    idToSaveFor,
+                    ConversationScrollState(
+                        firstVisibleItemIndex = listState.firstVisibleItemIndex,
+                        firstVisibleItemScrollOffset = listState.firstVisibleItemScrollOffset,
+                        userScrolledAway = !isAtBottomState.value,
+                        firstBubbleScreenY = existing?.firstBubbleScreenY ?: -1,
+                    ),
+                )
+            }
+        }
     }
 
     if (showAboutDialog) {

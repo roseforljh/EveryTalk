@@ -1,11 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- Debug 版本：允许所有 HTTP 明文通信，方便开发和测试 -->
-    <!-- ⚠️ 注意：此配置仅在 Debug 版本生效，Release 版本仍然强制 HTTPS -->
-    <base-config cleartextTrafficPermitted="true">
+    <!-- Debug 版本允许用户安装的调试证书。 -->
+    <base-config cleartextTrafficPermitted="false">
         <trust-anchors>
             <certificates src="system" />
-            <certificates src="user" />
         </trust-anchors>
     </base-config>
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="user" />
+        </trust-anchors>
+    </debug-overrides>
 </network-security-config>

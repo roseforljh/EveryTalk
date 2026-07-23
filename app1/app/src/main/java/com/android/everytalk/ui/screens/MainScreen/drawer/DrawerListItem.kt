@@ -64,7 +64,6 @@ internal fun DrawerConversationListItem(
     onMoveToGroup: (Int, String?) -> Unit,
     onMoveToGroupClick: (Int) -> Unit,
     onShareClick: (Int) -> Unit = {}, // 新增：分享回调
-    isImageGenerationMode: Boolean = false
 ) {
     val originalIndex = itemData.originalIndex
     val definitivePreviewText = getPreviewForIndex(originalIndex)
@@ -72,12 +71,6 @@ internal fun DrawerConversationListItem(
     // 修复: 根据当前模式判断是否激活,避免文本和图像模式历史项状态混淆
     val isActuallyActive = loadedHistoryIndex == originalIndex
     
-    // 修复: 使用rememberUpdatedState确保回调总是使用最新的模式值
-    val currentImageMode by rememberUpdatedState(isImageGenerationMode)
-    
-    // [DEBUG] 诊断日志：历史项激活状态
-    android.util.Log.d("DrawerListItem", "[ITEM_STATE] index=$originalIndex, loadedIndex=$loadedHistoryIndex, isActive=$isActuallyActive, isImageMode=$currentImageMode")
-
     var rippleState by remember { mutableStateOf<CustomRippleState>(CustomRippleState.Idle) }
     var currentPressPosition by remember { mutableStateOf(Offset.Zero) }
     val animationProgress by animateFloatAsState(
@@ -96,6 +89,10 @@ internal fun DrawerConversationListItem(
     val scope = rememberCoroutineScope()
     var pressAndHoldJob by remember { mutableStateOf<Job?>(null) }
     val haptic = LocalHapticFeedback.current
+    val currentExpandedItemIndex by rememberUpdatedState(expandedItemIndex)
+    val currentOnConversationClick by rememberUpdatedState(onConversationClick)
+    val currentOnExpandItem by rememberUpdatedState(onExpandItem)
+    val currentOnCollapseMenu by rememberUpdatedState(onCollapseMenu)
 
     val isDarkTheme = isSystemInDarkTheme()
     val alpha = remember { Animatable(0f) }
@@ -135,20 +132,18 @@ internal fun DrawerConversationListItem(
                         }
                     },
                     onTap = {
-                        // [DEBUG] 诊断日志：历史项点击
-                        android.util.Log.d("DrawerListItem", "[ITEM_CLICK] index=$originalIndex, expandedIndex=$expandedItemIndex, isImageMode=$currentImageMode")
-                        if (expandedItemIndex == originalIndex) {
-                            onCollapseMenu()
+                        if (currentExpandedItemIndex == originalIndex) {
+                            currentOnCollapseMenu()
                         } else {
-                            onCollapseMenu()
-                            onConversationClick(originalIndex)
+                            currentOnCollapseMenu()
+                            currentOnConversationClick(originalIndex)
                         }
                     },
                     onLongPress = { offset ->
                         haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                         pressAndHoldJob?.cancel()
                         rippleState = CustomRippleState.Idle
-                        onExpandItem(originalIndex, offset)
+                        currentOnExpandItem(originalIndex, offset)
                     }
                 )
             }

@@ -2,22 +2,36 @@ package com.android.everytalk.statecontroller.controller.config
 
 import android.util.Log
 import com.android.everytalk.data.DataClass.ApiConfig
+import com.android.everytalk.data.DataClass.ModalityType
 import com.android.everytalk.data.network.ApiClient
 import com.android.everytalk.statecontroller.ViewModelStateHolder
+import com.android.everytalk.statecontroller.rethrowIfCancellation
 import com.android.everytalk.ui.screens.viewmodel.ConfigManager
 import com.android.everytalk.ui.screens.viewmodel.DataPersistenceManager
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.update
 import java.util.UUID
+
+internal fun modelConfigGroupId(config: ApiConfig): String {
+    return listOf(
+        config.provider,
+        config.address,
+        config.channel,
+        config.key,
+        config.modalityType.name,
+    ).joinToString("\u0000")
+}
 
 /**
  * 负责模型拉取与配置批量管理的业务逻辑。
  *
- * 通过传入的 showSnackbar 回调向 UI 报告提示；通过 emitManualModelInputRequest
- * 回调触发“手动输入模型”对话框（由 AppViewModel 暴露 SharedFlow）。
+ * 通过传入的 showSnackbar 回调向 UI 报告提示。
  */
 class ModelAndConfigController(
     private val stateHolder: ViewModelStateHolder,
@@ -26,36 +40,37 @@ class ModelAndConfigController(
     private val configManager: ConfigManager,
     private val scope: CoroutineScope,
     private val showSnackbar: (String) -> Unit,
-    private val emitManualModelInputRequest: (provider: String, address: String, key: String, channel: String, isImageGen: Boolean, enableCodeExecution: Boolean?, toolsJson: String?) -> Unit
 ) {
+    private val modelRequestLock = Any()
+    private var modelRequestGeneration = 0L
+    private var modelRequestJob: Job? = null
 
-    val isFetchingModels: StateFlow<Boolean> get() = modelFetchManager.isFetchingModels
-    val fetchedModels: StateFlow<List<String>> get() = modelFetchManager.fetchedModels
-    val isRefreshingModels: StateFlow<Set<String>> get() = modelFetchManager.isRefreshingModels
-
-    fun fetchModels(apiUrl: String, apiKey: String, channel: String? = null) {
-        scope.launch {
-            modelFetchManager.setFetching(true)
-            modelFetchManager.setFetchedModels(emptyList())
-            try {
-                val models = withContext(Dispatchers.IO) {
-                    ApiClient.getModels(apiUrl, apiKey, channel)
-                }
-                modelFetchManager.setFetchedModels(models)
-                withContext(Dispatchers.Main) { showSnackbar("获取到 ${models.size} 个模型") }
-            } catch (e: Exception) {
-                Log.e("ModelAndConfig", "Failed to fetch models", e)
-                withContext(Dispatchers.Main) { showSnackbar("获取模型失败: ${e.message}") }
-            } finally {
-                modelFetchManager.setFetching(false)
-            }
-        }
+    fun fetchModels(
+        apiUrl: String,
+        apiKey: String,
+        channel: String?,
+        onResult: (Result<List<String>>) -> Unit,
+    ) {
+        launchLatestModelRequest(
+            apiUrl = apiUrl,
+            apiKey = apiKey,
+            channel = channel,
+            onSuccess = { models -> onResult(Result.success(models)) },
+            onFailure = { error ->
+                Log.e("ModelAndConfig", "Failed to fetch models", error)
+                onResult(Result.failure(error))
+            },
+        )
     }
 
     fun clearFetchedModels() {
-        scope.launch {
+        synchronized(modelRequestLock) {
+            modelRequestGeneration++
+            modelRequestJob?.cancel()
+            modelRequestJob = null
             modelFetchManager.setFetchedModels(emptyList())
-            modelFetchManager.setFetching(false)
+            modelFetchManager.setRefreshingModel(null)
+            stateHolder._showModelSelectionDialog.value = false
         }
     }
 
@@ -67,7 +82,10 @@ class ModelAndConfigController(
         channel: String = "OpenAI兼容",
         isImageGen: Boolean = false,
         enableCodeExecution: Boolean? = null,
-        toolsJson: String? = null
+        toolsJson: String? = null,
+        imageSize: String? = null,
+        numInferenceSteps: Int? = null,
+        guidanceScale: Float? = null,
     ) {
         if (modelNames.isEmpty()) {
             showSnackbar("请至少选择一个模型")
@@ -94,11 +112,15 @@ class ModelAndConfigController(
                         },
                         channel = channel,
                         enableCodeExecution = enableCodeExecution,
-                        toolsJson = toolsJson
+                        toolsJson = toolsJson,
+                        imageSize = imageSize,
+                        numInferenceSteps = numInferenceSteps,
+                        guidanceScale = guidanceScale,
                     )
                     configManager.addConfig(config, isImageGen)
                     successfulConfigs.add(modelName)
                 } catch (e: Exception) {
+                    e.rethrowIfCancellation()
                     Log.e("ModelAndConfig", "Failed to create config for model: $modelName", e)
                     failedConfigs.add(modelName)
                 }
@@ -113,166 +135,197 @@ class ModelAndConfigController(
         }
     }
 
-    fun createConfigAndFetchModels(provider: String, address: String, key: String, channel: String, isImageGen: Boolean = false, enableCodeExecution: Boolean? = null, toolsJson: String? = null) {
-        scope.launch {
-            try {
-                val models = withContext(Dispatchers.IO) {
-                    ApiClient.getModels(address, key, channel)
-                }
+    fun addModelToConfigGroup(representativeConfig: ApiConfig, modelName: String) {
+        val trimmedModelName = modelName.trim()
+        if (trimmedModelName.isEmpty()) return
 
-                if (models.isNotEmpty()) {
-                    val newConfigs = models.map { modelName ->
-                        ApiConfig(
-                            address = address.trim(),
-                            key = key.trim(),
-                            model = modelName,
-                            provider = provider,
-                            name = modelName,
-                            id = UUID.randomUUID().toString(),
-                            isValid = true,
-                            modalityType = if (isImageGen) com.android.everytalk.data.DataClass.ModalityType.IMAGE else com.android.everytalk.data.DataClass.ModalityType.TEXT,
-                            channel = channel,
-                            enableCodeExecution = enableCodeExecution,
-                            toolsJson = toolsJson
-                        )
-                    }
-                    newConfigs.forEach { config ->
-                        configManager.addConfig(config, isImageGen)
-                    }
-                    showSnackbar("成功添加 ${models.size} 个模型")
-                } else {
-                    // 无模型时直接触发手动输入
-                    emitManualModelInputRequest(provider, address, key, channel, isImageGen, enableCodeExecution, toolsJson)
-                }
-            } catch (e: Exception) {
-                Log.e("ModelAndConfig", "获取模型失败", e)
-                // 失败时直接触发手动输入
-                emitManualModelInputRequest(provider, address, key, channel, isImageGen, enableCodeExecution, toolsJson)
-            }
-        }
-    }
-
-    fun addModelToConfigGroup(apiKey: String, provider: String, address: String, modelName: String, channel: String, isImageGen: Boolean = false) {
-        scope.launch {
-            val newConfig = ApiConfig(
+        configManager.addConfig(
+            representativeConfig.copy(
                 id = UUID.randomUUID().toString(),
-                name = modelName,
-                provider = provider,
-                address = address,
-                key = apiKey,
-                model = modelName,
-                modalityType = if (isImageGen) com.android.everytalk.data.DataClass.ModalityType.IMAGE else com.android.everytalk.data.DataClass.ModalityType.TEXT,
-                channel = channel
-            )
-            configManager.addConfig(newConfig, isImageGen)
-        }
+                model = trimmedModelName,
+                name = trimmedModelName,
+            ),
+            representativeConfig.modalityType == ModalityType.IMAGE,
+        )
     }
 
     fun refreshModelsForConfig(config: ApiConfig) {
-        val refreshId = "${config.key}-${config.modalityType}"
+        val refreshId = modelConfigGroupId(config)
         val isImageGen = config.modalityType == com.android.everytalk.data.DataClass.ModalityType.IMAGE
-        scope.launch {
-            modelFetchManager.addRefreshingModel(refreshId)
-            try {
-                val models = withContext(Dispatchers.IO) {
-                    ApiClient.getModels(config.address, config.key, config.channel)
-                }
-
+        stateHolder._pendingConfigParams.value = null
+        stateHolder._showAutoFetchConfirmDialog.value = false
+        launchLatestModelRequest(
+            apiUrl = config.address,
+            apiKey = config.key,
+            channel = config.channel,
+            refreshId = refreshId,
+            onSuccess = { models ->
                 if (models.isEmpty()) {
                     showSnackbar("未获取到任何模型")
+                } else {
+                    stateHolder._pendingConfigParams.value = com.android.everytalk.statecontroller.PendingConfigParams(
+                        provider = config.provider,
+                        address = config.address,
+                        key = config.key,
+                        channel = config.channel,
+                        isImageGen = isImageGen,
+                        enableCodeExecution = config.enableCodeExecution,
+                        toolsJson = config.toolsJson,
+                        imageSize = config.imageSize,
+                        numInferenceSteps = config.numInferenceSteps,
+                        guidanceScale = config.guidanceScale,
+                        isRefresh = true,
+                    )
+                    stateHolder._showModelSelectionDialog.value = true
+                }
+            },
+            onFailure = { error ->
+                Log.e("ModelAndConfig", "刷新模型失败", error)
+                showSnackbar("刷新模型失败: ${error.message}")
+            },
+        )
+    }
+
+    private fun launchLatestModelRequest(
+        apiUrl: String,
+        apiKey: String,
+        channel: String?,
+        refreshId: String? = null,
+        onSuccess: (List<String>) -> Unit,
+        onFailure: (Exception) -> Unit,
+    ) {
+        lateinit var requestJob: Job
+        synchronized(modelRequestLock) {
+            val generation = ++modelRequestGeneration
+            modelRequestJob?.cancel()
+            modelFetchManager.setFetchedModels(emptyList())
+            modelFetchManager.setRefreshingModel(refreshId)
+            stateHolder._showModelSelectionDialog.value = false
+
+            requestJob = scope.launch(start = CoroutineStart.LAZY) {
+                val models = try {
+                    withContext(Dispatchers.IO) {
+                        ApiClient.getModels(apiUrl, apiKey, channel)
+                    }
+                } catch (e: CancellationException) {
+                    synchronized(modelRequestLock) {
+                        if (modelRequestGeneration == generation) {
+                            modelFetchManager.setRefreshingModel(null)
+                            modelRequestJob = null
+                        }
+                    }
+                    throw e
+                } catch (e: Exception) {
+                    synchronized(modelRequestLock) {
+                        if (modelRequestGeneration != generation) return@launch
+                        modelFetchManager.setRefreshingModel(null)
+                        modelRequestJob = null
+                        onFailure(e)
+                    }
                     return@launch
                 }
 
-                modelFetchManager.setFetchedModels(models)
-                stateHolder._pendingConfigParams.value = com.android.everytalk.statecontroller.PendingConfigParams(
-                    provider = config.provider,
-                    address = config.address,
-                    key = config.key,
-                    channel = config.channel,
-                    isImageGen = isImageGen,
-                    enableCodeExecution = config.enableCodeExecution,
-                    toolsJson = config.toolsJson,
-                    isRefresh = true
-                )
-                stateHolder._showModelSelectionDialog.value = true
-            } catch (e: Exception) {
-                Log.e("ModelAndConfig", "刷新模型失败", e)
-                showSnackbar("刷新模型失败: ${e.message}")
-            } finally {
-                modelFetchManager.removeRefreshingModel(refreshId)
+                synchronized(modelRequestLock) {
+                    if (modelRequestGeneration != generation) return@launch
+                    modelFetchManager.setFetchedModels(models)
+                    modelFetchManager.setRefreshingModel(null)
+                    modelRequestJob = null
+                    onSuccess(models)
+                }
             }
+            modelRequestJob = requestJob
         }
+        requestJob.start()
     }
 
     fun replaceModelsForConfigGroup(params: com.android.everytalk.statecontroller.PendingConfigParams, modelNames: List<String>) {
+        val requestedModels = modelNames.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        if (requestedModels.isEmpty()) {
+            showSnackbar("请至少选择一个模型")
+            return
+        }
+
         scope.launch {
             val currentConfigs = if (params.isImageGen) {
                 stateHolder._imageGenApiConfigs.value
             } else {
                 stateHolder._apiConfigs.value
             }
-            val configsToKeep = currentConfigs.filterNot {
+
+            val belongsToGroup: (ApiConfig) -> Boolean = {
                 it.key == params.key &&
-                it.provider == params.provider &&
-                it.address == params.address &&
-                it.channel == params.channel
+                    it.provider == params.provider &&
+                    it.address == params.address &&
+                    it.channel == params.channel
+            }
+            val oldGroup = currentConfigs.filter(belongsToGroup)
+            if (oldGroup.isEmpty()) {
+                showSnackbar("配置组已不存在")
+                return@launch
             }
 
-            val newConfigs = modelNames.map { modelName ->
-                ApiConfig(
-                    address = params.address,
-                    key = params.key,
-                    model = modelName,
-                    provider = params.provider,
-                    name = modelName,
+            val oldByModel = oldGroup.associateBy { it.model }
+            val template = oldGroup.first()
+            val refreshedGroup = requestedModels.map { modelName ->
+                oldByModel[modelName] ?: template.copy(
                     id = UUID.randomUUID().toString(),
-                    isValid = true,
-                    modalityType = if (params.isImageGen) {
-                        com.android.everytalk.data.DataClass.ModalityType.IMAGE
-                    } else {
-                        com.android.everytalk.data.DataClass.ModalityType.TEXT
-                    },
-                    channel = params.channel,
-                    enableCodeExecution = params.enableCodeExecution,
-                    toolsJson = params.toolsJson
+                    model = modelName,
+                    name = modelName,
+                    modalityType = if (params.isImageGen) ModalityType.IMAGE else ModalityType.TEXT,
                 )
             }
-            val finalConfigs = configsToKeep + newConfigs
+            val refreshedByModel = refreshedGroup.associateBy { it.model }
+            val oldIds = oldGroup.mapTo(mutableSetOf()) { it.id }
+            val currentSelectedConfig = if (params.isImageGen) {
+                stateHolder._selectedImageGenApiConfig.value
+            } else {
+                stateHolder._selectedApiConfig.value
+            }
+            val fallback = currentSelectedConfig
+                ?.takeIf { it.id in oldIds }
+                ?.let { refreshedByModel[it.model] }
+                ?: refreshedGroup.first()
+            val oldIdToNewId = oldGroup.associate { oldConfig ->
+                oldConfig.id to (refreshedByModel[oldConfig.model] ?: fallback).id
+            }
+            val finalConfigs = currentConfigs.filterNot(belongsToGroup) + refreshedGroup
+            val currentConversationMapping = stateHolder.conversationApiConfigIds.value
+            val updatedConversationMapping = currentConversationMapping.mapValues { (_, configId) ->
+                oldIdToNewId[configId] ?: configId
+            }
 
             if (params.isImageGen) {
                 stateHolder._imageGenApiConfigs.value = finalConfigs
             } else {
                 stateHolder._apiConfigs.value = finalConfigs
             }
-            persistenceManager.saveApiConfigs(finalConfigs, params.isImageGen)
-
-            val currentSelectedConfig = if (params.isImageGen) {
-                stateHolder._selectedImageGenApiConfig.value
-            } else {
-                stateHolder._selectedApiConfig.value
-            }
-            if (currentSelectedConfig != null &&
-                currentSelectedConfig.key == params.key &&
-                currentSelectedConfig.provider == params.provider &&
-                currentSelectedConfig.address == params.address &&
-                currentSelectedConfig.channel == params.channel &&
-                !finalConfigs.any { it.id == currentSelectedConfig.id }
-            ) {
-                val newSelection = finalConfigs.firstOrNull {
-                    it.key == params.key &&
-                    it.provider == params.provider &&
-                    it.address == params.address &&
-                    it.channel == params.channel
+            if (updatedConversationMapping != currentConversationMapping) {
+                stateHolder.conversationApiConfigIds.update { currentMapping ->
+                    currentMapping.mapValues { (_, configId) -> oldIdToNewId[configId] ?: configId }
                 }
+            }
+
+            val newSelection = currentSelectedConfig
+                ?.takeIf { it.id in oldIds }
+                ?.let { selected ->
+                    val targetId = oldIdToNewId.getValue(selected.id)
+                    refreshedGroup.first { it.id == targetId }
+                }
+            if (newSelection != null && newSelection != currentSelectedConfig) {
                 if (params.isImageGen) {
                     stateHolder._selectedImageGenApiConfig.value = newSelection
                 } else {
                     stateHolder._selectedApiConfig.value = newSelection
                 }
-                persistenceManager.saveSelectedConfigIdentifier(newSelection?.id, params.isImageGen)
+                persistenceManager.saveSelectedConfigIdentifier(newSelection.id, params.isImageGen)
             }
 
-            showSnackbar("刷新成功，已更新 ${modelNames.size} 个模型")
+            persistenceManager.saveApiConfigs(finalConfigs, params.isImageGen)
+            if (updatedConversationMapping != currentConversationMapping) {
+                persistenceManager.saveConversationApiConfigIds(updatedConversationMapping)
+            }
+
+            showSnackbar("刷新成功，已更新 ${requestedModels.size} 个模型")
         }
     }
 }

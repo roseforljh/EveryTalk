@@ -1,6 +1,5 @@
 package com.android.everytalk.data.database.daos
 
-import androidx.paging.PagingSource
 import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
@@ -8,6 +7,7 @@ import androidx.room.Query
 import androidx.room.Transaction
 import com.android.everytalk.data.database.entities.ChatSessionEntity
 import com.android.everytalk.data.database.entities.MessageEntity
+import com.android.everytalk.data.database.entities.RawMessageRow
 
 @Dao
 interface ChatDao {
@@ -30,22 +30,26 @@ interface ChatDao {
         insertMessages(messages)
     }
     
-    @Transaction
-    suspend fun saveLastOpenSession(session: ChatSessionEntity, messages: List<MessageEntity>) {
-        saveSessionWithMessages(session, messages)
-    }
-
     @Query("SELECT * FROM chat_sessions WHERE isImageGeneration = :isImageGen ORDER BY lastModifiedTimestamp DESC")
     suspend fun getAllSessions(isImageGen: Boolean): List<ChatSessionEntity>
 
     @Query("SELECT * FROM messages WHERE sessionId = :sessionId ORDER BY timestamp ASC")
     suspend fun getMessagesForSession(sessionId: String): List<MessageEntity>
-    
-    @Query("SELECT * FROM messages WHERE sessionId = :sessionId ORDER BY timestamp ASC")
-    fun getMessagesForSessionPaged(sessionId: String): PagingSource<Int, MessageEntity>
-    
-    @Query("SELECT COUNT(*) FROM messages WHERE sessionId = :sessionId")
-    suspend fun getMessageCountForSession(sessionId: String): Int
+
+    @Query(
+        """
+        SELECT id, sessionId, text, sender, reasoning, contentStarted, isError, name, timestamp,
+               isPlaceholderName, webSearchResults AS webSearchResultsJson,
+               currentWebSearchStage, imageUrls AS imageUrlsJson, attachments AS attachmentsJson,
+               outputType, parts AS partsJson, executionStatus, modelName, providerName
+        FROM messages
+        WHERE sessionId IN (
+            SELECT id FROM chat_sessions WHERE isImageGeneration = :isImageGen
+        )
+        ORDER BY sessionId ASC, timestamp ASC
+        """
+    )
+    suspend fun getRawMessagesForMode(isImageGen: Boolean): List<RawMessageRow>
     
     @Query("DELETE FROM chat_sessions WHERE isImageGeneration = :isImageGen")
     suspend fun clearAllSessions(isImageGen: Boolean)

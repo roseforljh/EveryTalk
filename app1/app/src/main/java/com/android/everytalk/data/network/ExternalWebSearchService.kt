@@ -6,15 +6,15 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.HttpRedirect
 import io.ktor.client.plugins.HttpTimeout
-import io.ktor.client.request.post
 import io.ktor.client.request.header
+import io.ktor.client.request.preparePost
 import io.ktor.client.request.setBody
-import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
 import io.ktor.http.isSuccess
 import io.ktor.http.contentType
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
@@ -35,6 +35,7 @@ object ExternalWebSearchService {
     private const val TAG = "ExternalWebSearchService"
     private const val DEFAULT_TIMEOUT_MS = 30_000L
     private const val DEFAULT_RESULT_LIMIT = 5
+    private const val MAX_SEARCH_RESPONSE_BYTES = 2L * 1024L * 1024L
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -54,12 +55,12 @@ object ExternalWebSearchService {
         apiKey: String,
         query: String,
     ): Result<ExternalWebSearchResponse> = withContext(Dispatchers.IO) {
-        runCatching {
+        try {
             val trimmedQuery = query.trim()
             require(trimmedQuery.isNotBlank()) { "搜索内容不能为空" }
             require(apiKey.isNotBlank()) { "${provider.displayName} API Key 未配置" }
 
-            val response = client.post(provider.baseUrl) {
+            val searchResponse = client.preparePost(provider.baseUrl) {
                 contentType(ContentType.Application.Json)
                 when (provider) {
                     ExternalWebSearchProvider.TAVILY -> {
@@ -122,21 +123,26 @@ object ExternalWebSearchService {
                         )
                     }
                 }
+            }.execute { response ->
+                if (!response.status.isSuccess()) {
+                    throw IllegalStateException("${provider.displayName} 搜索失败: HTTP ${response.status.value}")
+                }
+
+                val body = response.readTextAtMost(MAX_SEARCH_RESPONSE_BYTES)
+                val results = parseResults(provider, body)
+                if (results.isEmpty()) {
+                    Log.w(TAG, "provider=${provider.providerId} empty results bodyChars=${body.length}")
+                    throw IllegalStateException("${provider.displayName} 未返回可用搜索结果")
+                }
+                ExternalWebSearchResponse(provider = provider, results = results)
             }
 
-            if (!response.status.isSuccess()) {
-                throw IllegalStateException("${provider.displayName} 搜索失败: HTTP ${response.status.value}")
-            }
-
-            val body = response.bodyAsText()
-            val results = parseResults(provider, body)
-            if (results.isEmpty()) {
-                Log.w(TAG, "provider=${provider.providerId} empty results body=${body.take(1000)}")
-                throw IllegalStateException("${provider.displayName} 未返回可用搜索结果")
-            }
-            ExternalWebSearchResponse(provider = provider, results = results)
-        }.onFailure {
-            Log.e(TAG, "搜索失败 provider=${provider.providerId}", it)
+            Result.success(searchResponse)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "搜索失败 provider=${provider.providerId}", e)
+            Result.failure(e)
         }
     }
 

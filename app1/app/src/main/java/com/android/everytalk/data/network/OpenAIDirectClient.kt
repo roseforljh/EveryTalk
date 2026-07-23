@@ -18,12 +18,13 @@ import kotlinx.serialization.json.*
 import io.ktor.client.request.forms.*
 import io.ktor.http.content.*
 import android.util.Base64
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CancellationException
 
 object OpenAIDirectClient {
     private const val TAG = "OpenAIDirectClient"
     private const val MAX_TOOL_LOOPS = 50
+    private const val MAX_FILE_UPLOAD_RESPONSE_BYTES = 1L * 1024L * 1024L
+    private const val MAX_QWEN_UPLOAD_FILE_BYTES = 10L * 1024L * 1024L
 
     private class StreamingContentAggregator {
         private val buffer = StringBuilder()
@@ -390,9 +391,31 @@ object OpenAIDirectClient {
     }
 
     private var mcpToolExecutor: (suspend (String, JsonObject, suspend (String?) -> Unit) -> JsonElement)? = null
+    private var mcpToolExecutorOwner: Any? = null
 
-    fun setMcpToolExecutor(executor: (suspend (String, JsonObject, suspend (String?) -> Unit) -> JsonElement)?) {
+    @Synchronized
+    fun setMcpToolExecutor(
+        owner: Any,
+        executor: (suspend (String, JsonObject, suspend (String?) -> Unit) -> JsonElement)?,
+    ) {
+        mcpToolExecutorOwner = owner
         mcpToolExecutor = executor
+    }
+
+    @Synchronized
+    fun setMcpToolExecutor(
+        executor: (suspend (String, JsonObject, suspend (String?) -> Unit) -> JsonElement)?,
+    ) {
+        mcpToolExecutorOwner = null
+        mcpToolExecutor = executor
+    }
+
+    @Synchronized
+    fun clearMcpToolExecutor(owner: Any) {
+        if (mcpToolExecutorOwner === owner) {
+            mcpToolExecutorOwner = null
+            mcpToolExecutor = null
+        }
     }
     
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -400,6 +423,7 @@ object OpenAIDirectClient {
         client: HttpClient,
         request: ChatRequest
     ): Flow<AppStreamEvent> = channelFlow {
+        var terminalSent = false
         try {
             Log.i(TAG, "🔄 启动 OpenAI 兼容直连模式")
 
@@ -453,7 +477,7 @@ object OpenAIDirectClient {
                     configureSSERequest()
                 }.execute { response ->
                     if (!response.status.isSuccess()) {
-                        val errorBody = try { response.bodyAsText() } catch (_: Exception) { null }
+                        val errorBody = response.readErrorTextAtMost()
                         if (response.status.value == 400 && errorBody?.contains("image_url") == true) {
                             Log.w(TAG, "模型不支持 image_url，移除图片消息后重试")
                             conversationHistory.removeAll { msg ->
@@ -471,6 +495,7 @@ object OpenAIDirectClient {
                             return@execute
                         }
                         val result = NetworkUtils.handleApiError(response.status, errorBody, "OpenAI")
+                        terminalSent = true
                         send(result.error)
                         send(result.finish)
                         return@execute
@@ -504,8 +529,10 @@ object OpenAIDirectClient {
                     )
                 }
 
+                if (terminalSent) return@channelFlow
+
                 if (shouldFallbackResponses) {
-                    OpenAIResponsesClient.streamChatResponses(client, request).collect { event ->
+                    OpenAIResponsesClient.streamChatResponses(client, currentRequest).collect { event ->
                         send(event)
                     }
                     return@channelFlow
@@ -534,9 +561,8 @@ object OpenAIDirectClient {
                 conversationHistory.add(buildJsonObject {
                     put("role", "assistant")
                     put("content", parseResult?.fullText ?: "")
-                    if (!parseResult?.reasoningContent.isNullOrEmpty()) {
-                        put("reasoning_content", parseResult!!.reasoningContent)
-                    }
+                    parseResult?.reasoningContent?.takeIf { it.isNotEmpty() }
+                        ?.let { put("reasoning_content", it) }
                     putJsonArray("tool_calls") {
                         pendingToolCalls.forEach { toolInfo ->
                             addJsonObject {
@@ -561,11 +587,9 @@ object OpenAIDirectClient {
                             JsonObject(emptyMap())
                         }
 
-                        val result = withContext(NonCancellable) {
-                            Log.d(TAG, "🔧 开始执行工具: ${toolInfo.name}")
-                            mcpToolExecutor!!.invoke(toolInfo.name, argsJson) { status ->
-                                send(AppStreamEvent.ExecutionStatusUpdate(status))
-                            }
+                        Log.d(TAG, "🔧 开始执行工具: ${toolInfo.name}")
+                        val result = mcpToolExecutor!!.invoke(toolInfo.name, argsJson) { status ->
+                            send(AppStreamEvent.ExecutionStatusUpdate(status))
                         }
                         Log.i(TAG, "🔧 工具 ${toolInfo.name} 执行成功: resultChars=${result.toString().length}")
 
@@ -574,10 +598,11 @@ object OpenAIDirectClient {
                             send(AppStreamEvent.WebSearchResults(webResults))
                         }
 
-                        val images = (result as? JsonObject)?.get("_images")?.let { it as? JsonArray }
+                        val resultObject = result as? JsonObject
+                        val images = resultObject?.get("_images") as? JsonArray
                         if (images != null && images.isNotEmpty()) {
                             val textOnly = buildJsonObject {
-                                (result as JsonObject).entries.forEach { (k, v) ->
+                                resultObject.entries.forEach { (k, v) ->
                                     if (k != "_images") put(k, v)
                                 }
                             }
@@ -618,6 +643,8 @@ object OpenAIDirectClient {
                                 put("content", result.toString())
                             })
                         }
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         Log.e(TAG, "🔧 工具 ${toolInfo.name} 执行失败", e)
                         conversationHistory.add(buildJsonObject {
@@ -632,15 +659,21 @@ object OpenAIDirectClient {
             }
 
             Log.i(TAG, "🏁 工具循环完成，发送 Finish 事件")
-            send(AppStreamEvent.Finish("stop"))
+            if (!terminalSent) {
+                terminalSent = true
+                send(AppStreamEvent.Finish("stop"))
+            }
 
-        } catch (e: kotlinx.coroutines.CancellationException) {
+        } catch (e: CancellationException) {
             Log.d(TAG, "流被取消: ${e.message}")
             throw e
         } catch (e: Exception) {
-            val result = NetworkUtils.handleConnectionError(e, "OpenAI")
-            send(result.error)
-            send(result.finish)
+            if (!terminalSent) {
+                val result = NetworkUtils.handleConnectionError(e, "OpenAI")
+                terminalSent = true
+                send(result.error)
+                send(result.finish)
+            }
         }
 
         return@channelFlow
@@ -979,11 +1012,17 @@ object OpenAIDirectClient {
                         val fileName = segments.getOrNull(2) ?: "unknown_file"
                         
                         try {
+                            ImageGenerationDirectClient.ensureGeneratedImageBase64WithinLimit(
+                                part.base64Data,
+                                maxBytes = MAX_QWEN_UPLOAD_FILE_BYTES,
+                            )
                             val bytes = Base64.decode(part.base64Data, Base64.NO_WRAP)
                             val fileId = uploadFileToDashScope(client, request.apiKey, fileName, bytes)
                             Log.i(TAG, "Uploaded $fileName, id=$fileId")
                             
                             ApiContentPart.FileUri(uri = fileId, mimeType = "qwen-file-id")
+                        } catch (e: CancellationException) {
+                            throw e
                         } catch (e: Exception) {
                             Log.e(TAG, "Failed to upload file for Qwen", e)
                             ApiContentPart.Text("[Upload Failed: ${e.message}]")
@@ -1008,9 +1047,8 @@ object OpenAIDirectClient {
         fileBytes: ByteArray
     ): String {
         // https://dashscope.aliyuncs.com/compatible-mode/v1/files
-        val response = client.submitFormWithBinaryData(
-            url = "https://dashscope.aliyuncs.com/compatible-mode/v1/files",
-            formData = formData {
+        return client.preparePost("https://dashscope.aliyuncs.com/compatible-mode/v1/files") {
+            setBody(MultiPartFormDataContent(formData {
                 append("file", fileBytes, Headers.build {
                     append(HttpHeaders.ContentDisposition, "filename=\"$fileName\"")
                     val mimeType = when (fileName.substringAfterLast('.', "").lowercase()) {
@@ -1024,157 +1062,21 @@ object OpenAIDirectClient {
                     append(HttpHeaders.ContentType, mimeType)
                 })
                 append("purpose", "file-extract")
-            }
-        ) {
+            }))
             header(HttpHeaders.Authorization, "Bearer $apiKey")
-        }
-
-        if (!response.status.isSuccess()) {
-            throw Exception("Upload failed: ${response.status}")
-        }
-
-        val json = Json.parseToJsonElement(response.bodyAsText()).jsonObject
-        return json["id"]?.jsonPrimitive?.content ?: throw Exception("No file id in response")
-    }
-
-    /**
-     * 解析 OpenAI SSE 流
-     */
-    @OptIn(ExperimentalCoroutinesApi::class)
-    private fun parseOpenAISSEStream(channel: ByteReadChannel): Flow<AppStreamEvent> = channelFlow {
-        val lineBuffer = StringBuilder()
-        var fullText = ""
-        var eventCount = 0
-
-        // 推理/正文阶段状态，用于驱动思考框
-        var reasoningStarted = false
-        var reasoningFinished = false
-        var contentStarted = false
-        val contentAggregator = StreamingContentAggregator()
-        val thinkRouter = ThinkTagStreamRouter()
-
-        try {
-            while (!channel.isClosedForRead) {
-                val line = channel.readLine() ?: break
-
-                when {
-                    line.isEmpty() -> {
-                        // 空行 = 一个 SSE 事件结束
-                        val chunk = lineBuffer.toString().trim()
-                        if (chunk.isNotEmpty()) {
-                            if (chunk == "[DONE]") {
-                                // 若仍未发出推理完成，先发
-                                if (reasoningStarted && !reasoningFinished) {
-                                    send(AppStreamEvent.ReasoningFinish(null))
-                                    reasoningFinished = true
-                                }
-                                break
-                            }
-                            try {
-                                val jsonChunk = Json.parseToJsonElement(chunk).jsonObject
-
-                                // 解析 OpenAI-compat choices[].delta
-                                val choicesElement = jsonChunk["choices"]
-                                val choice = (choicesElement as? JsonArray)
-                                    ?.firstOrNull()
-                                    ?.jsonObject
-                                if (choice != null) {
-                                    val delta = choice["delta"]?.jsonObject
-
-                                    // 兼容可能的推理字段（与后端一致）
-                                    val reasoningText =
-                                        delta?.get("reasoning_content")?.jsonPrimitive?.contentOrNull
-                                            ?: delta?.get("reasoning")?.jsonPrimitive?.contentOrNull
-                                            ?: delta?.get("thinking")?.jsonPrimitive?.contentOrNull
-                                            ?: delta?.get("thoughts")?.jsonPrimitive?.contentOrNull
-
-                                    if (!reasoningText.isNullOrEmpty()) {
-                                        if (!reasoningStarted) {
-                                            reasoningStarted = true
-                                        }
-                                        send(AppStreamEvent.Reasoning(reasoningText))
-                                    }
-
-                                    val contentText = delta?.get("content")?.jsonPrimitive?.contentOrNull
-                                    if (!contentText.isNullOrEmpty()) {
-                                        val routed = thinkRouter.feed(contentText)
-                                        for (routedChunk in routed) {
-                                            if (routedChunk.isReasoning) {
-                                                if (!reasoningStarted) reasoningStarted = true
-                                                send(AppStreamEvent.Reasoning(routedChunk.text))
-                                            } else {
-                                                if (reasoningStarted && !reasoningFinished) {
-                                                    send(AppStreamEvent.ReasoningFinish(null))
-                                                    reasoningFinished = true
-                                                }
-                                                if (!contentStarted) contentStarted = true
-                                                eventCount++
-                                                fullText += routedChunk.text
-                                                send(AppStreamEvent.Content(routedChunk.text, null, null))
-                                            }
-                                        }
-                                    }
-
-                                    // 结束原因
-                                    val finishReason = choice["finish_reason"]?.jsonPrimitive?.contentOrNull
-                                    if (!finishReason.isNullOrBlank() && finishReason != "null") {
-                                        Log.d(TAG, "Finish reason: $finishReason")
-                                    }
-                                }
-                            } catch (_: Exception) {
-                                // 忽略解析错误，继续读取后续帧
-                            }
-                        }
-                        lineBuffer.clear()
-                    }
-                    line.startsWith("data:") -> {
-                        val dataContent = line.substring(5).trim()
-                        if (lineBuffer.isNotEmpty()) lineBuffer.append('\n')
-                        lineBuffer.append(dataContent)
-                    }
-                    line.startsWith(":") -> {
-                        // SSE 注释/心跳，忽略
-                    }
-                }
+        }.execute { response ->
+            if (!response.status.isSuccess()) {
+                throw Exception("Upload failed: ${response.status}")
             }
 
-            // 冲刷 thinkRouter 剩余内容
-            val routerRemaining = thinkRouter.flush()
-            for (routedChunk in routerRemaining) {
-                if (routedChunk.isReasoning) {
-                    if (!reasoningStarted) reasoningStarted = true
-                    send(AppStreamEvent.Reasoning(routedChunk.text))
-                } else {
-                    if (reasoningStarted && !reasoningFinished) {
-                        send(AppStreamEvent.ReasoningFinish(null))
-                        reasoningFinished = true
-                    }
-                    fullText += routedChunk.text
-                    send(AppStreamEvent.Content(routedChunk.text, null, null))
-                }
-            }
-
-            // 发送结束事件（补尾）
-            if (fullText.isNotEmpty()) {
-                send(AppStreamEvent.ContentFinal(fullText, null, null))
-            }
-            if (reasoningStarted && !reasoningFinished) {
-                send(AppStreamEvent.ReasoningFinish(null))
-            }
-            send(AppStreamEvent.Finish("stop"))
-
-        } catch (e: Exception) {
-            send(AppStreamEvent.Error("流解析失败: ${NetworkUtils.sanitizeMessage(e.message)}", null))
-        }
-
-        awaitClose {
-            Log.d(TAG, "SSE stream channel closed")
+            val json = Json.parseToJsonElement(
+                response.readTextAtMost(MAX_FILE_UPLOAD_RESPONSE_BYTES)
+            ).jsonObject
+            json["id"]?.jsonPrimitive?.content ?: throw Exception("No file id in response")
         }
     }
 
-    /**
-     * 构建带有工具调用历史的 OpenAI API 请求体
-     */
+    /** 构建包含会话历史的 OpenAI 请求载荷。 */
     private fun buildOpenAIPayloadWithHistory(
         request: ChatRequest,
         conversationHistory: List<JsonObject>
@@ -1318,9 +1220,10 @@ object OpenAIDirectClient {
         onToolCall: (OpenAiToolCallInfo) -> Unit,
         emitEvent: suspend (AppStreamEvent) -> Unit
     ): OpenAIParseResult {
+        val boundedChannel = BoundedSseLineReader(channel)
         val lineBuffer = StringBuilder()
-        var fullText = ""
-        var fullReasoningContent = ""
+        val fullText = StringBuilder()
+        val fullReasoningContent = StringBuilder()
 
         var reasoningStarted = false
         var reasoningFinished = false
@@ -1333,8 +1236,8 @@ object OpenAIDirectClient {
         val toolCallsMap = mutableMapOf<Int, Triple<String, String, StringBuilder>>() // index -> (id, name, arguments)
 
         try {
-            while (!channel.isClosedForRead) {
-                val line = channel.readLine() ?: break
+            while (true) {
+                val line = boundedChannel.readLine() ?: break
 
                 when {
                     line.isEmpty() -> {
@@ -1366,7 +1269,7 @@ object OpenAIDirectClient {
 
                                     if (!reasoningText.isNullOrEmpty()) {
                                         if (!reasoningStarted) reasoningStarted = true
-                                        fullReasoningContent += reasoningText
+                                        fullReasoningContent.append(reasoningText)
                                         emitEvent(AppStreamEvent.Reasoning(reasoningText))
                                     }
 
@@ -1377,7 +1280,7 @@ object OpenAIDirectClient {
                                         for (routedChunk in routed) {
                                             if (routedChunk.isReasoning) {
                                                 if (!reasoningStarted) reasoningStarted = true
-                                                fullReasoningContent += routedChunk.text
+                                                fullReasoningContent.append(routedChunk.text)
                                                 emitEvent(AppStreamEvent.Reasoning(routedChunk.text))
                                             } else {
                                                 if (reasoningStarted && !reasoningFinished) {
@@ -1385,7 +1288,7 @@ object OpenAIDirectClient {
                                                     reasoningFinished = true
                                                 }
                                                 if (!contentStarted) contentStarted = true
-                                                fullText += routedChunk.text
+                                                fullText.append(routedChunk.text)
                                                 val aggregatedChunks = contentAggregator.append(routedChunk.text)
                                                 aggregatedChunks.forEach { aggregated ->
                                                     emitEvent(AppStreamEvent.Content(aggregated, null, ""))
@@ -1425,15 +1328,19 @@ object OpenAIDirectClient {
                                         Log.d(TAG, "Finish reason: tool_calls, 准备处理工具调用")
                                     }
                                 }
+                            } catch (e: CancellationException) {
+                                throw e
                             } catch (e: Exception) {
                                 Log.w(TAG, "解析 SSE chunk 失败: ${e.message}")
+                                throw e
                             }
                         }
                         lineBuffer.clear()
                     }
                     line.startsWith("data:") -> {
                         val dataContent = line.substring(5).trim()
-                        if (lineBuffer.isNotEmpty()) lineBuffer.append('\n')
+                        val separatorLength = if (lineBuffer.isNotEmpty()) 1 else 0
+                        if (separatorLength == 1) lineBuffer.append('\n')
                         lineBuffer.append(dataContent)
                     }
                     line.startsWith(":") -> {
@@ -1447,14 +1354,14 @@ object OpenAIDirectClient {
             for (routedChunk in routerRemaining) {
                 if (routedChunk.isReasoning) {
                     if (!reasoningStarted) reasoningStarted = true
-                    fullReasoningContent += routedChunk.text
+                    fullReasoningContent.append(routedChunk.text)
                     emitEvent(AppStreamEvent.Reasoning(routedChunk.text))
                 } else {
                     if (reasoningStarted && !reasoningFinished) {
                         emitEvent(AppStreamEvent.ReasoningFinish(null))
                         reasoningFinished = true
                     }
-                    fullText += routedChunk.text
+                    fullText.append(routedChunk.text)
                     contentAggregator.append(routedChunk.text)
                 }
             }
@@ -1484,20 +1391,26 @@ object OpenAIDirectClient {
                 }
             }
 
-            // 发送结束事件
-            if (fullText.isNotEmpty() && !hasToolCalls) {
-                emitEvent(AppStreamEvent.ContentFinal(fullText, null, null))
-            }
-            if (reasoningStarted && !reasoningFinished) {
-                emitEvent(AppStreamEvent.ReasoningFinish(null))
-            }
-            // 注意：不在这里发送 Finish，由调用方决定（可能还有工具循环）
-
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
-            emitEvent(AppStreamEvent.Error("流解析失败: ${NetworkUtils.sanitizeMessage(e.message)}", null))
+            throw e
         }
 
-        return OpenAIParseResult(hasToolCalls = hasToolCalls, fullText = fullText, reasoningContent = fullReasoningContent)
+        val completedText = fullText.toString()
+        val completedReasoning = fullReasoningContent.toString()
+        if (completedText.isNotEmpty() && !hasToolCalls) {
+            emitEvent(AppStreamEvent.ContentFinal(completedText, null, null))
+        }
+        if (reasoningStarted && !reasoningFinished) {
+            emitEvent(AppStreamEvent.ReasoningFinish(null))
+        }
+
+        return OpenAIParseResult(
+            hasToolCalls = hasToolCalls,
+            fullText = completedText,
+            reasoningContent = completedReasoning
+        )
     }
 
     private fun shouldFallbackToResponses(errorBody: String?): Boolean {

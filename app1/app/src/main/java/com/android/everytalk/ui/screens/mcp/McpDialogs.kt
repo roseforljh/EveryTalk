@@ -724,7 +724,7 @@ fun AddMcpServerDialog(
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .offset(x = indicatorOffset)
+                                    .offset { androidx.compose.ui.unit.IntOffset(indicatorOffset.roundToPx(), 0) }
                                     .width(itemWidth)
                                     .fillMaxHeight()
                                     .clip(RoundedCornerShape(12.dp))
@@ -839,7 +839,7 @@ fun AddMcpServerDialog(
 
                                 Box(
                                     modifier = Modifier
-                                        .offset(x = indicatorOffset)
+                                        .offset { androidx.compose.ui.unit.IntOffset(indicatorOffset.roundToPx(), 0) }
                                         .width(itemWidth)
                                         .fillMaxHeight()
                                         .clip(RoundedCornerShape(12.dp))
@@ -960,109 +960,6 @@ fun AddMcpServerDialog(
                 border = BorderStroke(1.dp, mcpBorderColor)
             ) {
                 Text("取消", fontWeight = FontWeight.SemiBold)
-            }
-        }
-    )
-}
-
-/**
- * MCP 工具选择对话框
- */
-@Composable
-fun McpToolSelectionDialog(
-    availableTools: List<Pair<McpServerConfig, McpTool>>,
-    selectedTools: Set<String>,
-    onToolToggle: (String) -> Unit,
-    onDismiss: () -> Unit
-) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
-        shape = AppDialogShape,
-        containerColor = appDialogContainerColor(),
-        titleContentColor = appDialogContentColor(),
-        textContentColor = appDialogContentColor(),
-        title = {
-            Text(
-                text = "选择 MCP 工具",
-                style = MaterialTheme.typography.titleLarge,
-                fontWeight = FontWeight.Bold
-            )
-        },
-        text = {
-            if (availableTools.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(150.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        "暂无可用工具",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            } else {
-                LazyColumn(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(max = 400.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(availableTools, key = { "${it.first.id}:${it.second.name}" }) { (server, tool) ->
-                        val toolId = "${server.id}:${tool.name}"
-                        val isSelected = selectedTools.contains(toolId)
-
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            shape = RoundedCornerShape(8.dp),
-                            colors = CardDefaults.cardColors(
-                                containerColor = if (isSelected)
-                                    MaterialTheme.colorScheme.primaryContainer
-                                else
-                                    MaterialTheme.colorScheme.surfaceVariant
-                            )
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(12.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Column(modifier = Modifier.weight(1f)) {
-                                    Text(
-                                        text = tool.name,
-                                        style = MaterialTheme.typography.titleSmall,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                    tool.description?.let { desc ->
-                                        Text(
-                                            text = desc,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                        )
-                                    }
-                                    Text(
-                                        text = "来自: ${server.name}",
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                                    )
-                                }
-                                Checkbox(
-                                    checked = isSelected,
-                                    onCheckedChange = { onToolToggle(toolId) }
-                                )
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = onDismiss) {
-                Text("完成")
             }
         }
     )

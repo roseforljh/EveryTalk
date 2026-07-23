@@ -59,10 +59,8 @@ class Converters {
 
     // List<String> (for imageUrls, etc.)
     @TypeConverter
-    fun fromStringList(value: List<String>?): String {
-        if (value == null) return "[]"
-        return json.encodeToString(ListSerializer(String.serializer()), value)
-    }
+    fun fromStringList(value: List<String>): String =
+        json.encodeToString(ListSerializer(String.serializer()), value)
 
     @TypeConverter
     fun toStringList(value: String?): List<String> {
@@ -76,10 +74,8 @@ class Converters {
 
     // List<WebSearchResult>
     @TypeConverter
-    fun fromWebSearchResultList(value: List<WebSearchResult>?): String {
-        if (value == null) return "[]"
-        return json.encodeToString(ListSerializer(WebSearchResult.serializer()), value)
-    }
+    fun fromWebSearchResultList(value: List<WebSearchResult>): String =
+        json.encodeToString(ListSerializer(WebSearchResult.serializer()), value)
 
     @TypeConverter
     fun toWebSearchResultList(value: String?): List<WebSearchResult> {

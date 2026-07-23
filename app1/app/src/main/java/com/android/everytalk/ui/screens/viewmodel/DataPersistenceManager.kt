@@ -1,7 +1,6 @@
 package com.android.everytalk.ui.screens.viewmodel
 
 import android.content.Context
-import android.net.Uri
 import android.util.Log
 import com.android.everytalk.data.DataClass.ApiConfig
 import java.io.File
@@ -10,6 +9,7 @@ import com.android.everytalk.data.database.RoomDataSource
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.statecontroller.ViewModelStateHolder
 import com.android.everytalk.statecontroller.ConversationScrollState
+import com.android.everytalk.statecontroller.rethrowIfCancellation
 import com.android.everytalk.statecontroller.safeApiConfigSummary
 import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.DataClass.VoiceBackendConfig
@@ -33,6 +33,117 @@ import kotlinx.coroutines.sync.withLock
 import coil3.ImageLoader
 import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.json.Json
+import java.net.URI
+import java.nio.file.Files
+
+private val WINDOWS_ABSOLUTE_PATH = Regex("^[A-Za-z]:[\\\\/].*")
+private val URI_SCHEME_PREFIX = Regex("^[A-Za-z][A-Za-z0-9+.-]*:")
+private const val MAX_LOCAL_MEDIA_SOURCE_CHARS = 8_192
+private const val MAX_TEMP_CAMERA_FILE_AGE_MS = 7L * 24L * 60L * 60L * 1000L
+
+internal fun migrateApiConfigIds(
+    mapping: Map<String, String>,
+    idMigrations: Map<String, String>,
+): Map<String, String> = mapping.mapValues { (_, configId) -> idMigrations[configId] ?: configId }
+
+internal data class MediaDeletionCandidates(
+    val localSources: Set<String>,
+    val remoteUrls: Set<String>,
+)
+
+internal fun collectMediaDeletionCandidates(messages: Iterable<Message>): MediaDeletionCandidates {
+    val localSources = linkedSetOf<String>()
+    val remoteUrls = linkedSetOf<String>()
+
+    fun addSource(source: String?) {
+        val value = source?.trim()?.takeIf(String::isNotEmpty) ?: return
+        if (value.startsWith("http://", ignoreCase = true) ||
+            value.startsWith("https://", ignoreCase = true)
+        ) {
+            remoteUrls += value
+        } else if (mediaSourceToLocalPath(value) != null) {
+            localSources += value
+        }
+    }
+
+    messages.forEach { message ->
+        message.attachments.forEach { attachment ->
+            val source = when (attachment) {
+                is SelectedMediaItem.ImageFromUri -> attachment.filePath
+                is SelectedMediaItem.GenericFile -> attachment.filePath
+                is SelectedMediaItem.Audio -> null
+                is SelectedMediaItem.ImageFromBitmap -> attachment.filePath
+            }
+            addSource(source)
+        }
+        message.imageUrls.orEmpty().forEach(::addSource)
+    }
+
+    return MediaDeletionCandidates(localSources, remoteUrls)
+}
+
+internal fun mediaSourceToLocalPath(source: String): String? {
+    val value = source.trim()
+    if (value.isEmpty() || value.length > MAX_LOCAL_MEDIA_SOURCE_CHARS) return null
+
+    if (value.startsWith("file:", ignoreCase = true)) {
+        val uri = runCatching { URI(value) }.getOrNull() ?: return null
+        if (!uri.scheme.equals("file", ignoreCase = true) || uri.isOpaque || !uri.rawAuthority.isNullOrEmpty()) {
+            return null
+        }
+        val path = uri.path?.takeIf(String::isNotBlank) ?: return null
+        return if (File.separatorChar == '\\' && path.matches(Regex("^/[A-Za-z]:/.*"))) {
+            path.drop(1)
+        } else {
+            path
+        }
+    }
+
+    if (URI_SCHEME_PREFIX.containsMatchIn(value) && !WINDOWS_ABSOLUTE_PATH.matches(value)) return null
+    return value.takeIf { File(it).isAbsolute || it.startsWith('/') || WINDOWS_ABSOLUTE_PATH.matches(it) }
+}
+
+internal fun resolveOwnedMediaFile(source: String, allowedDirectories: Iterable<File>): File? {
+    val localPath = mediaSourceToLocalPath(source) ?: return null
+    val rawCandidatePath = runCatching { File(localPath).toPath() }.getOrNull() ?: return null
+    if (!rawCandidatePath.isAbsolute) return null
+    val candidatePath = runCatching { rawCandidatePath.normalize() }.getOrNull()
+        ?: return null
+
+    for (allowedDirectory in allowedDirectories) {
+        try {
+            val allowedPath = allowedDirectory.toPath().toAbsolutePath().normalize()
+            if (candidatePath == allowedPath || !candidatePath.startsWith(allowedPath)) continue
+
+            val relativePath = allowedPath.relativize(candidatePath)
+            var currentPath = allowedPath
+            var containsSymbolicLink = false
+            for (segment in relativePath) {
+                currentPath = currentPath.resolve(segment)
+                if (Files.isSymbolicLink(currentPath)) {
+                    containsSymbolicLink = true
+                    break
+                }
+            }
+            if (containsSymbolicLink) continue
+
+            val allowedRealPath = allowedPath.toRealPath()
+            val candidateRealPath = candidatePath.toRealPath()
+            val allowedCanonicalPath = allowedDirectory.canonicalFile.toPath()
+            val candidateCanonicalPath = File(localPath).canonicalFile.toPath()
+            if (!candidateRealPath.startsWith(allowedRealPath) ||
+                !candidateCanonicalPath.startsWith(allowedCanonicalPath) ||
+                !Files.isRegularFile(candidateRealPath)
+            ) {
+                continue
+            }
+            return candidateRealPath.toFile()
+        } catch (_: Exception) {
+            // 路径不存在、不可访问或无法规范化时一律不删除。
+        }
+    }
+    return null
+}
 
 internal data class InlineImageMigrationResult(
     val messages: List<Message>,
@@ -40,6 +151,26 @@ internal data class InlineImageMigrationResult(
     val failed: Boolean,
     val persistedSources: Set<String> = emptySet(),
 )
+
+internal fun collectReferencedAttachmentPaths(messages: Iterable<Message>): Set<String> = buildSet {
+    fun addLocalPath(source: String?) {
+        source?.let(::mediaSourceToLocalPath)
+            ?.let { runCatching { File(it).canonicalPath }.getOrNull() }
+            ?.let(::add)
+    }
+    messages.forEach { message ->
+        message.imageUrls.orEmpty().forEach(::addLocalPath)
+        message.attachments.forEach { attachment ->
+            val path = when (attachment) {
+                is SelectedMediaItem.ImageFromUri -> attachment.filePath
+                is SelectedMediaItem.GenericFile -> attachment.filePath
+                is SelectedMediaItem.Audio -> null
+                is SelectedMediaItem.ImageFromBitmap -> attachment.filePath
+            }
+            addLocalPath(path)
+        }
+    }
+}
 
 internal suspend fun migrateConversationInlineImages(
     messages: List<Message>,
@@ -309,11 +440,13 @@ class DataPersistenceManager(
     ) {
         stateHolder._isLoadingHistoryData.value = true
         viewModelScope.launch(Dispatchers.IO) {
+            cleanupExpiredCameraFiles()
             Log.d(TAG, "loadInitialData: 开始加载初始数据 (IO Thread)... loadLastChat: $loadLastChat")
             var initialConfigPresent = false
             var initialHistoryPresent = false
             var historyLoadingJob: Job? = null
             var loadingCompleteNotified = false
+            var imageConfigIdMigrations: Map<String, String> = emptyMap()
             val emittedLoadWarnings = mutableSetOf<String>()
             fun notifyLoadingComplete(configPresent: Boolean, historyPresent: Boolean) {
                 if (loadingCompleteNotified) return
@@ -348,7 +481,6 @@ class DataPersistenceManager(
                         !(it.provider.trim().lowercase() in listOf("默认", "default") &&
                           it.modalityType == com.android.everytalk.data.DataClass.ModalityType.TEXT)
                     }
-                    roomDataSource.clearApiConfigs()
                     roomDataSource.saveApiConfigs(loadedConfigs)
                     Log.i(TAG, "loadInitialData: 已清理旧的默认文本配置")
                 }
@@ -441,17 +573,25 @@ class DataPersistenceManager(
                     Log.i(TAG, "loadInitialData: 已创建 ${newDefaultImageConfigs.size} 个默认图像配置")
                 }
                 
-                // 修复：去重逻辑，移除完全重复的配置（除了ID不同）
-                // 对于"默认"provider的配置，只按model去重，忽略address、key和channel
-                val uniqueImageConfigs = loadedImageGenConfigs.distinctBy { config ->
+                // 修复：去重时记录旧ID到保留ID的映射，避免历史会话继续引用已删除ID。
+                val retainedByKey = linkedMapOf<String, ApiConfig>()
+                val duplicateImageConfigIds = linkedMapOf<String, String>()
+                loadedImageGenConfigs.forEach { config ->
                     val isDefaultProvider = config.provider.trim().lowercase() in listOf("默认", "default")
-                    if (isDefaultProvider) {
-                        // 默认配置只按provider和model去重
+                    val key = if (isDefaultProvider) {
                         "default|${config.model}|${config.modalityType}"
                     } else {
                         "${config.provider}|${config.address}|${config.key}|${config.model}|${config.channel}|${config.modalityType}"
                     }
+                    val retained = retainedByKey[key]
+                    if (retained == null) {
+                        retainedByKey[key] = config
+                    } else {
+                        duplicateImageConfigIds[config.id] = retained.id
+                    }
                 }
+                val uniqueImageConfigs = retainedByKey.values.toList()
+                imageConfigIdMigrations = duplicateImageConfigIds
                 if (uniqueImageConfigs.size < loadedImageGenConfigs.size) {
                     Log.i(TAG, "loadInitialData: 移除 ${loadedImageGenConfigs.size - uniqueImageConfigs.size} 个重复的图像配置")
                     loadedImageGenConfigs = uniqueImageConfigs
@@ -471,13 +611,18 @@ class DataPersistenceManager(
                 }
                 
                 val selectedImageGenConfigId: String? = roomDataSource.loadSelectedImageGenConfigId()
+                val retainedSelectedImageGenConfigId = selectedImageGenConfigId?.let {
+                    duplicateImageConfigIds[it] ?: it
+                }
                 var selectedImageGenConfig: ApiConfig? = null
-                if (selectedImageGenConfigId != null) {
-                    selectedImageGenConfig = loadedImageGenConfigs.find { it.id == selectedImageGenConfigId }
+                if (retainedSelectedImageGenConfigId != null) {
+                    selectedImageGenConfig = loadedImageGenConfigs.find { it.id == retainedSelectedImageGenConfigId }
                 }
                 if (selectedImageGenConfig == null && loadedImageGenConfigs.isNotEmpty()) {
                     selectedImageGenConfig = loadedImageGenConfigs.first()
                     roomDataSource.saveSelectedImageGenConfigId(selectedImageGenConfig.id)
+                } else if (retainedSelectedImageGenConfigId != selectedImageGenConfigId) {
+                    roomDataSource.saveSelectedImageGenConfigId(retainedSelectedImageGenConfigId)
                 }
  
                  withContext(Dispatchers.Main.immediate) {
@@ -532,10 +677,13 @@ class DataPersistenceManager(
                     try {
                         // 检查是否需要加载历史数据
                         val shouldLoadHistory = stateHolder._historicalConversations.value.isEmpty()
+                        var textHistoryLoadedCompletely = false
                         val loadedHistory = if (shouldLoadHistory) {
                             Log.d(TAG, "loadInitialData: 从 Room 加载历史数据...")
+                            val loadResult = roomDataSource.loadChatHistoryResult()
+                            textHistoryLoadedCompletely = loadResult.failedSessionIds.isEmpty()
                             migrateLoadedHistorySessions(
-                                loadResult = roomDataSource.loadChatHistoryResult(),
+                                loadResult = loadResult,
                                 isImageGeneration = false,
                                 onLoadWarning = ::warnOnce,
                             )
@@ -550,10 +698,18 @@ class DataPersistenceManager(
                         // 加载会话配置映射
                         try {
                             val mapping = roomDataSource.loadConversationApiConfigIds()
+                            val migratedMapping = migrateApiConfigIds(mapping, imageConfigIdMigrations)
                             withContext(Dispatchers.Main.immediate) {
-                                stateHolder.conversationApiConfigIds.value = mapping
+                                stateHolder.conversationApiConfigIds.value = migratedMapping
                             }
-                            Log.d(TAG, "loadInitialData: 会话配置映射已加载 - 共 ${mapping.size} 条")
+                            if (migratedMapping != mapping) {
+                                roomDataSource.saveConversationApiConfigIds(migratedMapping)
+                                val migratedCount = mapping.count { (conversationId, configId) ->
+                                    migratedMapping[conversationId] != configId
+                                }
+                                Log.i(TAG, "loadInitialData: 已迁移 $migratedCount 条图像配置会话映射")
+                            }
+                            Log.d(TAG, "loadInitialData: 会话配置映射已加载 - 共 ${migratedMapping.size} 条")
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: Exception) {
@@ -597,6 +753,9 @@ class DataPersistenceManager(
                                     stateHolder.systemPrompts[id] = prompt
                                 }
                             }
+                            if (textHistoryLoadedCompletely) {
+                                stateHolder.markTextHistoryReadyForParameterCleanup()
+                            }
                         }
                     } catch (e: CancellationException) {
                         throw e
@@ -606,13 +765,17 @@ class DataPersistenceManager(
                     }
 
                     try {
+                        val imageHistoryLoadResult = roomDataSource.loadImageGenerationHistoryResult()
                         val convertedImageGenHistory = migrateLoadedHistorySessions(
-                            loadResult = roomDataSource.loadImageGenerationHistoryResult(),
+                            loadResult = imageHistoryLoadResult,
                             isImageGeneration = true,
                             onLoadWarning = ::warnOnce,
                         )
                         withContext(Dispatchers.Main.immediate) {
                             stateHolder._imageGenerationHistoricalConversations.value = convertedImageGenHistory
+                            if (imageHistoryLoadResult.failedSessionIds.isEmpty()) {
+                                stateHolder.markImageHistoryReadyForStateCleanup()
+                            }
                         }
                     } catch (e: CancellationException) {
                         throw e
@@ -853,6 +1016,34 @@ class DataPersistenceManager(
         }
     }
 
+    private fun cleanupExpiredCameraFiles() {
+        val directory = File(context.filesDir, "chat_images_temp")
+        val cutoff = System.currentTimeMillis() - MAX_TEMP_CAMERA_FILE_AGE_MS
+        directory.listFiles()?.forEach { file ->
+            if (file.isFile && file.lastModified() in 1..cutoff) {
+                runCatching { file.delete() }
+                    .onFailure { Log.w(TAG, "Failed to delete expired camera file: ${file.absolutePath}", it) }
+            }
+        }
+    }
+
+    suspend fun saveHistorySession(
+        sessionId: String,
+        messages: List<Message>,
+        isImageGeneration: Boolean,
+    ) {
+        withContext(Dispatchers.IO) {
+            val finalMessages = if (isImageGeneration) persistInlineAndRemoteImages(messages) else messages
+            roomDataSource.saveLoadedHistorySession(sessionId, finalMessages, isImageGeneration)
+        }
+    }
+
+    suspend fun deleteHistorySession(sessionId: String) {
+        withContext(Dispatchers.IO) {
+            roomDataSource.deleteHistorySession(sessionId)
+        }
+    }
+
 
     suspend fun saveSelectedConfigIdentifier(configId: String?, isImageGen: Boolean = false) {
         withContext(Dispatchers.IO) {
@@ -912,6 +1103,7 @@ class DataPersistenceManager(
                 roomDataSource.saveConversationParameters(parameters)
                 Log.d(TAG, "saveConversationParameters: 已持久化 ${parameters.size} 个会话参数映射")
             } catch (e: Exception) {
+                e.rethrowIfCancellation()
                 Log.e(TAG, "saveConversationParameters 失败", e)
             }
         }
@@ -922,6 +1114,7 @@ class DataPersistenceManager(
             try {
                 roomDataSource.loadConversationParameters()
             } catch (e: Exception) {
+                e.rethrowIfCancellation()
                 Log.e(TAG, "loadConversationParameters 失败", e)
                 emptyMap()
             }
@@ -934,18 +1127,23 @@ class DataPersistenceManager(
                 roomDataSource.saveConversationApiConfigIds(mapping)
                 Log.d(TAG, "saveConversationApiConfigIds: 已持久化 ${mapping.size} 个会话配置映射")
             } catch (e: Exception) {
+                e.rethrowIfCancellation()
                 Log.e(TAG, "saveConversationApiConfigIds 失败", e)
             }
         }
     }
 
-    suspend fun clearAllApiConfigData() {
+    suspend fun clearAllApiConfigData(isImageGen: Boolean? = null) {
         withContext(Dispatchers.IO) {
-            Log.d(TAG, "clearAllApiConfigData: 请求 RoomDataSource 清除API配置并取消选中...")
-            roomDataSource.clearApiConfigs()
-            roomDataSource.saveSelectedConfigId(null) // 确保选中的也被清掉
-            roomDataSource.clearImageGenApiConfigs()
-            roomDataSource.saveSelectedImageGenConfigId(null)
+            Log.d(TAG, "clearAllApiConfigData: 清除配置，模态=${isImageGen ?: "全部"}")
+            if (isImageGen != true) {
+                roomDataSource.clearApiConfigs()
+                roomDataSource.saveSelectedConfigId(null)
+            }
+            if (isImageGen != false) {
+                roomDataSource.clearImageGenApiConfigs()
+                roomDataSource.saveSelectedImageGenConfigId(null)
+            }
             Log.i(TAG, "clearAllApiConfigData: API配置数据已通过 RoomDataSource 清除。")
         }
     }
@@ -1031,91 +1229,52 @@ class DataPersistenceManager(
         withContext(Dispatchers.IO) {
             Log.d(TAG, "Starting deletion of media files for ${conversations.size} conversations.")
             var deletedFilesCount = 0
-            val allFilePathsToDelete = mutableSetOf<String>()
-            val allHttpUrisToClearFromCache = mutableSetOf<String>()
-            val chatAttachmentsDirPath = File(context.filesDir, "chat_attachments").absolutePath
+            // 正文只是展示内容，不具备授权删除本地文件的语义。
+            val candidates = collectMediaDeletionCandidates(conversations.flatten())
+            val allowedMediaDirectories = listOf(
+                File(context.filesDir, "chat_attachments"),
+                File(context.filesDir, "chat_images"),
+                File(context.filesDir, "chat_images_temp"),
+                File(context.cacheDir, "preview_cache"),
+                File(context.cacheDir, "share_images"),
+            )
+            val resolvedCandidates = candidates.localSources.map { source ->
+                source to resolveOwnedMediaFile(source, allowedMediaDirectories)
+            }
+            val filesToDelete = resolvedCandidates
+                .mapNotNull { (_, file) -> file }
+                .toSet()
 
-            conversations.forEach { conversation ->
-                conversation.forEach { message ->
-                    message.attachments.forEach { attachment ->
-                        val path = when (attachment) {
-                            is SelectedMediaItem.ImageFromUri -> attachment.filePath
-                            is SelectedMediaItem.GenericFile -> attachment.filePath
-                            is SelectedMediaItem.Audio -> attachment.data
-                            is SelectedMediaItem.ImageFromBitmap -> attachment.filePath
-                        }
-                        if (!path.isNullOrBlank()) {
-                            // 用户触发删除：始终释放占用空间
-                            allFilePathsToDelete.add(path)
-                        }
-                    }
-
-                    // 处理消息中的图片URL
-                    message.imageUrls?.forEach { urlString ->
-                        try {
-                            val uri = Uri.parse(urlString)
-                            if (uri.scheme == "http" || uri.scheme == "https") {
-                                allHttpUrisToClearFromCache.add(urlString)
-                            } else {
-                                val path = uri.path
-                                if (path != null) {
-                                    // 用户触发删除：始终释放占用空间
-                                    allFilePathsToDelete.add(path)
-                                }
-                            }
-                        } catch (e: Exception) {
-                            // Fallback for non-URI strings that might be file paths
-                            val file = File(urlString)
-                            if (file.exists()) {
-                                // 用户触发删除：始终释放占用空间
-                                allFilePathsToDelete.add(urlString)
-                            }
-                        }
-                    }
-                    
-                    // 增强：处理消息中可能包含的其他媒体文件路径
-                    // 检查消息文本中是否包含本地文件路径
-                    val localFilePattern = Regex("file://[^\\s]+|/data/data/[^\\s]+|/storage/[^\\s]+")
-                    localFilePattern.findAll(message.text).forEach { match ->
-                        val filePath = match.value.removePrefix("file://")
-                        val file = File(filePath)
-                        if (file.exists() && (file.name.contains("chat_attachments") ||
-                            filePath.contains(context.filesDir.absolutePath))) {
-                            // 用户触发删除：始终释放占用空间
-                            allFilePathsToDelete.add(filePath)
-                        }
-                    }
-                }
+            val rejectedSources = resolvedCandidates.count { (_, file) -> file == null }
+            if (rejectedSources > 0) {
+                Log.w(TAG, "Skipped $rejectedSources media sources outside app-owned directories or invalid paths")
             }
 
             // 删除文件
-            allFilePathsToDelete.forEach { path ->
+            filesToDelete.forEach { file ->
                 try {
-                    val file = File(path)
-                    if (file.exists()) {
-                        if (file.delete()) {
-                            Log.d(TAG, "Successfully deleted media file: $path")
-                            deletedFilesCount++
-                        } else {
-                            Log.w(TAG, "Failed to delete media file: $path")
-                        }
+                    if (file.delete()) {
+                        Log.d(TAG, "Successfully deleted media file: ${file.path}")
+                        deletedFilesCount++
                     } else {
-                        Log.w(TAG, "Media file to delete does not exist: $path")
+                        Log.w(TAG, "Failed to delete media file: ${file.path}")
                     }
                 } catch (e: SecurityException) {
-                    Log.e(TAG, "Security exception deleting media file: $path", e)
+                    Log.e(TAG, "Security exception deleting media file: ${file.path}", e)
                 } catch (e: Exception) {
-                    Log.e(TAG, "Error deleting media file: $path", e)
+                    Log.e(TAG, "Error deleting media file: ${file.path}", e)
                 }
             }
 
             // 清理图片缓存
-            allFilePathsToDelete.forEach { path ->
-                imageLoader.diskCache?.remove(path)
-                imageLoader.diskCache?.remove("file://$path")
+            candidates.localSources.forEach { source ->
+                imageLoader.diskCache?.remove(source)
             }
-
-            allHttpUrisToClearFromCache.forEach { url ->
+            filesToDelete.forEach { file ->
+                imageLoader.diskCache?.remove(file.path)
+                imageLoader.diskCache?.remove(file.toURI().toString())
+            }
+            candidates.remoteUrls.forEach { url ->
                 imageLoader.diskCache?.remove(url)
             }
 
@@ -1134,7 +1293,7 @@ class DataPersistenceManager(
      *
      * 调用时机：清空历史、大批删除后
      */
-    suspend fun cleanupOrphanedAttachments() {
+    suspend fun cleanupOrphanedAttachments(vacuumDatabase: Boolean = false) {
         withContext(Dispatchers.IO) {
             try {
                 val chatAttachmentsDir = File(context.filesDir, "chat_attachments")
@@ -1147,77 +1306,36 @@ class DataPersistenceManager(
                 // 从文本历史会话收集
                 val textHistoryResult = roomDataSource.loadChatHistoryResult()
                 textHistoryResult.sessions.forEach { loadedSession ->
-                    val conv = loadedSession.messages
-                    conv.forEach { msg ->
-                        msg.imageUrls?.forEach { url ->
-                            val path = url.removePrefix("file://")
-                            if (path.startsWith("/")) {
-                                referencedPaths.add(path)
-                            }
-                        }
-                        msg.attachments.forEach { att ->
-                            val path = when (att) {
-                                is SelectedMediaItem.ImageFromUri -> att.filePath
-                                is SelectedMediaItem.GenericFile -> att.filePath
-                                is SelectedMediaItem.Audio -> att.data
-                                is SelectedMediaItem.ImageFromBitmap -> att.filePath
-                            }
-                            if (!path.isNullOrBlank() && path.startsWith("/")) {
-                                referencedPaths.add(path)
-                            }
-                        }
-                    }
+                    referencedPaths += collectReferencedAttachmentPaths(loadedSession.messages)
                 }
 
                 // 从图像生成历史会话收集
                 val imageHistoryResult = roomDataSource.loadImageGenerationHistoryResult()
                 imageHistoryResult.sessions.forEach { loadedSession ->
-                    val conv = loadedSession.messages
-                    conv.forEach { msg ->
-                        msg.imageUrls?.forEach { url ->
-                            val path = url.removePrefix("file://")
-                            if (path.startsWith("/")) {
-                                referencedPaths.add(path)
-                            }
-                        }
-                    }
+                    referencedPaths += collectReferencedAttachmentPaths(loadedSession.messages)
+                }
+
+                if (textHistoryResult.failedSessionIds.isNotEmpty() || imageHistoryResult.failedSessionIds.isNotEmpty()) {
+                    Log.w(
+                        TAG,
+                        "cleanupOrphanedAttachments: 历史加载不完整，跳过附件清理以避免误删",
+                    )
+                    return@withContext
                 }
                 
                 // 从最后打开的会话收集
-                val lastOpenChat = roomDataSource.loadLastOpenChat()
-                lastOpenChat.forEach { msg ->
-                    msg.imageUrls?.forEach { url ->
-                        val path = url.removePrefix("file://")
-                        if (path.startsWith("/")) {
-                            referencedPaths.add(path)
-                        }
-                    }
-                }
-                
-                val lastOpenImageChat = roomDataSource.loadLastOpenImageGenerationChat()
-                lastOpenImageChat.forEach { msg ->
-                    msg.imageUrls?.forEach { url ->
-                        val path = url.removePrefix("file://")
-                        if (path.startsWith("/")) {
-                            referencedPaths.add(path)
-                        }
-                    }
-                }
+                referencedPaths += collectReferencedAttachmentPaths(roomDataSource.loadLastOpenChat())
+                referencedPaths += collectReferencedAttachmentPaths(roomDataSource.loadLastOpenImageGenerationChat())
                 
                 Log.d(TAG, "cleanupOrphanedAttachments: Found ${referencedPaths.size} referenced files")
 
                 // 2) 清理 chat_attachments 中不再被引用的文件
                 var orphanedCount = 0
-                val hasUnloadedSessions = textHistoryResult.failedSessionIds.isNotEmpty() ||
-                    imageHistoryResult.failedSessionIds.isNotEmpty()
-                if (hasUnloadedSessions) {
-                    Log.w(
-                        TAG,
-                        "cleanupOrphanedAttachments: skipped persistent attachment deletion because some sessions could not be loaded",
-                    )
-                } else if (chatAttachmentsDir.exists()) {
+                if (chatAttachmentsDir.exists()) {
                     chatAttachmentsDir.listFiles()?.forEach { file ->
-                        if (file.isFile && file.absolutePath !in referencedPaths) {
+                        val canonicalPath = runCatching { file.canonicalPath }.getOrNull()
+                            ?: return@forEach
+                        if (file.isFile && canonicalPath !in referencedPaths) {
                             try {
                                 if (file.delete()) {
                                     orphanedCount++
@@ -1263,13 +1381,17 @@ class DataPersistenceManager(
                     Log.d(TAG, "Coil disk cache cleared")
                 }.onFailure { e -> Log.w(TAG, "Failed to clear Coil disk cache", e) }
 
-                // 5) 执行数据库 VACUUM 回收 SQLite 空间
-                runCatching {
-                    roomDataSource.vacuumDatabase()
-                    Log.d(TAG, "Database VACUUM completed")
-                }.onFailure { e -> Log.w(TAG, "Failed to VACUUM database", e) }
+                // 5) VACUUM 仅用于批量清空，避免单条删除触发全库重写。
+                if (vacuumDatabase) {
+                    runCatching {
+                        roomDataSource.vacuumDatabase()
+                        Log.d(TAG, "Database VACUUM completed")
+                    }.onFailure { e -> Log.w(TAG, "Failed to VACUUM database", e) }
+                }
 
                 Log.i(TAG, "Cleanup completed. Deleted $orphanedCount orphaned files. Cleared preview=$clearedPreview, share=$clearedShare cache files.")
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Error during orphaned file cleanup", e)
             }
@@ -1288,6 +1410,7 @@ class DataPersistenceManager(
                 }
                 Log.d(TAG, "savePinnedIds: saved ${ids.size} ids for isImageGen=$isImageGeneration to Room")
             } catch (e: Exception) {
+                e.rethrowIfCancellation()
                 Log.e(TAG, "savePinnedIds failed", e)
             }
         }
@@ -1342,6 +1465,7 @@ class DataPersistenceManager(
                     roomDataSource.loadPinnedTextIds()
                 }
             } catch (e: Exception) {
+                e.rethrowIfCancellation()
                 Log.e(TAG, "loadPinnedIds failed", e)
                 emptySet()
             }
@@ -1356,6 +1480,7 @@ class DataPersistenceManager(
                     roomDataSource.setSetting("conversation_scroll_states_v1", serialized)
                     Log.d(TAG, "saveConversationScrollStates: saved ${states.size} items")
                 } catch (e: Exception) {
+                    e.rethrowIfCancellation()
                     Log.e(TAG, "saveConversationScrollStates failed", e)
                 }
             }
@@ -1369,6 +1494,7 @@ class DataPersistenceManager(
                 if (raw.isBlank()) return@withContext emptyMap()
                 json.decodeFromString<Map<String, ConversationScrollState>>(raw)
             } catch (e: Exception) {
+                e.rethrowIfCancellation()
                 Log.e(TAG, "loadConversationScrollStates failed", e)
                 emptyMap()
             }
@@ -1387,6 +1513,7 @@ class DataPersistenceManager(
                 roomDataSource.saveExpandedGroupKeys(keys)
                 Log.d(TAG, "saveExpandedGroupKeys: saved ${keys.size} expanded group keys to Room")
             } catch (e: Exception) {
+                e.rethrowIfCancellation()
                 Log.e(TAG, "saveExpandedGroupKeys failed", e)
             }
         }
@@ -1401,6 +1528,7 @@ class DataPersistenceManager(
             try {
                 roomDataSource.loadExpandedGroupKeys()
             } catch (e: Exception) {
+                e.rethrowIfCancellation()
                 Log.e(TAG, "loadExpandedGroupKeys failed", e)
                 emptySet()
             }
@@ -1418,6 +1546,7 @@ class DataPersistenceManager(
                 roomDataSource.saveVoiceBackendConfigs(configs)
                 Log.d(TAG, "saveVoiceBackendConfigs: 已保存 ${configs.size} 个语音配置")
             } catch (e: Exception) {
+                e.rethrowIfCancellation()
                 Log.e(TAG, "saveVoiceBackendConfigs 失败", e)
             }
         }
@@ -1431,6 +1560,7 @@ class DataPersistenceManager(
             try {
                 roomDataSource.loadVoiceBackendConfigs()
             } catch (e: Exception) {
+                e.rethrowIfCancellation()
                 Log.e(TAG, "loadVoiceBackendConfigs 失败", e)
                 emptyList()
             }
@@ -1446,6 +1576,7 @@ class DataPersistenceManager(
                 roomDataSource.saveSelectedVoiceConfigId(configId)
                 Log.d(TAG, "saveSelectedVoiceConfigId: 已保存选中的语音配置ID '$configId'")
             } catch (e: Exception) {
+                e.rethrowIfCancellation()
                 Log.e(TAG, "saveSelectedVoiceConfigId 失败", e)
             }
         }
@@ -1459,6 +1590,7 @@ class DataPersistenceManager(
             try {
                 roomDataSource.loadSelectedVoiceConfigId()
             } catch (e: Exception) {
+                e.rethrowIfCancellation()
                 Log.e(TAG, "loadSelectedVoiceConfigId 失败", e)
                 null
             }
@@ -1475,6 +1607,7 @@ class DataPersistenceManager(
                 roomDataSource.saveSelectedVoiceConfigId(null)
                 Log.d(TAG, "clearVoiceBackendConfigs: 已清除所有语音配置")
             } catch (e: Exception) {
+                e.rethrowIfCancellation()
                 Log.e(TAG, "clearVoiceBackendConfigs 失败", e)
             }
         }

@@ -4,8 +4,6 @@ import androidx.compose.ui.graphics.Color
 
 // 亮色主题颜色
 val Purple80 = Color(0xFFD0BCFF)
-val PurpleGrey80 = Color(0xFFCCC2DC)
-val Pink80 = Color(0xFFEFB8C8)
 
 val Purple40 = Color(0xFF6650a4)
 val PurpleGrey40 = Color(0xFF625b71)
@@ -22,7 +20,6 @@ val DarkSurfaceContainer = Color(0xFF000000)    // 容器表面颜色 - 纯黑
 // 卡片和容器颜色 - 关键改进，避免白色突兀
 val DarkCardBackground = Color(0xFF2A2A2A)     // 卡片背景 - 取代白色
 val DarkCardElevated = Color(0xFF000000)       // 悬浮卡片背景
-val DarkInputBackground = Color(0xFF000000)    // 输入框背景
 
 // 深色前景系列 - 纯白主文字 + 灰阶次级文字
 val DarkOnBackground = Color(0xFFFFFFFF)       // 背景上的文字 - 纯白
@@ -54,29 +51,9 @@ val DarkErrorContainer = Color(0xFF4A1A1A)     // 错误容器
 val DarkOutline = Color(0xFF000000)            // 轮廓线 - 纯黑
 val DarkOutlineVariant = Color(0xFF000000)     // 轮廓线变体
 
-// 聊天专用颜色 - 统一的灰色调
-val DarkUserBubble = Color(0xFF3A4A5C)         // 用户消息气泡 - 深蓝灰
-val DarkAIBubble = Color(0xFF000000)           // AI消息气泡 - 纯黑
-val DarkCodeBackground = Color(0xFF000000)     // 代码块背景 - 纯黑
-val DarkCodeSurface = Color(0xFF000000)        // 代码表面色
-
-// 状态颜色 - 柔和版本
-val DarkSuccess = Color(0xFF66BB6A)            // 成功色 - 柔和绿
-val DarkWarning = Color(0xFFFFB74D)            // 警告色 - 柔和橙
-val DarkInfo = Color(0xFF64B5F6)               // 信息色 - 柔和蓝
-
-// 文字颜色 - 纯白主文字 + 灰阶层次
+// 文字颜色
 val DarkTextPrimary = Color(0xFFFFFFFF)        // 主要文字 - 纯白
-val DarkTextSecondary = Color(0xFFD0D0D0)      // 次要文字 - 中等灰白
-val DarkTextTertiary = Color(0xFFA8A8A8)       // 三级文字 - 浅灰
-val DarkTextDisabled = Color(0xFF666666)       // 禁用文字 - 深灰
-
-// 分割线和边框 - 微妙的分割
-val DarkDivider = Color(0xFF000000)            // 分割线 - 纯黑
-val DarkBorder = Color(0xFF484848)             // 边框色 - 柔和边框
-val DarkBorderLight = Color(0xFF000000)        // 浅边框色
 
 // 弹出选项卡专用颜色 - 响应主题变化
 val LightPopupBackground = Color(0xFFF5F5F5)    // 白天模式弹出选项卡背景 - 淡灰色
 val DarkPopupBackground = Color(0xFF363636)     // 夜间模式弹出选项卡背景 - 深灰色
-val DarkGreen = Color(0xFF2E7D32)

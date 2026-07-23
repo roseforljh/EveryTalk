@@ -7,6 +7,7 @@ import android.os.Bundle
 import androidx.profileinstaller.ProfileInstaller
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -27,8 +28,8 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -45,10 +46,13 @@ import com.android.everytalk.ui.screens.MainScreen.ChatScreen
 import com.android.everytalk.ui.screens.ImageGeneration.ImageGenerationScreen
 import com.android.everytalk.ui.screens.settings.SettingsScreen
 import com.android.everytalk.ui.theme.App1Theme
+import com.android.everytalk.util.message.MAX_EXTERNAL_TRANSFER_BYTES
+import com.android.everytalk.util.storage.readAtMost
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
+import java.io.IOException
 
 class AppViewModelFactory(
     private val application: Application
@@ -65,6 +69,7 @@ class AppViewModelFactory(
 private val defaultDrawerWidth = 320.dp
 private const val NAVIGATION_ROUTE_WAIT_TIMEOUT_MS = 1_000L
 private const val TRIM_MEMORY_RUNNING_LOW_LEVEL = 10
+private const val SHARED_TEXT_TOO_LARGE_MESSAGE = "分享文本过大（最大 256KB）"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -96,13 +101,17 @@ class MainActivity : ComponentActivity() {
     private var fileContentToSave: String? = null
     private lateinit var appViewModel: AppViewModel
     private val createDocument = registerForActivityResult(ActivityResultContracts.CreateDocument("text/markdown")) { uri ->
-        uri?.let {
-            fileContentToSave?.let { content ->
+        val content = fileContentToSave.also { fileContentToSave = null }
+        if (uri != null && content != null) {
+            lifecycleScope.launch(Dispatchers.IO) {
                 try {
-                    contentResolver.openOutputStream(it)?.use { outputStream ->
-                        outputStream.write(content.toByteArray())
+                    val outputStream = contentResolver.openOutputStream(uri)
+                        ?: throw IOException("无法打开导出文件")
+                    outputStream.use {
+                        it.write(content.toByteArray(Charsets.UTF_8))
                     }
-                    fileContentToSave = null
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     android.util.Log.e("MainActivity", "Failed to save file content", e)
                 }
@@ -189,8 +198,7 @@ class MainActivity : ComponentActivity() {
                         }
                     ) { contentPadding ->
                         val density = LocalDensity.current
-                        val configuration = LocalConfiguration.current
-                        val screenWidthDp = configuration.screenWidthDp.dp
+                        val screenWidthDp = with(density) { LocalWindowInfo.current.containerSize.width.toDp() }
 
                         LaunchedEffect(appViewModel.drawerState.isClosed, isSearchActiveInDrawer) {
                             if (appViewModel.drawerState.isClosed && isSearchActiveInDrawer) {
@@ -621,8 +629,15 @@ class MainActivity : ComponentActivity() {
                             while (!::appViewModel.isInitialized) {
                                 kotlinx.coroutines.delay(50)
                             }
-                            appViewModel.onTextChange(sharedText)
-                            appViewModel.showSnackbar("已接收分享内容")
+                            if (
+                                sharedText.length > MAX_EXTERNAL_TRANSFER_BYTES ||
+                                sharedText.toByteArray(Charsets.UTF_8).size > MAX_EXTERNAL_TRANSFER_BYTES
+                            ) {
+                                appViewModel.showSnackbar(SHARED_TEXT_TOO_LARGE_MESSAGE)
+                            } else {
+                                appViewModel.onTextChange(sharedText)
+                                appViewModel.showSnackbar("已接收分享内容")
+                            }
                         }
                     }
                 }
@@ -637,7 +652,7 @@ class MainActivity : ComponentActivity() {
     private suspend fun readSharedTextFile(fileUri: Uri) {
         try {
             val content = contentResolver.openInputStream(fileUri)?.use { inputStream ->
-                inputStream.bufferedReader().readText()
+                readAtMost(inputStream, MAX_EXTERNAL_TRANSFER_BYTES.toLong()).toString(Charsets.UTF_8)
             }
             if (!content.isNullOrBlank()) {
                 kotlinx.coroutines.withContext(Dispatchers.Main) {
@@ -646,6 +661,12 @@ class MainActivity : ComponentActivity() {
                     }
                     appViewModel.onTextChange(content)
                     appViewModel.showSnackbar("已接收分享文件内容")
+                }
+            }
+        } catch (e: IllegalArgumentException) {
+            kotlinx.coroutines.withContext(Dispatchers.Main) {
+                if (::appViewModel.isInitialized) {
+                    appViewModel.showSnackbar(SHARED_TEXT_TOO_LARGE_MESSAGE)
                 }
             }
         } catch (e: Exception) {
@@ -657,14 +678,6 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
-   
-   override fun onPause() {
-       super.onPause()
-       // 在应用暂停时也保存数据作为额外保护
-       if (this::appViewModel.isInitialized) {
-           appViewModel.onAppStop()
-       }
-   }
    
    override fun onStop() {
        super.onStop()

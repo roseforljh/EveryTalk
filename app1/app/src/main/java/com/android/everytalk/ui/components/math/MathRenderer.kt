@@ -371,9 +371,6 @@ internal fun MathJaxRenderResult.requireWidthPx(): Float =
 internal fun MathJaxRenderResult.requireHeightPx(): Float =
     requireNotNull(heightPx).coerceAtLeast(1f)
 
-internal fun MathJaxRenderResult.requireDepthPx(): Float =
-    requireNotNull(depthPx).coerceIn(0f, requireHeightPx() - 0.01f)
-
 internal fun Color.toMathJaxCssColor(): String {
     val alpha = (alpha * 255f).toInt().coerceIn(0, 255)
     val red = (red * 255f).toInt().coerceIn(0, 255)

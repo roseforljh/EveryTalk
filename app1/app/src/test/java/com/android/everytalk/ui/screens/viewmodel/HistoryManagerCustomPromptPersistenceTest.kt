@@ -6,6 +6,8 @@ import com.android.everytalk.statecontroller.ConversationFunctionToggleState
 import com.android.everytalk.statecontroller.ConversationScrollState
 import com.android.everytalk.statecontroller.ViewModelStateHolder
 import io.mockk.every
+import io.mockk.coEvery
+import io.mockk.coVerify
 import io.mockk.mockk
 import io.mockk.mockkStatic
 import io.mockk.unmockkAll
@@ -635,6 +637,8 @@ class HistoryManagerCustomPromptPersistenceTest {
         stateHolder.systemPrompts["orphan-system"] = "old"
         stateHolder.conversationScrollStates["user-keep"] = ConversationScrollState(firstVisibleItemIndex = 1)
         stateHolder.conversationScrollStates["orphan-scroll"] = ConversationScrollState(firstVisibleItemIndex = 9)
+        stateHolder.markTextHistoryReadyForParameterCleanup()
+        stateHolder.markImageHistoryReadyForStateCleanup()
 
         try {
             historyManager.saveCurrentChatToHistoryNow(forceSave = true)
@@ -702,6 +706,117 @@ class HistoryManagerCustomPromptPersistenceTest {
             assertEquals(1, stateHolder._historicalConversations.value.size)
             assertEquals(afterSecondRegenerationAndNewQuestion, stateHolder._historicalConversations.value[0])
             assertEquals(0, stateHolder._loadedHistoryIndex.value)
+        } finally {
+            scope.coroutineContext[Job]?.cancelAndJoin()
+        }
+    }
+
+    @Test
+    fun `排队保存后删除同一会话不会被旧快照重新写回`() = runBlocking {
+        val stateHolder = ViewModelStateHolder()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val persistenceManager = mockk<DataPersistenceManager>(relaxed = true)
+        val historyManager = HistoryManager(
+            stateHolder = stateHolder,
+            persistenceManager = persistenceManager,
+            compareMessageLists = { left, right -> left == right },
+            onHistoryModified = {},
+            scope = scope,
+        )
+        val original = listOf(
+            Message(id = "user-delete", text = "问题", sender = Sender.User),
+            Message(id = "ai-old", text = "旧回答", sender = Sender.AI),
+        )
+        val updated = original + Message(id = "ai-new", text = "新回答", sender = Sender.AI)
+        val retained = listOf(
+            Message(id = "user-retain", text = "保留", sender = Sender.User),
+        )
+        stateHolder._historicalConversations.value = listOf(original, retained)
+        stateHolder._loadedHistoryIndex.value = 0
+        stateHolder.setCurrentConversationId("user-delete")
+        stateHolder.messages.addAll(updated)
+        stateHolder.isTextConversationDirty.value = true
+
+        try {
+            historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true)
+            historyManager.deleteConversation(indexToDelete = 0)
+
+            assertEquals(listOf(retained), stateHolder._historicalConversations.value)
+        } finally {
+            scope.coroutineContext[Job]?.cancelAndJoin()
+        }
+    }
+
+    @Test
+    fun `同步保存和重命名持久化按提交顺序串行执行`() = runBlocking {
+        val stateHolder = ViewModelStateHolder()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val persistenceManager = mockk<DataPersistenceManager>(relaxed = true)
+        val calls = java.util.Collections.synchronizedList(mutableListOf<String>())
+        coEvery { persistenceManager.saveHistorySession(any(), any(), any()) } coAnswers {
+            calls += "dirty-save"
+        }
+        coEvery { persistenceManager.saveChatHistory(any(), any()) } coAnswers {
+            calls += "direct-sync"
+        }
+        val historyManager = HistoryManager(
+            stateHolder = stateHolder,
+            persistenceManager = persistenceManager,
+            compareMessageLists = { left, right -> left == right },
+            onHistoryModified = {},
+            scope = scope,
+        )
+        val original = listOf(Message(id = "user-1", text = "问题", sender = Sender.User))
+        val updated = original + Message(id = "ai-1", text = "回答", sender = Sender.AI)
+        stateHolder._historicalConversations.value = listOf(original)
+        stateHolder._loadedHistoryIndex.value = 0
+        stateHolder.setCurrentConversationId("user-1")
+        stateHolder.messages.addAll(updated)
+        stateHolder.isTextConversationDirty.value = true
+
+        try {
+            historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true)
+            historyManager.persistHistoryListDirectly()
+
+            assertEquals(listOf("dirty-save", "direct-sync"), calls)
+        } finally {
+            scope.coroutineContext[Job]?.cancelAndJoin()
+        }
+    }
+
+    @Test
+    fun `持久化失败后未变化的脏会话仍会重试`() = runBlocking {
+        val stateHolder = ViewModelStateHolder()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val persistenceManager = mockk<DataPersistenceManager>(relaxed = true)
+        var attempts = 0
+        coEvery { persistenceManager.saveHistorySession(any(), any(), any()) } coAnswers {
+            attempts++
+            if (attempts == 1) error("模拟首次写入失败")
+        }
+        val historyManager = HistoryManager(
+            stateHolder = stateHolder,
+            persistenceManager = persistenceManager,
+            compareMessageLists = { left, right -> left == right },
+            onHistoryModified = {},
+            scope = scope,
+        )
+        val original = listOf(Message(id = "user-retry", text = "问题", sender = Sender.User))
+        val updated = original + Message(id = "ai-retry", text = "回答", sender = Sender.AI)
+        stateHolder._historicalConversations.value = listOf(original)
+        stateHolder._loadedHistoryIndex.value = 0
+        stateHolder.setCurrentConversationId("user-retry")
+        stateHolder.messages.addAll(updated)
+        stateHolder.isTextConversationDirty.value = true
+
+        try {
+            runCatching { historyManager.saveCurrentChatToHistoryNow() }
+            assertTrue(stateHolder.isTextConversationDirty.value)
+
+            historyManager.saveCurrentChatToHistoryNow()
+
+            coVerify(exactly = 2) { persistenceManager.saveHistorySession("user-retry", updated, false) }
+            assertFalse(stateHolder.isTextConversationDirty.value)
         } finally {
             scope.coroutineContext[Job]?.cancelAndJoin()
         }

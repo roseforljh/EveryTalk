@@ -11,21 +11,6 @@ data class OpenClawRpcRequest<T>(
 )
 
 @Serializable
-data class OpenClawRpcError(
-    val code: String? = null,
-    val message: String? = null
-)
-
-@Serializable
-data class OpenClawRpcResponse<T>(
-    val type: String,
-    val id: String,
-    val ok: Boolean? = null,
-    val payload: T? = null,
-    val error: OpenClawRpcError? = null
-)
-
-@Serializable
 data class OpenClawChatSendParams(
     val sessionKey: String,
     val idempotencyKey: String,
@@ -36,81 +21,6 @@ data class OpenClawChatSendParams(
 @Serializable
 data class OpenClawSessionParams(
     val sessionKey: String
-)
-
-@Serializable
-data class OpenClawSessionsPreviewParams(
-    val keys: List<String>,
-    val limit: Int = 12,
-    val maxChars: Int = 240
-)
-
-@Serializable
-data class OpenClawSessionPreviewContentItem(
-    val role: String? = null,
-    val text: String? = null
-)
-
-@Serializable
-data class OpenClawSessionPreviewItem(
-    val key: String? = null,
-    val sessionKey: String? = null,
-    val title: String? = null,
-    val preview: String? = null,
-    val provider: String? = null,
-    val model: String? = null,
-    val defaultProvider: String? = null,
-    val defaultModel: String? = null,
-    val reasoning: String? = null,
-    val verbose: String? = null,
-    val elevated: String? = null,
-    val updatedAt: Long? = null,
-    val items: List<OpenClawSessionPreviewContentItem> = emptyList()
-)
-
-@Serializable
-data class OpenClawSessionsPreviewResponse(
-    val ts: Long? = null,
-    val previews: List<OpenClawSessionPreviewItem> = emptyList()
-)
-
-@Serializable
-data class OpenClawModelsListParams(
-    val provider: String? = null
-)
-
-@Serializable
-data class OpenClawModelDescriptor(
-    val provider: String? = null,
-    val model: String? = null,
-    val id: String? = null,
-    val name: String? = null
-)
-
-@Serializable
-data class OpenClawModelsProviderEntry(
-    val provider: String? = null,
-    val models: List<OpenClawModelDescriptor> = emptyList(),
-    val items: List<OpenClawModelDescriptor> = emptyList()
-)
-
-@Serializable
-data class OpenClawModelsListResponse(
-    val providers: List<OpenClawModelsProviderEntry> = emptyList(),
-    val models: List<OpenClawModelDescriptor> = emptyList(),
-    val items: List<OpenClawModelDescriptor> = emptyList()
-)
-
-@Serializable
-data class OpenClawRuntimeStatusPayload(
-    val sessionKey: String? = null,
-    val provider: String? = null,
-    val model: String? = null,
-    val defaultProvider: String? = null,
-    val defaultModel: String? = null,
-    val reasoning: String? = null,
-    val verbose: String? = null,
-    val elevated: String? = null
 )
 
 @Serializable

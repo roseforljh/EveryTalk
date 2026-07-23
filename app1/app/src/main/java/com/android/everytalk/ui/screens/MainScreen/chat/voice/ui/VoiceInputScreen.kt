@@ -56,7 +56,7 @@ fun VoiceInputScreen(
     var isProcessing by remember { mutableStateOf(false) }
     var isPlaying by remember { mutableStateOf(false) }
     var userCancelledPlayback by remember { mutableStateOf(false) }
-    var currentVolume by remember { mutableStateOf(0f) }
+    var currentVolume by remember { mutableFloatStateOf(0f) }
     var userText by remember { mutableStateOf("") }
     var assistantText by remember { mutableStateOf("") }
     var showTtsQuotaWarning by remember { mutableStateOf(false) }
@@ -144,7 +144,7 @@ fun VoiceInputScreen(
     
     DisposableEffect(Unit) {
         onDispose {
-            sessionController.forceRelease()
+            sessionController.close()
         }
     }
     

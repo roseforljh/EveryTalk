@@ -4,9 +4,9 @@ import android.app.Application
 import android.content.ContentResolver
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.util.Base64
 import android.util.Log
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.core.content.FileProvider
@@ -18,7 +18,6 @@ import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.PartsApiMessage
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
-import com.android.everytalk.util.image.ImageScaleCalculator
 import com.android.everytalk.data.DataClass.Message as UiMessage
 import com.android.everytalk.data.DataClass.Sender as UiSender
 import com.android.everytalk.data.DataClass.ThinkingConfig
@@ -27,21 +26,20 @@ import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.network.WebSearchSupport
 import com.android.everytalk.data.network.ExternalWebSearchProvider
 import com.android.everytalk.statecontroller.defaultReasoningBudgetForModel
-import com.android.everytalk.statecontroller.mcp.dispatch.McpDispatchIntent
-import com.android.everytalk.statecontroller.mcp.dispatch.McpDispatchStrategy
 import com.android.everytalk.statecontroller.mcp.dispatch.McpToolCandidate
 import com.android.everytalk.statecontroller.mcp.dispatch.QueryIntent
 import com.android.everytalk.statecontroller.mcp.dispatch.classifyMcpIntent
 import com.android.everytalk.statecontroller.mcp.dispatch.selectMcpCandidates
 import com.android.everytalk.statecontroller.mcp.dispatch.toToolDefinition
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
-import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -118,7 +116,7 @@ internal fun buildMcpUsageGuidance(
     isMcpEnabled: Boolean,
     hasMcpTools: Boolean,
     hasEffectiveWebSearch: Boolean = false,
-    dispatchIntent: McpDispatchIntent? = null,
+    dispatchIntent: QueryIntent? = null,
 ): String? {
     if (!isMcpEnabled || !hasMcpTools) {
         return null
@@ -130,7 +128,7 @@ internal fun buildMcpUsageGuidance(
         } else {
             append(MCP_BASE_USAGE_GUIDANCE.trim())
         }
-        when (dispatchIntent?.primaryIntent) {
+        when (dispatchIntent) {
             QueryIntent.DOCS_LOOKUP -> {
                 append("\n\n当前问题属于文档/API/SDK 查询，优先考虑文档类 MCP 工具和官方文档结果。")
             }
@@ -147,26 +145,6 @@ internal fun buildMcpUsageGuidance(
             append(MCP_REALTIME_NEWS_GUIDANCE.trim())
         }
     }
-}
-
-internal fun filterMcpToolsForRequest(
-    mcpTools: List<Map<String, Any>>,
-    shouldFilterSearchLikeTools: Boolean,
-): List<Map<String, Any>> {
-    if (!shouldFilterSearchLikeTools) {
-        return mcpTools
-    }
-
-    return mcpTools.filterNot { toolDefinition ->
-        classifyMcpTool(toolDefinition).isSearchLike
-    }
-}
-
-internal fun isSearchLikeMcpTool(
-    toolName: String,
-    toolDescription: String,
-): Boolean {
-    return classifyMcpTool(toolName, toolDescription).isSearchLike
 }
 
 private fun classifyMcpTool(toolDefinition: Map<String, Any>): McpToolClassification {
@@ -342,31 +320,21 @@ private data class AttachmentProcessingResult(
 )
 
 data class PreparedMcpDispatch(
-    val intent: McpDispatchIntent,
+    val intent: QueryIntent,
     val tools: List<Map<String, Any>>,
     val guidance: String?,
 )
 
-internal fun buildToolsForMessage(
-    messageText: String,
-    allCandidates: List<McpToolCandidate>,
-): List<Map<String, Any>> {
-    return prepareMcpDispatch(messageText, allCandidates).tools
-}
-
 internal fun prepareMcpDispatch(
     messageText: String,
     allCandidates: List<McpToolCandidate>,
-    strategy: McpDispatchStrategy = McpDispatchStrategy.modelLedDefault(),
-    isMcpEnabled: Boolean = true,
     hasEffectiveWebSearch: Boolean = false,
 ): PreparedMcpDispatch {
     val intent = classifyMcpIntent(messageText)
-    val plan = selectMcpCandidates(intent, allCandidates, strategy)
-    val tools = plan.exposedTools.map { it.toToolDefinition() }
+    val tools = selectMcpCandidates(intent, allCandidates).map { it.toToolDefinition() }
     val guidance = buildMcpUsageGuidance(
         messageText = messageText,
-        isMcpEnabled = isMcpEnabled,
+        isMcpEnabled = true,
         hasMcpTools = tools.isNotEmpty(),
         hasEffectiveWebSearch = hasEffectiveWebSearch,
         dispatchIntent = intent,
@@ -421,28 +389,12 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
     private val showSnackbar: (String) -> Unit,
     private val triggerScrollToBottom: () -> Unit,
     private val uriToBase64Encoder: (Uri) -> String?,
-    private val getMcpToolsForRequest: () -> List<Map<String, Any>> = { emptyList() },
     private val getMcpDispatchCandidates: () -> List<McpToolCandidate> = { emptyList() },
     private val getSelectedExternalWebSearchProvider: () -> ExternalWebSearchProvider? = { null },
     private val getSelectedExternalWebSearchProviderApiKey: () -> String = { "" },
 ) {
 
     private val fileManager: FileManager by lazy { FileManager(application) }
-
-    companion object {
-        private const val MAX_FILE_SIZE_BYTES = 50 * 1024 * 1024 // 50MB 最大文件大小
-        private const val CHAT_ATTACHMENTS_SUBDIR = "chat_attachments"
-        
-        // 保留兼容性的常量，但标记为过时
-        @Deprecated("Use ImageScaleConfig instead", ReplaceWith("ImageScaleConfig.CHAT_MODE.maxFileSize"))
-        private const val MAX_IMAGE_SIZE_BYTES = 4 * 1024 * 1024
-        @Deprecated("Use ImageScaleConfig instead", ReplaceWith("ImageScaleConfig.CHAT_MODE.maxDimension"))
-        private const val TARGET_IMAGE_WIDTH = 1024
-        @Deprecated("Use ImageScaleConfig instead", ReplaceWith("ImageScaleConfig.CHAT_MODE.maxDimension"))
-        private const val TARGET_IMAGE_HEIGHT = 1024
-        @Deprecated("Use ImageScaleConfig instead", ReplaceWith("ImageScaleConfig.CHAT_MODE.compressionQuality"))
-        private const val JPEG_COMPRESSION_QUALITY = 80
-    }
 
     private fun logUiMessages(stage: String, messages: List<UiMessage>) {
         Log.d("MessageSender", "$stage.size=${messages.size}")
@@ -528,20 +480,6 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
         return fileManager.loadAndCompressBitmapFromUri(uri = uri, isImageGeneration = isImageGeneration)
     }
 
-    private fun calculateInSampleSize(options: BitmapFactory.Options, reqWidth: Int, reqHeight: Int): Int {
-        val (height: Int, width: Int) = options.run { outHeight to outWidth }
-        var inSampleSize = 1
-
-        if (height > reqHeight || width > reqWidth) {
-            val halfHeight: Int = height / 2
-            val halfWidth: Int = width / 2
-            while (halfHeight / inSampleSize >= reqHeight && halfWidth / inSampleSize >= reqWidth) {
-                inSampleSize *= 2
-            }
-        }
-        return inSampleSize
-    }
-
     private suspend fun copyUriToAppInternalStorage(
         context: Context,
         sourceUri: Uri,
@@ -572,6 +510,55 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
             originalFileNameHint = originalFileNameHint,
             isImageGeneration = isImageGeneration
         )
+    }
+
+    private fun persistBitmapData(
+        item: SelectedMediaItem.ImageFromBitmap,
+        messageIdHint: String,
+        attachmentIndex: Int,
+    ): String? {
+        item.filePath?.let(::File)?.takeIf { it.isFile && it.length() > 0L }?.let { return it.absolutePath }
+        if (item.bitmapData.isBlank()) return null
+        return try {
+            val encodedLength = item.bitmapData.count { !it.isWhitespace() }.toLong()
+            val estimatedBytes = ((encodedLength + 3L) / 4L) * 3L
+            if (estimatedBytes > FileManager.MAX_MESSAGE_IMAGE_BYTES) return null
+            val decodedBytes = Base64.decode(item.bitmapData, Base64.DEFAULT)
+            if (decodedBytes.isEmpty() || decodedBytes.size.toLong() > FileManager.MAX_MESSAGE_IMAGE_BYTES) return null
+            val extension = when (item.mimeType.substringBefore(';').lowercase(Locale.ROOT)) {
+                "image/png" -> "png"
+                "image/webp" -> "webp"
+                else -> "jpg"
+            }
+            val directory = File(application.filesDir, "chat_attachments").apply { mkdirs() }
+            val targetFile = File(
+                directory,
+                "camera_${messageIdHint}_${attachmentIndex.coerceAtLeast(0)}_${System.currentTimeMillis()}.$extension",
+            )
+            val temporaryFile = File(directory, ".${targetFile.name}.tmp")
+            try {
+                FileOutputStream(temporaryFile).use { output ->
+                    output.write(decodedBytes)
+                    output.fd.sync()
+                }
+                if (!temporaryFile.renameTo(targetFile)) return null
+                targetFile.takeIf { it.isFile && it.length() == decodedBytes.size.toLong() }?.absolutePath
+            } finally {
+                temporaryFile.delete()
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            Log.e("MessageSender", "保存相机图片失败", error)
+            null
+        }
+    }
+
+    private fun deleteTemporaryCameraUri(uri: Uri) {
+        if (uri.authority != "${application.packageName}.provider") return
+        if (uri.pathSegments.firstOrNull() != "chat_images_temp") return
+        runCatching { application.contentResolver.delete(uri, null, null) }
+            .onFailure { Log.w("MessageSender", "删除相机临时文件失败: $uri", it) }
     }
 
     private suspend fun processAttachments(
@@ -610,40 +597,32 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
                 ?: getFileName(application.contentResolver, itemUri)
                 ?: (if (originalMediaItem is SelectedMediaItem.ImageFromBitmap) "camera_shot" else "attachment")
 
-            val persistentFilePath: String? = when (originalMediaItem) {
-                is SelectedMediaItem.ImageFromUri -> {
-                    val bitmap = loadAndCompressBitmapFromUri(application, originalMediaItem.uri, isImageGeneration)
-                    if (bitmap != null) {
-                        saveBitmapToAppInternalStorage(application, bitmap, tempMessageIdForNaming, index, originalFileNameForHint, isImageGeneration)
-                    } else {
-                        showSnackbar("无法加载或压缩图片: $originalFileNameForHint")
-                        return@withContext AttachmentProcessingResult(success = false)
-                    }
-                }
-                is SelectedMediaItem.ImageFromBitmap -> {
-                    originalMediaItem.bitmap?.let { bitmap ->
-                        val prefs = com.android.everytalk.config.ImageCompressionPreferences(application)
-                        val config = if (isImageGeneration) prefs.getImageGenerationModeConfig() else prefs.getChatModeConfig()
-                        val (targetW, targetH) = ImageScaleCalculator.calculateProportionalScale(bitmap.width, bitmap.height, config)
-                        val safeBitmap = try {
-                            if ((targetW > 0 && targetH > 0) && (targetW != bitmap.width || targetH != bitmap.height)) {
-                                Bitmap.createScaledBitmap(bitmap, targetW, targetH, true)
-                            } else {
-                                bitmap.copy(bitmap.config ?: Bitmap.Config.ARGB_8888, true)
-                            }
-                        } catch (_: OutOfMemoryError) {
-                            bitmap.copy(bitmap.config ?: Bitmap.Config.ARGB_8888, true)
+            val persistentFilePath: String? = try {
+                when (originalMediaItem) {
+                    is SelectedMediaItem.ImageFromUri -> {
+                        val bitmap = loadAndCompressBitmapFromUri(application, originalMediaItem.uri, isImageGeneration)
+                        if (bitmap != null) {
+                            saveBitmapToAppInternalStorage(application, bitmap, tempMessageIdForNaming, index, originalFileNameForHint, isImageGeneration)
+                        } else {
+                            showSnackbar("无法加载或压缩图片: $originalFileNameForHint")
+                            return@withContext AttachmentProcessingResult(success = false)
                         }
-                        saveBitmapToAppInternalStorage(application, safeBitmap, tempMessageIdForNaming, index, originalFileNameForHint, isImageGeneration)
+                    }
+                    is SelectedMediaItem.ImageFromBitmap -> {
+                        persistBitmapData(originalMediaItem, tempMessageIdForNaming, index)
+                    }
+                    is SelectedMediaItem.GenericFile -> {
+                        copyUriToAppInternalStorage(application, originalMediaItem.uri, tempMessageIdForNaming, index, originalMediaItem.displayName)
+                    }
+                    is SelectedMediaItem.Audio -> {
+                        // 音频数据已为Base64，无需额外处理
+                        null
                     }
                 }
-                is SelectedMediaItem.GenericFile -> {
-                    copyUriToAppInternalStorage(application, originalMediaItem.uri, tempMessageIdForNaming, index, originalMediaItem.displayName)
-                }
-                is SelectedMediaItem.Audio -> {
-                    // 音频数据已为Base64，无需额外处理
-                    null
-                }
+            } finally {
+                (originalMediaItem as? SelectedMediaItem.ImageFromUri)
+                    ?.uri
+                    ?.let(::deleteTemporaryCameraUri)
             }
 
             if (persistentFilePath == null && originalMediaItem !is SelectedMediaItem.Audio) {
@@ -668,13 +647,12 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
                 is SelectedMediaItem.ImageFromBitmap -> {
                     // 使用本地文件路径而非 FileProvider URI，确保应用重启后图片仍可访问
                     imageUriStringsForUi.add(persistentFilePath!!)
-                    originalMediaItem.bitmap?.let { bitmap ->
-                        SelectedMediaItem.ImageFromBitmap.fromBitmap(
-                            bitmap = bitmap,
-                            id = originalMediaItem.id,
-                            filePath = persistentFilePath
-                        )
-                    } ?: originalMediaItem // 如果 bitmap 为 null，返回原始对象
+                    SelectedMediaItem.ImageFromUri(
+                        uri = persistentFileProviderUri!!,
+                        id = originalMediaItem.id,
+                        mimeType = originalMediaItem.mimeType,
+                        filePath = persistentFilePath,
+                    )
                 }
                 is SelectedMediaItem.GenericFile -> {
                     // The ApiClient now handles streaming, so we don't need to read the bytes here.
@@ -695,16 +673,22 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
             processedAttachmentsForUi.add(processedItemForUi)
 
             // 为处理后的图片（现在拥有一个持久化的 URI）创建 API 内容部分
-            if (shouldUsePartsApiMessage && (processedItemForUi is SelectedMediaItem.ImageFromUri || processedItemForUi is SelectedMediaItem.ImageFromBitmap)) {
-                val imageUri = (processedItemForUi as? SelectedMediaItem.ImageFromUri)?.uri
-                    ?: (processedItemForUi as? SelectedMediaItem.ImageFromBitmap)?.let {
-                        // 对于 Bitmap，我们需要一个 URI 来编码
-                        persistentFileProviderUri
+            if (shouldUsePartsApiMessage && processedItemForUi is SelectedMediaItem.ImageFromUri) {
+                if (originalMediaItem is SelectedMediaItem.ImageFromBitmap) {
+                    val bitmapData = originalMediaItem.bitmapData.takeIf { it.isNotBlank() }
+                        ?: uriToBase64Encoder(processedItemForUi.uri)
+                    if (!bitmapData.isNullOrBlank()) {
+                        apiContentParts.add(
+                            ApiContentPart.InlineData(
+                                mimeType = originalMediaItem.mimeType,
+                                base64Data = bitmapData,
+                            )
+                        )
                     }
-
-                if (imageUri != null) {
+                } else {
+                    val imageUri = processedItemForUi.uri
                     val base64Data = uriToBase64Encoder(imageUri)
-                    val mimeType = application.contentResolver.getType(imageUri) ?: "image/jpeg"
+                    val mimeType = application.contentResolver.getType(imageUri) ?: processedItemForUi.mimeType
                     if (base64Data != null) {
                         apiContentParts.add(ApiContentPart.InlineData(mimeType = mimeType, base64Data = base64Data))
                     }
@@ -727,7 +711,7 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
         val textToActuallySend = messageText.trim()
         val allAttachments = attachments.toMutableList()
         if (audioBase64 != null) {
-            allAttachments.add(SelectedMediaItem.Audio(id = "audio_${UUID.randomUUID()}", mimeType = mimeType ?: "audio/3gpp", data = audioBase64!!))
+            allAttachments.add(SelectedMediaItem.Audio(id = "audio_${UUID.randomUUID()}", mimeType = mimeType ?: "audio/3gpp", data = audioBase64))
         }
 
         if (textToActuallySend.isBlank() && allAttachments.isEmpty()) {
@@ -755,21 +739,19 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
         // 记录会话使用的配置ID
         if (!isImageGeneration) {
             val conversationId = stateHolder._currentConversationId.value
-            val currentMap = stateHolder.conversationApiConfigIds.value.toMutableMap()
-            if (currentMap[conversationId] != currentConfig.id) {
-                currentMap[conversationId] = currentConfig.id
-                stateHolder.conversationApiConfigIds.value = currentMap
-                // 这里仅更新内存状态，HistoryManager.saveCurrentChatToHistoryIfNeededInternal 会负责持久化
+            stateHolder.conversationApiConfigIds.update { currentMap ->
+                if (currentMap[conversationId] == currentConfig.id) currentMap
+                else currentMap + (conversationId to currentConfig.id)
             }
+            // 这里仅更新内存状态，HistoryManager.saveCurrentChatToHistoryIfNeededInternal 会负责持久化
         } else {
             // 图像模式：绑定当前图像会话ID与配置ID
             val conversationId = stateHolder._currentImageGenerationConversationId.value
-            val currentMap = stateHolder.conversationApiConfigIds.value.toMutableMap()
-            if (currentMap[conversationId] != currentConfig.id) {
-                currentMap[conversationId] = currentConfig.id
-                stateHolder.conversationApiConfigIds.value = currentMap
-                // 这里仅更新内存状态，HistoryManager 会负责持久化
+            stateHolder.conversationApiConfigIds.update { currentMap ->
+                if (currentMap[conversationId] == currentConfig.id) currentMap
+                else currentMap + (conversationId to currentConfig.id)
             }
+            // 这里仅更新内存状态，HistoryManager 会负责持久化
         }
         
         Log.d("MessageSender", "✅ Using config: ${safeApiConfigSummary(currentConfig)}")
@@ -803,19 +785,39 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
                         if (!refImageUrl.isNullOrBlank()) {
                             // 下载并等比压缩该图片，作为位图附件加入
                             val fm = FileManager(application)
-                            val refBitmap = fm.loadAndCompressBitmapFromUrl(refImageUrl, isImageGeneration = true)
+                            val referenceHeaders = buildMap {
+                                currentConfig.key.takeIf { it.isNotBlank() }
+                                    ?.let { put("Authorization", "Bearer $it") }
+                                currentConfig.address.takeIf { it.isNotBlank() }
+                                    ?.let { put("Referer", it) }
+                            }
+                            val refBitmap = fm.loadAndCompressBitmapFromUrl(
+                                urlStr = refImageUrl,
+                                isImageGeneration = true,
+                                trustedOrigin = currentConfig.address,
+                                headers = referenceHeaders,
+                            )
                             if (refBitmap != null) {
+                                val referenceAttachment = withContext(Dispatchers.Default) {
+                                    try {
+                                        SelectedMediaItem.ImageFromBitmap.fromBitmap(
+                                            bitmap = refBitmap,
+                                            id = "ref_${UUID.randomUUID()}"
+                                        )
+                                    } finally {
+                                        if (!refBitmap.isRecycled) refBitmap.recycle()
+                                    }
+                                }
                                 allAttachments.add(
-                                    SelectedMediaItem.ImageFromBitmap.fromBitmap(
-                                        bitmap = refBitmap,
-                                        id = "ref_${UUID.randomUUID()}"
-                                    )
+                                    referenceAttachment
                                 )
                                 Log.d("MessageSender", "已自动附带上一轮AI图片作为参考: $refImageUrl")
                             } else {
                                 Log.w("MessageSender", "未能下载上一轮AI图片，跳过自动引用")
                             }
                         }
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         Log.w("MessageSender", "自动引用上一轮AI图片失败: ${e.message}")
                     }
@@ -926,11 +928,6 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
                 val apiMessagesForBackend = ensureUserMessagePresent(historyApiMessages, currentUserApiMessage)
 
                 val isMcpEnabledForRequest = stateHolder._isMcpEnabledForNextRequest.value
-                val rawMcpToolsForRequest = if (isMcpEnabledForRequest) {
-                    getMcpToolsForRequest()
-                } else {
-                    emptyList()
-                }
                 val dispatchCandidates = if (isMcpEnabledForRequest) {
                     getMcpDispatchCandidates()
                 } else {
@@ -1013,7 +1010,6 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
                     prepareMcpDispatch(
                         messageText = textToActuallySend,
                         allCandidates = dispatchCandidates,
-                        isMcpEnabled = true,
                         hasEffectiveWebSearch = hasEffectiveWebSearch,
                     )
                 } else {
@@ -1029,10 +1025,7 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
                         )
                     )
                 }
-                val mcpToolsForRequest = filterMcpToolsForRequest(
-                    mcpTools = if (preparedMcpDispatch.tools.isNotEmpty()) preparedMcpDispatch.tools else rawMcpToolsForRequest,
-                    shouldFilterSearchLikeTools = false,
-                )
+                val mcpToolsForRequest = preparedMcpDispatch.tools
                 val shouldEnableGoogleSearch = isGeminiChannel && webSearchRouting.useNativeWebSearch
                 val mcpHasSearchTool = mcpToolsForRequest.any { classifyMcpTool(it).isSearchLike }
                 val shouldInjectWebSearchTool = !shouldEnableGoogleSearch && !mcpHasSearchTool
@@ -1142,9 +1135,10 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
                         val toolsList = mutableListOf<Map<String, Any>>()
                         
                         // 1. 用户自定义工具
-                        if (!currentConfig.toolsJson.isNullOrBlank()) {
+                        val customToolsJson = currentConfig.toolsJson
+                        if (!customToolsJson.isNullOrBlank()) {
                             try {
-                                val jsonElement = Json.parseToJsonElement(currentConfig.toolsJson!!)
+                                val jsonElement = Json.parseToJsonElement(customToolsJson)
                                 if (jsonElement is JsonArray) {
                                     jsonElement.forEach { element: JsonElement ->
                                         if (element is JsonObject) {
@@ -1299,17 +1293,6 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
         }
     }
 
-private suspend fun readTextFromUri(context: Context, uri: Uri): String? {
-        return withContext(Dispatchers.IO) {
-            try {
-                context.contentResolver.openInputStream(uri)?.bufferedReader().use { reader ->
-                    reader?.readText()
-                }
-            } catch (e: Exception) {
-                null
-            }
-        }
-    }
     private fun getFileName(contentResolver: ContentResolver, uri: Uri): String? {
         if (uri == Uri.EMPTY) return null
         var fileName: String? = null

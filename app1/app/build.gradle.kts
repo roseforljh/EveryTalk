@@ -73,7 +73,6 @@ configurations.all {
 
 plugins {
     alias(libs.plugins.android.application)
-    alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     // Kotlin Serialization 插件
     id("org.jetbrains.kotlin.plugin.serialization") version libs.versions.kotlin.get()
@@ -108,9 +107,8 @@ android {
             useSupportLibrary = true
         }
         ndk {
-            // 仅保留 ARM 架构，移除 x86/x86_64 (模拟器用) 以减小 APK 体积
-            // 绝大多数 Android 手机使用 arm64-v8a 或 armeabi-v7a
-            abiFilters += listOf("armeabi-v7a", "arm64-v8a")
+            // 保留手机 ARM 架构，并提供 ChromeOS 所需的 x86_64 ABI。
+            abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86_64")
         }
     }
     // Signing configs for release build; values come from local.properties
@@ -278,29 +276,29 @@ ksp {
         implementation(libs.androidx.ui.tooling.preview)
         implementation(libs.androidx.material3)
 
-        implementation("androidx.compose.material:material") // 保留基础 Material 依赖
+        implementation(libs.androidx.compose.material) // 保留基础 Material 依赖
         
-        implementation("androidx.compose.material3:material3-window-size-class")
-        implementation("androidx.compose.material:material-icons-core")
-        implementation("androidx.compose.material:material-icons-extended")
+        implementation(libs.androidx.compose.material3.window)
+        implementation(libs.androidx.compose.material.icons.core)
+        implementation(libs.androidx.compose.material.icons.extended)
 
-        debugImplementation("androidx.compose.ui:ui-tooling")
+        debugImplementation(libs.androidx.ui.tooling)
 
         // ===== Lifecycle & ViewModel =====
-        implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.11.0")
-        implementation("androidx.activity:activity-compose:1.13.0")
+        implementation(libs.androidx.lifecycle.viewmodel.compose)
+        implementation(libs.androidx.activity.compose)
 
         // ===== Core Android & Lifecycle =====
         implementation(libs.androidx.core.ktx)
         implementation(libs.androidx.lifecycle.runtime.ktx)
-        implementation("androidx.lifecycle:lifecycle-process:2.11.0")
+        implementation(libs.androidx.lifecycle.process)
 
         // ===== Kotlin Serialization =====
-        implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+        implementation(libs.kotlinx.serialization.json)
 
         // ===== Coroutines =====
-        implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
-        implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
+        implementation(libs.kotlinx.coroutines.core)
+        implementation(libs.kotlinx.coroutines.android)
 
         // ===== Ktor Client (网络请求) =====
         implementation(libs.ktor.client.core)
@@ -311,39 +309,40 @@ ksp {
         implementation(libs.ktor.client.websockets)  // WebSocket 支持，用于阿里云实时语音识别
 
         // SLF4J - Ktor logging 的间接依赖,必须保留
-        implementation("org.slf4j:slf4j-nop:2.0.18")
+        implementation(libs.slf4j.nop)
 
         // ===== MCP (Model Context Protocol) SDK =====
         implementation(libs.mcp.kotlin.sdk)
 
         // ===== Testing =====
         testImplementation(libs.junit)
-        testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
-        testImplementation("io.mockk:mockk:1.14.11")
-        testImplementation("app.cash.turbine:turbine:1.2.1")
-        testImplementation("org.robolectric:robolectric:4.16.1")
+        testImplementation(libs.kotlinx.coroutines.test)
+        testImplementation(libs.ktor.client.mock)
+        testImplementation(libs.mockk)
+        testImplementation(libs.turbine)
+        testImplementation(libs.robolectric)
         testImplementation(libs.room.testing)
-        testImplementation("androidx.compose.ui:ui-test-junit4")
+        testImplementation(libs.androidx.ui.test.junit4)
         androidTestImplementation(libs.androidx.junit)
         androidTestImplementation(libs.androidx.espresso.core)
         androidTestImplementation(libs.androidx.ui.test.junit4)
         debugImplementation(libs.androidx.ui.test.manifest)
 
         // ===== Navigation =====
-        implementation("androidx.navigation:navigation-compose:2.9.8")
+        implementation(libs.navigation.compose)
         
         // ===== AppCompat & Material =====
-        implementation("androidx.appcompat:appcompat:1.7.1")
-        implementation("com.google.android.material:material:1.14.0")
+        implementation(libs.appcompat)
+        implementation(libs.google.material)
 
         // ===== Profile Installer =====
         implementation(libs.androidx.profileinstaller)
 
 
         // ===== 图片加载 - Coil =====
-        implementation("io.coil-kt.coil3:coil-compose:3.5.0")
-        implementation("io.coil-kt.coil3:coil-network-okhttp:3.5.0")
-        implementation("io.coil-kt.coil3:coil-video:3.5.0")
+        implementation(libs.coil.compose)
+        implementation(libs.coil.network.okhttp)
+        implementation(libs.coil.video)
         implementation(libs.coil.svg)
 
         // ===== 本地 MathJax WebView 运行时 =====
@@ -361,17 +360,12 @@ ksp {
         implementation(libs.mikepenz.markdown.coil3)
 
         // ===== PDF 处理 =====
-        implementation("com.tom-roush:pdfbox-android:2.0.27.0")
+        implementation(libs.pdfbox.android)
         // ===== Room Database =====
         implementation(libs.room.runtime)
         implementation(libs.room.ktx)
-        implementation("androidx.room:room-paging:2.8.4")
         ksp(libs.room.compiler)
-        
-        // ===== Paging 3 =====
-        implementation("androidx.paging:paging-runtime:3.5.0")
-        implementation("androidx.paging:paging-compose:3.5.0")
-        
+
         // ===== Hilt Dependency Injection =====
         // 暂不启用，项目统一使用 Koin
         // implementation(libs.hilt.android)
@@ -379,12 +373,12 @@ ksp {
         // implementation(libs.hilt.navigation.compose)
         
         // ===== Koin Dependency Injection =====
-        implementation("io.insert-koin:koin-android:4.2.2")
-        implementation("io.insert-koin:koin-androidx-compose:4.2.2")
-        testImplementation("io.insert-koin:koin-test:4.2.2")
+        implementation(libs.koin.android)
+        implementation(libs.koin.androidx.compose)
+        testImplementation(libs.koin.test)
     }
 
-val verifyMathJaxAssets by tasks.registering {
+val verifyMathJaxAssets = tasks.register("verifyMathJaxAssets") {
     group = "verification"
     description = "校验固定版本的 MathJax 本地资产是否完整且未被篡改"
 

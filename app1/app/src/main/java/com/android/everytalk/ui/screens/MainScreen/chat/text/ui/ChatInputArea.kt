@@ -86,8 +86,8 @@ import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.models.ImageSourceOption
 import com.android.everytalk.models.MoreOptionsType
 import com.android.everytalk.models.SelectedMediaItem
-import com.android.everytalk.util.audio.AudioRecorderHelper
 import com.android.everytalk.ui.components.modifier.diffuseShadow
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -434,15 +434,13 @@ fun ChatInputArea(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    var isRecording by remember { mutableStateOf(false) }
-    val audioRecorderHelper = remember { AudioRecorderHelper(context) }
 
     var pendingMessageTextForSend by remember { mutableStateOf<String?>(null) }
     var showImageSelectionPanel by remember { mutableStateOf(false) }
     var showMoreOptionsPanel by remember { mutableStateOf(false) }
     // 记录由外点关闭触发的时间戳，用于忽略紧随其后的按钮抬起点击，避免"先关后开"
-    var lastImagePanelDismissAt by remember { mutableStateOf(0L) }
-    var lastMorePanelDismissAt by remember { mutableStateOf(0L) }
+    var lastImagePanelDismissAt by remember { mutableLongStateOf(0L) }
+    var lastMorePanelDismissAt by remember { mutableLongStateOf(0L) }
     var showConversationParamsDialog by remember { mutableStateOf(false) }
     var showMcpServerListDialog by remember { mutableStateOf(false) }
     var tempCameraImageUri by remember { mutableStateOf<Uri?>(null) }
@@ -455,13 +453,8 @@ fun ChatInputArea(
             coroutineScope.launch {
                 try {
                     uris.forEach { uri ->
-                        val mimeType = context.contentResolver.getType(uri) ?: "image/*"
-                        val fileName = context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
-                            if (cursor.moveToFirst()) {
-                                val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                                if (nameIndex != -1) cursor.getString(nameIndex) else null
-                            } else null
-                        } ?: "图片"
+                        val (fileName, resolvedMimeType, _) = getFileDetailsFromUri(context, uri)
+                        val mimeType = resolvedMimeType ?: "image/*"
 
                         // 检查文件大小
                         val isFileSizeValid = checkFileSizeAndShowError(context, uri, fileName, onShowSnackbar)
@@ -481,6 +474,8 @@ fun ChatInputArea(
                             }
                         }
                     }
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     Log.e("PhotoPicker", "处理选择的图片时发生错误", e)
                     withContext(Dispatchers.Main) {
@@ -564,6 +559,8 @@ fun ChatInputArea(
                                 }
                             }
                         }
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         Log.e("OpenDocument", "处理选择的文件时发生错误", e)
                         withContext(Dispatchers.Main) {
@@ -576,18 +573,6 @@ fun ChatInputArea(
             }
         }
     )
-
-    val recordAudioPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { isGranted ->
-        if (isGranted) {
-            audioRecorderHelper.startRecording()
-            isRecording = true
-        } else {
-            onShowSnackbar("需要录音权限才能录制音频")
-        }
-    }
-
 
     // 🎯 性能优化：使用本地状态管理输入文本，避免每次按键都触发 ViewModel 更新
     // 这样可以大幅减少 ChatScreen 的重组次数，解决长文本输入卡顿问题
@@ -745,7 +730,7 @@ fun ChatInputArea(
                 val isDarkTheme = isSystemInDarkTheme()
                 var isFocused by remember { mutableStateOf(false) }
                 var showFunctionPanel by remember { mutableStateOf(false) }
-                var lastFunctionPanelDismissAt by remember { mutableStateOf(0L) }
+                var lastFunctionPanelDismissAt by remember { mutableLongStateOf(0L) }
 
                 BackHandler(enabled = showFunctionPanel) {
                     lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()

@@ -170,10 +170,8 @@ SILICONFLOW_API_KEY="sk-..."
 
 ### 核心组件
 - **[`ApiClient.kt`](app1/app/src/main/java/com/android/everytalk/data/network/ApiClient.kt)**: 统一网络请求客户端，支持流式 SSE 解析、多后端容错、Cloudflare 拦截自动降级。
-- **[`StreamingOutputController.kt`](app1/app/src/main/java/com/android/everytalk/util/streaming/StreamingOutputController.kt)**: 直通式流式输出控制器，接收增量后直接累积并回传 UI。
 - **[`GeminiDirectClient.kt`](app1/app/src/main/java/com/android/everytalk/data/network/GeminiDirectClient.kt)** / **[`OpenAIDirectClient.kt`](app1/app/src/main/java/com/android/everytalk/data/network/OpenAIDirectClient.kt)**: 直连客户端，支持无后端模式。
 - **[`VoiceChatSession.kt`](app1/app/src/main/java/com/android/everytalk/data/network/VoiceChatSession.kt)**: 语音对话会话管理，STT → Chat → TTS 完整链路。
-- **[`ImageCompressionPreferences.kt`](app1/app/src/main/java/com/android/everytalk/config/ImageCompressionPreferences.kt)**: 智能图片压缩配置管理。
 
 ### 系统要求
 | 组件 | 要求 |
@@ -199,8 +197,7 @@ EveryTalk/
 │   ├── app/
 │   │   ├── src/main/java/com/android/everytalk/
 │   │   │   ├── config/                      # ⚙️ 配置管理
-│   │   │   │   ├── BackendConfig.kt         # 后端 URL 配置
-│   │   │   │   └── ImageCompressionPreferences.kt  # 图片压缩配置
+│   │   │   │   └── BackendConfig.kt         # 后端 URL 配置
 │   │   │   ├── data/                        # 📊 数据层
 │   │   │   │   ├── network/                 # 🌐 网络请求
 │   │   │   │   │   ├── ApiClient.kt         # 统一 API 客户端
@@ -221,8 +218,6 @@ EveryTalk/
 │   │   │   │   │   └── settings/            # 设置界面
 │   │   │   │   └── components/              # 通用组件
 │   │   │   └── util/                        # 🔧 工具类
-│   │   │       ├── StreamingOutputController.kt  # 流式输出控制
-│   │   │       ├── ImprovedContentDeduplicator.kt # 内容去重
 │   │   │       ├── RequestSignatureUtil.kt       # 请求签名
 │   │   │       └── ScrollController.kt           # 滚动控制
 │   │   └── build.gradle.kts                 # 构建配置

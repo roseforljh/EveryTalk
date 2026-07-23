@@ -2,24 +2,19 @@ package com.android.everytalk.data.network
 
 import android.annotation.SuppressLint
 import android.media.*
-import android.media.MediaCodec
-import android.media.MediaCodecInfo
-import android.media.MediaFormat
-import android.media.MediaMuxer
 import android.os.Build
+import android.os.SystemClock
 import android.util.Log
 import com.android.everytalk.util.audio.AudioTestUtil
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import okhttp3.MediaType.Companion.toMediaType
 import com.android.everytalk.config.PerformanceConfig
 import com.android.everytalk.data.network.direct.SttDirectClient
 import com.android.everytalk.data.network.direct.TtsDirectClient
@@ -32,18 +27,103 @@ import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.plugins.websocket.*
 import io.ktor.serialization.kotlinx.json.*
 import kotlinx.serialization.json.Json
-import okhttp3.MultipartBody
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.RequestBody.Companion.asRequestBody
-import okhttp3.RequestBody.Companion.toRequestBody
-import org.json.JSONArray
-import org.json.JSONObject
 import java.io.ByteArrayOutputStream
-import java.io.File
+import java.util.ArrayDeque
 import java.util.concurrent.TimeUnit
-import java.io.BufferedReader
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
+
+internal class RealtimeAudioSequencer(
+    private val maxBufferedBytes: Int,
+) {
+    private val mutex = Mutex()
+    private val bufferedAudio = ArrayDeque<ByteArray>()
+    private val ready = AtomicBoolean(false)
+    private val connectionVersion = AtomicLong(0)
+    private var bufferedBytes = 0
+
+    init {
+        require(maxBufferedBytes > 0) { "音频缓冲区上限必须大于 0" }
+    }
+
+    val isReady: Boolean
+        get() = ready.get()
+
+    fun markNotReady() {
+        ready.set(false)
+        connectionVersion.incrementAndGet()
+    }
+
+    suspend fun reset() {
+        markNotReady()
+        mutex.withLock {
+            bufferedAudio.clear()
+            bufferedBytes = 0
+        }
+    }
+
+    fun discardImmediately() {
+        markNotReady()
+        if (!mutex.tryLock()) return
+        try {
+            bufferedAudio.clear()
+            bufferedBytes = 0
+        } finally {
+            mutex.unlock()
+        }
+    }
+
+    suspend fun enqueue(chunk: ByteArray, send: suspend (ByteArray) -> Unit) {
+        mutex.withLock {
+            if (ready.get()) {
+                send(chunk)
+                return
+            }
+
+            val bufferedChunk = if (chunk.size > maxBufferedBytes) {
+                chunk.copyOfRange(chunk.size - maxBufferedBytes, chunk.size)
+            } else {
+                chunk
+            }
+            while (bufferedBytes + bufferedChunk.size > maxBufferedBytes && bufferedAudio.isNotEmpty()) {
+                bufferedBytes -= bufferedAudio.removeFirst().size
+            }
+            bufferedAudio.addLast(bufferedChunk)
+            bufferedBytes += bufferedChunk.size
+        }
+    }
+
+    suspend fun flushBeforeReady(send: suspend (ByteArray) -> Unit): Boolean {
+        val expectedVersion = connectionVersion.get()
+        return mutex.withLock {
+            while (bufferedAudio.isNotEmpty()) {
+                val chunk = bufferedAudio.first()
+                send(chunk)
+                bufferedAudio.removeFirst()
+                bufferedBytes -= chunk.size
+            }
+
+            val connectionStillCurrent = connectionVersion.get() == expectedVersion
+            ready.set(connectionStillCurrent)
+            connectionStillCurrent
+        }
+    }
+}
+
+internal fun validateAudioRecordReadResult(bytesRead: Int) {
+    check(bytesRead >= 0) { "AudioRecord.read 失败，错误码: $bytesRead" }
+}
+
+enum class RecordingStopReason {
+    STOPPED_EXTERNALLY,
+    MAX_DURATION_REACHED,
+}
+
+internal fun hasReachedRecordingDurationLimit(
+    startedAtMs: Long,
+    nowMs: Long,
+    maxDurationMs: Long,
+): Boolean = nowMs - startedAtMs >= maxDurationMs
 
 /**
  * 语音对话会话（新流程）：STT → Chat → TTS
@@ -89,8 +169,11 @@ class VoiceChatSession(
     private val onWebSocketStateChanged: ((WebSocketState) -> Unit)? = null  // WebSocket 状态回调
 ) {
     private var audioRecord: AudioRecord? = null
+    @Volatile
     private var isRecording: Boolean = false
     private val pcmBuffer = SafeByteArrayOutputStream(256 * 1024)
+    private val finishMutex = Mutex()
+    private var finishResult: Result<VoiceChatResult>? = null
     
     // 录音最大时长（毫秒）
     private val maxRecordingDurationMs = 5 * 60 * 1000L  // 5分钟
@@ -102,18 +185,12 @@ class VoiceChatSession(
     // 阿里云实时 STT 客户端（每次录音独立一个会话，避免跨轮复用导致文本累积）
     private var aliyunRealtimeSttClient: AliyunRealtimeSttClient? = null
     private var realtimeSttJob: Job? = null
-    private val realtimeSttScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     
-    // 零等待录音：音频缓冲区（用于在 WebSocket 连接建立前缓存音频数据）
-    private val pendingAudioBuffer = mutableListOf<ByteArray>()
-    private val pendingBufferMutex = Mutex()
-    private val isWebSocketReady = AtomicBoolean(false)
-    
-    // 最大缓冲大小：5 秒音频 @ 16kHz 16bit mono = 160KB
-    private val maxPendingBufferSize = 5 * 16000 * 2
+    // 零等待录音：连接边界统一经由同一个顺序门禁，避免新音频越过旧缓冲。
+    private val realtimeAudioSequencer = RealtimeAudioSequencer(MAX_PENDING_AUDIO_BYTES)
     
     // Ktor HTTP 客户端（用于直连模式）
-    private val ktorClient: HttpClient by lazy {
+    private val ktorClientDelegate = lazy {
         HttpClient(OkHttp) {
             engine {
                 config {
@@ -135,17 +212,16 @@ class VoiceChatSession(
             }
             install(WebSockets) {
                 pingIntervalMillis = 30_000
+                maxFrameSize = MAX_WEBSOCKET_FRAME_BYTES
             }
         }
     }
+    private val ktorClient: HttpClient by ktorClientDelegate
+    private val clientClosed = AtomicBoolean(false)
     
     // 音频播放控制
     @Volatile
-    private var currentAudioTrack: AudioTrack? = null
-    @Volatile
     private var streamAudioPlayer: StreamAudioPlayer? = null
-    @Volatile
-    private var shouldStopPlayback = false
 
     // 录音参数（采样率 / 16-bit / mono）
     private val sampleRate = PerformanceConfig.VOICE_RECORD_SAMPLE_RATE_HZ
@@ -178,6 +254,7 @@ class VoiceChatSession(
     
     companion object {
         private const val TAG = "VoiceChatSession"
+        private const val MAX_PENDING_AUDIO_BYTES = 5 * 16000 * 2
     }
 
     /**
@@ -191,8 +268,10 @@ class VoiceChatSession(
      * 连接建立后，先发送缓冲的音频，再实时发送后续音频。
      * 这样用户按下按钮后立即看到录音动画，无需等待网络。
      */
-    suspend fun startRecording() = withContext(Dispatchers.IO) {
-        if (isRecording) return@withContext
+    suspend fun startRecording(): RecordingStopReason = withContext(Dispatchers.IO) {
+        if (isRecording) return@withContext RecordingStopReason.STOPPED_EXTERNALLY
+        check(!clientClosed.get()) { "语音会话已关闭" }
+        finishResult = null
         
         val recorder = createAudioRecord()
             ?: throw VoiceRecognitionException("无法启动录音，请检查麦克风权限是否已开启")
@@ -201,13 +280,10 @@ class VoiceChatSession(
         pcmBuffer.reset()
         
         // 重置零等待录音状态
-        pendingBufferMutex.withLock {
-            pendingAudioBuffer.clear()
-        }
-        isWebSocketReady.set(false)
+        realtimeAudioSequencer.reset()
 
         // 记录开始时间，用于后续最大时长检测
-        recordingStartTime = System.currentTimeMillis()
+        recordingStartTime = SystemClock.elapsedRealtime()
 
         // 如果是阿里云且启用实时 STT
         val shouldUseRealtimeStt = useRealtimeStt && sttPlatform.equals("Aliyun", ignoreCase = true)
@@ -225,24 +301,12 @@ class VoiceChatSession(
             Log.i(TAG, "AudioRecord started immediately (zero-wait mode)")
         } catch (e: Exception) {
             Log.e(TAG, "startRecording failed: ${e.message}", e)
-            audioRecord = null
+            releaseAudioRecord()
+            closeKtorClient()
             throw e
         }
  
         isRecording = true
-         
-        // 监控录音最大时长，防止无限录制
-        val monitorJob = CoroutineScope(Dispatchers.Default).launch {
-            while (isRecording) {
-                val elapsedMs = System.currentTimeMillis() - recordingStartTime
-                if (elapsedMs >= maxRecordingDurationMs) {
-                    Log.i(TAG, "Reached max recording duration, stopping recording")
-                    stopRecordingAndProcess()
-                    break
-                }
-                delay(1000)
-            }
-        }
         
         // 如果启用了实时 STT，则为本次录音创建独立的 AliyunRealtimeSttClient 会话
         if (shouldUseRealtimeStt) {
@@ -259,48 +323,53 @@ class VoiceChatSession(
                 format = "pcm"
             )
             aliyunRealtimeSttClient = client
-            isWebSocketReady.set(false)
+            realtimeAudioSequencer.markNotReady()
  
-            realtimeSttJob = realtimeSttScope.launch {
+            val recordingScope = this
+            realtimeSttJob = launch {
                 try {
                     client.start(
                         onReady = {
                             Log.i(TAG, "Aliyun realtime STT ready for this session")
-                            isWebSocketReady.set(true)
-                            // 连接就绪后，把零等待缓冲区里的音频补发过去
-                            realtimeSttScope.launch {
-                                flushPendingAudioBuffer()
-                            }
-                            // 回到主线程更新 UI 状态
-                            realtimeSttScope.launch(Dispatchers.Main) {
-                                notifyWebSocketState(WebSocketState.CONNECTED)
+                            recordingScope.launch {
+                                try {
+                                    val ready = realtimeAudioSequencer.flushBeforeReady { chunk ->
+                                        client.sendAudio(chunk)
+                                    }
+                                    if (ready) {
+                                        withContext(Dispatchers.Main) {
+                                            notifyWebSocketState(WebSocketState.CONNECTED)
+                                        }
+                                    }
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (e: Exception) {
+                                    realtimeAudioSequencer.markNotReady()
+                                    Log.e(TAG, "Failed to flush pending audio: ${e.message}", e)
+                                    withContext(Dispatchers.Main) {
+                                        notifyWebSocketState(WebSocketState.ERROR)
+                                    }
+                                }
                             }
                         },
                         onPartial = { text ->
-                            // 实时 partial，直接刷新 UI 识别文本（主线程）
-                            realtimeSttScope.launch(Dispatchers.Main) {
-                                onTranscriptionReceived?.invoke(text)
-                            }
+                            onTranscriptionReceived?.invoke(text)
                         },
                         onFinal = { text ->
-                            // 最终文本，同样通过 UI 回调更新（主线程）
-                            realtimeSttScope.launch(Dispatchers.Main) {
-                                onTranscriptionReceived?.invoke(text)
-                            }
+                            onTranscriptionReceived?.invoke(text)
                         },
                         onError = { errorMsg ->
                             Log.e(TAG, "Aliyun realtime STT error: $errorMsg")
-                            isWebSocketReady.set(false)
-                            realtimeSttScope.launch(Dispatchers.Main) {
-                                notifyWebSocketState(WebSocketState.ERROR)
-                            }
+                            realtimeAudioSequencer.markNotReady()
+                            notifyWebSocketState(WebSocketState.ERROR)
                         }
                     )
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     Log.e(TAG, "Error starting Aliyun realtime STT: ${e.message}", e)
-                    isWebSocketReady.set(false)
-                    // 这里已经在 IO 协程中，切回主线程更新 UI（仅实时模式下才会触发）
-                    realtimeSttScope.launch(Dispatchers.Main) {
+                    realtimeAudioSequencer.markNotReady()
+                    withContext(Dispatchers.Main) {
                         notifyWebSocketState(WebSocketState.ERROR)
                     }
                 }
@@ -310,16 +379,21 @@ class VoiceChatSession(
         // 启动读取循环
         val readBuf = ByteArray(3200) // 100ms @ 16kHz 16bit mono = 3200 bytes
         var lastVolumeUpdateTime = 0L
+        var stopReason = RecordingStopReason.STOPPED_EXTERNALLY
 
         try {
             while (isRecording) {
                 val n = recorder.read(readBuf, 0, readBuf.size)
-                // 退出条件： 你可以在这里加入检测最大录制时长的条件，或者在循环中判断
-                // 实时检测最大时长
-                val elapsedMs = System.currentTimeMillis() - recordingStartTime
-                if (elapsedMs >= maxRecordingDurationMs) {
+                validateAudioRecordReadResult(n)
+                if (hasReachedRecordingDurationLimit(
+                        startedAtMs = recordingStartTime,
+                        nowMs = SystemClock.elapsedRealtime(),
+                        maxDurationMs = maxRecordingDurationMs,
+                    )
+                ) {
                     Log.i(TAG, "Max recording duration reached, stopping recording")
-                    stopRecordingAndProcess()
+                    isRecording = false
+                    stopReason = RecordingStopReason.MAX_DURATION_REACHED
                     break
                 }
 
@@ -330,21 +404,21 @@ class VoiceChatSession(
                     // 实时 STT：优先发送到阿里云 WebSocket
                     if (shouldUseRealtimeStt) {
                         val chunk = readBuf.copyOfRange(0, n)
-                        if (isWebSocketReady.get()) {
-                            try {
-                                aliyunRealtimeSttClient?.sendAudio(chunk)
-                            } catch (e: Exception) {
-                                Log.w(TAG, "Failed to send audio chunk to realtime STT: ${e.message}")
+                        try {
+                            realtimeAudioSequencer.enqueue(chunk) { audio ->
+                                aliyunRealtimeSttClient?.sendAudio(audio)
+                                    ?: throw IllegalStateException("实时 STT 客户端已释放")
                             }
-                        } else {
-                            // 连接尚未就绪，写入零等待缓冲区
-                            bufferAudioChunk(chunk)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            Log.w(TAG, "Failed to queue audio chunk for realtime STT: ${e.message}")
                         }
                     }
                     
 
                     // 计算音量（RMS）并回调给UI
-                    val currentTime = System.currentTimeMillis()
+                    val currentTime = SystemClock.elapsedRealtime()
                     if (onVolumeChanged != null &&
                         currentTime - lastVolumeUpdateTime >= PerformanceConfig.VOICE_RECORD_VOLUME_UPDATE_INTERVAL_MS
                     ) {
@@ -366,77 +440,71 @@ class VoiceChatSession(
                             val normalizedVolume = (rms / 3000.0).coerceIn(0.0, 1.0).toFloat()
 
                             withContext(Dispatchers.Main) {
-                                onVolumeChanged?.invoke(normalizedVolume)
+                                onVolumeChanged.invoke(normalizedVolume)
                             }
                         }
                     }
-                } else if (n == AudioRecord.ERROR_INVALID_OPERATION || n == AudioRecord.ERROR_BAD_VALUE) {
-                    Log.e(TAG, "AudioRecord read error: $n")
-                    break
+                } else {
+                    // 个别设备会短暂返回 0，避免在 IO 线程持续空转。
+                    kotlinx.coroutines.delay(10)
                 }
             }
+        } catch (e: CancellationException) {
+            isRecording = false
+            releaseAudioRecord()
+            cancelRealtimeSttNow()
+            closeKtorClient()
+            throw e
         } catch (t: Throwable) {
             Log.e(TAG, "Recording loop error", t)
-        } finally {
-            // 关闭录音和监控
-            monitorJob.cancel()
+            isRecording = false
+            releaseAudioRecord()
+            cancelRealtimeSttNow()
+            closeKtorClient()
+            throw t
         }
+        stopReason
     }
     
-    /**
-     * 将音频块添加到待发送缓冲区
-     * 如果缓冲区已满（超过 5 秒音频），丢弃最旧的数据
-     */
-    private suspend fun bufferAudioChunk(chunk: ByteArray) {
-        pendingBufferMutex.withLock {
-            // 计算当前缓冲区大小
-            val currentSize = pendingAudioBuffer.sumOf { it.size }
-            if (currentSize + chunk.size > maxPendingBufferSize) {
-                // 缓冲区即将溢出，丢弃最旧的数据
-                var sizeToRemove = chunk.size
-                while (sizeToRemove > 0 && pendingAudioBuffer.isNotEmpty()) {
-                    val oldest = pendingAudioBuffer.removeAt(0)
-                    sizeToRemove -= oldest.size
-                }
-                Log.w(TAG, "Pending audio buffer overflow, dropped oldest chunks")
-            }
-            pendingAudioBuffer.add(chunk)
-            if (pendingAudioBuffer.size % 10 == 0) {
-                Log.d(TAG, "Buffering audio: ${pendingAudioBuffer.size} chunks, ~${currentSize / 1024}KB")
-            }
+    @Synchronized
+    private fun releaseAudioRecord() {
+        val recorder = audioRecord ?: return
+        audioRecord = null
+        try {
+            recorder.stop()
+        } catch (_: Throwable) {
+        }
+        try {
+            recorder.release()
+        } catch (_: Throwable) {
         }
     }
-    
-    /**
-     * 发送缓冲区中的所有音频数据
-     * 在 WebSocket 连接建立后调用
-     */
-    private suspend fun flushPendingAudioBuffer() {
-        val chunksToSend: List<ByteArray>
-        pendingBufferMutex.withLock {
-            chunksToSend = pendingAudioBuffer.toList()
-            pendingAudioBuffer.clear()
+
+    private fun cancelRealtimeSttNow() {
+        try {
+            aliyunRealtimeSttClient?.cancel()
+        } catch (_: Throwable) {
         }
-        if (chunksToSend.isNotEmpty()) {
-            val totalBytes = chunksToSend.sumOf { it.size }
-            val durationMs = (totalBytes.toFloat() / (sampleRate * 2) * 1000).toLong()
-            Log.i(TAG, "Flushing ${chunksToSend.size} buffered audio chunks (${totalBytes / 1024}KB, ~${durationMs}ms)")
-            try {
-                for (chunk in chunksToSend) {
-                    if (!isRecording && !isWebSocketReady.get()) {
-                        Log.w(TAG, "Recording stopped during flush, aborting")
-                        break
-                    }
-                    try {
-                        aliyunRealtimeSttClient?.sendAudio(chunk)
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Error sending buffered audio to realtime STT: ${e.message}")
-                    }
-                }
-                Log.i(TAG, "Buffered audio flushed successfully to AliyunRealtimeSttClient")
-            } catch (e: Exception) {
-                Log.w(TAG, "Error flushing audio buffer: ${e.message}")
-            }
+        aliyunRealtimeSttClient = null
+        realtimeSttJob?.cancel()
+        realtimeSttJob = null
+        realtimeAudioSequencer.markNotReady()
+    }
+
+    private suspend fun stopRealtimeStt() {
+        try {
+            aliyunRealtimeSttClient?.cancel()
+        } catch (_: Throwable) {
+        }
+        aliyunRealtimeSttClient = null
+        realtimeSttJob?.cancelAndJoin()
+        realtimeSttJob = null
+        realtimeAudioSequencer.markNotReady()
+    }
+
+    private fun closeKtorClient() {
+        if (clientClosed.compareAndSet(false, true) && ktorClientDelegate.isInitialized()) {
+            ktorClientDelegate.value.close()
         }
     }
     
@@ -445,63 +513,45 @@ class VoiceChatSession(
      * 停止录音并丢弃数据，不进行后续处理
      */
     suspend fun cancelRecording() = withContext(Dispatchers.IO) {
-        if (!isRecording) return@withContext
-        
         isRecording = false
         
         // 清理零等待录音缓冲区
-        pendingBufferMutex.withLock {
-            pendingAudioBuffer.clear()
-        }
-        isWebSocketReady.set(false)
+        realtimeAudioSequencer.reset()
         
         // 通知 UI WebSocket 已断开（仅实时模式下可见）
         withContext(Dispatchers.Main) {
             notifyWebSocketState(WebSocketState.DISCONNECTED)
         }
         
-        // 取消本地实时 STT 会话
-        try {
-            aliyunRealtimeSttClient?.cancel()
-        } catch (_: Throwable) {}
-        aliyunRealtimeSttClient = null
-        realtimeSttJob?.cancel()
-        realtimeSttJob = null
-        
-        try {
-            audioRecord?.stop()
-        } catch (_: Throwable) {}
-        try {
-            audioRecord?.release()
-        } catch (_: Throwable) {}
-        audioRecord = null
-        
+        directSession?.cancel()
+        directSession = null
+        stopRealtimeStt()
+        releaseAudioRecord()
+        stopPlayback()
         pcmBuffer.reset()
+        closeKtorClient()
         Log.i(TAG, "Recording cancelled and data discarded")
     }
 
     /**
      * 停止当前播放的音频
      */
+    fun requestStopPlayback() {
+        streamAudioPlayer?.requestStop()
+    }
+
     fun stopPlayback() {
-        shouldStopPlayback = true
-        
-        // 停止标准播放
-        currentAudioTrack?.let { track ->
-            try {
-                track.stop()
-                track.release()
-            } catch (_: Throwable) {}
-        }
-        currentAudioTrack = null
+        requestStopPlayback()
         
         // 停止流式播放
-        streamAudioPlayer?.let { player ->
-            try {
-                player.forceStop()
-            } catch (_: Throwable) {}
-        }
+        val player = streamAudioPlayer
         streamAudioPlayer = null
+        player?.let {
+            try {
+                it.forceStop()
+            } catch (_: Throwable) {
+            }
+        }
         
         Log.i(TAG, "Audio playback stopped by user")
     }
@@ -513,62 +563,62 @@ class VoiceChatSession(
         // 优先停止播放，确保退出时不会继续发声
         stopPlayback()
         
-        // 清理零等待录音缓冲区（非协程版本，直接清理）
-        pendingAudioBuffer.clear()
-        isWebSocketReady.set(false)
-        
-        // 取消实时 STT 客户端
-        try {
-            aliyunRealtimeSttClient?.cancel()
-        } catch (_: Throwable) {}
-        aliyunRealtimeSttClient = null
-        realtimeSttJob?.cancel()
-        realtimeSttJob = null
-
-        if (!isRecording && audioRecord == null) return
+        realtimeAudioSequencer.discardImmediately()
         
         isRecording = false
-        try {
-            audioRecord?.stop()
-        } catch (_: Throwable) {}
-        try {
-            audioRecord?.release()
-        } catch (_: Throwable) {}
-        audioRecord = null
-        
+        directSession?.cancel()
+        directSession = null
+        cancelRealtimeSttNow()
+        releaseAudioRecord()
+        pcmBuffer.reset()
+        closeKtorClient()
         Log.i(TAG, "Force released audio recorder")
     }
 
     /**
      * 停止录音并处理完整的语音对话流程
      */
-    suspend fun stopRecordingAndProcess(): VoiceChatResult = withContext(Dispatchers.IO) {
-        isRecording = false
-         
-        // 根据配置决定使用实时 STT 还是直连模式
-        val shouldUseRealtimeStt = useRealtimeStt && sttPlatform.equals("Aliyun", ignoreCase = true) && aliyunRealtimeSttClient != null
-         
-        return@withContext if (shouldUseRealtimeStt) {
-            Log.i(TAG, "Using Realtime STT Mode (Aliyun)")
-            stopRecordingAndProcessWithRealtimeStt()
-        } else {
-            Log.i(TAG, "Using Direct Mode")
-            stopRecordingAndProcessDirect()
+    suspend fun stopRecordingAndProcess(): VoiceChatResult = finishMutex.withLock {
+        finishResult?.let { return@withLock it.getOrThrow() }
+
+        val completed = try {
+            val result = withContext(Dispatchers.IO) {
+                isRecording = false
+
+                val shouldUseRealtimeStt = useRealtimeStt &&
+                    sttPlatform.equals("Aliyun", ignoreCase = true) &&
+                    aliyunRealtimeSttClient != null
+
+                if (shouldUseRealtimeStt) {
+                    Log.i(TAG, "Using Realtime STT Mode (Aliyun)")
+                    stopRecordingAndProcessWithRealtimeStt()
+                } else {
+                    Log.i(TAG, "Using Direct Mode")
+                    stopRecordingAndProcessDirect()
+                }
+            }
+            Result.success(result)
+        } catch (t: Throwable) {
+            Result.failure(t)
+        } finally {
+            withContext(NonCancellable + Dispatchers.IO) {
+                isRecording = false
+                releaseAudioRecord()
+                cancelRealtimeSttNow()
+                pcmBuffer.reset()
+                closeKtorClient()
+            }
         }
+
+        finishResult = completed
+        completed.getOrThrow()
     }
     
     /**
      * 使用实时 STT 模式处理：获取实时 STT 的最终结果，然后执行 Chat + TTS
      */
     private suspend fun stopRecordingAndProcessWithRealtimeStt(): VoiceChatResult {
-        // 停止录音
-        try {
-            audioRecord?.stop()
-        } catch (_: Throwable) {}
-        try {
-            audioRecord?.release()
-        } catch (_: Throwable) {}
-        audioRecord = null
+        releaseAudioRecord()
         
         // 【关键修复】给音频系统时间从录音模式切换到播放模式
         // 某些 OPPO/Realme 设备在录音结束后立即播放可能导致 AudioTrack 无法正常工作
@@ -585,18 +635,14 @@ class VoiceChatSession(
         // 等待实时 STT 完成并获取最终文本
         val userText = try {
             aliyunRealtimeSttClient?.finishAndWait() ?: ""
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "finishAndWait failed in realtime STT: ${e.message}", e)
             ""
+        } finally {
+            stopRealtimeStt()
         }
- 
-        // 清理实时 STT 客户端
-        try {
-            aliyunRealtimeSttClient?.cancel()
-        } catch (_: Throwable) {}
-        aliyunRealtimeSttClient = null
-        realtimeSttJob?.cancel()
-        realtimeSttJob = null
         
         // 通知 UI WebSocket 已断开（仅实时模式下可见）
         withContext(Dispatchers.Main) {
@@ -622,10 +668,7 @@ class VoiceChatSession(
      * 使用已有的用户文本执行 Chat + TTS（跳过 STT）
      */
     private suspend fun processWithExistingUserText(userText: String): VoiceChatResult {
-        val audioChunks = mutableListOf<ByteArray>()
-        var assistantText = ""
-        
-        directSession = VoiceChatDirectSession(
+        val session = VoiceChatDirectSession(
             httpClient = ktorClient,
             sttConfig = SttDirectClient.SttConfig(
                 platform = sttPlatform,
@@ -650,11 +693,9 @@ class VoiceChatSession(
                 // 已经有 userText，忽略 STT 回调
             },
             onResponseDelta = { _, full ->
-                assistantText = full
                 onResponseReceived?.invoke(full)
             },
             onAudioChunk = { chunk ->
-                audioChunks.add(chunk)
                 // 实时播放音频块
                 if (streamAudioPlayer == null) {
                     val audioFormat = TtsDirectClient.getAudioFormat(ttsPlatform)
@@ -670,39 +711,29 @@ class VoiceChatSession(
                 Log.i(TAG, "Direct mode completed: user='${user.take(50)}...', assistant='${assistant.take(50)}...'")
             }
         )
+        directSession = session
         
-        // 执行 Chat + TTS（使用已有的 userText）
-        val result = directSession?.processWithUserText(userText)
-            ?: throw Exception("Direct session process failed")
-        
-        // 等待播放完成
-        streamAudioPlayer?.close()
-        streamAudioPlayer = null
-        
-        directSession = null
-        
-        return VoiceChatResult(
-            userText = userText,
-            assistantText = result.assistantText,
-            audioData = result.audioData,
-            audioFormat = result.audioFormat,
-            sampleRate = result.sampleRate,
-            isRealtimeMode = true
-        )
+        return try {
+            val result = session.processWithUserText(userText)
+            streamAudioPlayer?.close()
+            VoiceChatResult(
+                userText = userText,
+                assistantText = result.assistantText,
+                hasAudio = result.hasAudio,
+            )
+        } finally {
+            session.cancel()
+            streamAudioPlayer?.forceStop()
+            streamAudioPlayer = null
+            if (directSession === session) directSession = null
+        }
     }
 
     /**
      * 直连模式处理：停止录音并使用直连 API 处理
      */
     private suspend fun stopRecordingAndProcessDirect(): VoiceChatResult {
-        // 停止录音
-        try {
-            audioRecord?.stop()
-        } catch (_: Throwable) {}
-        try {
-            audioRecord?.release()
-        } catch (_: Throwable) {}
-        audioRecord = null
+        releaseAudioRecord()
 
         val pcmData = pcmBuffer.toByteArray()
         if (pcmData.isEmpty()) {
@@ -711,18 +742,13 @@ class VoiceChatSession(
 
         Log.i(TAG, "Recorded ${pcmData.size} bytes of PCM data for direct mode")
 
-        val wavData = ByteArrayOutputStream(44 + pcmData.size).apply {
-            writeWavHeader(this, pcmData.size, sampleRate, 1, 16)
-            write(pcmData)
-        }.toByteArray()
+        val wavData = ByteArray(44 + pcmData.size)
+        writeWavHeader(wavData, pcmData.size, sampleRate, 1, 16)
+        pcmData.copyInto(wavData, destinationOffset = 44)
         Log.i(TAG, "Created WAV payload: ${wavData.size} bytes")
 
         // 创建直连会话
-        val audioChunks = mutableListOf<ByteArray>()
-        var userText = ""
-        var assistantText = ""
-
-        directSession = VoiceChatDirectSession(
+        val session = VoiceChatDirectSession(
             httpClient = ktorClient,
             sttConfig = SttDirectClient.SttConfig(
                 platform = sttPlatform,
@@ -744,15 +770,12 @@ class VoiceChatSession(
                 voiceName = voiceName
             ),
             onTranscription = { text ->
-                userText = text
                 onTranscriptionReceived?.invoke(text)
             },
             onResponseDelta = { _, full ->
-                assistantText = full
                 onResponseReceived?.invoke(full)
             },
             onAudioChunk = { chunk ->
-                audioChunks.add(chunk)
                 // 实时播放音频块
                 if (streamAudioPlayer == null) {
                     val audioFormat = TtsDirectClient.getAudioFormat(ttsPlatform)
@@ -769,110 +792,21 @@ class VoiceChatSession(
                 Log.i(TAG, "Direct mode completed: user='${user.take(50)}...', assistant='${assistant.take(50)}...'")
             }
         )
+        directSession = session
 
-        // 执行直连处理
-        val result = directSession?.process(wavData, "audio/wav")
-            ?: throw Exception("Direct session process failed")
-
-        // 等待播放完成
-        streamAudioPlayer?.close()
-        streamAudioPlayer = null
-
-        directSession = null
-
-        return VoiceChatResult(
-            userText = result.userText,
-            assistantText = result.assistantText,
-            audioData = result.audioData,
-            audioFormat = result.audioFormat,
-            sampleRate = result.sampleRate,
-            isRealtimeMode = false
-        )
-    }
-
-    /**
-     * 播放音频数据
-     */
-    private suspend fun playAudio(audioData: ByteArray, sampleRate: Int) = withContext(Dispatchers.IO) {
-        Log.i(TAG, "Playing audio: ${audioData.size} bytes at ${sampleRate}Hz")
-        
-        shouldStopPlayback = false
-
-        val channelConfig = AudioFormat.CHANNEL_OUT_MONO
-        val audioFormat = AudioFormat.ENCODING_PCM_16BIT
-        val minBufSize = AudioTrack.getMinBufferSize(sampleRate, channelConfig, audioFormat)
-        val bufferSize = maxOf(minBufSize, 8192)
-
-        val track = AudioTrack.Builder()
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_MEDIA)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build()
+        return try {
+            val result = session.process(wavData, "audio/wav")
+            streamAudioPlayer?.close()
+            VoiceChatResult(
+                userText = result.userText,
+                assistantText = result.assistantText,
+                hasAudio = result.hasAudio,
             )
-            .setAudioFormat(
-                AudioFormat.Builder()
-                    .setSampleRate(sampleRate)
-                    .setEncoding(audioFormat)
-                    .setChannelMask(channelConfig)
-                    .build()
-            )
-            .setBufferSizeInBytes(bufferSize)
-            .setTransferMode(AudioTrack.MODE_STREAM)
-            .build()
-
-        currentAudioTrack = track
-
-        try {
-            track.play()
-
-            var offset = 0
-            val chunkSize = 4096
-            while (offset < audioData.size && !shouldStopPlayback) {
-                val toWrite = minOf(chunkSize, audioData.size - offset)
-                val written = track.write(audioData, offset, toWrite)
-                if (written < 0) {
-                    Log.e(TAG, "AudioTrack write error: $written")
-                    break
-                }
-                offset += written
-            }
-            
-            if (shouldStopPlayback) {
-                Log.i(TAG, "Playback interrupted by user")
-                return@withContext
-            }
-
-            // 等待播放完成 (防止尾部截断)
-            // 计算总帧数 (16-bit = 2 bytes per frame)
-            val totalFrames = audioData.size / 2
-            var waitedMs = 0
-            val timeoutMs = (totalFrames.toFloat() / sampleRate * 1000).toLong() + 2000 // 理论时长 + 2秒缓冲
-            while (waitedMs < timeoutMs && !shouldStopPlayback) {
-                if (track.playState == AudioTrack.PLAYSTATE_STOPPED) break
-                // getPlaybackHeadPosition() 返回的是帧数
-                val currentPosition = track.playbackHeadPosition.toLong() and 0xFFFFFFFFL
-                if (currentPosition >= totalFrames) {
-                    Log.i(TAG, "Standard playback completed ($currentPosition / $totalFrames)")
-                    break
-                }
-                kotlinx.coroutines.delay(50)
-                waitedMs += 50
-            }
-        } catch (t: Throwable) {
-            Log.e(TAG, "Audio playback error", t)
         } finally {
-            try {
-                track.stop()
-            } catch (_: Throwable) {}
-            try {
-                track.release()
-            } catch (_: Throwable) {}
-            currentAudioTrack = null
-            // 播放结束后，将音量归零
-            withContext(Dispatchers.Main) {
-                onVolumeChanged?.invoke(0f)
-            }
+            session.cancel()
+            streamAudioPlayer?.forceStop()
+            streamAudioPlayer = null
+            if (directSession === session) directSession = null
         }
     }
 
@@ -910,34 +844,41 @@ class VoiceChatSession(
      * 写入WAV文件头部
      */
     private fun writeWavHeader(
-        out: java.io.OutputStream,
+        out: ByteArray,
         dataSize: Int,
         sampleRate: Int,
         channels: Int,
         bitsPerSample: Int
     ) {
+        require(out.size >= 44) { "WAV 缓冲区必须至少包含 44 字节头部" }
+        var offset = 0
+        fun write(bytes: ByteArray) {
+            bytes.copyInto(out, destinationOffset = offset)
+            offset += bytes.size
+        }
+
         val byteRate = sampleRate * channels * bitsPerSample / 8
         val blockAlign = channels * bitsPerSample / 8
         val chunkSize = 36 + dataSize
 
         // RIFF header
-        out.write("RIFF".toByteArray())
-        out.write(intToBytes(chunkSize))
-        out.write("WAVE".toByteArray())
+        write("RIFF".toByteArray())
+        write(intToBytes(chunkSize))
+        write("WAVE".toByteArray())
 
         // fmt chunk
-        out.write("fmt ".toByteArray())
-        out.write(intToBytes(16)) // Subchunk1Size
-        out.write(shortToBytes(1)) // AudioFormat (1 = PCM)
-        out.write(shortToBytes(channels))
-        out.write(intToBytes(sampleRate))
-        out.write(intToBytes(byteRate))
-        out.write(shortToBytes(blockAlign))
-        out.write(shortToBytes(bitsPerSample))
+        write("fmt ".toByteArray())
+        write(intToBytes(16)) // Subchunk1Size
+        write(shortToBytes(1)) // AudioFormat (1 = PCM)
+        write(shortToBytes(channels))
+        write(intToBytes(sampleRate))
+        write(intToBytes(byteRate))
+        write(shortToBytes(blockAlign))
+        write(shortToBytes(bitsPerSample))
 
         // data chunk
-        out.write("data".toByteArray())
-        out.write(intToBytes(dataSize))
+        write("data".toByteArray())
+        write(intToBytes(dataSize))
     }
 
     private fun intToBytes(value: Int): ByteArray {
@@ -1039,6 +980,10 @@ class VoiceChatSession(
         
         @Volatile
         private var forceStop = false
+
+        fun requestStop() {
+            forceStop = true
+        }
         
         fun start() {
             // 【关键修复】立即启动播放
@@ -1053,12 +998,23 @@ class VoiceChatSession(
         }
         
         fun forceStop() {
-            forceStop = true
+            requestStop()
+            val track = takeAudioTrack()
             try {
-                audioTrack?.pause()
-                audioTrack?.flush()
-                audioTrack?.stop()
-            } catch (_: Throwable) {}
+                track?.pause()
+                track?.flush()
+                track?.stop()
+            } catch (_: Throwable) {
+            } finally {
+                try {
+                    track?.release()
+                } catch (_: Throwable) {
+                }
+            }
+        }
+
+        private fun takeAudioTrack(): AudioTrack? = synchronized(this) {
+            audioTrack.also { audioTrack = null }
         }
         
         suspend fun write(data: ByteArray) {
@@ -1066,7 +1022,7 @@ class VoiceChatSession(
             val track = audioTrack ?: return
             
             // 计算音量并回调 (使用原始 Mono 数据计算)
-            val currentTime = System.currentTimeMillis()
+            val currentTime = SystemClock.elapsedRealtime()
             if (onVolumeChanged != null && currentTime - lastVolumeUpdateTime >= 50) {
                 lastVolumeUpdateTime = currentTime
                 
@@ -1085,7 +1041,7 @@ class VoiceChatSession(
                     val rms = kotlin.math.sqrt(sum / sampleCount)
                     val normalizedVolume = (rms / 2000.0).coerceIn(0.0, 1.0).toFloat()
                     withContext(Dispatchers.Main) {
-                        onVolumeChanged?.invoke(normalizedVolume)
+                        onVolumeChanged.invoke(normalizedVolume)
                     }
                 }
             }
@@ -1165,12 +1121,11 @@ class VoiceChatSession(
             }
         }
         
-        fun close() {
+        suspend fun close() {
+            val track = takeAudioTrack() ?: return
             try {
-                val track = audioTrack ?: return
                 if (forceStop) {
                     Log.i("StreamAudioPlayer", "Playback force stopped by user")
-                    track.release()
                     return
                 }
                 // 【关键修复】写入静音 Padding
@@ -1187,7 +1142,7 @@ class VoiceChatSession(
                 } catch (e: Exception) {
                     Log.w("StreamAudioPlayer", "Failed to write padding", e)
                 }
-                // 阻塞等待播放完成
+                // 挂起等待播放完成，避免占用协程调度线程。
                 // Stereo 模式下: 1 frame = 2 channels * 16bit = 4 bytes
                 val totalFrames = totalWrittenBytes / 4
                 var waitedMs = 0
@@ -1207,7 +1162,7 @@ class VoiceChatSession(
                         if (track.playState != AudioTrack.PLAYSTATE_PLAYING) {
                             try { track.play() } catch (_: Exception) {}
                         }
-                        Thread.sleep(50)
+                        kotlinx.coroutines.delay(50)
                         startupWaitMs += 50
                     }
                     
@@ -1232,20 +1187,26 @@ class VoiceChatSession(
                             lastPosition = currentPosition
                             positionStuckCount = 0
                         }
-                        Thread.sleep(50)
+                        kotlinx.coroutines.delay(50)
                         waitedMs += 50
                     }
                 }
                 if (waitedMs >= timeoutMs) {
                     Log.w("StreamAudioPlayer", "Playback wait timed out. Final pos: ${track.playbackHeadPosition} / $totalFrames")
                 }
-                // 3. 释放资源
-                track.stop()
-                track.release()
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.w("StreamAudioPlayer", "Error closing AudioTrack", e)
             } finally {
-                audioTrack = null
+                try {
+                    track.stop()
+                } catch (_: Throwable) {
+                }
+                try {
+                    track.release()
+                } catch (_: Throwable) {
+                }
             }
         }
     }
@@ -1318,40 +1279,10 @@ private class SafeByteArrayOutputStream(
 class VoiceRecognitionException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
 /**
- * 语音处理异常
- */
-class VoiceProcessingException(message: String, cause: Throwable? = null) : Exception(message, cause)
-
-/**
  * 语音对话结果
  */
 data class VoiceChatResult(
     val userText: String,
     val assistantText: String,
-    val audioData: ByteArray,
-    val audioFormat: String = "audio/pcm",
-    val sampleRate: Int = 24000,
-    val isRealtimeMode: Boolean = false
-) {
-    override fun equals(other: Any?): Boolean {
-        if (this === other) return true
-        if (javaClass != other?.javaClass) return false
-        other as VoiceChatResult
-        return userText == other.userText && 
-               assistantText == other.assistantText && 
-               audioData.contentEquals(other.audioData) && 
-               audioFormat == other.audioFormat && 
-               sampleRate == other.sampleRate && 
-               isRealtimeMode == other.isRealtimeMode
-    }
-
-    override fun hashCode(): Int {
-        var result = userText.hashCode()
-        result = 31 * result + assistantText.hashCode()
-        result = 31 * result + audioData.contentHashCode()
-        result = 31 * result + audioFormat.hashCode()
-        result = 31 * result + sampleRate
-        result = 31 * result + isRealtimeMode.hashCode()
-        return result
-    }
-}
+    val hasAudio: Boolean,
+)

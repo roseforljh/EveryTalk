@@ -13,6 +13,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import androidx.core.content.edit
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.VoiceBackendConfig
 import com.android.everytalk.statecontroller.AppViewModel
@@ -317,14 +318,14 @@ fun VoiceSettingsDialog(
                         if (newModel.isNotBlank() && !customModels.contains(newModel)) {
                             val newList = customModels + newModel.trim()
                             customModels = newList
-                            uiPrefs.edit().putString(customModelsKey, newList.joinToString(",")).apply()
+                            uiPrefs.edit { putString(customModelsKey, newList.joinToString(",")) }
                             chatModel = newModel.trim()
                         }
                     },
                     onRemoveModel = { modelToRemove ->
                         val newList = customModels - modelToRemove
                         customModels = newList
-                        uiPrefs.edit().putString(customModelsKey, newList.joinToString(",")).apply()
+                        uiPrefs.edit { putString(customModelsKey, newList.joinToString(",")) }
                         if (chatModel == modelToRemove) {
                             chatModel = ""
                         }

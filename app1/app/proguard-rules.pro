@@ -39,7 +39,6 @@
 
 # 自定义序列化器 - 必须完整保留
 -keep class com.android.everytalk.data.network.AnySerializer { *; }
--keep class com.android.everytalk.data.network.ApiMessageSerializer { *; }
 -keep class com.android.everytalk.util.*Serializer { *; }
 
 # ===== Ktor Client (精简版) =====

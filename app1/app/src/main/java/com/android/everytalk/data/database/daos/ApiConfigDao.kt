@@ -5,6 +5,7 @@ import androidx.room.Delete
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Transaction
 import com.android.everytalk.data.database.entities.ApiConfigEntity
 import com.android.everytalk.data.database.entities.VoiceBackendConfigEntity
 
@@ -18,6 +19,12 @@ interface ApiConfigDao {
 
     @Query("DELETE FROM api_configs WHERE isImageGenConfig = :isImageGen")
     suspend fun clearConfigs(isImageGen: Boolean)
+
+    @Transaction
+    suspend fun replaceConfigs(isImageGen: Boolean, configs: List<ApiConfigEntity>) {
+        clearConfigs(isImageGen)
+        if (configs.isNotEmpty()) insertConfigs(configs)
+    }
 }
 
 @Dao
@@ -30,4 +37,10 @@ interface VoiceConfigDao {
 
     @Query("DELETE FROM voice_backend_configs")
     suspend fun clearAll()
+
+    @Transaction
+    suspend fun replaceAll(configs: List<VoiceBackendConfigEntity>) {
+        clearAll()
+        if (configs.isNotEmpty()) insertAll(configs)
+    }
 }

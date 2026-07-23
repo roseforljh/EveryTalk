@@ -14,17 +14,38 @@ import io.ktor.utils.io.*
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.*
-import kotlinx.coroutines.NonCancellable
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CancellationException
 
 object OpenAIResponsesClient {
     private const val TAG = "OpenAIResponsesClient"
     private const val MAX_TOOL_LOOPS = 50
 
     private var mcpToolExecutor: (suspend (String, JsonObject, suspend (String?) -> Unit) -> JsonElement)? = null
+    private var mcpToolExecutorOwner: Any? = null
 
-    fun setMcpToolExecutor(executor: (suspend (String, JsonObject, suspend (String?) -> Unit) -> JsonElement)?) {
+    @Synchronized
+    fun setMcpToolExecutor(
+        owner: Any,
+        executor: (suspend (String, JsonObject, suspend (String?) -> Unit) -> JsonElement)?,
+    ) {
+        mcpToolExecutorOwner = owner
         mcpToolExecutor = executor
+    }
+
+    @Synchronized
+    fun setMcpToolExecutor(
+        executor: (suspend (String, JsonObject, suspend (String?) -> Unit) -> JsonElement)?,
+    ) {
+        mcpToolExecutorOwner = null
+        mcpToolExecutor = executor
+    }
+
+    @Synchronized
+    fun clearMcpToolExecutor(owner: Any) {
+        if (mcpToolExecutorOwner === owner) {
+            mcpToolExecutorOwner = null
+            mcpToolExecutor = null
+        }
     }
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -32,6 +53,7 @@ object OpenAIResponsesClient {
         client: HttpClient,
         request: ChatRequest
     ): Flow<AppStreamEvent> = channelFlow {
+        var terminalSent = false
         try {
             Log.i(TAG, "启动 OpenAI Responses API 模式")
 
@@ -68,8 +90,9 @@ object OpenAIResponsesClient {
                     configureSSERequest()
                 }.execute { response ->
                     if (!response.status.isSuccess()) {
-                        val errorBody = try { response.bodyAsText() } catch (_: Exception) { null }
+                        val errorBody = response.readErrorTextAtMost()
                         val result = NetworkUtils.handleApiError(response.status, errorBody, "OpenAI-Responses")
+                        terminalSent = true
                         send(result.error)
                         send(result.finish)
                         return@execute
@@ -89,6 +112,8 @@ object OpenAIResponsesClient {
                         }
                     )
                 }
+
+                if (terminalSent) return@channelFlow
 
                 Log.i(TAG, "循环 #$loopCount 结束, pendingToolCalls=${pendingToolCalls.size}")
 
@@ -112,10 +137,8 @@ object OpenAIResponsesClient {
                             JsonObject(emptyMap())
                         }
 
-                        val result = withContext(NonCancellable) {
-                            mcpToolExecutor!!.invoke(toolInfo.name, argsJson) { status ->
-                                send(AppStreamEvent.ExecutionStatusUpdate(status))
-                            }
+                        val result = mcpToolExecutor!!.invoke(toolInfo.name, argsJson) { status ->
+                            send(AppStreamEvent.ExecutionStatusUpdate(status))
                         }
                         Log.i(TAG, "工具 ${toolInfo.name} 执行成功")
 
@@ -130,6 +153,8 @@ object OpenAIResponsesClient {
                             put("call_id", toolInfo.callId)
                             put("output", result.toString())
                         })
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         Log.e(TAG, "工具 ${toolInfo.name} 执行失败", e)
                         conversationInput.add(buildJsonObject {
@@ -144,14 +169,20 @@ object OpenAIResponsesClient {
             }
 
             Log.i(TAG, "工具循环完成，发送 Finish")
-            send(AppStreamEvent.Finish("stop"))
+            if (!terminalSent) {
+                terminalSent = true
+                send(AppStreamEvent.Finish("stop"))
+            }
 
-        } catch (e: kotlinx.coroutines.CancellationException) {
+        } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            val result = NetworkUtils.handleConnectionError(e, "OpenAI-Responses")
-            send(result.error)
-            send(result.finish)
+            if (!terminalSent) {
+                val result = NetworkUtils.handleConnectionError(e, "OpenAI-Responses")
+                terminalSent = true
+                send(result.error)
+                send(result.finish)
+            }
         }
     }
 
@@ -299,17 +330,18 @@ object OpenAIResponsesClient {
         onToolCall: (ResponsesToolCallInfo) -> Unit,
         emitEvent: suspend (AppStreamEvent) -> Unit
     ): ResponsesParseResult {
+        val boundedChannel = BoundedSseLineReader(channel)
         val lineBuffer = StringBuilder()
-        var fullText = ""
-        var fullReasoningContent = ""
+        val fullText = StringBuilder()
+        val fullReasoningContent = StringBuilder()
         var hasToolCalls = false
 
         // 聚合 function_call 参数
         val toolCallsMap = mutableMapOf<String, Triple<String, String, StringBuilder>>() // callId -> (callId, name, args)
 
         try {
-            while (!channel.isClosedForRead) {
-                val line = channel.readLine() ?: break
+            while (true) {
+                val line = boundedChannel.readLine() ?: break
 
                 when {
                     line.isEmpty() -> {
@@ -324,7 +356,7 @@ object OpenAIResponsesClient {
                                     "response.output_text.delta" -> {
                                         val delta = event["delta"]?.jsonPrimitive?.contentOrNull ?: ""
                                         if (delta.isNotEmpty()) {
-                                            fullText += delta
+                                            fullText.append(delta)
                                             emitEvent(AppStreamEvent.Content(delta, null, ""))
                                         }
                                     }
@@ -362,7 +394,7 @@ object OpenAIResponsesClient {
                                     "response.reasoning_summary_text.delta" -> {
                                         val delta = event["delta"]?.jsonPrimitive?.contentOrNull ?: ""
                                         if (delta.isNotEmpty()) {
-                                            fullReasoningContent += delta
+                                            fullReasoningContent.append(delta)
                                             emitEvent(AppStreamEvent.Reasoning(delta))
                                         }
                                     }
@@ -387,7 +419,7 @@ object OpenAIResponsesClient {
                                                 summary.forEach { s ->
                                                     val text = (s as? JsonObject)?.get("text")?.jsonPrimitive?.contentOrNull
                                                     if (!text.isNullOrEmpty()) {
-                                                        fullReasoningContent += text
+                                                        fullReasoningContent.append(text)
                                                         emitEvent(AppStreamEvent.Reasoning(text))
                                                     }
                                                 }
@@ -403,18 +435,22 @@ object OpenAIResponsesClient {
                                             ?: event["error"]?.let { errEl ->
                                                 (errEl as? JsonObject)?.get("message")?.jsonPrimitive?.contentOrNull
                                             } ?: "Unknown error"
-                                        emitEvent(AppStreamEvent.Error(errorMsg, null))
+                                        throw IllegalStateException(errorMsg)
                                     }
                                 }
+                            } catch (e: CancellationException) {
+                                throw e
                             } catch (e: Exception) {
                                 Log.w(TAG, "解析 Responses SSE 事件失败: ${e.message}")
+                                throw e
                             }
                         }
                         lineBuffer.clear()
                     }
                     line.startsWith("data:") -> {
                         val dataContent = line.substring(5).trim()
-                        if (lineBuffer.isNotEmpty()) lineBuffer.append('\n')
+                        val separatorLength = if (lineBuffer.isNotEmpty()) 1 else 0
+                        if (separatorLength == 1) lineBuffer.append('\n')
                         lineBuffer.append(dataContent)
                     }
                     line.startsWith("event:") -> {
@@ -445,15 +481,23 @@ object OpenAIResponsesClient {
                 }
             }
 
-            if (fullText.isNotEmpty() && !hasToolCalls) {
-                emitEvent(AppStreamEvent.ContentFinal(fullText, null, null))
-            }
-
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
-            emitEvent(AppStreamEvent.Error("Responses 流解析失败: ${NetworkUtils.sanitizeMessage(e.message)}", null))
+            throw e
         }
 
-        return ResponsesParseResult(hasToolCalls = hasToolCalls, fullText = fullText, reasoningContent = fullReasoningContent)
+        val completedText = fullText.toString()
+        val completedReasoning = fullReasoningContent.toString()
+        if (completedText.isNotEmpty() && !hasToolCalls) {
+            emitEvent(AppStreamEvent.ContentFinal(completedText, null, null))
+        }
+
+        return ResponsesParseResult(
+            hasToolCalls = hasToolCalls,
+            fullText = completedText,
+            reasoningContent = completedReasoning
+        )
     }
 
     @Suppress("UNCHECKED_CAST")

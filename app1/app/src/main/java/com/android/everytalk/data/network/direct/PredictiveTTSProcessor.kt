@@ -82,10 +82,7 @@ class PredictiveTTSProcessor(
     private val outputNotify = Channel<Unit>(Channel.CONFLATED)
     
     // 活跃的任务协程
-    private val activeJobs = mutableListOf<Job>()
-    
-    // 作用域
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val activeJobs = ConcurrentHashMap.newKeySet<Job>()
     
     // 性能统计
     private var firstTaskStartTime: Long? = null
@@ -106,8 +103,15 @@ class PredictiveTTSProcessor(
      * @param text 待合成文本
      */
     suspend fun submitTask(sequenceId: Int, text: String) {
+        val task = TTSTask(sequenceId = sequenceId, text = text)
+        tasks[sequenceId] = task
+        totalTasks.updateAndGet { maxOf(it, sequenceId + 1) }
+
         if (text.isBlank()) {
             Log.d(TAG, "Skipping empty text for sequence $sequenceId")
+            task.status = TaskStatus.COMPLETED
+            task.completedEvent.complete(Unit)
+            outputNotify.trySend(Unit)
             return
         }
         
@@ -116,16 +120,16 @@ class PredictiveTTSProcessor(
             firstTaskStartTime = System.currentTimeMillis()
         }
         
-        val task = TTSTask(sequenceId = sequenceId, text = text)
-        tasks[sequenceId] = task
-        totalTasks.updateAndGet { maxOf(it, sequenceId + 1) }
-        
         val isFirst = sequenceId == 0
         Log.i(TAG, "[TTS Task $sequenceId] ${if (isFirst) "[首句] " else ""}提交任务: " +
                 "'${text.take(50)}${if (text.length > 50) "..." else ""}'")
         
         // 启动处理协程
-        val job = scope.launch {
+        // 先登记再启动，避免极短任务在加入 activeJobs 前完成而留下无效引用。
+        val job = CoroutineScope(currentCoroutineContext()).launch(
+            context = Dispatchers.IO,
+            start = CoroutineStart.LAZY,
+        ) {
             if (isFirst) {
                 processFirstTask(task)
             } else {
@@ -133,6 +137,8 @@ class PredictiveTTSProcessor(
             }
         }
         activeJobs.add(job)
+        job.invokeOnCompletion { activeJobs.remove(job) }
+        job.start()
     }
     
     /**
@@ -183,6 +189,8 @@ class PredictiveTTSProcessor(
                     Log.e(TAG, "[TTS Task 0] [首句] ✗ 失败: 重试 ${maxRetry + 1} 次后仍超时")
                 }
                 
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 task.error = e.message
                 val elapsed = System.currentTimeMillis() - startTime
@@ -249,6 +257,8 @@ class PredictiveTTSProcessor(
                         break
                     }
                     
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     task.error = e.message
                     val errorStr = e.message?.lowercase() ?: ""
@@ -389,20 +399,9 @@ class PredictiveTTSProcessor(
      * 清理资源，取消所有未完成的任务
      */
     suspend fun cleanup() {
-        // 取消所有活跃的任务
-        activeJobs.forEach { job ->
-            if (job.isActive) {
-                job.cancel()
-            }
-        }
-        
-        // 等待所有任务结束
-        activeJobs.forEach { job ->
-            try {
-                job.join()
-            } catch (_: Exception) {}
-        }
-        
+        val jobs = activeJobs.toList()
+        jobs.forEach { it.cancel() }
+        jobs.joinAll()
         activeJobs.clear()
         tasks.clear()
         
@@ -410,13 +409,5 @@ class PredictiveTTSProcessor(
         outputNotify.close()
         
         Log.d(TAG, "PredictiveTTSProcessor cleaned up")
-    }
-    
-    /**
-     * 取消整个处理器
-     */
-    fun cancel() {
-        scope.cancel()
-        Log.d(TAG, "PredictiveTTSProcessor cancelled")
     }
 }

@@ -33,6 +33,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -55,7 +56,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.ui.platform.LocalLayoutDirection
@@ -75,6 +77,7 @@ import com.android.everytalk.ui.components.dialog.appDialogTextFieldBorderColor
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -250,13 +253,12 @@ fun ConversationParametersDialog(
     initialTopP: Float? = null,
     initialMaxTokens: Int? = null
 ) {
-    var temperature by remember(initialTemperature) { mutableStateOf(initialTemperature ?: 0.7f) }
-    var topP by remember(initialTopP) { mutableStateOf(initialTopP ?: 1.0f) }
+    var temperature by remember(initialTemperature) { mutableFloatStateOf(initialTemperature ?: 0.7f) }
+    var topP by remember(initialTopP) { mutableFloatStateOf(initialTopP ?: 1.0f) }
     var useCustomMaxTokens by remember(initialMaxTokens) { mutableStateOf(initialMaxTokens != null) }
     var maxTokens by remember(initialMaxTokens) { mutableStateOf(initialMaxTokens?.toString() ?: "64000") }
 
-        val configuration = LocalConfiguration.current
-    val screenHeight = configuration.screenHeightDp.dp
+    val screenHeight = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.height.toDp() }
     val dialogHeight = screenHeight * 0.67f
     val dialogBg = appDialogContainerColor()
     val contentColor = appDialogContentColor()
@@ -319,7 +321,7 @@ fun ConversationParametersDialog(
                     )
 
                     Text(
-                        "Temperature: ${String.format("%.2f", temperature)}",
+                        "Temperature: ${String.format(Locale.US, "%.2f", temperature)}",
                         fontSize = 14.sp,
                         color = contentColor,
                         fontWeight = FontWeight.SemiBold
@@ -374,7 +376,7 @@ fun ConversationParametersDialog(
                     Spacer(modifier = Modifier.height(16.dp))
 
                     Text(
-                        "Top-p: ${String.format("%.2f", topP)}",
+                        "Top-p: ${String.format(Locale.US, "%.2f", topP)}",
                         fontSize = 14.sp,
                         color = contentColor,
                         fontWeight = FontWeight.SemiBold

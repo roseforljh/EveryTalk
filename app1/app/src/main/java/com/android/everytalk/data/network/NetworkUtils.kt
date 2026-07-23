@@ -55,7 +55,7 @@ object NetworkUtils {
         apiName: String
     ): ErrorWithFinish {
         val body = errorBody ?: "(no body)"
-        Log.e(TAG, "$apiName API 错误 $statusCode: $body")
+        Log.e(TAG, "$apiName API 错误 $statusCode: bodyChars=${body.length}")
         
         val errorMessage = when {
             statusCode.value == 401 -> "$apiName: API 密钥无效或已过期"

@@ -99,7 +99,12 @@ fun EmptyImageGenerationView() {
                 Text(
                     text = ".",
                     style = style,
-                    modifier = Modifier.offset(y = with(density) { it.value.toDp() })
+                    modifier = Modifier.offset {
+                        androidx.compose.ui.unit.IntOffset(
+                            x = 0,
+                            y = with(density) { it.value.toDp().roundToPx() },
+                        )
+                    }
                 )
             }
         }

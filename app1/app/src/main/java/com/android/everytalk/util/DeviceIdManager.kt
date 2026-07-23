@@ -1,5 +1,6 @@
 package com.android.everytalk.util
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.provider.Settings
 
@@ -21,6 +22,7 @@ object DeviceIdManager {
      * @param context Android Context
      * @return 设备ID字符串
      */
+    @SuppressLint("HardwareIds")
     fun getDeviceId(context: Context): String {
         // 如果已缓存，直接返回
         if (cachedDeviceId != null) {

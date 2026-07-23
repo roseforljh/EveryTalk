@@ -22,6 +22,10 @@ object PerformanceMonitor {
 
     // Config (can be made dynamic via PerformanceConfig later)
     @Volatile var enabled: Boolean = false
+        set(value) {
+            field = value
+            if (!value) sessions.clear()
+        }
     @Volatile var tag: String = "STREAM"
     @Volatile var firstNStraightLogs: Int = 5       // first N items are logged verbosely
     @Volatile var everyMSampled: Int = 10           // then sample every Mth item
@@ -179,19 +183,17 @@ object PerformanceMonitor {
     }
 
     fun onFinish(messageId: String) {
+        val s = sessions.remove(messageId) ?: return
         if (!enabled) return
-        val s = stats(messageId)
         s.endTs = System.currentTimeMillis()
         emitSummary("SESSION_SUMMARY", s)
-        sessions.remove(messageId)
     }
 
     fun onAbort(messageId: String, reason: String) {
+        val s = sessions.remove(messageId) ?: return
         if (!enabled) return
-        val s = stats(messageId)
         s.endTs = System.currentTimeMillis()
         emitSummary("SESSION_ABORT", s, extra = mapOf("reason" to reason))
-        sessions.remove(messageId)
     }
 
     private fun maybeEmitInterim(messageId: String) {

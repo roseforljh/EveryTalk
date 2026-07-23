@@ -56,12 +56,16 @@ import androidx.compose.material3.CardDefaults
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.graphics.Brush
@@ -95,16 +99,16 @@ fun ModelSelectionBottomSheet(
 ) {
     var searchText by remember { mutableStateOf("") }
     var showPlatformDialog by remember { mutableStateOf(false) }
-    val configuration = LocalConfiguration.current
+    val windowHeight = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.height.toDp() }
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
     
     // 滑动状态管理
     var isScrolling by remember { mutableStateOf(false) }
-    var lastScrollTime by remember { mutableStateOf(0L) }
-    var consecutiveScrollCount by remember { mutableStateOf(0) }
-    var lastScrollDirection by remember { mutableStateOf(0f) }
-    var scrollVelocityBuffer by remember { mutableStateOf(mutableListOf<Float>()) }
+    var lastScrollTime by remember { mutableLongStateOf(0L) }
+    var consecutiveScrollCount by remember { mutableIntStateOf(0) }
+    var lastScrollDirection by remember { mutableFloatStateOf(0f) }
+    val scrollVelocityBuffer = remember { mutableListOf<Float>() }
     
     // 检查列表是否在顶部
     val isAtTop by remember {
@@ -242,7 +246,7 @@ fun ModelSelectionBottomSheet(
         Column(
             modifier = Modifier
                 .padding(bottom = 12.dp)
-                .height(configuration.screenHeightDp.dp * 0.5f)
+                .height(windowHeight * 0.5f)
                 .nestedScroll(nestedScrollConnection)
         ) {
             val borderColor = if (isSystemInDarkTheme()) Color.White.copy(alpha = 0.2f) else Color.Black.copy(alpha = 0.15f)

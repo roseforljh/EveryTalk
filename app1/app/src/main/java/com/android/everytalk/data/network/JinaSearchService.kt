@@ -7,11 +7,11 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.HttpRedirect
 import io.ktor.client.plugins.HttpTimeout
-import io.ktor.client.request.get
 import io.ktor.client.request.header
-import io.ktor.client.statement.bodyAsText
+import io.ktor.client.request.prepareGet
 import io.ktor.http.HttpHeaders
 import io.ktor.http.isSuccess
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.android.everytalk.util.text.TextSanitizer
@@ -21,6 +21,7 @@ object JinaSearchService {
     private const val TAG = "JinaSearchService"
     private const val SEARCH_TIMEOUT_MS = 30_000L
     private const val DEFAULT_MAX_CONTENT_CHARS = 20_000
+    private const val MAX_SEARCH_RESPONSE_BYTES = 1L * 1024L * 1024L
 
     private val searchBaseUrl: String = BuildConfig.JINA_SEARCH_BASE_URL.trimEnd('/')
 
@@ -42,7 +43,7 @@ object JinaSearchService {
         query: String,
         maxContentChars: Int = DEFAULT_MAX_CONTENT_CHARS,
     ): Result<ExternalWebSearchResponse> = withContext(Dispatchers.IO) {
-        runCatching {
+        try {
             val trimmedQuery = query.trim()
             require(trimmedQuery.isNotBlank()) { "搜索内容不能为空" }
             require(searchBaseUrl.isNotBlank()) { "未配置 JINA_SEARCH_BASE_URL" }
@@ -51,35 +52,41 @@ object JinaSearchService {
             val searchUrl = "$searchBaseUrl/search?q=$encodedQuery"
             Log.d(TAG, "Jina Search: $searchUrl")
 
-            val response = client.get(searchUrl) {
+            val searchResponse = client.prepareGet(searchUrl) {
                 header(HttpHeaders.Accept, "application/json")
                 header("X-Return-Format", "markdown")
+            }.execute { response ->
+                if (!response.status.isSuccess()) {
+                    val errorBody = response.readErrorTextAtMost()?.take(500).orEmpty()
+                    Log.e(TAG, "Jina Search HTTP ${response.status.value}: bodyChars=${errorBody.length}")
+                    throw IllegalStateException("Jina Search 返回 HTTP ${response.status.value}: $errorBody")
+                }
+
+                val content = TextSanitizer.removeUnicodeReplacementCharacters(
+                    response.readTextAtMost(MAX_SEARCH_RESPONSE_BYTES)
+                )
+                if (content.isBlank()) {
+                    throw IllegalStateException("Jina Search 返回空内容")
+                }
+
+                val truncatedContent = if (content.length > maxContentChars) {
+                    content.take(maxContentChars).trimEnd()
+                } else {
+                    content
+                }
+
+                ExternalWebSearchResponse(
+                    provider = ExternalWebSearchProvider.TAVILY,
+                    results = parseMarkdownResults(truncatedContent),
+                )
             }
 
-            if (!response.status.isSuccess()) {
-                val errorBody = response.bodyAsText().take(500)
-                Log.e(TAG, "Jina Search HTTP ${response.status.value}: $errorBody")
-                throw IllegalStateException("Jina Search 返回 HTTP ${response.status.value}: $errorBody")
-            }
-
-            val content = TextSanitizer.removeUnicodeReplacementCharacters(response.bodyAsText())
-            if (content.isBlank()) {
-                throw IllegalStateException("Jina Search 返回空内容")
-            }
-
-            val truncatedContent = if (content.length > maxContentChars) {
-                content.take(maxContentChars).trimEnd()
-            } else {
-                content
-            }
-
-            val results = parseMarkdownResults(truncatedContent)
-            ExternalWebSearchResponse(
-                provider = ExternalWebSearchProvider.TAVILY,
-                results = results,
-            )
-        }.onFailure {
-            Log.e(TAG, "Jina Search 失败", it)
+            Result.success(searchResponse)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Jina Search 失败", e)
+            Result.failure(e)
         }
     }
 

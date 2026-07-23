@@ -4,8 +4,19 @@ import android.net.Uri
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.components.MarkdownPart
 import kotlinx.serialization.Serializable
+import java.io.File
 import java.util.UUID
 import com.android.everytalk.ui.components.MarkdownPartSerializer
+
+private fun SelectedMediaItem.ImageFromBitmap.encodedDataOrNull(
+    uriEncoder: (Uri) -> String?,
+): String? = bitmapData.takeIf { it.isNotBlank() }
+    ?: filePath
+        ?.takeIf { it.isNotBlank() }
+        ?.let(::File)
+        ?.takeIf { it.isFile && it.length() > 0L }
+        ?.let { uriEncoder(Uri.fromFile(it)) }
+        ?.takeIf { it.isNotBlank() }
 
 @Serializable
 enum class Sender {
@@ -71,17 +82,8 @@ data class Message(
                         }
                     }
                     is SelectedMediaItem.ImageFromBitmap -> {
-                        // 处理Bitmap类型的图片
-                        mediaItem.bitmap?.let { bitmap ->
-                            // 将Bitmap转为base64
-                            val baos = java.io.ByteArrayOutputStream()
-                            val format = if (mediaItem.mimeType.contains("png")) 
-                                android.graphics.Bitmap.CompressFormat.PNG 
-                            else 
-                                android.graphics.Bitmap.CompressFormat.JPEG
-                            bitmap.compress(format, 90, baos)
-                            val base64 = android.util.Base64.encodeToString(baos.toByteArray(), android.util.Base64.NO_WRAP)
-                            parts.add(ApiContentPart.InlineData(base64Data = base64, mimeType = mediaItem.mimeType))
+                        mediaItem.encodedDataOrNull(uriEncoder)?.let { bitmapData ->
+                            parts.add(ApiContentPart.InlineData(base64Data = bitmapData, mimeType = mediaItem.mimeType))
                         }
                     }
                     is SelectedMediaItem.GenericFile -> {
@@ -120,17 +122,8 @@ data class Message(
                         }
                     }
                     is SelectedMediaItem.ImageFromBitmap -> {
-                        // 处理Bitmap类型的图片
-                        mediaItem.bitmap?.let { bitmap ->
-                            // 将Bitmap转为base64
-                            val baos = java.io.ByteArrayOutputStream()
-                            val format = if (mediaItem.mimeType.contains("png")) 
-                                android.graphics.Bitmap.CompressFormat.PNG 
-                            else 
-                                android.graphics.Bitmap.CompressFormat.JPEG
-                            bitmap.compress(format, 90, baos)
-                            val base64 = android.util.Base64.encodeToString(baos.toByteArray(), android.util.Base64.NO_WRAP)
-                            parts.add(ApiContentPart.InlineData(base64Data = base64, mimeType = mediaItem.mimeType))
+                        mediaItem.encodedDataOrNull(uriEncoder)?.let { bitmapData ->
+                            parts.add(ApiContentPart.InlineData(base64Data = bitmapData, mimeType = mediaItem.mimeType))
                         }
                     }
                     is SelectedMediaItem.GenericFile -> {

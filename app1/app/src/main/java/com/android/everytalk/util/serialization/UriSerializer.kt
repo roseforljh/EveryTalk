@@ -1,6 +1,7 @@
 package com.android.everytalk.util.serialization
 
 import android.net.Uri
+import androidx.core.net.toUri
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.descriptors.PrimitiveKind
@@ -34,7 +35,7 @@ object UriSerializer : KSerializer<Uri> {
         return try {
             // Parse the string back to a Uri object.
             // If parsing results in null (for certain invalid inputs), default to Uri.EMPTY.
-            Uri.parse(uriString) ?: Uri.EMPTY
+            uriString.toUri()
         } catch (e: Exception) {
             // Wrap any parsing exceptions in a more informative SerializationException.
             throw SerializationException("Invalid URI format: '$uriString'", e)

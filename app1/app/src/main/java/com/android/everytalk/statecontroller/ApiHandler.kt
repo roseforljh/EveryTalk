@@ -36,6 +36,7 @@ import java.security.MessageDigest
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.CancellationException
+import java.util.concurrent.ConcurrentHashMap
 
 @Serializable
 private data class BackendErrorContent(val message: String? = null, val code: Int? = null)
@@ -177,18 +178,16 @@ class ApiHandler(
     private val historyManager: HistoryManager,
     private val onAiMessageFullTextChanged: (messageId: String, currentFullText: String) -> Unit,
     private val triggerScrollToBottom: () -> Unit,
-    private val executeMcpTool: (suspend (toolName: String, arguments: kotlinx.serialization.json.JsonObject) -> kotlinx.serialization.json.JsonElement)? = null,
-    private val isMcpTool: (toolName: String) -> Boolean = { false }
 ) {
     private val logger = AppLogger.forComponent("ApiHandler")
     private val jsonParserForError = Json { ignoreUnknownKeys = true }
     // 为每个会话创建独立的MessageProcessor实例，确保会话隔离
-    private val messageProcessorMap = mutableMapOf<String, MessageProcessor>()
-    private val processedMessageIds = mutableSetOf<String>()
-    private val generatedImageSourceFingerprints = mutableMapOf<String, MutableSet<String>>()
+    private val messageProcessorMap = ConcurrentHashMap<String, MessageProcessor>()
+    private val processedMessageIds = ConcurrentHashMap.newKeySet<String>()
+    private val generatedImageSourceFingerprints = ConcurrentHashMap<String, MutableSet<String>>()
     
     // 🛡️ 防 prompt 泄露：为每个消息创建独立的流式检测器
-    private val promptLeakDetectors = mutableMapOf<String, PromptLeakGuard.StreamingDetector>()
+    private val promptLeakDetectors = ConcurrentHashMap<String, PromptLeakGuard.StreamingDetector>()
 
     private val USER_CANCEL_PREFIX = "USER_CANCELLED:"
     private val NEW_STREAM_CANCEL_PREFIX = "NEW_STREAM_INITIATED:"
@@ -196,7 +195,7 @@ class ApiHandler(
     
     // 🎯 Retry mechanism configuration (Requirements: 7.3)
     private val MAX_RETRY_ATTEMPTS = 3
-    private val retryCountMap = mutableMapOf<String, Int>()
+    private val retryCountMap = ConcurrentHashMap<String, Int>()
 
     /**
      * 预先创建 AI 占位消息并设置流式状态，用于在正式 API 请求开始前（如执行外部搜索时）提供即时 UI 反馈
@@ -313,9 +312,7 @@ class ApiHandler(
             messageProcessorMap.remove(messageIdBeingCancelled)
             // 🛡️ 清理 prompt 泄露检测器
             promptLeakDetectors.remove(messageIdBeingCancelled)
-            synchronized(generatedImageSourceFingerprints) {
-                generatedImageSourceFingerprints.remove(messageIdBeingCancelled)
-            }
+            generatedImageSourceFingerprints.remove(messageIdBeingCancelled)
         }
 
         if (messageIdBeingCancelled != null) {
@@ -685,6 +682,13 @@ class ApiHandler(
                     logger.warn("Clear StreamingBuffer in finally block failed: ${e.message}")
                 }
 
+                // 流结束后这些对象不再参与后续消息处理，及时释放，避免长会话按消息累积。
+                messageProcessorMap.remove(aiMessageId)
+                processedMessageIds.remove(aiMessageId)
+                promptLeakDetectors.remove(aiMessageId)
+                generatedImageSourceFingerprints.remove(aiMessageId)
+                retryCountMap.remove(aiMessageId)
+
                 val currentJob = if (isImageGeneration) stateHolder.imageApiJob else stateHolder.textApiJob
                 if (currentJob == thisJob) {
                     if (isImageGeneration) {
@@ -725,10 +729,10 @@ class ApiHandler(
             digest.update(source.toByteArray(Charsets.UTF_8))
         }
         val fingerprint = digest.digest().joinToString("") { byte -> "%02x".format(byte) }
-        return synchronized(generatedImageSourceFingerprints) {
-            val fingerprints = generatedImageSourceFingerprints.getOrPut(messageId) { linkedSetOf() }
-            if (!fingerprints.add(fingerprint)) null else fingerprints.size - 1
+        val fingerprints = generatedImageSourceFingerprints.computeIfAbsent(messageId) {
+            ConcurrentHashMap.newKeySet()
         }
+        return if (!fingerprints.add(fingerprint)) null else fingerprints.size - 1
     }
 
     private suspend fun prepareGeneratedImage(
@@ -764,9 +768,7 @@ class ApiHandler(
 
 private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: String, isImageGeneration: Boolean = false) {
         // 获取当前消息ID对应的处理器和块管理器，若不存在则创建并加入映射
-        val currentMessageProcessor = synchronized(messageProcessorMap) {
-            messageProcessorMap.getOrPut(aiMessageId) { MessageProcessor() }
-        }
+        val currentMessageProcessor = messageProcessorMap.computeIfAbsent(aiMessageId) { MessageProcessor() }
         val preparedGeneratedImage = generatedImageSource(appEvent)?.let { source ->
             prepareGeneratedImage(source, aiMessageId)
         }
@@ -843,7 +845,9 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                         // 过滤纯空白内容，防止后端发送大量空格导致卡死
                         if (!deltaChunk.isNullOrEmpty() && deltaChunk.isNotBlank()) {
                             // 🛡️ 防 prompt 泄露：通过检测器过滤
-                            val leakDetector = promptLeakDetectors.getOrPut(aiMessageId) { PromptLeakGuard.StreamingDetector() }
+                            val leakDetector = promptLeakDetectors.computeIfAbsent(aiMessageId) {
+                                PromptLeakGuard.StreamingDetector()
+                            }
                             val filteredChunk = leakDetector.appendAndCheck(deltaChunk)
                             if (filteredChunk.isEmpty()) {
                                 logger.warn("🛡️ Blocked content chunk due to prompt leak detection for message $aiMessageId")
@@ -912,7 +916,9 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                         // 过滤纯空白内容
                         if (!deltaChunk.isNullOrEmpty() && deltaChunk.isNotBlank()) {
                             // 🛡️ 防 prompt 泄露：通过检测器过滤
-                            val leakDetector = promptLeakDetectors.getOrPut(aiMessageId) { PromptLeakGuard.StreamingDetector() }
+                            val leakDetector = promptLeakDetectors.computeIfAbsent(aiMessageId) {
+                                PromptLeakGuard.StreamingDetector()
+                            }
                             val filteredChunk = leakDetector.appendAndCheck(deltaChunk)
                             if (filteredChunk.isEmpty()) {
                                 logger.warn("🛡️ Blocked text chunk due to prompt leak detection for message $aiMessageId")
@@ -1130,10 +1136,6 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     OpenClawRuntimeState.current()?.sessionKey?.let { sessionKey ->
                         OpenClawRuntimeState.update(sessionKey = sessionKey, runId = null)
                     }
-                    
-                    // 🔥 正确的修复：不要删除处理器！让它保留在内存中
-                    // 处理器会在清理资源时被正确管理，不需要在这里删除
-                    logger.debug("Message processor for $aiMessageId retained after stream completion")
                     
                     // 按用户期望：不要在 finish 事件处强制切 isStreaming=false
                     // 说明：
@@ -1512,9 +1514,7 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
             }
             // 🛡️ 清理 prompt 泄露检测器
             promptLeakDetectors.remove(messageId)
-            synchronized(generatedImageSourceFingerprints) {
-                generatedImageSourceFingerprints.remove(messageId)
-            }
+            generatedImageSourceFingerprints.remove(messageId)
         }
         
         // 清理已处理的消息ID集合
@@ -1574,9 +1574,7 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
             }
             // 🛡️ 清理 prompt 泄露检测器
             promptLeakDetectors.remove(messageId)
-            synchronized(generatedImageSourceFingerprints) {
-                generatedImageSourceFingerprints.remove(messageId)
-            }
+            generatedImageSourceFingerprints.remove(messageId)
         }
         
         // 清理已处理的消息ID集合
@@ -1671,9 +1669,7 @@ private suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: St
                     removedCount++
                 }
                 promptLeakDetectors.remove(messageId)
-                synchronized(generatedImageSourceFingerprints) {
-                    generatedImageSourceFingerprints.remove(messageId)
-                }
+                generatedImageSourceFingerprints.remove(messageId)
             }
             
             // 清理已处理的消息ID集合

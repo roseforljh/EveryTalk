@@ -6,23 +6,22 @@ import androidx.compose.runtime.remember
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.network.VoiceChatSession
-import com.android.everytalk.data.network.VoiceChatResult
-import com.android.everytalk.data.network.direct.AliyunSttConnectionManager
+import com.android.everytalk.data.network.RecordingStopReason
 import com.android.everytalk.statecontroller.AppViewModel
-import io.ktor.client.*
-import io.ktor.client.engine.okhttp.OkHttp
-import io.ktor.client.plugins.*
-import io.ktor.client.plugins.contentnegotiation.*
-import io.ktor.client.plugins.websocket.*
-import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.Json
-import java.util.concurrent.CancellationException
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+
+internal fun ownsProcessingSlot(activeJob: Job?, finishingJob: Job): Boolean = activeJob === finishingJob
 
 /**
  * 语音会话控制器
@@ -45,94 +44,31 @@ class VoiceSessionController(
     // 确保 viewModel 不为空，或者在调用处保证。如果为空，这里会抛出异常，但在 Compose 预览中可能需要处理。
     // 实际运行时 viewModel 应该总是存在的。
     private val configManager = VoiceConfigManager(context, viewModel!!.stateHolder)
-    private var preconnectJob: Job? = null
-    
-    // 共享的 Ktor 客户端（用于预连接和录音）
-    private val sharedKtorClient: HttpClient by lazy {
-        HttpClient(OkHttp) {
-            engine {
-                config {
-                    connectTimeout(30, TimeUnit.SECONDS)
-                    readTimeout(300, TimeUnit.SECONDS)
-                    writeTimeout(120, TimeUnit.SECONDS)
-                }
-            }
-            install(ContentNegotiation) {
-                json(Json {
-                    ignoreUnknownKeys = true
-                    isLenient = true
-                })
-            }
-            install(HttpTimeout) {
-                requestTimeoutMillis = 10 * 60 * 1000  // 10分钟，用于长时间的 TTS 流式响应
-                connectTimeoutMillis = 60_000
-                socketTimeoutMillis = 5 * 60 * 1000   // 5分钟，避免僵死连接
-            }
-            install(WebSockets) {
-                pingIntervalMillis = 30_000
-            }
-        }
-    }
-    
-    private var isClientClosed = false
-    
-    /**
-     * 预连接阿里云 STT WebSocket
-     *
-     * 在用户进入聊天页面时调用，提前建立 WebSocket 连接。
-     * 这样当用户按下录音按钮时，连接已经就绪，可以立即发送音频。
-     */
-    fun preconnectSttIfNeeded() {
-        val config = configManager.loadConfig()
-        
-        // 只有启用阿里云实时 STT 时才预连接
-        if (!config.useRealtimeStreaming || !config.sttPlatform.equals("Aliyun", ignoreCase = true)) {
-            return
-        }
-        
-        // 验证配置
-        if (config.sttApiKey.isEmpty()) {
-            android.util.Log.w("VoiceSessionController", "Aliyun STT API key not configured, skipping preconnect")
-            return
-        }
-        
-        // 取消之前的预连接任务
-        preconnectJob?.cancel()
-        
-        preconnectJob = coroutineScope.launch(Dispatchers.IO) {
+    private val isClientClosed = AtomicBoolean(false)
+    private val cleanupScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    private fun cleanupInBackground(label: String, action: () -> Unit): Job =
+        cleanupScope.launch {
             try {
-                android.util.Log.i("VoiceSessionController", "Starting Aliyun STT preconnect...")
-                
-                // 初始化连接管理器
-                AliyunSttConnectionManager.initialize(sharedKtorClient)
-                
-                // 预连接（这会在后台建立 WebSocket 并等待 task-started）
-                AliyunSttConnectionManager.ensureConnected(
-                    apiKey = config.sttApiKey,
-                    model = config.sttModel.ifEmpty { "fun-asr-realtime" },
-                    sampleRate = 16000
-                )
-                
-                android.util.Log.i("VoiceSessionController", "Aliyun STT preconnect completed")
-            } catch (e: Exception) {
-                android.util.Log.e("VoiceSessionController", "Aliyun STT preconnect failed: ${e.message}", e)
+                action()
+            } catch (t: Throwable) {
+                android.util.Log.e("VoiceSessionController", label, t)
             }
+        }
+
+    private fun dispatchToUi(action: () -> Unit) {
+        if (isClientClosed.get()) return
+        coroutineScope.launch(Dispatchers.Main.immediate) {
+            if (!isClientClosed.get()) action()
         }
     }
     
-    /**
-     * 关闭预连接
-     */
-    fun shutdownPreconnect() {
-        preconnectJob?.cancel()
-        preconnectJob = null
-        AliyunSttConnectionManager.shutdown()
-    }
-    
+
     /**
      * 启动录音会话
      */
     fun startRecording() {
+        if (isClientClosed.get()) return
         // 【关键修复】在任何操作之前立即重置 WebSocket 状态
         // 这样可以清除上一次录音（可能是阿里云实时模式）的残留状态
         // 确保切换到非阿里云平台时不会显示旧的连接状态
@@ -182,10 +118,10 @@ class VoiceSessionController(
             // 传入实时 STT 配置（仅阿里云支持）
             useRealtimeStt = useRealtimeStt,
             
-            onVolumeChanged = onVolumeChanged,
-            onTranscriptionReceived = onTranscriptionReceived,
-            onResponseReceived = onResponseReceived,
-            onWebSocketStateChanged = onWebSocketStateChanged
+            onVolumeChanged = { value -> dispatchToUi { onVolumeChanged(value) } },
+            onTranscriptionReceived = { text -> dispatchToUi { onTranscriptionReceived(text) } },
+            onResponseReceived = { text -> dispatchToUi { onResponseReceived(text) } },
+            onWebSocketStateChanged = { state -> dispatchToUi { onWebSocketStateChanged(state) } },
         )
         android.util.Log.i(
             "VoiceSessionController",
@@ -199,11 +135,25 @@ class VoiceSessionController(
         
         coroutineScope.launch {
             try {
-                session.startRecording()
+                val stopReason = session.startRecording()
+                if (stopReason == RecordingStopReason.MAX_DURATION_REACHED) {
+                    withContext(Dispatchers.Main.immediate) {
+                        if (!isClientClosed.get() && currentSession === session) {
+                            stopAndProcess()
+                        }
+                    }
+                }
+            } catch (e: CancellationException) {
+                withContext(NonCancellable + Dispatchers.IO) {
+                    session.forceRelease()
+                }
+                throw e
             } catch (t: Throwable) {
                 android.util.Log.e("VoiceSessionController", "Failed to start recording", t)
-                onRecordingChanged(false)
-                currentSession = null
+                if (currentSession === session) {
+                    onRecordingChanged(false)
+                    currentSession = null
+                }
             }
         }
     }
@@ -212,23 +162,24 @@ class VoiceSessionController(
      * 停止录音并处理完整流程
      */
     fun stopAndProcess() {
+        if (processingJob?.isActive == true) return
         val session = currentSession ?: return
         
         onRecordingChanged(false)
         onVolumeChanged(0f)
         onProcessingChanged(true)
         
-        processingJob = coroutineScope.launch {
+        val job = coroutineScope.launch(start = CoroutineStart.LAZY) {
+            val finishingJob = coroutineContext.job
             try {
                 val result = session.stopRecordingAndProcess()
                 
                 // 保存对话到历史
                 saveToHistory(result.userText, result.assistantText)
                 
-                // 检查是否有音频（实时模式下音频是边播边放的，audioData 为空是正常的）
-                val hasAudio = result.audioData.isNotEmpty() || result.isRealtimeMode
+                val hasAudio = result.hasAudio
                 android.util.Log.i("VoiceSessionController",
-                    "Voice chat completed - User: '${result.userText}', AI: '${result.assistantText}', HasAudio: $hasAudio, IsRealtimeMode: ${result.isRealtimeMode}")
+                    "Voice chat completed - User: '${result.userText}', AI: '${result.assistantText}', HasAudio: $hasAudio")
                 
                 // 只有在非实时模式且没有音频数据时才显示 TTS 配额警告
                 if (!hasAudio) {
@@ -242,7 +193,7 @@ class VoiceSessionController(
                 android.util.Log.i("VoiceSessionController", "Voice chat saved to history")
             } catch (e: CancellationException) {
                 android.util.Log.i("VoiceSessionController", "Processing cancelled")
-                // 取消时不显示错误
+                throw e
             } catch (t: Throwable) {
                 android.util.Log.e("VoiceSessionController", "Voice chat failed", t)
                 onTranscriptionReceived("")
@@ -263,10 +214,14 @@ class VoiceSessionController(
                 if (currentSession === session) {
                     currentSession = null
                 }
-                onProcessingChanged(false)
-                processingJob = null
+                if (ownsProcessingSlot(processingJob, finishingJob)) {
+                    processingJob = null
+                    onProcessingChanged(false)
+                }
             }
         }
+        processingJob = job
+        job.start()
     }
     
     /**
@@ -277,13 +232,18 @@ class VoiceSessionController(
         val session = currentSession
         
         // 如果正在处理中，取消处理任务
-        if (processingJob?.isActive == true) {
-            processingJob?.cancel()
+        processingJob?.let { job ->
             processingJob = null
+            job.cancel()
+            onProcessingChanged(false)
         }
         
-        // 使用保存的引用停止音频播放
-        session?.stopPlayback()
+        session?.requestStopPlayback()
+        if (session != null) {
+            cleanupInBackground("Stop playback failed") {
+                session.stopPlayback()
+            }
+        }
     }
     
     /**
@@ -298,26 +258,43 @@ class VoiceSessionController(
         onResponseReceived("")
         
         // 取消正在进行的处理任务
-        processingJob?.cancel()
-        processingJob = null
+        processingJob?.let { job ->
+            processingJob = null
+            job.cancel()
+            onProcessingChanged(false)
+        }
         
         coroutineScope.launch {
             try {
                 session.cancelRecording()
+            } catch (e: CancellationException) {
+                throw e
             } catch (t: Throwable) {
                 android.util.Log.e("VoiceSessionController", "Cancel recording failed", t)
             } finally {
-                currentSession = null
+                if (currentSession === session) {
+                    currentSession = null
+                }
             }
         }
     }
     
-    /**
-     * 强制释放资源
-     */
-    fun forceRelease() {
-        currentSession?.forceRelease()
+    fun close() {
+        if (!isClientClosed.compareAndSet(false, true)) return
+        processingJob?.let { job ->
+            processingJob = null
+            job.cancel()
+        }
+        val session = currentSession
         currentSession = null
+        session?.requestStopPlayback()
+        if (session != null) {
+            cleanupInBackground("Force release failed") {
+                session.forceRelease()
+            }.invokeOnCompletion { cleanupScope.cancel() }
+        } else {
+            cleanupScope.cancel()
+        }
     }
     
     /**

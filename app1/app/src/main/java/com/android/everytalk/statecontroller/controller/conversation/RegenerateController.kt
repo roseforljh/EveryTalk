@@ -7,6 +7,7 @@ import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.statecontroller.ApiHandler
 import com.android.everytalk.statecontroller.ViewModelStateHolder
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -132,6 +133,8 @@ class RegenerateController(
                             scope.launch {
                                 try {
                                     persistenceDeleteMediaFor(listOf(messagesToRemove))
+                                } catch (e: CancellationException) {
+                                    throw e
                                 } catch (e: Exception) {
                                     Log.w("RegenerateController", "删除媒体失败: ${e.message}")
                                 }

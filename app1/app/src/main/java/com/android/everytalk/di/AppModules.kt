@@ -1,14 +1,8 @@
 package com.android.everytalk.di
 
-import com.android.everytalk.data.database.AppDatabase
-import com.android.everytalk.data.repository.MessageRepository
+import com.android.everytalk.data.network.MAX_WEBSOCKET_FRAME_BYTES
 import com.android.everytalk.provider.ProviderRegistry
-import com.android.everytalk.service.ChatService
-import com.android.everytalk.service.ChatServiceImpl
-import com.android.everytalk.statecontroller.StreamingMessageStateManager
-import com.android.everytalk.statecontroller.ViewModelStateHolder
 import com.android.everytalk.ui.components.math.MathJaxSvgRenderer
-import com.android.everytalk.util.cache.CacheManager
 import com.android.everytalk.util.storage.FileManager
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
@@ -35,6 +29,7 @@ val networkModule = module {
             }
             install(WebSockets) {
                 pingIntervalMillis = 30_000
+                maxFrameSize = MAX_WEBSOCKET_FRAME_BYTES
             }
         }
     }
@@ -42,34 +37,12 @@ val networkModule = module {
     single { ProviderRegistry(androidContext(), get()) }
 }
 
-val dataModule = module {
-    single { AppDatabase.getDatabase(androidContext()) }
-    single { get<AppDatabase>().apiConfigDao() }
-    single { get<AppDatabase>().voiceConfigDao() }
-    single { get<AppDatabase>().chatDao() }
-    single { get<AppDatabase>().settingsDao() }
-    single { MessageRepository(get()) }
-}
-
-val cacheModule = module {
-    single { CacheManager.getInstance(androidContext()) }
+val appModule = module {
     single { FileManager(androidContext()) }
-}
-
-val serviceModule = module {
-    single<ChatService> { ChatServiceImpl(androidContext()) }
-    single { StreamingMessageStateManager() }
     single { MathJaxSvgRenderer(androidContext()) }
-}
-
-val stateModule = module {
-    single { ViewModelStateHolder() }
 }
 
 val allModules = listOf(
     networkModule,
-    dataModule,
-    cacheModule,
-    serviceModule,
-    stateModule
+    appModule,
 )

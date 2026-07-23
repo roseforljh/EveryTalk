@@ -1,8 +1,6 @@
 package com.android.everytalk.ui.screens.MainScreen
 
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -35,8 +33,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.input.pointer.pointerInput
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.LinkAnnotation
@@ -312,7 +310,6 @@ fun ChatScreen(
     val conversationId by viewModel.currentConversationId.collectAsState()
     val latestReleaseInfo by viewModel.latestReleaseInfo.collectAsState()
     val updateInfo by viewModel.updateInfo.collectAsState()
-    val mcpUiStage by viewModel.mcpUiStage.collectAsState()
     val systemPrompt by viewModel.systemPrompt.collectAsState()
     val isSystemPromptEngaged by viewModel.isSystemPromptEngaged.collectAsState()
     val isSystemPromptExpanded by remember(conversationId) {
@@ -411,8 +408,14 @@ fun ChatScreen(
         previousConversationIdForScroll = conversationId
     }
 
+    val restoredScrollState = remember(scrollSessionKey) {
+        viewModel.getScrollState(scrollSessionKey)?.takeIf { it.userScrolledAway }
+    }
     val listState = remember(scrollSessionKey) {
-        LazyListState(0, 0)
+        LazyListState(
+            firstVisibleItemIndex = restoredScrollState?.firstVisibleItemIndex ?: 0,
+            firstVisibleItemScrollOffset = restoredScrollState?.firstVisibleItemScrollOffset ?: 0,
+        )
     }
     val scrollStateManager = rememberChatScrollStateManager(listState, coroutineScope)
 
@@ -467,12 +470,20 @@ fun ChatScreen(
             )
             if (!stillReady) continue
 
-            val targetIndex = listState.layoutInfo.totalItemsCount - 1
-            if (targetIndex >= 0) {
-                listState.scrollToItem(targetIndex)
-                listState.scrollBy(Float.MAX_VALUE)
+            val lastIndex = listState.layoutInfo.totalItemsCount - 1
+            if (lastIndex >= 0) {
+                val savedState = restoredScrollState
+                if (savedState != null) {
+                    listState.scrollToItem(
+                        index = savedState.firstVisibleItemIndex.coerceIn(0, lastIndex),
+                        scrollOffset = savedState.firstVisibleItemScrollOffset.coerceAtLeast(0),
+                    )
+                } else {
+                    listState.scrollToItem(lastIndex)
+                    listState.scrollBy(Float.MAX_VALUE)
+                    scrollStateManager.pinToRealBottomUntilUserScroll()
+                }
             }
-            scrollStateManager.pinToRealBottomUntilUserScroll()
             if (shouldClearHistoryLoadingOverlay(
                     completedGeneration = readyToken.first,
                     currentGeneration = historyLoadGenerationState.value,
@@ -487,11 +498,12 @@ fun ChatScreen(
     }
 
     val density = LocalDensity.current
-    val configuration = LocalConfiguration.current
+    val windowSize = LocalWindowInfo.current.containerSize
     val keyboardController = LocalSoftwareKeyboardController.current
 
 
     val isAtBottom by scrollStateManager.isAtBottom
+    val isAtBottomState = rememberUpdatedState(isAtBottom)
     
     LaunchedEffect(scrollStateManager, currentStreamingAiMessageId) {
         val isCurrentlyStreaming = currentStreamingAiMessageId != null
@@ -520,7 +532,7 @@ fun ChatScreen(
                         ConversationScrollState(
                             firstVisibleItemIndex = index,
                             firstVisibleItemScrollOffset = offset,
-                            userScrolledAway = !isAtBottom,
+                            userScrolledAway = !isAtBottomState.value,
                             firstBubbleScreenY = existing?.firstBubbleScreenY ?: -1
                         )
                     )
@@ -528,14 +540,14 @@ fun ChatScreen(
             }
     }
 
-    DisposableEffect(conversationId, isAtBottom) {
+    DisposableEffect(conversationId, listState) {
         val idToSaveFor = conversationId
         onDispose {
             val existing = viewModel.getScrollState(idToSaveFor)
             val stateToSave = ConversationScrollState(
                 firstVisibleItemIndex = listState.firstVisibleItemIndex,
                 firstVisibleItemScrollOffset = listState.firstVisibleItemScrollOffset,
-                userScrolledAway = !isAtBottom,
+                userScrolledAway = !isAtBottomState.value,
                 firstBubbleScreenY = existing?.firstBubbleScreenY ?: -1
             )
             viewModel.saveScrollState(idToSaveFor, stateToSave)
@@ -623,7 +635,7 @@ fun ChatScreen(
 
 
 
-    val screenWidth = configuration.screenWidthDp.dp
+    val screenWidth = with(density) { windowSize.width.toDp() }
     // 放宽列表传入的上限为整屏，由子项根据角色再做 60%/80% 约束
     val bubbleMaxWidth = remember(screenWidth) { screenWidth }
 
@@ -667,18 +679,6 @@ fun ChatScreen(
     val sourcesDialogTopAvoidance = calculateSourcesDialogTopAvoidance(
         topControlsBottom = topControlsBottomDp,
         statusBarHeight = statusBarHeightDp
-    )
-
-    val audioPermissionLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.RequestPermission(),
-        onResult = { isGranted ->
-            if (isGranted) {
-                // TODO: 权限授予后开始录音
-                viewModel.showSnackbar("录音权限已授予")
-            } else {
-                viewModel.showSnackbar("需要录音权限才能使用此功能")
-            }
-        }
     )
 
     Scaffold(
@@ -927,24 +927,6 @@ fun ChatScreen(
                     }
                 }
             )
-
-            mcpUiStage?.takeIf { it.userVisibleText.isNotBlank() }?.let { stage ->
-                Surface(
-                    modifier = Modifier
-                        .align(Alignment.TopCenter)
-                        .padding(top = 72.dp),
-                    shape = RoundedCornerShape(12.dp),
-                    color = MaterialTheme.colorScheme.secondaryContainer,
-                    tonalElevation = 2.dp,
-                ) {
-                    Text(
-                        text = stage.userVisibleText,
-                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSecondaryContainer,
-                    )
-                }
-            }
 
             AnimatedVisibility(
                 visible = isHistoryLoadingOverlayVisible,

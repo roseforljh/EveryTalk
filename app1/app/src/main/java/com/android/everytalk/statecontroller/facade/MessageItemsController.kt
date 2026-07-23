@@ -47,12 +47,9 @@ open class MessageItemsController(
         val items: List<ChatListItem>
     )
 
-    private val chatListItemCache = mutableMapOf<String, CacheEntry>()
-    private val imageGenerationChatListItemCache = mutableMapOf<String, CacheEntry>()
+    private val chatListItemCache = ConcurrentHashMap<String, CacheEntry>()
+    private val imageGenerationChatListItemCache = ConcurrentHashMap<String, CacheEntry>()
 
-    // 采用轻量状态机统一驱动"连接中/思考/流式/完成/错误"的展示
-    private val bubbleStateMachines = mutableMapOf<String, com.android.everytalk.ui.state.AiBubbleStateMachine>()
-    
     // 🔧 修复Loading不显示问题：记录每个消息开始流式传输的时间戳
     // 用于确保Loading状态至少显示一段时间（防止后端响应过快时跳过Connecting状态）
     private val streamingStartTimestamps = ConcurrentHashMap<String, Long>()
@@ -121,10 +118,12 @@ open class MessageItemsController(
         return computeBubbleState(message, isApiCalling, currentStreamingAiMessageId, isImageGeneration)
     }
 
-    private fun getBubbleStateMachine(messageId: String): com.android.everytalk.ui.state.AiBubbleStateMachine {
-        return bubbleStateMachines.getOrPut(messageId) {
-            com.android.everytalk.ui.state.AiBubbleStateMachine()
-        }
+    private fun retainCurrentMessageState(
+        messages: List<Message>,
+        cache: MutableMap<String, CacheEntry>,
+    ) {
+        val currentIds = messages.mapTo(HashSet(messages.size)) { it.id }
+        cache.keys.retainAll(currentIds)
     }
 
     val chatListItems: StateFlow<List<ChatListItem>> =
@@ -133,7 +132,9 @@ open class MessageItemsController(
             stateHolder._isTextApiCalling,
             stateHolder._currentTextStreamingAiMessageId,
         ) { messages, isApiCalling, currentStreamingAiMessageId ->
-            filterRenderableMessages(messages)
+            val renderableMessages = filterRenderableMessages(messages)
+            retainCurrentMessageState(renderableMessages, chatListItemCache)
+            renderableMessages
                 .map { message ->
                     when (message.sender) {
                         Sender.AI -> {
@@ -163,7 +164,7 @@ open class MessageItemsController(
 
                             val hasLoadingIndicator = cached?.items?.any { it is ChatListItem.LoadingIndicator } ?: false
                             val loadingTextMatches = if (hasLoadingIndicator && expectedStageText != null) {
-                                cached?.items?.any { it is ChatListItem.LoadingIndicator && it.text == expectedStageText } ?: false
+                                cached.items.any { it is ChatListItem.LoadingIndicator && it.text == expectedStageText }
                             } else true
                             val cachedFooter = cached?.items
                                 ?.filterIsInstance<ChatListItem.AiMessageFooter>()
@@ -201,7 +202,7 @@ open class MessageItemsController(
                                 (isCurrentlyStreaming || !hasStreamingOnlyItems || allowStreamingBlocksHashReuse)
 
                             if (cacheValid) {
-                                cached!!.items
+                                cached.items
                             } else {
                                 val newItems = createAiMessageItems(
                                     effectiveMessage,
@@ -246,7 +247,12 @@ open class MessageItemsController(
             stateHolder._isImageApiCalling,
             stateHolder._currentImageStreamingAiMessageId,
         ) { messages, isApiCalling, currentStreamingAiMessageId ->
-            filterRenderableMessages(messages)
+            val renderableMessages = filterRenderableMessages(messages)
+            retainCurrentMessageState(
+                renderableMessages,
+                imageGenerationChatListItemCache,
+            )
+            renderableMessages
                 .map { message ->
                     when (message.sender) {
                         Sender.AI -> {
@@ -265,7 +271,7 @@ open class MessageItemsController(
                             } else null
                             val hasLoadingIndicator = cached?.items?.any { it is ChatListItem.LoadingIndicator } ?: false
                             val loadingTextMatches = if (hasLoadingIndicator && expectedStageText != null) {
-                                cached?.items?.any { it is ChatListItem.LoadingIndicator && it.text == expectedStageText } ?: false
+                                cached.items.any { it is ChatListItem.LoadingIndicator && it.text == expectedStageText }
                             } else true
 
                             val cacheValid = cached != null &&
@@ -283,7 +289,7 @@ open class MessageItemsController(
                                 (isCurrentlyStreaming == (cached.items.any { it is ChatListItem.LoadingIndicator }))
 
                             if (cacheValid) {
-                                cached!!.items
+                                cached.items
                             } else {
                                 val newItems = createAiMessageItems(
                                     effectiveMessage,
@@ -379,7 +385,7 @@ open class MessageItemsController(
         val state = when {
             isCurrentStreaming && hasVisibleReasoning -> {
                 com.android.everytalk.ui.state.AiBubbleState.Reasoning(
-                    message.reasoning ?: "",
+                    message.reasoning,
                     isComplete = reasoningComplete
                 )
             }
@@ -391,7 +397,7 @@ open class MessageItemsController(
                 // 清理时间戳，因为已经开始流式输出
                 streamingStartTimestamps.remove(message.id)
                 com.android.everytalk.ui.state.AiBubbleState.Streaming(
-                    content = streamingRenderState?.content ?: message.text,
+                    content = streamingRenderState?.content.orEmpty().ifBlank { message.text },
                     hasReasoning = hasReasoning,
                     reasoningComplete = reasoningComplete
                 )
@@ -420,7 +426,6 @@ open class MessageItemsController(
         parseResult: StreamBlockParser.ParseResult? = null,
         isImageGeneration: Boolean = false
     ): List<ChatListItem> {
-        val sm = getBubbleStateMachine(message.id)
         val state = computeBubbleState(message, isApiCalling, currentStreamingAiMessageId, isImageGeneration)
         val resolvedParseResult = parseResult ?: resolveParseResult(
             message = message,
@@ -601,6 +606,7 @@ open class MessageItemsController(
             chatListItemCache.remove(messageId)
             android.util.Log.d("MessageItemsController", "Cleared TEXT cache for message: ${messageId.take(8)}")
         }
+        streamingStartTimestamps.remove(messageId)
     }
 
     /**

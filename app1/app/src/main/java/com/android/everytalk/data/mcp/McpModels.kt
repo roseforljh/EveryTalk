@@ -2,7 +2,6 @@ package com.android.everytalk.data.mcp
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 
 enum class McpTransportType {
@@ -105,33 +104,6 @@ sealed class McpInputSchema {
             is Obj -> properties
         }
     }
-}
-
-@Serializable
-data class McpToolCall(
-    val name: String,
-    val arguments: Map<String, JsonElement> = emptyMap()
-)
-
-@Serializable
-data class McpToolResult(
-    val content: List<McpContent>,
-    val isError: Boolean = false
-)
-
-@Serializable
-sealed class McpContent {
-    @Serializable
-    @SerialName("text")
-    data class Text(val text: String) : McpContent()
-
-    @Serializable
-    @SerialName("image")
-    data class Image(val data: String, val mimeType: String) : McpContent()
-
-    @Serializable
-    @SerialName("resource")
-    data class Resource(val uri: String, val mimeType: String?, val text: String?) : McpContent()
 }
 
 sealed class McpStatus {

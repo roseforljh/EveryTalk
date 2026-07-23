@@ -205,4 +205,37 @@ class StreamingMessageStateManagerRenderStateTest {
         }
         assertEquals(finalContent, subject.getCurrentRenderState(messageId).content)
     }
+
+    @Test
+    fun `完成态渲染缓存最多保留六十四条`() {
+        repeat(65) { index ->
+            val messageId = "completed-$index"
+            subject.startStreaming(messageId)
+            subject.updateContent(messageId, "content-$index")
+            subject.finalizeMessage(messageId)
+        }
+
+        val field = StreamingMessageStateManager::class.java.getDeclaredField("streamingRenderStates")
+        field.isAccessible = true
+        val renderStates = field.get(subject) as Map<*, *>
+
+        assertEquals(64, renderStates.size)
+        assertFalse(renderStates.containsKey("completed-0"))
+        assertTrue(renderStates.containsKey("completed-64"))
+    }
+
+    @Test
+    fun `历史消息渲染缓存最多保留六十四条`() {
+        repeat(65) { index ->
+            subject.getOrCreateRenderState("history-$index")
+        }
+
+        val field = StreamingMessageStateManager::class.java.getDeclaredField("streamingRenderStates")
+        field.isAccessible = true
+        val renderStates = field.get(subject) as Map<*, *>
+
+        assertEquals(64, renderStates.size)
+        assertFalse(renderStates.containsKey("history-0"))
+        assertTrue(renderStates.containsKey("history-64"))
+    }
 }

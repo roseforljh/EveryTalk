@@ -23,7 +23,9 @@ internal fun buildImagePreviewSelection(
     messages.forEach { message ->
         message.attachments.forEach { attachment ->
             val source = when (attachment) {
-                is SelectedMediaItem.ImageFromUri -> attachment.uri.toString()
+                is SelectedMediaItem.ImageFromUri -> attachment.filePath?.takeIf { it.isNotBlank() }
+                    ?: attachment.uri.toString()
+                is SelectedMediaItem.ImageFromBitmap -> attachment.model
                 else -> null
             }
             if (!source.isNullOrBlank()) {

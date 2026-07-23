@@ -1,9 +1,5 @@
 package com.android.everytalk.ui.components
 
-import android.graphics.Bitmap
-import android.graphics.BitmapFactory
-import android.net.Uri
-import android.util.Base64
 import android.widget.Toast
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
@@ -30,6 +26,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -38,12 +35,10 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.zIndex
 import com.android.everytalk.R
 import coil3.compose.AsyncImage
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayInputStream
-import java.io.InputStream
-import java.net.URL
 import com.android.everytalk.util.storage.FileManager
 
 @Composable
@@ -67,7 +62,7 @@ fun ImagePreviewDialog(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
-    var scale by remember { mutableStateOf(1f) }
+    var scale by remember { mutableFloatStateOf(1f) }
 
     val pagerState = rememberPagerState(
         initialPage = initialIndex.coerceIn(0, (urls.size - 1).coerceAtLeast(0)),
@@ -148,9 +143,21 @@ fun ImagePreviewDialog(
                 ) { page ->
                     val currentUrl = urls.getOrNull(page) ?: return@HorizontalPager
                     val animatedScale = remember(page) { Animatable(1f) }
-                    var pageOffsetX by remember(page) { mutableStateOf(0f) }
-                    var pageOffsetY by remember(page) { mutableStateOf(0f) }
+                    var pageOffsetX by remember(page) { mutableFloatStateOf(0f) }
+                    var pageOffsetY by remember(page) { mutableFloatStateOf(0f) }
                     val pageCoroutineScope = rememberCoroutineScope()
+                    val toggleZoom: () -> Unit = {
+                        pageCoroutineScope.launch {
+                            if (animatedScale.value > 1f) {
+                                animatedScale.animateTo(1f, tween(250))
+                                pageOffsetX = 0f
+                                pageOffsetY = 0f
+                            } else {
+                                animatedScale.animateTo(2f, tween(250))
+                            }
+                            scale = animatedScale.value
+                        }
+                    }
 
                     Box(
                         modifier = Modifier
@@ -197,19 +204,10 @@ fun ImagePreviewDialog(
                             .combinedClickable(
                                 indication = null,
                                 interactionSource = remember { MutableInteractionSource() },
-                                onClick = { },
-                                onDoubleClick = {
-                                    pageCoroutineScope.launch {
-                                        if (animatedScale.value > 1f) {
-                                            animatedScale.animateTo(1f, tween(250))
-                                            pageOffsetX = 0f
-                                            pageOffsetY = 0f
-                                        } else {
-                                            animatedScale.animateTo(2f, tween(250))
-                                        }
-                                        scale = animatedScale.value
-                                    }
-                                }
+                                role = Role.Button,
+                                onClickLabel = "切换图片缩放",
+                                onClick = toggleZoom,
+                                onDoubleClick = toggleZoom,
                             ),
                         contentAlignment = Alignment.Center
                     ) {
@@ -260,53 +258,14 @@ fun ImagePreviewDialog(
     }
 }
 
-private fun loadBitmap(context: android.content.Context, url: String): Bitmap? {
-    return when {
-        url.startsWith("data:", ignoreCase = true) -> {
-            decodeDataUrlToBitmap(url)
-        }
-        url.startsWith("content://") || url.startsWith("file://") -> {
-            context.contentResolver.openInputStream(Uri.parse(url)).use { input ->
-                input?.let { BitmapFactory.decodeStream(it) }
-            }
-        }
-        url.startsWith("http://") || url.startsWith("https://") -> {
-            URL(url).openStream().use { input ->
-                BitmapFactory.decodeStream(input)
-            }
-        }
-        else -> {
-            runCatching {
-                val uri = Uri.parse(url)
-                val input: InputStream? = when {
-                    uri.scheme.isNullOrBlank() -> java.io.File(url).inputStream()
-                    else -> context.contentResolver.openInputStream(uri)
-                }
-                input.use { stream -> stream?.let { BitmapFactory.decodeStream(it) } }
-            }.getOrNull()
-        }
-    }
-}
-
-private fun decodeDataUrlToBitmap(dataUrl: String): Bitmap? {
-    val commaIndex = dataUrl.indexOf(',')
-    if (commaIndex == -1) return null
-    val meta = dataUrl.substring(0, commaIndex)
-    val dataPart = dataUrl.substring(commaIndex + 1)
-    val isBase64 = meta.contains(";base64", ignoreCase = true)
-    val bytes: ByteArray = if (isBase64) {
-        Base64.decode(dataPart, Base64.DEFAULT)
-    } else {
-        java.net.URLDecoder.decode(dataPart, "UTF-8").toByteArray()
-    }
-    return ByteArrayInputStream(bytes).use { input -> BitmapFactory.decodeStream(input) }
-}
-
 private suspend fun saveImageToGallery(context: android.content.Context, url: String) {
     withContext(Dispatchers.IO) {
         try {
             val fileManager = FileManager(context)
-            val loaded = fileManager.loadBytesFromFlexibleSource(url)
+            val loaded = fileManager.loadBytesFromFlexibleSource(
+                source = url,
+                maxBytes = FileManager.MAX_MESSAGE_IMAGE_BYTES,
+            )
             if (loaded == null) {
                 withContext(Dispatchers.Main) {
                     Toast.makeText(context, "图片保存失败", Toast.LENGTH_SHORT).show()
@@ -326,8 +285,10 @@ private suspend fun saveImageToGallery(context: android.content.Context, url: St
                     Toast.makeText(context, "图片保存失败", Toast.LENGTH_SHORT).show()
                 }
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("ImagePreview", "保存图片失败", e)
             withContext(Dispatchers.Main) {
                 Toast.makeText(context, "图片保存失败: ${e.message}", Toast.LENGTH_SHORT).show()
             }

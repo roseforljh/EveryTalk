@@ -251,14 +251,13 @@ fun ChatMessagesList(
     onImageClick: (String) -> Unit,
     additionalBottomPadding: Dp = 0.dp
 ) {
-    val reasoningHeightMap = remember { mutableMapOf<String, Int>() }
     // 防止 AnimatedItems 等状态在重组时被重复触发
 
     var isContextMenuVisible by remember { mutableStateOf(false) }
     var contextMenuMessage by remember { mutableStateOf<Message?>(null) }
     var contextMenuPressOffset by remember { mutableStateOf(Offset.Zero) }
     // 防重复触发：在极短时间内只允许一次预览弹出
-    var lastImagePreviewAt by remember { mutableStateOf(0L) }
+    var lastImagePreviewAt by remember { mutableLongStateOf(0L) }
 
     val pauseAwareApiCalling = remember(viewModel) {
         viewModel.isTextApiCalling.freezeWhileStreamingPaused(viewModel.isStreamingPaused)
@@ -270,11 +269,11 @@ fun ChatMessagesList(
     val currentStreamingId by pauseAwareStreamingId.collectAsState(
         initial = viewModel.currentTextStreamingAiMessageId.value
     )
-    val configuration = LocalConfiguration.current
     val density = LocalDensity.current
+    val windowHeightDp = with(density) { LocalWindowInfo.current.containerSize.height.toDp().value }
     val pinnedUserBubbleMaxHeightPx = with(density) {
         resolveUserBubbleMaxHeightDp(
-            screenHeightDp = configuration.screenHeightDp.toFloat(),
+            screenHeightDp = windowHeightDp,
             isExpanded = false,
         ).dp.toPx().toInt()
     }
@@ -757,15 +756,6 @@ fun ChatMessagesList(
     }
 }
 
-enum class ContentType {
-    SIMPLE         // 普通内容，使用正常内边距
-}
-
-fun detectContentTypeForPadding(text: String): ContentType {
-    // 所有内容都使用正常内边距
-    return ContentType.SIMPLE
-}
-
 internal fun resolveLoadingStageDisplayText(text: String?): String {
     return text?.takeIf { it.isNotBlank() }.orEmpty()
 }
@@ -1024,12 +1014,12 @@ private fun PageSourceIconStack(
 fun AiMessageItem(
     message: Message,
     text: String,
-    blocks: List<StreamBlock> = emptyList(),
     maxWidth: Dp,
-    modifier: Modifier = Modifier,
     isStreaming: Boolean,
     messageOutputType: String,
     viewModel: AppViewModel,
+    modifier: Modifier = Modifier,
+    blocks: List<StreamBlock> = emptyList(),
     onImageClick: ((String) -> Unit)? = null
 ) {
     val shape = RectangleShape

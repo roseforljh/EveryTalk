@@ -299,9 +299,7 @@ object AudioTestUtil {
             info["mode"] = am.mode
             info["ringerMode"] = am.ringerMode
             
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-                info["isStreamMute"] = am.isStreamMute(AudioManager.STREAM_MUSIC)
-            }
+            info["isStreamMute"] = am.isStreamMute(AudioManager.STREAM_MUSIC)
         }
         
         return info

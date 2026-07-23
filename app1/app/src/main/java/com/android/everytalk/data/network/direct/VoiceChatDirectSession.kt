@@ -1,6 +1,8 @@
 package com.android.everytalk.data.network.direct
 
 import android.util.Log
+import com.android.everytalk.data.network.BoundedSseLineReader
+import com.android.everytalk.data.network.readErrorTextAtMost
 import io.ktor.client.*
 import io.ktor.client.plugins.*
 import io.ktor.client.request.*
@@ -65,13 +67,15 @@ class VoiceChatDirectSession(
      * 
      * @param audioData 录音数据
      * @param mimeType 音频 MIME 类型
-     * @return VoiceChatResult 包含识别文本、回复文本、音频数据
+     * @return VoiceChatResult 包含识别文本、回复文本和音频产出状态
      */
     suspend fun process(
         audioData: ByteArray,
         mimeType: String
     ): VoiceChatResult = withContext(Dispatchers.IO) {
         Log.i(TAG, "Direct voice chat processing started")
+        val processingJob = currentCoroutineContext()[Job]
+        currentJob = processingJob
         
         // 初始化分句器
         // Minimax 需要更大的分块以减少请求数 (QPS 限制)，同时避免首句过短导致第二句听起来很慢
@@ -97,7 +101,9 @@ class VoiceChatDirectSession(
         isCancelled = false
         
         var userText = ""
-        val audioChunks = mutableListOf<ByteArray>()
+        var hasAudio = false
+        var ttsProcessor: PredictiveTTSProcessor? = null
+        var audioCollectorJob: Job? = null
         
         try {
             // 1. STT - 语音转文字
@@ -139,7 +145,7 @@ class VoiceChatDirectSession(
             }
 
             // 创建预测性 TTS 处理器
-            val ttsProcessor = PredictiveTTSProcessor(
+            val processor = PredictiveTTSProcessor(
                 ttsExecutor = ttsExecutor,
                 maxConcurrent = maxConcurrent,
                 maxRetry = 2,
@@ -147,14 +153,15 @@ class VoiceChatDirectSession(
                 firstTaskTimeout = 15_000L,
                 minRequestInterval = minRequestInterval
             )
+            ttsProcessor = processor
             
             var sequenceId = 0
             
             // 启动 TTS 音频收集协程
-            val audioCollectorJob = launch {
-                ttsProcessor.yieldAudioInOrder().collect { chunk ->
+            audioCollectorJob = launch {
+                processor.yieldAudioInOrder().collect { chunk ->
                     if (!isCancelled && chunk.isNotEmpty()) {
-                        audioChunks.add(chunk)
+                        hasAudio = true
                         // 直接在当前协程中调用 suspend 回调，避免切换到主线程导致 ANR
                         onAudioChunk?.invoke(chunk)
                     }
@@ -184,7 +191,7 @@ class VoiceChatDirectSession(
                         if (segment.isNotBlank()) {
                             // 提交 TTS 任务（非阻塞）
                             val cleanSegment = stripMarkdownForTts(segment)
-                            ttsProcessor.submitTask(sequenceId, cleanSegment)
+                            processor.submitTask(sequenceId, cleanSegment)
                             sequenceId++
                         }
                     }
@@ -196,24 +203,23 @@ class VoiceChatDirectSession(
                 // 处理剩余 buffer
                 if (sentenceBuffer.isNotBlank()) {
                     val cleanSegment = stripMarkdownForTts(sentenceBuffer)
-                    ttsProcessor.submitTask(sequenceId, cleanSegment)
+                    processor.submitTask(sequenceId, cleanSegment)
                     sequenceId++
                 }
                 
                 // 标记输入完成
-                ttsProcessor.markInputComplete()
+                processor.markInputComplete()
                 
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Chat 流处理错误", e)
-                ttsProcessor.markInputComplete()
+                processor.markInputComplete()
                 throw e
             }
             
             // 等待 TTS 音频收集完成
             audioCollectorJob.join()
-            
-            // 清理 TTS 处理器
-            ttsProcessor.cleanup()
             
             val chatElapsed = System.currentTimeMillis() - chatStartTime
             Log.i(TAG, "Chat + TTS completed (${chatElapsed}ms)")
@@ -223,15 +229,10 @@ class VoiceChatDirectSession(
                 onComplete?.invoke(userText, fullAssistantText)
             }
             
-            // 获取音频格式
-            val audioFormat = TtsDirectClient.getAudioFormat(ttsConfig.platform)
-            
             VoiceChatResult(
                 userText = userText,
                 assistantText = fullAssistantText,
-                audioData = mergeAudioChunks(audioChunks),
-                audioFormat = audioFormat.format,
-                sampleRate = audioFormat.sampleRate
+                hasAudio = hasAudio,
             )
             
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -243,6 +244,12 @@ class VoiceChatDirectSession(
                 onError?.invoke(e.message ?: "未知错误")
             }
             throw e
+        } finally {
+            withContext(NonCancellable) {
+                audioCollectorJob?.cancelAndJoin()
+                ttsProcessor?.cleanup()
+            }
+            if (currentJob === processingJob) currentJob = null
         }
     }
     
@@ -313,14 +320,14 @@ class VoiceChatDirectSession(
             }
         }.execute { response ->
             if (!response.status.isSuccess()) {
-                val errorBody = try { response.bodyAsText() } catch (_: Exception) { "(no body)" }
+                val errorBody = response.readErrorTextAtMost() ?: "(no body)"
                 throw Exception("Gemini Chat failed: ${response.status} - $errorBody")
             }
             
-            val channel = response.bodyAsChannel()
+            val channel = BoundedSseLineReader(response.bodyAsChannel())
             val lineBuffer = StringBuilder()
             
-            while (!channel.isClosedForRead && !isCancelled) {
+            while (!isCancelled) {
                 val line = channel.readLine() ?: break
                 
                 when {
@@ -338,13 +345,16 @@ class VoiceChatDirectSession(
                                             }
                                         }
                                     }
+                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                throw e
                             } catch (_: Exception) {}
                         }
                         lineBuffer.clear()
                     }
                     line.startsWith("data:") -> {
                         val dataContent = line.substring(5).trim()
-                        if (lineBuffer.isNotEmpty()) lineBuffer.append('\n')
+                        val separatorLength = if (lineBuffer.isNotEmpty()) 1 else 0
+                        if (separatorLength == 1) lineBuffer.append('\n')
                         lineBuffer.append(dataContent)
                     }
                 }
@@ -402,14 +412,14 @@ class VoiceChatDirectSession(
             }
         }.execute { response ->
             if (!response.status.isSuccess()) {
-                val errorBody = try { response.bodyAsText() } catch (_: Exception) { "(no body)" }
+                val errorBody = response.readErrorTextAtMost() ?: "(no body)"
                 throw Exception("OpenAI Chat failed: ${response.status} - $errorBody")
             }
             
-            val channel = response.bodyAsChannel()
+            val channel = BoundedSseLineReader(response.bodyAsChannel())
             val lineBuffer = StringBuilder()
             
-            while (!channel.isClosedForRead && !isCancelled) {
+            while (!isCancelled) {
                 val line = channel.readLine() ?: break
                 
                 when {
@@ -425,13 +435,16 @@ class VoiceChatDirectSession(
                                         send(text)
                                     }
                                 }
+                            } catch (e: kotlinx.coroutines.CancellationException) {
+                                throw e
                             } catch (_: Exception) {}
                         }
                         lineBuffer.clear()
                     }
                     line.startsWith("data:") -> {
                         val dataContent = line.substring(5).trim()
-                        if (lineBuffer.isNotEmpty()) lineBuffer.append('\n')
+                        val separatorLength = if (lineBuffer.isNotEmpty()) 1 else 0
+                        if (separatorLength == 1) lineBuffer.append('\n')
                         lineBuffer.append(dataContent)
                     }
                 }
@@ -454,12 +467,14 @@ class VoiceChatDirectSession(
      * 用于实时 STT 模式：STT 已经在录音过程中完成，这里只需要执行 Chat + TTS
      *
      * @param userText 已识别的用户文本
-     * @return VoiceChatResult 包含回复文本、音频数据
+     * @return VoiceChatResult 包含回复文本和音频产出状态
      */
     suspend fun processWithUserText(
         userText: String
     ): VoiceChatResult = withContext(Dispatchers.IO) {
         Log.i(TAG, "Processing with existing user text: ${userText.take(50)}...")
+        val processingJob = currentCoroutineContext()[Job]
+        currentJob = processingJob
         
         // 初始化分句器
         val isMinimax = ttsConfig.platform.lowercase() == "minimax"
@@ -481,7 +496,9 @@ class VoiceChatDirectSession(
         fullAssistantText = ""
         isCancelled = false
         
-        val audioChunks = mutableListOf<ByteArray>()
+        var hasAudio = false
+        var ttsProcessor: PredictiveTTSProcessor? = null
+        var audioCollectorJob: Job? = null
         
         try {
             // 直接开始 Chat + TTS (跳过 STT)
@@ -501,7 +518,7 @@ class VoiceChatDirectSession(
             }
 
             // 创建预测性 TTS 处理器
-            val ttsProcessor = PredictiveTTSProcessor(
+            val processor = PredictiveTTSProcessor(
                 ttsExecutor = ttsExecutor,
                 maxConcurrent = 5,
                 maxRetry = 2,
@@ -509,14 +526,15 @@ class VoiceChatDirectSession(
                 firstTaskTimeout = 15_000L,
                 minRequestInterval = minRequestInterval
             )
+            ttsProcessor = processor
             
             var sequenceId = 0
             
             // 启动 TTS 音频收集协程
-            val audioCollectorJob = launch {
-                ttsProcessor.yieldAudioInOrder().collect { chunk ->
+            audioCollectorJob = launch {
+                processor.yieldAudioInOrder().collect { chunk ->
                     if (!isCancelled && chunk.isNotEmpty()) {
-                        audioChunks.add(chunk)
+                        hasAudio = true
                         onAudioChunk?.invoke(chunk)
                     }
                 }
@@ -544,7 +562,7 @@ class VoiceChatDirectSession(
                     for (segment in result.segments) {
                         if (segment.isNotBlank()) {
                             val cleanSegment = stripMarkdownForTts(segment)
-                            ttsProcessor.submitTask(sequenceId, cleanSegment)
+                            processor.submitTask(sequenceId, cleanSegment)
                             sequenceId++
                         }
                     }
@@ -556,24 +574,23 @@ class VoiceChatDirectSession(
                 // 处理剩余 buffer
                 if (sentenceBuffer.isNotBlank()) {
                     val cleanSegment = stripMarkdownForTts(sentenceBuffer)
-                    ttsProcessor.submitTask(sequenceId, cleanSegment)
+                    processor.submitTask(sequenceId, cleanSegment)
                     sequenceId++
                 }
                 
                 // 标记输入完成
-                ttsProcessor.markInputComplete()
+                processor.markInputComplete()
                 
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
             } catch (e: Exception) {
                 Log.e(TAG, "Chat 流处理错误", e)
-                ttsProcessor.markInputComplete()
+                processor.markInputComplete()
                 throw e
             }
             
             // 等待 TTS 音频收集完成
             audioCollectorJob.join()
-            
-            // 清理 TTS 处理器
-            ttsProcessor.cleanup()
             
             val chatElapsed = System.currentTimeMillis() - chatStartTime
             Log.i(TAG, "Chat + TTS completed (${chatElapsed}ms)")
@@ -583,15 +600,10 @@ class VoiceChatDirectSession(
                 onComplete?.invoke(userText, fullAssistantText)
             }
             
-            // 获取音频格式
-            val audioFormat = TtsDirectClient.getAudioFormat(ttsConfig.platform)
-            
             VoiceChatResult(
                 userText = userText,
                 assistantText = fullAssistantText,
-                audioData = mergeAudioChunks(audioChunks),
-                audioFormat = audioFormat.format,
-                sampleRate = audioFormat.sampleRate
+                hasAudio = hasAudio,
             )
             
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -603,25 +615,13 @@ class VoiceChatDirectSession(
                 onError?.invoke(e.message ?: "未知错误")
             }
             throw e
+        } finally {
+            withContext(NonCancellable) {
+                audioCollectorJob?.cancelAndJoin()
+                ttsProcessor?.cleanup()
+            }
+            if (currentJob === processingJob) currentJob = null
         }
-    }
-    
-    /**
-     * 合并音频块
-     */
-    private fun mergeAudioChunks(chunks: List<ByteArray>): ByteArray {
-        if (chunks.isEmpty()) return ByteArray(0)
-        
-        val totalSize = chunks.sumOf { it.size }
-        val result = ByteArray(totalSize)
-        var offset = 0
-        
-        for (chunk in chunks) {
-            System.arraycopy(chunk, 0, result, offset, chunk.size)
-            offset += chunk.size
-        }
-        
-        return result
     }
     
     /**
@@ -661,8 +661,6 @@ class VoiceChatDirectSession(
     data class VoiceChatResult(
         val userText: String,          // 用户说的话（识别结果）
         val assistantText: String,     // AI 回复
-        val audioData: ByteArray,      // 音频数据
-        val audioFormat: String,       // 音频格式
-        val sampleRate: Int            // 采样率
+        val hasAudio: Boolean,         // 是否产生过非空音频块
     )
 }

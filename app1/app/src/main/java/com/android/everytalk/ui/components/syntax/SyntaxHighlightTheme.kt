@@ -1,9 +1,6 @@
 package com.android.everytalk.ui.components.syntax
 
-import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
-import androidx.compose.runtime.remember
 import androidx.compose.ui.graphics.Color
 
 /**
@@ -183,16 +180,5 @@ data class SyntaxHighlightTheme(
             boolean = Color(0xFF986801),           // 棕色 - true, false
             nullValue = Color(0xFF986801)          // 棕色 - null
         )
-    }
-}
-
-/**
- * 根据系统主题获取语法高亮配色
- */
-@Composable
-fun rememberSyntaxTheme(): SyntaxHighlightTheme {
-    val isDark = isSystemInDarkTheme()
-    return remember(isDark) {
-        if (isDark) SyntaxHighlightTheme.Dark else SyntaxHighlightTheme.Light
     }
 }

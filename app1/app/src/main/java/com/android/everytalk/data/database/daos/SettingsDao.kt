@@ -33,6 +33,12 @@ interface SettingsDao {
     @Query("DELETE FROM pinned_items WHERE isImageGeneration = :isImageGen")
     suspend fun clearPinnedItems(isImageGen: Boolean)
 
+    @Transaction
+    suspend fun replacePinnedItems(isImageGen: Boolean, items: List<PinnedItemEntity>) {
+        clearPinnedItems(isImageGen)
+        if (items.isNotEmpty()) insertPinnedItems(items)
+    }
+
     // Conversation Groups
     @Query("SELECT * FROM conversation_groups")
     suspend fun getConversationGroups(): List<ConversationGroupEntity>
@@ -43,6 +49,12 @@ interface SettingsDao {
     @Query("DELETE FROM conversation_groups")
     suspend fun clearConversationGroups()
 
+    @Transaction
+    suspend fun replaceConversationGroups(groups: List<ConversationGroupEntity>) {
+        clearConversationGroups()
+        if (groups.isNotEmpty()) insertConversationGroups(groups)
+    }
+
     // Expanded Groups
     @Query("SELECT groupKey FROM expanded_groups")
     suspend fun getExpandedGroupKeys(): List<String>
@@ -52,6 +64,12 @@ interface SettingsDao {
 
     @Query("DELETE FROM expanded_groups")
     suspend fun clearExpandedGroups()
+
+    @Transaction
+    suspend fun replaceExpandedGroups(groups: List<ExpandedGroupEntity>) {
+        clearExpandedGroups()
+        if (groups.isNotEmpty()) insertExpandedGroups(groups)
+    }
 
     // Conversation Parameters
     @Query("SELECT * FROM conversation_params")

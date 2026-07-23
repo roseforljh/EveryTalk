@@ -45,7 +45,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -108,7 +109,7 @@ fun SystemPromptDialog(
     ) {
         val alphaAnim = remember { Animatable(0f) }
         val scaleAnim = remember { Animatable(0.92f) }
-        val screenHeight = LocalConfiguration.current.screenHeightDp.dp
+        val screenHeight = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.height.toDp() }
         val dialogBg = appDialogContainerColor()
         val contentColor = appDialogContentColor()
         val subtextColor = appDialogSubtextColor()

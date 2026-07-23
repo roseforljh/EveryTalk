@@ -2,6 +2,8 @@ package com.android.everytalk.data.network.direct
 
 import android.util.Base64
 import android.util.Log
+import com.android.everytalk.data.network.readErrorTextAtMost
+import com.android.everytalk.data.network.readTextAtMost
 import io.ktor.client.*
 import io.ktor.client.plugins.websocket.*
 import io.ktor.client.request.*
@@ -11,9 +13,30 @@ import io.ktor.http.*
 import io.ktor.utils.io.core.*
 import io.ktor.websocket.*
 import kotlinx.coroutines.*
-import kotlinx.coroutines.channels.Channel
 import kotlinx.serialization.json.*
 import java.util.UUID
+
+internal class AliyunSttTaskFailedException(
+    errorCode: String?,
+    errorMessage: String,
+) : Exception("Aliyun STT task failed: [${errorCode ?: "unknown"}] $errorMessage")
+
+internal data class AliyunSttEvent(
+    val name: String?,
+    val payload: JsonObject,
+)
+
+internal fun parseAliyunSttEvent(rawText: String): AliyunSttEvent {
+    val json = Json.parseToJsonElement(rawText).jsonObject
+    val header = json["header"]?.jsonObject
+    val event = header?.get("event")?.jsonPrimitive?.contentOrNull
+    if (event == "task-failed") {
+        val errorCode = header["error_code"]?.jsonPrimitive?.contentOrNull
+        val errorMessage = header["error_message"]?.jsonPrimitive?.contentOrNull ?: "Unknown error"
+        throw AliyunSttTaskFailedException(errorCode, errorMessage)
+    }
+    return AliyunSttEvent(event, json)
+}
 
 /**
  * STT 直连客户端
@@ -28,6 +51,7 @@ import java.util.UUID
  */
 object SttDirectClient {
     private const val TAG = "SttDirectClient"
+    private const val MAX_STT_RESPONSE_BYTES = 4L * 1024L * 1024L
     
     /**
      * STT 配置
@@ -131,30 +155,29 @@ object SttDirectClient {
             }
         }.toString()
         
-        try {
-            val response = client.post(url) {
+        return try {
+            client.preparePost(url) {
                 contentType(ContentType.Application.Json)
                 setBody(payload)
+            }.execute { response ->
+                if (!response.status.isSuccess()) {
+                    val errorBody = response.readErrorTextAtMost() ?: "(no body)"
+                    Log.e(TAG, "Gemini STT failed: ${response.status}, bodyChars=${errorBody.length}")
+                    throw Exception("Gemini STT failed: ${response.status}")
+                }
+
+                val responseText = response.readTextAtMost(MAX_STT_RESPONSE_BYTES)
+                val jsonResponse = Json.parseToJsonElement(responseText).jsonObject
+                val text = jsonResponse["candidates"]?.jsonArray?.firstOrNull()?.jsonObject
+                    ?.get("content")?.jsonObject
+                    ?.get("parts")?.jsonArray?.firstOrNull()?.jsonObject
+                    ?.get("text")?.jsonPrimitive?.contentOrNull?.trim() ?: ""
+
+                Log.i(TAG, "Gemini STT result chars=${text.length}")
+                text
             }
-            
-            if (!response.status.isSuccess()) {
-                val errorBody = try { response.bodyAsText() } catch (_: Exception) { "(no body)" }
-                Log.e(TAG, "Gemini STT failed: ${response.status} - $errorBody")
-                throw Exception("Gemini STT failed: ${response.status}")
-            }
-            
-            val responseText = response.bodyAsText()
-            val jsonResponse = Json.parseToJsonElement(responseText).jsonObject
-            
-            // 提取文本
-            val text = jsonResponse["candidates"]?.jsonArray?.firstOrNull()?.jsonObject
-                ?.get("content")?.jsonObject
-                ?.get("parts")?.jsonArray?.firstOrNull()?.jsonObject
-                ?.get("text")?.jsonPrimitive?.contentOrNull?.trim() ?: ""
-            
-            Log.i(TAG, "Gemini STT result chars=${text.length}")
-            return text
-            
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "Gemini STT error", e)
             throw e
@@ -180,32 +203,31 @@ object SttDirectClient {
         
         Log.i(TAG, "OpenAI STT: $model at $targetUrl, audio size=${audioData.size}")
         
-        try {
-            val response = client.submitFormWithBinaryData(
-                url = targetUrl,
-                formData = formData {
+        return try {
+            client.preparePost(targetUrl) {
+                header(HttpHeaders.Authorization, "Bearer $apiKey")
+                setBody(MultiPartFormDataContent(formData {
                     append("model", model)
                     append("file", "audio.wav", ContentType.Audio.Any) {
                         writeFully(audioData)
                     }
+                }))
+            }.execute { response ->
+                if (!response.status.isSuccess()) {
+                    val errorBody = response.readErrorTextAtMost() ?: "(no body)"
+                    Log.e(TAG, "OpenAI STT failed: ${response.status}, bodyChars=${errorBody.length}")
+                    throw Exception("OpenAI STT failed: ${response.status}")
                 }
-            ) {
-                header(HttpHeaders.Authorization, "Bearer $apiKey")
+
+                val responseText = response.readTextAtMost(MAX_STT_RESPONSE_BYTES)
+                val jsonResponse = Json.parseToJsonElement(responseText).jsonObject
+                val text = jsonResponse["text"]?.jsonPrimitive?.contentOrNull?.trim() ?: ""
+
+                Log.i(TAG, "OpenAI STT result chars=${text.length}")
+                text
             }
-            
-            if (!response.status.isSuccess()) {
-                val errorBody = try { response.bodyAsText() } catch (_: Exception) { "(no body)" }
-                Log.e(TAG, "OpenAI STT failed: ${response.status} - $errorBody")
-                throw Exception("OpenAI STT failed: ${response.status}")
-            }
-            
-            val responseText = response.bodyAsText()
-            val jsonResponse = Json.parseToJsonElement(responseText).jsonObject
-            val text = jsonResponse["text"]?.jsonPrimitive?.contentOrNull?.trim() ?: ""
-            
-            Log.i(TAG, "OpenAI STT result chars=${text.length}")
-            return text
-            
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "OpenAI STT error", e)
             throw e
@@ -229,37 +251,35 @@ object SttDirectClient {
         val ext = mimeType.substringAfter("/", "wav")
         val filename = "audio.$ext"
         
-        try {
-            val response = client.submitFormWithBinaryData(
-                url = apiUrl,
-                formData = formData {
+        return try {
+            client.preparePost(apiUrl) {
+                header(HttpHeaders.Authorization, "Bearer $apiKey")
+                setBody(MultiPartFormDataContent(formData {
                     append("model", model)
                     append("file", filename, ContentType.parse(mimeType)) {
                         writeFully(audioData)
                     }
+                }))
+            }.execute { response ->
+                if (!response.status.isSuccess()) {
+                    val errorBody = response.readErrorTextAtMost() ?: "(no body)"
+                    Log.e(TAG, "SiliconFlow STT failed: ${response.status}, bodyChars=${errorBody.length}")
+                    throw Exception("SiliconFlow STT failed: ${response.status}")
                 }
-            ) {
-                header(HttpHeaders.Authorization, "Bearer $apiKey")
+
+                val responseText = response.readTextAtMost(MAX_STT_RESPONSE_BYTES)
+                val jsonResponse = Json.parseToJsonElement(responseText).jsonObject
+                val text = jsonResponse["text"]?.jsonPrimitive?.contentOrNull?.trim() ?: ""
+
+                if (text.isEmpty()) {
+                    Log.w(TAG, "SiliconFlow STT returned empty text")
+                } else {
+                    Log.i(TAG, "SiliconFlow STT result chars=${text.length}")
+                }
+                text
             }
-            
-            if (!response.status.isSuccess()) {
-                val errorBody = try { response.bodyAsText() } catch (_: Exception) { "(no body)" }
-                Log.e(TAG, "SiliconFlow STT failed: ${response.status} - $errorBody")
-                throw Exception("SiliconFlow STT failed: ${response.status}")
-            }
-            
-            val responseText = response.bodyAsText()
-            val jsonResponse = Json.parseToJsonElement(responseText).jsonObject
-            val text = jsonResponse["text"]?.jsonPrimitive?.contentOrNull?.trim() ?: ""
-            
-            if (text.isEmpty()) {
-                Log.w(TAG, "SiliconFlow STT returned empty text")
-            } else {
-                Log.i(TAG, "SiliconFlow STT result chars=${text.length}")
-            }
-            
-            return text
-            
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "SiliconFlow STT error", e)
             throw e
@@ -346,6 +366,8 @@ object SttDirectClient {
                 model = model.ifEmpty { "fun-asr-realtime" },
                 wsUrl = wsUrl
             )
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "Aliyun STT error: ${e.message}", e)
             throw e
@@ -364,9 +386,10 @@ object SttDirectClient {
         model: String,
         wsUrl: String
     ): String = coroutineScope {
-        val resultChannel = Channel<String>(Channel.UNLIMITED)
+        val resultDeferred = CompletableDeferred<String>()
         val finalTextBuilder = StringBuilder()
-        var taskId = UUID.randomUUID().toString()
+        val taskId = UUID.randomUUID().toString()
+        var recognitionResult = ""
         
         try {
             client.wss(
@@ -405,21 +428,16 @@ object SttDirectClient {
                 
                 // 等待 task-started 事件
                 var taskStarted = false
-                val startTimeout = withTimeoutOrNull(10_000L) {
+                withTimeoutOrNull(10_000L) {
                     for (frame in incoming) {
                         if (frame is Frame.Text) {
                             val text = frame.readText()
                             
-                            val json = Json.parseToJsonElement(text).jsonObject
-                            val event = json["header"]?.jsonObject?.get("event")?.jsonPrimitive?.contentOrNull
+                            val event = parseAliyunSttEvent(text).name
                             
                             if (event == "task-started") {
                                 taskStarted = true
                                 break
-                            } else if (event == "task-failed") {
-                                val errorMsg = json["header"]?.jsonObject?.get("error_message")?.jsonPrimitive?.contentOrNull
-                                    ?: "Unknown error"
-                                throw Exception("Aliyun STT task failed: $errorMsg")
                             }
                         }
                     }
@@ -432,18 +450,16 @@ object SttDirectClient {
                 // 启动接收协程
                 val receiveJob = launch {
                     try {
-                        var resultCount = 0
                         for (frame in incoming) {
                             when (frame) {
                                 is Frame.Text -> {
                                     val text = frame.readText()
                                     
-                                    val json = Json.parseToJsonElement(text).jsonObject
-                                    val event = json["header"]?.jsonObject?.get("event")?.jsonPrimitive?.contentOrNull
+                                    val parsedEvent = parseAliyunSttEvent(text)
+                                    val json = parsedEvent.payload
                                     
-                                    when (event) {
+                                    when (parsedEvent.name) {
                                         "result-generated" -> {
-                                            resultCount++
                                             // 提取识别结果
                                             val output = json["payload"]?.jsonObject?.get("output")?.jsonObject
                                             val sentence = output?.get("sentence")?.jsonObject
@@ -462,15 +478,8 @@ object SttDirectClient {
                                             }
                                         }
                                         "task-finished" -> {
-                                            resultChannel.send(finalTextBuilder.toString())
+                                            resultDeferred.complete(finalTextBuilder.toString())
                                             return@launch
-                                        }
-                                        "task-failed" -> {
-                                            val errorCode = json["header"]?.jsonObject?.get("error_code")?.jsonPrimitive?.contentOrNull
-                                            val errorMsg = json["header"]?.jsonObject?.get("error_message")?.jsonPrimitive?.contentOrNull
-                                                ?: "Unknown error"
-                                            Log.e(TAG, "Aliyun STT task-failed: code=$errorCode, message=$errorMsg")
-                                            throw Exception("Aliyun STT task failed: [$errorCode] $errorMsg")
                                         }
                                         else -> {
                                             // 忽略其他事件
@@ -478,7 +487,7 @@ object SttDirectClient {
                                     }
                                 }
                                 is Frame.Close -> {
-                                    resultChannel.send(finalTextBuilder.toString())
+                                    resultDeferred.complete(finalTextBuilder.toString())
                                     return@launch
                                 }
                                 else -> {
@@ -486,21 +495,23 @@ object SttDirectClient {
                                 }
                             }
                         }
+                        resultDeferred.complete(finalTextBuilder.toString())
+                    } catch (e: CancellationException) {
+                        resultDeferred.cancel(e)
+                        throw e
                     } catch (e: Exception) {
                         Log.e(TAG, "Aliyun STT receive error: ${e.message}", e)
-                        resultChannel.send(finalTextBuilder.toString())
+                        resultDeferred.completeExceptionally(e)
                     }
                 }
                 
                 // 分块发送音频数据
                 val chunkSize = 3200  // 100ms @ 16kHz 16bit mono = 3200 bytes
                 var offset = 0
-                var chunkCount = 0
                 
                 while (offset < audioData.size) {
                     val end = minOf(offset + chunkSize, audioData.size)
                     val chunk = audioData.copyOfRange(offset, end)
-                    chunkCount++
                     
                     // 根据阿里云 DashScope WebSocket API 文档：
                     // 音频数据应该通过**二进制帧 (Binary Frame)** 发送，而不是 JSON 消息中的 Base64
@@ -527,21 +538,18 @@ object SttDirectClient {
                 send(Frame.Text(finishTaskMessage))
                 
                 // 等待接收完成 (长语音可能需要更长时间)
-                withTimeout(60_000L) {
-                    receiveJob.join()
-                }
+                recognitionResult = withTimeout(60_000L) { resultDeferred.await() }
+                receiveJob.join()
             }
             
-            // 从通道获取结果
-            val result = resultChannel.tryReceive().getOrNull() ?: finalTextBuilder.toString()
-            Log.i(TAG, "Aliyun STT final result chars=${result.length}")
-            result
+            Log.i(TAG, "Aliyun STT final result chars=${recognitionResult.length}")
+            recognitionResult
             
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e(TAG, "Aliyun STT WebSocket error", e)
             throw e
-        } finally {
-            resultChannel.close()
         }
     }
 }

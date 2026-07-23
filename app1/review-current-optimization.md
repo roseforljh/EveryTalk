@@ -99,11 +99,12 @@
 - 现象：旧配置未导出 schema，且 `MIGRATION_5_6` 没有旧库迁移回归测试。
 - 修复：`exportSchema=true`，新增 `room.schemaLocation`，生成 `5.json` 与 `6.json`，新增 5->6 迁移测试，验证 OpenClaw 字段数据经过空迁移后保持不变。
 
-### P2 CacheManager 清理后 scope 不可恢复
+### P2 CacheManager 生命周期问题（后续已移除）
 
 - 位置：`util/cache/CacheManager.kt`
 - 现象：`cleanup()` 取消单例 scope 后，后续 warmup 和 TTL 任务无法再启动。
-- 修复：scope 改为可恢复，并补 `CacheManagerTest`。
+- 当时修复：scope 改为可恢复，并补 `CacheManagerTest`。
+- 后续处理：确认该组件没有生产消费者后，已删除 `CacheManager.kt` 与对应测试。
 
 ### P1 图片编辑大图 OOM 风险
 
@@ -239,7 +240,7 @@
 
 - `:app:testDebugUnitTest --tests "com.android.everytalk.ui.screens.viewmodel.HistoryManagerCustomPromptPersistenceTest.queued force saves persist text and image conversations independently"`：通过。
 - `:app:testDebugUnitTest --tests "com.android.everytalk.statecontroller.facade.MessageItemsControllerStatusTest.image loading indicator runtime text advances while waiting for first content"`：通过。
-- `:app:testDebugUnitTest --tests "com.android.everytalk.util.cache.CacheManagerTest" --tests "com.android.everytalk.data.database.RoomDataSourceConversationParamsTest" --tests "com.android.everytalk.data.network.OpenAIResponsesClientPayloadTest" --tests "com.android.everytalk.data.DataClass.VersionUpdateInfoTest"`：通过。
+- `CacheManagerTest` 在组件移除前通过；同批次其余专项测试均通过。
 - `:app:testDebugUnitTest --tests "com.android.everytalk.data.database.AppDatabaseMigrationTest.migration 5 to 6 preserves api configs with openclaw columns" --stacktrace`：通过。
 - `:app:testDebugUnitTest --tests "com.android.everytalk.data.database.AppDatabaseMigrationTest.migration 5 to 6 preserves api configs with openclaw columns" --tests "com.android.everytalk.data.database.RoomDataSourceConversationParamsTest" --stacktrace`：通过。
 - `:app:testDebugUnitTest --tests "com.android.everytalk.util.storage.LimitedByteReaderTest" --stacktrace`：通过。

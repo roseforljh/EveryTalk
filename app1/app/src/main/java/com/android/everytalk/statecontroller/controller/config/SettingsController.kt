@@ -7,10 +7,12 @@ import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.VoiceBackendConfig
 import com.android.everytalk.statecontroller.ViewModelStateHolder
+import com.android.everytalk.statecontroller.rethrowIfCancellation
 import com.android.everytalk.statecontroller.safeApiConfigSummary
 import com.android.everytalk.statecontroller.viewmodel.ExportManager
 import com.android.everytalk.statecontroller.viewmodel.ProviderManager
 import com.android.everytalk.ui.screens.viewmodel.DataPersistenceManager
+import com.android.everytalk.ui.screens.viewmodel.HistoryManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -38,6 +40,7 @@ class SettingsController(
     private val context: android.content.Context,
     private val stateHolder: ViewModelStateHolder,
     private val persistenceManager: DataPersistenceManager,
+    private val historyManager: HistoryManager,
     private val providerManager: ProviderManager,
     private val exportManager: ExportManager,
     private val json: Json,
@@ -333,6 +336,7 @@ class SettingsController(
                 }
                     
             } catch (e: Exception) {
+                e.rethrowIfCancellation()
                 Log.e(TAG, "Export failed", e)
                 withContext(Dispatchers.Main) {
                     showSnackbar("导出失败: ${e.message ?: "未知错误"}")
@@ -445,6 +449,7 @@ class SettingsController(
                     "errors=${result.errors.size}, warnings=${result.warnings.size}")
 
             } catch (e: Exception) {
+                e.rethrowIfCancellation()
                 // 发生异常时回滚状态
                 Log.e(TAG, "Settings import failed, rolling back", e)
                 rollbackState(backupState)
@@ -503,8 +508,8 @@ class SettingsController(
         persistenceManager.saveSelectedConfigIdentifier(backup.selectedImageGenApiConfig?.id, isImageGen = true)
         persistenceManager.saveVoiceBackendConfigs(backup.voiceBackendConfigs)
         persistenceManager.saveSelectedVoiceConfigId(backup.selectedVoiceConfig?.id)
-        persistenceManager.saveChatHistory(backup.historicalConversations, isImageGeneration = false)
-        persistenceManager.saveChatHistory(backup.imageGenerationHistoricalConversations, isImageGeneration = true)
+        historyManager.persistHistoryListDirectly(isImageGeneration = false)
+        historyManager.persistHistoryListDirectly(isImageGeneration = true)
         persistenceManager.savePinnedIds(backup.pinnedTextConversationIds, isImageGeneration = false)
         persistenceManager.savePinnedIds(backup.pinnedImageConversationIds, isImageGeneration = true)
         persistenceManager.saveConversationGroups(backup.conversationGroups)
@@ -816,7 +821,7 @@ class SettingsController(
             
             currentHistory.addAll(newConversations)
             stateHolder._historicalConversations.value = currentHistory
-            persistenceManager.saveChatHistory(currentHistory, isImageGeneration = false)
+            historyManager.persistHistoryListDirectly(isImageGeneration = false)
             
             result.chatHistoryImported = newConversations.size
         }
@@ -847,7 +852,7 @@ class SettingsController(
             
             currentHistory.addAll(newConversations)
             stateHolder._imageGenerationHistoricalConversations.value = currentHistory
-            persistenceManager.saveChatHistory(currentHistory, isImageGeneration = true)
+            historyManager.persistHistoryListDirectly(isImageGeneration = true)
             
             result.imageHistoryImported = newConversations.size
         }

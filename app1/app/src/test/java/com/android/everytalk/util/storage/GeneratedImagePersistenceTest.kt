@@ -2,6 +2,7 @@ package com.android.everytalk.util.storage
 
 import android.app.Application
 import android.content.Context
+import android.graphics.Bitmap
 import androidx.test.core.app.ApplicationProvider
 import java.io.File
 import kotlinx.coroutines.test.runTest
@@ -96,5 +97,28 @@ class GeneratedImagePersistenceTest {
         assertEquals(File(context.filesDir, "chat_attachments").canonicalFile, savedFile.parentFile)
         assertTrue(".." !in savedFile.name)
         assertTrue("_-1_" !in savedFile.name)
+    }
+
+    @Test
+    fun `超大 Data URL 在 Base64 解码前拒绝`() = runTest {
+        val source = "data:image/png;base64," + "A".repeat(6 * 1024 * 1024)
+
+        assertNull(FileManager(context).loadBitmapFromDataUrl(source))
+    }
+
+    @Test
+    fun `位图保存直接写入附件文件并清理临时文件`() = runTest {
+        val bitmap = Bitmap.createBitmap(2, 2, Bitmap.Config.ARGB_8888)
+        val result = FileManager(context).saveBitmapToAppInternalStorage(
+            bitmapToSave = bitmap,
+            messageIdHint = "message-save",
+            attachmentIndex = 0,
+        )
+
+        val savedFile = File(requireNotNull(result))
+        assertTrue(savedFile.isFile)
+        assertTrue(savedFile.length() > 0L)
+        assertTrue(bitmap.isRecycled)
+        assertTrue(File(context.filesDir, "chat_attachments").listFiles().orEmpty().none { it.name.endsWith(".tmp") })
     }
 }

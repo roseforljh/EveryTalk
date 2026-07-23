@@ -71,6 +71,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.*
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -78,6 +79,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.zIndex
 import android.net.Uri
+import android.graphics.drawable.Drawable
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil3.compose.AsyncImage
@@ -94,14 +96,17 @@ import android.content.ContentValues
 import android.os.Build
 import android.provider.MediaStore
 import androidx.core.content.FileProvider
-import androidx.core.graphics.drawable.toBitmap
+import androidx.core.graphics.createBitmap
+import androidx.core.graphics.scale
+import androidx.core.net.toUri
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStream
+import java.util.Base64
 import android.widget.Toast
 import com.android.everytalk.data.DataClass.Message
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import android.graphics.BitmapFactory
+import com.android.everytalk.data.network.SafeHttpDownloader
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.statecontroller.freezeWhileStreamingPaused
@@ -127,17 +132,114 @@ import com.android.everytalk.ui.topanchor.mapChatItemsToTopAnchorItems
 import com.android.everytalk.ui.topanchor.resolveActiveTopAnchorTurn
 import com.android.everytalk.ui.topanchor.resolveTopAnchorResponseTargetId
 import com.android.everytalk.ui.topanchor.shouldAllowBottomScroll
+import com.android.everytalk.util.storage.CappedByteArrayOutputStream
 import com.android.everytalk.util.storage.readAtMost
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import coil3.size.Size
 import kotlin.math.min
 
 private const val MAX_PREVIEW_BITMAP_DIMENSION = 2048
-private const val MAX_BASE64_LENGTH_FOR_PREVIEW = 40 * 1024 * 1024
 private const val MAX_IMAGE_RAW_BYTES = 50L * 1024L * 1024L
+private const val IMAGE_DOWNLOAD_TIMEOUT_MS = 30_000
+internal const val MAX_IMAGE_BASE64_DECODED_BYTES = 32L * 1024L * 1024L
+private const val MAX_IMAGE_BASE64_WHITESPACE_CHARS = 2L * 1024L * 1024L
+private const val MAX_IMAGE_BASE64_ENCODED_CHARS =
+    ((MAX_IMAGE_BASE64_DECODED_BYTES + 2L) / 3L) * 4L + MAX_IMAGE_BASE64_WHITESPACE_CHARS
+private const val MAX_TEMP_IMAGE_FILES = 16
+private const val TEMP_IMAGE_MAX_AGE_MS = 24L * 60L * 60L * 1000L
+
+internal fun estimateImageBase64DecodedBytes(
+    encoded: CharSequence,
+    startIndex: Int = 0,
+): Long {
+    if (startIndex !in 0..encoded.length) return Long.MAX_VALUE
+
+    var meaningfulChars = 0L
+    var trailingPadding = 0
+    for (index in startIndex until encoded.length) {
+        when (val char = encoded[index]) {
+            ' ', '\t', '\r', '\n' -> Unit
+            else -> {
+                meaningfulChars++
+                trailingPadding = if (char == '=') trailingPadding + 1 else 0
+            }
+        }
+    }
+    return ((meaningfulChars * 3L) / 4L - trailingPadding.coerceAtMost(2)).coerceAtLeast(0L)
+}
+
+internal fun isImageBase64WithinDecodedLimit(
+    encoded: CharSequence,
+    startIndex: Int = 0,
+    maxDecodedBytes: Long = MAX_IMAGE_BASE64_DECODED_BYTES,
+): Boolean {
+    if (startIndex !in 0..encoded.length || maxDecodedBytes < 0L) return false
+    if ((encoded.length - startIndex).toLong() > MAX_IMAGE_BASE64_ENCODED_CHARS) return false
+    return estimateImageBase64DecodedBytes(encoded, startIndex) <= maxDecodedBytes
+}
+
+private class Base64PayloadInputStream(
+    private val source: CharSequence,
+    private val startIndex: Int,
+) : InputStream() {
+    private var index = startIndex
+
+    override fun read(): Int {
+        while (index < source.length) {
+            val char = source[index++]
+            if (char == ' ' || char == '\t' || char == '\r' || char == '\n') continue
+            require(char.code <= 0x7F) { "Base64 输入必须为 ASCII" }
+            return char.code
+        }
+        return -1
+    }
+
+    override fun read(buffer: ByteArray, offset: Int, length: Int): Int {
+        require(offset >= 0 && length >= 0 && offset <= buffer.size - length)
+        if (length == 0) return 0
+
+        var written = 0
+        while (written < length && index < source.length) {
+            val char = source[index++]
+            if (char == ' ' || char == '\t' || char == '\r' || char == '\n') continue
+            require(char.code <= 0x7F) { "Base64 输入必须为 ASCII" }
+            buffer[offset + written] = char.code.toByte()
+            written++
+        }
+        return if (written == 0) -1 else written
+    }
+}
+
+internal fun decodeImageBase64DataUri(dataUri: String): ByteArray? {
+    val commaIndex = dataUri.indexOf(',')
+    if (commaIndex < 0) return null
+    val base64MarkerIndex = dataUri.indexOf(";base64", startIndex = 5, ignoreCase = true)
+    if (base64MarkerIndex !in 5 until commaIndex) return null
+
+    val payloadStart = commaIndex + 1
+    if (payloadStart >= dataUri.length || !isImageBase64WithinDecodedLimit(dataUri, payloadStart)) return null
+    val estimatedBytes = estimateImageBase64DecodedBytes(dataUri, payloadStart)
+    if (estimatedBytes > Int.MAX_VALUE) return null
+    val output = ByteArray(estimatedBytes.toInt())
+    return try {
+        Base64.getDecoder().wrap(Base64PayloadInputStream(dataUri, payloadStart)).use { decodedStream ->
+            var offset = 0
+            while (offset < output.size) {
+                val read = decodedStream.read(output, offset, output.size - offset)
+                if (read == -1) break
+                offset += read
+            }
+            if (decodedStream.read() != -1) return null
+            if (offset == output.size) output else output.copyOf(offset)
+        }
+    } catch (_: Exception) {
+        return null
+    }
+}
 
 private fun calculateBitmapSampleSize(width: Int, height: Int): Int {
     var sampleSize = 1
@@ -181,15 +283,33 @@ private fun decodePreviewStream(openStream: () -> java.io.InputStream?): Bitmap?
     return openStream()?.use { BitmapFactory.decodeStream(it, null, options) }
 }
 
-private fun Bitmap.scaledToPreviewLimit(): Bitmap {
-    if (width <= MAX_PREVIEW_BITMAP_DIMENSION && height <= MAX_PREVIEW_BITMAP_DIMENSION) return this
+private fun Bitmap.copyScaledToPreviewLimit(): Bitmap? {
+    if (isRecycled) return null
+    if (width <= MAX_PREVIEW_BITMAP_DIMENSION && height <= MAX_PREVIEW_BITMAP_DIMENSION) {
+        return copy(Bitmap.Config.ARGB_8888, false)
+    }
     val scale = min(
         MAX_PREVIEW_BITMAP_DIMENSION.toFloat() / width.toFloat(),
         MAX_PREVIEW_BITMAP_DIMENSION.toFloat() / height.toFloat()
     )
     val targetW = (width * scale).toInt().coerceAtLeast(1)
     val targetH = (height * scale).toInt().coerceAtLeast(1)
-    return Bitmap.createScaledBitmap(this, targetW, targetH, true)
+    return this.scale(targetW, targetH)
+}
+
+private fun renderDrawableToOwnedBitmap(drawable: Drawable, width: Int, height: Int): Bitmap {
+    val bitmap = createBitmap(width, height, Bitmap.Config.ARGB_8888)
+    val previousBounds = android.graphics.Rect(drawable.bounds)
+    return try {
+        drawable.setBounds(0, 0, width, height)
+        drawable.draw(Canvas(bitmap))
+        bitmap
+    } catch (error: Throwable) {
+        bitmap.recycle()
+        throw error
+    } finally {
+        drawable.setBounds(previousBounds)
+    }
 }
 
 internal fun imageContextEditUsesPreview(): Boolean = false
@@ -204,12 +324,22 @@ private fun mimeFromImagePath(path: String): String {
 
 private fun File.readImageBytesAtMost(): ByteArray = readAtMost(MAX_IMAGE_RAW_BYTES)
 
-private fun okhttp3.ResponseBody.readImageBytesAtMost(): ByteArray {
-    val declaredLength = contentLength()
-    if (declaredLength > MAX_IMAGE_RAW_BYTES) {
-        throw IllegalArgumentException("Image exceeds maximum size: $MAX_IMAGE_RAW_BYTES bytes")
-    }
-    return byteStream().use { readAtMost(it, MAX_IMAGE_RAW_BYTES) }
+private fun createTemporaryImageFile(
+    context: Context,
+    directoryName: String,
+    prefix: String,
+    extension: String,
+): File {
+    val directory = File(context.cacheDir, directoryName).apply { mkdirs() }
+    val now = System.currentTimeMillis()
+    directory.listFiles()?.filter(File::isFile).orEmpty()
+        .filter { now - it.lastModified() > TEMP_IMAGE_MAX_AGE_MS }
+        .forEach(File::delete)
+    val remaining = directory.listFiles()?.filter(File::isFile).orEmpty()
+        .sortedBy(File::lastModified)
+    val excessCount = (remaining.size - MAX_TEMP_IMAGE_FILES + 1).coerceAtLeast(0)
+    remaining.take(excessCount).forEach(File::delete)
+    return File.createTempFile("${prefix}_", ".${extension.ifBlank { "img" }}", directory)
 }
 
 @Composable
@@ -224,8 +354,8 @@ fun ImageGenerationLoadingView() {
 
 @Composable
 private fun ImageGenLoadingIndicator(
-    text: String? = null,
     modifier: Modifier = Modifier,
+    text: String? = null,
 ) {
     val displayText = com.android.everytalk.ui.screens.MainScreen.chat.text.ui.resolveLoadingStageDisplayText(
         text
@@ -251,7 +381,7 @@ fun ImageGenerationMessagesList(
     scrollSessionKey: String = ""
 ) {
     val haptic = LocalHapticFeedback.current
-    val animatedItems = remember { mutableStateMapOf<String, Boolean>() }
+    val animatedItems = remember(scrollSessionKey) { mutableStateMapOf<String, Boolean>() }
     val density = LocalDensity.current
 
     var isContextMenuVisible by remember { mutableStateOf(false) }
@@ -268,16 +398,17 @@ fun ImageGenerationMessagesList(
     var imagePreviewModel by remember { mutableStateOf<Any?>(null) }
     var imagePreviewModels by remember { mutableStateOf<List<Any>>(emptyList()) }
 
-    val allConversationImages = remember(chatItems) {
+    val allConversationImages: List<Any> = remember(chatItems) {
         chatItems.flatMap { item ->
             when (item) {
                 is ChatListItem.UserMessage -> {
                     item.attachments.mapNotNull { att ->
                         when (att) {
                             is com.android.everytalk.models.SelectedMediaItem.ImageFromUri ->
-                                if (att.uri.scheme == "data") att.uri.toString() else att.uri
+                                att.filePath?.takeIf { it.isNotBlank() }
+                                    ?: if (att.uri.scheme == "data") att.uri.toString() else att.uri
                             is com.android.everytalk.models.SelectedMediaItem.ImageFromBitmap ->
-                                att.bitmap
+                                att.model
                             else -> null
                         }
                     }
@@ -289,47 +420,46 @@ fun ImageGenerationMessagesList(
             }
         }
     }
-    var currentImageIndex by remember { mutableStateOf(0) }
+    var currentImageIndex by remember { mutableIntStateOf(0) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val selectedImageConfig by viewModel.selectedImageGenApiConfig.collectAsState()
     val authToken = remember(selectedImageConfig) { selectedImageConfig?.key?.takeIf { it.isNotBlank() } }
     val refererHeader = remember(selectedImageConfig) { selectedImageConfig?.address?.takeIf { it.isNotBlank() } }
+    val imageDownloadHeaders = remember(authToken, refererHeader) {
+        buildMap {
+            authToken?.let { put("Authorization", "Bearer $it") }
+            refererHeader?.let { put("Referer", it) }
+        }
+    }
+
+    suspend fun downloadImageBytes(url: String): Pair<ByteArray, String>? {
+        val downloaded = SafeHttpDownloader.download(
+            url = url,
+            maxBytes = MAX_IMAGE_RAW_BYTES,
+            timeoutMillis = IMAGE_DOWNLOAD_TIMEOUT_MS,
+            accept = "image/*",
+            headers = imageDownloadHeaders,
+            trustedOrigin = refererHeader,
+        )
+        return downloaded.bytes.takeIf { it.isNotEmpty() }?.let { bytes ->
+            bytes to downloaded.contentType.substringBefore(';').ifBlank { "image/png" }
+        }
+    }
 
     suspend fun cacheImageModelForEditing(model: Any): Uri? = withContext(Dispatchers.IO) {
         try {
             val bytesAndMime = when (model) {
                 is String -> {
-                    if (model.startsWith("data:", ignoreCase = true) && model.contains(";base64,", ignoreCase = true)) {
+                    if (model.startsWith("data:", ignoreCase = true)) {
                         val mime = model.substringAfter("data:", "").substringBefore(";")
                             .takeIf { it.contains("image", ignoreCase = true) } ?: "image/png"
-                        val bytes = android.util.Base64.decode(model.substringAfter(";base64,", ""), android.util.Base64.DEFAULT)
+                        val bytes = decodeImageBase64DataUri(model) ?: return@withContext null
                         bytes to mime
                     } else {
-                        val uri = runCatching { Uri.parse(model) }.getOrNull()
+                        val uri = runCatching { model.toUri() }.getOrNull()
                         when (uri?.scheme?.lowercase()) {
-                            "http", "https" -> {
-                                val builder = Request.Builder()
-                                    .url(model)
-                                    .header("User-Agent", "EveryTalk/1.0 (Android)")
-                                    .header("Accept", "image/*")
-                                authToken?.let { builder.header("Authorization", "Bearer $it") }
-                                refererHeader?.let { builder.header("Referer", it) }
-                                OkHttpClient.Builder()
-                                    .followRedirects(true)
-                                    .followSslRedirects(true)
-                                    .build()
-                                    .newCall(builder.build())
-                                    .execute()
-                                    .use { resp ->
-                                        val bodyBytes = resp.body?.readImageBytesAtMost()
-                                        if (!resp.isSuccessful || bodyBytes == null || bodyBytes.isEmpty()) {
-                                            null
-                                        } else {
-                                            bodyBytes to (resp.header("Content-Type") ?: "image/png")
-                                        }
-                                    }
-                            }
+                            "http", "https" -> downloadImageBytes(model)
                             "content" -> context.contentResolver.openInputStream(uri)?.use { input ->
                                 readAtMost(input, MAX_IMAGE_RAW_BYTES) to (context.contentResolver.getType(uri) ?: "image/png")
                             }
@@ -348,11 +478,7 @@ fun ImageGenerationMessagesList(
                     "file" -> model.path?.let { path ->
                         File(path).takeIf { it.exists() }?.let { it.readImageBytesAtMost() to mimeFromImagePath(path) }
                     }
-                    "http", "https" -> cacheImageModelForEditing(model.toString())?.let { uri ->
-                        context.contentResolver.openInputStream(uri)?.use { input ->
-                            readAtMost(input, MAX_IMAGE_RAW_BYTES) to (context.contentResolver.getType(uri) ?: "image/png")
-                        }
-                    }
+                    "http", "https" -> downloadImageBytes(model.toString())
                     else -> null
                 }
                 else -> null
@@ -364,10 +490,11 @@ fun ImageGenerationMessagesList(
                 "image/webp" -> "webp"
                 else -> "png"
             }
-            val cacheDir = File(context.cacheDir, "preview_cache").apply { mkdirs() }
-            val file = File(cacheDir, "img_${System.currentTimeMillis()}.$ext")
+            val file = createTemporaryImageFile(context, "preview_cache", "img", ext)
             FileOutputStream(file).use { it.write(bytes) }
             FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             android.util.Log.e("ImagePreview", "cacheImageModelForEditing failed: ${e.message}", e)
             null
@@ -376,17 +503,20 @@ fun ImageGenerationMessagesList(
 
     fun openImagePreview(model: Any) {
         imagePreviewModel = model
+        val normalizedModel = com.android.everytalk.ui.components.image.normalizeImageSourceForComparison(model.toString())
         val index = allConversationImages.indexOfFirst { img ->
-            img == model || run {
-                val a = img.toString()
-                val b = model.toString()
-                (a.startsWith("/") && b.startsWith("file://") && b.endsWith(a)) ||
-                    (b.startsWith("/") && a.startsWith("file://") && a.endsWith(b))
-            }
+            com.android.everytalk.ui.components.image.normalizeImageSourceForComparison(img.toString()) == normalizedModel
         }
         currentImageIndex = if (index >= 0) index else 0
         imagePreviewModels = if (allConversationImages.isNotEmpty()) allConversationImages else listOf(model)
         isImagePreviewVisible = true
+    }
+
+    fun dismissImagePreview() {
+        isImagePreviewVisible = false
+        imagePreviewModel = null
+        imagePreviewModels = emptyList()
+        currentImageIndex = 0
     }
 
     val pauseAwareApiCalling = remember(viewModel) {
@@ -600,7 +730,7 @@ fun ImageGenerationMessagesList(
                                                             openImagePreview(model)
                                                         }
                                                         is com.android.everytalk.models.SelectedMediaItem.ImageFromBitmap -> {
-                                                            att.bitmap?.let { openImagePreview(it) }
+                                                            openImagePreview(att.model)
                                                         }
                                                         else -> { /* 其他类型暂不预览 */ }
                                                     }
@@ -814,9 +944,9 @@ fun ImageGenerationMessagesList(
             }
 
             // 手势缩放/平移状态（每页独立）
-            var scale by remember { mutableStateOf(1f) }
-            var offsetX by remember { mutableStateOf(0f) }
-            var offsetY by remember { mutableStateOf(0f) }
+            var scale by remember { mutableFloatStateOf(1f) }
+            var offsetX by remember { mutableFloatStateOf(0f) }
+            var offsetY by remember { mutableFloatStateOf(0f) }
 
             // 页面切换时重置缩放
             LaunchedEffect(pagerState.currentPage) {
@@ -826,12 +956,28 @@ fun ImageGenerationMessagesList(
             }
 
             // 简易画笔编辑器状态
+            val brushLoadingScope = rememberCoroutineScope()
             var isBrushing by remember { mutableStateOf(false) }
+            var isBrushLoading by remember { mutableStateOf(false) }
             var brushBaseBitmap by remember { mutableStateOf<Bitmap?>(null) }
 
             fun closeBrushEditor() {
                 isBrushing = false
+                val bitmap = brushBaseBitmap
                 brushBaseBitmap = null
+                if (bitmap != null && !bitmap.isRecycled) {
+                    bitmap.recycle()
+                }
+            }
+
+            DisposableEffect(Unit) {
+                onDispose {
+                    brushBaseBitmap?.takeIf { !it.isRecycled }?.recycle()
+                }
+            }
+
+            LaunchedEffect(imagePreviewModel) {
+                if (isBrushing) closeBrushEditor()
             }
 
             fun resetTransform() {
@@ -844,7 +990,7 @@ fun ImageGenerationMessagesList(
                 model: Any,
                 context: Context
             ): Bitmap? {
-                return withContext(Dispatchers.Main) {
+                return withContext(Dispatchers.IO) {
                     try {
                         val imageLoader = context.imageLoader
                         val request = ImageRequest.Builder(context)
@@ -858,24 +1004,24 @@ fun ImageGenerationMessagesList(
                         
                         if (result is SuccessResult) {
                             val image = result.image
-                            val drawable = image?.asDrawable(context.resources)
-                            
-                            if (drawable != null) {
-                                val w = drawable.intrinsicWidth.coerceAtLeast(1)
-                                val h = drawable.intrinsicHeight.coerceAtLeast(1)
-                                val scale = min(
-                                    MAX_PREVIEW_BITMAP_DIMENSION.toFloat() / w.toFloat(),
-                                    MAX_PREVIEW_BITMAP_DIMENSION.toFloat() / h.toFloat()
-                                ).coerceAtMost(1f)
-                                val targetW = (w * scale).toInt().coerceAtLeast(1)
-                                val targetH = (h * scale).toInt().coerceAtLeast(1)
-                                val bmp = drawable.toBitmap(targetW, targetH, Bitmap.Config.ARGB_8888)
-                                android.util.Log.d("ImagePreview", "Bitmap obtained via Coil cache/network.")
-                                return@withContext bmp
-                            }
+                            val drawable = image.asDrawable(context.resources)
+
+                            val w = drawable.intrinsicWidth.coerceAtLeast(1)
+                            val h = drawable.intrinsicHeight.coerceAtLeast(1)
+                            val scale = min(
+                                MAX_PREVIEW_BITMAP_DIMENSION.toFloat() / w.toFloat(),
+                                MAX_PREVIEW_BITMAP_DIMENSION.toFloat() / h.toFloat()
+                            ).coerceAtMost(1f)
+                            val targetW = (w * scale).toInt().coerceAtLeast(1)
+                            val targetH = (h * scale).toInt().coerceAtLeast(1)
+                            val bmp = renderDrawableToOwnedBitmap(drawable, targetW, targetH)
+                            android.util.Log.d("ImagePreview", "Bitmap obtained via Coil cache/network.")
+                            return@withContext bmp
                         } else {
                             android.util.Log.w("ImagePreview", "Coil execute returned non-success result.")
                         }
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         android.util.Log.w("ImagePreview", "Coil load failed, will fallback. Error: ${e.message}")
                     }
@@ -887,27 +1033,9 @@ fun ImageGenerationMessagesList(
             // 统一的 HTTP 下载（附加鉴权/来源头，含重定向）
             suspend fun httpGetBitmap(urlStr: String): Bitmap? = withContext(Dispatchers.IO) {
                 try {
-                    val client = OkHttpClient.Builder()
-                        .followRedirects(true)
-                        .followSslRedirects(true)
-                        .build()
-                    val builder = Request.Builder()
-                        .url(urlStr)
-                        .header("User-Agent", "EveryTalk/1.0 (Android)")
-                        .header("Accept", "image/*")
-                    authToken?.let { builder.header("Authorization", "Bearer $it") }
-                    refererHeader?.let { builder.header("Referer", it) }
-                    client.newCall(builder.build()).execute().use { resp ->
-                        if (!resp.isSuccessful) {
-                            android.util.Log.w("ImagePreview", "HTTP code=${resp.code} for $urlStr")
-                            return@use null
-                        }
-                        val bytes = resp.body?.readImageBytesAtMost()
-                        if (bytes != null && bytes.isNotEmpty()) {
-                            return@use decodePreviewByteArray(bytes)
-                        }
-                        null
-                    }
+                    downloadImageBytes(urlStr)?.first?.let(::decodePreviewByteArray)
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     android.util.Log.w("ImagePreview", "HTTP load failed: ${e.message}")
                     null
@@ -917,9 +1045,12 @@ fun ImageGenerationMessagesList(
             // 解析当前 model 为 Bitmap（切到IO线程；尽量兜底各种来源）
             suspend fun loadBitmapFromModel(model: Any): Bitmap? = withContext(Dispatchers.IO) {
                 try {
-                    android.util.Log.d("ImagePreview", "loadBitmapFromModel type=${model::class.java.name} value=$model")
+                    android.util.Log.d(
+                        "ImagePreview",
+                        "loadBitmapFromModel type=${model::class.java.simpleName} chars=${model.toString().length}",
+                    )
                     when (model) {
-                        is Bitmap -> return@withContext model.scaledToPreviewLimit()
+                        is Bitmap -> return@withContext model.copyScaledToPreviewLimit()
                         is Uri -> {
                             val scheme = model.scheme?.lowercase()
                             return@withContext when (scheme) {
@@ -947,17 +1078,10 @@ fun ImageGenerationMessagesList(
                         is String -> {
                             val s = model
                             if (s.startsWith("data:", ignoreCase = true)) {
-                                val isBase64 = s.contains(";base64,", ignoreCase = true)
-                                if (isBase64) {
-                                    val base64 = s.substringAfter(";base64,", "")
-                                    if (base64.isNotBlank() && base64.length <= MAX_BASE64_LENGTH_FOR_PREVIEW) {
-                                        val bytes = android.util.Base64.decode(base64, android.util.Base64.DEFAULT)
-                                        return@withContext decodePreviewByteArray(bytes)
-                                    }
-                                }
+                                return@withContext decodeImageBase64DataUri(s)?.let(::decodePreviewByteArray)
                             }
                             
-                            val uri = try { Uri.parse(s) } catch (_: Exception) { null }
+                            val uri = try { s.toUri() } catch (_: Exception) { null }
                             val scheme = uri?.scheme?.lowercase()
                             return@withContext when (scheme) {
                                 "http", "https" -> {
@@ -966,13 +1090,13 @@ fun ImageGenerationMessagesList(
                                 }
                                 "content" -> {
                                     try {
-                                        decodePreviewStream { context.contentResolver.openInputStream(uri!!) }
+                                        decodePreviewStream { context.contentResolver.openInputStream(uri) }
                                     } catch (e: Exception) {
                                         android.util.Log.w("ImagePreview", "Content read failed: ${e.message}")
                                         null
                                     }
                                 }
-                                "file" -> decodePreviewFile(uri?.path)
+                                "file" -> decodePreviewFile(uri.path)
                                 null -> decodePreviewFile(s)
                                 else -> {
                                     val bmp = decodePreviewFile(s)
@@ -985,26 +1109,22 @@ fun ImageGenerationMessagesList(
                         }
                         else -> {
                             val s = model.toString()
-                            val uri = try { Uri.parse(s) } catch (_: Exception) { null }
+                            val uri = try { s.toUri() } catch (_: Exception) { null }
                             val scheme = uri?.scheme?.lowercase()
                             return@withContext when (scheme) {
-                                "http", "https" -> {
-                                    httpGetBitmap(s) ?: run {
-                                        try {
-                                            decodePreviewStream { java.net.URL(s).openStream() }
-                                        } catch (_: Exception) { null }
-                                    }
-                                }
+                                "http", "https" -> httpGetBitmap(s)
                                 "content" -> {
                                     try {
-                                        decodePreviewStream { context.contentResolver.openInputStream(uri!!) }
+                                        decodePreviewStream { context.contentResolver.openInputStream(uri) }
                                     } catch (e: Exception) { null }
                                 }
-                                "file" -> decodePreviewFile(uri?.path)
+                                "file" -> decodePreviewFile(uri.path)
                                 else -> decodePreviewFile(s)
                             }
                         }
                     }
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     android.util.Log.e("ImagePreview", "loadBytesAndMime error: ${e.message}", e)
                     null
@@ -1024,60 +1144,28 @@ fun ImageGenerationMessagesList(
                             // 修复：支持 application/octet-stream 等非标准 MIME 的 data URI
                             if (s.startsWith("data:", ignoreCase = true)) {
                                 val mimePart = s.substringAfter("data:", "").substringBefore(";", "")
-                                val isBase64 = s.contains(";base64,", ignoreCase = true)
-                                
-                                if (isBase64) {
-                                    val base64 = s.substringAfter(";base64,", "")
-                                    if (base64.isNotBlank()) {
-                                        val bytes = android.util.Base64.decode(base64, android.util.Base64.DEFAULT)
-                                        // 如果 MIME 是 octet-stream，尝试修正为 image/png
-                                        val finalMime = if (mimePart.contains("image", true)) mimePart else "image/png"
-                                        android.util.Log.d("ImagePreview", "Decoded data URI with MIME: $finalMime")
-                                        return@withContext bytes to finalMime
-                                    }
-                                }
-                                // 如果不是 base64 或者是空，暂时不支持，走后续流程
-                            }
-                            
-                            // 旧逻辑：仅检查 data:image
-                            if (s.startsWith("data:image", ignoreCase = true)) {
-                                val mime = s.substringAfter("data:", "").substringBefore(";base64", "")
-                                val base64 = s.substringAfter(";base64,", "")
-                                if (base64.isNotBlank()) {
-                                    val bytes = android.util.Base64.decode(base64, android.util.Base64.DEFAULT)
-                                    return@withContext bytes to (mime.ifBlank { "image/png" })
+                                val bytes = decodeImageBase64DataUri(s)
+                                if (bytes != null) {
+                                    // 如果 MIME 是 octet-stream，尝试修正为 image/png
+                                    val finalMime = if (mimePart.contains("image", true)) mimePart else "image/png"
+                                    android.util.Log.d("ImagePreview", "Decoded data URI with MIME: $finalMime")
+                                    return@withContext bytes to finalMime
                                 }
                                 return@withContext null
                             }
-                            val uri = runCatching { Uri.parse(s) }.getOrNull()
+                            val uri = runCatching { s.toUri() }.getOrNull()
                             val scheme = uri?.scheme?.lowercase()
                             return@withContext when (scheme) {
-                                "http", "https" -> {
-                                    val client = OkHttpClient.Builder()
-                                        .followRedirects(true)
-                                        .followSslRedirects(true)
-                                        .build()
-                                    val builder = Request.Builder().url(s)
-                                        .header("User-Agent", "EveryTalk/1.0 (Android)")
-                                        .header("Accept", "image/*")
-                                    authToken?.let { builder.header("Authorization", "Bearer $it") }
-                                    refererHeader?.let { builder.header("Referer", it) }
-                                    client.newCall(builder.build()).execute().use { resp ->
-                                        if (!resp.isSuccessful) return@use null
-                                        val bytes = resp.body?.readImageBytesAtMost() ?: return@use null
-                                        val mime = resp.header("Content-Type") ?: "image/png"
-                                        bytes to mime
-                                    }
-                                }
+                                "http", "https" -> downloadImageBytes(s)
                                 "content" -> {
-                                    val mime = context.contentResolver.getType(uri!!)
+                                    val mime = context.contentResolver.getType(uri)
                                         ?: "image/png"
                                     context.contentResolver.openInputStream(uri)?.use { input ->
                                         readAtMost(input, MAX_IMAGE_RAW_BYTES) to mime
                                     }
                                 }
                                 "file" -> {
-                                    val path = uri?.path ?: return@withContext null
+                                    val path = uri.path ?: return@withContext null
                                     val file = File(path)
                                     if (!file.exists()) return@withContext null
                                     val mime = when (file.extension.lowercase()) {
@@ -1105,23 +1193,7 @@ fun ImageGenerationMessagesList(
                         is Uri -> {
                             val scheme = model.scheme?.lowercase()
                             return@withContext when (scheme) {
-                                "http", "https" -> {
-                                    val client = OkHttpClient.Builder()
-                                        .followRedirects(true)
-                                        .followSslRedirects(true)
-                                        .build()
-                                    val builder = Request.Builder().url(model.toString())
-                                        .header("User-Agent", "EveryTalk/1.0 (Android)")
-                                        .header("Accept", "image/*")
-                                    authToken?.let { builder.header("Authorization", "Bearer $it") }
-                                    refererHeader?.let { builder.header("Referer", it) }
-                                    client.newCall(builder.build()).execute().use { resp ->
-                                        if (!resp.isSuccessful) return@use null
-                                        val bytes = resp.body?.readImageBytesAtMost() ?: return@use null
-                                        val mime = resp.header("Content-Type") ?: "image/png"
-                                        bytes to mime
-                                    }
-                                }
+                                "http", "https" -> downloadImageBytes(model.toString())
                                 "content" -> {
                                     val mime = context.contentResolver.getType(model)
                                         ?: "image/png"
@@ -1146,12 +1218,16 @@ fun ImageGenerationMessagesList(
                         }
                         is Bitmap -> {
                             // 内存位图（如编辑结果）选择 PNG 无损导出
-                            val baos = java.io.ByteArrayOutputStream()
-                            model.compress(Bitmap.CompressFormat.PNG, 100, baos)
+                            val baos = CappedByteArrayOutputStream(MAX_IMAGE_RAW_BYTES)
+                            check(model.compress(Bitmap.CompressFormat.PNG, 100, baos)) {
+                                "图片编码失败"
+                            }
                             baos.toByteArray() to "image/png"
                         }
                         else -> null
                     }
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     android.util.Log.e("ImagePreview", "loadBytesAndMime primary failed: ${e.message}", e)
                     null
@@ -1164,11 +1240,21 @@ fun ImageGenerationMessagesList(
                 try {
                     val fallbackBitmap = loadBitmapWithCache(model, context)
                     if (fallbackBitmap != null) {
-                        val baos = java.io.ByteArrayOutputStream()
-                        fallbackBitmap.compress(Bitmap.CompressFormat.PNG, 100, baos)
-                        android.util.Log.i("ImagePreview", "Fallback success: recovered image from view/cache.")
-                        return@withContext baos.toByteArray() to "image/png"
+                        try {
+                            val bytes = CappedByteArrayOutputStream(MAX_IMAGE_RAW_BYTES).use { output ->
+                                check(fallbackBitmap.compress(Bitmap.CompressFormat.PNG, 100, output)) {
+                                    "图片编码失败"
+                                }
+                                output.toByteArray()
+                            }
+                            android.util.Log.i("ImagePreview", "Fallback success: recovered image from view/cache.")
+                            return@withContext bytes to "image/png"
+                        } finally {
+                            if (!fallbackBitmap.isRecycled) fallbackBitmap.recycle()
+                        }
                     }
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
                     android.util.Log.e("ImagePreview", "Fallback failed: ${e.message}", e)
                 }
@@ -1182,7 +1268,10 @@ fun ImageGenerationMessagesList(
                     try {
                         val pair = loadBytesAndMime(imagePreviewModel!!)
                         if (pair == null) {
-                            android.util.Log.e("ImagePreview", "saveToAlbum failed: loadBytesAndMime returned null for model: $imagePreviewModel")
+                            android.util.Log.e(
+                                "ImagePreview",
+                                "saveToAlbum failed: modelType=${imagePreviewModel?.javaClass?.simpleName} chars=${imagePreviewModel.toString().length}",
+                            )
                             viewModel.showSnackbar("加载失败")
                             return@launch
                         }
@@ -1193,32 +1282,40 @@ fun ImageGenerationMessagesList(
                             "image/webp" -> "webp"
                             else -> "img"
                         }
-                        val resolver = context.contentResolver
-                        val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
-                            MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
-                        else
-                            MediaStore.Images.Media.EXTERNAL_CONTENT_URI
-                        val values = ContentValues().apply {
-                            put(MediaStore.Images.Media.DISPLAY_NAME, "EveryTalk_${System.currentTimeMillis()}.$ext")
-                            put(MediaStore.Images.Media.MIME_TYPE, mime)
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                                put(MediaStore.Images.Media.IS_PENDING, 1)
+                        withContext(Dispatchers.IO) {
+                            val resolver = context.contentResolver
+                            val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                                MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY)
+                            else
+                                MediaStore.Images.Media.EXTERNAL_CONTENT_URI
+                            val values = ContentValues().apply {
+                                put(MediaStore.Images.Media.DISPLAY_NAME, "EveryTalk_${System.currentTimeMillis()}.$ext")
+                                put(MediaStore.Images.Media.MIME_TYPE, mime)
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                    put(MediaStore.Images.Media.IS_PENDING, 1)
+                                }
+                            }
+                            var insertedUri: Uri? = null
+                            try {
+                                val uri = checkNotNull(resolver.insert(collection, values)) { "无法创建相册文件" }
+                                insertedUri = uri
+                                checkNotNull(resolver.openOutputStream(uri)) { "无法写入相册文件" }.use { output ->
+                                    output.write(bytes)
+                                }
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                                    values.clear()
+                                    values.put(MediaStore.Images.Media.IS_PENDING, 0)
+                                    resolver.update(uri, values, null, null)
+                                }
+                                insertedUri = null
+                            } catch (error: Throwable) {
+                                insertedUri?.let { uri -> runCatching { resolver.delete(uri, null, null) } }
+                                throw error
                             }
                         }
-                        val uri = resolver.insert(collection, values)
-                        if (uri == null) {
-                            viewModel.showSnackbar("保存失败")
-                            return@launch
-                        }
-                        resolver.openOutputStream(uri)?.use { os -> 
-                            os.write(bytes)
-                        }
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                            values.clear()
-                            values.put(MediaStore.Images.Media.IS_PENDING, 0)
-                            resolver.update(uri, values, null, null)
-                        }
                         viewModel.showSnackbar("已保存")
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         viewModel.showSnackbar("保存失败")
                     }
@@ -1239,22 +1336,42 @@ fun ImageGenerationMessagesList(
                     "image/webp" -> "webp"
                     else -> "img"
                 }
-                val cacheDir = File(context.cacheDir, "preview_cache").apply { mkdirs() }
-                val file = File(cacheDir, "img_${System.currentTimeMillis()}.$ext")
-                FileOutputStream(file).use { fos -> fos.write(bytes) }
-                return FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
+                return withContext(Dispatchers.IO) {
+                    val file = createTemporaryImageFile(context, "preview_cache", "img", ext)
+                    FileOutputStream(file).use { output -> output.write(bytes) }
+                    FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
+                }
             }
 
             // 打开内置画笔编辑器
             fun openBrushEditor() {
-                scope.launch {
-                    val bmp = loadBitmapFromModel(imagePreviewModel!!)
-                    if (bmp == null) {
-                        viewModel.showSnackbar("加载失败")
-                        return@launch
+                if (isBrushing || isBrushLoading) return
+                val requestedModel = imagePreviewModel ?: return
+                isBrushLoading = true
+                brushLoadingScope.launch(Dispatchers.IO) {
+                    var bitmap: Bitmap? = null
+                    try {
+                        bitmap = loadBitmapFromModel(requestedModel)
+                        withContext(Dispatchers.Main.immediate) {
+                            val loadedBitmap = bitmap
+                            if (loadedBitmap == null) {
+                                viewModel.showSnackbar("加载失败")
+                                return@withContext
+                            }
+                            if (!isImagePreviewVisible || imagePreviewModel != requestedModel) {
+                                return@withContext
+                            }
+                            brushBaseBitmap?.takeIf { !it.isRecycled }?.recycle()
+                            brushBaseBitmap = loadedBitmap
+                            bitmap = null
+                            isBrushing = true
+                        }
+                    } finally {
+                        bitmap?.takeIf { !it.isRecycled }?.recycle()
+                        withContext(Dispatchers.Main.immediate) {
+                            isBrushLoading = false
+                        }
                     }
-                    brushBaseBitmap = bmp
-                    isBrushing = true
                 }
             }
 
@@ -1274,10 +1391,11 @@ fun ImageGenerationMessagesList(
                             "image/webp" -> "webp"
                             else -> "img"
                         }
-                        val cacheDir = File(context.cacheDir, "share_images").apply { mkdirs() }
-                        val file = File(cacheDir, "share_${System.currentTimeMillis()}.$ext")
-                        FileOutputStream(file).use { fos -> fos.write(bytes) }
-                        val uri = FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
+                        val uri = withContext(Dispatchers.IO) {
+                            val file = createTemporaryImageFile(context, "share_images", "share", ext)
+                            FileOutputStream(file).use { output -> output.write(bytes) }
+                            FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
+                        }
                         val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
                             type = mime
                             putExtra(android.content.Intent.EXTRA_STREAM, uri)
@@ -1286,6 +1404,8 @@ fun ImageGenerationMessagesList(
                             clipData = android.content.ClipData.newUri(context.contentResolver, "image", uri)
                         }
                         context.startActivity(android.content.Intent.createChooser(intent, "分享图片"))
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         viewModel.showSnackbar("分享失败")
                     }
@@ -1305,6 +1425,8 @@ fun ImageGenerationMessagesList(
                             )
                         )
                         viewModel.showSnackbar("已选择")
+                    } catch (e: CancellationException) {
+                        throw e
                     } catch (e: Exception) {
                         viewModel.showSnackbar("选择失败")
                     }
@@ -1328,12 +1450,12 @@ fun ImageGenerationMessagesList(
                     )
                     viewModel.showSnackbar("已选择")
                     // 关闭预览对话框，返回图像模式页面
-                    isImagePreviewVisible = false
+                    dismissImagePreview()
                 }
             }
 
             Dialog(
-                onDismissRequest = { isImagePreviewVisible = false },
+                onDismissRequest = { dismissImagePreview() },
                 properties = DialogProperties(
                     dismissOnBackPress = true,
                     dismissOnClickOutside = true,
@@ -1375,7 +1497,7 @@ fun ImageGenerationMessagesList(
                                     Spacer(modifier = Modifier.weight(1f))
                                 }
                                 IconButton(
-                                    onClick = { isImagePreviewVisible = false },
+                                    onClick = { dismissImagePreview() },
                                     modifier = Modifier
                                         .size(40.dp)
                                         .background(controlBackgroundColor, CircleShape)
@@ -1400,9 +1522,21 @@ fun ImageGenerationMessagesList(
                         ) { page ->
                             val currentUrl = imagePreviewModels.getOrNull(page)
                             val animatedScale = remember(page) { Animatable(1f) }
-                            var pageOffsetX by remember(page) { mutableStateOf(0f) }
-                            var pageOffsetY by remember(page) { mutableStateOf(0f) }
+                            var pageOffsetX by remember(page) { mutableFloatStateOf(0f) }
+                            var pageOffsetY by remember(page) { mutableFloatStateOf(0f) }
                             val coroutineScope = rememberCoroutineScope()
+                            val toggleZoom: () -> Unit = {
+                                coroutineScope.launch {
+                                    if (animatedScale.value > 1f) {
+                                        animatedScale.animateTo(1f, tween(250))
+                                        pageOffsetX = 0f
+                                        pageOffsetY = 0f
+                                    } else {
+                                        animatedScale.animateTo(2f, tween(250))
+                                    }
+                                    scale = animatedScale.value
+                                }
+                            }
 
                             Box(
                                 modifier = Modifier
@@ -1449,19 +1583,10 @@ fun ImageGenerationMessagesList(
                                     .combinedClickable(
                                         indication = null,
                                         interactionSource = remember { MutableInteractionSource() },
-                                        onClick = { },
-                                        onDoubleClick = {
-                                            coroutineScope.launch {
-                                                if (animatedScale.value > 1f) {
-                                                    animatedScale.animateTo(1f, tween(250))
-                                                    pageOffsetX = 0f
-                                                    pageOffsetY = 0f
-                                                } else {
-                                                    animatedScale.animateTo(2f, tween(250))
-                                                }
-                                                scale = animatedScale.value
-                                            }
-                                        }
+                                        role = Role.Button,
+                                        onClickLabel = "切换图片缩放",
+                                        onClick = toggleZoom,
+                                        onDoubleClick = toggleZoom,
                                     ),
                                 contentAlignment = Alignment.Center
                             ) {
@@ -1535,24 +1660,29 @@ fun ImageGenerationMessagesList(
                             // 将编辑后的图片加入"已选择媒体"，并返回（关闭画笔和预览）
                             scope.launch {
                                 try {
-                                    val cacheDir = File(context.cacheDir, "preview_cache").apply { mkdirs() }
-                                    val file = File(cacheDir, "edited_${System.currentTimeMillis()}.jpg")
-                                    FileOutputStream(file).use { fos ->
-                                        edited.compress(Bitmap.CompressFormat.JPEG, 95, fos)
+                                    val (uri, path) = withContext(Dispatchers.IO) {
+                                        val file = createTemporaryImageFile(context, "preview_cache", "edited", "jpg")
+                                        FileOutputStream(file).use { fos ->
+                                            check(edited.compress(Bitmap.CompressFormat.JPEG, 95, fos)) { "图片压缩失败" }
+                                        }
+                                        FileProvider.getUriForFile(context, "${context.packageName}.provider", file) to file.absolutePath
                                     }
-                                    val uri = FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
                                     viewModel.addMediaItem(
                                         com.android.everytalk.models.SelectedMediaItem.ImageFromUri(
                                             uri = uri,
                                             id = UUID.randomUUID().toString(),
-                                            filePath = null
+                                            filePath = path
                                         )
                                     )
                                     viewModel.showSnackbar("已编辑")
                                     closeBrushEditor()
-                                    isImagePreviewVisible = false
+                                    dismissImagePreview()
+                                } catch (e: CancellationException) {
+                                    throw e
                                 } catch (e: Exception) {
                                     viewModel.showSnackbar("保存失败")
+                                } finally {
+                                    if (!edited.isRecycled) edited.recycle()
                                 }
                             }
                         }
@@ -1571,10 +1701,12 @@ private fun BrushEditorOverlay(
     onDone: (Bitmap) -> Unit
 ) {
     // 数据与状态
+    val coroutineScope = rememberCoroutineScope()
     val imageBitmap = remember(baseBitmap) { baseBitmap.asImageBitmap() }
     val strokes = remember { mutableStateListOf<List<Offset>>() }
     val undoneStrokes = remember { mutableStateListOf<List<Offset>>() }
     val currentStroke = remember { mutableStateListOf<Offset>() } // 使用可观察列表，支持实时绘制
+    var isCompositing by remember { mutableStateOf(false) }
     val strokeWidthPx = 24f // 固定画笔粗细（不提供调节控件）
     val strokeColor = Color(0xFF82A8FF) // 接近示例中的淡蓝色
 
@@ -1620,7 +1752,7 @@ private fun BrushEditorOverlay(
                     Canvas(
                         modifier = Modifier
                             .matchParentSize()
-                            .pointerInput(Unit) {
+                            .pointerInput(drawW, drawH) {
                                 // 兼容性更好的连续绘制：基于 awaitPointerEvent 循环
                                 awaitPointerEventScope {
                                     while (true) {
@@ -1634,6 +1766,7 @@ private fun BrushEditorOverlay(
                                         } else {
                                             if (currentStroke.size > 1) {
                                                 strokes.add(currentStroke.toList())
+                                                undoneStrokes.clear()
                                             }
                                             currentStroke.clear() // 清空以便下一笔实时绘制
                                         }
@@ -1791,34 +1924,53 @@ private fun BrushEditorOverlay(
                                 modifier = Modifier
                                     .height(44.dp)
                                     .widthIn(min = 112.dp)
-                                    .clickable {
-                                        // 合成到原图尺寸
-                                        val out = Bitmap.createBitmap(baseBitmap.width, baseBitmap.height, Bitmap.Config.ARGB_8888)
-                                        val c = Canvas(out)
-                                        c.drawBitmap(baseBitmap, 0f, 0f, null)
-                                        val paint = android.graphics.Paint().apply {
-                                            color = strokeColor.toArgb()
-                                            isAntiAlias = true
-                                            strokeWidth = strokeWidthPx / scale
-                                            style = android.graphics.Paint.Style.STROKE
-                                            strokeCap = android.graphics.Paint.Cap.ROUND
-                                            strokeJoin = android.graphics.Paint.Join.ROUND
+                                    .clickable(enabled = !isCompositing) {
+                                        isCompositing = true
+                                        val strokeSnapshot = buildList {
+                                            addAll(strokes.map { it.toList() })
+                                            if (currentStroke.isNotEmpty()) add(currentStroke.toList())
                                         }
-                                        val sx = bmpW / drawW
-                                        val sy = bmpH / drawH
-                                        val allStrokes = (strokes + if (currentStroke.isNotEmpty()) listOf(currentStroke) else emptyList())
-                                        allStrokes.forEach { pts ->
-                                            if (pts.size > 1) {
-                                                for (i in 0 until pts.size - 1) {
-                                                    val x1 = pts[i].x * sx
-                                                    val y1 = pts[i].y * sy
-                                                    val x2 = pts[i + 1].x * sx
-                                                    val y2 = pts[i + 1].y * sy
-                                                    c.drawLine(x1, y1, x2, y2, paint)
+                                        coroutineScope.launch {
+                                            var pendingBitmap: Bitmap? = null
+                                            try {
+                                                pendingBitmap = withContext(Dispatchers.Default) {
+                                                    val result = createBitmap(
+                                                        baseBitmap.width,
+                                                        baseBitmap.height,
+                                                        Bitmap.Config.ARGB_8888,
+                                                    )
+                                                    val canvas = Canvas(result)
+                                                    canvas.drawBitmap(baseBitmap, 0f, 0f, null)
+                                                    val paint = android.graphics.Paint().apply {
+                                                        color = strokeColor.toArgb()
+                                                        isAntiAlias = true
+                                                        strokeWidth = strokeWidthPx / scale
+                                                        style = android.graphics.Paint.Style.STROKE
+                                                        strokeCap = android.graphics.Paint.Cap.ROUND
+                                                        strokeJoin = android.graphics.Paint.Join.ROUND
+                                                    }
+                                                    val sx = bmpW / drawW
+                                                    val sy = bmpH / drawH
+                                                    strokeSnapshot.forEach { points ->
+                                                        for (index in 0 until points.lastIndex) {
+                                                            canvas.drawLine(
+                                                                points[index].x * sx,
+                                                                points[index].y * sy,
+                                                                points[index + 1].x * sx,
+                                                                points[index + 1].y * sy,
+                                                                paint,
+                                                            )
+                                                        }
+                                                    }
+                                                    result
                                                 }
+                                                onDone(requireNotNull(pendingBitmap))
+                                                pendingBitmap = null
+                                            } finally {
+                                                pendingBitmap?.takeIf { !it.isRecycled }?.recycle()
+                                                isCompositing = false
                                             }
                                         }
-                                        onDone(out)
                                     }
                             ) {
                                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -1876,11 +2028,11 @@ private fun AiMessageItem(
     maxWidth: Dp,
     onLongPress: (Message, Offset) -> Unit,
     onOpenPreview: (Any) -> Unit,
-    modifier: Modifier = Modifier,
     isStreaming: Boolean,
     onImageLoaded: () -> Unit,
     scrollStateManager: ChatScrollStateManager,
-    viewModel: AppViewModel
+    viewModel: AppViewModel,
+    modifier: Modifier = Modifier
 ) {
     val shape = androidx.compose.ui.graphics.RectangleShape
     val aiReplyMessageDescription = stringResource(id = R.string.ai_reply_message)
@@ -1934,13 +2086,15 @@ private fun AiMessageItem(
     } else {
         localRenderState
     }
+    val currentMessage by rememberUpdatedState(message)
+    val currentOnLongPress by rememberUpdatedState(onLongPress)
 
     Row(
         modifier = modifier
             .fillMaxWidth(),
         horizontalArrangement = Arrangement.Start
     ) {
-        var itemGlobalPosition by remember { mutableStateOf(Offset.Zero) }
+        var itemGlobalPosition by remember(message.id) { mutableStateOf(Offset.Zero) }
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1951,7 +2105,7 @@ private fun AiMessageItem(
                     detectTapGestures(
                         onLongPress = { localOffset ->
                             // 将本地偏移转换为全局，统一与附件一致的定位体验
-                            onLongPress(message, itemGlobalPosition + localOffset)
+                            currentOnLongPress(currentMessage, itemGlobalPosition + localOffset)
                         }
                     )
                 }
@@ -1988,13 +2142,13 @@ private fun AiMessageItem(
                             attachments = message.imageUrls.map { urlStr ->
                                 val safeUri = try {
                                     when {
-                                        urlStr.startsWith("data:image", ignoreCase = true) -> Uri.parse(urlStr)
-                                        urlStr.startsWith("file://", ignoreCase = true) -> Uri.parse(urlStr)
+                                        urlStr.startsWith("data:image", ignoreCase = true) -> urlStr.toUri()
+                                        urlStr.startsWith("file://", ignoreCase = true) -> urlStr.toUri()
                                         urlStr.startsWith("/", ignoreCase = true) -> Uri.fromFile(File(urlStr))
-                                        else -> Uri.parse(urlStr)
+                                        else -> urlStr.toUri()
                                     }
                                 } catch (_: Exception) {
-                                    if (urlStr.startsWith("/")) Uri.fromFile(File(urlStr)) else Uri.parse(urlStr)
+                                    if (urlStr.startsWith("/")) Uri.fromFile(File(urlStr)) else urlStr.toUri()
                                 }
                                 SelectedMediaItem.ImageFromUri(safeUri, UUID.randomUUID().toString())
                             },

@@ -61,7 +61,6 @@ fun ImageGenerationSettingsScreen(
     val savedConfigs by viewModel.imageGenApiConfigs.collectAsState()
     val selectedConfigForApp by viewModel.selectedImageGenApiConfig.collectAsState()
     val allProviders by viewModel.allProviders.collectAsState()
-    val isFetchingModels by viewModel.isFetchingModels.collectAsState()
     val fetchedModels by viewModel.fetchedModels.collectAsState()
     val isRefreshingModels by viewModel.isRefreshingModels.collectAsState()
     val showAutoFetchConfirm by viewModel.showAutoFetchConfirmDialog.collectAsState()
@@ -93,17 +92,8 @@ fun ImageGenerationSettingsScreen(
     var showAddModelToKeyDialog by remember { mutableStateOf(false) }
     var showAddModelNameDialog by remember { mutableStateOf(false) }
     var pendingFullConfig by remember { mutableStateOf<ApiConfig?>(null) }
-    var addModelToKeyTargetApiKey by remember { mutableStateOf("") }
-    var addModelToKeyTargetProvider by remember { mutableStateOf("") }
-    var addModelToKeyTargetAddress by remember { mutableStateOf("") }
-    var addModelToKeyTargetChannel by remember { mutableStateOf("") }
-    var addModelToKeyTargetModality by remember { mutableStateOf(ModalityType.IMAGE) }
-    var addModelToKeyNewModelName by remember { mutableStateOf("") }
+    var addModelToKeyTarget by remember { mutableStateOf<ApiConfig?>(null) }
     var showManualModelInputDialog by remember { mutableStateOf(false) }
-    var manualModelInputProvider by remember { mutableStateOf("") }
-    var manualModelInputAddress by remember { mutableStateOf("") }
-    var manualModelInputKey by remember { mutableStateOf("") }
-    var manualModelInputChannel by remember { mutableStateOf("") }
 
     var showAddCustomProviderDialog by remember { mutableStateOf(false) }
     var newCustomProviderNameInput by remember { mutableStateOf("") }
@@ -117,10 +107,6 @@ fun ImageGenerationSettingsScreen(
     LaunchedEffect(Unit) {
         viewModel.showManualModelInputRequest.collect { request ->
             if (request.isImageGen) {
-                manualModelInputProvider = request.provider
-                manualModelInputAddress = request.address
-                manualModelInputKey = request.key
-                manualModelInputChannel = request.channel
                 showManualModelInputDialog = true
             }
         }
@@ -171,13 +157,8 @@ fun ImageGenerationSettingsScreen(
                 viewModel.selectConfig(configToSelect, isImageGen = true)
             },
             selectedConfigIdInApp = selectedConfigForApp?.id,
-            onAddModelForApiKeyClick = { apiKey, existingProvider, existingAddress, existingChannel, existingModality ->
-                addModelToKeyTargetApiKey = apiKey
-                addModelToKeyTargetProvider = existingProvider
-                addModelToKeyTargetAddress = existingAddress
-                addModelToKeyTargetChannel = existingChannel
-                addModelToKeyTargetModality = existingModality
-                addModelToKeyNewModelName = ""
+            onAddModelForApiKeyClick = { representativeConfig ->
+                addModelToKeyTarget = representativeConfig
                 showAddModelToKeyDialog = true
             },
             onDeleteModelForApiKey = { configToDelete ->
@@ -301,7 +282,10 @@ fun ImageGenerationSettingsScreen(
                        model = "Kwai-Kolors/Kolors",
                        modalityType = ModalityType.IMAGE,
                        channel = channel,
-                       isValid = true
+                       isValid = true,
+                       imageSize = imageSize,
+                       numInferenceSteps = numInferenceSteps,
+                       guidanceScale = guidanceScale,
                    )
                    viewModel.addConfig(config, isImageGen = true)
                    showAddFullConfigDialog = false
@@ -319,13 +303,25 @@ fun ImageGenerationSettingsScreen(
                        model = "",
                        modalityType = ModalityType.IMAGE,
                        channel = channel,
-                       isValid = true
+                       isValid = true,
+                       imageSize = imageSize,
+                       numInferenceSteps = numInferenceSteps,
+                       guidanceScale = guidanceScale,
                    )
                    viewModel.addConfig(config, isImageGen = true)
                    showAddFullConfigDialog = false
                    viewModel.clearFetchedModels()
                } else if (key.isNotBlank() && providerTrim.isNotBlank() && address.isNotBlank()) {
-                   viewModel.startAddConfigFlow(providerTrim, address, key, channel, isImageGen = true)
+                    viewModel.startAddConfigFlow(
+                        provider = providerTrim,
+                        address = address,
+                        key = key,
+                        channel = channel,
+                        isImageGen = true,
+                        imageSize = imageSize,
+                        numInferenceSteps = numInferenceSteps,
+                        guidanceScale = guidanceScale,
+                    )
                    showAddFullConfigDialog = false
                }
            },
@@ -335,20 +331,15 @@ fun ImageGenerationSettingsScreen(
 
     if (showManualModelInputDialog) {
         AddImageModelToKeyDialog(
-            onDismissRequest = { showManualModelInputDialog = false },
-            onConfirm = { modelName ->
-                val config = ApiConfig(
-                    id = UUID.randomUUID().toString(),
-                    address = manualModelInputAddress,
-                    key = manualModelInputKey,
-                    model = modelName,
-                    provider = manualModelInputProvider,
-                    name = modelName,
-                    modalityType = ModalityType.IMAGE,
-                    channel = manualModelInputChannel
-                )
-                viewModel.addConfig(config, isImageGen = true)
+            onDismissRequest = {
                 showManualModelInputDialog = false
+                viewModel.dismissManualModelInput()
+            },
+            onConfirm = { modelName ->
+                if (modelName.isNotBlank()) {
+                    viewModel.submitManualModel(modelName)
+                    showManualModelInputDialog = false
+                }
             }
         )
     }
@@ -376,20 +367,16 @@ fun ImageGenerationSettingsScreen(
 
     if (showAddModelToKeyDialog) {
         AddImageModelToKeyDialog(
-            onDismissRequest = { showAddModelToKeyDialog = false },
-            onConfirm = { modelName ->
-                val config = ApiConfig(
-                    id = UUID.randomUUID().toString(),
-                    address = addModelToKeyTargetAddress,
-                    key = addModelToKeyTargetApiKey,
-                    model = modelName,
-                    provider = addModelToKeyTargetProvider,
-                    name = modelName,
-                    modalityType = ModalityType.IMAGE,
-                    channel = addModelToKeyTargetChannel
-                )
-                viewModel.addConfig(config, isImageGen = true)
+            onDismissRequest = {
                 showAddModelToKeyDialog = false
+                addModelToKeyTarget = null
+            },
+            onConfirm = { modelName ->
+                addModelToKeyTarget?.let { representativeConfig ->
+                    viewModel.addModelToConfigGroup(representativeConfig, modelName)
+                    showAddModelToKeyDialog = false
+                    addModelToKeyTarget = null
+                }
             }
         )
     }

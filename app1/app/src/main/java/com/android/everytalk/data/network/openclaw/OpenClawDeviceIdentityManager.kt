@@ -2,6 +2,7 @@ package com.android.everytalk.data.network.openclaw
 
 import android.content.Context
 import android.util.Base64
+import androidx.core.content.edit
 import java.security.SecureRandom
 import org.bouncycastle.crypto.AsymmetricCipherKeyPair
 import org.bouncycastle.crypto.generators.Ed25519KeyPairGenerator
@@ -36,10 +37,10 @@ class OpenClawDeviceIdentityManager(
         }
 
         val generated = generateIdentity()
-        prefs.edit()
-            .putString("public_key", Base64.encodeToString(generated.publicKeyRaw, Base64.NO_WRAP))
-            .putString("private_key", Base64.encodeToString(generated.privateKeyRaw, Base64.NO_WRAP))
-            .apply()
+        prefs.edit {
+            putString("public_key", Base64.encodeToString(generated.publicKeyRaw, Base64.NO_WRAP))
+            putString("private_key", Base64.encodeToString(generated.privateKeyRaw, Base64.NO_WRAP))
+        }
         return generated
     }
 

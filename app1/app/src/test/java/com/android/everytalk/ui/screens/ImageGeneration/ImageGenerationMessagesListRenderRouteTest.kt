@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.screens.ImageGeneration
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -59,6 +60,28 @@ class ImageGenerationMessagesListRenderRouteTest {
 
         assertTrue(stopCallback.contains("viewModel.onCancelAPICall()"))
         assertTrue(stopCallback.contains("scrollStateManager.stopStreamingAndJumpToRealBottom()"))
+    }
+
+    @Test
+    fun `image base64 decoding is centralized behind decoded byte limit`() {
+        val source = imageGenerationMessagesListSource()
+        val gateIndex = source.indexOf("isImageBase64WithinDecodedLimit(dataUri, payloadStart)")
+        val decodeIndex = source.indexOf("Base64.getDecoder().wrap(Base64PayloadInputStream")
+
+        assertEquals(0, Regex("Base64\\.decode").findAll(source).count())
+        assertTrue(gateIndex >= 0)
+        assertTrue(decodeIndex > gateIndex)
+        assertTrue(source.contains("MAX_IMAGE_BASE64_DECODED_BYTES = 32L * 1024L * 1024L"))
+    }
+
+    @Test
+    fun `coil drawable is rendered into locally owned bitmap before recycling`() {
+        val source = imageGenerationMessagesListSource()
+
+        assertFalse(source.contains(".toBitmap("))
+        assertTrue(source.contains("renderDrawableToOwnedBitmap(drawable, targetW, targetH)"))
+        assertTrue(source.contains("model.copyScaledToPreviewLimit()"))
+        assertTrue(source.contains("brushBaseBitmap?.takeIf { !it.isRecycled }?.recycle()"))
     }
 
     private fun imageGenerationMessagesListSource(): String {

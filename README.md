@@ -160,7 +160,6 @@ SILICONFLOW_API_KEY="sk-..."
 
 ### Core Components
 - **[`ApiClient.kt`](app1/app/src/main/java/com/android/everytalk/data/network/ApiClient.kt)**: Manages network calls, SSE deserialization, error recovery, and Cloudflare bypass.
-- **[`StreamingOutputController.kt`](app1/app/src/main/java/com/android/everytalk/util/streaming/StreamingOutputController.kt)**: Pass-through streaming controller updating Compose states immediately.
 - **[`GeminiDirectClient.kt`](app1/app/src/main/java/com/android/everytalk/data/network/GeminiDirectClient.kt)** / **[`OpenAIDirectClient.kt`](app1/app/src/main/java/com/android/everytalk/data/network/OpenAIDirectClient.kt)**: Handles serverless connections directly to Google/OpenAI.
 - **[`VoiceChatSession.kt`](app1/app/src/main/java/com/android/everytalk/data/network/VoiceChatSession.kt)**: Manages continuous voice sessions (STT → Chat → TTS).
 
