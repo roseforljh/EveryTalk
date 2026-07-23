@@ -82,6 +82,19 @@ internal fun resolveCodeBlockScrollTarget(isStreaming: Boolean, maxValue: Int): 
     return if (isStreaming) maxValue.coerceAtLeast(0) else 0
 }
 
+internal fun shouldAnimateCodeBlockContentSize(
+    isStreaming: Boolean,
+    suppressInitialAsyncResizeAnimation: Boolean,
+    initialAsyncResizeSettled: Boolean,
+): Boolean = isStreaming ||
+    !suppressInitialAsyncResizeAnimation ||
+    initialAsyncResizeSettled
+
+private data class HighlightedCodeState(
+    val text: AnnotatedString,
+    val asyncHighlightReady: Boolean,
+)
+
 /**
  * 代码块卡片组件
  *
@@ -98,6 +111,7 @@ fun CodeBlockCard(
     code: String,
     modifier: Modifier = Modifier,
     isStreaming: Boolean = false,
+    suppressInitialAsyncResizeAnimation: Boolean = false,
     onCopy: (() -> Unit)? = null,
     onPreviewRequested: (() -> Unit)? = null,
     onLongPress: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null
@@ -126,20 +140,59 @@ fun CodeBlockCard(
         if (isDarkTheme) SyntaxHighlightTheme.Dark else SyntaxHighlightTheme.Light
     }
     
-    val highlightedCode by produceState(
-        AnnotatedString(code),
+    val shouldHighlightCode = remember(code, isStreaming) {
+        HighlightCache.shouldHighlight(code, isStreaming)
+    }
+    val highlightedCodeState by produceState(
+        HighlightedCodeState(
+            text = AnnotatedString(code),
+            asyncHighlightReady = !shouldHighlightCode,
+        ),
         code,
         language,
         isDarkTheme,
         isStreaming,
     ) {
-        value = AnnotatedString(code)
-        if (HighlightCache.shouldHighlight(code, isStreaming)) {
-            value = withContext(Dispatchers.Default) {
-                HighlightCache.highlight(code, language, isDarkTheme, syntaxTheme)
-            }
+        if (shouldHighlightCode) {
+            value = HighlightedCodeState(
+                text = withContext(Dispatchers.Default) {
+                    HighlightCache.highlight(code, language, isDarkTheme, syntaxTheme)
+                },
+                asyncHighlightReady = true,
+            )
         }
     }
+    var initialAsyncResizeSettled by remember(
+        code,
+        language,
+        isDarkTheme,
+        isStreaming,
+        suppressInitialAsyncResizeAnimation,
+    ) {
+        mutableStateOf(
+            !suppressInitialAsyncResizeAnimation || isStreaming || !shouldHighlightCode
+        )
+    }
+    LaunchedEffect(
+        highlightedCodeState.asyncHighlightReady,
+        suppressInitialAsyncResizeAnimation,
+        isStreaming,
+    ) {
+        if (
+            suppressInitialAsyncResizeAnimation &&
+            !isStreaming &&
+            highlightedCodeState.asyncHighlightReady &&
+            !initialAsyncResizeSettled
+        ) {
+            withFrameNanos { }
+            initialAsyncResizeSettled = true
+        }
+    }
+    val animateContentResize = shouldAnimateCodeBlockContentSize(
+        isStreaming = isStreaming,
+        suppressInitialAsyncResizeAnimation = suppressInitialAsyncResizeAnimation,
+        initialAsyncResizeSettled = initialAsyncResizeSettled,
+    )
     
     // 规范化语言标签
     val displayLanguage = language?.trim()?.ifBlank { "CODE" }?.uppercase() ?: "CODE"
@@ -379,8 +432,14 @@ fun CodeBlockCard(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .animateContentSize(
-                        animationSpec = tween(durationMillis = 220)
+                    .then(
+                        if (animateContentResize) {
+                            Modifier.animateContentSize(
+                                animationSpec = tween(durationMillis = 220)
+                            )
+                        } else {
+                            Modifier
+                        }
                     )
                     .background(Color.Transparent)
                     .drawWithContent {
@@ -450,7 +509,7 @@ fun CodeBlockCard(
                             .onSizeChanged { contentBoxHeightPx = it.height }
                     ) {
                         Text(
-                            text = highlightedCode,
+                            text = highlightedCodeState.text,
                             style = MaterialTheme.typography.bodyMedium.copy(
                                 fontFamily = FontFamily.Monospace,
                                 fontSize = 13.sp,
