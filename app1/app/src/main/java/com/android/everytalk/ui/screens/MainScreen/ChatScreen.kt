@@ -159,6 +159,12 @@ internal fun shouldShowHistoryConversationLoadingOverlay(
         currentLoadGeneration = currentLoadGeneration,
     )
 
+internal fun shouldShowInitialConversationLoadingOverlay(
+    isHistoryLoadingOverlayVisible: Boolean,
+    initialScrollHandled: Boolean,
+): Boolean = isHistoryLoadingOverlayVisible ||
+    !initialScrollHandled
+
 internal fun shouldStartHistoryConversationLoadingOverlay(
     observedLoadGeneration: Long,
     currentLoadGeneration: Long,
@@ -182,6 +188,7 @@ internal fun isHistoryConversationReadyForInitialBottom(
     messages: List<Message>,
     chatItems: List<ChatListItem>,
     laidOutItemCount: Int,
+    requireLaidOutItemCount: Boolean = true,
 ): Boolean {
     if (isLoadingHistory || isLoadingHistoryData) return false
     if (requireMatchingScrollSession && currentConversationId != scrollSessionKey) return false
@@ -198,6 +205,8 @@ internal fun isHistoryConversationReadyForInitialBottom(
             is ChatListItem.SystemMessage -> item.messageId
             is ChatListItem.AiMessage -> item.messageId
             is ChatListItem.AiMessageCode -> item.messageId
+            is ChatListItem.AiMessageSources -> item.messageId
+            is ChatListItem.AiMarkdownNode -> item.messageId
             is ChatListItem.AiMessageStreaming -> item.messageId
             is ChatListItem.AiMessageCodeStreaming -> item.messageId
             is ChatListItem.AiMessageReasoning -> item.message.id
@@ -210,7 +219,7 @@ internal fun isHistoryConversationReadyForInitialBottom(
     }
 
     return expectedMessageIds == renderedMessageIds &&
-        laidOutItemCount >= chatItems.size
+        (!requireLaidOutItemCount || laidOutItemCount >= chatItems.size)
 }
 
 @Composable
@@ -408,94 +417,103 @@ fun ChatScreen(
         previousConversationIdForScroll = conversationId
     }
 
-    val restoredScrollState = remember(scrollSessionKey) {
-        viewModel.getScrollState(scrollSessionKey)?.takeIf { it.userScrolledAway }
+    var initialListIndex by remember(scrollSessionKey) { mutableStateOf<Int?>(null) }
+    var initialScrollHandled by remember(scrollSessionKey) { mutableStateOf(false) }
+    var initialReadyToken by remember(scrollSessionKey) {
+        mutableStateOf<Pair<Long, String?>?>(null)
     }
-    val listState = remember(scrollSessionKey) {
-        LazyListState(
-            firstVisibleItemIndex = restoredScrollState?.firstVisibleItemIndex ?: 0,
-            firstVisibleItemScrollOffset = restoredScrollState?.firstVisibleItemScrollOffset ?: 0,
-        )
+    val initialContentReady = initialListIndex != null
+    val listState = remember(scrollSessionKey, initialListIndex) {
+        LazyListState(firstVisibleItemIndex = initialListIndex ?: 0)
     }
     val scrollStateManager = rememberChatScrollStateManager(listState, coroutineScope)
 
-    var initialScrollHandled by remember(scrollSessionKey) { mutableStateOf(false) }
-
-    LaunchedEffect(scrollSessionKey, listState, historyLoadGeneration) {
-        if (initialScrollHandled) return@LaunchedEffect
-
+    LaunchedEffect(scrollSessionKey, historyLoadGeneration) {
+        initialListIndex = null
+        initialReadyToken = null
+        initialScrollHandled = false
         val effectGeneration = historyLoadGeneration
-        while (!initialScrollHandled) {
-            val readyToken = snapshotFlow {
-                val currentGeneration = historyLoadGenerationState.value
-                if (currentGeneration != effectGeneration) return@snapshotFlow null
+        val readyToken = snapshotFlow {
+            val currentGeneration = historyLoadGenerationState.value
+            if (currentGeneration != effectGeneration) return@snapshotFlow null
 
-                val generationObserved = !shouldStartHistoryConversationLoadingOverlay(
-                    observedLoadGeneration = observedHistoryLoadGenerationState.value,
-                    currentLoadGeneration = currentGeneration,
-                )
-                if (!generationObserved) return@snapshotFlow null
+            val generationObserved = !shouldStartHistoryConversationLoadingOverlay(
+                observedLoadGeneration = observedHistoryLoadGenerationState.value,
+                currentLoadGeneration = currentGeneration,
+            )
+            if (!generationObserved) return@snapshotFlow null
 
-                val overlayVisible = isHistoryLoadingOverlayVisibleState.value
-                val ready = isHistoryConversationReadyForInitialBottom(
-                    currentConversationId = conversationIdState.value,
-                    scrollSessionKey = scrollSessionKey,
-                    isLoadingHistory = isLoadingHistoryState.value,
-                    isLoadingHistoryData = isLoadingHistoryDataState.value,
-                    requireMatchingScrollSession = overlayVisible,
-                    messages = messagesState.value,
-                    chatItems = chatListItemsState.value,
-                    laidOutItemCount = listState.layoutInfo.totalItemsCount,
-                )
-                if (ready) currentGeneration to historyLoadingOverlayKeyState.value else null
-            }
-                .filterNotNull()
-                .first()
-
-            withFrameNanos { }
-            if (historyLoadGenerationState.value != readyToken.first) {
-                return@LaunchedEffect
-            }
-
-            val stillReady = isHistoryConversationReadyForInitialBottom(
+            val overlayVisible = isHistoryLoadingOverlayVisibleState.value
+            val ready = isHistoryConversationReadyForInitialBottom(
                 currentConversationId = conversationIdState.value,
                 scrollSessionKey = scrollSessionKey,
                 isLoadingHistory = isLoadingHistoryState.value,
                 isLoadingHistoryData = isLoadingHistoryDataState.value,
-                requireMatchingScrollSession = readyToken.second != null ||
-                    isHistoryLoadingOverlayVisibleState.value,
+                requireMatchingScrollSession = overlayVisible,
                 messages = messagesState.value,
                 chatItems = chatListItemsState.value,
-                laidOutItemCount = listState.layoutInfo.totalItemsCount,
+                laidOutItemCount = 0,
+                requireLaidOutItemCount = false,
             )
-            if (!stillReady) continue
+            if (ready) currentGeneration to historyLoadingOverlayKeyState.value else null
+        }
+            .filterNotNull()
+            .first()
 
-            val lastIndex = listState.layoutInfo.totalItemsCount - 1
-            if (lastIndex >= 0) {
-                val savedState = restoredScrollState
-                if (savedState != null) {
-                    listState.scrollToItem(
-                        index = savedState.firstVisibleItemIndex.coerceIn(0, lastIndex),
-                        scrollOffset = savedState.firstVisibleItemScrollOffset.coerceAtLeast(0),
-                    )
+        initialListIndex = chatListItemsState.value.lastIndex.coerceAtLeast(0)
+        initialReadyToken = readyToken
+    }
+
+    LaunchedEffect(scrollSessionKey, listState, initialReadyToken) {
+        val readyToken = initialReadyToken ?: return@LaunchedEffect
+        if (chatListItemsState.value.isNotEmpty()) {
+            scrollStateManager.pinToRealBottomUntilUserScroll()
+            val layoutReadyGeneration = snapshotFlow {
+                val currentGeneration = historyLoadGenerationState.value
+                if (currentGeneration != readyToken.first) {
+                    currentGeneration
                 } else {
-                    listState.scrollToItem(lastIndex)
-                    listState.scrollBy(Float.MAX_VALUE)
-                    scrollStateManager.pinToRealBottomUntilUserScroll()
+                    val currentChatItems = chatListItemsState.value
+                    val expectedItemCount = currentChatItems.size
+                    val layoutInfo = listState.layoutInfo
+                    val lastVisibleIndex = layoutInfo.visibleItemsInfo.lastOrNull()?.index
+                    val layoutReady = isHistoryConversationReadyForInitialBottom(
+                        currentConversationId = conversationIdState.value,
+                        scrollSessionKey = scrollSessionKey,
+                        isLoadingHistory = isLoadingHistoryState.value,
+                        isLoadingHistoryData = isLoadingHistoryDataState.value,
+                        requireMatchingScrollSession = readyToken.second != null ||
+                            isHistoryLoadingOverlayVisibleState.value,
+                        messages = messagesState.value,
+                        chatItems = currentChatItems,
+                        laidOutItemCount = layoutInfo.totalItemsCount,
+                    ) &&
+                        lastVisibleIndex == expectedItemCount - 1 &&
+                        !listState.canScrollForward
+                    if (layoutReady) currentGeneration else null
                 }
             }
-            if (shouldClearHistoryLoadingOverlay(
-                    completedGeneration = readyToken.first,
-                    currentGeneration = historyLoadGenerationState.value,
-                    completedOverlayKey = readyToken.second,
-                    currentOverlayKey = historyLoadingOverlayKeyState.value,
-                )
-            ) {
-                historyLoadingOverlayKey = null
-            }
-            initialScrollHandled = true
+                .filterNotNull()
+                .first()
+            if (layoutReadyGeneration != readyToken.first) return@LaunchedEffect
         }
+
+        if (shouldClearHistoryLoadingOverlay(
+                completedGeneration = readyToken.first,
+                currentGeneration = historyLoadGenerationState.value,
+                completedOverlayKey = readyToken.second,
+                currentOverlayKey = historyLoadingOverlayKeyState.value,
+            )
+        ) {
+            historyLoadingOverlayKey = null
+        }
+        initialScrollHandled = true
     }
+
+    val isInitialConversationLoading = shouldShowInitialConversationLoadingOverlay(
+        isHistoryLoadingOverlayVisible = isHistoryLoadingOverlayVisible,
+        initialScrollHandled = initialScrollHandled,
+    )
 
     val density = LocalDensity.current
     val windowSize = LocalWindowInfo.current.containerSize
@@ -574,6 +592,8 @@ fun ChatScreen(
                         is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.UserMessage -> it.messageId == messageId
                         is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage -> it.messageId == messageId
                         is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCode -> it.messageId == messageId
+                        is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageSources -> it.messageId == messageId
+                        is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMarkdownNode -> it.messageId == messageId
                         is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageReasoning -> it.message.id == messageId
                         else -> false
                     }
@@ -726,6 +746,9 @@ fun ChatScreen(
                                 viewModel.showSystemPromptDialog()
                             }
                         )
+                    }
+                    !initialContentReady -> {
+                        Box(modifier = Modifier.fillMaxSize())
                     }
                     else -> {
 
@@ -929,7 +952,7 @@ fun ChatScreen(
             )
 
             AnimatedVisibility(
-                visible = isHistoryLoadingOverlayVisible,
+                visible = isInitialConversationLoading,
                 modifier = Modifier.fillMaxSize(),
                 enter = fadeIn(animationSpec = tween(durationMillis = 90)),
                 exit = fadeOut(animationSpec = tween(durationMillis = 120)),
