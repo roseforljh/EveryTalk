@@ -395,6 +395,14 @@ object GeminiDirectClient {
             // 添加工具（Web 搜索、代码执行、MCP 工具等）
             val mcpTools = PromptCachePolicy.normalizeTools(request.tools).orEmpty()
             val hasMcpTools = mcpTools.isNotEmpty()
+            runCatching {
+                Log.d(
+                    TAG,
+                    "Prompt prefix system=${PromptCachePolicy.systemFingerprint(messagesWithSystemPrompt)} " +
+                        "profile=${PromptCachePolicy.toolProfile(mcpTools)} " +
+                        "tools=${PromptCachePolicy.toolSchemaHash(mcpTools).take(16)}",
+                )
+            }
             if (enableWebSearch || enableCodeExecution || hasMcpTools) {
                 putJsonArray("tools") {
                     // Google Search 工具 - 使用 Gemini 原生 google_search (REST API 标准)

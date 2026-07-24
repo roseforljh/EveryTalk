@@ -210,6 +210,14 @@ object OpenAIResponsesClient {
             messages = messagesWithSystemPrompt,
             tools = normalizedTools,
         )
+        runCatching {
+            Log.d(
+                TAG,
+                "Prompt cache prefix system=${PromptCachePolicy.systemFingerprint(messagesWithSystemPrompt)} " +
+                    "profile=${PromptCachePolicy.toolProfile(normalizedTools)} " +
+                    "tools=${PromptCachePolicy.toolSchemaHash(normalizedTools).take(16)}",
+            )
+        }
 
         return buildJsonObject {
             put("model", request.model)
