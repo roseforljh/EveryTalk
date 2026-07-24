@@ -193,7 +193,7 @@ internal class ApiHandlerStreamProcessor(
             when (appEvent) {
                 is AppStreamEvent.Content -> {
                     if (processedResult is com.android.everytalk.util.messageprocessor.ProcessedEventResult.ContentUpdated) {
-                        val deltaChunk = TextSanitizer.removeUnicodeReplacementCharacters(appEvent.text)
+                        val deltaChunk = processedResult.text
                         // 过滤纯空白内容，防止后端发送大量空格导致卡死
                         if (!deltaChunk.isNullOrEmpty() && deltaChunk.isNotBlank()) {
                             // 🛡️ 防 prompt 泄露：通过检测器过滤
@@ -264,7 +264,7 @@ internal class ApiHandlerStreamProcessor(
                 is AppStreamEvent.ImageGeneration -> applyPreparedGeneratedImage(preparedGeneratedImage)
                 is AppStreamEvent.Text -> {
                     if (processedResult is com.android.everytalk.util.messageprocessor.ProcessedEventResult.ContentUpdated) {
-                        val deltaChunk = TextSanitizer.removeUnicodeReplacementCharacters(appEvent.text)
+                        val deltaChunk = processedResult.text
                         // 过滤纯空白内容
                         if (!deltaChunk.isNullOrEmpty() && deltaChunk.isNotBlank()) {
                             // 🛡️ 防 prompt 泄露：通过检测器过滤

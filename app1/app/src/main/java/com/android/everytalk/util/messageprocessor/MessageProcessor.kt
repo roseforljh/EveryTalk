@@ -3,8 +3,10 @@ package com.android.everytalk.util.messageprocessor
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.ui.components.MarkdownPart
 import com.android.everytalk.data.network.AppStreamEvent
+import com.android.everytalk.data.network.PromptCapabilityCatalog
 import com.android.everytalk.data.network.extractThinkTagContent
 import com.android.everytalk.util.AppLogger
+import com.android.everytalk.util.text.CapabilityCardOutputSanitizer
 import com.android.everytalk.util.text.TextSanitizer
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -20,6 +22,7 @@ class MessageProcessor {
     private val isCompleted = AtomicBoolean(false)
     private val currentTextBuilder = AtomicReference(StringBuilder())
     private val currentReasoningBuilder = AtomicReference(StringBuilder())
+    private val capabilityCardSanitizer = CapabilityCardOutputSanitizer.StreamingDetector()
 
     fun initialize(sessionId: String, messageId: String) {
         this.sessionId.set(sessionId)
@@ -62,19 +65,21 @@ class MessageProcessor {
                     if (eventText.isNotEmpty()) {
                         // 对每个chunk进行轻量级清理（仅转换全角符号）
                         val cleanedChunk = lightweightCleanup(eventText)
+                        val visibleChunk = capabilityCardSanitizer.appendAndSanitize(cleanedChunk)
                         
                         // 记录是否发生了清理
-                        if (cleanedChunk != eventText) {
-                            logger.debug("Chunk cleaned: ${eventText.length} -> ${cleanedChunk.length} chars")
+                        if (visibleChunk != cleanedChunk) {
+                            logger.debug("Chunk cleaned: ${eventText.length} -> ${visibleChunk.length} chars")
                         }
                         
-                        currentTextBuilder.get().append(cleanedChunk)
+                        currentTextBuilder.get().append(visibleChunk)
+                        return@withLock ProcessedEventResult.ContentUpdated(visibleChunk)
                     }
-                    ProcessedEventResult.ContentUpdated
+                    ProcessedEventResult.ContentUpdated("")
                 }
                 is AppStreamEvent.ContentFinal -> {
                     // 不对已有内容做任何替换/合并处理，保持已累积文本原样
-                    ProcessedEventResult.ContentUpdated
+                    ProcessedEventResult.ContentUpdated("")
                 }
                 is AppStreamEvent.CodeExecutionResult -> {
                     // 图片由 ApiHandler 在落盘后统一写入消息状态，这里只处理文本执行结果。
@@ -90,7 +95,7 @@ class MessageProcessor {
                     if (!event.codeExecutionOutput.isNullOrBlank()) {
                         val outputMarkdown = "\n\n```\n${event.codeExecutionOutput}\n```\n\n"
                         builder.append(outputMarkdown)
-                        ProcessedEventResult.ContentUpdated
+                        ProcessedEventResult.ContentUpdated(outputMarkdown)
                     } else {
                         ProcessedEventResult.NoChange
                     }
@@ -108,6 +113,9 @@ class MessageProcessor {
                 is AppStreamEvent.ToolCall -> {
                     // 暂时不在此处处理 ToolCall，由 ApiHandler 拦截并处理
                     // 返回 NoChange 或 新增 ToolCallResult
+                    if (event.name.equals(PromptCapabilityCatalog.SELECT_TOOL_NAME, ignoreCase = true)) {
+                        capabilityCardSanitizer.enable()
+                    }
                     ProcessedEventResult.NoChange
                 }
                 is AppStreamEvent.StreamEnd, is AppStreamEvent.Finish -> {
@@ -120,15 +128,21 @@ class MessageProcessor {
     }
 
     fun finalizeMessageProcessing(message: Message): Message {
+        currentTextBuilder.get().append(capabilityCardSanitizer.flush())
         val currentText = getCurrentText()
         val currentReasoning = getCurrentReasoning()
 
         logger.debug("Finalizing message ${message.id}: currentText=${currentText.length} chars, reasoning=${currentReasoning?.length ?: 0} chars")
 
         // 不做“整体重组/替换”。若本地缓冲为空，保留既有 message 字段，避免覆盖已持久化/已加载的文本。
-        val rawFinalText = TextSanitizer.removeUnicodeReplacementCharacters(
+        val normalizedFinalText = TextSanitizer.removeUnicodeReplacementCharacters(
             if (currentText.isNotEmpty()) currentText else message.text
         )
+        val rawFinalText = if (capabilityCardSanitizer.isEnabled()) {
+            CapabilityCardOutputSanitizer.sanitize(normalizedFinalText)
+        } else {
+            normalizedFinalText
+        }
         val thinkTagExtraction = extractThinkTagContent(rawFinalText)
         val finalText = thinkTagExtraction.content
         val extractedReasoning = thinkTagExtraction.reasoning.takeIf { it.isNotBlank() }
@@ -166,11 +180,12 @@ class MessageProcessor {
         isCompleted.set(false)
         currentTextBuilder.set(StringBuilder())
         currentReasoningBuilder.set(StringBuilder())
+        capabilityCardSanitizer.reset()
     }
 }
 
 sealed class ProcessedEventResult {
-    data object ContentUpdated : ProcessedEventResult()
+    data class ContentUpdated(val text: String) : ProcessedEventResult()
     data object ReasoningUpdated : ProcessedEventResult()
     object ReasoningComplete : ProcessedEventResult()
     object StreamComplete : ProcessedEventResult()
