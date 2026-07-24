@@ -1,5 +1,10 @@
 package com.android.everytalk.ui.components.markdown
 
+import com.mikepenz.markdown.model.State
+import com.mikepenz.markdown.model.parseMarkdown
+import org.intellij.markdown.MarkdownElementTypes
+import org.intellij.markdown.MarkdownTokenTypes
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -36,8 +41,58 @@ class MarkdownEngineOwnershipTest {
         assertTrue(entry.contains("fun UnifiedMarkdownNodesRenderer("))
         assertTrue(entry.contains("preparedMarkdownDocument: PreparedMarkdownDocument"))
         assertTrue(adapter.contains("fun MikePenzMarkdownNodesRenderer("))
-        assertTrue(adapter.contains("nodes.forEach { node ->"))
-        assertTrue(adapter.contains("MarkdownElement(node, components, state.content)"))
+        assertTrue(adapter.contains("nodes.forEachIndexed { index, node ->"))
+        assertTrue(adapter.contains("MarkdownElement("))
+        assertTrue(adapter.contains("node = node"))
+        assertTrue(adapter.contains("components = components"))
+        assertTrue(adapter.contains("content = state.content"))
+    }
+
+    @Test
+    fun `Markdown水平线由自身统一控制对称间距`() {
+        val renderer = mainSources(
+            "com/android/everytalk/ui/components/markdown/MikePenzMarkdownRenderer.kt",
+            "com/android/everytalk/ui/components/markdown/MarkdownRendererNodes.kt",
+        )
+        val style = mainSource(
+            "com/android/everytalk/ui/components/markdown/ChatMarkdownTextStyle.kt"
+        )
+
+        assertTrue(renderer.contains("nodeType == MarkdownTokenTypes.HORIZONTAL_RULE"))
+        assertTrue(renderer.contains("hasHorizontalRuleNeighbor(nodes, index"))
+        assertTrue(renderer.contains("contextNodes = preparedMarkdownDocument.nodes"))
+        assertTrue(renderer.contains("firstNodeIndex = selectedNodeStartIndex"))
+        assertTrue(renderer.contains("top = LocalMarkdownHorizontalRuleTopPadding.current"))
+        assertTrue(renderer.contains("bottom = ChatMarkdownTextStyle.HORIZONTAL_RULE_VERTICAL_PADDING_DP.dp"))
+        assertTrue(style.contains("HORIZONTAL_RULE_VERTICAL_PADDING_DP = 24f"))
+    }
+
+    @Test
+    fun `Markdown水平线相邻空行不再叠加块间距`() {
+        val state = parseMarkdown("段落\n\n---\n\n## 标题", lookupLinks = false) as State.Success
+        val nodes = state.node.children
+        val paragraphIndex = nodes.indexOfFirst { it.type == MarkdownElementTypes.PARAGRAPH }
+        val horizontalRuleIndex = nodes.indexOfFirst { it.type == MarkdownTokenTypes.HORIZONTAL_RULE }
+        val headingIndex = nodes.indexOfFirst { it.type == MarkdownElementTypes.ATX_2 }
+
+        assertTrue(shouldIncludeMarkdownNodeSpacer(nodes, paragraphIndex))
+        assertFalse(shouldIncludeMarkdownNodeSpacer(nodes, horizontalRuleIndex))
+        nodes.indices
+            .filter { nodes[it].type == MarkdownTokenTypes.EOL }
+            .forEach { assertFalse(shouldIncludeMarkdownNodeSpacer(nodes, it)) }
+        assertFalse(shouldIncludeMarkdownNodeSpacer(nodes, headingIndex))
+
+        val horizontalRuleBlock = listOf(nodes[horizontalRuleIndex])
+        assertEquals(
+            horizontalRuleIndex,
+            markdownNodeStartIndex(nodes, horizontalRuleBlock),
+        )
+        assertFalse(
+            shouldIncludeMarkdownNodeSpacer(
+                nodes,
+                markdownNodeStartIndex(nodes, horizontalRuleBlock),
+            )
+        )
     }
 
     @Test
@@ -214,6 +269,8 @@ class MarkdownEngineOwnershipTest {
         assertTrue(adapter.contains("visibleStreamingBundle?.preparedMessage ?: preparedMessage"))
         assertFalse(adapter.contains("key(visibleStreamingMarkdownState)"))
         assertTrue(adapter.contains("streamingMarkdownState = visibleStreamingMarkdownState"))
+        assertFalse(adapter.contains("MarkdownStreamingNodesSuccess("))
+        assertFalse(adapter.contains("streamingContent = visibleStreamingMarkdownState.content.toString()"))
         assertTrue(adapter.contains("appendOnlyMarkdownDelta("))
         assertTrue(adapter.contains("bundle.state.append(appendedDelta)"))
         assertTrue(adapter.contains("bundle.copy(preparedMessage = nextPreparedMessage)"))

@@ -194,6 +194,200 @@ class TopAnchorReserveEngineComposeAdditionalTest {
     }
 
     @Test
+    fun `key only regeneration layout wakes waiting anchor correction`() {
+        composeRule.mainClock.autoAdvance = false
+        val initialItems = listOf(
+            HarnessItem("history-0", 80.dp),
+            HarnessItem("history-1", 80.dp),
+            HarnessItem("history-2", 80.dp),
+            HarnessItem("history-3", 80.dp),
+            HarnessItem("stale-u2", 80.dp),
+        )
+        lateinit var engineState: TopAnchorReserveEngineState
+        lateinit var listState: LazyListState
+        lateinit var publishRegeneratedKey: () -> Unit
+        var targetAnchorYPx = 0
+
+        composeRule.setContent {
+            val density = LocalDensity.current
+            var items by remember { mutableStateOf(initialItems) }
+            listState = rememberLazyListState(initialFirstVisibleItemIndex = 2)
+            targetAnchorYPx = with(density) { 96.dp.toPx().toInt() }
+            engineState = remember {
+                TopAnchorReserveEngineState().also { state ->
+                    state.updateRuntime(
+                        TopAnchorRuntimeState(
+                            phase = TopAnchorPhase.InitialSnap,
+                            activeTurn = TopAnchorTurn("u2", null, "s1", 1L),
+                        )
+                    )
+                }
+            }
+            publishRegeneratedKey = {
+                items = items.dropLast(1) + HarnessItem("u2", 80.dp)
+            }
+
+            RunTopAnchorReserveEngine(
+                state = engineState,
+                listState = listState,
+                anchorIndex = items.lastIndex,
+                anchorKey = "u2",
+                targetAnchorY = targetAnchorYPx,
+                trailingRealItemIndex = items.lastIndex,
+                isRunning = true,
+                config = TopAnchorConfig(
+                    tallAnchorThresholdPx = with(density) { 240.dp.toPx().toInt() },
+                    tallAnchorVisibleHeightPx = targetAnchorYPx,
+                    topInsetPx = targetAnchorYPx,
+                    stableWindowNanos = 1_000_000L,
+                    keepReserveAfterRunEnd = true,
+                    reserveInsideTrailingItem = true,
+                ),
+                enabled = engineState.runtime.hasRuntime,
+            )
+
+            LazyColumn(
+                state = listState,
+                userScrollEnabled = engineState.userScrollEnabled,
+                modifier = Modifier.height(420.dp),
+                contentPadding = PaddingValues(top = 96.dp, bottom = 80.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                itemsIndexed(items, key = { _, item -> item.id }) { index, item ->
+                    Box(
+                        Modifier
+                            .appendTopAnchorReserve(
+                                if (index == items.lastIndex) engineState.reservePx else 0
+                            )
+                            .height(item.heightDp)
+                    )
+                }
+            }
+        }
+
+        repeat(8) {
+            composeRule.mainClock.advanceTimeByFrame()
+            composeRule.waitForIdle()
+        }
+        composeRule.runOnIdle { publishRegeneratedKey() }
+        repeat(16) {
+            composeRule.mainClock.advanceTimeByFrame()
+            composeRule.waitForIdle()
+        }
+
+        composeRule.runOnIdle {
+            val anchor = listState.layoutInfo.visibleItemsInfo.first { it.key == "u2" }
+            val actualAnchorY = anchor.offset - listState.layoutInfo.viewportStartOffset
+            assertTrue(
+                "仅 key 重排后未继续置顶：actual=$actualAnchorY target=$targetAnchorYPx",
+                abs(actualAnchorY - targetAnchorYPx) <= 1,
+            )
+        }
+    }
+
+    @Test
+    fun `anchor is reacquired when preceding content expands during initial snap`() {
+        composeRule.mainClock.autoAdvance = false
+        val items = listOf(
+            HarnessItem("history-0", 24.dp),
+            HarnessItem("history-1", 24.dp),
+            HarnessItem("history-2", 24.dp),
+            HarnessItem("history-3", 24.dp),
+            HarnessItem("history-4", 24.dp),
+            HarnessItem("long-answer", 24.dp),
+            HarnessItem("u2", 48.dp),
+            HarnessItem("a2", 24.dp),
+        )
+        lateinit var engineState: TopAnchorReserveEngineState
+        lateinit var listState: LazyListState
+        var targetAnchorYPx = 0
+
+        composeRule.setContent {
+            val density = LocalDensity.current
+            listState = rememberLazyListState()
+            targetAnchorYPx = with(density) { 96.dp.toPx().toInt() }
+            engineState = remember {
+                TopAnchorReserveEngineState().also { state ->
+                    state.activateTurn(TopAnchorTurn("u2", null, "s1", 0L))
+                }
+            }
+
+            RunTopAnchorReserveEngine(
+                state = engineState,
+                listState = listState,
+                anchorIndex = 6,
+                anchorKey = "u2",
+                targetAnchorY = targetAnchorYPx,
+                trailingRealItemIndex = items.lastIndex,
+                isRunning = true,
+                config = TopAnchorConfig(
+                    tallAnchorThresholdPx = with(density) { 240.dp.toPx().toInt() },
+                    tallAnchorVisibleHeightPx = targetAnchorYPx,
+                    topInsetPx = targetAnchorYPx,
+                    stableWindowNanos = 1_000_000L,
+                    keepReserveAfterRunEnd = true,
+                    reserveInsideTrailingItem = true,
+                ),
+                enabled = engineState.runtime.hasRuntime,
+            )
+
+            LazyColumn(
+                state = listState,
+                userScrollEnabled = engineState.userScrollEnabled,
+                modifier = Modifier.height(420.dp),
+                contentPadding = PaddingValues(top = 96.dp, bottom = 80.dp),
+            ) {
+                itemsIndexed(items, key = { _, item -> item.id }) { index, item ->
+                    val itemHeight = if (
+                        item.id == "long-answer" && engineState.reservePx > 0
+                    ) {
+                        900.dp
+                    } else {
+                        item.heightDp
+                    }
+                    Box(
+                        Modifier
+                            .appendTopAnchorReserve(
+                                if (index == items.lastIndex) engineState.reservePx else 0
+                            )
+                            .height(itemHeight)
+                    )
+                }
+            }
+        }
+
+        var correctionOpportunityObserved = false
+        repeat(8) {
+            if (!correctionOpportunityObserved) {
+                composeRule.mainClock.advanceTimeByFrame()
+                composeRule.waitForIdle()
+                composeRule.runOnIdle {
+                    val anchor = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == "u2" }
+                    val anchorAtTarget = anchor?.let {
+                        abs(it.offset - listState.layoutInfo.viewportStartOffset - targetAnchorYPx) <= 1
+                    } == true
+                    correctionOpportunityObserved = listState.canScrollForward || anchorAtTarget
+                }
+            }
+        }
+        repeat(8) {
+            composeRule.mainClock.advanceTimeByFrame()
+            composeRule.waitForIdle()
+        }
+
+        composeRule.runOnIdle {
+            val anchor = listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == "u2" }
+                ?: throw AssertionError("前序内容扩高后没有重新捕获用户锚点")
+            val actualAnchorY = anchor.offset - listState.layoutInfo.viewportStartOffset
+            assertTrue("测试未观察到可执行置顶校正的布局", correctionOpportunityObserved)
+            assertTrue(
+                "重新捕获锚点后未完成置顶：actual=$actualAnchorY target=$targetAnchorYPx",
+                abs(actualAnchorY - targetAnchorYPx) <= 1,
+            )
+        }
+    }
+
+    @Test
     fun `locking auto scroll cancels a previously scheduled bottom animation`() {
         composeRule.mainClock.autoAdvance = false
         val items = List(80) { index -> HarnessItem("item-$index", 80.dp) }

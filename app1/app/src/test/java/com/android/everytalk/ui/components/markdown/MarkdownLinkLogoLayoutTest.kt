@@ -30,6 +30,48 @@ class MarkdownLinkLogoLayoutTest {
     val composeRule = createComposeRule()
 
     @Test
+    fun `粗体美元区间在Compose文本节点中完整显示`() {
+        val content = "1. **${'$'}22 ~ ${'$'}25**"
+
+        composeRule.setContent {
+            MaterialTheme {
+                val bodyStyle = MaterialTheme.typography.bodyLarge
+                Markdown(
+                    content = content,
+                    colors = markdownColor(
+                        inlineCodeBackground = androidx.compose.ui.graphics.Color.Transparent,
+                        tableBackground = androidx.compose.ui.graphics.Color.Transparent,
+                    ),
+                    typography = markdownTypography(
+                        h1 = bodyStyle,
+                        h2 = bodyStyle,
+                        h3 = bodyStyle,
+                        h4 = bodyStyle,
+                        h5 = bodyStyle,
+                        h6 = bodyStyle,
+                        text = bodyStyle,
+                        quote = bodyStyle,
+                        paragraph = bodyStyle,
+                        ordered = bodyStyle,
+                        bullet = bodyStyle,
+                        list = bodyStyle,
+                        table = bodyStyle,
+                        inlineCode = bodyStyle,
+                        textLink = androidx.compose.ui.text.TextLinkStyles(),
+                    ),
+                    flavour = EveryTalkMarkdownFlavourDescriptor,
+                    immediate = true,
+                )
+            }
+        }
+        composeRule.waitForIdle()
+
+        composeRule
+            .onNodeWithText("${'$'}22 ~ ${'$'}25", substring = true)
+            .fetchSemanticsNode("")
+    }
+
+    @Test
     fun `单独自动链接的 Logo 与链接处于同一行`() {
         val content = "https://x.com"
         val request = MarkdownLinkLogoRequest(

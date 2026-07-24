@@ -16,9 +16,11 @@ import com.android.everytalk.ui.components.streaming.FormulaDisplayMode
 import com.android.everytalk.ui.components.streaming.FormulaRequest
 import com.android.everytalk.ui.components.streaming.INLINE_FORMULA_SCHEME
 import com.android.everytalk.ui.components.streaming.PreparedMessage
+import com.android.everytalk.ui.components.streaming.StreamBlockParser
 import org.intellij.markdown.MarkdownElementTypes
 import org.intellij.markdown.MarkdownTokenTypes
 import org.intellij.markdown.ast.ASTNode
+import org.intellij.markdown.flavours.gfm.GFMElementTypes
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -26,6 +28,41 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MarkdownHtmlSupportTest {
+
+    @Test
+    fun `粗体美元区间完整进入最终内联文本`() {
+        val input = "**${'$'}22 ~ ${'$'}25**"
+        val listInput = "1. $input"
+        val prepared = StreamBlockParser.prepareMessage(
+            content = listInput,
+            messageId = "bold-currency-range",
+            contentVersion = 1L,
+        )
+        assertEquals(listInput, prepared.markdown)
+        val parsed = parseMarkdown(
+            prepared.markdown,
+            flavour = EveryTalkMarkdownFlavourDescriptor,
+        ) as State.Success
+        val rendered = input.buildMarkdownAnnotatedString(
+            style = TextStyle.Default,
+            annotatorSettings = DefaultAnnotatorSettings(
+                linkTextSpanStyle = TextLinkStyles(style = SpanStyle()),
+                codeSpanStyle = SpanStyle(),
+                annotator = createPreparedMessageMarkdownAnnotator(prepared),
+            ),
+            flavour = EveryTalkMarkdownFlavourDescriptor,
+        )
+
+        assertFalse(parsed.node.containsType(GFMElementTypes.INLINE_MATH))
+        assertTrue(parsed.node.containsType(MarkdownElementTypes.STRONG))
+        assertEquals("${'$'}22 ~ ${'$'}25", rendered.text)
+        assertTrue(
+            rendered.spanStyles.any { range ->
+                range.item.fontWeight == FontWeight.Bold &&
+                    rendered.text.substring(range.start, range.end) == "${'$'}22 ~ ${'$'}25"
+            }
+        )
+    }
 
     @Test
     fun `named numeric and non bmp html entities decode after parsing`() {

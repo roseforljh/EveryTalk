@@ -18,6 +18,9 @@ import org.junit.Assert.assertFalse
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.intellij.markdown.IElementType
+import org.intellij.markdown.ast.ASTNode
+import org.intellij.markdown.flavours.gfm.GFMElementTypes
 import org.robolectric.annotation.Config
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicReference
@@ -28,6 +31,29 @@ import java.util.concurrent.atomic.AtomicBoolean
 class StreamingMarkdownRebaseComposeTest {
     @get:Rule
     val composeRule = createComposeRule()
+
+    @Test
+    fun `流式粗体美元区间不会进入GFM公式节点`() {
+        val content = "1. **${'$'}22 ~ ${'$'}25**"
+        val request = StreamingMarkdownRebaseRequest(
+            generation = 1,
+            content = content,
+        )
+
+        composeRule.setContent {
+            PrepareStreamingMarkdownRebase(request)
+        }
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            request.result.isCompleted
+        }
+
+        val state = runBlocking { request.result.await() }
+        val snapshot = state.snapshot.value
+        val nodes = snapshot.stableAst + snapshot.unstableAstTail
+
+        assertEquals(content, state.content.toString())
+        assertFalse(nodes.any { it.containsType(GFMElementTypes.INLINE_MATH) })
+    }
 
     @Test
     fun `新流式状态准备完成后才交付给调用方`() {
@@ -172,4 +198,7 @@ class StreamingMarkdownRebaseComposeTest {
         assertFalse(observedNullAfterReady.get())
         assertEquals(final.markdown to final.markdown, visiblePair.get())
     }
+
+    private fun ASTNode.containsType(type: IElementType): Boolean =
+        this.type == type || children.any { it.containsType(type) }
 }

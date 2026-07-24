@@ -260,6 +260,23 @@ class MarkdownRenderingContractTest {
     }
 
     @Test
+    fun `中文正文中的多组美元金额保持原文`() {
+        val markdown = """
+            - **EASICOIN**：每次验证扣除 ${'$'}0.03。如果卡内余额正好只有 ${'$'}20，可能因为多了 ${'$'}0.03 的 3DS 费或未预留税费而导致扣款失败。
+
+            1. 预留足够余额：ChatGPT 账单默认是 **${'$'}20**，但如果你的账单地址不在免税州，可能会被收取 6%~10% 的消费税（约 ${'$'}21.20~${'$'}22）。卡内建议至少保留 **${'$'}22 ~ ${'$'}25**。
+        """.trimIndent()
+        val prepared = StreamBlockParser.prepareMessage(
+            content = markdown,
+            messageId = "currency-prose",
+            contentVersion = 33L,
+        )
+
+        assertTrue(prepared.formulas.isEmpty())
+        assertEquals(markdown, prepared.markdown)
+    }
+
+    @Test
     fun `formula placeholder uses stable lowercase SHA256 id without payload encoding`() {
         val prepared = StreamBlockParser.prepareMessage(
             content = "公式 ${'$'}E = mc^2${'$'}",
