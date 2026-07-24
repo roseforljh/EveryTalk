@@ -1,5 +1,5 @@
 package com.android.everytalk.ui.screens.MainScreen
-
+import com.android.everytalk.statecontroller.*
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateContentSize
@@ -53,21 +53,6 @@ import com.android.everytalk.ui.components.dialog.appDialogCancelColor
 import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldColors
-
-// Helper data class for processed items
-internal data class ProcessedDrawerItems(
-    val pinned: List<FilteredConversationItem>,
-    val custom: Map<String, List<FilteredConversationItem>>,
-    val ungrouped: List<FilteredConversationItem>
-)
-
-// --- 常量定义 ---
-private val DEFAULT_DRAWER_WIDTH = 320.dp
-private const val EXPAND_ANIMATION_DURATION_MS = 200
-private const val CONTENT_CHANGE_ANIMATION_DURATION_MS = 200
-// 搜索框背景色将动态使用主题色
-private val LIST_ITEM_MIN_HEIGHT = 48.dp // <--- 控制历史列表项的最小高度
-
 @OptIn(
     ExperimentalMaterial3Api::class,
     ExperimentalComposeUiApi::class,
@@ -120,30 +105,25 @@ fun AppDrawerContent(
     var showMoveToGroupDialog by remember { mutableStateOf<Int?>(null) }
     var isAddGroupButtonVisible by remember { mutableStateOf(false) } // 控制"创建分组"按钮的可见性（默认隐藏）
     var isGroupSectionExpanded by remember { mutableStateOf(false) } // 控制分组区域的展开/收起（默认收起）
-
     // Animation states for deletion
     val deletingGroups = remember { mutableStateListOf<String>() }
     val deletingItems = remember { mutableStateListOf<String>() }
     val scope = rememberCoroutineScope()
-
     val focusRequester = remember { FocusRequester() }
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
     val screenWidth = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.width.toDp() }
-
     LaunchedEffect(loadedHistoryIndex) {
         if (loadedHistoryIndex == null) {
             selectedSet.clear()
             onExpandItem(null)
         }
     }
-
     LaunchedEffect(expandedItemIndex) {
         if (expandedItemIndex == null) {
             longPressPosition = null
         }
     }
-
     LaunchedEffect(isSearchActive, keyboardController) {
         if (isSearchActive) {
             delay(100)
@@ -154,12 +134,10 @@ fun AppDrawerContent(
             focusManager.clearFocus(force = true)
         }
     }
-
     // 解析会话稳定ID的辅助函数（与 AppViewModel 中的逻辑一致）
     fun resolveStableId(conversation: List<Message>): String? {
         return com.android.everytalk.util.ConversationNameHelper.resolveStableId(conversation)
     }
-    
     val processedItems = remember(currentSearchQuery, historicalConversations, isSearchActive, pinnedIds, conversationGroups) {
         derivedStateOf {
             val baseItems = if (!isSearchActive || currentSearchQuery.isBlank()) {
@@ -179,22 +157,18 @@ fun AppDrawerContent(
                     } else null
                 }
             }
-
             val pinned = baseItems.filter {
                 val stableId = resolveStableId(it.conversation)
                 stableId != null && pinnedIds.contains(stableId)
             }
-
             val custom = mutableMapOf<String, MutableList<FilteredConversationItem>>()
             val ungrouped = mutableListOf<FilteredConversationItem>()
             val groupByConversationId = conversationGroups.entries
                 .flatMap { (groupName, ids) -> ids.map { id -> id to groupName } }
                 .toMap()
-
             baseItems.forEach { item ->
                 val stableId = resolveStableId(item.conversation)
                 val groupName = stableId?.let { groupByConversationId[it] }
-                
                 if (groupName != null) {
                     custom.getOrPut(groupName) { mutableListOf() }.add(item)
                 } else {
@@ -204,23 +178,19 @@ fun AppDrawerContent(
                     }
                 }
             }
-            
             ProcessedDrawerItems(pinned, custom, ungrouped)
         }
     }.value
-
     val targetWidth = if (isSearchActive) screenWidth else DEFAULT_DRAWER_WIDTH
     val animatedWidth by animateDpAsState(
         targetValue = targetWidth,
         animationSpec = tween(durationMillis = EXPAND_ANIMATION_DURATION_MS),
         label = "drawerWidthAnimation"
     )
-
     @Composable
     fun ConversationItem(itemData: FilteredConversationItem, modifier: Modifier = Modifier) {
         val stableId = resolveStableId(itemData.conversation)
         val isPinned = stableId != null && pinnedIds.contains(stableId)
-
         Box(
             modifier = modifier
                 .fillMaxWidth()
@@ -277,16 +247,13 @@ fun AppDrawerContent(
             )
         }
     }
-
     BackHandler(enabled = isSearchActive) {
         onSearchActiveChange(false)
     }
-
     // Bug修复：当有条目展开时，优先处理返回事件为收起条目
     BackHandler(enabled = expandedItemIndex != null) {
         onExpandItem(null)
     }
-
     ModalDrawerSheet(
         modifier = modifier
             .fillMaxHeight()
@@ -307,13 +274,11 @@ fun AppDrawerContent(
         ) {
             val textFieldInteractionSource = remember { MutableInteractionSource() }
             val isTextFieldFocused by textFieldInteractionSource.collectIsFocusedAsState()
-
             LaunchedEffect(isTextFieldFocused) {
                 if (isTextFieldFocused && !isSearchActive) {
                     onSearchActiveChange(true)
                 }
             }
-
             // --- 搜索框区域 ---
             Row(
                 modifier = Modifier
@@ -401,7 +366,6 @@ fun AppDrawerContent(
                     keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() })
                 )
             }
-
             // --- “新建会话” 和 “清空记录” 按钮 ---
             Column {
                 Spacer(Modifier.height(8.dp))
@@ -584,7 +548,6 @@ fun AppDrawerContent(
                     }
                 }
             }
-
             // --- "分组" 标题行 ---
             Row(
                 modifier = Modifier
@@ -630,7 +593,6 @@ fun AppDrawerContent(
                     )
                 }
             }
-
             // --- 分组列表显示区域 ---
             AnimatedVisibility(
                 visible = isGroupSectionExpanded,
@@ -675,7 +637,6 @@ fun AppDrawerContent(
                                     }
                                 }
                             }
-
                             val isExpanded = expandedGroups.contains(groupName) && !deletingGroups.contains(groupName)
                             val groupItems = processedItems.custom[groupName] ?: emptyList()
                             if (isExpanded && groupItems.isNotEmpty()) {
@@ -729,7 +690,6 @@ fun AppDrawerContent(
                     }
                 }
             }
-
             // --- "会话" 标题行 ---
             Row(
                 modifier = Modifier
@@ -744,14 +704,12 @@ fun AppDrawerContent(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
-
             // --- 会话列表显示区域 ---
             Box(modifier = Modifier.weight(1f)) {
                 when {
                     isLoadingHistoryData -> {
                         HistorySkeletonLoading()
                     }
-
                     historicalConversations.isEmpty() && !isLoadingHistoryData -> {
                         Box(
                             modifier = Modifier
@@ -762,7 +720,6 @@ fun AppDrawerContent(
                             Text("暂无聊天记录", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
-
                     isSearchActive && currentSearchQuery.isNotBlank() && processedItems.pinned.isEmpty() && processedItems.custom.isEmpty() && processedItems.ungrouped.isEmpty() -> {
                         Box(
                             modifier = Modifier
@@ -773,7 +730,6 @@ fun AppDrawerContent(
                             Text("无匹配结果", color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
-
                     else -> {
                         LazyColumn(
                             modifier = Modifier.fillMaxSize(),
@@ -790,7 +746,6 @@ fun AppDrawerContent(
                                         modifier = Modifier.animateItem(placementSpec = tween(300))
                                     )
                                 }
-                                
                                 if (expandedGroups.contains("pinned")) {
                                     items(
                                         items = processedItems.pinned,
@@ -807,7 +762,6 @@ fun AppDrawerContent(
                                     }
                                 }
                             }
-
                             // "对话" (未分组和未置顶) - 始终显示,不需要展开/收起
                             if (processedItems.ungrouped.isNotEmpty()) {
                                 items(
@@ -871,7 +825,6 @@ fun AppDrawerContent(
                 }
             }
             Spacer(Modifier.height(16.dp))
- 
              // --- 对话框 ---
              DeleteConfirmationDialog(
                  showDialog = showDeleteConfirm,
@@ -885,13 +838,11 @@ fun AppDrawerContent(
                     showDeleteConfirm = false // 关闭对话框
                     selectedSet.clear()
                     onExpandItem(null) // 如果有菜单打开，也关闭它
-                    
                     // 收集需要删除的项的ID以进行动画
                     val idsToAnimate = indicesToDelete.mapNotNull { index ->
                         historicalConversations.getOrNull(index)?.let { resolveStableId(it) }
                     }
                     deletingItems.addAll(idsToAnimate)
-
                     scope.launch {
                         delay(300) // 等待动画完成
                         // 从后往前删除，避免索引错位
@@ -900,7 +851,6 @@ fun AppDrawerContent(
                     }
                 }
             )
-
             ClearAllConfirmationDialog(
                 showDialog = showClearAllConfirm,
                 onDismiss = { showClearAllConfirm = false },
@@ -911,7 +861,6 @@ fun AppDrawerContent(
                     onExpandItem(null)
                 }
             )
-
            ClearImageHistoryConfirmationDialog(
                showDialog = showClearImageHistoryDialog,
                onDismiss = onDismissClearImageHistoryDialog,
@@ -920,7 +869,6 @@ fun AppDrawerContent(
                    onDismissClearImageHistoryDialog()
                }
            )
-
             renamingIndex?.let { index ->
                 var newName by remember(index) { mutableStateOf(getFullTextForIndex(index)) }
                 val dialogBg = appDialogContainerColor()
@@ -928,7 +876,6 @@ fun AppDrawerContent(
                 val cancelButtonColor = appDialogCancelColor()
                 val confirmButtonColor = contentColor
                 val confirmButtonTextColor = dialogBg
-
                 AlertDialog(
                     modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
                     onDismissRequest = { renamingIndex = null },
@@ -1003,7 +950,6 @@ fun AppDrawerContent(
                     textContentColor = contentColor
                 )
             }
-            
             if (showCreateGroupDialog) {
                 CreateGroupDialog(
                     onDismiss = { showCreateGroupDialog = false },
@@ -1016,7 +962,6 @@ fun AppDrawerContent(
                     }
                 )
             }
-
             if (showMoveToGroupDialog != null) {
                 val conversationIndex = showMoveToGroupDialog!!
                 val conversation = historicalConversations.getOrNull(conversationIndex)
@@ -1024,7 +969,6 @@ fun AppDrawerContent(
                 val isCurrentlyGrouped = stableId?.let { id ->
                     conversationGroups.any { it.value.contains(id) }
                 } ?: false
-
                 MoveToGroupDialog(
                     groups = conversationGroups.keys.toList().filter { groupName ->
                         val members = conversationGroups[groupName]
@@ -1039,226 +983,5 @@ fun AppDrawerContent(
                 )
             }
         }
-    }
-}
-
-@Composable
-fun CollapsibleGroupHeader(
-    groupName: String,
-    isExpanded: Boolean,
-    onToggleExpand: () -> Unit,
-    modifier: Modifier = Modifier,
-    onRename: ((String) -> Unit)? = null,
-    onDelete: (() -> Unit)? = null,
-    isPinnedGroup: Boolean = false
-) {
-    var showRenameDialog by remember { mutableStateOf(false) }
-    var newName by remember { mutableStateOf(groupName) }
-    var showMenu by remember { mutableStateOf(false) }
-
-    // 为箭头图标添加旋转动画
-    val arrowRotation by animateFloatAsState(
-        targetValue = if (isExpanded) 90f else 0f,
-        animationSpec = tween(durationMillis = 200),
-        label = "arrowRotation"
-    )
-
-    Surface(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-        onClick = onToggleExpand,
-        shape = RoundedCornerShape(8.dp),
-        color = MaterialTheme.colorScheme.surfaceContainerLowest
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 12.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Icon(
-                painter = painterResource(R.drawable.ic_arrow_end),
-                contentDescription = if (isExpanded) "收起" else "展开",
-                tint = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier
-                    .size(20.dp)
-                    .graphicsLayer {
-                        rotationZ = arrowRotation
-                    }
-            )
-            Spacer(Modifier.width(12.dp))
-            Text(
-                text = groupName,
-                style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.weight(1f)
-            )
-            
-            // 只有非置顶分组才显示菜单按钮
-            if (!isPinnedGroup && (onRename != null || onDelete != null)) {
-                Box {
-                    IconButton(
-                        onClick = { showMenu = true },
-                        modifier = Modifier.size(32.dp)
-                    ) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_dots_vertical),
-                            "更多选项",
-                            modifier = Modifier.size(20.dp)
-                        )
-                    }
-                    
-                    DropdownMenu(
-                        expanded = showMenu,
-                        onDismissRequest = { showMenu = false }
-                    ) {
-                        if (onRename != null) {
-                            DropdownMenuItem(
-                                text = { Text("重命名") },
-                                onClick = {
-                                    showMenu = false
-                                    showRenameDialog = true
-                                },
-                                leadingIcon = {
-                                    Icon(painter = painterResource(R.drawable.ic_pencil), "重命名")
-                                }
-                            )
-                        }
-                        if (onDelete != null) {
-                            DropdownMenuItem(
-                                text = { Text("删除") },
-                                onClick = {
-                                    showMenu = false
-                                    onDelete()
-                                },
-                                leadingIcon = {
-                                    Icon(painter = painterResource(R.drawable.ic_trash), "删除")
-                                }
-                            )
-                        }
-                    }
-                }
-            }
-        }
-    }
-    
-    if (showRenameDialog && onRename != null) {
-        val dialogBg = appDialogContainerColor()
-        val contentColor = appDialogContentColor()
-        val cancelButtonColor = appDialogCancelColor()
-        AlertDialog(
-            onDismissRequest = { showRenameDialog = false },
-            modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
-            shape = AppDialogShape,
-            containerColor = dialogBg,
-            titleContentColor = contentColor,
-            textContentColor = contentColor,
-            title = { Text("重命名分组") },
-            text = {
-                OutlinedTextField(
-                    value = newName,
-                    onValueChange = { newName = it },
-                    label = { Text("新名称") },
-                    shape = AppDialogTextFieldShape,
-                    colors = appDialogTextFieldColors()
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        if (newName.isNotBlank()) {
-                            onRename(newName)
-                        }
-                        showRenameDialog = false
-                    },
-                    shape = AppDialogButtonShape,
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = contentColor,
-                        contentColor = dialogBg
-                    )
-                ) {
-                    Text("重命名")
-                }
-            },
-            dismissButton = {
-                OutlinedButton(
-                    onClick = { showRenameDialog = false },
-                    shape = AppDialogButtonShape,
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = dialogBg,
-                        contentColor = cancelButtonColor
-                    ),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
-                ) {
-                    Text("取消")
-                }
-            }
-        )
-    }
-}
-
-@Composable
-private fun HistorySkeletonLoading() {
-    val isDark = isSystemInDarkTheme()
-    val baseColor = if (isDark) Color.White else Color.Black
-
-    val infiniteTransition = rememberInfiniteTransition(label = "skeletonPulse")
-    val alpha by infiniteTransition.animateFloat(
-        initialValue = 0.06f,
-        targetValue = 0.14f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(900, 0, FastOutSlowInEasing),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "skeletonAlpha",
-    )
-
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        repeat(6) { index ->
-            SkeletonItem(
-                color = baseColor.copy(alpha = alpha),
-                widthFraction = when (index % 3) {
-                    0 -> 0.85f
-                    1 -> 0.65f
-                    else -> 0.75f
-                },
-            )
-        }
-    }
-}
-
-@Composable
-private fun SkeletonItem(
-    color: Color,
-    widthFraction: Float,
-) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(48.dp)
-            .padding(vertical = 4.dp),
-        verticalArrangement = Arrangement.Center,
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(widthFraction)
-                .height(14.dp)
-                .clip(RoundedCornerShape(4.dp))
-                .background(color),
-        )
-        Spacer(modifier = Modifier.height(8.dp))
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(widthFraction * 0.6f)
-                .height(10.dp)
-                .clip(RoundedCornerShape(3.dp))
-                .background(color),
-        )
     }
 }

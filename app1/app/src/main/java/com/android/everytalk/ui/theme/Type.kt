@@ -1,4 +1,5 @@
 package com.android.everytalk.ui.theme // 确保这是你的主题包名
+import com.android.everytalk.statecontroller.*
 
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle

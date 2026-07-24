@@ -1,4 +1,5 @@
 package com.android.everytalk.ui.screens.viewmodel
+import com.android.everytalk.statecontroller.*
 
 import android.content.Context
 import android.util.Log
@@ -36,10 +37,10 @@ import kotlinx.serialization.json.Json
 import java.net.URI
 import java.nio.file.Files
 
-private val WINDOWS_ABSOLUTE_PATH = Regex("^[A-Za-z]:[\\\\/].*")
-private val URI_SCHEME_PREFIX = Regex("^[A-Za-z][A-Za-z0-9+.-]*:")
-private const val MAX_LOCAL_MEDIA_SOURCE_CHARS = 8_192
-private const val MAX_TEMP_CAMERA_FILE_AGE_MS = 7L * 24L * 60L * 60L * 1000L
+internal val WINDOWS_ABSOLUTE_PATH = Regex("^[A-Za-z]:[\\\\/].*")
+internal val URI_SCHEME_PREFIX = Regex("^[A-Za-z][A-Za-z0-9+.-]*:")
+internal const val MAX_LOCAL_MEDIA_SOURCE_CHARS = 8_192
+internal const val MAX_TEMP_CAMERA_FILE_AGE_MS = 7L * 24L * 60L * 60L * 1000L
 
 internal fun migrateApiConfigIds(
     mapping: Map<String, String>,
@@ -256,26 +257,26 @@ internal suspend fun migrateConversationInlineImages(
 }
 
 class DataPersistenceManager(
-    private val context: Context,
-    private val stateHolder: ViewModelStateHolder,
-    private val viewModelScope: CoroutineScope,
-    private val imageLoader: ImageLoader
+    internal val context: Context,
+    internal val stateHolder: ViewModelStateHolder,
+    internal val viewModelScope: CoroutineScope,
+    internal val imageLoader: ImageLoader
 ) {
-    private val TAG = "PersistenceManager"
-    private val conversationGroupsSaveMutex = kotlinx.coroutines.sync.Mutex()
-    private val conversationScrollStatesSaveMutex = kotlinx.coroutines.sync.Mutex()
+    internal val TAG = "PersistenceManager"
+    internal val conversationGroupsSaveMutex = kotlinx.coroutines.sync.Mutex()
+    internal val conversationScrollStatesSaveMutex = kotlinx.coroutines.sync.Mutex()
     
     // Room 数据源
-    private val roomDataSource by lazy { RoomDataSource(context) }
-    private val fileManager by lazy { FileManager(context) }
-    private val protectedTextSessionIds = linkedSetOf<String>()
-    private val protectedImageSessionIds = linkedSetOf<String>()
-    @Volatile private var protectLastOpenTextSession = false
-    @Volatile private var protectLastOpenImageSession = false
+    internal val roomDataSource by lazy { RoomDataSource(context) }
+    internal val fileManager by lazy { FileManager(context) }
+    internal val protectedTextSessionIds = linkedSetOf<String>()
+    internal val protectedImageSessionIds = linkedSetOf<String>()
+    @Volatile internal var protectLastOpenTextSession = false
+    @Volatile internal var protectLastOpenImageSession = false
     
     // 默认配置初始化标志位 (存储在 Room 数据库中)
-    private val KEY_DEFAULT_CONFIGS_INITIALIZED = "default_configs_initialized_v1"
-    private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+    internal val KEY_DEFAULT_CONFIGS_INITIALIZED = "default_configs_initialized_v1"
+    internal val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     suspend fun loadCustomProviders(): Set<String> {
         return withContext(Dispatchers.IO) {
@@ -326,7 +327,7 @@ class DataPersistenceManager(
     }
 
     /** 将历史消息中的图片来源统一归档；失败时保留原记录，交由后续迁移重试。 */
-    private suspend fun persistInlineAndRemoteImages(messages: List<Message>): List<Message> {
+    internal suspend fun persistInlineAndRemoteImages(messages: List<Message>): List<Message> {
         if (messages.isEmpty()) return messages
         return messages.map { message ->
             val originalUrls = message.imageUrls.orEmpty()
@@ -348,25 +349,25 @@ class DataPersistenceManager(
         }
     }
 
-    private fun protectedSessionIds(isImageGeneration: Boolean): Set<String> = synchronized(this) {
+    internal fun protectedSessionIds(isImageGeneration: Boolean): Set<String> = synchronized(this) {
         if (isImageGeneration) protectedImageSessionIds.toSet() else protectedTextSessionIds.toSet()
     }
 
-    private fun protectSessions(isImageGeneration: Boolean, sessionIds: Collection<String>) {
+    internal fun protectSessions(isImageGeneration: Boolean, sessionIds: Collection<String>) {
         synchronized(this) {
             val target = if (isImageGeneration) protectedImageSessionIds else protectedTextSessionIds
             target += sessionIds
         }
     }
 
-    private fun unprotectSession(isImageGeneration: Boolean, sessionId: String) {
+    internal fun unprotectSession(isImageGeneration: Boolean, sessionId: String) {
         synchronized(this) {
             val target = if (isImageGeneration) protectedImageSessionIds else protectedTextSessionIds
             target -= sessionId
         }
     }
 
-    private fun deleteMigratedImageFile(path: String) {
+    internal fun deleteMigratedImageFile(path: String) {
         runCatching {
             val attachmentDir = File(context.filesDir, "chat_attachments").canonicalFile
             val file = File(path).canonicalFile
@@ -374,7 +375,7 @@ class DataPersistenceManager(
         }
     }
 
-    private suspend fun migrateLoadedHistorySessions(
+    internal suspend fun migrateLoadedHistorySessions(
         loadResult: com.android.everytalk.data.database.SessionHistoryLoadResult,
         isImageGeneration: Boolean,
         onLoadWarning: suspend (String) -> Unit,
@@ -433,518 +434,14 @@ class DataPersistenceManager(
         }
     }
 
+
     fun loadInitialData(
         loadLastChat: Boolean = true,
         onLoadWarning: (String) -> Unit = {},
         onLoadingComplete: (initialConfigPresent: Boolean, initialHistoryPresent: Boolean) -> Unit
     ) {
-        stateHolder._isLoadingHistoryData.value = true
-        viewModelScope.launch(Dispatchers.IO) {
-            cleanupExpiredCameraFiles()
-            Log.d(TAG, "loadInitialData: 开始加载初始数据 (IO Thread)... loadLastChat: $loadLastChat")
-            var initialConfigPresent = false
-            var initialHistoryPresent = false
-            var historyLoadingJob: Job? = null
-            var loadingCompleteNotified = false
-            var imageConfigIdMigrations: Map<String, String> = emptyMap()
-            val emittedLoadWarnings = mutableSetOf<String>()
-            fun notifyLoadingComplete(configPresent: Boolean, historyPresent: Boolean) {
-                if (loadingCompleteNotified) return
-                loadingCompleteNotified = true
-                onLoadingComplete(configPresent, historyPresent)
-            }
-            suspend fun warnOnce(message: String) {
-                val shouldEmit = synchronized(emittedLoadWarnings) { emittedLoadWarnings.add(message) }
-                if (shouldEmit) {
-                    withContext(Dispatchers.Main.immediate) { onLoadWarning(message) }
-                }
-            }
-
-            try {
-                // 第一阶段：快速加载API配置（优先级最高）
-                Log.d(TAG, "loadInitialData: 阶段1 - 加载API配置...")
-                var loadedConfigs: List<ApiConfig> = if (stateHolder._apiConfigs.value.isEmpty()) {
-                    Log.d(TAG, "loadInitialData: API配置缓存未命中。从RoomDataSource加载...")
-                    roomDataSource.loadApiConfigs()
-                } else {
-                    Log.d(TAG, "loadInitialData: API配置缓存命中。使用现有数据。")
-                    stateHolder._apiConfigs.value
-                }
-                
-                // 清理旧的默认文本配置（如果存在）
-                val hasLegacyDefaultConfigs = loadedConfigs.any {
-                    it.provider.trim().lowercase() in listOf("默认", "default") &&
-                    it.modalityType == com.android.everytalk.data.DataClass.ModalityType.TEXT
-                }
-                if (hasLegacyDefaultConfigs) {
-                    loadedConfigs = loadedConfigs.filter {
-                        !(it.provider.trim().lowercase() in listOf("默认", "default") &&
-                          it.modalityType == com.android.everytalk.data.DataClass.ModalityType.TEXT)
-                    }
-                    roomDataSource.saveApiConfigs(loadedConfigs)
-                    Log.i(TAG, "loadInitialData: 已清理旧的默认文本配置")
-                }
-
-                initialConfigPresent = loadedConfigs.isNotEmpty()
-
-                Log.d(TAG, "loadInitialData: 调用 roomDataSource.loadSelectedConfigId()...")
-                val selectedConfigId: String? = roomDataSource.loadSelectedConfigId()
-                var selectedConfigFromDataSource: ApiConfig? = null
-                if (selectedConfigId != null) {
-                    selectedConfigFromDataSource = loadedConfigs.find { it.id == selectedConfigId }
-                    if (selectedConfigFromDataSource == null && loadedConfigs.isNotEmpty()) {
-                        Log.w(TAG, "loadInitialData: 持久化的选中配置ID '$selectedConfigId' 在当前配置列表中未找到。将清除持久化的选中ID。")
-                        roomDataSource.saveSelectedConfigId(null)
-                    }
-                }
-
-                var finalSelectedConfig = selectedConfigFromDataSource
-                if (finalSelectedConfig == null && loadedConfigs.isNotEmpty()) {
-                    finalSelectedConfig = loadedConfigs.first()
-                    Log.i(TAG, "loadInitialData: 无有效选中配置或之前未选中，默认选择第一个: ${safeApiConfigSummary(finalSelectedConfig)}。将保存此选择。")
-                    roomDataSource.saveSelectedConfigId(finalSelectedConfig.id)
-                }
-
-                // 立即更新API配置到UI，让用户可以开始使用
-                withContext(Dispatchers.Main.immediate) {
-                    Log.d(TAG, "loadInitialData: 阶段1完成 - 更新API配置到UI...")
-                    stateHolder._apiConfigs.value = loadedConfigs
-                    stateHolder._selectedApiConfig.value = finalSelectedConfig
-                }
-
-                // Load image generation configs
-                var loadedImageGenConfigs: List<ApiConfig> = roomDataSource.loadImageGenApiConfigs()
-
-                val defaultConfigsInitialized = roomDataSource.getSetting(KEY_DEFAULT_CONFIGS_INITIALIZED, "false") == "true"
-
-                // 自动创建默认图像配置（如果不存在且未初始化过）
-                // 默认创建三个图像模型：Modal Z-Image-Turbo、Qwen 图像编辑、SiliconFlow
-                val hasDefaultImageConfig = loadedImageGenConfigs.any {
-                    it.provider.trim().lowercase() in listOf("默认", "default") &&
-                    it.modalityType == com.android.everytalk.data.DataClass.ModalityType.IMAGE
-                }
-                if (!hasDefaultImageConfig && !defaultConfigsInitialized) {
-                    Log.i(TAG, "loadInitialData: 未找到默认图像配置且首次初始化，自动创建三个默认图像模型...")
-                    
-                    val newDefaultImageConfigs = mutableListOf<ApiConfig>()
-                    
-                    // 1. Modal Z-Image-Turbo 图像生成
-                    newDefaultImageConfigs.add(ApiConfig(
-                        id = java.util.UUID.randomUUID().toString(),
-                        name = "Z-Image-Turbo (Modal)",
-                        provider = "默认",
-                        address = "",
-                        key = "",
-                        model = "z-image-turbo-modal",
-                        modalityType = com.android.everytalk.data.DataClass.ModalityType.IMAGE,
-                        channel = "",
-                        isValid = true,
-                        numInferenceSteps = 4
-                    ))
-                    
-                    // 2. Qwen 图像编辑
-                    newDefaultImageConfigs.add(ApiConfig(
-                        id = java.util.UUID.randomUUID().toString(),
-                        name = "Qwen Image Edit",
-                        provider = "默认",
-                        address = "",
-                        key = "",
-                        model = "qwen-image-edit-modal",
-                        modalityType = com.android.everytalk.data.DataClass.ModalityType.IMAGE,
-                        channel = "",
-                        isValid = true,
-                        numInferenceSteps = 30
-                    ))
-                    
-                    // 3. SiliconFlow 图像生成 (Kwai-Kolors/Kolors)
-                    newDefaultImageConfigs.add(ApiConfig(
-                        id = java.util.UUID.randomUUID().toString(),
-                        name = "Kwai-Kolors/Kolors",
-                        provider = "默认",
-                        address = "",
-                        key = "",
-                        model = "Kwai-Kolors/Kolors",
-                        modalityType = com.android.everytalk.data.DataClass.ModalityType.IMAGE,
-                        channel = "",
-                        isValid = true
-                    ))
-                    
-                    loadedImageGenConfigs = loadedImageGenConfigs + newDefaultImageConfigs
-                    Log.i(TAG, "loadInitialData: 已创建 ${newDefaultImageConfigs.size} 个默认图像配置")
-                }
-                
-                // 修复：去重时记录旧ID到保留ID的映射，避免历史会话继续引用已删除ID。
-                val retainedByKey = linkedMapOf<String, ApiConfig>()
-                val duplicateImageConfigIds = linkedMapOf<String, String>()
-                loadedImageGenConfigs.forEach { config ->
-                    val isDefaultProvider = config.provider.trim().lowercase() in listOf("默认", "default")
-                    val key = if (isDefaultProvider) {
-                        "default|${config.model}|${config.modalityType}"
-                    } else {
-                        "${config.provider}|${config.address}|${config.key}|${config.model}|${config.channel}|${config.modalityType}"
-                    }
-                    val retained = retainedByKey[key]
-                    if (retained == null) {
-                        retainedByKey[key] = config
-                    } else {
-                        duplicateImageConfigIds[config.id] = retained.id
-                    }
-                }
-                val uniqueImageConfigs = retainedByKey.values.toList()
-                imageConfigIdMigrations = duplicateImageConfigIds
-                if (uniqueImageConfigs.size < loadedImageGenConfigs.size) {
-                    Log.i(TAG, "loadInitialData: 移除 ${loadedImageGenConfigs.size - uniqueImageConfigs.size} 个重复的图像配置")
-                    loadedImageGenConfigs = uniqueImageConfigs
-                    // 同时保存去重后的配置
-                    roomDataSource.saveImageGenApiConfigs(loadedImageGenConfigs)
-                }
-
-                // 统一保存所有图像配置（包括新增的）
-                if (!hasDefaultImageConfig && !defaultConfigsInitialized) {
-                    roomDataSource.saveImageGenApiConfigs(loadedImageGenConfigs)
-                    Log.i(TAG, "loadInitialData: 已保存更新后的图像配置列表")
-                }
-                
-                // 标记默认配置已初始化 (保存到 Room 数据库)
-                if (!defaultConfigsInitialized) {
-                    roomDataSource.setSetting(KEY_DEFAULT_CONFIGS_INITIALIZED, "true")
-                }
-                
-                val selectedImageGenConfigId: String? = roomDataSource.loadSelectedImageGenConfigId()
-                val retainedSelectedImageGenConfigId = selectedImageGenConfigId?.let {
-                    duplicateImageConfigIds[it] ?: it
-                }
-                var selectedImageGenConfig: ApiConfig? = null
-                if (retainedSelectedImageGenConfigId != null) {
-                    selectedImageGenConfig = loadedImageGenConfigs.find { it.id == retainedSelectedImageGenConfigId }
-                }
-                if (selectedImageGenConfig == null && loadedImageGenConfigs.isNotEmpty()) {
-                    selectedImageGenConfig = loadedImageGenConfigs.first()
-                    roomDataSource.saveSelectedImageGenConfigId(selectedImageGenConfig.id)
-                } else if (retainedSelectedImageGenConfigId != selectedImageGenConfigId) {
-                    roomDataSource.saveSelectedImageGenConfigId(retainedSelectedImageGenConfigId)
-                }
- 
-                 withContext(Dispatchers.Main.immediate) {
-                     stateHolder._imageGenApiConfigs.value = loadedImageGenConfigs
-                     stateHolder._selectedImageGenApiConfig.value = selectedImageGenConfig
-                 }
-
-                // 加载语音后端配置
-                var loadedVoiceConfigs = roomDataSource.loadVoiceBackendConfigs()
-                
-                // 自动创建默认语音配置（如果不存在且未初始化过）
-                // 注意：语音配置暂时复用同一个初始化标志位，或者如果需要独立控制可以新加
-                val hasDefaultVoiceConfig = loadedVoiceConfigs.any {
-                    it.provider.trim().lowercase() in listOf("默认", "default")
-                }
-                if (!hasDefaultVoiceConfig && !defaultConfigsInitialized) {
-                    Log.i(TAG, "loadInitialData: 未找到默认语音配置且首次初始化，自动创建...")
-                    val defaultVoiceConfig = com.android.everytalk.data.DataClass.VoiceBackendConfig.createDefault()
-                    loadedVoiceConfigs = loadedVoiceConfigs + listOf(defaultVoiceConfig)
-                    roomDataSource.saveVoiceBackendConfigs(loadedVoiceConfigs)
-                    Log.i(TAG, "loadInitialData: 已创建默认语音配置")
-                }
-                
-                val selectedVoiceConfigId: String? = roomDataSource.loadSelectedVoiceConfigId()
-                var selectedVoiceConfig: com.android.everytalk.data.DataClass.VoiceBackendConfig? = null
-                if (selectedVoiceConfigId != null) {
-                    selectedVoiceConfig = loadedVoiceConfigs.find { it.id == selectedVoiceConfigId }
-                }
-                if (selectedVoiceConfig == null && loadedVoiceConfigs.isNotEmpty()) {
-                    selectedVoiceConfig = loadedVoiceConfigs.first()
-                    roomDataSource.saveSelectedVoiceConfigId(selectedVoiceConfig.id)
-                }
-                
-                withContext(Dispatchers.Main.immediate) {
-                    stateHolder._voiceBackendConfigs.value = loadedVoiceConfigs
-                    stateHolder._selectedVoiceConfig.value = selectedVoiceConfig
-                }
-                Log.i(TAG, "loadInitialData: 已加载 ${loadedVoiceConfigs.size} 个语音配置")
-
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.e(TAG, "loadInitialData: 加载配置时发生错误", e)
-                warnOnce("部分初始数据加载失败，原数据已保留")
-            }
-
-            try {
-                // 第二阶段：异步加载历史数据（延迟加载）
-                historyLoadingJob = launch {
-                    Log.d(TAG, "loadInitialData: 阶段2 - 开始异步加载历史数据...")
-
-                    try {
-                        // 检查是否需要加载历史数据
-                        val shouldLoadHistory = stateHolder._historicalConversations.value.isEmpty()
-                        var textHistoryLoadedCompletely = false
-                        val loadedHistory = if (shouldLoadHistory) {
-                            Log.d(TAG, "loadInitialData: 从 Room 加载历史数据...")
-                            val loadResult = roomDataSource.loadChatHistoryResult()
-                            textHistoryLoadedCompletely = loadResult.failedSessionIds.isEmpty()
-                            migrateLoadedHistorySessions(
-                                loadResult = loadResult,
-                                isImageGeneration = false,
-                                onLoadWarning = ::warnOnce,
-                            )
-                        } else {
-                            Log.d(TAG, "loadInitialData: 使用缓存的历史数据。")
-                            stateHolder._historicalConversations.value
-                        }
-                        
-                        initialHistoryPresent = loadedHistory.isNotEmpty()
-                        Log.i(TAG, "loadInitialData: 历史数据加载完成。数量: ${loadedHistory.size}")
-
-                        // 加载会话配置映射
-                        try {
-                            val mapping = roomDataSource.loadConversationApiConfigIds()
-                            val migratedMapping = migrateApiConfigIds(mapping, imageConfigIdMigrations)
-                            withContext(Dispatchers.Main.immediate) {
-                                stateHolder.conversationApiConfigIds.value = migratedMapping
-                            }
-                            if (migratedMapping != mapping) {
-                                roomDataSource.saveConversationApiConfigIds(migratedMapping)
-                                val migratedCount = mapping.count { (conversationId, configId) ->
-                                    migratedMapping[conversationId] != configId
-                                }
-                                Log.i(TAG, "loadInitialData: 已迁移 $migratedCount 条图像配置会话映射")
-                            }
-                            Log.d(TAG, "loadInitialData: 会话配置映射已加载 - 共 ${migratedMapping.size} 条")
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Failed to load conversation api config mapping", e)
-                        }
-
-                        // 自动修复消息parts - 检查并修复有问题的AI消息
-                        val repairedHistory = loadedHistory.map { conversation ->
-                            conversation.map { message ->
-                                if (message.sender == com.android.everytalk.data.DataClass.Sender.AI &&
-                                    message.text.isNotBlank() && 
-                                    (message.parts.isEmpty() || 
-                                     !message.parts.any { part ->
-                                         when (part) {
-                                             is com.android.everytalk.ui.components.MarkdownPart.Text -> part.content.isNotBlank()
-                                             is com.android.everytalk.ui.components.MarkdownPart.CodeBlock -> part.content.isNotBlank()
-                                             // Math blocks removed
-                                             // is com.android.everytalk.ui.components.MarkdownPart.Table -> part.tableData.headers.isNotEmpty()
-                                             else -> false
-                                         }
-                                     })) {
-                                    // 需要修复的消息
-                                    Log.d(TAG, "自动修复消息parts: messageId=${message.id}")
-                                    // 这里可以调用MessageProcessor.finalizeMessageProcessing
-                                    // 暂时先标记，稍后在渲染时修复
-                                    message
-                                } else {
-                                    message
-                                }
-                            }
-                        }
-
-                        // 更新历史数据到UI
-                        withContext(Dispatchers.Main.immediate) {
-                            Log.d(TAG, "loadInitialData: 阶段2完成 - 更新历史数据到UI...")
-                            stateHolder._historicalConversations.value = repairedHistory
-                            repairedHistory.forEach { conversation ->
-                                val id = ConversationNameHelper.resolveStableId(conversation)
-                                if (id != null) {
-                                    val prompt = conversation.firstOrNull { it.sender == com.android.everytalk.data.DataClass.Sender.System }?.text ?: ""
-                                    stateHolder.systemPrompts[id] = prompt
-                                }
-                            }
-                            if (textHistoryLoadedCompletely) {
-                                stateHolder.markTextHistoryReadyForParameterCleanup()
-                            }
-                        }
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        Log.e(TAG, "loadInitialData: 加载历史数据时发生错误", e)
-                        warnOnce("部分历史加载失败，原数据已保留")
-                    }
-
-                    try {
-                        val imageHistoryLoadResult = roomDataSource.loadImageGenerationHistoryResult()
-                        val convertedImageGenHistory = migrateLoadedHistorySessions(
-                            loadResult = imageHistoryLoadResult,
-                            isImageGeneration = true,
-                            onLoadWarning = ::warnOnce,
-                        )
-                        withContext(Dispatchers.Main.immediate) {
-                            stateHolder._imageGenerationHistoricalConversations.value = convertedImageGenHistory
-                            if (imageHistoryLoadResult.failedSessionIds.isEmpty()) {
-                                stateHolder.markImageHistoryReadyForStateCleanup()
-                            }
-                        }
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        Log.e(TAG, "loadInitialData: 加载图像历史时发生错误", e)
-                        warnOnce("部分历史加载失败，原数据已保留")
-                    }
-                }
-
-                // Phase 3: Load last open chats if needed
-                if (loadLastChat) {
-                    Log.d(TAG, "loadInitialData: Phase 3 - Loading last open chats...")
-                    var lastOpenChat: List<Message>? = null
-                    var lastOpenImageGenChat: List<Message>? = null
-
-                    var loadedOriginalTextChat: List<Message>? = null
-                    try {
-                        val original = roomDataSource.loadLastOpenChat()
-                        loadedOriginalTextChat = original
-                        val migration = migrateConversationInlineImages(
-                            messages = original,
-                            persistSource = ::persistMessageImageSource,
-                            deletePersistedSource = ::deleteMigratedImageFile,
-                        )
-                        if (migration.failed) {
-                            protectLastOpenTextSession = false
-                            lastOpenChat = original
-                            warnOnce("部分历史图片迁移失败，原数据已保留")
-                        } else {
-                            try {
-                                if (migration.changed) {
-                                    roomDataSource.saveLastOpenChat(migration.messages)
-                                }
-                                lastOpenChat = migration.messages
-                                protectLastOpenTextSession = false
-                            } catch (exception: CancellationException) {
-                                throw exception
-                            } catch (exception: Exception) {
-                                migration.persistedSources.forEach(::deleteMigratedImageFile)
-                                lastOpenChat = original
-                                protectLastOpenTextSession = false
-                                Log.w(TAG, "Last-open text migration writeback failed: type=${exception::class.simpleName}")
-                                warnOnce("部分历史图片迁移失败，原数据已保留")
-                            }
-                        }
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        lastOpenChat = loadedOriginalTextChat
-                        protectLastOpenTextSession = loadedOriginalTextChat == null
-                        Log.w(TAG, "Last-open text load or migration failed: type=${e::class.simpleName}")
-                        warnOnce("部分历史加载失败，原数据已保留")
-                    }
-
-                    var loadedOriginalImageChat: List<Message>? = null
-                    try {
-                        val original = roomDataSource.loadLastOpenImageGenerationChat()
-                        loadedOriginalImageChat = original
-                        val migration = migrateConversationInlineImages(
-                            messages = original,
-                            persistSource = ::persistMessageImageSource,
-                            deletePersistedSource = ::deleteMigratedImageFile,
-                        )
-                        if (migration.failed) {
-                            protectLastOpenImageSession = false
-                            lastOpenImageGenChat = original
-                            warnOnce("部分历史图片迁移失败，原数据已保留")
-                        } else {
-                            try {
-                                if (migration.changed) {
-                                    roomDataSource.saveLastOpenImageGenerationChat(migration.messages)
-                                }
-                                lastOpenImageGenChat = migration.messages
-                                protectLastOpenImageSession = false
-                            } catch (exception: CancellationException) {
-                                throw exception
-                            } catch (exception: Exception) {
-                                migration.persistedSources.forEach(::deleteMigratedImageFile)
-                                lastOpenImageGenChat = original
-                                protectLastOpenImageSession = false
-                                Log.w(TAG, "Last-open image migration writeback failed: type=${exception::class.simpleName}")
-                                warnOnce("部分历史图片迁移失败，原数据已保留")
-                            }
-                        }
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        lastOpenImageGenChat = loadedOriginalImageChat
-                        protectLastOpenImageSession = loadedOriginalImageChat == null
-                        Log.w(TAG, "Last-open image load or migration failed: type=${e::class.simpleName}")
-                        warnOnce("部分历史加载失败，原数据已保留")
-                    }
-
-                    withContext(Dispatchers.Main.immediate) {
-                        lastOpenChat?.let { loadedMessages ->
-                            stateHolder.messages.clear()
-                            stateHolder.messages.addAll(loadedMessages)
-                            stateHolder.textReasoningCompleteMap.clear()
-                            loadedMessages.forEach { message ->
-                                if (message.sender == com.android.everytalk.data.DataClass.Sender.AI &&
-                                    !message.reasoning.isNullOrBlank()
-                                ) {
-                                    stateHolder.textReasoningCompleteMap[message.id] = true
-                                }
-                            }
-                            stateHolder._currentConversationId.value =
-                                ConversationNameHelper.resolveStableId(loadedMessages)
-                                    ?: "new_chat_${System.currentTimeMillis()}"
-                            stateHolder.applyCurrentConversationFunctionToggleState()
-                            stateHolder._loadedHistoryIndex.value = null
-                        }
-                        lastOpenImageGenChat?.let { loadedMessages ->
-                            stateHolder.imageGenerationMessages.clear()
-                            stateHolder.imageGenerationMessages.addAll(loadedMessages)
-                            stateHolder.imageReasoningCompleteMap.clear()
-                            loadedMessages.forEach { message ->
-                                if (message.sender == com.android.everytalk.data.DataClass.Sender.AI &&
-                                    !message.reasoning.isNullOrBlank()
-                                ) {
-                                    stateHolder.imageReasoningCompleteMap[message.id] = true
-                                }
-                            }
-                            stateHolder._currentImageGenerationConversationId.value =
-                                loadedMessages.firstOrNull()?.id ?: "image_resume_${System.currentTimeMillis()}"
-                            stateHolder._loadedImageGenerationHistoryIndex.value = null
-                        }
-                    }
-                    Log.i(
-                        TAG,
-                        "loadInitialData: Last open chats loaded. Text: ${lastOpenChat?.size ?: -1}, Image: ${lastOpenImageGenChat?.size ?: -1}",
-                    )
-                } else {
-                    withContext(Dispatchers.Main.immediate) {
-                        stateHolder.messages.clear()
-                        stateHolder.imageGenerationMessages.clear()
-                        stateHolder._loadedHistoryIndex.value = null
-                        stateHolder._loadedImageGenerationHistoryIndex.value = null
-                        // 若未加载"last open chat"，也重置推理完成映射
-                        stateHolder.textReasoningCompleteMap.clear()
-                        stateHolder.imageReasoningCompleteMap.clear()
-                    }
-                    Log.i(TAG, "loadInitialData: Skipped loading last open chats.")
-                }
-                historyLoadingJob.join()
-                notifyLoadingComplete(initialConfigPresent, initialHistoryPresent)
-
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.e(TAG, "loadInitialData: 加载初始数据时发生严重错误", e)
-                withContext(NonCancellable) {
-                    historyLoadingJob?.cancelAndJoin()
-                }
-                warnOnce("部分初始数据加载失败，原数据已保留")
-                notifyLoadingComplete(initialConfigPresent, initialHistoryPresent)
-            } finally {
-                withContext(NonCancellable) {
-                    historyLoadingJob?.cancelAndJoin()
-                    notifyLoadingComplete(initialConfigPresent, initialHistoryPresent)
-                    withContext(Dispatchers.Main.immediate) {
-                        stateHolder._isLoadingHistoryData.value = false
-                    }
-                }
-                Log.d(TAG, "loadInitialData: 初始数据加载的IO线程任务结束。")
-            }
-        }
+        loadInitialDataInternal(loadLastChat, onLoadWarning, onLoadingComplete)
     }
-
-
     suspend fun clearAllChatHistory() {
         withContext(Dispatchers.IO) {
             Log.d(TAG, "clearAllChatHistory: 请求清除聊天历史...")
@@ -1016,7 +513,7 @@ class DataPersistenceManager(
         }
     }
 
-    private fun cleanupExpiredCameraFiles() {
+    internal fun cleanupExpiredCameraFiles() {
         val directory = File(context.filesDir, "chat_images_temp")
         val cutoff = System.currentTimeMillis() - MAX_TEMP_CAMERA_FILE_AGE_MS
         directory.listFiles()?.forEach { file ->
@@ -1225,180 +722,12 @@ class DataPersistenceManager(
             Log.d(TAG, "Cleared last open chat for isImageGeneration=$isImageGeneration from Room")
         }
     }
-    suspend fun deleteMediaFilesForMessages(conversations: List<List<Message>>) {
-        withContext(Dispatchers.IO) {
-            Log.d(TAG, "Starting deletion of media files for ${conversations.size} conversations.")
-            var deletedFilesCount = 0
-            // 正文只是展示内容，不具备授权删除本地文件的语义。
-            val candidates = collectMediaDeletionCandidates(conversations.flatten())
-            val allowedMediaDirectories = listOf(
-                File(context.filesDir, "chat_attachments"),
-                File(context.filesDir, "chat_images"),
-                File(context.filesDir, "chat_images_temp"),
-                File(context.cacheDir, "preview_cache"),
-                File(context.cacheDir, "share_images"),
-            )
-            val resolvedCandidates = candidates.localSources.map { source ->
-                source to resolveOwnedMediaFile(source, allowedMediaDirectories)
-            }
-            val filesToDelete = resolvedCandidates
-                .mapNotNull { (_, file) -> file }
-                .toSet()
 
-            val rejectedSources = resolvedCandidates.count { (_, file) -> file == null }
-            if (rejectedSources > 0) {
-                Log.w(TAG, "Skipped $rejectedSources media sources outside app-owned directories or invalid paths")
-            }
+    suspend fun deleteMediaFilesForMessages(conversations: List<List<Message>>) =
+        deleteMediaFilesForMessagesInternal(conversations)
 
-            // 删除文件
-            filesToDelete.forEach { file ->
-                try {
-                    if (file.delete()) {
-                        Log.d(TAG, "Successfully deleted media file: ${file.path}")
-                        deletedFilesCount++
-                    } else {
-                        Log.w(TAG, "Failed to delete media file: ${file.path}")
-                    }
-                } catch (e: SecurityException) {
-                    Log.e(TAG, "Security exception deleting media file: ${file.path}", e)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Error deleting media file: ${file.path}", e)
-                }
-            }
-
-            // 清理图片缓存
-            candidates.localSources.forEach { source ->
-                imageLoader.diskCache?.remove(source)
-            }
-            filesToDelete.forEach { file ->
-                imageLoader.diskCache?.remove(file.path)
-                imageLoader.diskCache?.remove(file.toURI().toString())
-            }
-            candidates.remoteUrls.forEach { url ->
-                imageLoader.diskCache?.remove(url)
-            }
-
-            Log.d(TAG, "Finished media file deletion. Total files deleted: $deletedFilesCount")
-        }
-    }
-
-    /**
-     * 清理孤立的附件文件与临时缓存（已删除会话但文件仍存在的情况），并回收图片缓存
-     *
-     * 覆盖范围：
-     * - filesDir/chat_attachments 中不再被引用的图片文件
-     * - cacheDir/preview_cache 预览生成的临时文件
-     * - cacheDir/share_images 分享生成的临时文件
-     * - Coil 内存/磁盘缓存
-     *
-     * 调用时机：清空历史、大批删除后
-     */
-    suspend fun cleanupOrphanedAttachments(vacuumDatabase: Boolean = false) {
-        withContext(Dispatchers.IO) {
-            try {
-                val chatAttachmentsDir = File(context.filesDir, "chat_attachments")
-                val previewCacheDir = File(context.cacheDir, "preview_cache")
-                val shareImagesDir = File(context.cacheDir, "share_images")
-
-                // 1) 收集当前所有会话中被引用的图片路径
-                val referencedPaths = mutableSetOf<String>()
-
-                // 从文本历史会话收集
-                val textHistoryResult = roomDataSource.loadChatHistoryResult()
-                textHistoryResult.sessions.forEach { loadedSession ->
-                    referencedPaths += collectReferencedAttachmentPaths(loadedSession.messages)
-                }
-
-                // 从图像生成历史会话收集
-                val imageHistoryResult = roomDataSource.loadImageGenerationHistoryResult()
-                imageHistoryResult.sessions.forEach { loadedSession ->
-                    referencedPaths += collectReferencedAttachmentPaths(loadedSession.messages)
-                }
-
-                if (textHistoryResult.failedSessionIds.isNotEmpty() || imageHistoryResult.failedSessionIds.isNotEmpty()) {
-                    Log.w(
-                        TAG,
-                        "cleanupOrphanedAttachments: 历史加载不完整，跳过附件清理以避免误删",
-                    )
-                    return@withContext
-                }
-                
-                // 从最后打开的会话收集
-                referencedPaths += collectReferencedAttachmentPaths(roomDataSource.loadLastOpenChat())
-                referencedPaths += collectReferencedAttachmentPaths(roomDataSource.loadLastOpenImageGenerationChat())
-                
-                Log.d(TAG, "cleanupOrphanedAttachments: Found ${referencedPaths.size} referenced files")
-
-                // 2) 清理 chat_attachments 中不再被引用的文件
-                var orphanedCount = 0
-                if (chatAttachmentsDir.exists()) {
-                    chatAttachmentsDir.listFiles()?.forEach { file ->
-                        val canonicalPath = runCatching { file.canonicalPath }.getOrNull()
-                            ?: return@forEach
-                        if (file.isFile && canonicalPath !in referencedPaths) {
-                            try {
-                                if (file.delete()) {
-                                    orphanedCount++
-                                    Log.d(TAG, "Deleted orphaned file: ${file.absolutePath}")
-                                }
-                            } catch (e: Exception) {
-                                Log.w(TAG, "Failed to delete orphaned file: ${file.absolutePath}", e)
-                            }
-                        }
-                    }
-                }
-                Log.i(TAG, "cleanupOrphanedAttachments: Deleted $orphanedCount orphaned files from chat_attachments")
-
-                // 3) 清空预览/分享产生的临时缓存
-                fun clearCacheDir(dir: File, label: String): Int {
-                    if (!dir.exists()) return 0
-                    var count = 0
-                    dir.listFiles()?.forEach { f ->
-                        try {
-                            if (f.isFile) {
-                                if (f.delete()) count++
-                            } else {
-                                if (f.deleteRecursively()) count++
-                            }
-                        } catch (e: Exception) {
-                            Log.w(TAG, "Failed to delete cache file in $label: ${f.absolutePath}", e)
-                        }
-                    }
-                    Log.d(TAG, "Cleared $count files from $label")
-                    return count
-                }
-                val clearedPreview = clearCacheDir(previewCacheDir, "preview_cache")
-                val clearedShare = clearCacheDir(shareImagesDir, "share_images")
-
-                // 4) 统一清理 Coil 内存/磁盘缓存
-                runCatching {
-                    imageLoader.memoryCache?.clear()
-                    Log.d(TAG, "Coil memory cache cleared")
-                }.onFailure { e -> Log.w(TAG, "Failed to clear Coil memory cache", e) }
-
-                runCatching {
-                    imageLoader.diskCache?.clear()
-                    Log.d(TAG, "Coil disk cache cleared")
-                }.onFailure { e -> Log.w(TAG, "Failed to clear Coil disk cache", e) }
-
-                // 5) VACUUM 仅用于批量清空，避免单条删除触发全库重写。
-                if (vacuumDatabase) {
-                    runCatching {
-                        roomDataSource.vacuumDatabase()
-                        Log.d(TAG, "Database VACUUM completed")
-                    }.onFailure { e -> Log.w(TAG, "Failed to VACUUM database", e) }
-                }
-
-                Log.i(TAG, "Cleanup completed. Deleted $orphanedCount orphaned files. Cleared preview=$clearedPreview, share=$clearedShare cache files.")
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.e(TAG, "Error during orphaned file cleanup", e)
-            }
-        }
-    }
-
-    // ========= 置顶集合：文本与图像 =========
+    suspend fun cleanupOrphanedAttachments(vacuumDatabase: Boolean = false) =
+        cleanupOrphanedAttachmentsInternal(vacuumDatabase)
     suspend fun savePinnedIds(ids: Set<String>, isImageGeneration: Boolean) {
         withContext(Dispatchers.IO) {
             try {

@@ -144,25 +144,157 @@ import coil3.size.Size
 import kotlin.math.min
 
 @Composable
-fun ImageGenerationLoadingView() {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.CenterStart
-    ) {
-        ImageGenLoadingIndicator(text = "等待首个响应")
-    }
-}
-
-@Composable
-internal fun ImageGenLoadingIndicator(
-    modifier: Modifier = Modifier,
-    text: String? = null,
+@SuppressLint("StateFlowValueCalledInComposition")
+internal fun AiMessageItem(
+    message: Message,
+    text: String,
+    maxWidth: Dp,
+    onLongPress: (Message, Offset) -> Unit,
+    onOpenPreview: (Any) -> Unit,
+    isStreaming: Boolean,
+    onImageLoaded: () -> Unit,
+    scrollStateManager: ChatScrollStateManager,
+    viewModel: AppViewModel,
+    modifier: Modifier = Modifier
 ) {
-    val displayText = com.android.everytalk.ui.screens.MainScreen.chat.text.ui.resolveLoadingStageDisplayText(
-        text
+    val shape = androidx.compose.ui.graphics.RectangleShape
+    val aiReplyMessageDescription = stringResource(id = R.string.ai_reply_message)
+    val streamingRenderStateSource = remember(message.id, viewModel) {
+        viewModel.getStreamingRenderState(message.id)
+    }
+    val pauseAwareRenderState = remember(streamingRenderStateSource, viewModel) {
+        streamingRenderStateSource.freezeWhileStreamingPaused(viewModel.isStreamingPaused)
+    }
+    val streamingRenderState by pauseAwareRenderState.collectAsState(
+        initial = streamingRenderStateSource.value
     )
-    com.android.everytalk.ui.screens.MainScreen.chat.text.ui.LoadingStageIndicator(
-        text = displayText,
-        modifier = modifier,
-    )
+    val shouldPreferStreamingContent = isStreaming || streamingRenderState.isStreaming
+    val effectiveText = if (shouldPreferStreamingContent) {
+        streamingRenderState.content.ifBlank { text.ifBlank { message.text } }
+    } else {
+        val staticText = text.ifBlank { message.text }
+        if (staticText.isBlank() && streamingRenderState.content.isNotBlank()) {
+            streamingRenderState.content
+        } else {
+            staticText
+        }
+    }
+    val renderMessage = if (effectiveText == message.text) {
+        message
+    } else {
+        message.copy(text = effectiveText)
+    }
+    val useUpstreamRenderState = shouldPreferStreamingContent &&
+        streamingRenderState.content == effectiveText &&
+        streamingRenderState.blocks.isNotEmpty()
+    val localRenderState = remember(
+        message.id,
+        effectiveText,
+        shouldPreferStreamingContent,
+        useUpstreamRenderState,
+    ) {
+        if (!useUpstreamRenderState && effectiveText.isNotBlank()) {
+            buildStreamingRenderState(
+                messageId = "${message.id}:image-generation",
+                content = effectiveText,
+                isStreaming = shouldPreferStreamingContent,
+                isComplete = !shouldPreferStreamingContent,
+            )
+        } else {
+            null
+        }
+    }
+    val renderState = if (useUpstreamRenderState) {
+        streamingRenderState
+    } else {
+        localRenderState
+    }
+    val currentMessage by rememberUpdatedState(message)
+    val currentOnLongPress by rememberUpdatedState(onLongPress)
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth(),
+        horizontalArrangement = Arrangement.Start
+    ) {
+        var itemGlobalPosition by remember(message.id) { mutableStateOf(Offset.Zero) }
+        Surface(
+            modifier = Modifier
+                .fillMaxWidth()
+                .onGloballyPositioned { coords ->
+                    itemGlobalPosition = coords.localToRoot(Offset.Zero)
+                }
+                .pointerInput(message.id) {
+                    detectTapGestures(
+                        onLongPress = { localOffset ->
+                            // 将本地偏移转换为全局，统一与附件一致的定位体验
+                            currentOnLongPress(currentMessage, itemGlobalPosition + localOffset)
+                        }
+                    )
+                }
+                .semantics {
+                    contentDescription = aiReplyMessageDescription
+                },
+            shape = shape,
+            color = Color.Transparent,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            shadowElevation = 0.dp
+        ) {
+            Box(
+                modifier = Modifier
+                    .padding(
+                        start = ChatMarkdownTextStyle.ASSISTANT_CONTENT_START_PADDING_DP.dp,
+                        top = ChatMarkdownTextStyle.ASSISTANT_CONTENT_TOP_PADDING_DP.dp,
+                        end = ChatMarkdownTextStyle.ASSISTANT_CONTENT_END_PADDING_DP.dp,
+                        bottom = ChatMarkdownTextStyle.ASSISTANT_CONTENT_BOTTOM_PADDING_DP.dp
+                    )
+            ) {
+                Column {
+                    if (renderState != null && renderState.blocks.isNotEmpty()) {
+                        UnifiedMarkdownRenderer(
+                            preparedMessage = renderState.preparedMessage,
+                            sender = renderMessage.sender,
+                            isStreaming = shouldPreferStreamingContent,
+                        )
+                    }
+                    if (message.imageUrls != null && message.imageUrls.isNotEmpty()) {
+                        if (text.isNotBlank()) {
+                            Spacer(modifier = Modifier.height(8.dp))
+                        }
+                        AttachmentsContent(
+                            attachments = message.imageUrls.map { urlStr ->
+                                val safeUri = try {
+                                    when {
+                                        urlStr.startsWith("data:image", ignoreCase = true) -> urlStr.toUri()
+                                        urlStr.startsWith("file://", ignoreCase = true) -> urlStr.toUri()
+                                        urlStr.startsWith("/", ignoreCase = true) -> Uri.fromFile(File(urlStr))
+                                        else -> urlStr.toUri()
+                                    }
+                                } catch (_: Exception) {
+                                    if (urlStr.startsWith("/")) Uri.fromFile(File(urlStr)) else urlStr.toUri()
+                                }
+                                SelectedMediaItem.ImageFromUri(safeUri, UUID.randomUUID().toString())
+                            },
+                            onAttachmentClick = { _ ->
+                                val firstUrl = message.imageUrls.firstOrNull()
+                                if (!firstUrl.isNullOrBlank()) {
+                                    onOpenPreview(firstUrl)
+                                }
+                            },
+                            maxWidth = maxWidth,
+                            message = message,
+                            onEditRequest = {},
+                            onRegenerateRequest = {},
+                            onLongPress = { msg, offset -> onLongPress(msg, offset) },
+                            onImageLoaded = onImageLoaded,
+                            bubbleColor = MaterialTheme.chatColors.aiBubble,
+                            scrollStateManager = scrollStateManager,
+                            isAiGenerated = true,
+                            onImageClick = { url -> onOpenPreview(url) }
+                        )
+                    }
+                }
+            }
+        }
+    }
 }

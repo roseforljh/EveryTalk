@@ -70,131 +70,67 @@ import com.android.everytalk.data.DataClass.ModalityType
 import com.android.everytalk.data.network.ExternalWebSearchProvider
 
 @Composable
-internal fun EditExternalWebSearchProviderDialog(
-    provider: ExternalWebSearchProvider,
-    currentApiKey: String,
-    onApiKeyChange: (String) -> Unit,
-    onDismiss: () -> Unit,
+internal fun ConfirmDeleteDialog(
+    onDismissRequest: () -> Unit,
+    onConfirm: () -> Unit,
+    title: String,
+    text: String
 ) {
-    var apiKey by remember(currentApiKey, provider.providerId) { mutableStateOf(currentApiKey) }
-    var apiKeyVisible by remember { mutableStateOf(false) }
-    val dialogBg = if (isSystemInDarkTheme()) Color.Black else Color.White; val borderColor = if (isSystemInDarkTheme()) Color(0xFF414141) else Color(0xFFF3F3F3); val contentColor = if (isSystemInDarkTheme()) Color.White else Color(0xFF0D0D0D)
-
+    val isDarkTheme = isSystemInDarkTheme()
+    val dialogBg = if (isDarkTheme) Color.Black else Color.White
+    val borderColor = if (isDarkTheme) Color(0xFF414141) else Color(0xFFF3F3F3)
+    val contentColor = if (isDarkTheme) Color.White else Color(0xFF0D0D0D)
     AlertDialog(
         modifier = Modifier
             .wrapContentHeight()
             .border(1.dp, borderColor, RoundedCornerShape(28.dp)),
-        onDismissRequest = onDismiss,
+        onDismissRequest = onDismissRequest,
         shape = RoundedCornerShape(28.dp),
         containerColor = dialogBg,
+        titleContentColor = contentColor,
+        textContentColor = contentColor,
         title = {
             Text(
-                text = "编辑 ${provider.displayName}",
-                style = MaterialTheme.typography.headlineSmall,
+                title,
+                fontSize = 20.sp,
                 fontWeight = FontWeight.Bold,
                 color = contentColor
             )
         },
         text = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState()),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
-            ) {
-                Surface(
-                    shape = RoundedCornerShape(16.dp),
-                    color = provider.accentColor.copy(alpha = 0.12f),
-                    border = BorderStroke(1.dp, provider.accentColor.copy(alpha = 0.35f)),
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Text(
-                            text = provider.description,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_link),
-                                contentDescription = null,
-                                tint = provider.accentColor,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Text(
-                                text = provider.baseUrl,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                }
-
-                OutlinedTextField(
-                    value = apiKey,
-                    onValueChange = { apiKey = it },
-                    label = { Text("API Key") },
-                    placeholder = { Text(provider.apiKeyPlaceholder) },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = DialogTextFieldColors,
-                    visualTransformation = if (apiKeyVisible) {
-                        androidx.compose.ui.text.input.VisualTransformation.None
-                    } else {
-                        androidx.compose.ui.text.input.PasswordVisualTransformation()
-                    },
-                    trailingIcon = {
-                        IconButton(onClick = { apiKeyVisible = !apiKeyVisible }) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_eye),
-                                contentDescription = if (apiKeyVisible) "隐藏" else "显示",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                        }
-                    }
-                )
-            }
+            Text(
+                text,
+                style = MaterialTheme.typography.bodyMedium,
+                color = contentColor.copy(alpha = 0.8f)
+            )
         },
         confirmButton = {
             Row(
-                modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 OutlinedButton(
-                    onClick = onDismiss,
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp),
+                    onClick = onDismissRequest,
                     shape = RoundedCornerShape(24.dp),
                     colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = dialogBg,
+                        containerColor = Color.Transparent,
                         contentColor = contentColor
                     ),
-                    border = BorderStroke(1.dp, borderColor)
+                    border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
                 ) {
                     Text("取消", fontWeight = FontWeight.SemiBold)
                 }
                 Button(
                     onClick = {
-                        onApiKeyChange(apiKey)
-                        onDismiss()
+                        onConfirm()
+                        onDismissRequest()
                     },
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp),
                     shape = RoundedCornerShape(24.dp),
                     colors = ButtonDefaults.buttonColors(
-                        containerColor = contentColor,
-                        contentColor = dialogBg
+                        containerColor = Color(0xFFEF5350),
+                        contentColor = Color.White
                     )
                 ) {
-                    Text("保存", fontWeight = FontWeight.SemiBold)
+                    Text("删除", fontWeight = FontWeight.SemiBold)
                 }
             }
         },
@@ -203,27 +139,140 @@ internal fun EditExternalWebSearchProviderDialog(
 }
 
 @Composable
-internal fun SettingsFieldLabel(
-    text: String,
-    modifier: Modifier = Modifier
+internal fun ImportExportDialog(
+    onDismissRequest: () -> Unit,
+    onExport: (includeHistory: Boolean) -> Unit,
+    onImport: () -> Unit,
+    isExportEnabled: Boolean,
+    chatHistoryCount: Int,
+    imageHistoryCount: Int
 ) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.labelLarge,
-        fontWeight = FontWeight.SemiBold,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = modifier.padding(bottom = 8.dp)
+    val isDarkTheme = isSystemInDarkTheme()
+    val dialogBg = if (isDarkTheme) Color.Black else Color.White
+    val borderColor = if (isDarkTheme) Color(0xFF414141) else Color(0xFFF3F3F3)
+    val contentColor = if (isDarkTheme) Color.White else Color(0xFF0D0D0D)
+    val subtextColor = if (isDarkTheme) Color.White.copy(alpha = 0.6f) else Color(0xFF0D0D0D).copy(alpha = 0.6f)
+    var includeHistory by remember { mutableStateOf(false) }
+
+    AlertDialog(
+        modifier = Modifier
+            .wrapContentHeight()
+            .border(1.dp, borderColor, RoundedCornerShape(28.dp)),
+        onDismissRequest = onDismissRequest,
+        shape = RoundedCornerShape(28.dp),
+        containerColor = dialogBg,
+        titleContentColor = contentColor,
+        textContentColor = contentColor,
+        title = {
+            Text(
+                "导入 / 导出",
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Bold,
+                color = contentColor
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                if (chatHistoryCount > 0 || imageHistoryCount > 0) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .border(1.dp, borderColor, RoundedCornerShape(16.dp))
+                            .clickable { includeHistory = !includeHistory }
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(22.dp)
+                                .clip(RoundedCornerShape(7.dp))
+                                .background(if (includeHistory) contentColor else Color.Transparent)
+                                .border(
+                                    1.dp,
+                                    if (includeHistory) contentColor else borderColor,
+                                    RoundedCornerShape(7.dp)
+                                ),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            if (includeHistory) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_check),
+                                    contentDescription = null,
+                                    tint = dialogBg,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                            }
+                        }
+                        Spacer(Modifier.width(12.dp))
+                        Column {
+                            Text(
+                                "包含聊天历史",
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = contentColor
+                            )
+                            Text(
+                                "文本: $chatHistoryCount 个会话, 图像: $imageHistoryCount 个会话",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = subtextColor
+                            )
+                        }
+                    }
+                }
+
+                Text(
+                    "导出文件包含API密钥等敏感信息，请妥善保管",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = subtextColor
+                )
+            }
+        },
+        confirmButton = {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                OutlinedButton(
+                    onClick = onImport,
+                    shape = RoundedCornerShape(24.dp),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = Color.Transparent,
+                        contentColor = contentColor
+                    ),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
+                ) {
+                    Text("导入", fontWeight = FontWeight.SemiBold)
+                }
+                Button(
+                    onClick = { onExport(includeHistory) },
+                    enabled = isExportEnabled,
+                    shape = RoundedCornerShape(24.dp),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = contentColor,
+                        contentColor = dialogBg,
+                        disabledContainerColor = borderColor,
+                        disabledContentColor = subtextColor
+                    )
+                ) {
+                    Text("导出", fontWeight = FontWeight.SemiBold)
+                }
+            }
+        }
     )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun AddProviderDialog(
-    newProviderName: String,
-    onNewProviderNameChange: (String) -> Unit,
+internal fun AddModelDialog(
     onDismissRequest: () -> Unit,
-    onConfirm: () -> Unit
+    onConfirm: (String) -> Unit
 ) {
+    var modelName by remember { mutableStateOf("") }
+
     val isDarkTheme = isSystemInDarkTheme()
     val dialogBg = if (isDarkTheme) Color.Black else Color.White; val borderColor = if (isDarkTheme) Color(0xFF414141) else Color(0xFFF3F3F3); val contentColor = if (isDarkTheme) Color.White else Color(0xFF0D0D0D)
 
@@ -238,7 +287,7 @@ internal fun AddProviderDialog(
         textContentColor = contentColor,
         title = {
             Text(
-                "添加新模型平台",
+                "添加新模型",
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold,
                 color = contentColor
@@ -249,15 +298,15 @@ internal fun AddProviderDialog(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                SettingsFieldLabel("平台名称")
+                SettingsFieldLabel("模型名称")
                 OutlinedTextField(
-                    value = newProviderName,
-                    onValueChange = onNewProviderNameChange,
-                    placeholder = { Text("例如: OpenRouter, Anthropic...") },
+                    value = modelName,
+                    onValueChange = { modelName = it },
+                    placeholder = { Text("例如: gpt-4-turbo") },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
-                    keyboardActions = KeyboardActions(onDone = { if (newProviderName.isNotBlank()) onConfirm() }),
+                    keyboardActions = KeyboardActions(onDone = { if (modelName.isNotBlank()) onConfirm(modelName) }),
                     shape = DialogShape,
                     colors = DialogTextFieldColors
                 )
@@ -279,8 +328,8 @@ internal fun AddProviderDialog(
                     Text("取消", fontWeight = FontWeight.SemiBold)
                 }
                 Button(
-                    onClick = onConfirm,
-                    enabled = newProviderName.isNotBlank(),
+                    onClick = { onConfirm(modelName) },
+                    enabled = modelName.isNotBlank(),
                     shape = RoundedCornerShape(24.dp),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = contentColor,
@@ -295,58 +344,4 @@ internal fun AddProviderDialog(
         },
         dismissButton = {}
     )
-}
-
-@Composable
-internal fun CustomStyledDropdownMenu(
-    transitionState: MutableTransitionState<Boolean>,
-    onDismissRequest: () -> Unit,
-    anchorBounds: Rect?,
-    modifier: Modifier = Modifier,
-    yOffsetDp: Dp = 0.dp,
-    content: @Composable ColumnScope.() -> Unit
-) {
-    Log.d(
-        "DropdownAnimation",
-        "CustomStyledDropdownMenu: transitionState.currentState=${transitionState.currentState}, transitionState.targetState=${transitionState.targetState}, anchorBounds is null: ${anchorBounds == null}"
-    )
-
-    if ((transitionState.currentState || transitionState.targetState) && anchorBounds != null) {
-        val density = LocalDensity.current
-        val menuWidth = with(density) { anchorBounds.width.toDp() }
-        val isDark = isSystemInDarkTheme()
-        val menuBg = if (isDark) Color(0xFF212121) else Color(0xFFFFFFFF)
-        val menuBorder = if (isDark) Color(0xFF414141) else Color(0xFFF3F3F3)
-
-        MaterialTheme(
-            shapes = MaterialTheme.shapes.copy(
-                extraSmall = RoundedCornerShape(20.dp)
-            ),
-            colorScheme = MaterialTheme.colorScheme.copy(
-                surface = menuBg
-            )
-        ) {
-            DropdownMenu(
-                expanded = transitionState.currentState || transitionState.targetState,
-                onDismissRequest = onDismissRequest,
-                modifier = modifier
-                    .width(menuWidth)
-                    .heightIn(max = 280.dp)
-                    .border(1.dp, menuBorder, RoundedCornerShape(20.dp)),
-                offset = DpOffset(0.dp, yOffsetDp),
-                properties = PopupProperties(
-                    focusable = true,
-                    dismissOnClickOutside = true,
-                    dismissOnBackPress = true
-                )
-            ) {
-                content()
-            }
-        }
-    } else if ((transitionState.currentState || transitionState.targetState) && anchorBounds == null) {
-        Log.w(
-            "DropdownAnimation",
-            "CustomStyledDropdownMenu: Animation state active BUT anchorBounds is NULL. Menu will not be shown."
-        )
-    }
 }

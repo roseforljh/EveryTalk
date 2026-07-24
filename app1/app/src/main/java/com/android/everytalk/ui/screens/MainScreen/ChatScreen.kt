@@ -1,4 +1,5 @@
 package com.android.everytalk.ui.screens.MainScreen
+import com.android.everytalk.statecontroller.*
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
@@ -81,200 +82,6 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.delay
 
-internal fun shouldPreserveScrollSessionOnConversationIdChange(
-    previousConversationId: String?,
-    newConversationId: String,
-    messages: List<Message>,
-    isHistoryConversationLoad: Boolean = false,
-): Boolean {
-    if (isHistoryConversationLoad) return false
-    if (previousConversationId.isNullOrBlank()) {
-        return false
-    }
-    if (previousConversationId == newConversationId) {
-        return true
-    }
-
-    val derivedStableConversationId = messages.firstOrNull { it.sender == Sender.User }?.id
-        ?: messages.firstOrNull { it.sender == Sender.System && !it.isPlaceholderName }?.id
-        ?: messages.firstOrNull()?.id
-
-    val previousIdWasTemporary = previousConversationId.startsWith("new_chat_") ||
-        previousConversationId.startsWith("chat_") ||
-        previousConversationId.startsWith("user_temp_")
-    return previousIdWasTemporary && derivedStableConversationId == newConversationId
-}
-
-internal fun buildHistoryLoadingBubblePlaceholders(conversationId: String): List<ChatListItem> {
-    val keyPrefix = conversationId.ifBlank { "history" }
-    return listOf(
-        ChatListItem.LoadingBubblePlaceholder(
-            id = "$keyPrefix-history-placeholder-0",
-            role = PlaceholderRole.User,
-            widthFraction = 0.58f,
-            estimatedHeightDp = 52,
-        ),
-        ChatListItem.LoadingBubblePlaceholder(
-            id = "$keyPrefix-history-placeholder-1",
-            role = PlaceholderRole.Assistant,
-            widthFraction = 0.82f,
-            estimatedHeightDp = 92,
-        ),
-        ChatListItem.LoadingBubblePlaceholder(
-            id = "$keyPrefix-history-placeholder-2",
-            role = PlaceholderRole.User,
-            widthFraction = 0.46f,
-            estimatedHeightDp = 48,
-        ),
-        ChatListItem.LoadingBubblePlaceholder(
-            id = "$keyPrefix-history-placeholder-3",
-            role = PlaceholderRole.Assistant,
-            widthFraction = 0.76f,
-            estimatedHeightDp = 128,
-        ),
-        ChatListItem.LoadingBubblePlaceholder(
-            id = "$keyPrefix-history-placeholder-4",
-            role = PlaceholderRole.Assistant,
-            widthFraction = 0.64f,
-            estimatedHeightDp = 72,
-        ),
-    )
-}
-
-internal fun shouldHideHistoryLoadingSkeleton(
-    chatItems: List<ChatListItem>,
-): Boolean {
-    return chatItems.isNotEmpty()
-}
-
-internal fun shouldShowHistoryConversationLoadingOverlay(
-    isLoadingHistory: Boolean,
-    overlayKey: String?,
-    observedLoadGeneration: Long,
-    currentLoadGeneration: Long,
-): Boolean = isLoadingHistory ||
-    overlayKey != null ||
-    shouldStartHistoryConversationLoadingOverlay(
-        observedLoadGeneration = observedLoadGeneration,
-        currentLoadGeneration = currentLoadGeneration,
-    )
-
-internal fun shouldShowInitialConversationLoadingOverlay(
-    isHistoryLoadingOverlayVisible: Boolean,
-    initialScrollHandled: Boolean,
-): Boolean = isHistoryLoadingOverlayVisible ||
-    !initialScrollHandled
-
-internal fun shouldStartHistoryConversationLoadingOverlay(
-    observedLoadGeneration: Long,
-    currentLoadGeneration: Long,
-): Boolean = currentLoadGeneration > 0L && currentLoadGeneration != observedLoadGeneration
-
-internal fun shouldClearHistoryLoadingOverlay(
-    completedGeneration: Long,
-    currentGeneration: Long,
-    completedOverlayKey: String?,
-    currentOverlayKey: String?,
-): Boolean = completedOverlayKey != null &&
-    completedGeneration == currentGeneration &&
-    completedOverlayKey == currentOverlayKey
-
-internal fun isHistoryConversationReadyForInitialBottom(
-    currentConversationId: String,
-    scrollSessionKey: String,
-    isLoadingHistory: Boolean,
-    isLoadingHistoryData: Boolean = false,
-    requireMatchingScrollSession: Boolean = true,
-    messages: List<Message>,
-    chatItems: List<ChatListItem>,
-    laidOutItemCount: Int,
-    requireLaidOutItemCount: Boolean = true,
-): Boolean {
-    if (isLoadingHistory || isLoadingHistoryData) return false
-    if (requireMatchingScrollSession && currentConversationId != scrollSessionKey) return false
-
-    val expectedMessageIds = messages
-        .dropWhile { message ->
-            message.sender == Sender.System && !message.isPlaceholderName && message.text.isNotBlank()
-        }
-        .filter { message -> message.sender != Sender.Tool || message.isError }
-        .mapTo(mutableSetOf()) { message -> message.id }
-    val renderedMessageIds = chatItems.mapNotNullTo(mutableSetOf()) { item ->
-        when (item) {
-            is ChatListItem.UserMessage -> item.messageId
-            is ChatListItem.SystemMessage -> item.messageId
-            is ChatListItem.AiMessage -> item.messageId
-            is ChatListItem.AiMessageCode -> item.messageId
-            is ChatListItem.AiMessageSources -> item.messageId
-            is ChatListItem.AiMarkdownNode -> item.messageId
-            is ChatListItem.AiMessageStreaming -> item.messageId
-            is ChatListItem.AiMessageCodeStreaming -> item.messageId
-            is ChatListItem.AiMessageReasoning -> item.message.id
-            is ChatListItem.AiMessageFooter -> item.message.id
-            is ChatListItem.ErrorMessage -> item.messageId
-            is ChatListItem.LoadingIndicator -> item.messageId
-            is ChatListItem.StatusIndicator -> item.messageId
-            is ChatListItem.LoadingBubblePlaceholder -> null
-        }
-    }
-
-    return expectedMessageIds == renderedMessageIds &&
-        (!requireLaidOutItemCount || laidOutItemCount >= chatItems.size)
-}
-
-@Composable
-internal fun HistoryConversationLoadingOverlay(
-    modifier: Modifier = Modifier,
-) {
-    Box(
-        modifier = modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.background.copy(alpha = 0.88f))
-            .pointerInput(Unit) {
-                awaitPointerEventScope {
-                    while (true) {
-                        awaitPointerEvent().changes.forEach { change ->
-                            change.consume()
-                        }
-                    }
-                }
-            },
-        contentAlignment = Alignment.Center,
-    ) {
-        EveryTalkLoadingIndicator(
-            size = 32.dp,
-            strokeWidth = 3.dp,
-            contentDescription = "正在加载会话",
-        )
-    }
-}
-
-internal fun calculateSourcesDialogBottomAvoidance(
-    inputAreaHeight: Dp,
-    inputBottomInset: Dp,
-    edgeGap: Dp = WebSourcesDialogEdgeGap
-): Dp {
-    val inputContentHeight = if (inputAreaHeight > inputBottomInset) {
-        inputAreaHeight - inputBottomInset
-    } else {
-        0.dp
-    }
-    return inputContentHeight + edgeGap
-}
-
-internal fun calculateSourcesDialogTopAvoidance(
-    topControlsBottom: Dp,
-    statusBarHeight: Dp,
-    edgeGap: Dp = WebSourcesDialogEdgeGap
-): Dp {
-    val controlsBottomBelowStatusBar = if (topControlsBottom > statusBarHeight) {
-        topControlsBottom - statusBarHeight
-    } else {
-        0.dp
-    }
-    return controlsBottomBelowStatusBar + edgeGap
-}
-
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ChatScreen(
@@ -284,12 +91,12 @@ fun ChatScreen(
 ) {
     val messages: List<Message> = viewModel.messages
     val text by viewModel.text.collectAsState()
-    
+
     // Dynamic config selection based on mode
     val uiMode by viewModel.uiModeFlow.collectAsState()
     val textConfig by viewModel.selectedApiConfig.collectAsState()
     val imageConfig by viewModel.selectedImageGenApiConfig.collectAsState()
-    
+
     val selectedApiConfig by remember(uiMode, textConfig, imageConfig) {
         derivedStateOf {
             if (uiMode == SimpleModeManager.ModeType.IMAGE) imageConfig else textConfig
@@ -326,7 +133,7 @@ fun ChatScreen(
             viewModel.systemPromptExpandedState[conversationId] ?: false
         }
     }
- 
+
      val coroutineScope = rememberCoroutineScope()
      val loadedHistoryIndex by viewModel.loadedHistoryIndex.collectAsState()
     val chatListItems by viewModel.chatListItems.collectAsState()
@@ -374,18 +181,18 @@ fun ChatScreen(
     val isDrawerOpen = !viewModel.drawerState.isClosed
     val isSearchActiveInDrawer by viewModel.isSearchActiveInDrawer.collectAsState()
     val expandedDrawerItemIndex by viewModel.expandedDrawerItemIndex.collectAsState()
-    
+
     // 处理返回键逻辑 - 优先处理抽屉相关操作，再处理页面导航
     BackHandler(enabled = isDrawerOpen && expandedDrawerItemIndex != null) {
         // 最高优先级：收起展开的历史项
         viewModel.setExpandedDrawerItemIndex(null)
     }
-    
+
     BackHandler(enabled = isDrawerOpen && isSearchActiveInDrawer) {
         // 中等优先级：退出搜索模式
         viewModel.setSearchActiveInDrawer(false)
     }
-    
+
     BackHandler(enabled = isDrawerOpen && expandedDrawerItemIndex == null && !isSearchActiveInDrawer) {
         // 低优先级：关闭抽屉
         coroutineScope.launch {
@@ -522,7 +329,7 @@ fun ChatScreen(
 
     val isAtBottom by scrollStateManager.isAtBottom
     val isAtBottomState = rememberUpdatedState(isAtBottom)
-    
+
     LaunchedEffect(scrollStateManager, currentStreamingAiMessageId) {
         val isCurrentlyStreaming = currentStreamingAiMessageId != null
         scrollStateManager.updateStreamingState(isCurrentlyStreaming)
@@ -598,14 +405,14 @@ fun ChatScreen(
                         else -> false
                     }
                 }
-                
+
                 if (targetIndex != -1) {
                     break
                 }
                 delay(50)
                 attempts++
             }
-            
+
             android.util.Log.d("ChatScreen", "scrollToItemEvent: targetIndex=$targetIndex, totalItems=${listState.layoutInfo.totalItemsCount}")
             if (targetIndex != -1) {
                 scrollStateManager.scrollItemToTop(targetIndex)
@@ -623,10 +430,10 @@ fun ChatScreen(
     )
     var showModelSelectionBottomSheet by remember { mutableStateOf(false) }
     var showEditConfigDialog by remember { mutableStateOf(false) }
-    
+
     val textModels by viewModel.apiConfigs.collectAsState()
     val imageModels by viewModel.imageGenApiConfigs.collectAsState()
-    
+
     val availableModels by remember(uiMode, textModels, imageModels) {
         derivedStateOf {
             if (uiMode == SimpleModeManager.ModeType.IMAGE) imageModels else textModels
@@ -667,13 +474,13 @@ fun ChatScreen(
     val showSourcesDialog by viewModel.showSourcesDialog.collectAsState()
     val sourcesForDialog by viewModel.sourcesForDialog.collectAsState()
     val imeInsets = WindowInsets.ime
-    
+
     // 获取输入法高度用于整体布局偏移
     val imeHeightPx by remember {
         derivedStateOf { imeInsets.getBottom(density) }
     }
     val imeHeightDp = with(density) { imeHeightPx.toDp() }
-    
+
     // 计算输入法是否可见
     val isKeyboardVisible by remember {
         derivedStateOf { imeHeightPx > 0 }
@@ -1004,7 +811,7 @@ fun ChatScreen(
                     // 🔥 关键修复：从 ViewModel 获取最新的消息对象，而不是使用长按时捕获的可能已过期的快照
                     // 这解决了"刚生成的消息内容为空"的问题，因为长按时的 Message 对象可能尚未包含流式传输完成后的最终文本
                     val latestMessage = viewModel.getMessageById(selectedMessageForOptions!!.id) ?: selectedMessageForOptions!!
-                    
+
                     when (option) {
                         AiMessageOption.COPY_FULL_TEXT -> viewModel.copyToClipboard(latestMessage.text)
                         AiMessageOption.REGENERATE -> {
@@ -1025,7 +832,7 @@ fun ChatScreen(
             )
         }
     }
- 
+
     val showAboutDialog by viewModel.showAboutDialog.collectAsState()
 
     if (showAboutDialog) {
@@ -1076,147 +883,4 @@ fun ChatScreen(
            onClear = { viewModel.clearSystemPrompt() }
        )
    }
-}
- 
-@Composable
-private fun AboutDialog(
-    viewModel: AppViewModel,
-    onDismiss: () -> Unit
-) {
-    val context = androidx.compose.ui.platform.LocalContext.current
-    val packageInfo = remember { context.packageManager.getPackageInfo(context.packageName, 0) }
-    val versionName = packageInfo.versionName
-
-    val dialogBg = appDialogContainerColor()
-    val contentColor = appDialogContentColor()
-    val cancelButtonColor = appDialogCancelColor()
-    val confirmButtonColor = contentColor
-    val confirmButtonTextColor = dialogBg
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
-        shape = AppDialogShape,
-        containerColor = dialogBg,
-        titleContentColor = contentColor,
-        textContentColor = contentColor,
-        title = { Text("关于 EveryTalk") },
-        text = {
-            val annotatedString = buildAnnotatedString {
-                append("版本: $versionName\n\n一个开源的、可高度定制的 AI 聊天客户端。\n\nGitHub: ")
-                withLink(
-                    LinkAnnotation.Url(
-                        url = "https://github.com/roseforljh/KunTalkwithAi",
-                        styles = TextLinkStyles(style = SpanStyle(color = Color(0xFF007eff)))
-                    )
-                ) {
-                    append("EveryTalk")
-                }
-            }
-
-            Text(
-                text = annotatedString,
-                style = MaterialTheme.typography.bodyMedium.copy(color = contentColor)
-            )
-        },
-        confirmButton = {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                // 关闭按钮：统一取消样式（红色描边）
-                OutlinedButton(
-                    onClick = onDismiss,
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp),
-                    shape = RoundedCornerShape(24.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = dialogBg,
-                        contentColor = cancelButtonColor
-                    ),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
-                ) {
-                    Text(
-                        text = "关闭",
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    )
-                }
-
-                // 检查更新按钮：统一确认样式
-                Button(
-                    onClick = {
-                        viewModel.checkForUpdates()
-                        onDismiss()
-                    },
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp),
-                    shape = RoundedCornerShape(24.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = confirmButtonColor,
-                        contentColor = confirmButtonTextColor,
-                        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                        disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                    )
-                ) {
-                    Text(
-                        text = "检查更新",
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    )
-                }
-            }
-        },
-        dismissButton = {}
-    )
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun AiMessageOptionsBottomSheet(
-    onDismissRequest: () -> Unit,
-    sheetState: SheetState,
-    onOptionSelected: (AiMessageOption) -> Unit
-) {
-    ModalBottomSheet(
-        onDismissRequest = onDismissRequest,
-        sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surfaceDim,
-    ) {
-        Column(modifier = Modifier.padding(bottom = 32.dp)) {
-            AiMessageOption.values().forEach { option ->
-                ListItem(
-                    headlineContent = {
-                        Text(
-                            text = option.title,
-                            color = MaterialTheme.colorScheme.onSurface
-                        )
-                    },
-                    leadingContent = {
-                        Icon(
-                            imageVector = option.icon,
-                            contentDescription = option.title,
-                            tint = MaterialTheme.colorScheme.onSurface
-                        )
-                    },
-                    modifier = Modifier.clickable { onOptionSelected(option) },
-                    colors = ListItemDefaults.colors(
-                        containerColor = MaterialTheme.colorScheme.surfaceDim,
-                        headlineColor = MaterialTheme.colorScheme.onSurface,
-                        leadingIconColor = MaterialTheme.colorScheme.onSurface
-                    )
-                )
-            }
-        }
-    }
-}
-
-private enum class AiMessageOption(val title: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
-    COPY_FULL_TEXT("复制全文", Icons.Filled.ContentCopy),
-    REGENERATE("重新回答", Icons.Filled.Refresh),
-    EXPORT_TEXT("导出文本", Icons.Filled.IosShare)
 }

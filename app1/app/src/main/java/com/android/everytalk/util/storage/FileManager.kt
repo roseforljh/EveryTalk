@@ -30,11 +30,11 @@ import java.util.UUID
  * 统一的文件管理类，用于处理所有文件操作
  * 减少文件处理的冗余代码
  */
-class FileManager(private val context: Context) {
-    private val logger = AppLogger.forComponent("FileManager")
+class FileManager(internal val context: Context) {
+    internal val logger = AppLogger.forComponent("FileManager")
     
     companion object {
-        private const val CHAT_ATTACHMENTS_DIR = "chat_attachments"
+        internal const val CHAT_ATTACHMENTS_DIR = "chat_attachments"
         private const val MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024 // 100MB 最大文件大小
         const val MAX_MESSAGE_IMAGE_BYTES = 16L * 1024L * 1024L
         private const val MAX_REMOTE_IMAGE_PIXELS = 40_000_000L
@@ -50,40 +50,6 @@ class FileManager(private val context: Context) {
         private const val JPEG_COMPRESSION_QUALITY = 80
     }
 
-    private fun guessExtensionFromMime(mime: String?): String {
-        val normalized = (mime ?: "").substringBefore(';').trim().lowercase()
-        return when (normalized) {
-            "image/png" -> "png"
-            "image/jpeg", "image/jpg" -> "jpg"
-            "image/webp" -> "webp"
-            "image/gif" -> "gif"
-            "image/heic" -> "heic"
-            "image/heif" -> "heif"
-            "image/avif" -> "avif"
-            else -> "bin"
-        }
-    }
-
-    /**
-     * 获取聊天附件目录
-     * @return 聊天附件目录
-     */
-    private fun getChatAttachmentsDir(): File {
-        val dir = File(context.filesDir, CHAT_ATTACHMENTS_DIR)
-        if (!dir.exists() && !dir.mkdirs()) {
-            logger.error("Failed to create chat attachments directory")
-        }
-        return dir
-    }
-    
-    /**
-     * 根据使用场景获取图片缩放配置
-     * @param isImageGeneration 是否为图像生成模式
-     * @return 对应的图片缩放配置
-     */
-    private fun getImageConfigForMode(isImageGeneration: Boolean): ImageScaleConfig {
-        return if (isImageGeneration) ImageScaleConfig.IMAGE_GENERATION_MODE else ImageScaleConfig.CHAT_MODE
-    }
     
     /**
      * 检查文件大小是否超过限制
@@ -157,21 +123,6 @@ class FileManager(private val context: Context) {
      * @param reqHeight 目标高度
      * @return 采样大小
      */
-    private fun calculateInSampleSize(options: BitmapFactory.Options, reqWidth: Int, reqHeight: Int): Int {
-        val (height: Int, width: Int) = options.run { outHeight to outWidth }
-        var inSampleSize = 1
-        
-        if (height > reqHeight || width > reqWidth) {
-            val halfHeight: Int = height / 2
-            val halfWidth: Int = width / 2
-            
-            while (halfHeight / inSampleSize >= reqHeight && halfWidth / inSampleSize >= reqWidth) {
-                inSampleSize *= 2
-            }
-        }
-        
-        return inSampleSize
-    }
     
     /**
      * 从Uri加载并压缩位图 - 新版本支持等比缩放
