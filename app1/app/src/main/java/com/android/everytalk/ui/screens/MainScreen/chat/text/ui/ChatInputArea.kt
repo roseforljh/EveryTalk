@@ -838,7 +838,7 @@ fun ChatInputArea(
                 LaunchedEffect(showFunctionPanel) {
                     if (showFunctionPanel) {
                         renderFunctionPanel = true
-                        launch { functionPanelAlpha.animateTo(1f, animationSpec = tween(durationMillis = 150)) }
+                        functionPanelAlpha.snapTo(1f)
                         launch { functionPanelScale.animateTo(1f, animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) }
                     } else if (renderFunctionPanel) {
                         launch { functionPanelAlpha.animateTo(0f, animationSpec = tween(durationMillis = 140)) }
@@ -1002,6 +1002,8 @@ fun ChatInputArea(
                                             .wrapContentHeight()
                                             .graphicsLayer {
                                                 alpha = functionPanelAlpha.value
+                                            }
+                                            .graphicsLayer {
                                                 scaleX = functionPanelScale.value
                                                 scaleY = functionPanelScale.value
                                                 transformOrigin = TransformOrigin(0.5f, 1f)

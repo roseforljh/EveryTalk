@@ -1042,9 +1042,9 @@ private fun pageSourceInitial(source: WebSearchResult): String {
 }
 
 @Composable
-private fun PageSourcesButton(
+internal fun PageSourcesButton(
     pageSources: List<WebSearchResult>,
-    viewModel: AppViewModel,
+    onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val isDarkTheme = isSystemInDarkTheme()
@@ -1054,10 +1054,8 @@ private fun PageSourcesButton(
         Color(0xFFF1F1EF)
     }
     Surface(
-        onClick = {
-            viewModel.showSourcesDialog(pageSources)
-        },
-        modifier = modifier,
+        onClick = onClick,
+        modifier = modifier.wrapContentWidth(align = Alignment.Start),
         shape = RoundedCornerShape(24.dp),
         color = buttonColor,
         contentColor = MaterialTheme.colorScheme.onSurface,
@@ -1126,7 +1124,6 @@ private fun PageSourceIconStack(
     }
 }
 
-
 @Composable
 private fun StaticAiMessageSourcesItem(
     item: ChatListItem.AiMessageSources,
@@ -1150,7 +1147,7 @@ private fun StaticAiMessageSourcesItem(
         ) {
             PageSourcesButton(
                 pageSources = item.pageSources,
-                viewModel = viewModel,
+                onClick = { viewModel.showSourcesDialog(item.pageSources) },
                 modifier = Modifier.padding(
                     start = ChatMarkdownTextStyle.ASSISTANT_CONTENT_START_PADDING_DP.dp,
                     top = ChatMarkdownTextStyle.ASSISTANT_CONTENT_TOP_PADDING_DP.dp,
@@ -1349,7 +1346,7 @@ fun AiMessageItem(
                 if (pageSources.isNotEmpty()) {
                     PageSourcesButton(
                         pageSources = pageSources,
-                        viewModel = viewModel,
+                        onClick = { viewModel.showSourcesDialog(pageSources) },
                         modifier = Modifier.padding(
                             start = ChatMarkdownTextStyle.ASSISTANT_CONTENT_START_PADDING_DP.dp,
                             top = ChatMarkdownTextStyle.ASSISTANT_CONTENT_TOP_PADDING_DP.dp,
