@@ -5,7 +5,13 @@ import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.ui.components.streaming.PreparedMarkdownDocument
 import com.android.everytalk.ui.components.streaming.PreparedMessage
 import com.android.everytalk.ui.components.streaming.StreamBlock
+import org.intellij.markdown.MarkdownElementTypes
+import org.intellij.markdown.MarkdownTokenTypes
 import org.intellij.markdown.ast.ASTNode
+import org.intellij.markdown.flavours.gfm.GFMElementTypes
+
+private const val STATIC_MARKDOWN_BLOCK_MAX_NODES = 8
+private const val STATIC_MARKDOWN_BLOCK_MAX_SOURCE_CHARS = 2_000
 
 enum class PlaceholderRole {
     User,
@@ -74,18 +80,37 @@ sealed interface ChatListItem {
         val messageId: String,
         val preparedMessage: PreparedMessage,
         val preparedMarkdownDocument: PreparedMarkdownDocument,
-        val node: ASTNode,
-        val nodeIndex: Int,
-        val nodeCount: Int,
+        val nodes: List<ASTNode>,
+        val firstNodeIndex: Int,
+        val lastNodeIndex: Int,
+        val blockIndex: Int,
+        val targetBlockIndexByUri: Map<String, Int>,
         val hasSourcesBefore: Boolean,
     ) : ChatListItem {
-        override val stableId: String = "${messageId}_markdown_${node.startOffset}_${node.type}"
+        init {
+            require(nodes.isNotEmpty()) { "Markdown 分块至少包含一个节点" }
+            require(firstNodeIndex >= 0 && lastNodeIndex >= firstNodeIndex) {
+                "Markdown 分块节点索引无效"
+            }
+        }
+
+        val node: ASTNode
+            get() = nodes.first()
+
+        val nodeIndex: Int
+            get() = firstNodeIndex
+
+        val nodeCount: Int
+            get() = preparedMarkdownDocument.nodes.size
+
+        override val stableId: String =
+            "${messageId}_markdown_${nodes.first().startOffset}_${nodes.last().endOffset}"
 
         val isFirstNode: Boolean
-            get() = nodeIndex == 0
+            get() = firstNodeIndex == 0
 
         val isLastNode: Boolean
-            get() = nodeIndex == nodeCount - 1
+            get() = lastNodeIndex == nodeCount - 1
     }
 
     // 新增：流式渲染专用项（文本/数学/代码）
@@ -175,6 +200,25 @@ internal fun expandStaticAiMessageItem(item: ChatListItem): List<ChatListItem> {
 
     if (preparedMarkdownDocument.nodes.isEmpty()) return listOf(item)
 
+    val nodeBlocks = buildStaticMarkdownNodeBlocks(
+        nodes = preparedMarkdownDocument.nodes,
+        standaloneNodeIndices = preparedMarkdownDocument.targetNodeIndexByUri.values.toSet(),
+    )
+    val blockIndexByNodeIndex = IntArray(preparedMarkdownDocument.nodes.size)
+    var nextNodeIndex = 0
+    nodeBlocks.forEachIndexed { blockIndex, nodes ->
+        repeat(nodes.size) {
+            blockIndexByNodeIndex[nextNodeIndex++] = blockIndex
+        }
+    }
+    val targetBlockIndexByUri = buildMap {
+        preparedMarkdownDocument.targetNodeIndexByUri.forEach { (uri, nodeIndex) ->
+            if (nodeIndex in blockIndexByNodeIndex.indices) {
+                put(uri, blockIndexByNodeIndex[nodeIndex])
+            }
+        }
+    }
+
     return buildList {
         if (pageSources.isNotEmpty()) {
             add(
@@ -185,19 +229,90 @@ internal fun expandStaticAiMessageItem(item: ChatListItem): List<ChatListItem> {
                 )
             )
         }
-        preparedMarkdownDocument.nodes.forEachIndexed { index, node ->
+        var firstNodeIndex = 0
+        nodeBlocks.forEachIndexed { blockIndex, nodes ->
+            val lastNodeIndex = firstNodeIndex + nodes.lastIndex
             add(
                 ChatListItem.AiMarkdownNode(
                     message = message,
                     messageId = messageId,
                     preparedMessage = preparedMessage,
                     preparedMarkdownDocument = preparedMarkdownDocument,
-                    node = node,
-                    nodeIndex = index,
-                    nodeCount = preparedMarkdownDocument.nodes.size,
+                    nodes = nodes,
+                    firstNodeIndex = firstNodeIndex,
+                    lastNodeIndex = lastNodeIndex,
+                    blockIndex = blockIndex,
+                    targetBlockIndexByUri = targetBlockIndexByUri,
                     hasSourcesBefore = pageSources.isNotEmpty(),
                 )
             )
+            firstNodeIndex = lastNodeIndex + 1
         }
     }
+}
+
+internal fun buildStaticMarkdownNodeBlocks(
+    nodes: List<ASTNode>,
+    standaloneNodeIndices: Set<Int> = emptySet(),
+): List<List<ASTNode>> {
+    if (nodes.isEmpty()) return emptyList()
+
+    val blocks = ArrayList<List<ASTNode>>()
+    val current = ArrayList<ASTNode>(STATIC_MARKDOWN_BLOCK_MAX_NODES)
+    var currentSourceChars = 0
+    var currentRenderableNodes = 0
+
+    fun flushCurrent() {
+        if (current.isEmpty()) return
+        blocks.add(current.toList())
+        current.clear()
+        currentSourceChars = 0
+        currentRenderableNodes = 0
+    }
+
+    nodes.forEachIndexed { nodeIndex, node ->
+        if (
+            nodeIndex in standaloneNodeIndices ||
+            node.requiresStandaloneStaticMarkdownBlock()
+        ) {
+            flushCurrent()
+            blocks.add(listOf(node))
+            return@forEachIndexed
+        }
+
+        val sourceChars = (node.endOffset - node.startOffset).coerceAtLeast(0)
+        val renderableNodeCount = node.staticMarkdownRenderableNodeCount()
+        if (
+            current.isNotEmpty() &&
+            renderableNodeCount > 0 &&
+            (currentRenderableNodes >= STATIC_MARKDOWN_BLOCK_MAX_NODES ||
+                currentSourceChars + sourceChars > STATIC_MARKDOWN_BLOCK_MAX_SOURCE_CHARS)
+        ) {
+            flushCurrent()
+        }
+        current.add(node)
+        currentSourceChars += sourceChars
+        currentRenderableNodes += renderableNodeCount
+    }
+    flushCurrent()
+    return blocks
+}
+
+private fun ASTNode.staticMarkdownRenderableNodeCount(): Int = when (type) {
+    MarkdownTokenTypes.EOL,
+    MarkdownTokenTypes.WHITE_SPACE -> 0
+
+    else -> 1
+}
+
+private fun ASTNode.requiresStandaloneStaticMarkdownBlock(): Boolean {
+    if (
+        type == MarkdownElementTypes.CODE_FENCE ||
+        type == MarkdownElementTypes.CODE_BLOCK ||
+        type == MarkdownElementTypes.IMAGE ||
+        type == GFMElementTypes.TABLE
+    ) {
+        return true
+    }
+    return children.any(ASTNode::requiresStandaloneStaticMarkdownBlock)
 }

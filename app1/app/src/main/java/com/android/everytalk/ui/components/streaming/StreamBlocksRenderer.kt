@@ -4,6 +4,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.ui.components.markdown.MikePenzMarkdownNodeRenderer
+import com.android.everytalk.ui.components.markdown.MikePenzMarkdownNodesRenderer
 import com.android.everytalk.ui.components.markdown.MikePenzMarkdownRenderer
 import com.android.everytalk.ui.components.markdown.FootnoteNavigationState
 import org.intellij.markdown.ast.ASTNode
@@ -45,6 +46,31 @@ fun UnifiedMarkdownNodeRenderer(
         preparedMessage = preparedMessage,
         preparedMarkdownDocument = preparedMarkdownDocument,
         node = node,
+        modifier = modifier,
+        sender = sender,
+        onCodePreviewRequested = onCodePreviewRequested,
+        onCodeCopied = onCodeCopied,
+        onImageClick = onImageClick,
+        footnoteNavigationState = footnoteNavigationState,
+    )
+}
+
+@Composable
+fun UnifiedMarkdownNodesRenderer(
+    preparedMessage: PreparedMessage,
+    preparedMarkdownDocument: PreparedMarkdownDocument,
+    nodes: List<ASTNode>,
+    modifier: Modifier = Modifier,
+    sender: Sender = Sender.AI,
+    onCodePreviewRequested: ((String, String) -> Unit)? = null,
+    onCodeCopied: (() -> Unit)? = null,
+    onImageClick: ((String) -> Unit)? = null,
+    footnoteNavigationState: FootnoteNavigationState? = null,
+) {
+    MikePenzMarkdownNodesRenderer(
+        preparedMessage = preparedMessage,
+        preparedMarkdownDocument = preparedMarkdownDocument,
+        nodes = nodes,
         modifier = modifier,
         sender = sender,
         onCodePreviewRequested = onCodePreviewRequested,

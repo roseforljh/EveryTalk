@@ -6,6 +6,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -102,6 +104,7 @@ import com.mikepenz.markdown.annotator.buildMarkdownAnnotatedString
 import com.mikepenz.markdown.compose.Markdown
 import com.mikepenz.markdown.compose.MarkdownElement
 import com.mikepenz.markdown.compose.LocalMarkdownDimens
+import com.mikepenz.markdown.compose.LocalMarkdownAnnotator
 import com.mikepenz.markdown.compose.components.MarkdownComponentModel
 import com.mikepenz.markdown.compose.components.MarkdownComponents
 import com.mikepenz.markdown.compose.components.markdownComponents
@@ -163,6 +166,8 @@ private const val MARKDOWN_IMAGE_ERROR_HEIGHT_DP = 32f
 private const val MARKDOWN_TABLE_EDGE_SHADOW_WIDTH_DP = 20f
 private const val MARKDOWN_LINK_LOGO_SCHEME = "everytalk-link-logo:"
 private const val MARKDOWN_LINK_LOGO_SIZE_EM = 0.9f
+private const val MARKDOWN_LINK_LOGO_SIZE_DP = 16f
+private const val MARKDOWN_LINK_LOGO_GAP_DP = 4f
 private val MARKDOWN_LINK_LIGHT_COLOR = Color(0xFF3D7DB5)
 private val MARKDOWN_LINK_DARK_COLOR = Color(0xFF8FC9FF)
 private val MARKDOWN_IMAGE_ERROR_INTRINSIC_SIZE = Size(-1f, -1f)
@@ -472,6 +477,63 @@ private fun preparedMessageLinkLogoSource(message: PreparedMessage): String = bu
     }
 }
 
+internal fun markdownSingleAutolinkLogoRequest(
+    content: String,
+    node: ASTNode,
+    definitions: Map<String, String>,
+    requests: List<MarkdownLinkLogoRequest>,
+): MarkdownLinkLogoRequest? {
+    if (node.type != MarkdownElementTypes.PARAGRAPH) return null
+
+    val significantChildren = node.children.filterNot { child ->
+        child.type == MarkdownTokenTypes.WHITE_SPACE || child.type == MarkdownTokenTypes.EOL
+    }
+    val autolink = significantChildren.singleOrNull { child ->
+        child.type == MarkdownElementTypes.AUTOLINK ||
+            child.type == GFMTokenTypes.GFM_AUTOLINK
+    } ?: return null
+    val paragraphText = node.safeTextInNode(content)?.trim() ?: return null
+    val autolinkText = autolink.safeTextInNode(content)?.trim() ?: return null
+    if (paragraphText != autolinkText) return null
+    val host = autolink.markdownLinkLogoDestination(content, definitions)
+        ?.let(::linkHost)
+        ?.takeIf { it.isNotBlank() }
+        ?: return null
+    return requests.firstOrNull { it.host == host }
+}
+
+@Composable
+internal fun MarkdownSingleAutolinkLogoParagraph(
+    content: String,
+    node: ASTNode,
+    style: TextStyle,
+    request: MarkdownLinkLogoRequest,
+    logoFreeAnnotator: MarkdownAnnotator,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier.wrapContentWidth(),
+        verticalAlignment = Alignment.Top,
+    ) {
+        MarkdownLinkLogo(
+            request = request,
+            modifier = Modifier.size(MARKDOWN_LINK_LOGO_SIZE_DP.dp),
+        )
+        Spacer(modifier = Modifier.size(MARKDOWN_LINK_LOGO_GAP_DP.dp))
+        Box {
+            CompositionLocalProvider(
+                LocalMarkdownAnnotator provides logoFreeAnnotator,
+            ) {
+                MarkdownParagraph(
+                    content = content,
+                    node = node,
+                    style = style,
+                )
+            }
+        }
+    }
+}
+
 private fun markdownLinkLogoInlineContent(
     requests: List<MarkdownLinkLogoRequest>,
 ): Map<String, InlineTextContent> = requests.associate { request ->
@@ -487,15 +549,22 @@ private fun markdownLinkLogoInlineContent(
 }
 
 @Composable
-private fun MarkdownLinkLogo(request: MarkdownLinkLogoRequest) {
+private fun MarkdownLinkLogo(
+    request: MarkdownLinkLogoRequest,
+    modifier: Modifier = Modifier,
+) {
     val painter = rememberAsyncImagePainter(model = request.faviconUrl)
     val painterState = painter.state.collectAsState().value
     Box(
         modifier = Modifier
+            .then(modifier)
             .fillMaxSize()
             .padding(1.dp)
             .clip(RoundedCornerShape(4.dp))
-            .background(MaterialTheme.colorScheme.surfaceVariant),
+            .background(MaterialTheme.colorScheme.surfaceVariant)
+            .semantics(mergeDescendants = true) {
+                contentDescription = "链接 Logo：${request.host}"
+            },
         contentAlignment = Alignment.Center,
     ) {
         when (painterState) {
@@ -884,6 +953,7 @@ fun MikePenzMarkdownRenderer(
     enableSelectionContainer: Boolean = true,
     preparedMarkdownDocument: PreparedMarkdownDocument? = null,
     markdownNode: ASTNode? = null,
+    markdownNodes: List<ASTNode>? = null,
     footnoteNavigationState: FootnoteNavigationState? = null,
 ) {
     val committedStreamEpoch = remember { mutableIntStateOf(0) }
@@ -1088,11 +1158,19 @@ fun MikePenzMarkdownRenderer(
                     linkLogoDefinitions = linkLogoDefinitions,
                 )
             }
+            val logoFreeAnnotator = remember(renderFormulaMessage) {
+                createPreparedMessageMarkdownAnnotator(
+                    preparedMessage = renderFormulaMessage,
+                )
+            }
             val currentPreparedMessage = rememberUpdatedState(visiblePreparedMessage)
             val currentFormulaMessage = rememberUpdatedState(renderFormulaMessage)
             val currentFormulaStates = rememberUpdatedState(formulaStates)
             val currentInlineContentMap = rememberUpdatedState(markdownInlineContentMap)
             val currentAnnotator = rememberUpdatedState(annotator)
+            val currentLogoFreeAnnotator = rememberUpdatedState(logoFreeAnnotator)
+            val currentLinkLogoRequests = rememberUpdatedState(linkLogoRequests)
+            val currentLinkLogoDefinitions = rememberUpdatedState(linkLogoDefinitions)
     val currentBodyStyle = rememberUpdatedState(bodyStyle)
     val currentSender = rememberUpdatedState(sender)
     val currentIsStreaming = rememberUpdatedState(isStreaming)
@@ -1118,16 +1196,37 @@ fun MikePenzMarkdownRenderer(
                         ),
                         navigation = footnoteNavigation,
                     ) { targetModifier ->
-                        MarkdownParagraph(
+                        val linkLogoRequest = markdownSingleAutolinkLogoRequest(
                             content = model.content,
                             node = model.node,
-                            modifier = targetModifier,
-                            style = markdownParagraphStyle(
+                            definitions = currentLinkLogoDefinitions.value,
+                            requests = currentLinkLogoRequests.value,
+                        )
+                        if (linkLogoRequest == null) {
+                            MarkdownParagraph(
                                 content = model.content,
                                 node = model.node,
-                                baseStyle = model.typography.paragraph,
-                            ),
-                        )
+                                modifier = targetModifier,
+                                style = markdownParagraphStyle(
+                                    content = model.content,
+                                    node = model.node,
+                                    baseStyle = model.typography.paragraph,
+                                ),
+                            )
+                        } else {
+                            MarkdownSingleAutolinkLogoParagraph(
+                                content = model.content,
+                                node = model.node,
+                                style = markdownParagraphStyle(
+                                    content = model.content,
+                                    node = model.node,
+                                    baseStyle = model.typography.paragraph,
+                                ),
+                                request = linkLogoRequest,
+                                logoFreeAnnotator = currentLogoFreeAnnotator.value,
+                                modifier = targetModifier,
+                            )
+                        }
                     }
                 },
                 heading1 = { model ->
@@ -1375,7 +1474,8 @@ fun MikePenzMarkdownRenderer(
             )
             val markdownInlineContent = markdownInlineContent(markdownInlineContentMap)
             val renderStaticMarkdown: @Composable () -> Unit = {
-                if (preparedMarkdownDocument != null && markdownNode != null) {
+                val selectedMarkdownNodes = markdownNodes ?: markdownNode?.let(::listOf)
+                if (preparedMarkdownDocument != null && selectedMarkdownNodes != null) {
                     Markdown(
                         state = preparedMarkdownDocument.state,
                         colors = markdownColors,
@@ -1387,11 +1487,11 @@ fun MikePenzMarkdownRenderer(
                         inlineContent = markdownInlineContent,
                         components = components,
                         success = { state, nodeComponents, nodeModifier ->
-                            MarkdownNodeSuccess(
+                            MarkdownNodesSuccess(
                                 state = state,
                                 components = nodeComponents,
                                 modifier = nodeModifier,
-                                node = markdownNode,
+                                nodes = selectedMarkdownNodes,
                             )
                         },
                     )
@@ -1479,6 +1579,31 @@ fun MikePenzMarkdownNodeRenderer(
     onImageClick: ((String) -> Unit)? = null,
     footnoteNavigationState: FootnoteNavigationState? = null,
 ) {
+    MikePenzMarkdownNodesRenderer(
+        preparedMessage = preparedMessage,
+        preparedMarkdownDocument = preparedMarkdownDocument,
+        nodes = listOf(node),
+        modifier = modifier,
+        sender = sender,
+        onCodePreviewRequested = onCodePreviewRequested,
+        onCodeCopied = onCodeCopied,
+        onImageClick = onImageClick,
+        footnoteNavigationState = footnoteNavigationState,
+    )
+}
+
+@Composable
+fun MikePenzMarkdownNodesRenderer(
+    preparedMessage: PreparedMessage,
+    preparedMarkdownDocument: PreparedMarkdownDocument,
+    nodes: List<ASTNode>,
+    modifier: Modifier = Modifier,
+    sender: Sender = Sender.AI,
+    onCodePreviewRequested: ((String, String) -> Unit)? = null,
+    onCodeCopied: (() -> Unit)? = null,
+    onImageClick: ((String) -> Unit)? = null,
+    footnoteNavigationState: FootnoteNavigationState? = null,
+) {
     MikePenzMarkdownRenderer(
         preparedMessage = preparedMessage,
         modifier = modifier,
@@ -1488,20 +1613,22 @@ fun MikePenzMarkdownNodeRenderer(
         onCodeCopied = onCodeCopied,
         onImageClick = onImageClick,
         preparedMarkdownDocument = preparedMarkdownDocument,
-        markdownNode = node,
+        markdownNodes = nodes,
         footnoteNavigationState = footnoteNavigationState,
     )
 }
 
 @Composable
-private fun MarkdownNodeSuccess(
+private fun MarkdownNodesSuccess(
     state: State.Success,
     components: MarkdownComponents,
     modifier: Modifier,
-    node: ASTNode,
+    nodes: List<ASTNode>,
 ) {
-    Box(modifier = modifier) {
-        MarkdownElement(node, components, state.content)
+    Column(modifier = modifier) {
+        nodes.forEach { node ->
+            MarkdownElement(node, components, state.content)
+        }
     }
 }
 

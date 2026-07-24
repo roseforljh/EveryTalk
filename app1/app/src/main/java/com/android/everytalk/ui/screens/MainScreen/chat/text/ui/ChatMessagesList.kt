@@ -95,7 +95,7 @@ import com.android.everytalk.ui.components.streaming.StreamBlock
 import com.android.everytalk.ui.components.streaming.MathBlockState
 import com.android.everytalk.ui.components.streaming.StreamBlockParser
 import com.android.everytalk.ui.components.streaming.UnifiedMarkdownRenderer
-import com.android.everytalk.ui.components.streaming.UnifiedMarkdownNodeRenderer
+import com.android.everytalk.ui.components.streaming.UnifiedMarkdownNodesRenderer
 import com.android.everytalk.ui.components.streaming.buildStreamingRenderState
 import com.android.everytalk.ui.components.streaming.contentVersionForRendering
 import com.android.everytalk.ui.topanchor.RunTopAnchorReserveEngine
@@ -201,6 +201,15 @@ internal fun shouldAddConversationGapAfter(item: ChatListItem): Boolean = when (
     is ChatListItem.AiMessageSources -> false
     is ChatListItem.AiMarkdownNode -> item.isLastNode
     else -> true
+}
+
+internal fun resolveStaticMarkdownTargetListIndex(
+    currentListIndex: Int,
+    item: ChatListItem.AiMarkdownNode,
+    uri: String,
+): Int? {
+    val targetBlockIndex = item.targetBlockIndexByUri[uri] ?: return null
+    return currentListIndex - item.blockIndex + targetBlockIndex
 }
 
 @Composable
@@ -434,7 +443,7 @@ fun ChatMessagesList(
                     // item recreation when switching between Streaming/Non-Streaming states.
                     // This allows the inner Composable to handle state transitions smoothly.
                     is ChatListItem.AiMessageSources -> "AiMessageSources"
-                    is ChatListItem.AiMarkdownNode -> item.node.type
+                    is ChatListItem.AiMarkdownNode -> "AiMarkdownBlock"
                     is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage,
                     is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageStreaming,
                     is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCode,
@@ -501,10 +510,12 @@ fun ChatMessagesList(
                             }
                             SideEffect {
                                 footnoteNavigation.setFallbackNavigator { uri ->
-                                    val targetNodeIndex = item.preparedMarkdownDocument
-                                        .targetNodeIndexByUri[uri]
+                                    val targetListIndex = resolveStaticMarkdownTargetListIndex(
+                                        currentListIndex = index,
+                                        item = item,
+                                        uri = uri,
+                                    )
                                         ?: return@setFallbackNavigator false
-                                    val targetListIndex = index - item.nodeIndex + targetNodeIndex
                                     listCoroutineScope.launch {
                                         listState.animateScrollToItem(targetListIndex)
                                     }
@@ -1205,10 +1216,10 @@ private fun StaticAiMarkdownNodeItem(
                         },
                     )
             ) {
-                UnifiedMarkdownNodeRenderer(
+                UnifiedMarkdownNodesRenderer(
                     preparedMessage = item.preparedMessage,
                     preparedMarkdownDocument = item.preparedMarkdownDocument,
-                    node = item.node,
+                    nodes = item.nodes,
                     sender = item.message.sender,
                     onCodePreviewRequested = { language, code ->
                         previewLanguage = language
