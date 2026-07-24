@@ -6,6 +6,9 @@ import com.android.everytalk.ui.components.streaming.PreparedMarkdownDocument
 import com.android.everytalk.ui.components.streaming.PreparedMessage
 import com.mikepenz.markdown.model.State
 import com.mikepenz.markdown.model.parseMarkdown
+import org.intellij.markdown.MarkdownElementTypes
+import org.intellij.markdown.MarkdownTokenTypes
+import org.intellij.markdown.ast.LeafASTNode
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -81,5 +84,52 @@ class ChatListItemStableIdTest {
         assertFalse(expanded.any { it is ChatListItem.AiMessage })
         assertEquals(document.nodes, nodes.flatMap { it.nodes })
         assertTrue(nodes.map { it.stableId }.distinct().size == nodes.size)
+    }
+
+    @Test
+    fun `静态Markdown分块每块最多包含一个可渲染顶层节点`() {
+        val state = parseMarkdown("# 标题\n\n第一段。\n\n第二段。") as State.Success
+        val nodes = state.node.children
+
+        val blocks = buildStaticMarkdownNodeBlocks(nodes)
+
+        assertEquals(nodes, blocks.flatten())
+        assertTrue(
+            blocks.all { block ->
+                block.count { node ->
+                    node.type != MarkdownTokenTypes.EOL &&
+                        node.type != MarkdownTokenTypes.WHITE_SPACE
+                } <= 1
+            }
+        )
+        assertTrue(
+            blocks.none { block ->
+                block.all { node ->
+                    node.type == MarkdownTokenTypes.EOL ||
+                        node.type == MarkdownTokenTypes.WHITE_SPACE
+                }
+            }
+        )
+    }
+
+    @Test
+    fun `前导空白不会因超长节点预算形成独立分块`() {
+        val leadingEol = LeafASTNode(MarkdownTokenTypes.EOL, 0, 1)
+        val longParagraph = LeafASTNode(MarkdownElementTypes.PARAGRAPH, 1, 2_502)
+
+        val blocks = buildStaticMarkdownNodeBlocks(listOf(leadingEol, longParagraph))
+
+        assertEquals(listOf(listOf(leadingEol, longParagraph)), blocks)
+    }
+
+    @Test
+    fun `独立重节点不会在相邻位置留下纯空白分块`() {
+        val leadingEol = LeafASTNode(MarkdownTokenTypes.EOL, 0, 1)
+        val codeFence = LeafASTNode(MarkdownElementTypes.CODE_FENCE, 1, 101)
+        val trailingEol = LeafASTNode(MarkdownTokenTypes.EOL, 101, 102)
+
+        val blocks = buildStaticMarkdownNodeBlocks(listOf(leadingEol, codeFence, trailingEol))
+
+        assertEquals(listOf(listOf(leadingEol, codeFence, trailingEol)), blocks)
     }
 }

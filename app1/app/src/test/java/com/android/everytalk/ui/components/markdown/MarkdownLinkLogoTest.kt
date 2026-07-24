@@ -3,6 +3,8 @@ package com.android.everytalk.ui.components.markdown
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.TextStyle
+import com.android.everytalk.ui.components.streaming.PreparedMarkdownDocument
+import com.android.everytalk.ui.components.streaming.PreparedMessage
 import com.mikepenz.markdown.annotator.DefaultAnnotatorSettings
 import com.mikepenz.markdown.annotator.buildMarkdownAnnotatedString
 import com.mikepenz.markdown.model.State
@@ -10,10 +12,49 @@ import com.mikepenz.markdown.model.parseMarkdown
 import org.intellij.markdown.MarkdownElementTypes
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MarkdownLinkLogoTest {
+
+    @Test
+    fun `静态分块渲染复用消息级链接索引`() {
+        val content = "[官网](https://example.com/policy)"
+        val state = parseMarkdown(content, lookupLinks = true) as State.Success
+        val index = markdownLinkLogoIndex(content)
+        val document = PreparedMarkdownDocument(
+            state = state,
+            nodes = state.node.children,
+            linkLogoIndex = index,
+        )
+        val message = PreparedMessage(
+            markdown = content,
+            formulas = emptyMap(),
+            hasPendingFormula = false,
+            contentVersion = 1L,
+        )
+
+        val resolved = resolveMarkdownLinkLogoIndex(
+            isStreaming = false,
+            preparedMessage = message,
+            preparedMarkdownDocument = document,
+            calculate = { error("静态分块渲染不应重新解析整条消息") },
+        )
+
+        assertSame(index, resolved)
+    }
+
+    @Test
+    fun `已解析文档直接构建链接索引`() {
+        val content = "[官网](https://www.example.com/a) https://example.com/b"
+        val state = parseMarkdown(content, lookupLinks = true) as State.Success
+
+        assertEquals(
+            markdownLinkLogoIndex(content),
+            markdownLinkLogoIndex(content, state),
+        )
+    }
 
     @Test
     fun `普通链接和自动链接按 host 去重`() {

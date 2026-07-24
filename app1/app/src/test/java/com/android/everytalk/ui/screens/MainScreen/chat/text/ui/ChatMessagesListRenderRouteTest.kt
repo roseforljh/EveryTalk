@@ -10,6 +10,7 @@ import com.android.everytalk.ui.screens.MainScreen.chat.core.expandStaticAiMessa
 import com.mikepenz.markdown.model.State
 import com.mikepenz.markdown.model.parseMarkdown
 import org.intellij.markdown.MarkdownElementTypes
+import org.intellij.markdown.MarkdownTokenTypes
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -19,7 +20,7 @@ import java.io.File
 class ChatMessagesListRenderRouteTest {
 
     @Test
-    fun `历史长回复将普通Markdown节点合并为有限大小的懒列表项`() {
+    fun `历史长回复将普通Markdown节点拆为单节点懒列表项`() {
         val message = Message(
             id = "history-node-blocks",
             text = (1..17).joinToString("\n\n") { "第 ${it} 段。" },
@@ -44,11 +45,11 @@ class ChatMessagesListRenderRouteTest {
             )
         ).filterIsInstance<ChatListItem.AiMarkdownNode>()
 
-        assertEquals(3, blocks.size)
+        assertEquals(17, blocks.size)
         assertEquals(state.node.children, blocks.flatMap { it.nodes })
         assertTrue(
             blocks.all { block ->
-                block.nodes.count { it.type == MarkdownElementTypes.PARAGRAPH } <= 8
+                block.renderableTopLevelNodeCount() <= 1
             }
         )
         assertTrue(blocks.first().isFirstNode)
@@ -105,8 +106,8 @@ class ChatMessagesListRenderRouteTest {
                 uri = "last",
             ),
         )
-        assertEquals(1, blocks.first().nodes.size)
-        assertEquals(1, blocks.last().nodes.size)
+        assertEquals(1, blocks.first().renderableTopLevelNodeCount())
+        assertEquals(1, blocks.last().renderableTopLevelNodeCount())
     }
 
     @Test
@@ -137,7 +138,7 @@ class ChatMessagesListRenderRouteTest {
             block.nodes.any { it.type == MarkdownElementTypes.CODE_FENCE }
         }
 
-        assertEquals(1, codeBlock.nodes.size)
+        assertEquals(1, codeBlock.renderableTopLevelNodeCount())
         assertTrue(codeBlock.blockIndex > 0)
         assertTrue(codeBlock.blockIndex < blocks.lastIndex)
     }
@@ -384,4 +385,8 @@ class ChatMessagesListRenderRouteTest {
         requireNotNull(sourceFile) { "找不到 ChatMessagesList.kt" }
         return sourceFile.readText(Charsets.UTF_8)
     }
+}
+
+private fun ChatListItem.AiMarkdownNode.renderableTopLevelNodeCount(): Int = nodes.count { node ->
+    node.type != MarkdownTokenTypes.EOL && node.type != MarkdownTokenTypes.WHITE_SPACE
 }

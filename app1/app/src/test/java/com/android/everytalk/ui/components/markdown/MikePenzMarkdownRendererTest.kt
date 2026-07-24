@@ -416,6 +416,20 @@ class MikePenzMarkdownRendererTest {
 
         assertEquals(setOf(outerId, summaryId), resolveVisibleFormulaRequests(prepared).keys)
         assertEquals(
+            setOf(outerId),
+            resolveVisibleFormulaRequests(
+                preparedMessage = prepared,
+                visibleMarkdown = "![math]($INLINE_FORMULA_SCHEME$outerId)",
+            ).keys,
+        )
+        assertEquals(
+            setOf(summaryId),
+            resolveVisibleFormulaRequests(
+                preparedMessage = prepared,
+                visibleMarkdown = "```$DETAILS_FENCE_LANGUAGE\n$detailsAssetId\n```",
+            ).keys,
+        )
+        assertEquals(
             setOf(bodyId),
             resolveVisibleFormulaRequests(
                 prepared.copy(markdown = details.markdown)

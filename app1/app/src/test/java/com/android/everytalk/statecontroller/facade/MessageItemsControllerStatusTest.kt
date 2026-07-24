@@ -14,6 +14,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.delay
+import org.intellij.markdown.MarkdownTokenTypes
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -373,7 +374,13 @@ class MessageItemsControllerStatusTest {
                 targetNodeIndex in block.firstNodeIndex..block.lastNodeIndex
             }
             assertEquals(targetBlock.blockIndex, blocks.first().targetBlockIndexByUri[uri])
-            assertEquals(1, targetBlock.nodes.size)
+            assertEquals(
+                1,
+                targetBlock.nodes.count { node ->
+                    node.type != MarkdownTokenTypes.EOL &&
+                        node.type != MarkdownTokenTypes.WHITE_SPACE
+                },
+            )
         }
     }
 
