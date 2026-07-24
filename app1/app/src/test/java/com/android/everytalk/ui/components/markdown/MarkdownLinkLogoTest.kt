@@ -5,7 +5,11 @@ import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.TextStyle
 import com.mikepenz.markdown.annotator.DefaultAnnotatorSettings
 import com.mikepenz.markdown.annotator.buildMarkdownAnnotatedString
+import com.mikepenz.markdown.model.State
+import com.mikepenz.markdown.model.parseMarkdown
+import org.intellij.markdown.MarkdownElementTypes
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -65,5 +69,62 @@ class MarkdownLinkLogoTest {
 
         assertTrue(rendered.text.startsWith("example.com"))
         assertEquals(2, rendered.text.windowed("example.com".length).count { it == "example.com" })
+    }
+
+    @Test
+    fun `单独自动链接段落使用外置 Logo 布局`() {
+        val content = "https://x.com/i/status/2080141498658762797"
+        val state = parseMarkdown(content, lookupLinks = true) as State.Success
+        val paragraph = state.node.children.single { it.type == MarkdownElementTypes.PARAGRAPH }
+        val index = markdownLinkLogoIndex(content)
+
+        assertEquals(
+            "x.com",
+            markdownSingleAutolinkLogoRequest(
+                content = content,
+                node = paragraph,
+                definitions = index.definitions,
+                requests = index.requests,
+            )?.host,
+        )
+    }
+
+    @Test
+    fun `带前后文字的自动链接继续使用原行内布局`() {
+        val content = "来源：https://x.com/i/status/2080141498658762797"
+        val state = parseMarkdown(content, lookupLinks = true) as State.Success
+        val paragraph = state.node.children.single { it.type == MarkdownElementTypes.PARAGRAPH }
+        val index = markdownLinkLogoIndex(content)
+
+        assertNull(
+            markdownSingleAutolinkLogoRequest(
+                content = content,
+                node = paragraph,
+                definitions = index.definitions,
+                requests = index.requests,
+            ),
+        )
+    }
+
+    @Test
+    fun `外置 Logo 布局不修改链接文本`() {
+        val content = "https://x.com/i/status/2080141498658762797"
+        val rendered = content.buildMarkdownAnnotatedString(
+            style = TextStyle.Default,
+            annotatorSettings = DefaultAnnotatorSettings(
+                linkTextSpanStyle = TextLinkStyles(style = SpanStyle()),
+                codeSpanStyle = SpanStyle(),
+                annotator = createPreparedMessageMarkdownAnnotator(
+                    preparedMessage = com.android.everytalk.ui.components.streaming.PreparedMessage(
+                        markdown = content,
+                        formulas = emptyMap(),
+                        hasPendingFormula = false,
+                        contentVersion = 1L,
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals(content, rendered.text)
     }
 }

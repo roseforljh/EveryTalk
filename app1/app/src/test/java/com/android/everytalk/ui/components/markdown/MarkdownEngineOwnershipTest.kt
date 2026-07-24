@@ -21,7 +21,7 @@ class MarkdownEngineOwnershipTest {
     }
 
     @Test
-    fun `历史完成态Markdown节点继续复用MikePenz原生组件环境`() {
+    fun `历史完成态Markdown分块继续复用MikePenz原生组件环境`() {
         val entry = mainSource(
             "com/android/everytalk/ui/components/streaming/StreamBlocksRenderer.kt"
         )
@@ -29,9 +29,10 @@ class MarkdownEngineOwnershipTest {
             "com/android/everytalk/ui/components/markdown/MikePenzMarkdownRenderer.kt"
         )
 
-        assertTrue(entry.contains("fun UnifiedMarkdownNodeRenderer("))
+        assertTrue(entry.contains("fun UnifiedMarkdownNodesRenderer("))
         assertTrue(entry.contains("preparedMarkdownDocument: PreparedMarkdownDocument"))
-        assertTrue(adapter.contains("fun MikePenzMarkdownNodeRenderer("))
+        assertTrue(adapter.contains("fun MikePenzMarkdownNodesRenderer("))
+        assertTrue(adapter.contains("nodes.forEach { node ->"))
         assertTrue(adapter.contains("MarkdownElement(node, components, state.content)"))
     }
 

@@ -329,7 +329,7 @@ class MessageItemsControllerStatusTest {
     }
 
     @Test
-    fun `completed ai item exposes lazy markdown nodes from the same prepared content`() {
+    fun `completed ai item exposes bounded markdown blocks from the same prepared content`() {
         val controller = MessageItemsControllerTestAccess.newController()
         controller.stateHolder.messages.add(
             Message(
@@ -346,7 +346,8 @@ class MessageItemsControllerStatusTest {
 
         assertEquals(nodes.first().preparedMessage.markdown, document.state.content)
         assertTrue(document.nodes.size > 1)
-        assertEquals(document.nodes.size, nodes.size)
+        assertTrue(document.nodes.size > nodes.size)
+        assertEquals(document.nodes, nodes.flatMap { it.nodes })
     }
 
     @Test
@@ -361,13 +362,19 @@ class MessageItemsControllerStatusTest {
             )
         )
 
-        val document = controller.chatListItemsForTest()
+        val blocks = controller.chatListItemsForTest()
             .filterIsInstance<ChatListItem.AiMarkdownNode>()
-            .first()
-            .preparedMarkdownDocument
+        val document = blocks.first().preparedMarkdownDocument
 
         assertTrue(document.targetNodeIndexByUri.containsKey(footnoteDefinitionUri(1)))
         assertTrue(document.targetNodeIndexByUri.containsKey(footnoteReferenceUri(1, 1)))
+        document.targetNodeIndexByUri.forEach { (uri, targetNodeIndex) ->
+            val targetBlock = blocks.single { block ->
+                targetNodeIndex in block.firstNodeIndex..block.lastNodeIndex
+            }
+            assertEquals(targetBlock.blockIndex, blocks.first().targetBlockIndexByUri[uri])
+            assertEquals(1, targetBlock.nodes.size)
+        }
     }
 
     @Test

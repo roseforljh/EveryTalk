@@ -18,6 +18,24 @@ class ChatScrollStateManagerTest {
     }
 
     @Test
+    fun `距离暂为零但仍可继续滚动时必须重新锚定末项`() {
+        assertEquals(
+            BottomCorrection.AnchorLastItem,
+            resolveBottomCorrection(
+                remainingPx = 0,
+                canScrollForward = true,
+            ),
+        )
+        assertEquals(
+            BottomCorrection.None,
+            resolveBottomCorrection(
+                remainingPx = 0,
+                canScrollForward = false,
+            ),
+        )
+    }
+
+    @Test
     fun `manual scroll away from bottom keeps auto scroll locked`() {
         val locked = resolvePreventAutoScroll(
             currentValue = false,
@@ -61,7 +79,8 @@ class ChatScrollStateManagerTest {
         requireNotNull(source) { "找不到 ChatScrollStateManager.kt" }
         assertTrue(source.contains("snapshotFlow { bottomContentRevision() }"))
         assertTrue(source.contains("first { revision -> revision != handledRevision }"))
-        assertTrue(source.contains("resolveBottomCorrection(remainingPx)"))
+        assertTrue(source.contains("remainingPx = changedRevision.remainingPx"))
+        assertTrue(source.contains("canScrollForward = changedRevision.canScrollForward"))
         assertTrue(source.contains("fun dispose()"))
         assertTrue(source.contains("stateObserverJob.cancel()"))
         assertFalse(source.contains("INITIAL_BOTTOM_SETTLE"))

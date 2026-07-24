@@ -171,6 +171,55 @@ class ChatScrollStateManagerComposeTest {
     }
 
     @Test
+    fun `底部守护会修正项目尺寸不变的位置漂移`() {
+        composeRule.mainClock.autoAdvance = false
+        lateinit var listState: androidx.compose.foundation.lazy.LazyListState
+        lateinit var scrollStateManager: ChatScrollStateManager
+        lateinit var coroutineScope: CoroutineScope
+        var displacedPx = 0f
+
+        composeRule.setContent {
+            coroutineScope = rememberCoroutineScope()
+            listState = rememberLazyListState()
+            scrollStateManager = rememberChatScrollStateManager(listState, coroutineScope)
+
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.height(320.dp),
+            ) {
+                items(12, key = { "position_shift_message_$it" }) {
+                    Spacer(Modifier.height(180.dp))
+                }
+            }
+        }
+
+        composeRule.mainClock.advanceTimeByFrame()
+        composeRule.waitForIdle()
+        composeRule.runOnIdle {
+            scrollStateManager.jumpToBottom(isUserAction = true)
+        }
+        repeat(10) {
+            composeRule.mainClock.advanceTimeByFrame()
+            composeRule.waitForIdle()
+        }
+        composeRule.runOnIdle {
+            assertFalse(listState.canScrollForward)
+            coroutineScope.launch {
+                displacedPx = listState.scrollBy(-40f)
+            }
+        }
+        repeat(10) {
+            composeRule.mainClock.advanceTimeByFrame()
+            composeRule.waitForIdle()
+        }
+
+        composeRule.runOnIdle {
+            assertTrue(displacedPx < 0f)
+            assertFalse(listState.canScrollForward)
+        }
+    }
+
+    @Test
     fun `用户打断底部守护后程序滚动标记会立即释放`() {
         lateinit var listState: androidx.compose.foundation.lazy.LazyListState
         lateinit var scrollStateManager: ChatScrollStateManager

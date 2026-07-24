@@ -9,6 +9,8 @@ import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
 import com.android.everytalk.ui.screens.MainScreen.chat.core.expandStaticAiMessageItem
 import com.mikepenz.markdown.model.State
 import com.mikepenz.markdown.model.parseMarkdown
+import org.intellij.markdown.MarkdownElementTypes
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -17,10 +19,134 @@ import java.io.File
 class ChatMessagesListRenderRouteTest {
 
     @Test
+    fun `历史长回复将普通Markdown节点合并为有限大小的懒列表项`() {
+        val message = Message(
+            id = "history-node-blocks",
+            text = (1..17).joinToString("\n\n") { "第 ${it} 段。" },
+            sender = Sender.AI,
+        )
+        val preparedMessage = PreparedMessage(
+            markdown = message.text,
+            formulas = emptyMap(),
+            hasPendingFormula = false,
+            contentVersion = 1L,
+        )
+        val state = parseMarkdown(preparedMessage.markdown) as State.Success
+
+        val blocks = expandStaticAiMessageItem(
+            ChatListItem.AiMessage(
+                message = message,
+                messageId = message.id,
+                text = message.text,
+                hasReasoning = false,
+                preparedMessage = preparedMessage,
+                preparedMarkdownDocument = PreparedMarkdownDocument(state, state.node.children),
+            )
+        ).filterIsInstance<ChatListItem.AiMarkdownNode>()
+
+        assertEquals(3, blocks.size)
+        assertEquals(state.node.children, blocks.flatMap { it.nodes })
+        assertTrue(
+            blocks.all { block ->
+                block.nodes.count { it.type == MarkdownElementTypes.PARAGRAPH } <= 8
+            }
+        )
+        assertTrue(blocks.first().isFirstNode)
+        assertTrue(blocks.last().isLastNode)
+    }
+
+    @Test
+    fun `跨分块脚注定位换算为目标懒列表项`() {
+        val message = Message(
+            id = "history-footnote-blocks",
+            text = (1..17).joinToString("\n\n") { "第 ${it} 段。" },
+            sender = Sender.AI,
+        )
+        val preparedMessage = PreparedMessage(
+            markdown = message.text,
+            formulas = emptyMap(),
+            hasPendingFormula = false,
+            contentVersion = 1L,
+        )
+        val state = parseMarkdown(preparedMessage.markdown) as State.Success
+        val blocks = expandStaticAiMessageItem(
+            ChatListItem.AiMessage(
+                message = message,
+                messageId = message.id,
+                text = message.text,
+                hasReasoning = false,
+                preparedMessage = preparedMessage,
+                preparedMarkdownDocument = PreparedMarkdownDocument(
+                    state = state,
+                    nodes = state.node.children,
+                    targetNodeIndexByUri = mapOf(
+                        "first" to 0,
+                        "last" to state.node.children.lastIndex,
+                    ),
+                ),
+            )
+        ).filterIsInstance<ChatListItem.AiMarkdownNode>()
+        val currentBlock = blocks[1]
+        val baseListIndex = 40 - currentBlock.blockIndex
+
+        assertEquals(
+            baseListIndex + blocks.first().blockIndex,
+            resolveStaticMarkdownTargetListIndex(
+                currentListIndex = 40,
+                item = currentBlock,
+                uri = "first",
+            ),
+        )
+        assertEquals(
+            baseListIndex + blocks.last().blockIndex,
+            resolveStaticMarkdownTargetListIndex(
+                currentListIndex = 40,
+                item = currentBlock,
+                uri = "last",
+            ),
+        )
+        assertEquals(1, blocks.first().nodes.size)
+        assertEquals(1, blocks.last().nodes.size)
+    }
+
+    @Test
+    fun `历史代码块保持独立懒列表项`() {
+        val message = Message(
+            id = "history-heavy-block",
+            text = "前文。\n\n```kotlin\nprintln(\"hi\")\n```\n\n后文。",
+            sender = Sender.AI,
+        )
+        val preparedMessage = PreparedMessage(
+            markdown = message.text,
+            formulas = emptyMap(),
+            hasPendingFormula = false,
+            contentVersion = 1L,
+        )
+        val state = parseMarkdown(preparedMessage.markdown) as State.Success
+        val blocks = expandStaticAiMessageItem(
+            ChatListItem.AiMessage(
+                message = message,
+                messageId = message.id,
+                text = message.text,
+                hasReasoning = false,
+                preparedMessage = preparedMessage,
+                preparedMarkdownDocument = PreparedMarkdownDocument(state, state.node.children),
+            )
+        ).filterIsInstance<ChatListItem.AiMarkdownNode>()
+        val codeBlock = blocks.single { block ->
+            block.nodes.any { it.type == MarkdownElementTypes.CODE_FENCE }
+        }
+
+        assertEquals(1, codeBlock.nodes.size)
+        assertTrue(codeBlock.blockIndex > 0)
+        assertTrue(codeBlock.blockIndex < blocks.lastIndex)
+    }
+
+    @Test
     fun `历史Markdown节点之间不插入会话级间距`() {
         val message = Message(
             id = "history-spacing",
-            text = "第一段。\n\n第二段。",
+            text = (1..9).joinToString("\n\n") { "第 ${it} 段。" },
             sender = Sender.AI,
         )
         val preparedMessage = PreparedMessage(
