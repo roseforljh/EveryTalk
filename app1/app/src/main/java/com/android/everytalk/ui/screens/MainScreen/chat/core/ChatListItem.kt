@@ -2,6 +2,9 @@ package com.android.everytalk.ui.screens.MainScreen.chat.core
 
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.WebSearchResult
+import com.android.everytalk.ui.components.markdown.safeTextInNode
+import com.android.everytalk.ui.components.streaming.BLOCK_FORMULA_FENCE_LANGUAGE
+import com.android.everytalk.ui.components.streaming.INLINE_FORMULA_SCHEME
 import com.android.everytalk.ui.components.streaming.PreparedMarkdownDocument
 import com.android.everytalk.ui.components.streaming.PreparedMessage
 import com.android.everytalk.ui.components.streaming.StreamBlock
@@ -10,8 +13,8 @@ import org.intellij.markdown.MarkdownTokenTypes
 import org.intellij.markdown.ast.ASTNode
 import org.intellij.markdown.flavours.gfm.GFMElementTypes
 
-// 完成态历史消息按单个可渲染顶层节点拆分，避免 LazyColumn 测量一个块时连带渲染大量离屏内容。
-private const val STATIC_MARKDOWN_BLOCK_MAX_NODES = 1
+// ponytail: 轻量节点按渲染成本小批量合并；公式成本高于纯文本，代码、表格和图片仍独占分块。
+private const val STATIC_MARKDOWN_BLOCK_MAX_RENDER_COST = 4
 private const val STATIC_MARKDOWN_BLOCK_MAX_SOURCE_CHARS = 2_000
 
 enum class PlaceholderRole {
@@ -204,6 +207,7 @@ internal fun expandStaticAiMessageItem(item: ChatListItem): List<ChatListItem> {
     val nodeBlocks = buildStaticMarkdownNodeBlocks(
         nodes = preparedMarkdownDocument.nodes,
         standaloneNodeIndices = preparedMarkdownDocument.targetNodeIndexByUri.values.toSet(),
+        content = preparedMarkdownDocument.state.content,
     )
     val blockIndexByNodeIndex = IntArray(preparedMarkdownDocument.nodes.size)
     var nextNodeIndex = 0
@@ -255,67 +259,93 @@ internal fun expandStaticAiMessageItem(item: ChatListItem): List<ChatListItem> {
 internal fun buildStaticMarkdownNodeBlocks(
     nodes: List<ASTNode>,
     standaloneNodeIndices: Set<Int> = emptySet(),
+    content: String? = null,
 ): List<List<ASTNode>> {
     if (nodes.isEmpty()) return emptyList()
 
     val blocks = ArrayList<List<ASTNode>>()
-    val current = ArrayList<ASTNode>(STATIC_MARKDOWN_BLOCK_MAX_NODES)
+    val current = ArrayList<ASTNode>(STATIC_MARKDOWN_BLOCK_MAX_RENDER_COST)
     var currentSourceChars = 0
-    var currentRenderableNodes = 0
+    var currentRenderCost = 0
+    var currentContainsStandaloneNode = false
 
     fun flushCurrent() {
         if (current.isEmpty()) return
         blocks.add(current.toList())
         current.clear()
         currentSourceChars = 0
-        currentRenderableNodes = 0
+        currentRenderCost = 0
+        currentContainsStandaloneNode = false
     }
 
     nodes.forEachIndexed { nodeIndex, node ->
         val sourceChars = (node.endOffset - node.startOffset).coerceAtLeast(0)
-        val renderableNodeCount = node.staticMarkdownRenderableNodeCount()
+        val renderCost = node.staticMarkdownRenderCost(content)
         if (
             nodeIndex in standaloneNodeIndices ||
-            node.requiresStandaloneStaticMarkdownBlock()
+            node.requiresStandaloneStaticMarkdownBlock(content)
         ) {
-            if (currentRenderableNodes > 0) flushCurrent()
+            if (currentRenderCost > 0 || currentContainsStandaloneNode) flushCurrent()
             current.add(node)
             currentSourceChars += sourceChars
-            currentRenderableNodes += renderableNodeCount
+            currentRenderCost += renderCost
+            currentContainsStandaloneNode = true
             return@forEachIndexed
         }
 
         if (
-            currentRenderableNodes > 0 &&
-            renderableNodeCount > 0 &&
-            (currentRenderableNodes >= STATIC_MARKDOWN_BLOCK_MAX_NODES ||
-                currentSourceChars + sourceChars > STATIC_MARKDOWN_BLOCK_MAX_SOURCE_CHARS)
+            renderCost > 0 &&
+            (currentContainsStandaloneNode ||
+                (currentRenderCost > 0 &&
+                    (currentRenderCost + renderCost > STATIC_MARKDOWN_BLOCK_MAX_RENDER_COST ||
+                        currentSourceChars + sourceChars > STATIC_MARKDOWN_BLOCK_MAX_SOURCE_CHARS)))
         ) {
             flushCurrent()
         }
         current.add(node)
         currentSourceChars += sourceChars
-        currentRenderableNodes += renderableNodeCount
+        currentRenderCost += renderCost
     }
     flushCurrent()
     return blocks
 }
 
-private fun ASTNode.staticMarkdownRenderableNodeCount(): Int = when (type) {
+private fun ASTNode.staticMarkdownRenderCost(content: String?): Int = when (type) {
     MarkdownTokenTypes.EOL,
     MarkdownTokenTypes.WHITE_SPACE -> 0
 
-    else -> 1
+    else -> {
+        val source = content?.let(::safeTextInNode)
+        if (
+            source?.contains(INLINE_FORMULA_SCHEME) == true ||
+            source?.contains(BLOCK_FORMULA_FENCE_LANGUAGE) == true
+        ) {
+            2
+        } else {
+            1
+        }
+    }
 }
 
-private fun ASTNode.requiresStandaloneStaticMarkdownBlock(): Boolean {
+private fun ASTNode.requiresStandaloneStaticMarkdownBlock(content: String?): Boolean {
     if (
-        type == MarkdownElementTypes.CODE_FENCE ||
+        (type == MarkdownElementTypes.CODE_FENCE && !isInternalMathFence(content)) ||
         type == MarkdownElementTypes.CODE_BLOCK ||
         type == MarkdownElementTypes.IMAGE ||
         type == GFMElementTypes.TABLE
     ) {
         return true
     }
-    return children.any(ASTNode::requiresStandaloneStaticMarkdownBlock)
+    return children.any { child -> child.requiresStandaloneStaticMarkdownBlock(content) }
+}
+
+private fun ASTNode.isInternalMathFence(content: String?): Boolean {
+    if (type != MarkdownElementTypes.CODE_FENCE || content == null) return false
+    val openingLine = safeTextInNode(content)
+        ?.lineSequence()
+        ?.firstOrNull()
+        ?.trim()
+        ?: return false
+    return openingLine == "```$BLOCK_FORMULA_FENCE_LANGUAGE" ||
+        openingLine == "~~~$BLOCK_FORMULA_FENCE_LANGUAGE"
 }
