@@ -35,7 +35,7 @@ internal object ChatMarkdownTextStyle {
     const val SPACING_BEFORE_HEADING_DP = SPACING_PARAGRAPH_DP
     const val SPACING_AFTER_HEADING_DP = 4f
     const val HORIZONTAL_RULE_THICKNESS_DP = 1f
-    const val HORIZONTAL_RULE_VERTICAL_PADDING_DP = 8f
+    const val HORIZONTAL_RULE_VERTICAL_PADDING_DP = 24f
     const val HORIZONTAL_RULE_COLOR_ALPHA = 0.2f
     const val SPACING_AFTER_DIVIDER_DP = 0f
     const val SPACING_AFTER_LIST_DP = 8f

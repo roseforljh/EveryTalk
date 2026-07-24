@@ -128,7 +128,6 @@ import com.mikepenz.markdown.model.ImageWidth
 import com.mikepenz.markdown.model.MarkdownAnnotator
 import com.mikepenz.markdown.model.PlaceholderConfig
 import com.mikepenz.markdown.model.State
-import com.mikepenz.markdown.model.StreamingMarkdownState
 import com.mikepenz.markdown.model.markdownAnnotator
 import com.mikepenz.markdown.model.markdownInlineContent
 import com.mikepenz.markdown.model.markdownPadding
@@ -203,18 +202,115 @@ fun MikePenzMarkdownNodesRenderer(
     )
 }
 
+internal val LocalMarkdownHorizontalRuleTopPadding = compositionLocalOf {
+    ChatMarkdownTextStyle.HORIZONTAL_RULE_VERTICAL_PADDING_DP.dp
+}
+
 @Composable
 internal fun MarkdownNodesSuccess(
     state: State.Success,
     components: MarkdownComponents,
     modifier: Modifier,
     nodes: List<ASTNode>,
+    contextNodes: List<ASTNode> = nodes,
+    firstNodeIndex: Int = 0,
+) {
+    MarkdownNodesColumn(
+        nodes = nodes,
+        contextNodes = contextNodes,
+        firstNodeIndex = firstNodeIndex,
+        components = components,
+        modifier = modifier,
+        content = state.content,
+    )
+}
+
+@Composable
+private fun MarkdownNodesColumn(
+    nodes: List<ASTNode>,
+    contextNodes: List<ASTNode>,
+    firstNodeIndex: Int,
+    components: MarkdownComponents,
+    modifier: Modifier,
+    content: String,
 ) {
     Column(modifier = modifier) {
-        nodes.forEach { node ->
-            MarkdownElement(node, components, state.content)
+        nodes.forEachIndexed { index, node ->
+            val contextIndex = firstNodeIndex + index
+            val hasValidContext = contextNodes.getOrNull(contextIndex) === node
+            val spacingNodes = if (hasValidContext) contextNodes else nodes
+            val spacingIndex = if (hasValidContext) contextIndex else index
+            CompositionLocalProvider(
+                LocalMarkdownHorizontalRuleTopPadding provides
+                    markdownHorizontalRuleTopPadding(spacingNodes, spacingIndex),
+            ) {
+                MarkdownElement(
+                    node = node,
+                    components = components,
+                    content = content,
+                    includeSpacer = shouldIncludeMarkdownNodeSpacer(spacingNodes, spacingIndex),
+                )
+            }
         }
     }
+}
+
+private fun markdownHorizontalRuleTopPadding(nodes: List<ASTNode>, index: Int): Dp {
+    val previousNode = previousVisibleMarkdownNode(nodes, index)
+    return if (previousNode?.type == MarkdownElementTypes.ORDERED_LIST ||
+        previousNode?.type == MarkdownElementTypes.UNORDERED_LIST
+    ) {
+        (ChatMarkdownTextStyle.HORIZONTAL_RULE_VERTICAL_PADDING_DP -
+            ChatMarkdownTextStyle.SPACING_AFTER_LIST_DP * 2).dp
+    } else {
+        ChatMarkdownTextStyle.HORIZONTAL_RULE_VERTICAL_PADDING_DP.dp
+    }
+}
+
+private fun previousVisibleMarkdownNode(nodes: List<ASTNode>, index: Int): ASTNode? {
+    var previousIndex = index - 1
+    while (previousIndex in nodes.indices) {
+        val node = nodes[previousIndex]
+        if (node.type != MarkdownTokenTypes.EOL && node.type != MarkdownTokenTypes.WHITE_SPACE) {
+            return node
+        }
+        previousIndex--
+    }
+    return null
+}
+
+internal fun markdownNodeStartIndex(
+    contextNodes: List<ASTNode>,
+    selectedNodes: List<ASTNode>,
+): Int {
+    val firstSelectedNode = selectedNodes.firstOrNull() ?: return 0
+    return contextNodes.indexOfFirst { it === firstSelectedNode }.coerceAtLeast(0)
+}
+
+internal fun shouldIncludeMarkdownNodeSpacer(nodes: List<ASTNode>, index: Int): Boolean {
+    val nodeType = nodes[index].type
+    if (nodeType == MarkdownTokenTypes.WHITE_SPACE ||
+        nodeType == MarkdownTokenTypes.HORIZONTAL_RULE
+    ) {
+        return false
+    }
+    if (nodeType == MarkdownTokenTypes.EOL) {
+        return !hasHorizontalRuleNeighbor(nodes, index, -1) &&
+            !hasHorizontalRuleNeighbor(nodes, index, 1)
+    }
+    return !hasHorizontalRuleNeighbor(nodes, index, -1)
+}
+
+private fun hasHorizontalRuleNeighbor(nodes: List<ASTNode>, index: Int, step: Int): Boolean {
+    var neighborIndex = index + step
+    while (neighborIndex in nodes.indices) {
+        when (nodes[neighborIndex].type) {
+            MarkdownTokenTypes.EOL,
+            MarkdownTokenTypes.WHITE_SPACE -> neighborIndex += step
+            else -> return nodes[neighborIndex].type == MarkdownTokenTypes.HORIZONTAL_RULE
+        }
+    }
+    return false
 }
 
 @Composable
@@ -276,7 +372,13 @@ internal fun FootnoteMarkdownHeader(
 }
 
 internal fun footnoteTargets(markdown: String): Set<String> =
-    when (val state = parseMarkdown(markdown, lookupLinks = false)) {
+    when (
+        val state = parseMarkdown(
+            markdown,
+            lookupLinks = false,
+            flavour = EveryTalkMarkdownFlavourDescriptor,
+        )
+    ) {
         is State.Success -> footnoteTargets(content = state.content, node = state.node)
         else -> emptySet()
     }

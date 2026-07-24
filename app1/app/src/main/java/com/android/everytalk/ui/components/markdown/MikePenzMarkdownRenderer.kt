@@ -128,7 +128,6 @@ import com.mikepenz.markdown.model.ImageWidth
 import com.mikepenz.markdown.model.MarkdownAnnotator
 import com.mikepenz.markdown.model.PlaceholderConfig
 import com.mikepenz.markdown.model.State
-import com.mikepenz.markdown.model.StreamingMarkdownState
 import com.mikepenz.markdown.model.markdownAnnotator
 import com.mikepenz.markdown.model.markdownInlineContent
 import com.mikepenz.markdown.model.markdownPadding
@@ -510,6 +509,15 @@ fun MikePenzMarkdownRenderer(
                         onImageClick = currentImageClickCallback.value,
                     )
                 },
+                horizontalRule = {
+                    // 相邻空行由节点渲染器收口，分隔线自身提供完全对称的上下留白。
+                    MarkdownDivider(
+                        modifier = Modifier.padding(
+                            top = LocalMarkdownHorizontalRuleTopPadding.current,
+                            bottom = ChatMarkdownTextStyle.HORIZONTAL_RULE_VERTICAL_PADDING_DP.dp,
+                        ),
+                    )
+                },
                 paragraph = { model ->
                     FootnoteTarget(
                         targetUris = footnoteTargets(
@@ -718,6 +726,7 @@ fun MikePenzMarkdownRenderer(
                                     details.summary.buildMarkdownAnnotatedString(
                                         style = summaryStyle,
                                         annotatorSettings = summaryAnnotatorSettings,
+                                        flavour = EveryTalkMarkdownFlavourDescriptor,
                                     )
                                 }
                                 val summaryFootnoteTargets = remember(details.summary) {
@@ -798,6 +807,10 @@ fun MikePenzMarkdownRenderer(
             val renderStaticMarkdown: @Composable () -> Unit = {
                 val selectedMarkdownNodes = markdownNodes ?: markdownNode?.let(::listOf)
                 if (preparedMarkdownDocument != null && selectedMarkdownNodes != null) {
+                    val selectedNodeStartIndex = markdownNodeStartIndex(
+                        contextNodes = preparedMarkdownDocument.nodes,
+                        selectedNodes = selectedMarkdownNodes,
+                    )
                     Markdown(
                         state = preparedMarkdownDocument.state,
                         colors = markdownColors,
@@ -814,6 +827,8 @@ fun MikePenzMarkdownRenderer(
                                 components = nodeComponents,
                                 modifier = nodeModifier,
                                 nodes = selectedMarkdownNodes,
+                                contextNodes = preparedMarkdownDocument.nodes,
+                                firstNodeIndex = selectedNodeStartIndex,
                             )
                         },
                     )
@@ -823,11 +838,20 @@ fun MikePenzMarkdownRenderer(
                         colors = markdownColors,
                         typography = typography,
                         padding = padding,
+                        flavour = EveryTalkMarkdownFlavourDescriptor,
                         modifier = Modifier.markdownWidth(sender),
                         imageTransformer = EveryTalkMarkdownImageTransformer,
                         annotator = annotator,
                         inlineContent = markdownInlineContent,
                         components = components,
+                        success = { state, nodeComponents, nodeModifier ->
+                            MarkdownNodesSuccess(
+                                state = state,
+                                components = nodeComponents,
+                                modifier = nodeModifier,
+                                nodes = state.node.children,
+                            )
+                        },
                         retainState = true,
                     )
                 }

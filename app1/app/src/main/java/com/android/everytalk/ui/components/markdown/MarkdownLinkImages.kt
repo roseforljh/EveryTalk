@@ -154,7 +154,11 @@ import org.koin.compose.koinInject
 
 internal fun markdownLinkLogoIndex(content: String): MarkdownLinkLogoIndex {
     val state = runCatching {
-        parseMarkdown(content, lookupLinks = true)
+        parseMarkdown(
+            content,
+            lookupLinks = true,
+            flavour = EveryTalkMarkdownFlavourDescriptor,
+        )
     }.getOrNull() as? State.Success ?: return MarkdownLinkLogoIndex(
         requests = emptyList(),
         definitions = emptyMap(),

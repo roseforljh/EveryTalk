@@ -88,6 +88,8 @@ import com.android.everytalk.ui.components.streaming.contentVersionForRendering
 
 private val CONTEXT_MENU_CORNER_RADIUS = 28.dp
 private val CONTEXT_MENU_ITEM_ICON_SIZE = 22.dp
+// Markdown 单行字形视觉中心相对气泡中心偏下，用户气泡向上补偿 5dp。
+private val USER_BUBBLE_TEXT_OPTICAL_OFFSET = (-5).dp
 
 internal fun attachmentStripHorizontalAlignment(sender: Sender): Alignment.Horizontal =
     if (sender == Sender.User) Alignment.End else Alignment.Start
@@ -280,7 +282,8 @@ internal fun UserOrErrorMessageContent(
                             } else {
                                 Modifier
                             }
-                        )
+                        ),
+                    contentAlignment = Alignment.CenterStart
                 ) {
                     // 原有内容层
                     Box(
@@ -310,7 +313,15 @@ internal fun UserOrErrorMessageContent(
                             UnifiedMarkdownRenderer(
                                 preparedMessage = preparedMessage,
                                 sender = message.sender,
-                                modifier = Modifier.wrapContentWidth(),
+                                modifier = Modifier
+                                    .wrapContentWidth()
+                                    .offset(
+                                        y = if (message.sender == Sender.User) {
+                                            USER_BUBBLE_TEXT_OPTICAL_OFFSET
+                                        } else {
+                                            0.dp
+                                        }
+                                    ),
                             )
                         }
                     }
@@ -334,7 +345,7 @@ internal fun UserOrErrorMessageContent(
                                 )
                             )
                             .clickable { isExpanded = !isExpanded }
-                            .padding(top = 12.dp, bottom = 6.dp), // 减小高度，调整视觉平衡
+                            .padding(vertical = 9.dp),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(

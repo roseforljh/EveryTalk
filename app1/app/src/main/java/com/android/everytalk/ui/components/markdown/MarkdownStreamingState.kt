@@ -204,7 +204,9 @@ internal fun shouldRebaseStreamingMarkdownDelta(delta: String): Boolean {
 internal fun PrepareStreamingMarkdownRebase(request: StreamingMarkdownRebaseRequest?) {
     if (request == null) return
     key(request.generation) {
-        val state = rememberStreamingMarkdownState()
+        val state = rememberStreamingMarkdownState(
+            flavour = EveryTalkMarkdownFlavourDescriptor,
+        )
         LaunchedEffect(state, request) {
             try {
                 request.beforePrepare()

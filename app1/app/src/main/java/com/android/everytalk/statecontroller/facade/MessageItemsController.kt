@@ -13,6 +13,7 @@ import com.android.everytalk.ui.components.streaming.PreparedMarkdownDocument
 import com.android.everytalk.ui.components.streaming.StreamBlockParser
 import com.android.everytalk.ui.components.streaming.contentVersionForRendering
 import com.android.everytalk.ui.components.markdown.footnoteTargets
+import com.android.everytalk.ui.components.markdown.EveryTalkMarkdownFlavourDescriptor
 import com.android.everytalk.ui.components.markdown.markdownLinkLogoIndex
 import com.android.everytalk.ui.components.markdown.preparedMessageLinkLogoSource
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
@@ -103,7 +104,12 @@ open class MessageItemsController(
             hasPendingFormula = displayParseResult.hasPendingMath,
             contentVersion = contentVersionForRendering(displayText),
         )
-        val preparedMarkdownDocument = (parseMarkdown(preparedMessage.markdown) as? State.Success)
+        val preparedMarkdownDocument = (
+            parseMarkdown(
+                preparedMessage.markdown,
+                flavour = EveryTalkMarkdownFlavourDescriptor,
+            ) as? State.Success
+        )
             ?.let { state ->
                 PreparedMarkdownDocument(
                     state = state,

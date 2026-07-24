@@ -34,7 +34,7 @@ internal fun findNextInlineMathStart(
             !escaped &&
             !isDoubleDollar &&
             !isMathDelimiterProtected(content, index, mathProtectionMask) &&
-            !isCurrencyDollar(content, index, mathProtectionMask)
+            !isCurrencyDollar(content, index)
         ) {
             return index
         }
@@ -46,27 +46,38 @@ internal fun findNextInlineMathStart(
 internal fun isCurrencyDollar(
     content: String,
     index: Int,
-    mathProtectionMask: BooleanArray,
 ): Boolean {
     if (index + 1 >= content.length || !content[index + 1].isDigit()) return false
 
-    val closingIndex = findNextUnescapedSingleDollarOnLine(content, index + 1, mathProtectionMask)
-    if (closingIndex == -1) return true
-    if (closingIndex + 1 < content.length && content[closingIndex + 1].isDigit()) return true
+    var cursor = index + 1
+    var decimalPointSeen = false
+    while (cursor < content.length) {
+        when {
+            content[cursor].isDigit() || content[cursor] == ',' -> cursor++
+            content[cursor] == '.' && !decimalPointSeen -> {
+                decimalPointSeen = true
+                cursor++
+            }
+            else -> break
+        }
+    }
 
-    val body = content.substring(index + 1, closingIndex)
-    return !isDigitStartedMathBody(body)
+    val next = content.getOrNull(cursor) ?: return true
+    if (next == '$') return false
+
+    // ponytail: 货币金额按数字后的上下文判定，避免把中文正文吞进 `$...$`。
+    return when {
+        next == '/' -> content.getOrNull(cursor + 1)?.let { it.isLetter() || isCjk(it) } == true
+        next == '*' -> content.getOrNull(cursor + 1) == '*'
+        next in MATH_OPERATOR_CHARS || next == '\\' || next.isLetterOrDigit() -> false
+        else -> true
+    }
 }
 
-internal fun isDigitStartedMathBody(body: String): Boolean {
-    val trimmed = body.trim()
-    if (latexCommandRegex.containsMatchIn(trimmed)) return true
-    val normalized = latexCommandRegex.replace(trimmed, "")
-    if (normalized.isEmpty()) return false
-    val hasCjk = normalized.any { it.code in 0x4E00..0x9FFF }
-    val hasProseWord = proseWordRegex.containsMatchIn(normalized)
-    return !hasCjk && !hasProseWord
-}
+private val MATH_OPERATOR_CHARS = setOf('+', '-', '=', '^', '_', '*', '/', '<', '>')
+
+private fun isCjk(char: Char): Boolean =
+    char.code in 0x3400..0x9FFF
 
 internal fun findNextUnescapedSingleDollarOnLine(
     content: String,

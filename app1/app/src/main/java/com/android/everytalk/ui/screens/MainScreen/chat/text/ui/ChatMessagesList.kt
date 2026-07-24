@@ -544,7 +544,7 @@ fun ChatMessagesList(
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.End,
-                                verticalAlignment = Alignment.Top
+                                verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Column(
                                     modifier = Modifier.wrapContentWidth(),
