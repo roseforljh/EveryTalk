@@ -13,6 +13,8 @@ import com.android.everytalk.ui.components.streaming.PreparedMarkdownDocument
 import com.android.everytalk.ui.components.streaming.StreamBlockParser
 import com.android.everytalk.ui.components.streaming.contentVersionForRendering
 import com.android.everytalk.ui.components.markdown.footnoteTargets
+import com.android.everytalk.ui.components.markdown.markdownLinkLogoIndex
+import com.android.everytalk.ui.components.markdown.preparedMessageLinkLogoSource
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
 import com.android.everytalk.ui.screens.MainScreen.chat.core.expandStaticAiMessageItem
 import com.mikepenz.markdown.model.State
@@ -112,6 +114,11 @@ open class MessageItemsController(
                                 put(uri, index)
                             }
                         }
+                    },
+                    linkLogoIndex = if (preparedMessage.details.isEmpty()) {
+                        markdownLinkLogoIndex(preparedMessage.markdown, state)
+                    } else {
+                        markdownLinkLogoIndex(preparedMessageLinkLogoSource(preparedMessage))
                     },
                 )
             }

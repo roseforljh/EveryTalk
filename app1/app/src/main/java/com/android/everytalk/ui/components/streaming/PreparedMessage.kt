@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.components.streaming
 
+import com.android.everytalk.ui.components.markdown.MarkdownLinkLogoIndex
 import com.mikepenz.markdown.model.State
 import org.intellij.markdown.ast.ASTNode
 
@@ -34,6 +35,7 @@ data class PreparedMarkdownDocument(
     val state: State.Success,
     val nodes: List<ASTNode>,
     val targetNodeIndexByUri: Map<String, Int> = emptyMap(),
+    val linkLogoIndex: MarkdownLinkLogoIndex? = null,
 )
 
 internal const val INLINE_FORMULA_SCHEME = "everytalk-math-inline:"

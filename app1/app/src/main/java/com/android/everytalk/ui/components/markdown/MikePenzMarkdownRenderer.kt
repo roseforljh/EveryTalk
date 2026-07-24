@@ -51,6 +51,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
@@ -98,6 +99,8 @@ import com.android.everytalk.ui.components.streaming.PreparedMarkdownDocument
 import com.android.everytalk.ui.components.streaming.PreparedMessage
 import coil3.compose.AsyncImagePainter
 import coil3.compose.rememberAsyncImagePainter
+import coil3.request.ImageRequest
+import coil3.size.Size as CoilSize
 import com.mikepenz.markdown.coil3.Coil3ImageTransformerImpl
 import com.mikepenz.markdown.annotator.annotatorSettings
 import com.mikepenz.markdown.annotator.buildMarkdownAnnotatedString
@@ -172,12 +175,12 @@ private val MARKDOWN_LINK_LIGHT_COLOR = Color(0xFF3D7DB5)
 private val MARKDOWN_LINK_DARK_COLOR = Color(0xFF8FC9FF)
 private val MARKDOWN_IMAGE_ERROR_INTRINSIC_SIZE = Size(-1f, -1f)
 
-internal data class MarkdownLinkLogoRequest(
+data class MarkdownLinkLogoRequest(
     val host: String,
     val faviconUrl: String,
 )
 
-internal data class MarkdownLinkLogoIndex(
+data class MarkdownLinkLogoIndex(
     val requests: List<MarkdownLinkLogoRequest>,
     val definitions: Map<String, String>,
 )
@@ -353,6 +356,13 @@ internal fun markdownLinkLogoIndex(content: String): MarkdownLinkLogoIndex {
         definitions = emptyMap(),
     )
 
+    return markdownLinkLogoIndex(content, state)
+}
+
+internal fun markdownLinkLogoIndex(
+    content: String,
+    state: State.Success,
+): MarkdownLinkLogoIndex {
     val definitions = linkedMapOf<String, String>()
     state.node.collectMarkdownLinkDefinitions(content, definitions)
 
@@ -469,12 +479,28 @@ private fun ASTNode.hasMarkdownLinkLogoExcludedAncestor(): Boolean {
     return false
 }
 
-private fun preparedMessageLinkLogoSource(message: PreparedMessage): String = buildString {
+internal fun preparedMessageLinkLogoSource(message: PreparedMessage): String = buildString {
     append(message.markdown)
     message.details.values.forEach { details ->
         append('\n')
         append(details.summary)
     }
+}
+
+internal fun resolveMarkdownLinkLogoIndex(
+    isStreaming: Boolean,
+    preparedMessage: PreparedMessage,
+    preparedMarkdownDocument: PreparedMarkdownDocument?,
+    calculate: (String) -> MarkdownLinkLogoIndex = ::markdownLinkLogoIndex,
+): MarkdownLinkLogoIndex {
+    if (isStreaming) {
+        return MarkdownLinkLogoIndex(
+            requests = emptyList(),
+            definitions = emptyMap(),
+        )
+    }
+    return preparedMarkdownDocument?.linkLogoIndex
+        ?: calculate(preparedMessageLinkLogoSource(preparedMessage))
 }
 
 internal fun markdownSingleAutolinkLogoRequest(
@@ -512,7 +538,7 @@ internal fun MarkdownSingleAutolinkLogoParagraph(
     modifier: Modifier = Modifier,
 ) {
     Row(
-        modifier = modifier.wrapContentWidth(),
+        modifier = modifier.wrapContentWidth(align = Alignment.Start),
         verticalAlignment = Alignment.Top,
     ) {
         MarkdownLinkLogo(
@@ -553,7 +579,17 @@ private fun MarkdownLinkLogo(
     request: MarkdownLinkLogoRequest,
     modifier: Modifier = Modifier,
 ) {
-    val painter = rememberAsyncImagePainter(model = request.faviconUrl)
+    val context = LocalContext.current
+    val iconSizePx = with(LocalDensity.current) {
+        MARKDOWN_LINK_LOGO_SIZE_DP.dp.roundToPx().coerceAtLeast(1)
+    }
+    val imageRequest = remember(context, request.faviconUrl, iconSizePx) {
+        ImageRequest.Builder(context)
+            .data(request.faviconUrl)
+            .size(CoilSize(iconSizePx, iconSizePx))
+            .build()
+    }
+    val painter = rememberAsyncImagePainter(model = imageRequest)
     val painterState = painter.state.collectAsState().value
     Box(
         modifier = Modifier
@@ -1062,12 +1098,32 @@ fun MikePenzMarkdownRenderer(
     val formulaFontSize = typography.text.fontSize.takeIf { it.isSpecified }
         ?: MaterialTheme.typography.bodyLarge.fontSize
     val formulaFontSizePx = with(density) { formulaFontSize.toPx() }
+    val selectedFormulaMarkdown = remember(
+        preparedMarkdownDocument?.state?.content,
+        markdownNode,
+        markdownNodes,
+    ) {
+        val selectedNodes = markdownNodes ?: markdownNode?.let(::listOf)
+        if (preparedMarkdownDocument == null || selectedNodes == null) {
+            null
+        } else {
+            markdownNodesSourceOrNull(
+                content = preparedMarkdownDocument.state.content,
+                nodes = selectedNodes,
+            )
+        }
+    }
     val validFormulas = remember(
         visiblePreparedMessage.markdown,
         visiblePreparedMessage.formulas,
+        visiblePreparedMessage.details,
         visiblePreparedMessage.contentVersion,
+        selectedFormulaMarkdown,
     ) {
-        resolveVisibleFormulaRequests(visiblePreparedMessage)
+        resolveVisibleFormulaRequests(
+            preparedMessage = visiblePreparedMessage,
+            visibleMarkdown = selectedFormulaMarkdown ?: visiblePreparedMessage.markdown,
+        )
     }
     val renderIdentities = remember(validFormulas) { formulaRenderIdentities(validFormulas) }
     val renderFormulaMessage = remember(renderIdentities) {
@@ -1125,16 +1181,17 @@ fun MikePenzMarkdownRenderer(
                         }
                     }
             }
-            val linkLogoSource = remember(
+            val linkLogoIndex = remember(
                 isStreaming,
                 visiblePreparedMessage.markdown.takeUnless { isStreaming },
                 visiblePreparedMessage.details.takeUnless { isStreaming },
+                preparedMarkdownDocument?.linkLogoIndex,
             ) {
-                // 流式期间不创建 favicon 请求，避免每个增量片段触发额外重组。
-                if (isStreaming) "" else preparedMessageLinkLogoSource(visiblePreparedMessage)
-            }
-            val linkLogoIndex = remember(linkLogoSource) {
-                markdownLinkLogoIndex(linkLogoSource)
+                resolveMarkdownLinkLogoIndex(
+                    isStreaming = isStreaming,
+                    preparedMessage = visiblePreparedMessage,
+                    preparedMarkdownDocument = preparedMarkdownDocument,
+                )
             }
             val linkLogoRequests = linkLogoIndex.requests
             val linkLogoDefinitions = linkLogoIndex.definitions
@@ -1854,11 +1911,12 @@ internal fun resolveInlineFormula(
 
 internal fun resolveVisibleFormulaRequests(
     preparedMessage: PreparedMessage,
+    visibleMarkdown: String = preparedMessage.markdown,
 ): Map<String, FormulaRequest> {
     val visibleSource = buildString {
-        append(preparedMessage.markdown)
+        append(visibleMarkdown)
         preparedMessage.details.values.forEach { details ->
-            if (preparedMessage.markdown.contains(details.id)) {
+            if (visibleMarkdown.contains(details.id)) {
                 append('\n')
                 append(details.summary)
             }
@@ -1869,6 +1927,17 @@ internal fun resolveVisibleFormulaRequests(
             contentAddressPattern.matches(id) &&
             formula.contentVersion == preparedMessage.contentVersion &&
             visibleSource.contains(id)
+    }
+}
+
+internal fun markdownNodesSourceOrNull(
+    content: String,
+    nodes: List<ASTNode>,
+): String? = buildString {
+    nodes.forEachIndexed { index, node ->
+        val nodeSource = node.safeTextInNode(content) ?: return null
+        if (index > 0) append('\n')
+        append(nodeSource)
     }
 }
 

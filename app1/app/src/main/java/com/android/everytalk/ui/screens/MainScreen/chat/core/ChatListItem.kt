@@ -10,7 +10,8 @@ import org.intellij.markdown.MarkdownTokenTypes
 import org.intellij.markdown.ast.ASTNode
 import org.intellij.markdown.flavours.gfm.GFMElementTypes
 
-private const val STATIC_MARKDOWN_BLOCK_MAX_NODES = 8
+// 完成态历史消息按单个可渲染顶层节点拆分，避免 LazyColumn 测量一个块时连带渲染大量离屏内容。
+private const val STATIC_MARKDOWN_BLOCK_MAX_NODES = 1
 private const val STATIC_MARKDOWN_BLOCK_MAX_SOURCE_CHARS = 2_000
 
 enum class PlaceholderRole {
@@ -271,19 +272,21 @@ internal fun buildStaticMarkdownNodeBlocks(
     }
 
     nodes.forEachIndexed { nodeIndex, node ->
+        val sourceChars = (node.endOffset - node.startOffset).coerceAtLeast(0)
+        val renderableNodeCount = node.staticMarkdownRenderableNodeCount()
         if (
             nodeIndex in standaloneNodeIndices ||
             node.requiresStandaloneStaticMarkdownBlock()
         ) {
-            flushCurrent()
-            blocks.add(listOf(node))
+            if (currentRenderableNodes > 0) flushCurrent()
+            current.add(node)
+            currentSourceChars += sourceChars
+            currentRenderableNodes += renderableNodeCount
             return@forEachIndexed
         }
 
-        val sourceChars = (node.endOffset - node.startOffset).coerceAtLeast(0)
-        val renderableNodeCount = node.staticMarkdownRenderableNodeCount()
         if (
-            current.isNotEmpty() &&
+            currentRenderableNodes > 0 &&
             renderableNodeCount > 0 &&
             (currentRenderableNodes >= STATIC_MARKDOWN_BLOCK_MAX_NODES ||
                 currentSourceChars + sourceChars > STATIC_MARKDOWN_BLOCK_MAX_SOURCE_CHARS)
