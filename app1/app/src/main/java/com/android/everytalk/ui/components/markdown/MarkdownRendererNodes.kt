@@ -128,6 +128,7 @@ import com.mikepenz.markdown.model.ImageWidth
 import com.mikepenz.markdown.model.MarkdownAnnotator
 import com.mikepenz.markdown.model.PlaceholderConfig
 import com.mikepenz.markdown.model.State
+import com.mikepenz.markdown.model.StreamingMarkdownState
 import com.mikepenz.markdown.model.markdownAnnotator
 import com.mikepenz.markdown.model.markdownInlineContent
 import com.mikepenz.markdown.model.markdownPadding
@@ -226,6 +227,26 @@ internal fun MarkdownNodesSuccess(
 }
 
 @Composable
+internal fun MarkdownStreamingNodesSuccess(
+    snapshot: StreamingMarkdownState.Snapshot,
+    components: MarkdownComponents,
+    modifier: Modifier,
+    streamingContent: String,
+) {
+    val nodes = remember(snapshot) {
+        snapshot.stableAst + snapshot.unstableAstTail
+    }
+    MarkdownNodesColumn(
+        nodes = nodes,
+        contextNodes = nodes,
+        firstNodeIndex = 0,
+        components = components,
+        modifier = modifier,
+        content = streamingContent,
+    )
+}
+
+@Composable
 private fun MarkdownNodesColumn(
     nodes: List<ASTNode>,
     contextNodes: List<ASTNode>,
@@ -290,13 +311,10 @@ internal fun markdownNodeStartIndex(
 internal fun shouldIncludeMarkdownNodeSpacer(nodes: List<ASTNode>, index: Int): Boolean {
     val nodeType = nodes[index].type
     if (nodeType == MarkdownTokenTypes.WHITE_SPACE ||
+        nodeType == MarkdownTokenTypes.EOL ||
         nodeType == MarkdownTokenTypes.HORIZONTAL_RULE
     ) {
         return false
-    }
-    if (nodeType == MarkdownTokenTypes.EOL) {
-        return !hasHorizontalRuleNeighbor(nodes, index, -1) &&
-            !hasHorizontalRuleNeighbor(nodes, index, 1)
     }
     return !hasHorizontalRuleNeighbor(nodes, index, -1)
 }

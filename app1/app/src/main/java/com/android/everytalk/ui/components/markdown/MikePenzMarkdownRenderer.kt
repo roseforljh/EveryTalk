@@ -882,6 +882,14 @@ fun MikePenzMarkdownRenderer(
                                 annotator = annotator,
                                 inlineContent = markdownInlineContent,
                                 components = components,
+                                success = { snapshot, nodeComponents, nodeModifier ->
+                                    MarkdownStreamingNodesSuccess(
+                                        snapshot = snapshot,
+                                        components = nodeComponents,
+                                        modifier = nodeModifier,
+                                        streamingContent = visibleStreamingMarkdownState.content.toString(),
+                                    )
+                                },
                             )
                         }
                     } else {

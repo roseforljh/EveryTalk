@@ -151,18 +151,32 @@ import org.intellij.markdown.ast.findChildOfType
 import org.intellij.markdown.flavours.gfm.GFMElementTypes
 import org.intellij.markdown.flavours.gfm.GFMFlavourDescriptor
 import org.intellij.markdown.flavours.gfm.GFMTokenTypes
+import org.intellij.markdown.flavours.gfm.StrikeThroughParser
+import org.intellij.markdown.parser.sequentialparsers.EmphasisLikeParser
 import org.intellij.markdown.parser.sequentialparsers.SequentialParser
 import org.intellij.markdown.parser.sequentialparsers.SequentialParserManager
+import org.intellij.markdown.parser.sequentialparsers.impl.EmphStrongDelimiterParser
 import org.intellij.markdown.parser.sequentialparsers.impl.MathParser
 import org.koin.compose.koinInject
 
-/** EveryTalk 已在进入 Markdown 前接管公式，禁用 GFM 的二次美元公式解析。 */
+/** EveryTalk 已接管公式，并仅允许双波浪号触发删除线。 */
+@Suppress("DEPRECATION")
 internal object EveryTalkMarkdownFlavourDescriptor : GFMFlavourDescriptor() {
-    private val parsersWithoutMath: List<SequentialParser> =
-        super.sequentialParserManager.getParserSequence().filterNot { it is MathParser }
+    private val parsers: List<SequentialParser> = buildList {
+        super.sequentialParserManager.getParserSequence().forEach { parser ->
+            when (parser) {
+                is MathParser -> Unit
+                is EmphasisLikeParser -> {
+                    add(StrikeThroughParser())
+                    add(EmphasisLikeParser(EmphStrongDelimiterParser()))
+                }
+                else -> add(parser)
+            }
+        }
+    }
 
     private val parserManager = object : SequentialParserManager() {
-        override fun getParserSequence(): List<SequentialParser> = parsersWithoutMath
+        override fun getParserSequence(): List<SequentialParser> = parsers
     }
 
     override val sequentialParserManager: SequentialParserManager

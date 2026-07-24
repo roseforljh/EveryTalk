@@ -163,8 +163,9 @@ internal fun preprocessMarkdownExtensions(
         return MarkdownExtensionPreprocessResult(markdown = markdown, details = emptyMap())
     }
 
+    val contractNormalized = MarkdownContractValidator.normalize(markdown)
     val sanitized = extractSafeHtmlBlocks(
-        markdown = markdown,
+        markdown = contractNormalized,
         contentVersion = contentVersion,
         detailsNesting = 0,
         extractDetails = false,
