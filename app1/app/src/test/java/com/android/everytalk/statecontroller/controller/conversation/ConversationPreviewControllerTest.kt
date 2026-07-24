@@ -41,9 +41,9 @@ class ConversationPreviewControllerTest {
 
     private fun appViewModelSource(): String {
         val candidates = listOf(
-            File("src/main/java/com/android/everytalk/statecontroller/AppViewModel.kt"),
-            File("app/src/main/java/com/android/everytalk/statecontroller/AppViewModel.kt"),
-            File("app1/app/src/main/java/com/android/everytalk/statecontroller/AppViewModel.kt"),
+            File("src/main/java/com/android/everytalk/statecontroller/viewmodel/AppViewModel.kt"),
+            File("app/src/main/java/com/android/everytalk/statecontroller/viewmodel/AppViewModel.kt"),
+            File("app1/app/src/main/java/com/android/everytalk/statecontroller/viewmodel/AppViewModel.kt"),
         )
         val appViewModel = requireNotNull(candidates.firstOrNull(File::isFile)) { "找不到 AppViewModel.kt" }
             .readText(Charsets.UTF_8)

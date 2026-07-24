@@ -9,7 +9,7 @@ class ModelConfigFlowContractTest {
 
     @Test
     fun `auto fetch passes channel without shared loading wait`() {
-        val source = sourceFile("statecontroller/AppViewModelDataActions.kt")
+        val source = sourceFile("statecontroller/viewmodel/AppViewModelDataActions.kt")
         val fetchFunction = source
             .substringAfter("internal fun AppViewModel.onConfirmAutoFetch()")
             .substringBefore("internal fun AppViewModel.onManualInput()")
@@ -21,8 +21,8 @@ class ModelConfigFlowContractTest {
 
     @Test
     fun `manual input stays in view model and preserves configuration parameters`() {
-        val viewModel = sourceFile("statecontroller/AppViewModel.kt") +
-            sourceFile("statecontroller/AppViewModelDataActions.kt")
+        val viewModel = sourceFile("statecontroller/viewmodel/AppViewModel.kt") +
+            sourceFile("statecontroller/viewmodel/AppViewModelDataActions.kt")
         val settings = sourceFile("ui/screens/settings/SettingsScreen.kt")
         val imageSettings = sourceFile("ui/screens/ImageGeneration/ImageGenerationSettingsScreen.kt")
 

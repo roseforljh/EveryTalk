@@ -49,17 +49,17 @@ class AppViewModelHistoryLoadTest {
     @Test
     fun `text history load job covers preparation through final commit`() {
         val appViewModelSource = source(
-            "src/main/java/com/android/everytalk/statecontroller/AppViewModel.kt",
-            "app/src/main/java/com/android/everytalk/statecontroller/AppViewModel.kt",
-            "app1/app/src/main/java/com/android/everytalk/statecontroller/AppViewModel.kt",
+            "src/main/java/com/android/everytalk/statecontroller/viewmodel/AppViewModel.kt",
+            "app/src/main/java/com/android/everytalk/statecontroller/viewmodel/AppViewModel.kt",
+            "app1/app/src/main/java/com/android/everytalk/statecontroller/viewmodel/AppViewModel.kt",
         ) + source(
-            "src/main/java/com/android/everytalk/statecontroller/AppViewModelConversationActions.kt",
-            "app/src/main/java/com/android/everytalk/statecontroller/AppViewModelConversationActions.kt",
-            "app1/app/src/main/java/com/android/everytalk/statecontroller/AppViewModelConversationActions.kt",
+            "src/main/java/com/android/everytalk/statecontroller/viewmodel/AppViewModelConversationActions.kt",
+            "app/src/main/java/com/android/everytalk/statecontroller/viewmodel/AppViewModelConversationActions.kt",
+            "app1/app/src/main/java/com/android/everytalk/statecontroller/viewmodel/AppViewModelConversationActions.kt",
         ) + source(
-            "src/main/java/com/android/everytalk/statecontroller/AppViewModelActions.kt",
-            "app/src/main/java/com/android/everytalk/statecontroller/AppViewModelActions.kt",
-            "app1/app/src/main/java/com/android/everytalk/statecontroller/AppViewModelActions.kt",
+            "src/main/java/com/android/everytalk/statecontroller/viewmodel/AppViewModelActions.kt",
+            "app/src/main/java/com/android/everytalk/statecontroller/viewmodel/AppViewModelActions.kt",
+            "app1/app/src/main/java/com/android/everytalk/statecontroller/viewmodel/AppViewModelActions.kt",
         )
         val historyControllerSource = source(
             "src/main/java/com/android/everytalk/statecontroller/controller/conversation/HistoryController.kt",

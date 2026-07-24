@@ -9,9 +9,9 @@ class McpToolExecutorLifecycleTest {
     @Test
     fun `MCP 执行器按拥有者清理并保留兼容入口`() {
         listOf(
-            "data/network/GeminiDirectClient.kt",
-            "data/network/OpenAIDirectClient.kt",
-            "data/network/OpenAIResponsesClient.kt",
+            "data/network/llm/GeminiDirectClient.kt",
+            "data/network/llm/OpenAIDirectClient.kt",
+            "data/network/llm/OpenAIResponsesClient.kt",
         ).forEach { relativePath ->
             val source = source(relativePath)
             assertTrue(source.contains("private var mcpToolExecutorOwner: Any? = null"))
@@ -21,7 +21,7 @@ class McpToolExecutorLifecycleTest {
             assertTrue(source.contains("mcpToolExecutor = null"))
         }
 
-        val viewModel = source("statecontroller/AppViewModel.kt")
+        val viewModel = source("statecontroller/viewmodel/AppViewModel.kt")
         assertTrue(viewModel.contains("private val mcpToolExecutorOwner = Any()"))
         assertTrue(viewModel.contains("GeminiDirectClient.clearMcpToolExecutor(mcpToolExecutorOwner)"))
         assertTrue(viewModel.contains("OpenAIDirectClient.clearMcpToolExecutor(mcpToolExecutorOwner)"))

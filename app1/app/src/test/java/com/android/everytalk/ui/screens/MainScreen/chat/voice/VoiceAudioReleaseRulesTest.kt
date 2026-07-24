@@ -21,7 +21,7 @@ class VoiceAudioReleaseRulesTest {
 
     @Test
     fun `stream audio close always releases track in finally`() {
-        val source = sourceFile("data/network/VoiceChatSession.kt").readText(Charsets.UTF_8)
+        val source = sourceFile("data/network/direct/VoiceChatSession.kt").readText(Charsets.UTF_8)
         val close = source.substringAfter("fun close()")
             .substringBefore("private fun resample")
         val finallyBlock = close.substringAfter("finally")

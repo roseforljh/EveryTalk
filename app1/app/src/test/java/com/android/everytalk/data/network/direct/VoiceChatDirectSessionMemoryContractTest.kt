@@ -23,7 +23,7 @@ class VoiceChatDirectSessionMemoryContractTest {
 
     @Test
     fun `voice result only carries the audio production flag`() {
-        val source = sourceFile("data/network/VoiceChatSession.kt").readText(Charsets.UTF_8)
+        val source = sourceFile("data/network/direct/VoiceChatSession.kt").readText(Charsets.UTF_8)
         val result = source.substringAfter("data class VoiceChatResult(")
 
         assertTrue(result.contains("val hasAudio: Boolean"))

@@ -404,9 +404,9 @@ class ChatScreenScrollSessionTest {
 
     private fun chatScreenSource(): String {
         val candidates = listOf(
-            File("src/main/java/com/android/everytalk/ui/screens/MainScreen/ChatScreen.kt"),
-            File("app/src/main/java/com/android/everytalk/ui/screens/MainScreen/ChatScreen.kt"),
-            File("app1/app/src/main/java/com/android/everytalk/ui/screens/MainScreen/ChatScreen.kt"),
+            File("src/main/java/com/android/everytalk/ui/screens/MainScreen/chat/ChatScreen.kt"),
+            File("app/src/main/java/com/android/everytalk/ui/screens/MainScreen/chat/ChatScreen.kt"),
+            File("app1/app/src/main/java/com/android/everytalk/ui/screens/MainScreen/chat/ChatScreen.kt"),
         )
         val sourceFile = candidates.firstOrNull { it.isFile }
         requireNotNull(sourceFile) { "找不到 ChatScreen.kt" }

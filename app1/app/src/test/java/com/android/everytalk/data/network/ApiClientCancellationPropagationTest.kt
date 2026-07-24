@@ -43,7 +43,7 @@ class ApiClientCancellationPropagationTest {
     }
 
     private fun apiClientSource(): String {
-        val relativePath = "data/network/ApiClient.kt"
+        val relativePath = "data/network/core/ApiClient.kt"
         val candidates = listOf(
             File("src/main/java/com/android/everytalk/$relativePath"),
             File("app/src/main/java/com/android/everytalk/$relativePath"),

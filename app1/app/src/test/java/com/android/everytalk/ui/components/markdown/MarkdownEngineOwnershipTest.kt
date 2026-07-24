@@ -150,7 +150,7 @@ class MarkdownEngineOwnershipTest {
         assertTrue(adapter.contains("list = ChatMarkdownTextStyle.LIST_TOP_LEVEL_ITEM_SPACING_DP.dp"))
         assertTrue(adapter.contains("listIndent = ChatMarkdownTextStyle.LIST_NESTED_INDENT_DP.dp"))
         val style = mainSource(
-            "com/android/everytalk/ui/components/ChatMarkdownTextStyle.kt"
+            "com/android/everytalk/ui/components/markdown/ChatMarkdownTextStyle.kt"
         )
         assertTrue(style.contains("BODY_FONT_SIZE_SP = 16f"))
         assertTrue(style.contains("BODY_LINE_HEIGHT_SP = 26f"))

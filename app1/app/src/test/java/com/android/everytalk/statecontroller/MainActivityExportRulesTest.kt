@@ -18,9 +18,9 @@ class MainActivityExportRulesTest {
 
     private fun mainActivitySource(): File {
         val candidates = listOf(
-            File("src/main/java/com/android/everytalk/statecontroller/MainActivity.kt"),
-            File("app/src/main/java/com/android/everytalk/statecontroller/MainActivity.kt"),
-            File("app1/app/src/main/java/com/android/everytalk/statecontroller/MainActivity.kt"),
+            File("src/main/java/com/android/everytalk/statecontroller/activity/MainActivity.kt"),
+            File("app/src/main/java/com/android/everytalk/statecontroller/activity/MainActivity.kt"),
+            File("app1/app/src/main/java/com/android/everytalk/statecontroller/activity/MainActivity.kt"),
         )
         return requireNotNull(candidates.firstOrNull(File::isFile)) { "找不到 MainActivity.kt" }
     }
