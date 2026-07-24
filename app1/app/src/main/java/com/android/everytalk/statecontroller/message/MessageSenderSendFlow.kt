@@ -25,8 +25,8 @@ import com.android.everytalk.data.DataClass.ImageGenRequest
 import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.network.WebSearchSupport
 import com.android.everytalk.data.network.ExternalWebSearchProvider
+import com.android.everytalk.data.network.PromptCapabilityCatalog
 import com.android.everytalk.data.network.PromptCachePolicy
-import com.android.everytalk.data.network.PromptDirectiveBuilder
 import com.android.everytalk.statecontroller.defaultReasoningBudgetForModel
 import com.android.everytalk.statecontroller.mcp.dispatch.McpToolCandidate
 import com.android.everytalk.statecontroller.mcp.dispatch.QueryIntent
@@ -53,7 +53,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.longOrNull
 
-internal fun shouldDecoratePromptDirectives(
+internal fun shouldUsePromptCapabilities(
     isImageGeneration: Boolean,
     provider: String,
     channel: String,
@@ -395,20 +395,7 @@ internal fun MessageSender.sendMessageInternal(
                     }
                 }
 
-                val finalApiMessages = if (shouldDecoratePromptDirectives(
-                        isImageGeneration = isImageGeneration,
-                        provider = providerForRequestBackend,
-                        channel = currentConfig.channel,
-                        model = currentConfig.model,
-                    )
-                ) {
-                    PromptDirectiveBuilder.decorateMessages(
-                        messages = apiMessagesForBackend,
-                        queryIntentNameResolver = { text -> classifyMcpIntent(text).name },
-                    )
-                } else {
-                    apiMessagesForBackend.toList()
-                }
+                val finalApiMessages = apiMessagesForBackend.toList()
 
                 logApiMessages("finalMessages", finalApiMessages)
 
@@ -535,6 +522,16 @@ internal fun MessageSender.sendMessageInternal(
                             toolsList.add(builtInWebSearchToolDefinition())
                         }
 
+                        if (shouldUsePromptCapabilities(
+                                isImageGeneration = isImageGeneration,
+                                provider = providerForRequestBackend,
+                                channel = currentConfig.channel,
+                                model = currentConfig.model,
+                            )
+                        ) {
+                            toolsList.add(PromptCapabilityCatalog.selectionToolDefinition())
+                        }
+
                         val effectiveTools = appendBuiltInWebFetchToolIfNeeded(
                             tools = toolsList,
                         )
@@ -618,6 +615,13 @@ internal fun MessageSender.sendMessageInternal(
                         )
                     } else null
                 )
+
+                Log.d(
+                    "MessageSender",
+                    "Prompt tool profile=${PromptCachePolicy.toolProfile(chatRequestForApi.tools)} " +
+                        "schema=${PromptCachePolicy.toolSchemaHash(chatRequestForApi.tools).take(16)}",
+                )
+                PromptCachePolicy.logToolProfile(chatRequestForApi.tools)
 
                 apiHandler.streamChatResponse(
                     requestBody = chatRequestForApi,

@@ -90,6 +90,7 @@ import com.android.everytalk.data.network.ExternalWebSearchService
 import com.android.everytalk.data.network.JinaSearchService
 import com.android.everytalk.data.network.OpenAIDirectClient
 import com.android.everytalk.data.network.OpenAIResponsesClient
+import com.android.everytalk.data.network.PromptCapabilityCatalog
 import com.android.everytalk.data.network.WebSearchSupport
 import com.android.everytalk.data.network.WebFetchToolExecutor
 import com.android.everytalk.util.storage.readAtMost
@@ -186,6 +187,12 @@ internal suspend fun executeSharedToolCall(
     },
     fallbackExecutor: suspend (String, JsonObject) -> JsonElement,
 ): JsonElement {
+    if (toolName.equals(PromptCapabilityCatalog.SELECT_TOOL_NAME, ignoreCase = true)) {
+        updateStatus("选择回答能力")
+        val result = PromptCapabilityCatalog.executeSelection(arguments)
+        updateStatus(null)
+        return result
+    }
     if (toolName.equals(BUILT_IN_WEBFETCH_TOOL_NAME, ignoreCase = true)) {
         val url = arguments["url"]?.jsonPrimitive?.contentOrNull.orEmpty()
         updateStatus(buildToolStatus("读取网页", url))
