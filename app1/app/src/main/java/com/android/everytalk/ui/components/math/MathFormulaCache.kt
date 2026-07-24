@@ -65,6 +65,7 @@ internal object MathFormulaSvgCache {
     private const val SYNTAX_FAILURE_TTL_NANOS = 60_000_000_000L
 
     private val mutex = Mutex()
+    private val memoryLock = Any()
     private val memoryEntries =
         LinkedHashMap<MathFormulaCacheKey, CachedSvgResult>(16, 0.75f, true)
     private val syntaxFailures =
@@ -80,6 +81,7 @@ internal object MathFormulaSvgCache {
 
         val diskCache = MathFormulaDiskCache(File(cacheRoot, MathFormulaDiskCache.DIRECTORY_NAME))
         val keys = requests.map(::cacheKeyOf)
+        val memoryResults = getMemoryReadyResults(requests)
         val resolved = arrayOfNulls<Pair<MathFormulaCacheKey, MathJaxRenderResult>>(requests.size)
         val unresolvedIndexes = mutableListOf<Int>()
         val nowNanos = System.nanoTime()
@@ -87,7 +89,7 @@ internal object MathFormulaSvgCache {
 
         requests.forEachIndexed { index, request ->
             val key = keys[index]
-            val memoryResult = memoryEntries[key]?.result
+            val memoryResult = memoryResults[key]
             val failureResult = syntaxFailures[key]
                 ?.takeIf { it.expiresAtNanos > nowNanos }
                 ?.result
@@ -153,6 +155,23 @@ internal object MathFormulaSvgCache {
         resolved.map { requireNotNull(it) }
     }
 
+    /**
+     * 同步读取已经完成安全校验的内存结果，供 Compose 首帧直接恢复真实公式尺寸。
+     * 锁内只做 LRU 查询和轻量数据类复制，不执行 SVG 解析或磁盘访问。
+     */
+    internal fun getMemoryReadyResults(
+        requests: List<MathJaxRenderRequest>,
+    ): Map<MathFormulaCacheKey, MathJaxRenderResult> = synchronized(memoryLock) {
+        buildMap {
+            requests.forEach { request ->
+                val key = cacheKeyOf(request)
+                memoryEntries[key]?.result?.let { result ->
+                    put(key, result.forRequest(request))
+                }
+            }
+        }
+    }
+
     private fun normalizeRendererResult(result: MathJaxRenderResult): MathJaxRenderResult {
         if (result.status != MathJaxRenderStatus.READY || result.hasUsableMathSvg()) return result
         return result.copy(
@@ -172,15 +191,17 @@ internal object MathFormulaSvgCache {
         val byteSize = svg.toByteArray(Charsets.UTF_8).size
         if (byteSize > MAX_MEMORY_CACHE_BYTES) return
 
-        memoryEntries.remove(key)?.let { previous -> memoryBytes -= previous.byteSize }
-        memoryEntries[key] = CachedSvgResult(result = result, byteSize = byteSize)
-        memoryBytes += byteSize
+        synchronized(memoryLock) {
+            memoryEntries.remove(key)?.let { previous -> memoryBytes -= previous.byteSize }
+            memoryEntries[key] = CachedSvgResult(result = result, byteSize = byteSize)
+            memoryBytes += byteSize
 
-        val iterator = memoryEntries.entries.iterator()
-        while (memoryBytes > MAX_MEMORY_CACHE_BYTES && iterator.hasNext()) {
-            val eldest = iterator.next().value
-            memoryBytes -= eldest.byteSize
-            iterator.remove()
+            val iterator = memoryEntries.entries.iterator()
+            while (memoryBytes > MAX_MEMORY_CACHE_BYTES && iterator.hasNext()) {
+                val eldest = iterator.next().value
+                memoryBytes -= eldest.byteSize
+                iterator.remove()
+            }
         }
     }
 

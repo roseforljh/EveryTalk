@@ -86,10 +86,15 @@ internal data class MathFormulaRenderSnapshot(
 internal fun reconcileMathFormulaRenderStates(
     previous: MathFormulaRenderSnapshot,
     requests: List<MathJaxRenderRequest>,
+    cachedReadyResults: Map<MathFormulaCacheKey, MathJaxRenderResult> = emptyMap(),
 ): Map<String, MathFormulaRenderState> = requests.associate { request ->
     val retainedState = previous.statesById[request.id]
         ?.takeIf { previous.requestsById[request.id] == request }
-    request.id to (retainedState ?: MathFormulaRenderState.Loading)
+    val cacheKey = cacheKeyOf(request)
+    val cachedState = cachedReadyResults[cacheKey]
+        ?.takeIf { it.status == MathJaxRenderStatus.READY }
+        ?.let { result -> MathFormulaRenderState.Ready(result, cacheKey) }
+    request.id to (retainedState ?: cachedState ?: MathFormulaRenderState.Loading)
 }
 
 @Composable
@@ -122,7 +127,11 @@ internal fun rememberMathFormulaRenderStates(
     }
     var snapshot by remember(renderer) { mutableStateOf(MathFormulaRenderSnapshot()) }
     val states = remember(requests, snapshot) {
-        reconcileMathFormulaRenderStates(snapshot, requests)
+        reconcileMathFormulaRenderStates(
+            previous = snapshot,
+            requests = requests,
+            cachedReadyResults = MathFormulaSvgCache.getMemoryReadyResults(requests),
+        )
     }
 
     LaunchedEffect(renderer, requests) {
@@ -132,7 +141,7 @@ internal fun rememberMathFormulaRenderStates(
         }
 
         val requestsById = requests.associateBy(MathJaxRenderRequest::id)
-        val retainedStates = reconcileMathFormulaRenderStates(snapshot, requests)
+        val retainedStates = states
         val pendingRequests = requests.filter { request ->
             retainedStates[request.id] == MathFormulaRenderState.Loading
         }
@@ -236,14 +245,19 @@ internal fun MathBlock(
             val density = LocalDensity.current
             val formulaWidth = with(density) { state.result.requireWidthPx().toDp() }
             val formulaHeight = with(density) { state.result.requireHeightPx().toDp() }
-            val scrollState = rememberScrollState()
 
             BoxWithConstraints(modifier = modifier.fillMaxWidth()) {
+                val scrollState = rememberScrollState()
                 val contentWidth = maxOf(maxWidth, formulaWidth)
+                val overflowModifier = if (formulaWidth > maxWidth) {
+                    Modifier.horizontalScroll(scrollState)
+                } else {
+                    Modifier
+                }
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .horizontalScroll(scrollState),
+                        .then(overflowModifier),
                 ) {
                     Box(
                         modifier = Modifier
