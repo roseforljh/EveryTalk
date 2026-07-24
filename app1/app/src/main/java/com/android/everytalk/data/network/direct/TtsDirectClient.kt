@@ -18,118 +18,23 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.channelFlow
 import kotlinx.serialization.json.*
 
-internal class BoundedJsonObjectByteBuffer(private val maxBytes: Long) {
-    init {
-        require(maxBytes in 1..Int.MAX_VALUE.toLong()) { "JSON 缓冲区上限无效" }
-    }
-
-    private var bytes = ByteArray(minOf(maxBytes.toInt(), 8192))
-    private var size = 0
-
-    internal val bufferedByteCount: Int
-        get() = size
-
-    fun append(source: ByteArray, length: Int): List<String> {
-        require(length in 0..source.size) { "追加字节长度无效" }
-        val requiredSize = size.toLong() + length
-        if (requiredSize > maxBytes) {
-            throw ResponseBodyTooLargeException(maxBytes)
-        }
-        ensureCapacity(requiredSize.toInt())
-        source.copyInto(bytes, destinationOffset = size, startIndex = 0, endIndex = length)
-        size = requiredSize.toInt()
-        return drainCompleteObjects()
-    }
-
-    private fun ensureCapacity(requiredSize: Int) {
-        if (requiredSize <= bytes.size) return
-        bytes = bytes.copyOf(minOf(maxBytes.toInt(), maxOf(requiredSize, bytes.size * 2)))
-    }
-
-    private fun drainCompleteObjects(): List<String> {
-        val objects = mutableListOf<String>()
-        var consumedBytes = 0
-        var braceCount = 0
-        var inString = false
-        var escaped = false
-        var jsonStart = -1
-
-        for (index in 0 until size) {
-            when (val value = bytes[index].toInt() and 0xff) {
-                '\\'.code -> if (inString) escaped = !escaped
-                '"'.code -> {
-                    if (!escaped) inString = !inString
-                    escaped = false
-                }
-                else -> {
-                    if (escaped) {
-                        escaped = false
-                    } else if (!inString) {
-                        when (value) {
-                            '{'.code -> {
-                                if (braceCount == 0) jsonStart = index
-                                braceCount++
-                            }
-                            '}'.code -> if (braceCount > 0) {
-                                braceCount--
-                                if (braceCount == 0 && jsonStart >= 0) {
-                                    objects += String(
-                                        bytes,
-                                        jsonStart,
-                                        index - jsonStart + 1,
-                                        Charsets.UTF_8,
-                                    )
-                                    consumedBytes = index + 1
-                                    jsonStart = -1
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if (consumedBytes > 0) {
-            bytes.copyInto(bytes, startIndex = consumedBytes, endIndex = size)
-            size -= consumedBytes
-        }
-        return objects
-    }
-}
-
-internal class AliyunTtsApiException(
-    errorCode: String,
-    errorMessage: String?,
-) : Exception("Aliyun TTS Error: $errorMessage ($errorCode)")
-
-internal fun parseAliyunTtsJsonOrNull(rawText: String): JsonObject? {
-    val json = try {
-        Json.parseToJsonElement(rawText).jsonObject
-    } catch (_: Exception) {
-        return null
-    }
-    val errorCode = json["code"]?.jsonPrimitive?.contentOrNull ?: return json
-    val errorMessage = json["message"]?.jsonPrimitive?.contentOrNull
-    throw AliyunTtsApiException(errorCode, errorMessage)
-}
-
-/**
- * TTS 直连客户端
- * 
- * 支持直接从 Android 客户端调用各种 TTS API，无需经过后端代理。
- * 
- * 支持的平台：
- * - Gemini (Google)
- * - OpenAI
- * - SiliconFlow (流式)
- * - Minimax
- */
+    /**
+     * TTS 直连客户端
+     *
+     * 支持直接从 Android 客户端调用各种 TTS API，无需经过后端代理。
+     *
+     * 支持的平台：
+     * - Gemini (Google)
+     * - OpenAI
+     * - SiliconFlow (流式)
+     * - Minimax
+     */
 object TtsDirectClient {
     private const val TAG = "TtsDirectClient"
     internal const val MAX_NON_STREAMING_AUDIO_BYTES = 64L * 1024L * 1024L
     private const val MAX_ENCODED_AUDIO_RESPONSE_BYTES = 64L * 1024L * 1024L
     private const val MAX_STREAM_RESPONSE_BYTES = 96L * 1024L * 1024L
-    
+
     /**
      * TTS 配置
      */
@@ -140,7 +45,7 @@ object TtsDirectClient {
         val model: String,
         val voiceName: String
     )
-    
+
     /**
      * 音频格式配置
      */
@@ -148,7 +53,7 @@ object TtsDirectClient {
         val format: String,      // "pcm", "opus", "mp3", "wav"
         val sampleRate: Int      // 采样率，如 24000, 32000
     )
-    
+
     // 平台默认音频格式
     private val AUDIO_FORMAT_CONFIG = mapOf(
         "gemini" to AudioFormat("pcm", 24000),
@@ -206,17 +111,17 @@ object TtsDirectClient {
             "fishaudio/fish-speech-1.5:diana"
         )
     )
-    
+
     /**
      * 获取平台对应的音频格式
      */
     fun getAudioFormat(platform: String): AudioFormat {
         return AUDIO_FORMAT_CONFIG[platform.lowercase()] ?: AudioFormat("pcm", 24000)
     }
-    
+
     /**
      * 执行 TTS 合成（非流式）
-     * 
+     *
      * @param client HTTP 客户端
      * @param config TTS 配置
      * @param text 待合成文本
@@ -271,13 +176,13 @@ object TtsDirectClient {
             else -> throw IllegalArgumentException("Unsupported TTS platform: ${config.platform}")
         }
     }
-    
+
     /**
      * 执行 TTS 合成（流式）
-     * 
+     *
      * 仅 SiliconFlow 支持真正的流式输出。
      * 其他平台会将完整音频作为单个块返回。
-     * 
+     *
      * @param client HTTP 客户端
      * @param config TTS 配置
      * @param text 待合成文本
@@ -335,7 +240,7 @@ object TtsDirectClient {
             }
         }
     }
-    
+
     /**
      * Minimax TTS (非流式)
      */
@@ -348,7 +253,7 @@ object TtsDirectClient {
         apiUrl: String
     ): ByteArray {
         Log.i(TAG, "Minimax TTS: $model, voice=$voiceId at $apiUrl")
-        
+
         val payload = buildJsonObject {
             put("model", model)
             put("text", text)
@@ -366,7 +271,7 @@ object TtsDirectClient {
                 put("channel", 1)
             }
         }.toString()
-        
+
         return try {
             client.preparePost(apiUrl) {
                 contentType(ContentType.Application.Json)
@@ -425,7 +330,7 @@ object TtsDirectClient {
         apiUrl: String
     ): Flow<ByteArray> = channelFlow {
         Log.i(TAG, "Minimax Stream TTS: $model, voice=$voiceId at $apiUrl")
-        
+
         val payload = buildJsonObject {
             put("model", model)
             put("text", text)
@@ -443,7 +348,7 @@ object TtsDirectClient {
                 put("channel", 1)
             }
         }.toString()
-        
+
         try {
             client.preparePost(apiUrl) {
                 contentType(ContentType.Application.Json)
@@ -455,20 +360,20 @@ object TtsDirectClient {
                     Log.e(TAG, "Minimax Stream TTS failed: ${response.status}, bodyChars=${errorBody.length}")
                     throw Exception("Minimax Stream TTS failed: ${response.status}")
                 }
-                
+
                 val channel = response.bodyAsChannel().counted()
                 var chunkCount = 0
                 var totalBytes = 0L
-                
+
                 // Minimax 流式响应是连续的 JSON 对象，可能没有换行符分隔，也可能有
                 // 这里我们需要逐个解析 JSON 对象
                 // 简单的做法是读取直到遇到 '}' 且括号平衡，或者按行读取（如果服务端有换行）
                 // 观察示例，通常是 SSE 风格或者 JSON Lines
                 // 假设是 JSON Lines 或者连续 JSON
-                
+
                 val jsonBuffer = BoundedJsonObjectByteBuffer(MAX_SSE_EVENT_BYTES)
                 val readBuffer = ByteArray(4096)
-                
+
                 while (!channel.isClosedForRead) {
                     val bytesRead = channel.readAvailable(readBuffer)
                     if (bytesRead > 0) {
@@ -478,7 +383,7 @@ object TtsDirectClient {
                         jsonBuffer.append(readBuffer, bytesRead).forEach { jsonStr ->
                             try {
                                             val json = Json.parseToJsonElement(jsonStr).jsonObject
-                                            
+
                                             // 检查错误
                                             val baseResp = json["base_resp"]?.jsonObject
                                             val statusCode = baseResp?.get("status_code")?.jsonPrimitive?.intOrNull
@@ -487,21 +392,21 @@ object TtsDirectClient {
                                                 Log.e(TAG, "Minimax Stream TTS API error: $statusCode - $statusMsg")
                                                 throw Exception("Minimax TTS API error: $statusMsg")
                                             }
-                                            
+
                                             // 提取音频
                                             val dataObj = json["data"]?.jsonObject
                                             val audioHex = dataObj?.get("audio")?.jsonPrimitive?.contentOrNull
                                             val status = dataObj?.get("status")?.jsonPrimitive?.intOrNull // 1=continue, 2=end
-                                            
+
                                             // Minimax 流式 API 坑点：status=2 的包可能包含全量音频
                                             // 策略：如果 status=2 且之前已经收到过数据，则忽略当前包的音频，防止重复播放
                                             // 除非 audioHex 很短（可能是最后一个分片），但为了保险起见，
                                             // 如果用户反馈重复，极有可能是 status=2 包含了全量数据。
                                             // 观察示例，status=2 的包带有 extra_info，很可能是汇总包。
-                                            
+
                                             val isEndPacket = (status == 2)
                                             val shouldSkipAudio = isEndPacket && chunkCount > 0
-                                            
+
                                             if (!audioHex.isNullOrEmpty()) {
                                                 if (shouldSkipAudio) {
                                                     Log.w(TAG, "Skipping audio in Minimax status=2 packet to avoid duplication")
@@ -514,11 +419,11 @@ object TtsDirectClient {
                                                     }
                                                 }
                                             }
-                                            
+
                                             if (isEndPacket) {
                                                 // 结束
                                             }
-                                            
+
                             } catch (e: CancellationException) {
                                 throw e
                             } catch (e: ResponseBodyTooLargeException) {
@@ -533,10 +438,10 @@ object TtsDirectClient {
                         }
                     }
                 }
-                
+
                 Log.i(TAG, "Minimax Stream TTS completed: $chunkCount chunks, $totalBytes bytes")
             }
-            
+
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -544,10 +449,10 @@ object TtsDirectClient {
             throw e
         }
     }
-    
+
     /**
      * Gemini TTS
-     * 
+     *
      * 使用 Gemini 的语音合成能力
      */
     suspend fun synthesizeWithGemini(
@@ -560,9 +465,9 @@ object TtsDirectClient {
     ): ByteArray {
         val baseUrl = apiUrl?.trimEnd('/') ?: "https://generativelanguage.googleapis.com"
         val url = "$baseUrl/v1beta/models/$model:generateContent?key=$apiKey"
-        
+
         Log.i(TAG, "Gemini TTS: $model, voice=$voiceName, text=${text.take(50)}...")
-        
+
         // 构建请求体
         val payload = buildJsonObject {
             putJsonArray("contents") {
@@ -588,7 +493,7 @@ object TtsDirectClient {
                 }
             }
         }.toString()
-        
+
         return try {
             client.preparePost(url) {
                 contentType(ContentType.Application.Json)
@@ -628,7 +533,7 @@ object TtsDirectClient {
             throw e
         }
     }
-    
+
     /**
      * OpenAI TTS
      */
@@ -647,16 +552,16 @@ object TtsDirectClient {
         } else {
             "${apiUrl.trimEnd('/')}/audio/speech"
         }
-        
+
         Log.i(TAG, "OpenAI TTS: $model, voice=$voiceName at $targetUrl")
-        
+
         val payload = buildJsonObject {
             put("model", model)
             put("input", text)
             put("voice", voiceName)
             put("response_format", responseFormat)
         }.toString()
-        
+
         return try {
             client.preparePost(targetUrl) {
                 contentType(ContentType.Application.Json)
@@ -680,7 +585,7 @@ object TtsDirectClient {
             throw e
         }
     }
-    
+
     /**
      * SiliconFlow TTS（非流式）
      */
@@ -695,14 +600,14 @@ object TtsDirectClient {
         sampleRate: Int = 32000
     ): ByteArray {
         Log.i(TAG, "SiliconFlow TTS: $model, voice=$voice at $apiUrl")
-        
+
         // 处理 voice 参数，如果未包含模型前缀则自动添加
         val finalVoice = if (model.isNotEmpty() && voice.isNotEmpty() && !voice.contains(":")) {
             "$model:$voice"
         } else {
             voice
         }
-        
+
         val payload = buildJsonObject {
             put("model", model)
             put("input", text)
@@ -711,7 +616,7 @@ object TtsDirectClient {
             put("sample_rate", sampleRate)
             put("stream", false)
         }.toString()
-        
+
         return try {
             client.preparePost(apiUrl) {
                 contentType(ContentType.Application.Json)
@@ -735,7 +640,7 @@ object TtsDirectClient {
             throw e
         }
     }
-    
+
     /**
      * SiliconFlow TTS（流式）
      */
@@ -750,18 +655,18 @@ object TtsDirectClient {
         sampleRate: Int = 32000
     ): Flow<ByteArray> = channelFlow {
         Log.i(TAG, "SiliconFlow Stream TTS: $model, voice=$voice")
-        
+
         // 处理 voice 参数
         val finalVoice = if (model.isNotEmpty() && voice.isNotEmpty() && !voice.contains(":")) {
             "$model:$voice"
         } else {
             voice
         }
-        
+
         // IndexTTS-2 模型特殊处理
         val finalSampleRate = if (model.contains("IndexTTS-2")) 24000 else sampleRate
         val enableStream = !model.contains("IndexTTS-2")
-        
+
         val payload = buildJsonObject {
             put("model", model)
             put("input", text)
@@ -770,7 +675,7 @@ object TtsDirectClient {
             put("sample_rate", finalSampleRate)
             put("stream", enableStream)
         }.toString()
-        
+
         try {
             client.preparePost(apiUrl) {
                 contentType(ContentType.Application.Json)
@@ -782,12 +687,12 @@ object TtsDirectClient {
                     Log.e(TAG, "SiliconFlow Stream TTS failed: ${response.status}, bodyChars=${errorBody.length}")
                     throw Exception("SiliconFlow Stream TTS failed: ${response.status}")
                 }
-                
+
                 val channel = response.bodyAsChannel()
                 var chunkCount = 0
                 var totalBytes = 0L
                 val buffer = ByteArray(8192)
-                
+
                 while (!channel.isClosedForRead) {
                     val bytesRead = channel.readAvailable(buffer)
                     if (bytesRead > 0) {
@@ -797,10 +702,10 @@ object TtsDirectClient {
                         send(chunk)
                     }
                 }
-                
+
                 Log.i(TAG, "SiliconFlow Stream TTS completed: $chunkCount chunks, $totalBytes bytes")
             }
-            
+
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -831,9 +736,9 @@ object TtsDirectClient {
 
         val actualVoice = voice.ifEmpty { "Cherry" }
         val actualModel = model.ifEmpty { "qwen3-tts-flash" }
-        
+
         Log.i(TAG, "Aliyun TTS: model=$actualModel, voice=$actualVoice at $targetUrl")
-        
+
         // 按照阿里云 DashScope CosyVoice TTS API 格式构建请求
         // 参考: https://help.aliyun.com/zh/model-studio/developer-reference/cosyvoice-large-model-api
         // voice 需要放在 input 对象内部
@@ -848,9 +753,9 @@ object TtsDirectClient {
                 put("format", "pcm")
             }
         }.toString()
-        
+
         Log.d(TAG, "Aliyun TTS request payload: chars=${payload.length}")
-        
+
         return try {
             client.preparePost(targetUrl) {
                 contentType(ContentType.Application.Json)
@@ -921,9 +826,9 @@ object TtsDirectClient {
 
         val actualVoice = voice.ifEmpty { "Cherry" }
         val actualModel = model.ifEmpty { "qwen3-tts-flash" }
-        
+
         Log.i(TAG, "Aliyun Stream TTS: model=$actualModel, voice=$actualVoice at $targetUrl")
-        
+
         // 按照阿里云 DashScope CosyVoice TTS API 格式构建请求
         // 参考: https://help.aliyun.com/zh/model-studio/developer-reference/cosyvoice-large-model-api
         // voice 需要放在 input 对象内部
@@ -938,9 +843,9 @@ object TtsDirectClient {
                 put("format", "pcm")
             }
         }.toString()
-        
+
         Log.d(TAG, "Aliyun Stream TTS request payload: chars=${payload.length}")
-        
+
         try {
             client.preparePost(targetUrl) {
                 contentType(ContentType.Application.Json)
@@ -953,30 +858,30 @@ object TtsDirectClient {
                 if (!response.status.isSuccess()) {
                     val errorBody = response.readErrorTextAtMost() ?: "(no body)"
                     Log.e(TAG, "Aliyun Stream TTS failed: ${response.status}, bodyChars=${errorBody.length}")
-                    
+
                     parseAliyunTtsJsonOrNull(errorBody)
-                    
+
                     throw Exception("Aliyun Stream TTS failed: ${response.status}")
                 }
-                
+
                 val channel = BoundedSseLineReader(
                     response.bodyAsChannel(),
                     maxStreamBytes = MAX_STREAM_RESPONSE_BYTES,
                 )
                 var chunkCount = 0
                 var totalBytes = 0L
-                
+
                 while (true) {
                     val line = channel.readLine() ?: break
-                    
+
                     if (line.startsWith("data:")) {
                         val jsonStr = line.substring(5).trim()
                         if (jsonStr.isEmpty()) continue
-                        
+
                         try {
                             val json = parseAliyunTtsJsonOrNull(jsonStr)
                                 ?: throw IllegalArgumentException("无效的阿里云 TTS JSON")
-                            
+
                             // 检查 output.audio
                             val output = json["output"]?.jsonObject
                             // 官方文档: output.audio.data
@@ -984,7 +889,7 @@ object TtsDirectClient {
                             val audioData = audioObj?.get("data")?.jsonPrimitive?.contentOrNull
                                             ?: audioObj?.get("audio")?.jsonPrimitive?.contentOrNull // 尝试兼容旧格式
                                             ?: output?.get("audio")?.jsonPrimitive?.contentOrNull // 尝试直接获取
-                            
+
                             if (!audioData.isNullOrEmpty()) {
                                 ensureEncodedAudioWithinLimit(audioData)
                                 val chunk = Base64.decode(audioData, Base64.DEFAULT)
@@ -994,13 +899,13 @@ object TtsDirectClient {
                                     chunkCount++
                                 }
                             }
-                            
+
                             // 检查结束
                             val finishReason = output?.get("finish_reason")?.jsonPrimitive?.contentOrNull
                             if (finishReason == "stop") {
                                 break
                             }
-                            
+
                         } catch (e: CancellationException) {
                             throw e
                         } catch (e: ResponseBodyTooLargeException) {
@@ -1018,10 +923,10 @@ object TtsDirectClient {
                         parseAliyunTtsJsonOrNull(line)
                     }
                 }
-                
+
                 Log.i(TAG, "Aliyun Stream TTS completed: $chunkCount chunks, $totalBytes bytes")
             }
-            
+
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -1030,45 +935,6 @@ object TtsDirectClient {
         }
     }
 
-    /**
-     * Helper function to convert hex string to byte array
-     */
-    private fun hexStringToByteArray(s: String): ByteArray {
-        val len = s.length
-        require(len % 2 == 0) { "音频十六进制数据长度必须为偶数" }
-        if (len.toLong() / 2L > MAX_NON_STREAMING_AUDIO_BYTES) {
-            throw ResponseBodyTooLargeException(MAX_NON_STREAMING_AUDIO_BYTES)
-        }
-        val data = ByteArray(len / 2)
-        var i = 0
-        while (i < len) {
-            val high = Character.digit(s[i], 16)
-            val low = Character.digit(s[i + 1], 16)
-            require(high >= 0 && low >= 0) { "音频十六进制数据包含非法字符" }
-            data[i / 2] = ((high shl 4) + low).toByte()
-            i += 2
-        }
-        return data
-    }
-
-    private fun addAudioBytes(currentBytes: Long, additionalBytes: Int): Long {
-        if (currentBytes > MAX_NON_STREAMING_AUDIO_BYTES - additionalBytes) {
-            throw ResponseBodyTooLargeException(MAX_NON_STREAMING_AUDIO_BYTES)
-        }
-        return currentBytes + additionalBytes
-    }
-
-    private fun ensureEncodedAudioWithinLimit(encoded: String) {
-        val encodedLength = encoded.count { !it.isWhitespace() }.toLong()
-        val estimatedBytes = (encodedLength / 4L) * 3L + when (encodedLength % 4L) {
-            2L -> 1L
-            3L -> 2L
-            else -> 0L
-        }
-        if (estimatedBytes > MAX_NON_STREAMING_AUDIO_BYTES) {
-            throw ResponseBodyTooLargeException(MAX_NON_STREAMING_AUDIO_BYTES)
-        }
-    }
     /**
      * 解析并验证音色 ID
      *
@@ -1079,12 +945,12 @@ object TtsDirectClient {
     private fun resolveVoice(voiceId: String, platform: String): String {
         val platformKey = platform.lowercase()
         val validVoices = VOICE_LISTS[platformKey] ?: return voiceId // 未知平台不处理
-        
+
         // 1. 精确匹配
         if (validVoices.any { it.equals(voiceId, ignoreCase = true) }) {
             return voiceId
         }
-        
+
         // 2. 模糊匹配/特殊映射 (保留之前的 Minimax 映射逻辑作为增强)
         if (platformKey == "minimax") {
              val mapped = when (voiceId.lowercase()) {
@@ -1094,11 +960,11 @@ object TtsDirectClient {
                 else -> null
             }
             if (mapped != null) return mapped
-            
+
             // Minimax ID 通常较长或包含连字符，如果看起来像有效ID也放行
             if (voiceId.contains("-") || voiceId.length > 10) return voiceId
         }
-        
+
         // 3. 默认回退：使用列表第一个
         val defaultVoice = validVoices.first()
         Log.w(TAG, "Voice '$voiceId' is invalid for platform '$platform', falling back to default: '$defaultVoice'")

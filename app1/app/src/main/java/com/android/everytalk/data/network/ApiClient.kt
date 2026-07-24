@@ -70,7 +70,7 @@ private fun throwInlineAttachmentTooLarge(displayName: String, size: Long): Noth
     )
 }
 
-private suspend fun readInlineAttachmentBytes(
+internal suspend fun readInlineAttachmentBytes(
     context: Context,
     uri: Uri,
     displayName: String
@@ -97,7 +97,7 @@ private suspend fun readInlineAttachmentBytes(
     }
 }
 
-private fun ensureInlineAttachmentSize(displayName: String, rawSize: Long) {
+internal fun ensureInlineAttachmentSize(displayName: String, rawSize: Long) {
     if (rawSize > MAX_INLINE_ATTACHMENT_BYTES) {
         throwInlineAttachmentTooLarge(displayName, rawSize)
     }
@@ -955,165 +955,3 @@ object ApiClient {
  * - OpenAI-compat: messages[].content -> [{"type":"text"}, {"type":"image_url"...}]
  * 实现方式：把最后一条 user SimpleTextApiMessage 升级为 PartsApiMessage 并注入 InlineData
  */
-private suspend fun buildDirectMultimodalRequest(
-    request: ChatRequest,
-    attachments: List<com.android.everytalk.models.SelectedMediaItem>,
-    context: Context
-): ChatRequest {
-    val inlineParts = mutableListOf<com.android.everytalk.data.DataClass.ApiContentPart.InlineData>()
-    val documentTexts = mutableListOf<String>()
-
-    attachments.forEach { item ->
-        when (item) {
-            is com.android.everytalk.models.SelectedMediaItem.ImageFromUri -> {
-                val mime = context.contentResolver.getType(item.uri) ?: "image/jpeg"
-                val bytes = readInlineAttachmentBytes(context, item.uri, "图片")
-                if (bytes != null && isImageMime(mime)) {
-                    val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                    inlineParts.add(
-                        com.android.everytalk.data.DataClass.ApiContentPart.InlineData(
-                            base64Data = b64,
-                            mimeType = mime
-                        )
-                    )
-                }
-            }
-            is com.android.everytalk.models.SelectedMediaItem.ImageFromBitmap -> {
-                if (item.bitmapData.isNotBlank() && isImageMime(item.mimeType)) {
-                    val encodedLength = item.bitmapData.count { !it.isWhitespace() }.toLong()
-                    ensureInlineAttachmentSize("图片", ((encodedLength + 3L) / 4L) * 3L)
-                    inlineParts.add(
-                        com.android.everytalk.data.DataClass.ApiContentPart.InlineData(
-                            base64Data = item.bitmapData,
-                            mimeType = item.mimeType
-                        )
-                    )
-                }
-            }
-            is com.android.everytalk.models.SelectedMediaItem.Audio -> {
-                // Audio item already contains base64 data
-                val mime = item.mimeType
-                ensureInlineAttachmentSize("音频", item.data.length * 3L / 4L)
-                inlineParts.add(
-                    com.android.everytalk.data.DataClass.ApiContentPart.InlineData(
-                        base64Data = item.data,
-                        mimeType = mime
-                    )
-                )
-            }
-            is com.android.everytalk.models.SelectedMediaItem.GenericFile -> {
-                val mime = item.mimeType
-                if (isImageMime(mime) || isAudioMime(mime) || isVideoMime(mime)) {
-                    val bytes = readInlineAttachmentBytes(context, item.uri, item.displayName)
-                    if (bytes != null) {
-                        val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                        inlineParts.add(
-                            com.android.everytalk.data.DataClass.ApiContentPart.InlineData(
-                                base64Data = b64,
-                                mimeType = mime
-                            )
-                        )
-                    }
-                } else {
-                    // 尝试提取文档文本
-                    // Qwen 和 Gemini 模型支持原生文档上传，跳过文本提取，直接传递文件
-                    val isQwen = request.model.contains("qwen", ignoreCase = true)
-                    val isGemini = request.model.contains("gemini", ignoreCase = true)
-                    val isPdf = mime == "application/pdf"
-
-                    if (isQwen) {
-                        val fileName = item.displayName
-                        // 读取文件字节并转为 Base64，以便 OpenAIDirectClient 上传
-                        val bytes = readInlineAttachmentBytes(context, item.uri, fileName)
-
-                        if (bytes != null) {
-                            val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                            inlineParts.add(
-                                com.android.everytalk.data.DataClass.ApiContentPart.InlineData(
-                                    base64Data = b64,
-                                    mimeType = "file_upload_marker|$mime|$fileName" // 使用特殊 mimeType 标记，携带文件名
-                                )
-                            )
-                        }
-                    } else if (isGemini && isPdf) {
-                        // Gemini 原生支持 PDF，直接通过 inlineData 传递
-                        val bytes = readInlineAttachmentBytes(context, item.uri, item.displayName)
-
-                        if (bytes != null) {
-                            val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
-                            inlineParts.add(
-                                com.android.everytalk.data.DataClass.ApiContentPart.InlineData(
-                                    base64Data = b64,
-                                    mimeType = mime
-                                )
-                            )
-                        }
-                    } else {
-                        val text = DocumentProcessor.extractText(context, item.uri, mime)
-                        if (!text.isNullOrBlank()) {
-                            val fileName = item.displayName
-                            documentTexts.add("--- Begin of document: $fileName ---\n$text\n--- End of document ---")
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if (inlineParts.isEmpty() && documentTexts.isEmpty()) return request
-
-    val msgs = request.messages.toMutableList()
-    val lastUserIdx = msgs.indexOfLast { it.role == "user" }
-    if (lastUserIdx < 0) return request
-
-    val lastMsg = msgs[lastUserIdx]
-    
-    // 构造文档文本部分
-    val documentContentParts = documentTexts.map { 
-        com.android.everytalk.data.DataClass.ApiContentPart.Text(it) 
-    }
-
-    val newParts = when (lastMsg) {
-        is com.android.everytalk.data.DataClass.PartsApiMessage -> {
-            val existing = lastMsg.parts.toMutableList()
-            // 先放文档，再放原消息，最后放多媒体
-            existing.addAll(0, documentContentParts)
-            existing.addAll(inlineParts)
-            existing.toList()
-        }
-        is com.android.everytalk.data.DataClass.SimpleTextApiMessage -> {
-            val list = mutableListOf<com.android.everytalk.data.DataClass.ApiContentPart>()
-            list.addAll(documentContentParts)
-            if (lastMsg.content.isNotBlank()) {
-                list.add(com.android.everytalk.data.DataClass.ApiContentPart.Text(lastMsg.content))
-            }
-            list.addAll(inlineParts)
-            list.toList()
-        }
-    }
-
-    val upgraded = com.android.everytalk.data.DataClass.PartsApiMessage(
-        role = "user",
-        parts = newParts
-    )
-    msgs[lastUserIdx] = upgraded
-    return request.copy(messages = msgs)
-}
-
-private fun isImageMime(mime: String?): Boolean {
-    if (mime == null) return false
-    val m = mime.lowercase()
-    return m.startsWith("image/")
-}
-
-private fun isAudioMime(mime: String?): Boolean {
-    if (mime == null) return false
-    val m = mime.lowercase()
-    return m.startsWith("audio/")
-}
-
-private fun isVideoMime(mime: String?): Boolean {
-    if (mime == null) return false
-    val m = mime.lowercase()
-    return m.startsWith("video/")
-}

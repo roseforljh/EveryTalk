@@ -203,10 +203,18 @@ object OpenAIResponsesClient {
         previousOutput: List<JsonElement>
     ): String {
         val messagesWithSystemPrompt = SystemPromptInjector.smartInjectSystemPrompt(request.messages)
+        val normalizedTools = PromptCachePolicy.normalizeTools(request.tools)
+        val promptCacheKey = PromptCachePolicy.buildOpenAICacheKey(
+            apiAddress = resolvedOpenAIApiAddress(request),
+            model = request.model,
+            messages = messagesWithSystemPrompt,
+            tools = normalizedTools,
+        )
 
         return buildJsonObject {
             put("model", request.model)
             put("stream", true)
+            promptCacheKey?.let { put("prompt_cache_key", it) }
 
             // instructions: 提取 system message
             val systemMsg = messagesWithSystemPrompt.firstOrNull { it.role == "system" }
@@ -295,7 +303,7 @@ object OpenAIResponsesClient {
             }
 
             // 工具注入 (Responses API 扁平格式)
-            request.tools?.let { tools ->
+            normalizedTools?.let { tools ->
                 if (tools.isNotEmpty()) {
                     putJsonArray("tools") {
                         tools.forEach { toolDef ->
@@ -428,7 +436,12 @@ object OpenAIResponsesClient {
                                         }
                                     }
                                     "response.completed" -> {
-                                        // 响应完成
+                                        val responseObject = event["response"] as? JsonObject
+                                        val usage = responseObject?.get("usage") as? JsonObject
+                                        val details = usage?.get("input_tokens_details") as? JsonObject
+                                        val cachedTokens = (details?.get("cached_tokens") as? JsonPrimitive)?.longOrNull ?: 0L
+                                        val cacheWriteTokens = (details?.get("cache_write_tokens") as? JsonPrimitive)?.longOrNull ?: 0L
+                                        Log.d(TAG, "Prompt cache usage: cached=$cachedTokens write=$cacheWriteTokens")
                                     }
                                     "error" -> {
                                         val errorMsg = event["message"]?.jsonPrimitive?.contentOrNull
@@ -517,4 +530,9 @@ object OpenAIResponsesClient {
             else -> JsonPrimitive(value.toString())
         }
     }
+
+    private fun resolvedOpenAIApiAddress(request: ChatRequest): String =
+        request.apiAddress?.trim()?.takeIf { it.isNotEmpty() }
+            ?: com.android.everytalk.BuildConfig.DEFAULT_OPENAI_API_BASE_URL.trim().takeIf { it.isNotEmpty() }
+            ?: "https://api.openai.com"
 }

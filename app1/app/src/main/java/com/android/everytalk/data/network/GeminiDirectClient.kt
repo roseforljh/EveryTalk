@@ -393,7 +393,7 @@ object GeminiDirectClient {
             }
             
             // 添加工具（Web 搜索、代码执行、MCP 工具等）
-            val mcpTools = request.tools.orEmpty()
+            val mcpTools = PromptCachePolicy.normalizeTools(request.tools).orEmpty()
             val hasMcpTools = mcpTools.isNotEmpty()
             if (enableWebSearch || enableCodeExecution || hasMcpTools) {
                 putJsonArray("tools") {
