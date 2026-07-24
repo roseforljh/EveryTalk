@@ -11,6 +11,8 @@ import com.android.everytalk.ui.components.streaming.FormulaDisplayMode
 import com.android.everytalk.ui.components.streaming.FormulaRequest
 import com.android.everytalk.ui.components.streaming.INLINE_FORMULA_SCHEME
 import com.android.everytalk.ui.components.streaming.PreparedMessage
+import com.android.everytalk.ui.components.streaming.StreamBlockParser
+import com.mikepenz.markdown.model.StreamingMarkdownState
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -53,6 +55,55 @@ class StreamingMarkdownRebaseComposeTest {
 
         assertEquals(content, state.content.toString())
         assertFalse(nodes.any { it.containsType(GFMElementTypes.INLINE_MATH) })
+    }
+
+    @Test
+    fun `流式单波浪范围不会跨增量配成删除线`() {
+        val firstContent =
+            "**预留足够余额：** ChatGPT 账单默认是 ${'$'}20，但如果你的账单地址不在免税州，" +
+                "可能会被收取 6%~10% 的消费税（约 "
+        val secondContent =
+            firstContent + "${'$'}21.20~${'$'}22）。卡内建议至少保留 **${'$'}22"
+        val finalContent = secondContent + " ~ ${'$'}25**。"
+        fun prepare(content: String, version: Long): PreparedMessage =
+            StreamBlockParser.prepareMessage(
+                content = content,
+                messageId = "streaming-tilde-range",
+                contentVersion = version,
+            )
+
+        val first = prepare(firstContent, 1L)
+        val second = prepare(secondContent, 2L)
+        val final = prepare(finalContent, 3L)
+        val current = mutableStateOf(first)
+        val visibleBundle = AtomicReference<StreamingMarkdownBundle?>(null)
+
+        composeRule.setContent {
+            val bundle = rememberStreamingMarkdownBundle(
+                preparedMessage = current.value,
+                streamEpoch = 1,
+                enabled = true,
+            )
+            SideEffect {
+                visibleBundle.set(bundle)
+            }
+        }
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            visibleBundle.get()?.state?.content?.toString() == first.markdown
+        }
+        assertFalse(requireNotNull(visibleBundle.get()).state.containsStrikethrough())
+
+        for (next in listOf(second, final)) {
+            composeRule.runOnIdle { current.value = next }
+            composeRule.waitForIdle()
+            composeRule.waitUntil(timeoutMillis = 5_000L) {
+                visibleBundle.get()?.let { bundle ->
+                    bundle.preparedMessage.contentVersion == next.contentVersion &&
+                        bundle.state.content.toString() == next.markdown
+                } == true
+            }
+            assertFalse(requireNotNull(visibleBundle.get()).state.containsStrikethrough())
+        }
     }
 
     @Test
@@ -201,4 +252,10 @@ class StreamingMarkdownRebaseComposeTest {
 
     private fun ASTNode.containsType(type: IElementType): Boolean =
         this.type == type || children.any { it.containsType(type) }
+
+    private fun StreamingMarkdownState.containsStrikethrough(): Boolean {
+        val currentSnapshot = snapshot.value
+        return (currentSnapshot.stableAst + currentSnapshot.unstableAstTail)
+            .any { it.containsType(GFMElementTypes.STRIKETHROUGH) }
+    }
 }

@@ -1,8 +1,10 @@
 package com.android.everytalk.data.network
 
 import com.android.everytalk.data.DataClass.ApiContentPart
+import com.android.everytalk.data.DataClass.AbstractApiMessage
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.PartsApiMessage
+import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import kotlinx.serialization.json.JsonElement
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
@@ -44,7 +46,7 @@ class OpenAIResponsesClientPayloadTest {
         val official = buildResponsesPayloadForTest(request("https://api.openai.com"))
         val compatible = buildResponsesPayloadForTest(request("https://example.com/v1"))
 
-        assertTrue(official.contains("\"prompt_cache_key\":\"et-v1-"))
+        assertTrue(official.contains("\"prompt_cache_key\":\"et-cap-v1-"))
         assertFalse(compatible.contains("prompt_cache_key"))
         assertFalse(official.contains("prompt_cache_options"))
         assertFalse(official.contains("prompt_cache_breakpoint"))
@@ -58,6 +60,21 @@ class OpenAIResponsesClientPayloadTest {
         val second = buildResponsesPayloadForTest(request(tools = listOf(alpha, beta)))
 
         assertEquals(first, second)
+    }
+
+    @Test
+    fun `responses payload keeps user history unchanged and exposes capability protocol`() {
+        val messages = listOf(
+            SimpleTextApiMessage(id = "u1", role = "user", content = "第一轮财报分析"),
+            SimpleTextApiMessage(id = "a1", role = "assistant", content = "第一轮回答"),
+            SimpleTextApiMessage(id = "u2", role = "user", content = "继续"),
+        )
+        val payload = buildResponsesPayloadForTest(request(messages = messages))
+
+        assertTrue(payload.contains("第一轮财报分析"))
+        assertTrue(payload.contains("第一轮回答"))
+        assertTrue(payload.contains("everytalk_select_capabilities"))
+        assertFalse(payload.contains("ETD v="))
     }
 
     private fun buildResponsesPayloadForTest(request: ChatRequest): String {
@@ -74,8 +91,11 @@ class OpenAIResponsesClientPayloadTest {
         apiAddress: String = "https://api.openai.com",
         tools: List<Map<String, Any>>? = null,
         model: String = "gpt-5.6",
+        messages: List<AbstractApiMessage> = listOf(
+            PartsApiMessage(role = "user", parts = listOf(ApiContentPart.Text("hello"))),
+        ),
     ): ChatRequest = ChatRequest(
-        messages = listOf(PartsApiMessage(role = "user", parts = listOf(ApiContentPart.Text("hello")))),
+        messages = messages,
         provider = "OpenAI",
         channel = "codex",
         apiAddress = apiAddress,

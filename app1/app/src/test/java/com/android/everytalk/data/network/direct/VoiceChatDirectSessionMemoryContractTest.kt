@@ -34,6 +34,15 @@ class VoiceChatDirectSessionMemoryContractTest {
         assertTrue(source.contains("val wavData = ByteArray(44 + pcmData.size)"))
     }
 
+    @Test
+    fun `voice path does not use automatic prompt routing`() {
+        val source = sourceFile("data/network/direct/VoiceChatDirectSession.kt").readText(Charsets.UTF_8)
+
+        assertFalse(source.contains("PromptDirectiveBuilder"))
+        assertFalse(source.contains("SystemPromptRouter"))
+        assertFalse(source.contains("[ETD v="))
+    }
+
     private fun sourceFile(relativePath: String): File {
         val candidates = listOf(
             File("src/main/java/com/android/everytalk/$relativePath"),

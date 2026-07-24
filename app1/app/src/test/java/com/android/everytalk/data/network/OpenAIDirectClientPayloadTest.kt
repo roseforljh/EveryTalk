@@ -1,6 +1,7 @@
 package com.android.everytalk.data.network
 
 import android.app.Application
+import com.android.everytalk.data.DataClass.AbstractApiMessage
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import org.junit.Assert.assertEquals
@@ -19,7 +20,7 @@ class OpenAIDirectClientPayloadTest {
     fun `official recent model should include cache key and usage`() {
         val payload = buildPayload(request(apiAddress = "https://api.openai.com", model = "gpt-5.6"))
 
-        assertTrue(payload.contains("\"prompt_cache_key\":\"et-v1-"))
+        assertTrue(payload.contains("\"prompt_cache_key\":\"et-cap-v1-"))
         assertTrue(payload.contains("\"stream_options\":{\"include_usage\":true}"))
         assertFalse(payload.contains("prompt_cache_options"))
         assertFalse(payload.contains("prompt_cache_breakpoint"))
@@ -43,6 +44,21 @@ class OpenAIDirectClientPayloadTest {
         assertEquals(first, second)
     }
 
+    @Test
+    fun `chat payload keeps user history unchanged and exposes capability protocol`() {
+        val messages = listOf(
+            SimpleTextApiMessage(id = "u1", role = "user", content = "第一轮财报分析"),
+            SimpleTextApiMessage(id = "a1", role = "assistant", content = "第一轮回答"),
+            SimpleTextApiMessage(id = "u2", role = "user", content = "继续"),
+        )
+        val payload = buildPayload(request(messages = messages))
+
+        assertTrue(payload.contains("第一轮财报分析"))
+        assertTrue(payload.contains("第一轮回答"))
+        assertTrue(payload.contains("everytalk_select_capabilities"))
+        assertFalse(payload.contains("ETD v="))
+    }
+
     private fun buildPayload(request: ChatRequest): String {
         val method = OpenAIDirectClient::class.java.getDeclaredMethod(
             "buildOpenAIPayload",
@@ -56,8 +72,9 @@ class OpenAIDirectClientPayloadTest {
         apiAddress: String = "https://api.openai.com",
         model: String = "gpt-5.4",
         tools: List<Map<String, Any>>? = null,
+        messages: List<AbstractApiMessage> = listOf(SimpleTextApiMessage(role = "user", content = "hello")),
     ): ChatRequest = ChatRequest(
-        messages = listOf(SimpleTextApiMessage(role = "user", content = "hello")),
+        messages = messages,
         provider = "OpenAI",
         channel = "OpenAI",
         apiAddress = apiAddress,

@@ -26,15 +26,12 @@ class SystemPromptInjectorRenderSafetyTest {
     }
 
     @Test
-    fun `stable prompt should include compact protocol catalogs`() {
+    fun `stable prompt should include capability catalog and selection protocol`() {
         val prompt = SystemPromptInjector.getSystemPrompt("zh-CN")
 
-        assertTrue(prompt.contains("# 主任务目录 p"))
-        assertTrue(prompt.contains("# 输出目录 o"))
-        assertTrue(prompt.contains("# 风险目录 r"))
-        assertTrue(prompt.contains("CODING_DEBUGGING="))
-        assertTrue(prompt.contains("TABLE="))
-        assertTrue(prompt.contains("FINANCIAL_CAUTION="))
+        assertTrue(prompt.contains("everytalk_select_capabilities"))
+        assertTrue(prompt.contains("markdown-table:"))
+        assertTrue(prompt.contains("financial-caution:"))
     }
 
     @Test
@@ -42,12 +39,14 @@ class SystemPromptInjectorRenderSafetyTest {
         val zhPrompt = SystemPromptInjector.getSystemPrompt("zh-CN")
         val enPrompt = SystemPromptInjector.getSystemPrompt("en")
 
-        assertTrue(zhPrompt.contains("表头、分隔行和数据行列数完全一致"))
+        assertTrue(zhPrompt.contains("表头、分隔行和所有数据行列数完全一致"))
+        assertTrue(zhPrompt.contains("表格从独立行开始"))
         assertTrue(zhPrompt.contains("竖线写成 `\\|`"))
         assertTrue(zhPrompt.contains("禁止 `\\(...\\)`、`\\[...\\]`"))
         assertTrue(zhPrompt.contains("代码块放在列表外层"))
 
-        assertTrue(enPrompt.contains("every row has equal columns"))
+        assertTrue(enPrompt.contains("keep equal columns"))
+        assertTrue(enPrompt.contains("start tables on their own line"))
         assertTrue(enPrompt.contains("escape `|` as `\\|`"))
         assertTrue(enPrompt.contains("no `\\(...\\)`, `\\[...\\]`"))
         assertTrue(enPrompt.contains("blocks outside lists"))

@@ -6,6 +6,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.sp
 import com.mikepenz.markdown.annotator.DefaultAnnotatorSettings
 import com.mikepenz.markdown.annotator.buildMarkdownAnnotatedString
@@ -28,6 +29,65 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MarkdownHtmlSupportTest {
+
+    @Test
+    fun `单波浪范围保持正文且双波浪仍是删除线`() {
+        val twoSingleTildes =
+            "**预留足够余额：** ChatGPT 账单默认是 ${'$'}20，但如果你的账单地址不在免税州，" +
+                "可能会被收取 6%~10% 的消费税（约 ${'$'}21.20~${'$'}22）。"
+        val twoSingleTildesParsed = parseMarkdown(
+            twoSingleTildes,
+            flavour = EveryTalkMarkdownFlavourDescriptor,
+        ) as State.Success
+        val input =
+            twoSingleTildes +
+                "卡内建议至少保留 **${'$'}22 ~ ${'$'}25**。"
+        val prepared = StreamBlockParser.prepareMessage(
+            content = input,
+            messageId = "tilde-range",
+            contentVersion = 1L,
+        )
+        val parsed = parseMarkdown(
+            prepared.markdown,
+            flavour = EveryTalkMarkdownFlavourDescriptor,
+        ) as State.Success
+        val rendered = prepared.markdown.buildMarkdownAnnotatedString(
+            style = TextStyle.Default,
+            annotatorSettings = DefaultAnnotatorSettings(
+                linkTextSpanStyle = TextLinkStyles(style = SpanStyle()),
+                codeSpanStyle = SpanStyle(),
+                annotator = createPreparedMessageMarkdownAnnotator(prepared),
+            ),
+            flavour = EveryTalkMarkdownFlavourDescriptor,
+        )
+
+        assertFalse(twoSingleTildesParsed.node.containsType(GFMElementTypes.STRIKETHROUGH))
+        assertEquals(input, prepared.markdown)
+        assertFalse(parsed.node.containsType(GFMElementTypes.STRIKETHROUGH))
+        assertEquals(input.replace("**", ""), rendered.text)
+        assertFalse(
+            rendered.spanStyles.any { range ->
+                range.item.textDecoration == TextDecoration.LineThrough
+            }
+        )
+
+        val explicit = "正常 ~~删除线~~ 正文".buildMarkdownAnnotatedString(
+            style = TextStyle.Default,
+            annotatorSettings = DefaultAnnotatorSettings(
+                linkTextSpanStyle = TextLinkStyles(style = SpanStyle()),
+                codeSpanStyle = SpanStyle(),
+                annotator = markdownAnnotator(),
+            ),
+            flavour = EveryTalkMarkdownFlavourDescriptor,
+        )
+        assertEquals("正常 删除线 正文", explicit.text)
+        assertTrue(
+            explicit.spanStyles.any { range ->
+                range.item.textDecoration == TextDecoration.LineThrough &&
+                    explicit.text.substring(range.start, range.end) == "删除线"
+            }
+        )
+    }
 
     @Test
     fun `粗体美元区间完整进入最终内联文本`() {

@@ -4,6 +4,7 @@ import com.mikepenz.markdown.model.State
 import com.mikepenz.markdown.model.parseMarkdown
 import org.intellij.markdown.MarkdownElementTypes
 import org.intellij.markdown.MarkdownTokenTypes
+import org.intellij.markdown.flavours.gfm.GFMElementTypes
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -62,9 +63,46 @@ class MarkdownEngineOwnershipTest {
         assertTrue(renderer.contains("hasHorizontalRuleNeighbor(nodes, index"))
         assertTrue(renderer.contains("contextNodes = preparedMarkdownDocument.nodes"))
         assertTrue(renderer.contains("firstNodeIndex = selectedNodeStartIndex"))
+        assertTrue(renderer.contains("MarkdownStreamingNodesSuccess("))
         assertTrue(renderer.contains("top = LocalMarkdownHorizontalRuleTopPadding.current"))
         assertTrue(renderer.contains("bottom = ChatMarkdownTextStyle.HORIZONTAL_RULE_VERTICAL_PADDING_DP.dp"))
         assertTrue(style.contains("HORIZONTAL_RULE_VERTICAL_PADDING_DP = 24f"))
+    }
+
+    @Test
+    fun `表格后水平线在流式与完成态都不叠加空行间距`() {
+        val state = parseMarkdown(
+            """
+            | 维度 | EASICOIN |
+            | :--- | :--- |
+            | 额外激励 | 无 |
+
+            ---
+
+            ### 二、相比 Plasma One，EASICOIN 的优势
+            """.trimIndent(),
+            lookupLinks = false,
+            flavour = EveryTalkMarkdownFlavourDescriptor,
+        ) as State.Success
+        val nodes = state.node.children
+        val tableIndex = nodes.indexOfFirst { it.type == GFMElementTypes.TABLE }
+        val horizontalRuleIndex = nodes.indexOfFirst {
+            it.type == MarkdownTokenTypes.HORIZONTAL_RULE
+        }
+        val headingIndex = nodes.indexOfFirst { it.type == MarkdownElementTypes.ATX_3 }
+
+        assertTrue(tableIndex >= 0)
+        assertTrue(horizontalRuleIndex > tableIndex)
+        assertTrue(headingIndex > horizontalRuleIndex)
+        (tableIndex + 1..headingIndex).forEach { index ->
+            if (
+                nodes[index].type == MarkdownTokenTypes.EOL ||
+                nodes[index].type == MarkdownTokenTypes.HORIZONTAL_RULE ||
+                index == headingIndex
+            ) {
+                assertFalse(shouldIncludeMarkdownNodeSpacer(nodes, index))
+            }
+        }
     }
 
     @Test
@@ -93,6 +131,21 @@ class MarkdownEngineOwnershipTest {
                 markdownNodeStartIndex(nodes, horizontalRuleBlock),
             )
         )
+    }
+
+    @Test
+    fun `连续空行不再重复产生段落间距`() {
+        val state = parseMarkdown("第一段\n\n\n第二段", lookupLinks = false) as State.Success
+        val nodes = state.node.children
+        val paragraphIndices = nodes.indices.filter {
+            nodes[it].type == MarkdownElementTypes.PARAGRAPH
+        }
+
+        assertEquals(2, paragraphIndices.size)
+        paragraphIndices.forEach { assertTrue(shouldIncludeMarkdownNodeSpacer(nodes, it)) }
+        nodes.indices
+            .filter { nodes[it].type == MarkdownTokenTypes.EOL }
+            .forEach { assertFalse(shouldIncludeMarkdownNodeSpacer(nodes, it)) }
     }
 
     @Test
@@ -269,8 +322,8 @@ class MarkdownEngineOwnershipTest {
         assertTrue(adapter.contains("visibleStreamingBundle?.preparedMessage ?: preparedMessage"))
         assertFalse(adapter.contains("key(visibleStreamingMarkdownState)"))
         assertTrue(adapter.contains("streamingMarkdownState = visibleStreamingMarkdownState"))
-        assertFalse(adapter.contains("MarkdownStreamingNodesSuccess("))
-        assertFalse(adapter.contains("streamingContent = visibleStreamingMarkdownState.content.toString()"))
+        assertTrue(adapter.contains("MarkdownStreamingNodesSuccess("))
+        assertTrue(adapter.contains("streamingContent = visibleStreamingMarkdownState.content.toString()"))
         assertTrue(adapter.contains("appendOnlyMarkdownDelta("))
         assertTrue(adapter.contains("bundle.state.append(appendedDelta)"))
         assertTrue(adapter.contains("bundle.copy(preparedMessage = nextPreparedMessage)"))

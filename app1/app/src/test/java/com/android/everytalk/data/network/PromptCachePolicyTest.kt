@@ -55,7 +55,7 @@ class PromptCachePolicyTest {
         )
 
         assertEquals(first, second)
-        assertTrue(first.orEmpty().startsWith("et-v1-"))
+        assertTrue(first.orEmpty().startsWith("et-cap-v1-"))
         assertNull(
             PromptCachePolicy.buildOpenAICacheKey(
                 apiAddress = "https://example.com/v1",
@@ -88,6 +88,36 @@ class PromptCachePolicyTest {
         assertFalse(PromptCachePolicy.supportsPromptCaching("gpt-3.5-turbo"))
         assertTrue(PromptCachePolicy.supportsPromptCaching("gpt-5.6"))
         assertTrue(PromptCachePolicy.supportsPromptCaching("gpt-6"))
+    }
+
+    @Test
+    fun `tool profiles stay finite and cache key changes when profile changes`() {
+        val timeTool = listOf(tool("get_current_datetime", emptyMap()))
+        val searchTool = listOf(tool("web_search", emptyMap()))
+
+        assertEquals(PromptCachePolicy.ToolProfile.CURRENT_TIME, PromptCachePolicy.toolProfile(timeTool))
+        assertEquals(PromptCachePolicy.ToolProfile.WEB_SEARCH, PromptCachePolicy.toolProfile(searchTool))
+        assertNotEquals(
+            PromptCachePolicy.buildOpenAICacheKey("https://api.openai.com", "gpt-5.6", emptyList(), timeTool),
+            PromptCachePolicy.buildOpenAICacheKey("https://api.openai.com", "gpt-5.6", emptyList(), searchTool),
+        )
+    }
+
+    @Test
+    fun `system fingerprint ignores user text and changes with stable system`() {
+        val first = listOf(
+            SimpleTextApiMessage(role = "system", content = "stable"),
+            SimpleTextApiMessage(role = "user", content = "first"),
+        )
+        val second = first.map { message ->
+            if (message.role == "user") message.copy(content = "second") else message
+        }
+
+        assertEquals(PromptCachePolicy.systemFingerprint(first), PromptCachePolicy.systemFingerprint(second))
+        assertNotEquals(
+            PromptCachePolicy.systemFingerprint(first),
+            PromptCachePolicy.systemFingerprint(listOf(SimpleTextApiMessage(role = "system", content = "changed"))),
+        )
     }
 
     private fun tool(name: String, parameters: Map<String, Any>): Map<String, Any> = mapOf(

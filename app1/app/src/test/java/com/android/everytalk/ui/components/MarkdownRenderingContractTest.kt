@@ -7,6 +7,8 @@ import com.android.everytalk.ui.components.streaming.INLINE_FORMULA_SCHEME
 import com.android.everytalk.ui.components.streaming.StreamBlock
 import com.android.everytalk.ui.components.streaming.StreamBlockParser
 import com.android.everytalk.ui.components.streaming.extractFencedCodeBlockContent
+import com.android.everytalk.ui.components.markdown.EveryTalkMarkdownFlavourDescriptor
+import org.intellij.markdown.flavours.gfm.GFMElementTypes
 import com.mikepenz.markdown.model.State
 import com.mikepenz.markdown.model.parseMarkdown
 import org.junit.Assert.assertEquals
@@ -15,6 +17,47 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MarkdownRenderingContractTest {
+
+    @Test
+    fun `正文粘连表头时只修复表格边界并交给 GFM 表格解析`() {
+        val source = """
+            特征：| 财务指标 | 2024 财年 | 2025 财年 | 年同比变化 |
+            | :--- | :--- | :--- | :--- |
+            | 总营收 | 37 亿美元 | 130.7 亿美元 | 增长 |
+        """.trimIndent()
+
+        val prepared = StreamBlockParser.prepareMessage(
+            content = source,
+            messageId = "financial-table-boundary",
+            contentVersion = 41L,
+        )
+        val state = parseMarkdown(
+            prepared.markdown,
+            lookupLinks = false,
+            flavour = EveryTalkMarkdownFlavourDescriptor,
+        ) as State.Success
+
+        assertTrue(prepared.markdown.contains("特征：\n\n| 财务指标"))
+        assertTrue(state.node.children.any { it.type == GFMElementTypes.TABLE })
+    }
+
+    @Test
+    fun `代码围栏内的表格样式文本不被边界修复`() {
+        val source = """
+            ```text
+            前缀：| a | b |
+            | --- | --- |
+            ```
+        """.trimIndent()
+
+        val prepared = StreamBlockParser.prepareMessage(
+            content = source,
+            messageId = "table-in-code-fence",
+            contentVersion = 42L,
+        )
+
+        assertTrue(prepared.markdown.contains("前缀：| a | b |"))
+    }
 
     @Test
     fun `renderable markdown without outer fence uses markdown code and math owners`() {
