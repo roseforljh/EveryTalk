@@ -76,6 +76,7 @@ import androidx.compose.ui.semantics.collectionInfo
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.ui.components.ChatMarkdownTextStyle
 import com.android.everytalk.ui.components.EveryTalkLoadingIndicator
 import com.android.everytalk.ui.components.content.CodeBlockCard
 import com.android.everytalk.ui.components.math.MathBlock
@@ -1013,8 +1014,8 @@ fun MikePenzMarkdownRenderer(
     val density = LocalDensity.current
     val formulaColor = MaterialTheme.colorScheme.onSurface.toMathJaxCssColor()
     val bodyStyle = MaterialTheme.typography.bodyLarge.copy(
-        fontSize = 16.sp,
-        lineHeight = 24.sp,
+        fontSize = ChatMarkdownTextStyle.BODY_FONT_SIZE_SP.sp,
+        lineHeight = ChatMarkdownTextStyle.BODY_LINE_HEIGHT_SP.sp,
         fontWeight = FontWeight.Normal,
     )
     val markdownLinkColor = if (MaterialTheme.colorScheme.background.luminance() < 0.5f) {
@@ -1024,31 +1025,33 @@ fun MikePenzMarkdownRenderer(
     }
     val typography = markdownTypography(
         h1 = bodyStyle.copy(
-            fontSize = 24.sp,
-            lineHeight = 32.sp,
-            fontWeight = FontWeight.SemiBold,
+            fontSize = ChatMarkdownTextStyle.headingFontSizeSp(1).sp,
+            lineHeight = ChatMarkdownTextStyle.headingLineHeightSp(1).sp,
+            fontWeight = FontWeight.Medium,
         ),
         h2 = bodyStyle.copy(
-            fontSize = 22.sp,
-            lineHeight = 30.sp,
-            fontWeight = FontWeight.SemiBold,
+            fontSize = ChatMarkdownTextStyle.headingFontSizeSp(2).sp,
+            lineHeight = ChatMarkdownTextStyle.headingLineHeightSp(2).sp,
+            fontWeight = FontWeight.Medium,
         ),
         h3 = bodyStyle.copy(
-            fontSize = 20.sp,
-            lineHeight = 28.sp,
-            fontWeight = FontWeight.SemiBold,
+            fontSize = ChatMarkdownTextStyle.headingFontSizeSp(3).sp,
+            lineHeight = ChatMarkdownTextStyle.headingLineHeightSp(3).sp,
+            fontWeight = FontWeight.Medium,
         ),
         h4 = bodyStyle.copy(
-            fontSize = 18.sp,
-            lineHeight = 26.sp,
-            fontWeight = FontWeight.SemiBold,
+            fontSize = ChatMarkdownTextStyle.headingFontSizeSp(4).sp,
+            lineHeight = ChatMarkdownTextStyle.headingLineHeightSp(4).sp,
+            fontWeight = FontWeight.Medium,
         ),
         h5 = bodyStyle.copy(
-            fontSize = 17.sp,
-            lineHeight = 24.sp,
+            fontSize = ChatMarkdownTextStyle.headingFontSizeSp(5).sp,
+            lineHeight = ChatMarkdownTextStyle.headingLineHeightSp(5).sp,
             fontWeight = FontWeight.Medium,
         ),
         h6 = bodyStyle.copy(
+            fontSize = ChatMarkdownTextStyle.headingFontSizeSp(6).sp,
+            lineHeight = ChatMarkdownTextStyle.headingLineHeightSp(6).sp,
             fontWeight = FontWeight.Medium,
         ),
         text = bodyStyle,
@@ -1060,7 +1063,7 @@ fun MikePenzMarkdownRenderer(
         table = bodyStyle,
         inlineCode = bodyStyle.copy(
             fontFamily = FontFamily.Monospace,
-            fontSize = 14.sp,
+            fontSize = 13.sp,
             lineHeight = 20.sp,
         ),
         textLink = TextLinkStyles(
@@ -1072,11 +1075,11 @@ fun MikePenzMarkdownRenderer(
         ),
     )
     val padding = markdownPadding(
-        block = 3.dp,
-        list = 4.dp,
-        listItemTop = 3.dp,
-        listItemBottom = 3.dp,
-        listIndent = 22.dp,
+        block = ChatMarkdownTextStyle.SPACING_PARAGRAPH_DP.dp,
+        list = ChatMarkdownTextStyle.LIST_TOP_LEVEL_ITEM_SPACING_DP.dp,
+        listItemTop = 8.dp,
+        listItemBottom = 8.dp,
+        listIndent = ChatMarkdownTextStyle.LIST_NESTED_INDENT_DP.dp,
     )
     val inheritedFootnoteNavigation = LocalFootnoteNavigation.current
     val footnoteNavigation = footnoteNavigationState

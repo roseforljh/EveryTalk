@@ -2,7 +2,7 @@ package com.android.everytalk.ui.components
 
 internal object ChatMarkdownTextStyle {
     const val BODY_FONT_SIZE_SP = 16f
-    const val BODY_LINE_HEIGHT_SP = 24f
+    const val BODY_LINE_HEIGHT_SP = 26f
 
     const val ASSISTANT_CONTENT_START_PADDING_DP = 16f
     const val ASSISTANT_CONTENT_TOP_PADDING_DP = 4f
@@ -25,7 +25,7 @@ internal object ChatMarkdownTextStyle {
     const val LIST_BULLET_START_PADDING_DP = LIST_MARKER_INDENT_DP
     const val LIST_BULLET_TOP_PADDING_DP = 9.5f
     const val LIST_NESTED_INDENT_DP = 24f
-    const val LIST_ITEM_SPACING_DP = 4f
+    const val LIST_ITEM_SPACING_DP = 8f
     const val LIST_TOP_LEVEL_ITEM_SPACING_DP = LIST_ITEM_SPACING_DP
     const val LIST_NESTED_TOP_SPACING_DP = 0f
     const val LIST_ITEM_LINE_HEIGHT_SP = BODY_LINE_HEIGHT_SP
@@ -55,16 +55,24 @@ internal object ChatMarkdownTextStyle {
 
     fun headingFontSizeSp(level: Int): Float {
         return when (level.coerceIn(1, 6)) {
-            1 -> 26f
-            2 -> 22f
-            3 -> 20f
-            4 -> 18f
+            1 -> 22f
+            2 -> 20f
+            3 -> 18f
+            4 -> 17f
+            5 -> 16f
             else -> BODY_FONT_SIZE_SP
         }
     }
 
     fun headingLineHeightSp(level: Int): Float {
-        return BODY_LINE_HEIGHT_SP
+        return when (level.coerceIn(1, 6)) {
+            1 -> 28f
+            2 -> 26f
+            3 -> 24f
+            4 -> 23f
+            5 -> 22f
+            else -> 21f
+        }
     }
 
     fun headingRelativeSizeMultiplier(level: Int): Float {
