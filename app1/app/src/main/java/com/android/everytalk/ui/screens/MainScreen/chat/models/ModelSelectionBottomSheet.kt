@@ -126,18 +126,12 @@ fun ModelSelectionBottomSheet(
     
     val platforms = allApiConfigs.map { it.provider }.distinct()
 
-    // 🆕 过滤并排序模型：默认配置的模型置顶
+    // 过滤并按模型名称排序
     val filteredModels = availableModels
         .filter {
             it.name.contains(searchText, ignoreCase = true) || it.model.contains(searchText, ignoreCase = true)
         }
-        .sortedWith(compareBy(
-            { config ->
-                // 默认配置排在最前面（返回0），其他配置返回1
-                if (config.provider.trim().lowercase() in listOf("默认", "default")) 0 else 1
-            },
-            { it.name } // 同类配置内部按名称排序
-        ))
+        .let(::sortModelConfigs)
     
     // 检查是否有足够的内容需要滚动
     val hasScrollableContent by remember {

@@ -30,6 +30,7 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.ApiConfig
+import com.android.everytalk.ui.screens.MainScreen.chat.models.sortModelConfigs
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -53,9 +54,10 @@ fun List<ApiConfig>.groupByConfig(): List<ConfigGroup> {
                 address = key.second,
                 key = key.third,
                 channel = configs.first().channel,
-                models = configs
+                models = sortModelConfigs(configs)
             )
         }
+        .sortedBy { it.displayName.lowercase() }
 }
 
 @Composable
@@ -249,7 +251,7 @@ private fun ModelPickerDialog(
                     color = subtextColor,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                 )
-                group.models.forEach { config ->
+                sortModelConfigs(group.models).forEach { config ->
                     val isSelected = config.id == selectedApiConfig?.id
                     Row(
                         modifier = Modifier

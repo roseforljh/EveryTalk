@@ -49,6 +49,7 @@ import com.android.everytalk.data.DataClass.ModalityType
 import com.android.everytalk.data.network.ExternalWebSearchProvider
 import com.android.everytalk.data.network.ExternalWebSearchProviderConfig
 import com.android.everytalk.statecontroller.controller.config.modelConfigGroupId
+import com.android.everytalk.ui.screens.MainScreen.chat.models.sortModelConfigs
 
 @SuppressLint("ConfigurationScreenWidthHeight")
 @OptIn(ExperimentalMaterial3Api::class)
@@ -682,6 +683,7 @@ private fun ModelListPopup(
     val popupBorderColor = if (isDark) Color(0xFF414141) else Color(0xFFF3F3F3)
     val textColor = if (isDark) Color.White else Color(0xFF0D0D0D)
     val selectedColor = if (isDark) Color(0xFF6EB5FF) else Color(0xFF3B82F6)
+    val sortedConfigs = remember(configs) { sortModelConfigs(configs) }
 
     val scaleAnim = remember { androidx.compose.animation.core.Animatable(0.8f) }
     val alphaAnim = remember { androidx.compose.animation.core.Animatable(0f) }
@@ -738,7 +740,7 @@ private fun ModelListPopup(
                         .verticalScroll(rememberScrollState())
                         .padding(vertical = 8.dp)
                 ) {
-                    configs.forEach { config ->
+                    sortedConfigs.forEach { config ->
                         val isSelected = config.id == selectedConfigId
                         Row(
                             modifier = Modifier

@@ -75,6 +75,7 @@ import com.android.everytalk.ui.screens.BubbleMain.Main.resolveUserBubbleMaxHeig
 import com.android.everytalk.ui.screens.BubbleMain.Main.MessageContextMenu
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
 import com.android.everytalk.ui.screens.MainScreen.chat.core.PlaceholderRole
+import com.android.everytalk.ui.screens.MainScreen.chat.models.sortModelConfigs
 import com.android.everytalk.ui.screens.MainScreen.chat.text.state.ChatScrollStateManager
 import com.android.everytalk.ui.theme.ChatDimensions
 import com.android.everytalk.ui.theme.chatColors
@@ -1768,7 +1769,7 @@ private fun ModelPickerPopupContent(
             )
         } else {
             LazyColumn {
-                items(availableModels, key = { it.id }) { config ->
+                items(sortModelConfigs(availableModels), key = { it.id }) { config ->
                     val displayName = config.name.takeIf { it.isNotBlank() } ?: config.model
                     Row(
                         modifier = Modifier

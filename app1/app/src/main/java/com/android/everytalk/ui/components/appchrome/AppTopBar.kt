@@ -42,6 +42,7 @@ import com.android.everytalk.ui.components.dialog.appDialogBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.components.dialog.appDialogSubtextColor
+import com.android.everytalk.ui.screens.MainScreen.chat.models.sortModelConfigs
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -487,6 +488,7 @@ private fun ModelSelectionDropdown(
     val cardBg = if (isDark) Color(0xFF212121) else Color(0xFFFFFFFF)
     val popupBorderColor = if (isDark) Color.White.copy(alpha = 0.10f) else Color(0xFF0D0D0D).copy(alpha = 0.05f)
     val textColor = if (isDark) Color.White else Color(0xFF0D0D0D)
+    val sortedModels = remember(models) { sortModelConfigs(models) }
 
     val scaleAnim = remember { Animatable(0.8f) }
     val alphaAnim = remember { Animatable(0f) }
@@ -527,7 +529,7 @@ private fun ModelSelectionDropdown(
                     .padding(vertical = 8.dp),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                models.forEach { modelConfig ->
+                sortedModels.forEach { modelConfig ->
                     val isSelected = modelConfig.id == selectedApiConfig?.id
                     Row(
                         modifier = Modifier

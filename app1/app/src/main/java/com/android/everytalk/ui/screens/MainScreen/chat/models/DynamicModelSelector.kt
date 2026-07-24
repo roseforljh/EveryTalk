@@ -19,6 +19,7 @@ import androidx.compose.ui.window.DialogProperties
 import com.android.everytalk.ui.screens.settings.DialogTextFieldColors
 import com.android.everytalk.ui.screens.settings.DialogShape
 import com.android.everytalk.ui.screens.settings.SettingsFieldLabel
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -38,6 +39,12 @@ fun DynamicModelSelector(
     val dialogBg = if (isDark) Color.Black else Color.White
     val borderColor = if (isDark) Color(0xFF414141) else Color(0xFFF3F3F3)
     val contentColor = if (isDark) Color.White else Color(0xFF0D0D0D)
+    val sortedModelList = remember(modelList) {
+        modelList.sortedWith(
+            compareBy<String> { it.trim().lowercase(Locale.ROOT) }
+                .thenBy { it.trim() }
+        )
+    }
 
     // 添加模型对话框
     if (showAddDialog) {
@@ -130,9 +137,9 @@ fun DynamicModelSelector(
         SettingsFieldLabel(label)
         
         ExposedDropdownMenuBox(
-            expanded = expanded && modelList.isNotEmpty(),
+            expanded = expanded && sortedModelList.isNotEmpty(),
             onExpandedChange = { 
-                if (modelList.isEmpty()) {
+                if (sortedModelList.isEmpty()) {
                     // 如果列表为空，点击时直接弹出添加对话框
                     showAddDialog = true
                 } else {
@@ -185,12 +192,12 @@ fun DynamicModelSelector(
                 }
             }
 
-            if (modelList.isNotEmpty()) {
+            if (sortedModelList.isNotEmpty()) {
                 ExposedDropdownMenu(
                     expanded = expanded,
                     onDismissRequest = { expanded = false }
                 ) {
-                    modelList.forEach { modelOption ->
+                    sortedModelList.forEach { modelOption ->
                         DropdownMenuItem(
                             text = {
                                 Row(
