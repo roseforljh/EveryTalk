@@ -1,4 +1,5 @@
 package com.android.everytalk.ui.components.syntax
+import com.android.everytalk.statecontroller.*
 
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle

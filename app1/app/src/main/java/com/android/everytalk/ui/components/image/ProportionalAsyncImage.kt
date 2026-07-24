@@ -1,4 +1,5 @@
 package com.android.everytalk.ui.components
+import com.android.everytalk.statecontroller.*
 
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.width

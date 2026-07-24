@@ -1,4 +1,5 @@
 package com.android.everytalk.ui.screens.BubbleMain.Main
+import com.android.everytalk.statecontroller.*
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*

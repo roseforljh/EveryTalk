@@ -1,4 +1,5 @@
 package com.android.everytalk.ui.components
+import com.android.everytalk.statecontroller.*
 
 import android.os.SystemClock
 import androidx.compose.animation.AnimatedContent

@@ -1,4 +1,5 @@
 package com.android.everytalk.ui.components
+import com.android.everytalk.statecontroller.*
 
 import com.android.everytalk.data.DataClass.WebSearchResult
 

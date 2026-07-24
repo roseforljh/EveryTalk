@@ -1,4 +1,5 @@
 package com.android.everytalk.ui.components.math
+import com.android.everytalk.statecontroller.*
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll

@@ -1,4 +1,5 @@
 package com.android.everytalk.ui.components
+import com.android.everytalk.statecontroller.*
 
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing

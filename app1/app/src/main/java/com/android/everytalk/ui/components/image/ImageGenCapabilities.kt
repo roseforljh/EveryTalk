@@ -1,4 +1,5 @@
 package com.android.everytalk.ui.components
+import com.android.everytalk.statecontroller.*
 
 /**
  * 图像生成“模型家族”能力注册表（数据驱动，不依赖具体单一模型名）。

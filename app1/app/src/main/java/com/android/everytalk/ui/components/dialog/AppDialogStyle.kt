@@ -1,4 +1,5 @@
 package com.android.everytalk.ui.components.dialog
+import com.android.everytalk.statecontroller.*
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.shape.RoundedCornerShape
