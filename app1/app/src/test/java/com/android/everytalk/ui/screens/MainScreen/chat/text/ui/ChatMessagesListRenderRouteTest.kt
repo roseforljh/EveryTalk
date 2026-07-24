@@ -20,7 +20,7 @@ import java.io.File
 class ChatMessagesListRenderRouteTest {
 
     @Test
-    fun `历史长回复将普通Markdown节点拆为单节点懒列表项`() {
+    fun `历史长回复将普通Markdown节点拆为有界小批量懒列表项`() {
         val message = Message(
             id = "history-node-blocks",
             text = (1..17).joinToString("\n\n") { "第 ${it} 段。" },
@@ -45,11 +45,11 @@ class ChatMessagesListRenderRouteTest {
             )
         ).filterIsInstance<ChatListItem.AiMarkdownNode>()
 
-        assertEquals(17, blocks.size)
+        assertEquals(5, blocks.size)
         assertEquals(state.node.children, blocks.flatMap { it.nodes })
         assertTrue(
             blocks.all { block ->
-                block.renderableTopLevelNodeCount() <= 1
+                block.renderableTopLevelNodeCount() <= 4
             }
         )
         assertTrue(blocks.first().isFirstNode)

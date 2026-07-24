@@ -108,6 +108,47 @@ class MathRendererTest {
     }
 
     @Test
+    fun `内存缓存命中首帧直接Ready且配置变化继续Loading`() {
+        val request = MathJaxRenderRequest(
+            id = "cached-ready-" + "d".repeat(64),
+            latex = "x^2",
+            display = false,
+            fontSizePx = 32f,
+            color = "#112233",
+            requestVersion = 17L,
+        )
+        val cacheKey = cacheKeyOf(request)
+        val cachedResult = MathJaxRenderResult(
+            id = request.id,
+            status = MathJaxRenderStatus.READY,
+            svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 20 10\"><path d=\"M0 0h20v10z\"/></svg>",
+            widthPx = 20f,
+            heightPx = 10f,
+            depthPx = 2f,
+            requestVersion = request.requestVersion,
+        )
+
+        val readyState = reconcileMathFormulaRenderStates(
+            previous = MathFormulaRenderSnapshot(),
+            requests = listOf(request),
+            cachedReadyResults = mapOf(cacheKey to cachedResult),
+        ).getValue(request.id)
+        val changedRequest = request.copy(color = "#ffffff")
+        val changedState = reconcileMathFormulaRenderStates(
+            previous = MathFormulaRenderSnapshot(),
+            requests = listOf(changedRequest),
+            cachedReadyResults = mapOf(cacheKey to cachedResult),
+        ).getValue(changedRequest.id)
+
+        assertTrue(readyState is MathFormulaRenderState.Ready)
+        assertEquals(
+            request.requestVersion,
+            (readyState as MathFormulaRenderState.Ready).result.requestVersion,
+        )
+        assertSame(MathFormulaRenderState.Loading, changedState)
+    }
+
+    @Test
     fun `SVG缓存键忽略内容版本并包含全部渲染配置`() {
         val base = MathJaxRenderRequest(
             id = "a".repeat(64),

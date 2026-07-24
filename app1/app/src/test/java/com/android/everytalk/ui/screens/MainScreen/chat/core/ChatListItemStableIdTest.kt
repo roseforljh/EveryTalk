@@ -2,6 +2,7 @@ package com.android.everytalk.ui.screens.MainScreen.chat.core
 
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.ui.components.streaming.BLOCK_FORMULA_FENCE_LANGUAGE
 import com.android.everytalk.ui.components.streaming.PreparedMarkdownDocument
 import com.android.everytalk.ui.components.streaming.PreparedMessage
 import com.mikepenz.markdown.model.State
@@ -87,19 +88,20 @@ class ChatListItemStableIdTest {
     }
 
     @Test
-    fun `静态Markdown分块每块最多包含一个可渲染顶层节点`() {
-        val state = parseMarkdown("# 标题\n\n第一段。\n\n第二段。") as State.Success
+    fun `静态Markdown轻量分块每块最多包含四个可渲染顶层节点`() {
+        val state = parseMarkdown((1..9).joinToString("\n\n") { "第 ${it} 段。" }) as State.Success
         val nodes = state.node.children
 
         val blocks = buildStaticMarkdownNodeBlocks(nodes)
 
         assertEquals(nodes, blocks.flatten())
+        assertEquals(3, blocks.size)
         assertTrue(
             blocks.all { block ->
                 block.count { node ->
                     node.type != MarkdownTokenTypes.EOL &&
                         node.type != MarkdownTokenTypes.WHITE_SPACE
-                } <= 1
+                } <= 4
             }
         )
         assertTrue(
@@ -110,6 +112,45 @@ class ChatListItemStableIdTest {
                 }
             }
         )
+    }
+
+    @Test
+    fun `连续块级公式按渲染成本合并而不是每条独占Lazy项`() {
+        val markdown = (1..3).joinToString("\n\n") { index ->
+            "```$BLOCK_FORMULA_FENCE_LANGUAGE\nformula-$index\n```"
+        }
+        val state = parseMarkdown(markdown) as State.Success
+        val nodes = state.node.children
+
+        val blocks = buildStaticMarkdownNodeBlocks(
+            nodes = nodes,
+            content = state.content,
+        )
+
+        assertEquals(nodes, blocks.flatten())
+        assertEquals(3, nodes.count { it.type == MarkdownElementTypes.CODE_FENCE })
+        assertEquals(2, blocks.size)
+        assertEquals(
+            2,
+            blocks.first().count { it.type == MarkdownElementTypes.CODE_FENCE },
+        )
+    }
+
+    @Test
+    fun `真实代码块在生产分块路径中仍然独占Lazy项`() {
+        val state = parseMarkdown(
+            "前文。\n\n```kotlin\nprintln(1)\n```\n\n后文。"
+        ) as State.Success
+        val blocks = buildStaticMarkdownNodeBlocks(
+            nodes = state.node.children,
+            content = state.content,
+        )
+        val codeBlock = blocks.single { block ->
+            block.any { it.type == MarkdownElementTypes.CODE_FENCE }
+        }
+
+        assertEquals(3, blocks.size)
+        assertFalse(codeBlock.any { it.type == MarkdownElementTypes.PARAGRAPH })
     }
 
     @Test
