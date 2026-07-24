@@ -156,6 +156,7 @@ fun RunTopAnchorReserveEngine(
                     state = state,
                     listState = listState,
                     expectedTurn = turn,
+                    anchorIndex = anchorIndex,
                     anchorKey = anchorKey,
                     targetAnchorY = targetAnchorY,
                     trailingRealItemIndex = trailingRealItemIndexState.value,
@@ -177,6 +178,7 @@ fun RunTopAnchorReserveEngine(
                         state = state,
                         listState = listState,
                         expectedTurn = turn,
+                        anchorIndex = anchorIndex,
                         anchorKey = anchorKey,
                         targetAnchorY = targetAnchorY,
                         trailingRealItemIndex = trailingRealItemIndexState.value,
@@ -251,17 +253,32 @@ private suspend fun correctTopAnchorOnce(
     state: TopAnchorReserveEngineState,
     listState: LazyListState,
     expectedTurn: TopAnchorTurn,
+    anchorIndex: Int,
     anchorKey: Any?,
     targetAnchorY: Int,
     trailingRealItemIndex: Int,
     config: TopAnchorConfig
 ): Boolean {
     if (!isTopAnchorCorrectionCurrent(state.runtime, expectedTurn)) return false
-    val snapshot = listState.layoutInfo.toTopAnchorSnapshot(
+    var snapshot = listState.layoutInfo.toTopAnchorSnapshot(
         firstVisibleItemIndex = listState.firstVisibleItemIndex,
         firstVisibleItemScrollOffset = listState.firstVisibleItemScrollOffset
     )
-    val anchor = snapshot.visibleItems.firstOrNull { it.key == anchorKey } ?: return false
+    var anchor = snapshot.visibleItems.firstOrNull { it.key == anchorKey }
+    var reacquiredAnchor = false
+    if (anchor == null) {
+        if (anchorIndex !in 0 until snapshot.totalItemsCount) return false
+        // 前序 Markdown、图片或公式异步扩高时，目标用户项可能被推出可见区。
+        // 先按当前索引重新捕获，再用稳定 key 校验，避免纠偏循环永久失去锚点。
+        listState.scrollToItem(anchorIndex, scrollOffset = 0)
+        if (!isTopAnchorCorrectionCurrent(state.runtime, expectedTurn)) return false
+        snapshot = listState.layoutInfo.toTopAnchorSnapshot(
+            firstVisibleItemIndex = listState.firstVisibleItemIndex,
+            firstVisibleItemScrollOffset = listState.firstVisibleItemScrollOffset
+        )
+        anchor = snapshot.visibleItems.firstOrNull { it.key == anchorKey } ?: return false
+        reacquiredAnchor = true
+    }
     // offset 属于 LazyList 的内容坐标；viewportStartOffset 包含负的顶部 contentPadding。
     // 两者相减后才是列表视口内的真实坐标，避免目标位置被顶部 padding 再向下推一次。
     val currentTopY = anchor.offset - snapshot.viewportStartOffset
@@ -281,7 +298,7 @@ private suspend fun correctTopAnchorOnce(
         tallAnchorVisibleHeightPx = config.tallAnchorVisibleHeightPx
     )
     val driftPx = computeTopAnchorDriftPx(currentAnchorY, targetAnchorY)
-    if (abs(driftPx) <= 1) return false
+    if (abs(driftPx) <= 1) return reacquiredAnchor
 
     val consumedPx = listState.scrollBy(driftPx.toFloat()).roundToInt()
     if (!isTopAnchorCorrectionCurrent(state.runtime, expectedTurn)) return false
@@ -344,6 +361,7 @@ private suspend fun runTopAnchorCorrectionLoop(
                 state = state,
                 listState = listState,
                 expectedTurn = turn,
+                anchorIndex = anchorIndex,
                 anchorKey = anchorKey,
                 targetAnchorY = targetAnchorY,
                 trailingRealItemIndex = trailingRealItemIndex(),

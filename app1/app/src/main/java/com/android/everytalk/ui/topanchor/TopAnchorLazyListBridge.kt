@@ -33,8 +33,13 @@ data class TopAnchorLayoutSnapshot(
             result = result * 31 + afterContentPadding
             result = result * 31 + firstVisibleItemIndex
             result = result * 31 + firstVisibleItemScrollOffset
-            result = result * 31 + visibleItems.sumOf { it.size }
-            result = result * 31 + visibleItems.sumOf { it.offset }
+            // 连续重答会在几何尺寸不变时移动同一个消息 key，必须把顺序纳入版本。
+            visibleItems.forEach { item ->
+                result = result * 31 + (item.key?.hashCode() ?: 0)
+                result = result * 31 + item.index
+                result = result * 31 + item.offset
+                result = result * 31 + item.size
+            }
             return result
         }
 }
