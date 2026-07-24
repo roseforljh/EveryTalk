@@ -1,5 +1,6 @@
 package com.android.everytalk.data.network
 
+import com.android.everytalk.data.DataClass.ChatRequest
 import io.ktor.client.HttpClient
 import io.ktor.client.request.*
 import io.ktor.client.request.forms.*
@@ -465,3 +466,8 @@ internal fun shouldFallbackToResponses(errorBody: String?): Boolean {
         lower.contains("<!doctype") ||
         (lower.contains("403 forbidden") && !lower.startsWith("{"))
 }
+
+internal fun resolvedOpenAIApiAddress(request: ChatRequest): String =
+    request.apiAddress?.trim()?.takeIf { it.isNotEmpty() }
+        ?: com.android.everytalk.BuildConfig.DEFAULT_OPENAI_API_BASE_URL.trim().takeIf { it.isNotEmpty() }
+        ?: "https://api.openai.com"

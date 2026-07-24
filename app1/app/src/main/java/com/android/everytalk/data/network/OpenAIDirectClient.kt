@@ -1,5 +1,4 @@
 package com.android.everytalk.data.network
-
 import android.util.Log
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
@@ -52,7 +51,7 @@ object OpenAIDirectClient {
             mcpToolExecutor = null
         }
     }
-    
+
     @OptIn(ExperimentalCoroutinesApi::class)
     suspend fun streamChatDirect(
         client: HttpClient,
@@ -997,10 +996,4 @@ object OpenAIDirectClient {
             reasoningContent = completedReasoning
         )
     }
-
-    private fun resolvedOpenAIApiAddress(request: ChatRequest): String =
-        request.apiAddress?.trim()?.takeIf { it.isNotEmpty() }
-            ?: com.android.everytalk.BuildConfig.DEFAULT_OPENAI_API_BASE_URL.trim().takeIf { it.isNotEmpty() }
-            ?: "https://api.openai.com"
-
 }

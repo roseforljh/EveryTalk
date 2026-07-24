@@ -24,52 +24,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.updateAndGet
-import kotlinx.serialization.Serializable
-
-@Serializable
-data class ConversationScrollState(
-    val firstVisibleItemIndex: Int = 0,
-    val firstVisibleItemScrollOffset: Int = 0,
-    val userScrolledAway: Boolean = false,
-    val firstBubbleScreenY: Int = -1
-)
-
-enum class OpenClawGatewayConnectionState {
-    DISCONNECTED,
-    PAIRING_PENDING,
-    CONNECTED
-}
-
-data class OpenClawGatewayStatus(
-    val connectionState: OpenClawGatewayConnectionState = OpenClawGatewayConnectionState.DISCONNECTED,
-    val pendingDeviceId: String? = null,
-    val statusText: String? = null
-)
-
-/**
- * 待处理的配置参数
- * 用于在添加配置流程中临时保存用户输入的参数
- */
-data class PendingConfigParams(
-    val provider: String,
-    val address: String,
-    val key: String,
-    val channel: String,
-    val isImageGen: Boolean,
-    val enableCodeExecution: Boolean? = null,
-    val toolsJson: String? = null,
-    val imageSize: String? = null,
-    val numInferenceSteps: Int? = null,
-    val guidanceScale: Float? = null,
-    val isRefresh: Boolean = false
-)
-
-@Serializable
-data class ConversationFunctionToggleState(
-    val webSearchEnabled: Boolean = false,
-    val codeExecutionEnabled: Boolean = false,
-    val mcpEnabled: Boolean = false
-)
  
  class ViewModelStateHolder {
     // 🎯 Streaming message state manager for efficient UI updates
@@ -1030,27 +984,6 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
         )
     }
     
-    // 图像生成错误处理方法
-    fun incrementImageGenerationRetryCount() {
-        _imageGenerationRetryCount.value = _imageGenerationRetryCount.value + 1
-    }
-    
-    fun resetImageGenerationRetryCount() {
-        _imageGenerationRetryCount.value = 0
-    }
-    
-    fun setImageGenerationError(error: String) {
-        _imageGenerationError.value = error
-    }
-    
-    fun showImageGenerationErrorDialog(show: Boolean) {
-        _shouldShowImageGenerationError.value = show
-    }
-    
-    fun dismissImageGenerationErrorDialog() {
-        _shouldShowImageGenerationError.value = false
-        _imageGenerationError.value = null
-    }
     private var _apiHandler: ApiHandler? = null
     fun setApiHandler(handler: ApiHandler) {
         _apiHandler = handler

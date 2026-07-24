@@ -300,7 +300,7 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
         }
     }
 
-    internal fun ensureUserMessagePresent(
+    private fun ensureUserMessagePresent(
         messages: MutableList<AbstractApiMessage>,
         currentUserMessage: AbstractApiMessage
     ): MutableList<AbstractApiMessage> {
@@ -328,6 +328,11 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
         }
         return messages
     }
+
+    internal fun ensureUserMessagePresentForRequest(
+        messages: MutableList<AbstractApiMessage>,
+        currentUserMessage: AbstractApiMessage,
+    ): MutableList<AbstractApiMessage> = ensureUserMessagePresent(messages, currentUserMessage)
 
     /**
      * 从Uri加载并压缩位图 - 新版本支持等比缩放
@@ -376,7 +381,7 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
         )
     }
 
-    internal fun persistBitmapData(
+    private fun persistBitmapData(
         item: SelectedMediaItem.ImageFromBitmap,
         messageIdHint: String,
         attachmentIndex: Int,
