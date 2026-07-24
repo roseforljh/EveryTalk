@@ -9,6 +9,7 @@ import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateTo
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.lazy.LazyListItemInfo
+import androidx.compose.foundation.lazy.LazyListLayoutInfo
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.*
 import androidx.compose.ui.geometry.Offset
@@ -40,9 +41,11 @@ internal enum class BottomCorrection {
 internal fun resolveBottomCorrection(
     remainingPx: Int?,
     tolerancePx: Int = 0,
+    canScrollForward: Boolean = remainingPx == null || remainingPx > tolerancePx,
 ): BottomCorrection = when {
+    !canScrollForward -> BottomCorrection.None
     remainingPx == null -> BottomCorrection.AnchorLastItem
-    remainingPx <= tolerancePx -> BottomCorrection.None
+    remainingPx <= tolerancePx -> BottomCorrection.AnchorLastItem
     else -> BottomCorrection.ScrollBy
 }
 
@@ -200,6 +203,8 @@ class ChatScrollStateManager(
         val totalItems: Int,
         val viewportEndOffset: Int,
         val visibleItems: List<BottomVisibleItemRevision>,
+        val remainingPx: Int?,
+        val canScrollForward: Boolean,
     )
 
     private fun onReachedBottom() {
@@ -387,15 +392,18 @@ class ChatScrollStateManager(
     }
 
     private suspend fun keepRealBottomPinned(pinGeneration: Long) {
-        var handledRevision = bottomContentRevision()
+        var handledRevision: BottomContentRevision? = null
         while (pinGeneration == stopBottomPinGeneration && isStopBottomPinActive) {
             val changedRevision = snapshotFlow { bottomContentRevision() }
                 .distinctUntilChanged()
                 .first { revision -> revision != handledRevision }
             if (pinGeneration != stopBottomPinGeneration || !isStopBottomPinActive) return
 
-            val remainingPx = remainingDistanceToBottomPx()
-            val correction = resolveBottomCorrection(remainingPx)
+            val remainingPx = changedRevision.remainingPx
+            val correction = resolveBottomCorrection(
+                remainingPx = remainingPx,
+                canScrollForward = changedRevision.canScrollForward,
+            )
             logger.debug(
                 "Bottom content revision changed: generation=$pinGeneration, " +
                     "total=${changedRevision.totalItems}, remainingPx=$remainingPx, " +
@@ -415,11 +423,15 @@ class ChatScrollStateManager(
             visibleItems = layoutInfo.visibleItemsInfo.map { item ->
                 BottomVisibleItemRevision(key = item.key, size = item.size)
             },
+            remainingPx = remainingDistanceToBottomPx(layoutInfo),
+            canScrollForward = listState.canScrollForward,
         )
     }
 
-    private fun remainingDistanceToBottomPx(): Int? {
-        val layoutInfo = listState.layoutInfo
+    private fun remainingDistanceToBottomPx(): Int? =
+        remainingDistanceToBottomPx(listState.layoutInfo)
+
+    private fun remainingDistanceToBottomPx(layoutInfo: LazyListLayoutInfo): Int? {
         val lastIndex = layoutInfo.totalItemsCount - 1
         if (lastIndex < 0) return 0
         val lastItem = layoutInfo.visibleItemsInfo.firstOrNull { item -> item.index == lastIndex }
