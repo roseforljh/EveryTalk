@@ -7,6 +7,7 @@ import com.android.everytalk.ui.components.MarkdownPart
 import io.mockk.every
 import io.mockk.mockkStatic
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.buildJsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Before
@@ -131,5 +132,36 @@ class MessageProcessorFinalizePartsTest {
 
         assertFalse(finalized.text.contains("data:image", ignoreCase = true))
         assertEquals("\n\n```\n执行完成\n```\n\n", finalized.text)
+    }
+
+    @Test
+    fun `stream processing hides leaked capability card from visible text`() = runBlocking {
+        val processor = MessageProcessor().apply { initialize("session", "capability-card") }
+
+        processor.processStreamEvent(
+            AppStreamEvent.ToolCall(
+                id = "capability-tool-call",
+                name = "everytalk_select_capabilities",
+                argumentsObj = buildJsonObject { },
+            ),
+            "capability-card",
+        )
+
+        val visibleChunks = listOf(
+            "局方能力",
+            "选择：\n\n• general-",
+            "answer\n\n---\n\n",
+            "结论：保留正文",
+        ).map { chunk ->
+            (processor.processStreamEvent(AppStreamEvent.Content(chunk), "capability-card")
+                as ProcessedEventResult.ContentUpdated).text
+        }
+
+        val finalized = processor.finalizeMessageProcessing(
+            Message(id = "capability-card", text = "", sender = Sender.AI),
+        )
+
+        assertEquals(listOf("", "", "", "结论：保留正文"), visibleChunks)
+        assertEquals("结论：保留正文", finalized.text)
     }
 }
