@@ -1,5 +1,34 @@
 # Changelog
 
+## [1.22.0](https://github.com/roseforljh/EveryTalk/compare/v1.21.0...v1.22.0) (2026-07-24)
+
+
+### Features
+
+* LLM客户端新增 PromptCachePolicy 能力指纹日志 ([86cb576](https://github.com/roseforljh/EveryTalk/commit/86cb576a575ce1a2410462d9f61a43102d116ba6))
+* loading/连接状态统一添加实时耗时显示 ([bdea675](https://github.com/roseforljh/EveryTalk/commit/bdea67588d2d9ffc74d128d4b9f8a546b458d473))
+* Markdown 链接 Logo — 链接旁显示 favicon，自定义链接颜色去下划线 ([f1a55da](https://github.com/roseforljh/EveryTalk/commit/f1a55da43d2f1e3cf2243930e61ce540d4548574))
+* 完成态AI消息惰性展开为Markdown节点项 ([9dfd420](https://github.com/roseforljh/EveryTalk/commit/9dfd420b0fbc59e48f54894de091dada24eeb2e4))
+
+
+### Bug Fixes
+
+* Markdown表格单元格设置maxLines=Int.MAX_VALUE防止文本被截断 ([de08aa5](https://github.com/roseforljh/EveryTalk/commit/de08aa5b1b558cf351d8334c9384b34cdab548db))
+* TopAnchor 哈希纳入 item 顺序/锚点丢失后按索引重新捕获 ([de8b5ae](https://github.com/roseforljh/EveryTalk/commit/de8b5ae2cf88c4f936c3d866fa922eba4fce6148))
+* TopAnchor引擎重答阶段与用户操控阶段鲁棒性增强 ([2705e4d](https://github.com/roseforljh/EveryTalk/commit/2705e4df28009b127f0cfe082b8f8cddb8dccff4))
+* 代码块初始异步高亮期间抑制resize动画 ([b6db15e](https://github.com/roseforljh/EveryTalk/commit/b6db15e4d5d57c6fc915571c352ab17ba9829600))
+* 初始加载滚动拆分为两阶段初始化 ([02f6eb7](https://github.com/roseforljh/EveryTalk/commit/02f6eb78906fb4275e5997ee5e5b3a0f00ad567b))
+* 功能面板弹入动画优化/PageSourcesButton解耦 ([2e0f16c](https://github.com/roseforljh/EveryTalk/commit/2e0f16cfa24a55513c3f764da1880232e4842680))
+* 底部守护根据 canScrollForward 修正零剩余距离误判 ([a37d02d](https://github.com/roseforljh/EveryTalk/commit/a37d02d9e347a1f02f5929211e9e9fe507684bbd))
+* 流式Markdown渲染优化 - rebase触发改进与非流式结束原子校准 ([7285e95](https://github.com/roseforljh/EveryTalk/commit/7285e95b4e1daa4ef021149e9fb9026ad2454d56))
+* 清理模型误输出到正文的能力选择卡 ([70e5a16](https://github.com/roseforljh/EveryTalk/commit/70e5a161075ea8af52c3a8433a06aa0c037176b9))
+* 重新生成时原地替换用户消息防止LazyColumn key中断 ([bcf67cb](https://github.com/roseforljh/EveryTalk/commit/bcf67cbc5c6264eb1658f152f0173cf1d77b5767))
+
+
+### Performance Improvements
+
+* 数学公式首帧同步恢复cache/水平滚动惰性绑定 ([5158075](https://github.com/roseforljh/EveryTalk/commit/5158075dfd8677a1bf07242491b470d3c3c7cd9d))
+
 ## [1.21.0](https://github.com/roseforljh/EveryTalk/compare/v1.20.3...v1.21.0) (2026-07-20)
 
 
