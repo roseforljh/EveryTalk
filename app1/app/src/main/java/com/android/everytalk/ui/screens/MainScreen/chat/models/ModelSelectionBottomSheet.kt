@@ -1,4 +1,5 @@
 package com.android.everytalk.ui.screens.MainScreen.chat.models
+import com.android.everytalk.statecontroller.*
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column

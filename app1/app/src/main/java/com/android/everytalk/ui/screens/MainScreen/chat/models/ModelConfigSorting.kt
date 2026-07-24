@@ -1,4 +1,5 @@
 package com.android.everytalk.ui.screens.MainScreen.chat.models
+import com.android.everytalk.statecontroller.*
 
 import com.android.everytalk.data.DataClass.ApiConfig
 import java.util.Locale

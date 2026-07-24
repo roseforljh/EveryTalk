@@ -1,4 +1,5 @@
 package com.android.everytalk.ui.screens.MainScreen.chat.text.state
+import com.android.everytalk.statecontroller.*
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.ui.unit.Density
