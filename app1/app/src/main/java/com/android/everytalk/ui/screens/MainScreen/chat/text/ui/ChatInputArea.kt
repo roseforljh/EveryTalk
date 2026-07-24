@@ -1,11 +1,9 @@
 package com.android.everytalk.ui.screens.MainScreen.chat.text.ui
 import com.android.everytalk.statecontroller.*
-
 import kotlin.math.max
 import android.Manifest
 import android.content.Context
 import android.net.Uri
-import android.provider.OpenableColumns
 import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -18,7 +16,6 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -28,7 +25,6 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.isImeVisible
@@ -38,19 +34,13 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.ui.draw.shadow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.Language
-import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.Image
-import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.ui.res.painterResource
 import com.android.everytalk.R
@@ -69,20 +59,14 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntRect
-import androidx.compose.ui.unit.IntSize
-import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
-import androidx.core.content.FileProvider
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.models.ImageSourceOption
 import com.android.everytalk.models.MoreOptionsType
@@ -101,9 +85,6 @@ import com.android.everytalk.data.mcp.McpServerState
 import com.android.everytalk.data.mcp.McpServerConfig
 import com.android.everytalk.ui.screens.mcp.McpServerListDialog
 import java.io.File
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
 import java.util.UUID
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -526,21 +507,7 @@ fun ChatInputArea(
                 val moreScale = remember { Animatable(0.8f) }
 
                 val functionPanelPositionProvider = remember(chatInputContentHeightPx, density) {
-                    object : PopupPositionProvider {
-                        override fun calculatePosition(
-                            anchorBounds: IntRect,
-                            windowSize: IntSize,
-                            layoutDirection: LayoutDirection,
-                            popupContentSize: IntSize
-                        ): IntOffset {
-                            val marginPx = with(density) { 8.dp.roundToPx() }
-                            val x = ((windowSize.width - popupContentSize.width) / 2)
-                                .coerceIn(0, (windowSize.width - popupContentSize.width).coerceAtLeast(0))
-                            val y = (windowSize.height - chatInputContentHeightPx - marginPx - popupContentSize.height)
-                                .coerceIn(0, (windowSize.height - popupContentSize.height).coerceAtLeast(0))
-                            return IntOffset(x, y)
-                        }
-                    }
+                    chatInputPopupPositionProvider(chatInputContentHeightPx, density)
                 }
 
                 LaunchedEffect(showFunctionPanel) {

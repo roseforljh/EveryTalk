@@ -106,6 +106,25 @@ import java.util.Date
 import java.util.Locale
 import java.util.UUID
 
+internal fun chatInputPopupPositionProvider(
+    contentHeightPx: Int,
+    density: Density,
+): PopupPositionProvider = object : PopupPositionProvider {
+    override fun calculatePosition(
+        anchorBounds: IntRect,
+        windowSize: IntSize,
+        layoutDirection: LayoutDirection,
+        popupContentSize: IntSize,
+    ): IntOffset {
+        val marginPx = with(density) { 8.dp.roundToPx() }
+        val x = ((windowSize.width - popupContentSize.width) / 2)
+            .coerceIn(0, (windowSize.width - popupContentSize.width).coerceAtLeast(0))
+        val y = (windowSize.height - contentHeightPx - marginPx - popupContentSize.height)
+            .coerceIn(0, (windowSize.height - popupContentSize.height).coerceAtLeast(0))
+        return IntOffset(x, y)
+    }
+}
+
 internal fun createImageFileUri(context: Context): Uri {
     val timeStamp: String = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
     val imageFileName = "JPEG_${timeStamp}_"
