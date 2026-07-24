@@ -45,7 +45,11 @@ class ConversationPreviewControllerTest {
             File("app/src/main/java/com/android/everytalk/statecontroller/AppViewModel.kt"),
             File("app1/app/src/main/java/com/android/everytalk/statecontroller/AppViewModel.kt"),
         )
-        return requireNotNull(candidates.firstOrNull(File::isFile)) { "找不到 AppViewModel.kt" }
+        val appViewModel = requireNotNull(candidates.firstOrNull(File::isFile)) { "找不到 AppViewModel.kt" }
             .readText(Charsets.UTF_8)
+        val dataActions = candidates.map { file ->
+            File(file.parentFile, "AppViewModelDataActions.kt")
+        }.firstOrNull(File::isFile)?.readText(Charsets.UTF_8).orEmpty()
+        return appViewModel + "\n" + dataActions
     }
 }

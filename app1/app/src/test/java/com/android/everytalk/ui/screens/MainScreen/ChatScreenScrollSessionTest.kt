@@ -414,13 +414,18 @@ class ChatScreenScrollSessionTest {
     }
 
     private fun dataPersistenceSource(): String {
-        val candidates = listOf(
-            File("src/main/java/com/android/everytalk/ui/screens/viewmodel/DataPersistenceManager.kt"),
-            File("app/src/main/java/com/android/everytalk/ui/screens/viewmodel/DataPersistenceManager.kt"),
-            File("app1/app/src/main/java/com/android/everytalk/ui/screens/viewmodel/DataPersistenceManager.kt"),
+        val fileNames = listOf(
+            "DataPersistenceManager.kt",
+            "DataPersistenceManagerInitialization.kt",
         )
-        val sourceFile = candidates.firstOrNull { it.isFile }
-        requireNotNull(sourceFile) { "找不到 DataPersistenceManager.kt" }
-        return sourceFile.readText(Charsets.UTF_8)
+        return fileNames.joinToString("\n") { fileName ->
+            val candidates = listOf(
+                File("src/main/java/com/android/everytalk/ui/screens/viewmodel/$fileName"),
+                File("app/src/main/java/com/android/everytalk/ui/screens/viewmodel/$fileName"),
+                File("app1/app/src/main/java/com/android/everytalk/ui/screens/viewmodel/$fileName"),
+            )
+            requireNotNull(candidates.firstOrNull { it.isFile }) { "找不到 $fileName" }
+                .readText(Charsets.UTF_8)
+        }
     }
 }

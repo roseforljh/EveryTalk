@@ -9,20 +9,24 @@ class ModelConfigFlowContractTest {
 
     @Test
     fun `auto fetch passes channel without shared loading wait`() {
-        val source = sourceFile("statecontroller/AppViewModel.kt")
+        val source = sourceFile("statecontroller/AppViewModelDataActions.kt")
+        val fetchFunction = source
+            .substringAfter("internal fun AppViewModel.onConfirmAutoFetch()")
+            .substringBefore("internal fun AppViewModel.onManualInput()")
 
-        assertTrue(source.contains("fetchModels(params.address, params.key, params.channel)"))
-        assertFalse(source.contains("isFetchingModels"))
-        assertFalse(source.contains("flatMapLatest { fetching"))
+        assertTrue(fetchFunction.contains("fetchModels(params.address, params.key, params.channel)"))
+        assertFalse(fetchFunction.contains("isFetchingModels"))
+        assertFalse(fetchFunction.contains("flatMapLatest"))
     }
 
     @Test
     fun `manual input stays in view model and preserves configuration parameters`() {
-        val viewModel = sourceFile("statecontroller/AppViewModel.kt")
+        val viewModel = sourceFile("statecontroller/AppViewModel.kt") +
+            sourceFile("statecontroller/AppViewModelDataActions.kt")
         val settings = sourceFile("ui/screens/settings/SettingsScreen.kt")
         val imageSettings = sourceFile("ui/screens/ImageGeneration/ImageGenerationSettingsScreen.kt")
 
-        assertTrue(viewModel.contains("fun submitManualModel(modelName: String)"))
+        assertTrue(viewModel.contains("submitManualModel(modelName: String)"))
         assertTrue(viewModel.contains("enableCodeExecution = params.enableCodeExecution"))
         assertTrue(viewModel.contains("toolsJson = params.toolsJson"))
         assertTrue(viewModel.contains("imageSize = params.imageSize"))

@@ -376,14 +376,16 @@ class ChatMessagesListRenderRouteTest {
     }
 
     private fun chatMessagesListSource(): String {
-        val candidates = listOf(
-            File("src/main/java/com/android/everytalk/ui/screens/MainScreen/chat/text/ui/ChatMessagesList.kt"),
-            File("app/src/main/java/com/android/everytalk/ui/screens/MainScreen/chat/text/ui/ChatMessagesList.kt"),
-            File("app1/app/src/main/java/com/android/everytalk/ui/screens/MainScreen/chat/text/ui/ChatMessagesList.kt"),
-        )
-        val sourceFile = candidates.firstOrNull { it.isFile }
-        requireNotNull(sourceFile) { "找不到 ChatMessagesList.kt" }
-        return sourceFile.readText(Charsets.UTF_8)
+        val fileNames = listOf("ChatMessagesList.kt", "ChatAiMessageComponents.kt")
+        return fileNames.joinToString("\n") { fileName ->
+            val candidates = listOf(
+                File("src/main/java/com/android/everytalk/ui/screens/MainScreen/chat/text/ui/$fileName"),
+                File("app/src/main/java/com/android/everytalk/ui/screens/MainScreen/chat/text/ui/$fileName"),
+                File("app1/app/src/main/java/com/android/everytalk/ui/screens/MainScreen/chat/text/ui/$fileName"),
+            )
+            requireNotNull(candidates.firstOrNull { it.isFile }) { "找不到 $fileName" }
+                .readText(Charsets.UTF_8)
+        }
     }
 }
 

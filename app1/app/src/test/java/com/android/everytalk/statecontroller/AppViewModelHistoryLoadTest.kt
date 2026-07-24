@@ -52,6 +52,14 @@ class AppViewModelHistoryLoadTest {
             "src/main/java/com/android/everytalk/statecontroller/AppViewModel.kt",
             "app/src/main/java/com/android/everytalk/statecontroller/AppViewModel.kt",
             "app1/app/src/main/java/com/android/everytalk/statecontroller/AppViewModel.kt",
+        ) + source(
+            "src/main/java/com/android/everytalk/statecontroller/AppViewModelConversationActions.kt",
+            "app/src/main/java/com/android/everytalk/statecontroller/AppViewModelConversationActions.kt",
+            "app1/app/src/main/java/com/android/everytalk/statecontroller/AppViewModelConversationActions.kt",
+        ) + source(
+            "src/main/java/com/android/everytalk/statecontroller/AppViewModelActions.kt",
+            "app/src/main/java/com/android/everytalk/statecontroller/AppViewModelActions.kt",
+            "app1/app/src/main/java/com/android/everytalk/statecontroller/AppViewModelActions.kt",
         )
         val historyControllerSource = source(
             "src/main/java/com/android/everytalk/statecontroller/controller/conversation/HistoryController.kt",

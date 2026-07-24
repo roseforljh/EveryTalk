@@ -27,8 +27,8 @@ class ImageGenerationMessagesListRenderRouteTest {
     fun `image streaming state should respect pause aware collection and item snapshot`() {
         val source = imageGenerationMessagesListSource()
 
-        assertTrue(source.contains("streamingRenderStateSource.freezeWhileStreamingPaused"))
-        assertTrue(source.contains("currentImageStreamingAiMessageId.freezeWhileStreamingPaused"))
+        assertTrue(source.contains("isImageApiCalling.freezeWhileStreamingPaused"))
+        assertTrue(source.contains("viewModel.currentImageStreamingAiMessageId.freezeWhileStreamingPaused"))
         assertTrue(source.contains("val message = item.message"))
         assertFalse(source.contains("[UI] Rendering AI message"))
     }
@@ -85,14 +85,21 @@ class ImageGenerationMessagesListRenderRouteTest {
     }
 
     private fun imageGenerationMessagesListSource(): String {
-        val candidates = listOf(
-            File("src/main/java/com/android/everytalk/ui/screens/ImageGeneration/ImageGenerationMessagesList.kt"),
-            File("app/src/main/java/com/android/everytalk/ui/screens/ImageGeneration/ImageGenerationMessagesList.kt"),
-            File("app1/app/src/main/java/com/android/everytalk/ui/screens/ImageGeneration/ImageGenerationMessagesList.kt"),
+        val fileNames = listOf(
+            "ImageGenerationMessagesList.kt",
+            "ImageGenerationMessagesListContent.kt",
+            "ImageGenerationImageSupport.kt",
+            "ImageGenerationImagePreview.kt",
         )
-        val sourceFile = candidates.firstOrNull { it.isFile }
-        requireNotNull(sourceFile) { "找不到 ImageGenerationMessagesList.kt" }
-        return sourceFile.readText(Charsets.UTF_8)
+        return fileNames.joinToString("\n") { fileName ->
+            val candidates = listOf(
+                File("src/main/java/com/android/everytalk/ui/screens/ImageGeneration/$fileName"),
+                File("app/src/main/java/com/android/everytalk/ui/screens/ImageGeneration/$fileName"),
+                File("app1/app/src/main/java/com/android/everytalk/ui/screens/ImageGeneration/$fileName"),
+            )
+            requireNotNull(candidates.firstOrNull { it.isFile }) { "找不到 $fileName" }
+                .readText(Charsets.UTF_8)
+        }
     }
 
     private fun imageGenerationScreenSource(): String {

@@ -25,8 +25,12 @@ class MarkdownEngineOwnershipTest {
         val entry = mainSource(
             "com/android/everytalk/ui/components/streaming/StreamBlocksRenderer.kt"
         )
-        val adapter = mainSource(
-            "com/android/everytalk/ui/components/markdown/MikePenzMarkdownRenderer.kt"
+        val adapter = mainSources(
+            "com/android/everytalk/ui/components/markdown/MikePenzMarkdownRenderer.kt",
+            "com/android/everytalk/ui/components/markdown/MarkdownRendererNodes.kt",
+            "com/android/everytalk/ui/components/markdown/MarkdownLinkImages.kt",
+            "com/android/everytalk/ui/components/markdown/MarkdownRendererConstants.kt",
+            "com/android/everytalk/ui/components/markdown/MarkdownStreamingState.kt",
         )
 
         assertTrue(entry.contains("fun UnifiedMarkdownNodesRenderer("))
@@ -45,7 +49,20 @@ class MarkdownEngineOwnershipTest {
         )
 
         entryPoints.forEach { path ->
-            val source = mainSource(path)
+            val source = if (path.endsWith("ChatMessagesList.kt")) {
+                mainSources(
+                    path,
+                    "com/android/everytalk/ui/screens/MainScreen/chat/text/ui/ChatAiMessageComponents.kt",
+                )
+            } else if (path.endsWith("ImageGenerationMessagesList.kt")) {
+                mainSources(
+                    path,
+                    "com/android/everytalk/ui/screens/ImageGeneration/ImageGenerationMessagesListContent.kt",
+                    "com/android/everytalk/ui/screens/ImageGeneration/ImageGenerationAiMessageItem.kt",
+                )
+            } else {
+                mainSource(path)
+            }
             assertTrue(path, source.contains("UnifiedMarkdownRenderer("))
             assertFalse(path, source.contains("MikePenzMarkdownRenderer("))
         }
@@ -64,8 +81,12 @@ class MarkdownEngineOwnershipTest {
 
     @Test
     fun `数学公式由本地MathJax转SVG并由Compose绘制`() {
-        val adapter = mainSource(
-            "com/android/everytalk/ui/components/markdown/MikePenzMarkdownRenderer.kt"
+        val adapter = mainSources(
+            "com/android/everytalk/ui/components/markdown/MikePenzMarkdownRenderer.kt",
+            "com/android/everytalk/ui/components/markdown/MarkdownRendererNodes.kt",
+            "com/android/everytalk/ui/components/markdown/MarkdownLinkImages.kt",
+            "com/android/everytalk/ui/components/markdown/MarkdownRendererConstants.kt",
+            "com/android/everytalk/ui/components/markdown/MarkdownStreamingState.kt",
         )
         val mathRenderer = mainSource(
             "com/android/everytalk/ui/components/math/MathRenderer.kt"
@@ -95,8 +116,12 @@ class MarkdownEngineOwnershipTest {
 
     @Test
     fun `Markdown标准组件使用MikePenz并集中配置移动端视觉层级`() {
-        val adapter = mainSource(
-            "com/android/everytalk/ui/components/markdown/MikePenzMarkdownRenderer.kt"
+        val adapter = mainSources(
+            "com/android/everytalk/ui/components/markdown/MikePenzMarkdownRenderer.kt",
+            "com/android/everytalk/ui/components/markdown/MarkdownRendererNodes.kt",
+            "com/android/everytalk/ui/components/markdown/MarkdownLinkImages.kt",
+            "com/android/everytalk/ui/components/markdown/MarkdownRendererConstants.kt",
+            "com/android/everytalk/ui/components/markdown/MarkdownStreamingState.kt",
         )
 
         assertTrue(adapter.contains("val markdownColors = markdownColor("))
@@ -173,8 +198,12 @@ class MarkdownEngineOwnershipTest {
 
     @Test
     fun `AI流式Markdown使用MikePenz稳定AST并可从非追加改写恢复`() {
-        val adapter = mainSource(
-            "com/android/everytalk/ui/components/markdown/MikePenzMarkdownRenderer.kt"
+        val adapter = mainSources(
+            "com/android/everytalk/ui/components/markdown/MikePenzMarkdownRenderer.kt",
+            "com/android/everytalk/ui/components/markdown/MarkdownRendererNodes.kt",
+            "com/android/everytalk/ui/components/markdown/MarkdownLinkImages.kt",
+            "com/android/everytalk/ui/components/markdown/MarkdownRendererConstants.kt",
+            "com/android/everytalk/ui/components/markdown/MarkdownStreamingState.kt",
         )
 
         assertTrue(adapter.contains("rememberStreamingMarkdownState("))
@@ -232,6 +261,9 @@ class MarkdownEngineOwnershipTest {
     private fun mainSource(relativePath: String): String {
         return projectFile("app/src/main/java/$relativePath").readText(Charsets.UTF_8)
     }
+
+    private fun mainSources(vararg relativePaths: String): String =
+        relativePaths.joinToString("\n") { relativePath -> mainSource(relativePath) }
 
     private fun projectFile(relativePath: String): File {
         val workingDirectory = File(System.getProperty("user.dir") ?: ".").absoluteFile
