@@ -31,7 +31,8 @@ internal object ChatMarkdownTextStyle {
     const val LIST_NESTED_TOP_SPACING_DP = 0f
     const val LIST_ITEM_LINE_HEIGHT_SP = BODY_LINE_HEIGHT_SP
 
-    const val SPACING_PARAGRAPH_DP = 8f
+    const val SPACING_PARAGRAPH_DP = 16f
+    const val STANDALONE_STRONG_SECTION_EXTRA_TOP_SPACING_DP = 8f
     const val SPACING_BEFORE_HEADING_DP = SPACING_PARAGRAPH_DP
     const val SPACING_AFTER_HEADING_DP = 4f
     const val HORIZONTAL_RULE_THICKNESS_DP = 1f

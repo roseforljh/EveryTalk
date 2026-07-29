@@ -3,13 +3,13 @@ package com.android.everytalk.ui.components.markdown
 /**
  * 渲染前只修复可确定识别的 Markdown 结构边界。
  *
- * 模型把正文和表头粘在同一行时，GFM 解析器会把整行当作普通段落。这里不改写表格内容，
- * 只在下一行确实是表格分隔行时，把表头从正文中拆出来，并避开代码围栏。
+ * 模型把正文和表头粘在同一行时，GFM 解析器会把整行当作普通段落。独占一行的加粗小标题
+ * 紧邻正文时，CommonMark 也会把两行合并为同一段。这里只补齐可确定的块边界，并避开代码围栏。
  */
 internal object MarkdownContractValidator {
 
     fun normalize(markdown: String): String {
-        if (markdown.isBlank() || '|' !in markdown) return markdown
+        if (markdown.isBlank()) return markdown
 
         val normalizedLineBreaks = markdown.replace("\r\n", "\n")
         val lines = normalizedLineBreaks.split('\n')
@@ -30,11 +30,19 @@ internal object MarkdownContractValidator {
                 isPotentialTableRow(tablePart) &&
                 nextLine != null &&
                 isTableSeparatorRow(nextLine)
+            val canSeparateStrongHeading = !protectedLine &&
+                isStandaloneStrongLine(line) &&
+                nextLine?.isNotBlank() == true
 
             if (canSplit) {
                 output += prefix.trimEnd()
                 output += ""
                 output += tablePart
+                changed = true
+            } else if (canSeparateStrongHeading) {
+                if (output.lastOrNull()?.isNotBlank() == true) output += ""
+                output += line
+                output += ""
                 changed = true
             } else {
                 output += line
@@ -54,9 +62,45 @@ internal object MarkdownContractValidator {
         val trimmed = line.trim()
         if (!trimmed.startsWith('|') || !trimmed.endsWith('|')) return false
         val cells = trimmed.removePrefix("|").removeSuffix("|").split('|')
-        return cells.isNotEmpty() && cells.all { cell ->
-            cell.trim().matches(Regex("^:?-{3,}:?$"))
+        return cells.isNotEmpty() && cells.all(::isTableSeparatorCell)
+    }
+
+    private fun isTableSeparatorCell(cell: String): Boolean {
+        val trimmed = cell.trim()
+        var start = 0
+        var endExclusive = trimmed.length
+        if (trimmed.getOrNull(start) == ':') start++
+        if (endExclusive > start && trimmed[endExclusive - 1] == ':') endExclusive--
+        if (endExclusive - start < 3) return false
+        return (start until endExclusive).all { trimmed[it] == '-' }
+    }
+
+    private fun isStandaloneStrongLine(line: String): Boolean {
+        val trimmed = line.trim()
+        val delimiter = when {
+            trimmed.startsWith("**") && trimmed.endsWith("**") -> '*'
+            trimmed.startsWith("__") && trimmed.endsWith("__") -> '_'
+            else -> return false
         }
+        if (trimmed.length <= 4 || trimmed[2] == delimiter || trimmed[trimmed.length - 3] == delimiter) {
+            return false
+        }
+        val content = trimmed.substring(2, trimmed.length - 2)
+        return content.isNotBlank() && !containsUnescapedDelimiter(content, delimiter)
+    }
+
+    private fun containsUnescapedDelimiter(content: String, delimiter: Char): Boolean {
+        var index = 0
+        while (index < content.length - 1) {
+            if (content[index] == '\\') {
+                index += 2
+            } else if (content[index] == delimiter && content[index + 1] == delimiter) {
+                return true
+            } else {
+                index++
+            }
+        }
+        return false
     }
 
     private fun countUnescapedPipes(line: String): Int {

@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
@@ -261,6 +262,13 @@ private fun MarkdownNodesColumn(
             val hasValidContext = contextNodes.getOrNull(contextIndex) === node
             val spacingNodes = if (hasValidContext) contextNodes else nodes
             val spacingIndex = if (hasValidContext) contextIndex else index
+            val extraTopSpacing = standaloneStrongSectionExtraTopSpacing(
+                nodes = spacingNodes,
+                index = spacingIndex,
+            )
+            if (extraTopSpacing.value > 0f) {
+                Spacer(modifier = Modifier.height(extraTopSpacing))
+            }
             CompositionLocalProvider(
                 LocalMarkdownHorizontalRuleTopPadding provides
                     markdownHorizontalRuleTopPadding(spacingNodes, spacingIndex),
@@ -274,6 +282,23 @@ private fun MarkdownNodesColumn(
             }
         }
     }
+}
+
+internal fun standaloneStrongSectionExtraTopSpacing(nodes: List<ASTNode>, index: Int): Dp {
+    if (index !in nodes.indices || !nodes[index].isStandaloneStrongParagraph()) return 0.dp
+    if (previousVisibleMarkdownNode(nodes, index) == null) return 0.dp
+    return ChatMarkdownTextStyle.STANDALONE_STRONG_SECTION_EXTRA_TOP_SPACING_DP.dp
+}
+
+private fun ASTNode.isStandaloneStrongParagraph(): Boolean {
+    if (type != MarkdownElementTypes.PARAGRAPH) return false
+    var visibleChild: ASTNode? = null
+    for (child in children) {
+        if (child.type == MarkdownTokenTypes.EOL || child.type == MarkdownTokenTypes.WHITE_SPACE) continue
+        if (visibleChild != null) return false
+        visibleChild = child
+    }
+    return visibleChild?.type == MarkdownElementTypes.STRONG
 }
 
 private fun markdownHorizontalRuleTopPadding(nodes: List<ASTNode>, index: Int): Dp {
