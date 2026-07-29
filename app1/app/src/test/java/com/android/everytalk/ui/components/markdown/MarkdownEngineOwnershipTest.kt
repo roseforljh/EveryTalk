@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.components.markdown
 
+import androidx.compose.ui.unit.dp
 import com.mikepenz.markdown.model.State
 import com.mikepenz.markdown.model.parseMarkdown
 import org.intellij.markdown.MarkdownElementTypes
@@ -149,6 +150,25 @@ class MarkdownEngineOwnershipTest {
     }
 
     @Test
+    fun `仅后续独占加粗小标题增加额外顶部间距`() {
+        val state = parseMarkdown(
+            "**1. 第一项**\n\n第一段正文。\n\n**2. 第二项**\n\n第二段正文。",
+            lookupLinks = false,
+            flavour = EveryTalkMarkdownFlavourDescriptor,
+        ) as State.Success
+        val nodes = state.node.children
+        val paragraphIndices = nodes.indices.filter {
+            nodes[it].type == MarkdownElementTypes.PARAGRAPH
+        }
+
+        assertEquals(4, paragraphIndices.size)
+        assertEquals(0.dp, standaloneStrongSectionExtraTopSpacing(nodes, paragraphIndices[0]))
+        assertEquals(0.dp, standaloneStrongSectionExtraTopSpacing(nodes, paragraphIndices[1]))
+        assertEquals(8.dp, standaloneStrongSectionExtraTopSpacing(nodes, paragraphIndices[2]))
+        assertEquals(0.dp, standaloneStrongSectionExtraTopSpacing(nodes, paragraphIndices[3]))
+    }
+
+    @Test
     fun `生产消息入口只调用统一Markdown入口`() {
         val entryPoints = listOf(
             "com/android/everytalk/ui/screens/MainScreen/chat/text/ui/ChatMessagesList.kt",
@@ -265,7 +285,7 @@ class MarkdownEngineOwnershipTest {
         assertTrue(style.contains("1 -> 22f"))
         assertTrue(style.contains("3 -> 18f"))
         assertTrue(style.contains("LIST_ITEM_SPACING_DP = 8f"))
-        assertTrue(style.contains("SPACING_PARAGRAPH_DP = 8f"))
+        assertTrue(style.contains("SPACING_PARAGRAPH_DP = 16f"))
         assertTrue(adapter.contains("summaryAnnotatorSettings = annotatorSettings("))
         assertTrue(adapter.contains("annotator = annotator"))
         assertTrue(adapter.contains("typography = typography"))

@@ -8,6 +8,7 @@ import com.android.everytalk.ui.components.streaming.StreamBlock
 import com.android.everytalk.ui.components.streaming.StreamBlockParser
 import com.android.everytalk.ui.components.streaming.extractFencedCodeBlockContent
 import com.android.everytalk.ui.components.markdown.EveryTalkMarkdownFlavourDescriptor
+import org.intellij.markdown.MarkdownElementTypes
 import org.intellij.markdown.flavours.gfm.GFMElementTypes
 import com.mikepenz.markdown.model.State
 import com.mikepenz.markdown.model.parseMarkdown
@@ -17,6 +18,105 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MarkdownRenderingContractTest {
+
+    @Test
+    fun `独占加粗小标题与紧邻正文被修复为两个段落`() {
+        val source = """
+            **1. 红卫兵运动**
+            学生被动员起来成立“红卫兵”组织，以“革命”名义冲击党政机关。
+        """.trimIndent()
+
+        val prepared = StreamBlockParser.prepareMessage(
+            content = source,
+            messageId = "standalone-strong-heading",
+            contentVersion = 43L,
+        )
+        val state = parseMarkdown(
+            prepared.markdown,
+            lookupLinks = false,
+            flavour = EveryTalkMarkdownFlavourDescriptor,
+        ) as State.Success
+
+        assertEquals(
+            "**1. 红卫兵运动**\n\n学生被动员起来成立“红卫兵”组织，以“革命”名义冲击党政机关。",
+            prepared.markdown,
+        )
+        assertEquals(
+            2,
+            state.node.children.count { it.type == MarkdownElementTypes.PARAGRAPH },
+        )
+    }
+
+    @Test
+    fun `连续加粗小标题与前后正文均保留段落间距`() {
+        val source = """
+            **1. 红卫兵运动**
+            第一段正文。
+            **2. 破“四旧”**
+            第二段正文。
+        """.trimIndent()
+
+        val prepared = StreamBlockParser.prepareMessage(
+            content = source,
+            messageId = "consecutive-strong-headings",
+            contentVersion = 46L,
+        )
+        val state = parseMarkdown(
+            prepared.markdown,
+            lookupLinks = false,
+            flavour = EveryTalkMarkdownFlavourDescriptor,
+        ) as State.Success
+
+        assertEquals(
+            """
+                **1. 红卫兵运动**
+
+                第一段正文。
+
+                **2. 破“四旧”**
+
+                第二段正文。
+            """.trimIndent(),
+            prepared.markdown,
+        )
+        assertEquals(
+            4,
+            state.node.children.count { it.type == MarkdownElementTypes.PARAGRAPH },
+        )
+    }
+
+    @Test
+    fun `下划线加粗小标题使用相同的段落边界修复`() {
+        val source = "__风险提示__\n以下内容需要单独成段。"
+
+        val prepared = StreamBlockParser.prepareMessage(
+            content = source,
+            messageId = "underscore-strong-heading",
+            contentVersion = 44L,
+        )
+
+        assertEquals("__风险提示__\n\n以下内容需要单独成段。", prepared.markdown)
+    }
+
+    @Test
+    fun `代码围栏和普通行内加粗不被小标题边界修复`() {
+        val source = """
+            普通正文包含 **重点内容**，后面仍是同一段。
+
+            ```text
+            **1. 代码中的标题**
+            代码中的正文
+            ```
+        """.trimIndent()
+
+        val prepared = StreamBlockParser.prepareMessage(
+            content = source,
+            messageId = "strong-heading-protected-content",
+            contentVersion = 45L,
+        )
+
+        assertEquals(source, prepared.markdown)
+    }
 
     @Test
     fun `正文粘连表头时只修复表格边界并交给 GFM 表格解析`() {
