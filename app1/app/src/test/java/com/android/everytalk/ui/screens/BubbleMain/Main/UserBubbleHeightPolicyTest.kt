@@ -57,4 +57,5 @@ class UserBubbleHeightPolicyTest {
 
         assertEquals(28f, bottomPadding, 0.0001f)
     }
+
 }

@@ -1,9 +1,10 @@
 package com.android.everytalk.statecontroller.facade
 
 import com.android.everytalk.data.DataClass.Message
-import com.android.everytalk.data.DataClass.GenerationConfig
+import com.android.everytalk.data.DataClass.ApiConfig
+import com.android.everytalk.data.DataClass.ModelParameters
+import com.android.everytalk.data.DataClass.ReasoningMode
 import com.android.everytalk.data.DataClass.Sender
-import com.android.everytalk.data.DataClass.ThinkingConfig
 import com.android.everytalk.ui.components.markdown.footnoteDefinitionUri
 import com.android.everytalk.ui.components.markdown.footnoteReferenceUri
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
@@ -554,7 +555,7 @@ class MessageItemsControllerStatusTest {
     }
 
     @Test
-    fun `text loading indicator includes factual runtime text before first content`() {
+    fun `text connecting stage routes runtime status into execution drawer item`() {
         val controller = MessageItemsControllerTestAccess.newController()
         controller.stateHolder.messages.add(
             Message(
@@ -569,16 +570,18 @@ class MessageItemsControllerStatusTest {
         controller.stateHolder._currentTextStreamingAiMessageId.value = "ai-loading-text"
 
         val items = controller.chatListItemsForTest()
-        val loading = items.filterIsInstance<ChatListItem.LoadingIndicator>().single()
+        val execution = items.filterIsInstance<ChatListItem.AiMessageReasoning>().single()
 
-        assertEquals("等待首个响应", loading.text)
-        assertFalse(loading.text.orEmpty().contains("OpenAI"))
-        assertFalse(loading.text.orEmpty().contains("gpt-4o"))
+        assertEquals("等待首个响应", execution.activityStatusText)
+        assertFalse(execution.activityStatusText.orEmpty().contains("OpenAI"))
+        assertFalse(execution.activityStatusText.orEmpty().contains("gpt-4o"))
+        assertFalse(items.any { it is ChatListItem.LoadingIndicator })
     }
 
     @Test
     fun `gemini connecting stage exposes reasoning item before first reasoning token`() {
         val controller = MessageItemsControllerTestAccess.newController()
+        controller.stateHolder._selectedApiConfig.value = geminiConfig()
         controller.stateHolder.messages.add(
             Message(
                 id = "ai-gemini-connecting",
@@ -620,15 +623,10 @@ class MessageItemsControllerStatusTest {
     }
 
     @Test
-    fun `explicitly disabled reasoning keeps gemini connecting stage compact`() {
+    fun `explicitly disabled reasoning still uses generic execution drawer`() {
         val controller = MessageItemsControllerTestAccess.newController()
-        controller.stateHolder.updateCurrentConversationConfig(
-            GenerationConfig(
-                thinkingConfig = ThinkingConfig(
-                    includeThoughts = false,
-                    thinkingBudget = 0,
-                )
-            )
+        controller.stateHolder._selectedApiConfig.value = geminiConfig(
+            modelParameters = ModelParameters(reasoningMode = ReasoningMode.DISABLED)
         )
         controller.stateHolder.messages.add(
             Message(
@@ -644,12 +642,23 @@ class MessageItemsControllerStatusTest {
 
         val items = controller.chatListItemsForTest()
 
-        assertFalse(items.any { it is ChatListItem.AiMessageReasoning })
-        assertTrue(items.any { it is ChatListItem.LoadingIndicator })
+        val execution = items.filterIsInstance<ChatListItem.AiMessageReasoning>().single()
+        assertEquals("等待首个响应", execution.activityStatusText)
+        assertFalse(items.any { it is ChatListItem.LoadingIndicator })
     }
 
+    private fun geminiConfig(modelParameters: ModelParameters = ModelParameters()): ApiConfig = ApiConfig(
+        address = "https://generativelanguage.googleapis.com",
+        key = "test-key",
+        model = "gemini-2.5-pro",
+        provider = "Google",
+        name = "gemini-2.5-pro",
+        channel = "Gemini",
+        modelParameters = modelParameters,
+    )
+
     @Test
-    fun `ordinary model connecting stage does not expose speculative reasoning item`() {
+    fun `ordinary model connecting stage uses generic execution drawer`() {
         val controller = MessageItemsControllerTestAccess.newController()
         controller.stateHolder.messages.add(
             Message(
@@ -665,12 +674,35 @@ class MessageItemsControllerStatusTest {
 
         val items = controller.chatListItemsForTest()
 
-        assertFalse(items.any { it is ChatListItem.AiMessageReasoning })
-        assertTrue(items.any { it is ChatListItem.LoadingIndicator })
+        val execution = items.filterIsInstance<ChatListItem.AiMessageReasoning>().single()
+        assertEquals("等待首个响应", execution.activityStatusText)
+        assertFalse(items.any { it is ChatListItem.LoadingIndicator })
     }
 
     @Test
-    fun `image loading indicator includes factual runtime text before first content`() {
+    fun `tool call status is routed into execution drawer item`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.stateHolder.messages.add(
+            Message(
+                id = "ai-tool-call",
+                text = "",
+                sender = Sender.AI,
+                reasoning = "正在选择工具",
+                currentWebSearchStage = "调用工具 · search_docs",
+            )
+        )
+        controller.stateHolder._isTextApiCalling.value = true
+        controller.stateHolder._currentTextStreamingAiMessageId.value = "ai-tool-call"
+
+        val items = controller.chatListItemsForTest()
+        val execution = items.filterIsInstance<ChatListItem.AiMessageReasoning>().single()
+
+        assertEquals("调用工具 · search_docs", execution.activityStatusText)
+        assertFalse(items.any { it is ChatListItem.LoadingIndicator })
+    }
+
+    @Test
+    fun `image connecting stage routes runtime status into execution drawer item`() {
         val controller = MessageItemsControllerTestAccess.newController()
         controller.stateHolder.imageGenerationMessages.add(
             Message(
@@ -686,18 +718,19 @@ class MessageItemsControllerStatusTest {
 
         val items = runBlocking {
             controller.imageGenerationChatListItems.first { chatItems ->
-                chatItems.any { it is ChatListItem.LoadingIndicator }
+                chatItems.any { it is ChatListItem.AiMessageReasoning }
             }
         }
-        val loading = items.filterIsInstance<ChatListItem.LoadingIndicator>().single()
+        val execution = items.filterIsInstance<ChatListItem.AiMessageReasoning>().single()
 
-        assertEquals("等待首个响应", loading.text)
-        assertFalse(loading.text.orEmpty().contains("Gemini"))
-        assertFalse(loading.text.orEmpty().contains("imagen-3"))
+        assertEquals("等待首个响应", execution.activityStatusText)
+        assertFalse(execution.activityStatusText.orEmpty().contains("Gemini"))
+        assertFalse(execution.activityStatusText.orEmpty().contains("imagen-3"))
+        assertFalse(items.any { it is ChatListItem.LoadingIndicator })
     }
 
     @Test
-    fun `image loading indicator remains stable while waiting for first content`() = runBlocking {
+    fun `image execution drawer status remains stable while waiting for first content`() = runBlocking {
         val controller = MessageItemsControllerTestAccess.newController()
         controller.stateHolder.imageGenerationMessages.add(
             Message(
@@ -713,14 +746,14 @@ class MessageItemsControllerStatusTest {
 
         val firstItems = withTimeout(2_000) {
             controller.imageGenerationChatListItems.first { chatItems ->
-                chatItems.any { it is ChatListItem.LoadingIndicator }
+                chatItems.any { it is ChatListItem.AiMessageReasoning }
             }
         }
-        val firstText = firstItems.filterIsInstance<ChatListItem.LoadingIndicator>().single().text
+        val firstText = firstItems.filterIsInstance<ChatListItem.AiMessageReasoning>().single().activityStatusText
         delay(1_100)
 
         val secondItems = controller.imageGenerationChatListItems.value
-        val secondText = secondItems.filterIsInstance<ChatListItem.LoadingIndicator>().single().text
+        val secondText = secondItems.filterIsInstance<ChatListItem.AiMessageReasoning>().single().activityStatusText
 
         assertEquals("等待首个响应", secondText)
         assertFalse(secondText.orEmpty().contains("Gemini"))
