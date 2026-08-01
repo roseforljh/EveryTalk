@@ -351,14 +351,11 @@ private fun ApiKeyItemGroup(
     }
     val providerName =
         configsInGroup.firstOrNull()?.provider?.ifBlank { null } ?: "综合平台"
-    val displayTitle = OpenClawSettingsRules.displayTitleForSettingsGroup(providerName)
-    val displaySubtitle = OpenClawSettingsRules.displaySubtitleForSettingsGroup(providerName)
-    val connectionSummary = OpenClawSettingsRules.connectionSummaryLabel(providerName, configsInGroup.firstOrNull()?.address.orEmpty())
-    val secretSummary = OpenClawSettingsRules.secretSummaryLabel(providerName, apiKey)
-    val remoteTargetSummary = OpenClawSettingsRules.remoteTargetLabel(configsInGroup.firstOrNull()?.openClawSessionId.orEmpty())
+    val connectionSummary = "地址: ${configsInGroup.firstOrNull()?.address.orEmpty().trim()}"
+    val secretSummary = "Key: ${SettingsEndpointRules.maskApiKey(apiKey)}"
     val firstCfg = configsInGroup.firstOrNull()
-    val isPinnedGroup = firstCfg != null && OpenClawSettingsRules.isPinnedSettingsGroup(firstCfg.provider)
-    val canExpandModels = firstCfg != null && OpenClawSettingsRules.canExpandSettingsModels(firstCfg.provider)
+    val isPinnedGroup = firstCfg != null && SettingsEndpointRules.isPinnedSettingsGroup(firstCfg.provider)
+    val canExpandModels = firstCfg != null && SettingsEndpointRules.canExpandSettingsModels(firstCfg.provider)
     val isDarkMode = isSystemInDarkTheme()
     val cardContainerColor = if (isDarkMode) Color.Black else Color.White
     val cardBorderColor = if (isDarkMode) Color(0xFF414141) else Color(0xFFF3F3F3)
@@ -395,24 +392,13 @@ private fun ApiKeyItemGroup(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = displayTitle,
+                        text = providerName,
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
-                    if (!displaySubtitle.isNullOrBlank()) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = displaySubtitle,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            fontWeight = FontWeight.Medium,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
                     Spacer(modifier = Modifier.height(4.dp))
                     if (!isPinnedGroup) {
                         Text(
@@ -428,15 +414,6 @@ private fun ApiKeyItemGroup(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             fontWeight = FontWeight.Normal
                         )
-                        if (!remoteTargetSummary.isNullOrBlank()) {
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = remoteTargetSummary,
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
                     }
                 }
                 if (isPinnedGroup) {

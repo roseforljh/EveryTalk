@@ -90,7 +90,7 @@ internal fun AddNewFullConfigDialog(
     val channels = if (isImageMode) {
         listOf("OpenAI兼容", "Gemini")
     } else {
-        listOf("OpenAI兼容", "Gemini", "OpenClaw", "Codex")
+        listOf("OpenAI兼容", "Anthropic", "Gemini", "Codex")
     }
     var selectedChannel by remember { mutableStateOf(channels.first()) }
     var apiKeyVisible by remember { mutableStateOf(false) }
@@ -116,10 +116,13 @@ internal fun AddNewFullConfigDialog(
     }
     val isDefaultSel = false // 移除默认选项，此变量保持为 false
     val isGoogleProvider = provider.trim().lowercase() in listOf("google", "gemini", "谷歌")
-    // 当平台为 Google 时，通道锁定为 Gemini
+    val isAnthropicProvider = provider.trim().equals("Anthropic", ignoreCase = true)
+    val isChannelLocked = isGoogleProvider || isAnthropicProvider
+    // 官方平台使用对应的原生协议渠道。
     LaunchedEffect(provider) {
-        if (isGoogleProvider) {
-            selectedChannel = "Gemini"
+        when {
+            isGoogleProvider -> selectedChannel = "Gemini"
+            isAnthropicProvider -> selectedChannel = "Anthropic"
         }
     }
 
@@ -265,7 +268,7 @@ internal fun AddNewFullConfigDialog(
                                                     modifier = Modifier.weight(1f)
                                                 )
                                                 // 统一删除策略：仅保护部分系统预置平台，其他均可删除
-                                                val canDelete = OpenClawSettingsRules.canDeleteProvider(providerItem)
+                                                val canDelete = SettingsEndpointRules.canDeleteProvider(providerItem)
                                                 if (canDelete) {
                                                     IconButton(
                                                         onClick = {
@@ -283,10 +286,11 @@ internal fun AddNewFullConfigDialog(
                                             }
                                         },
                                         onClick = {
-                                            // 选平台时若为 Google/谷歌，则锁定渠道为 Gemini
+                                            // 官方平台使用对应的原生协议渠道。
                                             val low = providerItem.trim().lowercase()
-                                            if (low == "google" || low == "gemini" || low == "谷歌") {
-                                                selectedChannel = "Gemini"
+                                            when {
+                                                low == "google" || low == "gemini" || low == "谷歌" -> selectedChannel = "Gemini"
+                                                low == "anthropic" -> selectedChannel = "Anthropic"
                                             }
                                             onProviderChange(providerItem)
                                             providerMenuExpanded = false
@@ -306,7 +310,7 @@ internal fun AddNewFullConfigDialog(
                         ExposedDropdownMenuBox(
                             expanded = channelMenuExpanded,
                             onExpandedChange = {
-                                if (!isGoogleProvider) {
+                                if (!isChannelLocked) {
                                     channelMenuExpanded = !channelMenuExpanded
                                 } else {
                                     channelMenuExpanded = false
@@ -318,9 +322,9 @@ internal fun AddNewFullConfigDialog(
                                 value = selectedChannel,
                                 onValueChange = {},
                                 readOnly = true,
-                                enabled = !isGoogleProvider, // Google 平台时禁用手动切换
+                                enabled = !isChannelLocked,
                                 modifier = Modifier
-                                    .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable, enabled = !isGoogleProvider)
+                                    .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable, enabled = !isChannelLocked)
                                     .fillMaxWidth()
                                     .onGloballyPositioned { coordinates -> 
                                         channelTextFieldAnchorBounds = coordinates.boundsInWindow()
@@ -332,7 +336,7 @@ internal fun AddNewFullConfigDialog(
                                 colors = DialogTextFieldColors
                             )
 
-                            if (!isGoogleProvider) {
+                            if (!isChannelLocked) {
                                 CustomStyledDropdownMenu(
                                     transitionState = channelMenuTransitionState,
                                     onDismissRequest = {
@@ -353,7 +357,7 @@ internal fun AddNewFullConfigDialog(
                             }
                         }
 
-                        SettingsFieldLabel(OpenClawSettingsRules.addressLabelFor(provider, selectedChannel))
+                        SettingsFieldLabel("API接口地址")
                         OutlinedTextField(
                             value = apiAddress,
                             onValueChange = onApiAddressChange,
@@ -368,11 +372,10 @@ internal fun AddNewFullConfigDialog(
                         // 实时预览 + 固定使用说明
                         if (selectedChannel != "Gemini") {
                             val fullUrlPreview = remember(apiAddress, provider, selectedChannel) {
-                                OpenClawSettingsRules.buildFullEndpointPreview(
+                                SettingsEndpointRules.buildFullEndpointPreview(
                                     base = apiAddress,
                                     provider = provider,
                                     channel = selectedChannel,
-                                    accessMode = if (OpenClawSettingsRules.isOpenClaw(provider, selectedChannel)) "bridge" else null,
                                     isImageMode = isImageMode
                                 )
                             }
@@ -386,7 +389,7 @@ internal fun AddNewFullConfigDialog(
                             }
                         }
 
-                        SettingsFieldLabel(OpenClawSettingsRules.keyLabelFor(provider, selectedChannel))
+                        SettingsFieldLabel("API密钥")
                         OutlinedTextField(
                             value = apiKey,
                             onValueChange = onApiKeyChange,

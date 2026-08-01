@@ -93,7 +93,7 @@ internal fun EditConfigDialog(
     val channelTypes = if (isImageMode) {
         listOf("OpenAI兼容", "Gemini")
     } else {
-        listOf("OpenAI兼容", "Gemini", "OpenClaw", "Codex")
+        listOf("OpenAI兼容", "Anthropic", "Gemini", "Codex")
     }
     
     var channelMenuExpanded by remember { mutableStateOf(false) }
@@ -261,11 +261,10 @@ internal fun EditConfigDialog(
                     )
                     if (selectedChannel != "Gemini") {
                         val fullUrlPreview = remember(apiAddress, provider, selectedChannel) {
-                            OpenClawSettingsRules.buildFullEndpointPreview(
+                            SettingsEndpointRules.buildFullEndpointPreview(
                                 base = apiAddress,
                                 provider = provider,
                                 channel = selectedChannel,
-                                accessMode = if (OpenClawSettingsRules.isOpenClaw(provider, selectedChannel)) "bridge" else null,
                                 isImageMode = isImageMode
                             )
                         }
