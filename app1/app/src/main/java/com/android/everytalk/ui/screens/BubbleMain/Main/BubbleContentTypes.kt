@@ -88,8 +88,8 @@ import com.android.everytalk.ui.components.streaming.contentVersionForRendering
 
 private val CONTEXT_MENU_CORNER_RADIUS = 28.dp
 private val CONTEXT_MENU_ITEM_ICON_SIZE = 22.dp
-// Markdown 单行字形视觉中心相对气泡中心偏下，用户气泡向上补偿 5dp。
-private val USER_BUBBLE_TEXT_OPTICAL_OFFSET = (-5).dp
+// Markdown 字形视觉重心偏下，用户气泡只移动内容绘制位置，不改变气泡尺寸。
+private val USER_BUBBLE_TEXT_OPTICAL_OFFSET = (-8).dp
 
 internal fun attachmentStripHorizontalAlignment(sender: Sender): Alignment.Horizontal =
     if (sender == Sender.User) Alignment.End else Alignment.Start

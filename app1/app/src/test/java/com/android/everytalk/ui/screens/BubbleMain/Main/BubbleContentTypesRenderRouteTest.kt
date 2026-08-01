@@ -20,6 +20,14 @@ class BubbleContentTypesRenderRouteTest {
     }
 
     @Test
+    fun `user bubble text applies optical centering without changing bubble size`() {
+        val source = bubbleContentTypesSource()
+
+        assertTrue(source.contains("USER_BUBBLE_TEXT_OPTICAL_OFFSET = (-8).dp"))
+        assertTrue(source.contains("USER_BUBBLE_TEXT_OPTICAL_OFFSET\n"))
+    }
+
+    @Test
     fun `multiple image attachments use visible bounds instead of fixed square whitespace`() {
         val source = bubbleContentTypesSource()
 
