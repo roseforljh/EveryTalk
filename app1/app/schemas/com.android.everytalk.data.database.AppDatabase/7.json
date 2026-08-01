@@ -1,12 +1,12 @@
 {
   "formatVersion": 1,
   "database": {
-    "version": 5,
-    "identityHash": "bf6a8da4159665a6104a0bfd75e70c30",
+    "version": 7,
+    "identityHash": "0acb205a0a8a208738d012705354e3b1",
     "entities": [
       {
         "tableName": "api_configs",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `address` TEXT NOT NULL, `key` TEXT NOT NULL, `model` TEXT NOT NULL, `provider` TEXT NOT NULL, `name` TEXT NOT NULL, `channel` TEXT NOT NULL, `isValid` INTEGER NOT NULL, `modalityType` TEXT NOT NULL, `temperature` REAL NOT NULL, `topP` REAL, `maxTokens` INTEGER, `defaultUseWebSearch` INTEGER, `imageSize` TEXT, `numInferenceSteps` INTEGER, `guidanceScale` REAL, `toolsJson` TEXT, `enableCodeExecution` INTEGER, `openClawAccessMode` TEXT NOT NULL, `openClawBridgeUrl` TEXT, `openClawSessionId` TEXT, `isImageGenConfig` INTEGER NOT NULL, PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` TEXT NOT NULL, `address` TEXT NOT NULL, `key` TEXT NOT NULL, `model` TEXT NOT NULL, `provider` TEXT NOT NULL, `name` TEXT NOT NULL, `channel` TEXT NOT NULL, `isValid` INTEGER NOT NULL, `modalityType` TEXT NOT NULL, `temperature` REAL NOT NULL, `topP` REAL, `maxTokens` INTEGER, `defaultUseWebSearch` INTEGER, `imageSize` TEXT, `numInferenceSteps` INTEGER, `guidanceScale` REAL, `toolsJson` TEXT, `enableCodeExecution` INTEGER, `isImageGenConfig` INTEGER NOT NULL, PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
@@ -107,22 +107,6 @@
             "fieldPath": "enableCodeExecution",
             "columnName": "enableCodeExecution",
             "affinity": "INTEGER"
-          },
-          {
-            "fieldPath": "openClawAccessMode",
-            "columnName": "openClawAccessMode",
-            "affinity": "TEXT",
-            "notNull": true
-          },
-          {
-            "fieldPath": "openClawBridgeUrl",
-            "columnName": "openClawBridgeUrl",
-            "affinity": "TEXT"
-          },
-          {
-            "fieldPath": "openClawSessionId",
-            "columnName": "openClawSessionId",
-            "affinity": "TEXT"
           },
           {
             "fieldPath": "isImageGenConfig",
@@ -618,7 +602,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'bf6a8da4159665a6104a0bfd75e70c30')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '0acb205a0a8a208738d012705354e3b1')"
     ]
   }
 }

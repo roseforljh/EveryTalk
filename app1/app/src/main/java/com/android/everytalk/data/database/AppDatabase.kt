@@ -36,7 +36,7 @@ import com.android.everytalk.data.database.entities.VoiceBackendConfigEntity
         ConversationParamsEntity::class,
         McpServerConfigEntity::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -60,7 +60,14 @@ abstract class AppDatabase : RoomDatabase() {
                 )
                 // 数据库本体使用 Android Room + SQLite。
                 // 当前没有接入 SQLCipher/SupportFactory，所以不是整库加密；敏感密钥的保护在上层字段处理逻辑中完成。
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                .addMigrations(
+                    MIGRATION_1_2,
+                    MIGRATION_2_3,
+                    MIGRATION_3_4,
+                    MIGRATION_4_5,
+                    MIGRATION_5_6,
+                    MIGRATION_6_7,
+                )
                 .build()
                 INSTANCE = instance
                 instance
@@ -100,16 +107,61 @@ abstract class AppDatabase : RoomDatabase() {
 
         val MIGRATION_4_5 = object : Migration(4, 5) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                db.execSQL("ALTER TABLE api_configs ADD COLUMN openClawAccessMode TEXT NOT NULL DEFAULT 'bridge'")
-                db.execSQL("ALTER TABLE api_configs ADD COLUMN openClawBridgeUrl TEXT")
-                db.execSQL("ALTER TABLE api_configs ADD COLUMN openClawSessionId TEXT")
-                db.execSQL("UPDATE api_configs SET openClawSessionId = NULL")
+                // 该版本不再需要结构变更。
             }
         }
 
         val MIGRATION_5_6 = object : Migration(5, 6) {
             override fun migrate(db: SupportSQLiteDatabase) {
-                // openClawSessionId 已在 4 -> 5 中添加，这里保持空迁移，避免重复加列导致闪退。
+                // 该版本不需要结构变更。
+            }
+        }
+
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS api_configs_new (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        address TEXT NOT NULL,
+                        key TEXT NOT NULL,
+                        model TEXT NOT NULL,
+                        provider TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        channel TEXT NOT NULL,
+                        isValid INTEGER NOT NULL,
+                        modalityType TEXT NOT NULL,
+                        temperature REAL NOT NULL,
+                        topP REAL,
+                        maxTokens INTEGER,
+                        defaultUseWebSearch INTEGER,
+                        imageSize TEXT,
+                        numInferenceSteps INTEGER,
+                        guidanceScale REAL,
+                        toolsJson TEXT,
+                        enableCodeExecution INTEGER,
+                        isImageGenConfig INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO api_configs_new (
+                        id, address, key, model, provider, name, channel, isValid,
+                        modalityType, temperature, topP, maxTokens, defaultUseWebSearch,
+                        imageSize, numInferenceSteps, guidanceScale, toolsJson,
+                        enableCodeExecution, isImageGenConfig
+                    )
+                    SELECT
+                        id, address, key, model, provider, name, channel, isValid,
+                        modalityType, temperature, topP, maxTokens, defaultUseWebSearch,
+                        imageSize, numInferenceSteps, guidanceScale, toolsJson,
+                        enableCodeExecution, isImageGenConfig
+                    FROM api_configs
+                    """.trimIndent()
+                )
+                db.execSQL("DROP TABLE api_configs")
+                db.execSQL("ALTER TABLE api_configs_new RENAME TO api_configs")
             }
         }
     }

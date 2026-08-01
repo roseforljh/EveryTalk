@@ -6,12 +6,8 @@ import androidx.sqlite.db.SupportSQLiteOpenHelper
 import androidx.sqlite.db.framework.FrameworkSQLiteOpenHelperFactory
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
-import java.io.File
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.jsonArray
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.After
 import org.junit.Before
@@ -39,11 +35,11 @@ class AppDatabaseMigrationTest {
     }
 
     @Test
-    fun `migration 5 to 6 preserves api configs with openclaw columns`() {
+    fun `migration 6 to 7 preserves common api config data`() {
         val createHelper = openHelper(
-            version = 5,
+            version = 6,
             onCreate = { db ->
-                createSchemaFromJson(db, 5)
+                createVersion6ApiConfigsTable(db)
             }
         )
         createHelper.writableDatabase.apply {
@@ -53,13 +49,11 @@ class AppDatabaseMigrationTest {
                     id, address, key, model, provider, name, channel, isValid,
                     modalityType, temperature, topP, maxTokens, defaultUseWebSearch,
                     imageSize, numInferenceSteps, guidanceScale, toolsJson,
-                    enableCodeExecution, openClawAccessMode, openClawBridgeUrl,
-                    openClawSessionId, isImageGenConfig
+                    enableCodeExecution, isImageGenConfig
                 ) VALUES (
-                    'api-1', 'https://example.test', 'secret', 'model-1', 'openclaw',
-                    'OpenClaw', 'chat', 1, 'TEXT', 0.7, NULL, NULL, 0,
-                    NULL, NULL, NULL, '[]', 0, 'bridge',
-                    'http://127.0.0.1:3000', 'session-1', 0
+                    'api-1', 'https://example.test', 'secret', 'model-1', 'anthropic',
+                    'Anthropic', 'Anthropic', 1, 'TEXT', 0.7, NULL, 8192, 0,
+                    NULL, NULL, NULL, '[]', 0, 0
                 )
                 """.trimIndent()
             )
@@ -68,24 +62,30 @@ class AppDatabaseMigrationTest {
         createHelper.close()
 
         val migrateHelper = openHelper(
-            version = 6,
+            version = 7,
             onUpgrade = { db, oldVersion, newVersion ->
-                assertEquals(5, oldVersion)
-                assertEquals(6, newVersion)
-                AppDatabase.MIGRATION_5_6.migrate(db)
+                assertEquals(6, oldVersion)
+                assertEquals(7, newVersion)
+                AppDatabase.MIGRATION_6_7.migrate(db)
             }
         )
         val db = migrateHelper.writableDatabase
 
         val cursor = db.query(
-            "SELECT openClawAccessMode, openClawBridgeUrl, openClawSessionId FROM api_configs WHERE id = 'api-1'"
+            "SELECT provider, channel, maxTokens, toolsJson FROM api_configs WHERE id = 'api-1'"
         )
         cursor.use {
             assertTrue(it.moveToFirst())
-            assertEquals("bridge", it.getString(0))
-            assertEquals("http://127.0.0.1:3000", it.getString(1))
-            assertEquals("session-1", it.getString(2))
+            assertEquals("anthropic", it.getString(0))
+            assertEquals("Anthropic", it.getString(1))
+            assertEquals(8192, it.getInt(2))
+            assertEquals("[]", it.getString(3))
         }
+        val columns = mutableListOf<String>()
+        db.query("PRAGMA table_info(api_configs)").use { tableInfo ->
+            while (tableInfo.moveToNext()) columns += tableInfo.getString(1)
+        }
+        assertFalse(columns.contains("legacyFeatureState"))
         db.close()
         migrateHelper.close()
     }
@@ -117,32 +117,33 @@ class AppDatabaseMigrationTest {
         )
     }
 
-    private fun createSchemaFromJson(db: SupportSQLiteDatabase, version: Int) {
-        val schema = schemaFile(version).readText(Charsets.UTF_8).removePrefix("\uFEFF")
-        val database = Json.parseToJsonElement(schema).jsonObject
-            .getValue("database")
-            .jsonObject
-        database.getValue("entities").jsonArray.forEach { entityElement ->
-            val entity = entityElement.jsonObject
-            val tableName = entity.getValue("tableName").jsonPrimitive.content
-            val createSql = entity.getValue("createSql").jsonPrimitive.content
-                .replace("\${TABLE_NAME}", tableName)
-            db.execSQL(createSql)
-        }
-        database.getValue("setupQueries").jsonArray.forEach { query ->
-            db.execSQL(query.jsonPrimitive.content)
-        }
-    }
-
-    private fun schemaFile(version: Int): File {
-        val relative = "schemas/com.android.everytalk.data.database.AppDatabase/$version.json"
-        val candidates = listOf(
-            File(relative),
-            File("app/$relative"),
-            File("app1/app/$relative"),
+    private fun createVersion6ApiConfigsTable(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE api_configs (
+                id TEXT NOT NULL PRIMARY KEY,
+                address TEXT NOT NULL,
+                key TEXT NOT NULL,
+                model TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                name TEXT NOT NULL,
+                channel TEXT NOT NULL,
+                isValid INTEGER NOT NULL,
+                modalityType TEXT NOT NULL,
+                temperature REAL NOT NULL,
+                topP REAL,
+                maxTokens INTEGER,
+                defaultUseWebSearch INTEGER,
+                imageSize TEXT,
+                numInferenceSteps INTEGER,
+                guidanceScale REAL,
+                toolsJson TEXT,
+                enableCodeExecution INTEGER,
+                legacyFeatureState TEXT,
+                isImageGenConfig INTEGER NOT NULL
+            )
+            """.trimIndent()
         )
-        return candidates.firstOrNull { it.isFile }
-            ?: error("Missing schema file: $relative")
     }
 
     private companion object {
