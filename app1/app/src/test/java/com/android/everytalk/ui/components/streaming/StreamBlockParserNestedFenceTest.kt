@@ -13,11 +13,11 @@ class StreamBlockParserNestedFenceTest {
             如果官方链接下载较慢，可以使用社区维护的快速安装脚本：
             *   **macOS:**
                 ```bash
-                curl -fsSL https://raw.githubusercontent.com/736773174/openclaw-setup-cn/main/install.sh | bash
+                curl -fsSL https://example.com/install.sh | bash
                 ```
             *   **Windows (PowerShell):**
                 ```powershell
-                irm https://raw.githubusercontent.com/736773174/openclaw-setup-cn/main/install.ps1 | iex
+                irm https://example.com/install.ps1 | iex
                 ```
         """.trimIndent()
 

@@ -103,13 +103,6 @@ data class ChatRequest(
     @SerialName("conversationId")
     val conversationId: String? = null,
 
-    @SerialName("openClawSessionId")
-    val openClawSessionId: String? = null,
-
-    // legacy field: keep only for backward compatibility with persisted data during migration window
-    @SerialName("openClawBridgeUrl")
-    val openClawBridgeUrl: String? = null,
-
     // 代码执行工具控制：None=auto(智能判断), True=强制开启, False=强制关闭
     @SerialName("enableCodeExecution")
     val enableCodeExecution: Boolean? = null

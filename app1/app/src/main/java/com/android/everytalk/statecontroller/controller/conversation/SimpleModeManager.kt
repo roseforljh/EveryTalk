@@ -145,7 +145,6 @@ class SimpleModeManager(
             // 新会话是全新的、独立的：禁止任何迁移/继承
             val newId = "chat_${UUID.randomUUID()}"
             stateHolder.setCurrentConversationId(newId)
-            stateHolder.updateOpenClawSessionId(null)
             stateHolder.systemPrompts[newId] = ""
             // 不为新会话自动回填会话参数，保持默认关闭
         }

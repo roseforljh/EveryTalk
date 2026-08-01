@@ -11,7 +11,7 @@ class StreamBlockParserTildeFenceTest {
         val input = """
             安装步骤：
             ~~~bash
-            curl -fsSL https://openclaw.ai/install.sh | bash
+            curl -fsSL https://example.com/install.sh | bash
             ~~~
         """.trimIndent()
 
@@ -27,7 +27,7 @@ class StreamBlockParserTildeFenceTest {
         val input = """
             安装步骤：
             ~~~powershell
-            irm https://openclaw.ai/install.ps1 | iex
+            irm https://example.com/install.ps1 | iex
         """.trimIndent()
 
         val result = StreamBlockParser.parse(input, "msg")

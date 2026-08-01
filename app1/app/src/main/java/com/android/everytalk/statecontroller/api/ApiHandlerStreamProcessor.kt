@@ -3,7 +3,6 @@ package com.android.everytalk.statecontroller
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.network.AppStreamEvent
-import com.android.everytalk.data.network.openclaw.OpenClawRuntimeState
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
 import com.android.everytalk.util.AppLogger
 import com.android.everytalk.util.PromptLeakGuard
@@ -369,14 +368,6 @@ internal class ApiHandlerStreamProcessor(
                     } else {
                         updatedMessage.copy(currentWebSearchStage = appEvent.stage)
                     }
-                    stateHolder.updateOpenClawGatewayStatus(appEvent.stage)
-                    if (appEvent.stage.startsWith("agent_run:")) {
-                        val runId = appEvent.stage.substringAfter(':', "").ifBlank { null }
-                        val current = OpenClawRuntimeState.current()
-                        current?.sessionKey?.let { sessionKey ->
-                            OpenClawRuntimeState.update(sessionKey = sessionKey, runId = runId)
-                        }
-                    }
                 }
                 is AppStreamEvent.ExecutionStatusUpdate -> {
                     updatedMessage = if (currentMessage.contentStarted || currentMessage.text.isNotBlank()) {
@@ -483,10 +474,6 @@ internal class ApiHandlerStreamProcessor(
                             stateHolder._isImageApiCalling.value = false
                             stateHolder._currentImageStreamingAiMessageId.value = null
                         }
-                    }
-                    stateHolder.updateOpenClawSessionId(null)
-                    OpenClawRuntimeState.current()?.sessionKey?.let { sessionKey ->
-                        OpenClawRuntimeState.update(sessionKey = sessionKey, runId = null)
                     }
                     
                     // 按用户期望：不要在 finish 事件处强制切 isStreaming=false

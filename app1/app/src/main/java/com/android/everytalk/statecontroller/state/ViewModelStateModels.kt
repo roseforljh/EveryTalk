@@ -10,18 +10,6 @@ data class ConversationScrollState(
     val firstBubbleScreenY: Int = -1,
 )
 
-enum class OpenClawGatewayConnectionState {
-    DISCONNECTED,
-    PAIRING_PENDING,
-    CONNECTED,
-}
-
-data class OpenClawGatewayStatus(
-    val connectionState: OpenClawGatewayConnectionState = OpenClawGatewayConnectionState.DISCONNECTED,
-    val pendingDeviceId: String? = null,
-    val statusText: String? = null,
-)
-
 /** 待处理的配置参数，用于暂存添加配置流程中的用户输入。 */
 data class PendingConfigParams(
     val provider: String,

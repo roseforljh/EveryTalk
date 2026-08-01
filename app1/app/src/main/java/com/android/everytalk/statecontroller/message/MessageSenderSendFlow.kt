@@ -55,12 +55,7 @@ import kotlinx.serialization.json.longOrNull
 
 internal fun shouldUsePromptCapabilities(
     isImageGeneration: Boolean,
-    provider: String,
-    channel: String,
-    model: String,
-): Boolean = !isImageGeneration && listOf(provider, channel, model).none {
-    it.contains("openclaw", ignoreCase = true)
-}
+): Boolean = !isImageGeneration
 
 internal fun MessageSender.sendMessageInternal(
         messageText: String,
@@ -446,7 +441,6 @@ internal fun MessageSender.sendMessageInternal(
                     model = currentConfig.model,
                     deviceId = com.android.everytalk.util.DeviceIdManager.getDeviceId(application),
                     conversationId = stateHolder._currentConversationId.value,
-                    openClawSessionId = stateHolder._currentOpenClawSessionId.value,
                     useWebSearch = webSearchRouting.useNativeWebSearch,
                     // 显式传递代码执行开关状态
                     enableCodeExecution = enableCodeExecutionForRequest,
@@ -524,9 +518,6 @@ internal fun MessageSender.sendMessageInternal(
 
                         if (shouldUsePromptCapabilities(
                                 isImageGeneration = isImageGeneration,
-                                provider = providerForRequestBackend,
-                                channel = currentConfig.channel,
-                                model = currentConfig.model,
                             )
                         ) {
                             toolsList.add(PromptCapabilityCatalog.selectionToolDefinition())
