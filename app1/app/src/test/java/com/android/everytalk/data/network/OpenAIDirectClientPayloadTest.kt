@@ -3,7 +3,9 @@ package com.android.everytalk.data.network
 import android.app.Application
 import com.android.everytalk.data.DataClass.AbstractApiMessage
 import com.android.everytalk.data.DataClass.ChatRequest
+import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -35,6 +37,22 @@ class OpenAIDirectClientPayloadTest {
     }
 
     @Test
+    fun `官方和兼容接口使用各自的最大输出字段`() {
+        val generationConfig = GenerationConfig(maxOutputTokens = 8192)
+        val official = buildPayload(
+            request(apiAddress = "https://api.openai.com/v1", generationConfig = generationConfig)
+        )
+        val compatible = buildPayload(
+            request(apiAddress = "https://example.com/v1", generationConfig = generationConfig)
+        )
+
+        assertTrue(official.contains("\"max_completion_tokens\":8192"))
+        assertFalse(official.contains("\"max_tokens\""))
+        assertTrue(compatible.contains("\"max_tokens\":8192"))
+        assertFalse(compatible.contains("\"max_completion_tokens\""))
+    }
+
+    @Test
     fun `tool order should not change payload bytes`() {
         val alpha = tool("alpha")
         val beta = tool("beta")
@@ -59,6 +77,23 @@ class OpenAIDirectClientPayloadTest {
         assertFalse(payload.contains("ETD v="))
     }
 
+    @Test
+    fun `compatible payload merges typed custom model parameters`() {
+        val payload = buildPayload(
+            request(
+                customModelParameters = mapOf(
+                    "reasoning_effort" to JsonPrimitive("medium"),
+                    "thinking_budget" to JsonPrimitive(4096),
+                    "enable_thinking" to JsonPrimitive(true),
+                )
+            )
+        )
+
+        assertTrue(payload.contains("\"reasoning_effort\":\"medium\""))
+        assertTrue(payload.contains("\"thinking_budget\":4096"))
+        assertTrue(payload.contains("\"enable_thinking\":true"))
+    }
+
     private fun buildPayload(request: ChatRequest): String {
         val method = OpenAIDirectClient::class.java.getDeclaredMethod(
             "buildOpenAIPayload",
@@ -73,6 +108,8 @@ class OpenAIDirectClientPayloadTest {
         model: String = "gpt-5.4",
         tools: List<Map<String, Any>>? = null,
         messages: List<AbstractApiMessage> = listOf(SimpleTextApiMessage(role = "user", content = "hello")),
+        customModelParameters: Map<String, Any>? = null,
+        generationConfig: GenerationConfig? = null,
     ): ChatRequest = ChatRequest(
         messages = messages,
         provider = "OpenAI",
@@ -81,6 +118,8 @@ class OpenAIDirectClientPayloadTest {
         apiKey = "test-key",
         model = model,
         tools = tools,
+        customModelParameters = customModelParameters,
+        generationConfig = generationConfig,
     )
 
     private fun tool(name: String): Map<String, Any> = mapOf(

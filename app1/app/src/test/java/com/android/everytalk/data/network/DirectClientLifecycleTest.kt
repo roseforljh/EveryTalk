@@ -79,6 +79,25 @@ class DirectClientLifecycleTest {
     }
 
     @Test
+    fun `HTTP错误保留上游结构化上下文字段`() = runBlocking {
+        val body =
+            """{"error":{"message":"maximum context length exceeded","type":"invalid_request_error","code":"context_length_exceeded","param":"messages","max_context_tokens":8192}}"""
+        withHttpClient(status = 400, body = body) { client ->
+            val error = OpenAIDirectClient.streamChatDirect(
+                client,
+                request("OpenAI", "OpenAI"),
+            ).toList().filterIsInstance<AppStreamEvent.Error>().single()
+
+            assertEquals(400, error.upstreamStatus)
+            assertEquals("context_length_exceeded", error.code)
+            assertEquals("invalid_request_error", error.type)
+            assertEquals("messages", error.parameter)
+            assertEquals("maximum context length exceeded", error.rawMessage)
+            assertEquals(8_192, error.maxContextTokens)
+        }
+    }
+
+    @Test
     fun `parse errors emit one error terminal without stop`() = runBlocking {
         withHttpClient(body = "data: {broken}\n\n") { client ->
             assertSingleErrorTerminal(
@@ -182,6 +201,114 @@ class DirectClientLifecycleTest {
             assertEquals(expected, events.filterIsInstance<AppStreamEvent.ContentFinal>().single().text)
             assertEquals(listOf("stop"), events.filterIsInstance<AppStreamEvent.Finish>().map { it.reason })
             assertFalse(events.any { it is AppStreamEvent.Error })
+        }
+    }
+
+    @Test
+    fun `OpenAI Chat流将最终usage发布为统一事件`() = runBlocking {
+        val body = buildString {
+            append("data: ")
+            append(
+                """{"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":20,"total_tokens":120,"prompt_tokens_details":{"cached_tokens":30},"completion_tokens_details":{"reasoning_tokens":7}}}"""
+            )
+            append("\n\ndata: [DONE]\n\n")
+        }
+
+        withHttpClient(body = body) { client ->
+            val usage = OpenAIDirectClient.streamChatDirect(
+                client,
+                request("OpenAI", "OpenAI"),
+            ).toList().filterIsInstance<AppStreamEvent.Usage>().single().usage
+
+            assertEquals(100L, usage.inputTokens)
+            assertEquals(20L, usage.outputTokens)
+            assertEquals(7L, usage.reasoningTokens)
+            assertEquals(30L, usage.cachedInputTokens)
+            assertEquals(120L, usage.totalTokens)
+            assertTrue(usage.isFinal)
+            assertEquals(TokenUsageSource.OPENAI_CHAT, usage.source)
+        }
+    }
+
+    @Test
+    fun `OpenAI Responses完成事件发布统一usage`() = runBlocking {
+        val body = buildString {
+            appendResponsesEvent(
+                """{"type":"response.completed","response":{"usage":{"input_tokens":200,"output_tokens":30,"total_tokens":230,"input_tokens_details":{"cached_tokens":40,"cache_write_tokens":10},"output_tokens_details":{"reasoning_tokens":9}}}}"""
+            )
+            append("data: [DONE]\n\n")
+        }
+
+        withHttpClient(body = body) { client ->
+            val usage = OpenAIResponsesClient.streamChatResponses(
+                client,
+                request("OpenAI", "OpenAI"),
+            ).toList().filterIsInstance<AppStreamEvent.Usage>().single().usage
+
+            assertEquals(200L, usage.inputTokens)
+            assertEquals(30L, usage.outputTokens)
+            assertEquals(9L, usage.reasoningTokens)
+            assertEquals(40L, usage.cachedInputTokens)
+            assertEquals(10L, usage.cacheWriteTokens)
+            assertEquals(230L, usage.totalTokens)
+            assertEquals(TokenUsageSource.OPENAI_RESPONSES, usage.source)
+        }
+    }
+
+    @Test
+    fun `Gemini usageMetadata发布统一usage`() = runBlocking {
+        val body = buildString {
+            append("data: ")
+            append(
+                """{"candidates":[{"content":{"parts":[{"text":"ok"}]}}],"usageMetadata":{"promptTokenCount":300,"candidatesTokenCount":40,"thoughtsTokenCount":11,"cachedContentTokenCount":50,"totalTokenCount":340}}"""
+            )
+            append("\n\ndata: [DONE]\n\n")
+        }
+
+        withHttpClient(body = body) { client ->
+            val usage = GeminiDirectClient.streamChatDirect(
+                client,
+                request("Gemini", "Gemini"),
+            ).toList().filterIsInstance<AppStreamEvent.Usage>().single().usage
+
+            assertEquals(300L, usage.inputTokens)
+            assertEquals(40L, usage.outputTokens)
+            assertEquals(11L, usage.reasoningTokens)
+            assertEquals(50L, usage.cachedInputTokens)
+            assertEquals(340L, usage.totalTokens)
+            assertEquals(TokenUsageSource.GEMINI, usage.source)
+        }
+    }
+
+    @Test
+    fun `Anthropic合并message start与delta usage`() = runBlocking {
+        val body = buildString {
+            append("data: ")
+            append(
+                """{"type":"message_start","message":{"usage":{"input_tokens":400,"cache_read_input_tokens":60,"cache_creation_input_tokens":20}}}"""
+            )
+            append("\n\ndata: ")
+            append(
+                """{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":50}}"""
+            )
+            append("\n\ndata: {\"type\":\"message_stop\"}\n\n")
+        }
+
+        withHttpClient(body = body) { client ->
+            val usageEvents = AnthropicDirectClient.streamChatDirect(
+                client,
+                request("Anthropic", "Anthropic"),
+            ).toList().filterIsInstance<AppStreamEvent.Usage>()
+
+            assertEquals(2, usageEvents.size)
+            assertFalse(usageEvents.first().usage.isFinal)
+            val usage = usageEvents.last().usage
+            assertEquals(400L, usage.inputTokens)
+            assertEquals(50L, usage.outputTokens)
+            assertEquals(60L, usage.cachedInputTokens)
+            assertEquals(20L, usage.cacheWriteTokens)
+            assertTrue(usage.isFinal)
+            assertEquals(TokenUsageSource.ANTHROPIC, usage.source)
         }
     }
 

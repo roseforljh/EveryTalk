@@ -7,6 +7,7 @@ import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.DataClass.PartsApiMessage
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.DataClass.ThinkingConfig
+import com.android.everytalk.data.DataClass.ReasoningMode
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -85,7 +86,11 @@ class AnthropicDirectClientTest {
                         temperature = 0.2f,
                         topP = 0.8f,
                         maxOutputTokens = 4096,
-                        thinkingConfig = ThinkingConfig(includeThoughts = true, thinkingBudget = 2048),
+                        thinkingConfig = ThinkingConfig(
+                            includeThoughts = true,
+                            thinkingBudget = 2048,
+                            reasoningMode = ReasoningMode.BUDGET,
+                        ),
                     ),
                 ),
             ),
@@ -94,6 +99,26 @@ class AnthropicDirectClientTest {
         assertEquals(2048, payload.getValue("thinking").jsonObject.getValue("budget_tokens").jsonPrimitive.content.toInt())
         assertFalse(payload.containsKey("temperature"))
         assertFalse(payload.containsKey("top_p"))
+    }
+
+    @Test
+    fun `adaptive thinking payload uses configurable medium effort`() {
+        val payload = Json.parseToJsonElement(
+            AnthropicDirectClient.buildAnthropicPayload(
+                request(
+                    generationConfig = GenerationConfig(
+                        thinkingConfig = ThinkingConfig(
+                            includeThoughts = true,
+                            reasoningMode = ReasoningMode.EFFORT,
+                            reasoningEffort = "medium",
+                        ),
+                    ),
+                ),
+            ),
+        ).jsonObject
+
+        assertEquals("adaptive", payload.getValue("thinking").jsonObject.getValue("type").jsonPrimitive.content)
+        assertEquals("medium", payload.getValue("output_config").jsonObject.getValue("effort").jsonPrimitive.content)
     }
 
     @Test

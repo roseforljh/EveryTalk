@@ -5,6 +5,8 @@ import com.android.everytalk.data.DataClass.AbstractApiMessage
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.PartsApiMessage
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
+import com.android.everytalk.data.DataClass.GenerationConfig
+import com.android.everytalk.data.DataClass.ThinkingConfig
 import kotlinx.serialization.json.JsonElement
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
@@ -77,6 +79,31 @@ class OpenAIResponsesClientPayloadTest {
         assertFalse(payload.contains("ETD v="))
     }
 
+    @Test
+    fun `responses reasoning effort comes from model parameters and defaults to medium`() {
+        val defaultPayload = buildResponsesPayloadForTest(request())
+        val highPayload = buildResponsesPayloadForTest(
+            request(
+                generationConfig = GenerationConfig(
+                    thinkingConfig = ThinkingConfig(reasoningEffort = "high"),
+                )
+            )
+        )
+
+        assertTrue(defaultPayload.contains("\"effort\":\"medium\""))
+        assertTrue(highPayload.contains("\"effort\":\"high\""))
+    }
+
+    @Test
+    fun `responses使用官方最大输出字段`() {
+        val payload = buildResponsesPayloadForTest(
+            request(generationConfig = GenerationConfig(maxOutputTokens = 8192))
+        )
+
+        assertTrue(payload.contains("\"max_output_tokens\":8192"))
+        assertFalse(payload.contains("\"max_completion_tokens\""))
+    }
+
     private fun buildResponsesPayloadForTest(request: ChatRequest): String {
         val method = OpenAIResponsesClient::class.java.getDeclaredMethod(
             "buildResponsesPayload",
@@ -94,6 +121,7 @@ class OpenAIResponsesClientPayloadTest {
         messages: List<AbstractApiMessage> = listOf(
             PartsApiMessage(role = "user", parts = listOf(ApiContentPart.Text("hello"))),
         ),
+        generationConfig: GenerationConfig? = null,
     ): ChatRequest = ChatRequest(
         messages = messages,
         provider = "OpenAI",
@@ -102,6 +130,7 @@ class OpenAIResponsesClientPayloadTest {
         apiKey = "test-key",
         model = model,
         tools = tools,
+        generationConfig = generationConfig,
     )
 
     private fun tool(name: String): Map<String, Any> = mapOf(
