@@ -12,7 +12,7 @@
 
 - **Project Positioning**: A native Android AI client focusing on multi-model integration, real-time streaming, multimodal features, and local privacy.
 - **Target Platform**: Android 8.1 and above (Android 10+ recommended); Development environment requires Android Studio + JDK 17.
-- **Capabilities**: Covers text conversation, vision, image generation, live voice, LaTeX offline rendering, native web search, and OpenClaw remote control integration.
+- **Capabilities**: Covers text conversation, vision, image generation, live voice, LaTeX offline rendering, native web search, and native Anthropic Messages API access.
 - **Connection Modes**: Supports direct upstream API calls (serverless), as well as routing through an optional proxy backend for image generation and extra endpoints.
 - **Minimum Requirement**: First-time use requires at least one set of API endpoint, model name, and API key. Advanced capabilities depend on upstream models or backend support.
 
@@ -25,7 +25,6 @@
 - Personal users who want to unify multiple LLMs (such as OpenAI o1/o3-mini, Gemini 2.5/2.0, Claude 3.7 Sonnet, DeepSeek-R1) in a single Android app.
 - Heavy AI users who require high-performance streaming, multimodal inputs, advanced image generation (Flux.1, Imagen 3, DALL-E 3), and voice conversations.
 - Developers wanting to learn modern native Android AI applications using Kotlin and Jetpack Compose.
-- Advanced users requiring remote server control via the OpenClaw / Bridge setup.
 
 ### Not Suitable For
 
@@ -40,7 +39,7 @@
 
 - The primary deliverable of this project is the **native Android client** located in `app1/`.
 - The application supports a **serverless direct connection mode**, but not all models provide identical features (e.g., web search only works on models that support native search parameters).
-- Features like image generation, voice interaction, backend proxies, and OpenClaw depend on whether your upstream models or server endpoints support them.
+- Features like image generation, voice interaction, and backend proxies depend on whether your upstream models or server endpoints support them.
 - "Supported" in this README means the client contains the integration pipeline, not that every model works with every config by default.
 
 ---
@@ -48,7 +47,6 @@
 ## 📚 Document Index
 
 - **Project Overview**: Current `README.md` (English) / `README_zh.md` (中文).
-- **OpenClaw Integration**: [`docs/OpenClaw接入指南.md`](docs/OpenClaw接入指南.md), detailing the setup of EveryTalk -> Bridge -> Gateway.
 - **Markdown and Math Rendering Record**: [`docs/plans/Markdown与MathJax统一渲染方案.md`](docs/plans/Markdown与MathJax统一渲染方案.md), recording the completed MikePenz + CodeBlockCard + MathJax 4 SVG architecture, verification results, and remaining device acceptance items.
 - **Design Logs**: `docs/plans/`, containing design documentation and historical architectural decisions.
 - **Developer / Agent Docs**: `CLAUDE.md` and `AGENTS.md`, helpful for maintainers wanting to build and run tests.
@@ -277,18 +275,6 @@ data: [DONE]
   ]
 }
 ```
-
----
-
-## 🦞 OpenClaw Guide
-
-If you wish to control your remote VPS instances running Claw via EveryTalk:
-
-```bash
-curl -fsSL https://claw.everytalk.cc | bash
-```
-
-See [OpenClaw Integration](docs/OpenClaw接入指南.md) for full configuration steps.
 
 ---
 

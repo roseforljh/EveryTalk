@@ -12,7 +12,7 @@
 
 - **项目定位**: 面向 Android 的原生 AI 对话客户端，聚焦多模型接入、流式交互、多模态能力与本地化使用体验。
 - **当前平台**: Android 8.1 及以上，推荐 Android 10+；开发环境建议使用 Android Studio + JDK 17。
-- **能力范围**: 覆盖文本对话、视觉理解、图像生成、语音交互、数学公式渲染、原生联网搜索与 OpenClaw 远程控制扩展接入。
+- **能力范围**: 覆盖文本对话、视觉理解、图像生成、语音交互、数学公式渲染、原生联网搜索与 Anthropic Messages API 直连。
 - **接入方式**: 支持直连兼容 API，也支持通过可选后端做请求代理、图像生成与附加能力扩展。
 - **使用门槛**: 首次使用至少需要一套可用的模型 API 地址、模型名称与对应密钥；部分高级能力依赖上游模型或后端支持。
 
@@ -25,7 +25,6 @@
 - 想在 Android 设备上统一接入多种大模型（如最新的 OpenAI o1/o3-mini, Gemini 2.5/2.0, Claude 3.7 Sonnet, DeepSeek-R1 等）的个人用户。
 - 需要流式响应、多模态输入、高级图像生成（如 Flux.1, Imagen 3, DALL-E 3）、语音交互的重度 AI 使用者。
 - 希望基于 Kotlin + Jetpack Compose 学习原生 AI 应用实现的开发者。
-- 需要通过 OpenClaw / Bridge 方案扩展远程能力的进阶用户。
 
 ### 不适合
 
@@ -40,16 +39,15 @@
 
 - 本项目当前主交付形态是 **Android 原生客户端**，核心工程位于 `app1/`。
 - 应用支持 **无后端直连模式**，但并不是所有模型都具备一致能力；例如联网搜索只对支持原生搜索的模型生效。
-- 图像生成、语音链路、后端代理、OpenClaw 等能力，是否可用取决于你接入的服务端或上游模型是否支持。
+- 图像生成、语音链路、后端代理等能力，是否可用取决于你接入的服务端或上游模型是否支持。
 - README 中的“支持”表示项目已经提供对应接入链路或消费能力，不等于任意模型在任意配置下都默认可用。
-- 仓库中同时包含 Android 客户端与可选后端相关代码，初次阅读时建议优先从 `README_zh.md`、`docs/OpenClaw接入指南.md` 和 `docs/plans/` 进入。
+- 仓库中同时包含 Android 客户端与可选后端相关代码，初次阅读时建议优先从 `README_zh.md` 和 `docs/plans/` 进入。
 
 ---
 
 ## 📚 文档入口
 
 - **项目总览**: 当前 `README_zh.md`（中文）/ `README.md`（英文）。
-- **OpenClaw 专题**: [`docs/OpenClaw接入指南.md`](docs/OpenClaw接入指南.md)，说明 EveryTalk -> Bridge -> Gateway 的接入链路与部署方式。
 - **方案沉淀**: `docs/plans/`，包含部分功能设计与演进方案，可用于理解历史决策与结构调整方向。
 - **Claude / Agent 相关文档**: `CLAUDE.md` 与 `AGENTS.md`，适合需要在本仓库内继续开发或协作的维护者。
 
@@ -321,26 +319,6 @@ X-Timestamp: Unix timestamp
 **数据加密**:
 - 本地设备数据使用 AES-256 加密存储。
 - 网络传输强制使用 HTTPS。
-
----
-
-## 📚 技术实现文档
-
-| 主题 | 说明 | 链接 |
-|------|------|------|
-| **OpenClaw 远程接入** | 说明如何通过 EveryTalk + VPS Bridge + OpenClaw Gateway 的方式远程控制龙虾。 | [👉 查看文档](docs/OpenClaw接入指南.md) |
-
----
-
-## 🦞 OpenClaw 接入指南
-
-如果你希望通过 EveryTalk 远程控制部署在服务器上的 Claw 龙虾控制端：
-
-```bash
-curl -fsSL https://claw.everytalk.cc | bash
-```
-
-详细信息请参见 [OpenClaw 接入指南](docs/OpenClaw接入指南.md)。
 
 ---
 
