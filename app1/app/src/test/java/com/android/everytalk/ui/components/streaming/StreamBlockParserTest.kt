@@ -349,6 +349,115 @@ class StreamBlockParserTest {
     }
 
     @Test
+    fun `数字开头且数字后有空格的公式不会破坏后续公式`() {
+        val prepared = StreamBlockParser.prepareMessage(
+            content =
+                "两边同时除以 ${'$'}36 \\times 37${'$'}（不改变大小关系）\n\n" +
+                    "后文 ${'$'}\\frac{\\ln 36}{36}${'$'}",
+            messageId = "msg-digit-space-latex",
+            contentVersion = 60L,
+        )
+
+        assertEquals(
+            listOf("36 \\times 37", "\\frac{\\ln 36}{36}"),
+            prepared.formulas.values.map { it.latex },
+        )
+        assertFalse(prepared.hasPendingFormula)
+    }
+
+    @Test
+    fun `连续金额不会挪动其后的公式定界符`() {
+        val content =
+            "价格 ${'$'}5-${'$'}10，拆分 ${'$'}5/${'$'}10，套餐 ${'$'}20 / 月；" +
+                "公式 ${'$'}36 \\times 37${'$'}，且 ${'$'}n=3${'$'}。"
+        val prepared = StreamBlockParser.prepareMessage(
+            content = content,
+            messageId = "msg-currency-before-digit-math",
+            contentVersion = 61L,
+        )
+
+        assertEquals(
+            listOf("36 \\times 37", "n=3"),
+            prepared.formulas.values.map { it.latex },
+        )
+        assertTrue(prepared.markdown.contains("价格 ${'$'}5-${'$'}10"))
+        assertTrue(prepared.markdown.contains("拆分 ${'$'}5/${'$'}10"))
+        assertTrue(prepared.markdown.contains("套餐 ${'$'}20 / 月"))
+        assertFalse(prepared.hasPendingFormula)
+    }
+
+    @Test
+    fun `金额歧义按完整定界符对局部消解`() {
+        val cases = listOf(
+            "it costs ${'$'}5 and ${'$'}10." to emptyList(),
+            "Prices are ${'$'}10, ${'$'}20, and ${'$'}30." to emptyList(),
+            "Pay ${'$'}20 when ${'$'}n=3${'$'} holds." to listOf("n=3"),
+            "costs ${'$'}5 and ${'$'}7, and ${'$'}n${'$'} holds" to listOf("n"),
+            "Prices: ${'$'}5−${'$'}10 each" to emptyList(),
+            "Pay ${'$'}20 when x_1 rises, then ${'$'}n${'$'} holds" to listOf("n"),
+            "Prices range from US${'$'}50 to US${'$'}100" to emptyList(),
+            "${'$'}50 to US${'$'}60" to emptyList(),
+            "Solve ${'$'}5x_2 = 10${'$'} now" to listOf("5x_2 = 10"),
+        )
+
+        cases.forEachIndexed { index, (content, expectedFormulas) ->
+            val prepared = StreamBlockParser.prepareMessage(
+                content = content,
+                messageId = "msg-currency-pair-$index",
+                contentVersion = 70L + index,
+            )
+
+            assertEquals(expectedFormulas, prepared.formulas.values.map { it.latex })
+            assertFalse(prepared.hasPendingFormula)
+        }
+    }
+
+    @Test
+    fun `流式累计文本在闭合后重新识别数字开头公式`() {
+        val firstContent = "前文 ${'$'}x${'$'}，比较 ${'$'}36 \\times"
+        val (firstState, cache) = buildStreamingRenderStateIncremental(
+            messageId = "msg-incremental-digit-math",
+            content = firstContent,
+            isStreaming = true,
+            isComplete = false,
+            cache = IncrementalParseCache(),
+        )
+
+        assertEquals(listOf("x"), firstState.preparedMessage.formulas.values.map { it.latex })
+
+        val (closedState, _) = buildStreamingRenderStateIncremental(
+            messageId = "msg-incremental-digit-math",
+            content = "${firstContent} 37${'$'}，后文 ${'$'}n${'$'}",
+            isStreaming = true,
+            isComplete = false,
+            cache = cache,
+        )
+
+        assertEquals(
+            listOf("x", "36 \\times 37", "n"),
+            closedState.preparedMessage.formulas.values.map { it.latex },
+        )
+        assertFalse(closedState.hasPendingMath)
+    }
+
+    @Test
+    fun `常见数字开头表达式都保持为行内公式`() {
+        val prepared = StreamBlockParser.prepareMessage(
+            content =
+                "结果 ${'$'}0${'$'}、${'$'}1 + 2${'$'}、" +
+                    "${'$'}5x = 10${'$'}、${'$'}m-1${'$'}",
+            messageId = "msg-digit-expressions",
+            contentVersion = 62L,
+        )
+
+        assertEquals(
+            listOf("0", "1 + 2", "5x = 10", "m-1"),
+            prepared.formulas.values.map { it.latex },
+        )
+        assertFalse(prepared.hasPendingFormula)
+    }
+
+    @Test
     fun `complex single dollar math remains inline token while streaming`() {
         val result = StreamBlockParser.parse(
             "formula ${'$'}\\frac{a}{b}${'$'} stays inline",

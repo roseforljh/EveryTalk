@@ -34,7 +34,7 @@ internal fun findNextInlineMathStart(
             !escaped &&
             !isDoubleDollar &&
             !isMathDelimiterProtected(content, index, mathProtectionMask) &&
-            !isCurrencyDollar(content, index)
+            !isCurrencyDollar(content, index, mathProtectionMask)
         ) {
             return index
         }
@@ -46,35 +46,65 @@ internal fun findNextInlineMathStart(
 internal fun isCurrencyDollar(
     content: String,
     index: Int,
+    mathProtectionMask: BooleanArray,
 ): Boolean {
-    if (index + 1 >= content.length || !content[index + 1].isDigit()) return false
+    if (!opensCurrencyAmount(content, index)) return false
 
-    var cursor = index + 1
-    var decimalPointSeen = false
-    while (cursor < content.length) {
-        when {
-            content[cursor].isDigit() || content[cursor] == ',' -> cursor++
-            content[cursor] == '.' && !decimalPointSeen -> {
-                decimalPointSeen = true
-                cursor++
-            }
-            else -> break
-        }
-    }
+    val close = findNextUnescapedSingleDollarOnLine(
+        content = content,
+        startIndex = index + 1,
+        mathProtectionMask = mathProtectionMask,
+    )
+    if (close < 0 || opensCurrencyAmount(content, close)) return true
 
-    val next = content.getOrNull(cursor) ?: return true
-    if (next == '$') return false
-
-    // ponytail: 货币金额按数字后的上下文判定，避免把中文正文吞进 `$...$`。
-    return when {
-        next == '/' -> content.getOrNull(cursor + 1)?.let { it.isLetter() || isCjk(it) } == true
-        next == '*' -> content.getOrNull(cursor + 1) == '*'
-        next in MATH_OPERATOR_CHARS || next == '\\' || next.isLetterOrDigit() -> false
-        else -> true
-    }
+    // ponytail: 先验证完整定界符对，避免金额与数字开头公式互相挪动后续 `$`。
+    return !isLikelyInlineMathBody(content.substring(index + 1, close))
 }
 
-private val MATH_OPERATOR_CHARS = setOf('+', '-', '=', '^', '_', '*', '/', '<', '>')
+private val INLINE_MATH_TRAILING_OPERATOR_CHARS =
+    setOf('-', '+', '*', '/', '=', '<', '>', ',', ';', ':', '(', '[', '–', '—', '−')
+
+private fun opensCurrencyAmount(content: String, index: Int): Boolean =
+    content.getOrNull(index + 1)?.isDigit() == true
+
+private fun isLikelyInlineMathBody(body: String): Boolean {
+    if (body.isEmpty()) return false
+    if (body.last().isWhitespace() && !body.first().isWhitespace()) return false
+    if (body.last() in INLINE_MATH_TRAILING_OPERATOR_CHARS) return false
+    if (containsInlineLatexSyntax(body)) return true
+    if (body.any(::isCjk)) return false
+    return !hasAdjacentLongLatinWords(body)
+}
+
+private fun containsInlineLatexSyntax(body: String): Boolean = body.indices.any { index ->
+    body[index] in "_^{}" ||
+        (body[index] == '\\' && body.getOrNull(index + 1)?.let(::isAsciiLetter) == true)
+}
+
+private fun hasAdjacentLongLatinWords(body: String): Boolean {
+    var cursor = 0
+    while (cursor < body.length) {
+        if (!isAsciiLetter(body[cursor])) {
+            cursor++
+            continue
+        }
+
+        val firstStart = cursor
+        while (cursor < body.length && isAsciiLetter(body[cursor])) cursor++
+        if (cursor - firstStart < 3) continue
+
+        val whitespaceStart = cursor
+        while (cursor < body.length && body[cursor].isWhitespace()) cursor++
+        if (cursor == whitespaceStart) continue
+
+        val secondStart = cursor
+        while (cursor < body.length && isAsciiLetter(body[cursor])) cursor++
+        if (cursor - secondStart >= 3) return true
+    }
+    return false
+}
+
+private fun isAsciiLetter(char: Char): Boolean = char in 'A'..'Z' || char in 'a'..'z'
 
 private fun isCjk(char: Char): Boolean =
     char.code in 0x3400..0x9FFF
