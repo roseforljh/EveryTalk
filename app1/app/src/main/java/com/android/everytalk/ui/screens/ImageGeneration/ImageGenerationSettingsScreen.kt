@@ -175,9 +175,10 @@ fun ImageGenerationSettingsScreen(
             onRefreshModelsClick = { config ->
                 viewModel.refreshModelsForConfig(config)
             },
-                isRefreshingModels = isRefreshingModels,
-                isImageMode = true
-            )
+            onConfigureModelParameters = null,
+            isRefreshingModels = isRefreshingModels,
+            isImageMode = true
+        )
 
             Box(
                 modifier = Modifier

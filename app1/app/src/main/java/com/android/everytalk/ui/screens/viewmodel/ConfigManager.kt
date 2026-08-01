@@ -3,6 +3,7 @@ import com.android.everytalk.statecontroller.*
 
 import android.util.Log
 import com.android.everytalk.data.DataClass.ApiConfig
+import com.android.everytalk.data.DataClass.ModelParameters
 import com.android.everytalk.statecontroller.ApiHandler
 import com.android.everytalk.statecontroller.ViewModelStateHolder
 import com.android.everytalk.statecontroller.safeApiConfigSummary
@@ -427,7 +428,17 @@ class ConfigManager(
                         cfg.channel == representativeConfig.channel) {
                         
                         // 仅当参数不为 null 时才更新（支持部分更新）
-                        var updatedCfg = cfg.copy(provider = trimmedProvider, address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
+                        var updatedCfg = cfg.copy(
+                            provider = trimmedProvider,
+                            address = trimmedAddress,
+                            key = trimmedKey,
+                            channel = trimmedChannel,
+                            modelParameters = if (cfg.channel.equals(trimmedChannel, ignoreCase = true)) {
+                                cfg.modelParameters
+                            } else {
+                                ModelParameters()
+                            },
+                        )
                         if (newEnableCodeExecution != null) {
                             updatedCfg = updatedCfg.copy(enableCodeExecution = newEnableCodeExecution)
                         }
@@ -448,14 +459,7 @@ class ConfigManager(
                         selected.address == representativeConfig.address &&
                         selected.channel == representativeConfig.channel) {
                         
-                        var updatedSel = selected.copy(provider = trimmedProvider, address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
-                        if (newEnableCodeExecution != null) {
-                            updatedSel = updatedSel.copy(enableCodeExecution = newEnableCodeExecution)
-                        }
-                        if (trimmedToolsJson != null) {
-                            updatedSel = updatedSel.copy(toolsJson = trimmedToolsJson.ifBlank { null })
-                        }
-                        stateHolder._selectedApiConfig.value = updatedSel
+                        stateHolder._selectedApiConfig.value = newConfigs.first { it.id == selected.id }
                     }
                 }
             }

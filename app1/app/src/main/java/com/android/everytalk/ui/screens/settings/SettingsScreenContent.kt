@@ -16,6 +16,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -141,6 +143,7 @@ internal fun SettingsScreenContent(
     onEditConfigClick: (config: ApiConfig) -> Unit,
     onDeleteConfigGroup: (representativeConfig: ApiConfig) -> Unit,
     onRefreshModelsClick: (config: ApiConfig) -> Unit,
+    onConfigureModelParameters: ((config: ApiConfig) -> Unit)?,
     isRefreshingModels: Set<String>,
     isImageMode: Boolean = false
 ) {
@@ -203,6 +206,7 @@ internal fun SettingsScreenContent(
                     onEditConfigClick = { onEditConfigClick(configsForKeyAndModality.first()) },
                     onDeleteGroup = { onDeleteConfigGroup(configsForKeyAndModality.first()) },
                     onRefreshModelsClick = { onRefreshModelsClick(configsForKeyAndModality.first()) },
+                    onConfigureModelParameters = onConfigureModelParameters,
                     isRefreshing = modelConfigGroupId(configsForKeyAndModality.first()) in isRefreshingModels
                 )
                 Spacer(Modifier.height(16.dp))
@@ -332,6 +336,7 @@ private fun ApiKeyItemGroup(
     onEditConfigClick: () -> Unit,
     onDeleteGroup: () -> Unit,
     onRefreshModelsClick: () -> Unit,
+    onConfigureModelParameters: ((ApiConfig) -> Unit)?,
     isRefreshing: Boolean
 ) {
     var showModelPopup by remember { mutableStateOf(false) }
@@ -533,6 +538,7 @@ private fun ApiKeyItemGroup(
                         selectedConfigId = selectedConfigIdInApp,
                         onSelectConfig = onSelectConfig,
                         onDeleteConfig = onDeleteModelForApiKey,
+                        onConfigureModelParameters = onConfigureModelParameters,
                         onDismiss = { showModelPopup = false }
                     )
                 }
@@ -648,12 +654,14 @@ private fun ModelItem(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ModelListPopup(
     configs: List<ApiConfig>,
     selectedConfigId: String?,
     onSelectConfig: (ApiConfig) -> Unit,
     onDeleteConfig: (ApiConfig) -> Unit,
+    onConfigureModelParameters: ((ApiConfig) -> Unit)?,
     onDismiss: () -> Unit
 ) {
     val isDark = isSystemInDarkTheme()
@@ -723,10 +731,18 @@ private fun ModelListPopup(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable {
-                                    onSelectConfig(config)
-                                    onDismiss()
-                                }
+                                .combinedClickable(
+                                    onClick = {
+                                        onSelectConfig(config)
+                                        onDismiss()
+                                    },
+                                    onLongClick = onConfigureModelParameters?.let { configure ->
+                                        {
+                                            configure(config)
+                                            onDismiss()
+                                        }
+                                    },
+                                )
                                 .padding(horizontal = 16.dp, vertical = 12.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {

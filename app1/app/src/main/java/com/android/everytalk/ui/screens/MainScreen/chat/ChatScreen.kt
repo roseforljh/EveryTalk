@@ -52,6 +52,9 @@ import androidx.navigation.NavController
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.data.DataClass.resolvedModelTokenLimits
+import com.android.everytalk.data.mcp.McpStatus
+import com.android.everytalk.data.network.PromptCapabilityCatalog
 import com.android.everytalk.navigation.Screen
 import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.statecontroller.ConversationScrollState
@@ -78,6 +81,8 @@ import com.android.everytalk.ui.screens.MainScreen.chat.models.ModelSelectionBot
 import com.android.everytalk.ui.screens.MainScreen.chat.text.state.rememberChatScrollStateManager
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
 import com.android.everytalk.ui.screens.MainScreen.chat.core.PlaceholderRole
+import com.android.everytalk.statecontroller.mcp.dispatch.toMcpToolCandidate
+import com.android.everytalk.statecontroller.mcp.dispatch.toToolDefinition
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.delay
@@ -122,6 +127,7 @@ fun ChatScreen(
     val isLoadingHistory by viewModel.isLoadingHistory.collectAsState()
     val historyLoadGeneration by viewModel.historyLoadGeneration.collectAsState()
     val mcpServerStates by viewModel.mcpServerStates.collectAsState()
+    val isMcpEnabled by viewModel.stateHolder._isMcpEnabledForNextRequest.collectAsState()
     val isLoadingHistoryData by viewModel.isLoadingHistoryData.collectAsState()
     val conversationId by viewModel.currentConversationId.collectAsState()
     val latestReleaseInfo by viewModel.latestReleaseInfo.collectAsState()
@@ -430,6 +436,7 @@ fun ChatScreen(
     )
     var showModelSelectionBottomSheet by remember { mutableStateOf(false) }
     var showEditConfigDialog by remember { mutableStateOf(false) }
+    var modelParametersTarget by remember { mutableStateOf<com.android.everytalk.data.DataClass.ApiConfig?>(null) }
 
     val textModels by viewModel.apiConfigs.collectAsState()
     val imageModels by viewModel.imageGenApiConfigs.collectAsState()
@@ -741,6 +748,9 @@ fun ChatScreen(
                     viewModel.selectConfig(modelConfig)
                     showModelSelectionBottomSheet = false
                 },
+                onModelLongClick = { modelConfig ->
+                    modelParametersTarget = modelConfig
+                },
                 onDismissModelSelection = { showModelSelectionBottomSheet = false },
                 allApiConfigs = availableModels,
                 onConfigModelSelected = { config ->
@@ -800,6 +810,90 @@ fun ChatScreen(
                     )
                     showEditConfigDialog = false
                 }
+            )
+        }
+
+        modelParametersTarget?.let { target ->
+            val latestExactSnapshot = messages.asReversed().firstOrNull { message ->
+                message.sender == Sender.AI &&
+                    message.modelName == target.model &&
+                    message.providerName == target.provider &&
+                    message.contextUsageSnapshot?.configId == target.id
+            }?.contextUsageSnapshot
+            val currentToolIds = enabledMessageToolIdsForRequest(
+                isImageGeneration = false,
+                webSearchEnabled = isWebSearchEnabled,
+                mcpEnabled = isMcpEnabled,
+            )
+            val latestSentToolIds = messages.asReversed()
+                .firstOrNull { it.sender == Sender.User }
+                ?.enabledToolIds
+                .orEmpty()
+            val liveEstimate = remember(
+                target,
+                messages.toList(),
+                text,
+                systemPrompt,
+                isWebSearchEnabled,
+                isCodeExecutionEnabled,
+                isMcpEnabled,
+                mcpServerStates,
+            ) {
+                val visibleTools = mutableListOf<Map<String, Any>>()
+                target.toolsJson?.takeIf(String::isNotBlank)?.let { schema ->
+                    visibleTools += mapOf("type" to "custom_schema", "schema" to schema)
+                }
+                if (isWebSearchEnabled) visibleTools += builtInWebSearchToolDefinition()
+                if (isCodeExecutionEnabled) {
+                    visibleTools += mapOf("code_execution" to emptyMap<String, Any>())
+                }
+                if (isMcpEnabled) {
+                    mcpServerStates.values
+                        .asSequence()
+                        .filter { state -> state.config.enabled && state.status is McpStatus.Connected }
+                        .flatMap { state ->
+                            state.tools.asSequence()
+                                .filter { tool -> tool.enable }
+                                .map { tool ->
+                                    toMcpToolCandidate(state.config.name, tool).toToolDefinition()
+                                }
+                        }
+                        .forEach(visibleTools::add)
+                }
+                visibleTools += PromptCapabilityCatalog.selectionToolDefinition()
+                val toolsWithWebFetch = appendBuiltInWebFetchToolIfNeeded(visibleTools)
+                val finalTools = appendBuiltInCurrentTimeTool(toolsWithWebFetch)
+                estimateConversationDraftContextUsage(
+                    messages = messages,
+                    draftText = text,
+                    systemPrompt = systemPrompt,
+                    tools = finalTools,
+                    limits = resolvedModelTokenLimits(
+                        maxOutputTokens = target.maxTokens,
+                        maxContextTokens = target.modelParameters.maxContextTokens,
+                    ),
+                    configId = target.id,
+                )
+            }
+            com.android.everytalk.ui.screens.settings.ModelParametersDialog(
+                config = target,
+                contextUsageSnapshot = if (
+                    text.isNotBlank() ||
+                    latestExactSnapshot == null ||
+                    currentToolIds != latestSentToolIds
+                ) {
+                    liveEstimate
+                } else {
+                    latestExactSnapshot
+                },
+                onDismissRequest = { modelParametersTarget = null },
+                onConfirm = { updatedConfig ->
+                    viewModel.updateConfig(
+                        config = updatedConfig,
+                        isImageGen = uiMode == SimpleModeManager.ModeType.IMAGE,
+                    )
+                    modelParametersTarget = null
+                },
             )
         }
 

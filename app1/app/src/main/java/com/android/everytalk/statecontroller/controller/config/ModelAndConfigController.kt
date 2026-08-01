@@ -3,6 +3,8 @@ package com.android.everytalk.statecontroller.controller.config
 import android.util.Log
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.ModalityType
+import com.android.everytalk.data.DataClass.ModelParameters
+import com.android.everytalk.data.DataClass.withModelCapabilityDefaults
 import com.android.everytalk.data.network.ApiClient
 import com.android.everytalk.statecontroller.ViewModelStateHolder
 import com.android.everytalk.statecontroller.rethrowIfCancellation
@@ -91,6 +93,7 @@ class ModelAndConfigController(
             showSnackbar("请至少选择一个模型")
             return
         }
+        val capabilitiesByModel = modelNames.associateWith(modelFetchManager::capabilityFor)
         scope.launch {
             val successfulConfigs = mutableListOf<String>()
             val failedConfigs = mutableListOf<String>()
@@ -116,7 +119,7 @@ class ModelAndConfigController(
                         imageSize = imageSize,
                         numInferenceSteps = numInferenceSteps,
                         guidanceScale = guidanceScale,
-                    )
+                    ).withModelCapabilityDefaults(listOfNotNull(capabilitiesByModel[modelName]))
                     configManager.addConfig(config, isImageGen)
                     successfulConfigs.add(modelName)
                 } catch (e: Exception) {
@@ -144,6 +147,9 @@ class ModelAndConfigController(
                 id = UUID.randomUUID().toString(),
                 model = trimmedModelName,
                 name = trimmedModelName,
+                modelParameters = ModelParameters(),
+            ).withModelCapabilityDefaults(
+                listOfNotNull(modelFetchManager.capabilityFor(trimmedModelName))
             ),
             representativeConfig.modalityType == ModalityType.IMAGE,
         )
@@ -203,9 +209,9 @@ class ModelAndConfigController(
             stateHolder._showModelSelectionDialog.value = false
 
             requestJob = scope.launch(start = CoroutineStart.LAZY) {
-                val models = try {
+                val catalog = try {
                     withContext(Dispatchers.IO) {
-                        ApiClient.getModels(apiUrl, apiKey, channel)
+                        ApiClient.getModelCatalog(apiUrl, apiKey, channel)
                     }
                 } catch (e: CancellationException) {
                     synchronized(modelRequestLock) {
@@ -227,10 +233,10 @@ class ModelAndConfigController(
 
                 synchronized(modelRequestLock) {
                     if (modelRequestGeneration != generation) return@launch
-                    modelFetchManager.setFetchedModels(models)
+                    modelFetchManager.setFetchedCatalog(catalog)
                     modelFetchManager.setRefreshingModel(null)
                     modelRequestJob = null
-                    onSuccess(models)
+                    onSuccess(catalog.map { it.modelId })
                 }
             }
             modelRequestJob = requestJob
@@ -244,6 +250,7 @@ class ModelAndConfigController(
             showSnackbar("请至少选择一个模型")
             return
         }
+        val capabilitiesByModel = requestedModels.associateWith(modelFetchManager::capabilityFor)
 
         scope.launch {
             val currentConfigs = if (params.isImageGen) {
@@ -272,7 +279,8 @@ class ModelAndConfigController(
                     model = modelName,
                     name = modelName,
                     modalityType = if (params.isImageGen) ModalityType.IMAGE else ModalityType.TEXT,
-                )
+                    modelParameters = ModelParameters(),
+                ).withModelCapabilityDefaults(listOfNotNull(capabilitiesByModel[modelName]))
             }
             val refreshedByModel = refreshedGroup.associateBy { it.model }
             val oldIds = oldGroup.mapTo(mutableSetOf()) { it.id }

@@ -17,11 +17,12 @@ data class ApiConfig(
     val modalityType: ModalityType = ModalityType.TEXT,
     val temperature: Float = 0.0f,
     val topP: Float? = null,
-    val maxTokens: Int? = null,
+    val maxTokens: Int? = DEFAULT_MAX_OUTPUT_TOKENS,
     val defaultUseWebSearch: Boolean? = null,
     val imageSize: String? = null,
     val numInferenceSteps: Int? = null,
     val guidanceScale: Float? = null,
+    val modelParameters: ModelParameters = ModelParameters(),
     // 新增：Function Calling 工具配置 (JSON字符串)
     val toolsJson: String? = null,
     // 新增：是否启用代码执行

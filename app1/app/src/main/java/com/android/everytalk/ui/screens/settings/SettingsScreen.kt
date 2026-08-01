@@ -163,6 +163,7 @@ fun SettingsScreen(
 
     var showEditConfigDialog by remember { mutableStateOf(false) }
     var configToEdit by remember { mutableStateOf<ApiConfig?>(null) }
+    var modelParametersTarget by remember { mutableStateOf<ApiConfig?>(null) }
     var showConfirmDeleteProviderDialog by remember { mutableStateOf(false) }
     var providerToDelete by remember { mutableStateOf<String?>(null) }
     var showImportExportDialog by remember { mutableStateOf(false) }
@@ -321,6 +322,9 @@ fun SettingsScreen(
                         onRefreshModelsClick = { config ->
                             viewModel.refreshModelsForConfig(config)
                         },
+                        onConfigureModelParameters = if (isInImageMode) null else { config ->
+                            modelParametersTarget = config
+                        },
                         isRefreshingModels = isRefreshingModels
                     )
                 } else {
@@ -378,6 +382,9 @@ fun SettingsScreen(
                                     },
                                     onRefreshModelsClick = { config ->
                                         viewModel.refreshModelsForConfig(config)
+                                    },
+                                    onConfigureModelParameters = if (isInImageMode) null else { config ->
+                                        modelParametersTarget = config
                                     },
                                     isRefreshingModels = isRefreshingModels
                                 )
@@ -692,6 +699,17 @@ fun SettingsScreen(
                     addModelToKeyTarget = null
                 }
             }
+        )
+    }
+
+    modelParametersTarget?.let { target ->
+        ModelParametersDialog(
+            config = target,
+            onDismissRequest = { modelParametersTarget = null },
+            onConfirm = { updatedConfig ->
+                viewModel.updateConfig(updatedConfig, isImageGen = false)
+                modelParametersTarget = null
+            },
         )
     }
     

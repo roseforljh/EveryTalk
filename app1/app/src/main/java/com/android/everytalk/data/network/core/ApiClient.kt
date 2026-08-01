@@ -7,6 +7,8 @@ import android.provider.OpenableColumns
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.ImageGenerationResponse
 import com.android.everytalk.data.DataClass.GitHubRelease
+import com.android.everytalk.data.DataClass.ModelCapabilityCandidate
+import com.android.everytalk.data.DataClass.modelParameterProtocol
 import com.android.everytalk.models.SelectedMediaItem
 import io.ktor.client.*
 import io.ktor.client.call.*
@@ -103,12 +105,6 @@ internal fun ensureInlineAttachmentSize(displayName: String, rawSize: Long) {
     }
 }
 
-@Serializable
-data class ModelInfo(val id: String)
-
-@Serializable
-data class ModelsResponse(val data: List<ModelInfo>)
-
 object ApiClient {
     private const val GITHUB_API_BASE_URL = "https://api.github.com/"
     
@@ -137,6 +133,7 @@ object ApiClient {
                     subclass(AppStreamEvent.ContentFinal::class)
                     subclass(AppStreamEvent.Reasoning::class)
                     subclass(AppStreamEvent.ReasoningFinish::class)
+                    subclass(AppStreamEvent.Usage::class)
                     subclass(AppStreamEvent.StreamEnd::class)
                     subclass(AppStreamEvent.WebSearchStatus::class)
                     subclass(AppStreamEvent.WebSearchResults::class)
@@ -154,6 +151,7 @@ object ApiClient {
     }
 
     private lateinit var client: HttpClient
+    private lateinit var modelCapabilityCache: ModelCapabilityCache
     private var isInitialized = false
 
     // 将 localhost/127.0.0.1 识别为本机地址（在真机上通常不可达），用于回退排序
@@ -170,6 +168,9 @@ object ApiClient {
         if (isInitialized) return
         synchronized(this) {
             if (isInitialized) return
+            modelCapabilityCache = ModelCapabilityCache(
+                context.applicationContext.cacheDir.resolve("model-capabilities-v1.json")
+            )
             client = HttpClient(io.ktor.client.engine.okhttp.OkHttp) {
                 engine {
                     // 跨境延迟优化配置
@@ -552,7 +553,14 @@ object ApiClient {
         throw IOException("从所有可用源检查更新失败。可能的原因：网络连接问题、VPN干扰、或服务器不可达。", lastException)
     }
 
-    suspend fun getModels(apiUrl: String, apiKey: String, channel: String? = null): List<String> {
+    suspend fun getModels(apiUrl: String, apiKey: String, channel: String? = null): List<String> =
+        getModelCatalog(apiUrl, apiKey, channel).map(ModelCapabilityCandidate::modelId)
+
+    suspend fun getModelCatalog(
+        apiUrl: String,
+        apiKey: String,
+        channel: String? = null,
+    ): List<ModelCapabilityCandidate> {
         if (!isInitialized) {
             throw IllegalStateException("ApiClient not initialized. Call initialize() first.")
         }
@@ -572,6 +580,7 @@ object ApiClient {
         // 优化：当渠道为Gemini或为Google Gemini官方域名时，使用Gemini格式的API
         val isGeminiChannel = channel?.lowercase()?.trim() == "gemini"
         val isAnthropicChannel = channel?.lowercase()?.trim() == "anthropic"
+        val protocol = modelParameterProtocol(channel.orEmpty())
         val isGoogleOfficialDomain = hostLower == "generativelanguage.googleapis.com" ||
                 (hostLower?.endsWith("googleapis.com") == true &&
                  baseForModels.contains("generativelanguage", ignoreCase = true))
@@ -604,7 +613,8 @@ object ApiClient {
                 buildFinalUrl(normalizedBase, "/v1/models")
             }
         }
-        android.util.Log.d("ApiClient", "获取模型列表 - 原始URL: '$apiUrl', 最终请求URL: '$url'")
+        val displayUrl = if (cleanedApiKey.isEmpty()) url else url.replace(cleanedApiKey, "***")
+        android.util.Log.d("ApiClient", "获取模型列表 - 最终请求URL: '$displayUrl'")
     
         return try {
             val response = client.get {
@@ -626,87 +636,30 @@ object ApiClient {
             }
             val responseBody = response.readTextAtMost(MAX_MODELS_RESPONSE_BYTES)
     
-            // Gemini格式响应优先解析(官方或反代)：{"models":[{"name":"models/gemini-1.5-pro", ...}, ...]}
-            if (isGoogleOfficialDomain || isGeminiChannel) {
-                try {
-                    val root = jsonParser.parseToJsonElement(responseBody)
-                    if (root is JsonObject && root["models"] is JsonArray) {
-                        val arr = root["models"]!!.jsonArray
-                        val ids = arr.mapNotNull { el ->
-                            try {
-                                val name = el.jsonObject["name"]?.jsonPrimitive?.contentOrNull?.trim()
-                                name?.removePrefix("models/")?.takeIf { it.isNotEmpty() }
-                            } catch (_: Exception) { null }
-                        }.distinct()
-                        if (ids.isNotEmpty()) return ids
-                    }
-                } catch (_: Exception) {
-                    // 继续走下方通用解析
-                }
+            val catalog = try {
+                parseModelCatalog(
+                    responseBody = responseBody,
+                    protocol = protocol,
+                    apiAddress = normalizedBase,
+                )
+            } catch (error: Exception) {
+                throw IOException("无法解析模型列表的响应。请检查API端点返回的数据格式是否正确。", error)
             }
-    
-            // 通用解析 1: {"data":[{"id": "..."}]}
-            try {
-                val modelsResponse = jsonParser.decodeFromString<ModelsResponse>(responseBody)
-                return modelsResponse.data.map { it.id }
-            } catch (_: SerializationException) {
-                // 通用解析 2: [{"id": "..."}]
-                try {
-                    val modelsList = jsonParser.decodeFromString<List<ModelInfo>>(responseBody)
-                    return modelsList.map { it.id }
-                } catch (_: SerializationException) {
-                    // 兜底解析：尝试从常见容器字段中提取（data/models），并兼容 name/model/id 等字段
-                    try {
-                        val root = jsonParser.parseToJsonElement(responseBody)
-                        fun extractIdFromObj(obj: JsonObject): String? {
-                            val candidates = listOf("id", "model", "name", "identifier")
-                            for (k in candidates) {
-                                obj[k]?.jsonPrimitive?.contentOrNull?.let { s -> 
-                                    val v = s.trim()
-                                    if (v.isNotEmpty()) {
-                                        // 若为 Google 风格 "models/xxx"，统一去掉前缀
-                                        return v.removePrefix("models/")
-                                    }
-                                }
-                            }
-                            return null
-                        }
-                        fun extractFromArray(arr: JsonArray): List<String> {
-                            return arr.mapNotNull { el ->
-                                when {
-                                    el is JsonObject -> extractIdFromObj(el)
-                                    else -> el.jsonPrimitive.contentOrNull?.trim()
-                                        ?.removePrefix("models/")
-                                        ?.takeIf { it.isNotEmpty() }
-                                }
-                            }.distinct()
-                        }
-    
-                        val ids: List<String> = when {
-                            root is JsonObject && root["data"] is JsonArray -> 
-                                extractFromArray(root["data"]!!.jsonArray)
-                            root is JsonObject && root["models"] is JsonArray -> 
-                                extractFromArray(root["models"]!!.jsonArray)
-                            root is JsonArray -> 
-                                extractFromArray(root)
-                            else -> emptyList()
-                        }
-    
-                        if (ids.isNotEmpty()) {
-                            return ids
-                        } else {
-                            throw IOException("无法解析模型列表的响应。请检查API端点返回的数据格式是否正确。")
-                        }
-                    } catch (e3: Exception) {
-                        throw IOException("无法解析模型列表的响应。请检查API端点返回的数据格式是否正确。", e3)
-                    }
-                }
+            if (catalog.isEmpty()) {
+                throw IOException("无法解析模型列表的响应。请检查API端点返回的数据格式是否正确。")
             }
+            modelCapabilityCache.put(catalog)
+            return catalog
         } catch (e: CoroutineCancellationException) {
             throw e
         } catch (e: Exception) {
-            android.util.Log.e("ApiClient", "从 $url 获取模型列表失败", e)
-            throw IOException("从 $url 获取模型列表失败: ${e.message}", e)
+            val cachedCatalog = modelCapabilityCache.get(protocol, normalizedBase)
+            if (cachedCatalog.isNotEmpty()) {
+                android.util.Log.w("ApiClient", "从 $displayUrl 获取模型列表失败，使用未过期的本地能力缓存")
+                return cachedCatalog
+            }
+            android.util.Log.e("ApiClient", "从 $displayUrl 获取模型列表失败", e)
+            throw IOException("从 $displayUrl 获取模型列表失败: ${e.message}", e)
         }
     }
     /**

@@ -527,7 +527,7 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                 allApiConfigs = allImageConfigs,
                 onConfigModelSelected = { config ->
                     viewModel.selectConfig(config, isImageGen = true)
-                }
+                },
             )
         }
     }

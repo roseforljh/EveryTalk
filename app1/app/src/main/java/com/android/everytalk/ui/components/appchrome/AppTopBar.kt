@@ -99,6 +99,7 @@ fun AppTopBar(
     modelList: List<com.android.everytalk.data.DataClass.ApiConfig> = emptyList(),
     selectedApiConfig: com.android.everytalk.data.DataClass.ApiConfig? = null,
     onModelSelected: (com.android.everytalk.data.DataClass.ApiConfig) -> Unit = {},
+    onModelLongClick: ((com.android.everytalk.data.DataClass.ApiConfig) -> Unit)? = null,
     onDismissModelSelection: () -> Unit = {},
     onTitleLongClick: () -> Unit = {},
     allApiConfigs: List<com.android.everytalk.data.DataClass.ApiConfig> = emptyList(),
@@ -174,6 +175,8 @@ fun AppTopBar(
                             .clip(RoundedCornerShape(percent = 50))
                             .background(buttonBg)
                             .combinedClickable(
+                                onClickLabel = "选择模型",
+                                onLongClickLabel = "切换配置",
                                 onClick = onTitleClick,
                                 onLongClick = {
                                     if (allApiConfigs.isNotEmpty()) {
@@ -181,7 +184,7 @@ fun AppTopBar(
                                     } else {
                                         onTitleLongClick()
                                     }
-                                }
+                                },
                             )
                             .padding(horizontal = 16.dp),
                         contentAlignment = Alignment.Center
@@ -222,6 +225,7 @@ fun AppTopBar(
                             models = modelList,
                             selectedApiConfig = selectedApiConfig,
                             onModelSelected = onModelSelected,
+                            onModelLongClick = onModelLongClick,
                             onDismiss = onDismissModelSelection
                         )
                     }
@@ -230,10 +234,8 @@ fun AppTopBar(
                         visible = showConfigSwitch,
                         allConfigs = allApiConfigs,
                         selectedApiConfig = selectedApiConfig,
-                        onModelSelected = { config ->
-                            onConfigModelSelected(config)
-                        },
-                        onDismiss = { showConfigSwitch = false }
+                        onModelSelected = onConfigModelSelected,
+                        onDismiss = { showConfigSwitch = false },
                     )
                 }
             }
@@ -478,11 +480,13 @@ private fun TopBarMenuItem(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ModelSelectionDropdown(
     models: List<com.android.everytalk.data.DataClass.ApiConfig>,
     selectedApiConfig: com.android.everytalk.data.DataClass.ApiConfig?,
     onModelSelected: (com.android.everytalk.data.DataClass.ApiConfig) -> Unit,
+    onModelLongClick: ((com.android.everytalk.data.DataClass.ApiConfig) -> Unit)?,
     onDismiss: () -> Unit
 ) {
     val isDark = isSystemInDarkTheme()
@@ -532,10 +536,20 @@ private fun ModelSelectionDropdown(
             ) {
                 sortedModels.forEach { modelConfig ->
                     val isSelected = modelConfig.id == selectedApiConfig?.id
+                    val modelInteractionModifier = if (onModelLongClick != null) {
+                        Modifier.combinedClickable(
+                            onClickLabel = "选择模型",
+                            onLongClickLabel = "打开模型参数",
+                            onClick = { onModelSelected(modelConfig) },
+                            onLongClick = { onModelLongClick(modelConfig) },
+                        )
+                    } else {
+                        Modifier.clickable { onModelSelected(modelConfig) }
+                    }
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { onModelSelected(modelConfig) }
+                            .then(modelInteractionModifier)
                             .padding(horizontal = 14.dp, vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.Center
