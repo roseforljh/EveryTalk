@@ -1,6 +1,9 @@
 package com.android.everytalk.statecontroller.controller.config
 
 import com.android.everytalk.data.DataClass.ApiConfig
+import com.android.everytalk.data.DataClass.ModelCapabilityCandidate
+import com.android.everytalk.data.DataClass.ModelCapabilitySource
+import com.android.everytalk.data.DataClass.ModelParameterProtocol
 import com.android.everytalk.data.DataClass.ModalityType
 import com.android.everytalk.data.network.ApiClient
 import com.android.everytalk.statecontroller.PendingConfigParams
@@ -12,12 +15,15 @@ import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
 import io.mockk.mockkObject
+import io.mockk.slot
 import io.mockk.unmockkAll
+import io.mockk.verify
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -40,7 +46,7 @@ class ModelAndConfigControllerTest {
         mockkObject(ApiClient)
         val firstStarted = CompletableDeferred<Unit>()
         val firstCancelled = CompletableDeferred<Unit>()
-        coEvery { ApiClient.getModels("first", "key-a", "OpenAI兼容") } coAnswers {
+        coEvery { ApiClient.getModelCatalog("first", "key-a", "OpenAI兼容") } coAnswers {
             firstStarted.complete(Unit)
             try {
                 awaitCancellation()
@@ -48,7 +54,14 @@ class ModelAndConfigControllerTest {
                 firstCancelled.complete(Unit)
             }
         }
-        coEvery { ApiClient.getModels("second", "key-b", "Gemini") } returns listOf("model-b")
+        val modelB = ModelCapabilityCandidate(
+            modelId = "model-b",
+            protocol = ModelParameterProtocol.GEMINI,
+            contextWindowTokens = 1_000_000,
+            maxOutputTokens = 64_000,
+            source = ModelCapabilitySource.LIVE_ENDPOINT,
+        )
+        coEvery { ApiClient.getModelCatalog("second", "key-b", "Gemini") } returns listOf(modelB)
 
         val stateHolder = ViewModelStateHolder()
         val modelFetchManager = ModelFetchManager()
@@ -64,7 +77,8 @@ class ModelAndConfigControllerTest {
         firstCancelled.await()
         assertTrue(firstResults.isEmpty())
         assertEquals(listOf("model-b"), modelFetchManager.fetchedModels.value)
-        coVerify(exactly = 1) { ApiClient.getModels("second", "key-b", "Gemini") }
+        assertEquals(modelB, modelFetchManager.capabilityFor("model-b"))
+        coVerify(exactly = 1) { ApiClient.getModelCatalog("second", "key-b", "Gemini") }
     }
 
     @Test
@@ -72,7 +86,7 @@ class ModelAndConfigControllerTest {
         mockkObject(ApiClient)
         val started = CompletableDeferred<Unit>()
         val cancelled = CompletableDeferred<Unit>()
-        coEvery { ApiClient.getModels(any(), any(), any()) } coAnswers {
+        coEvery { ApiClient.getModelCatalog(any(), any(), any()) } coAnswers {
             started.complete(Unit)
             try {
                 awaitCancellation()
@@ -95,6 +109,148 @@ class ModelAndConfigControllerTest {
         assertTrue(modelFetchManager.fetchedModels.value.isEmpty())
         assertTrue(modelFetchManager.isRefreshingModels.value.isEmpty())
         assertFalse(stateHolder._showModelSelectionDialog.value)
+    }
+
+    @Test
+    fun `新模型配置采用端点报告的 token 限制`() = runTest(UnconfinedTestDispatcher()) {
+        val stateHolder = ViewModelStateHolder()
+        val modelFetchManager = ModelFetchManager().apply {
+            setFetchedCatalog(
+                listOf(
+                    ModelCapabilityCandidate(
+                        modelId = "model-a",
+                        protocol = ModelParameterProtocol.GEMINI,
+                        endpointIdentity = "https://api.example.com/v1",
+                        contextWindowTokens = 1_000_000,
+                        maxOutputTokens = 64_000,
+                        source = ModelCapabilitySource.LIVE_ENDPOINT,
+                    )
+                )
+            )
+        }
+        val configManager = mockk<ConfigManager>(relaxed = true)
+        val controller = controller(
+            scope = this,
+            stateHolder = stateHolder,
+            modelFetchManager = modelFetchManager,
+            configManager = configManager,
+        )
+
+        controller.createMultipleConfigs(
+            provider = "Gemini",
+            address = "https://api.example.com/v1/",
+            key = "secret",
+            modelNames = listOf("model-a"),
+            channel = "Gemini",
+        )
+
+        val configSlot = slot<ApiConfig>()
+        verify { configManager.addConfig(capture(configSlot), false) }
+        assertEquals(64_000, configSlot.captured.maxTokens)
+        assertEquals(1_000_000, configSlot.captured.modelParameters.maxContextTokens)
+        assertEquals(
+            ModelCapabilitySource.LIVE_ENDPOINT,
+            configSlot.captured.modelParameters.resolvedCapability?.contextWindowSource,
+        )
+    }
+
+    @Test
+    fun `配置组新增模型采用端点报告的 token 限制`() = runTest(UnconfinedTestDispatcher()) {
+        val modelFetchManager = ModelFetchManager().apply {
+            setFetchedCatalog(
+                listOf(
+                    ModelCapabilityCandidate(
+                        modelId = "model-new",
+                        protocol = ModelParameterProtocol.GEMINI,
+                        endpointIdentity = "https://api.example.com/v1",
+                        contextWindowTokens = 2_000_000,
+                        maxOutputTokens = 32_000,
+                        source = ModelCapabilitySource.LIVE_ENDPOINT,
+                    )
+                )
+            )
+        }
+        val configManager = mockk<ConfigManager>(relaxed = true)
+        val controller = controller(
+            scope = this,
+            stateHolder = ViewModelStateHolder(),
+            modelFetchManager = modelFetchManager,
+            configManager = configManager,
+        )
+        val representative = ApiConfig(
+            address = "https://api.example.com/v1/",
+            key = "secret",
+            model = "model-old",
+            provider = "Gemini",
+            name = "model-old",
+            channel = "Gemini",
+        )
+
+        controller.addModelToConfigGroup(representative, "model-new")
+
+        val configSlot = slot<ApiConfig>()
+        verify { configManager.addConfig(capture(configSlot), false) }
+        assertEquals(32_000, configSlot.captured.maxTokens)
+        assertEquals(2_000_000, configSlot.captured.modelParameters.maxContextTokens)
+        assertEquals(
+            ModelCapabilitySource.LIVE_ENDPOINT,
+            configSlot.captured.modelParameters.resolvedCapability?.maxOutputSource,
+        )
+    }
+
+    @Test
+    fun `刷新配置组的新模型采用调用前快照的端点能力`() = runTest {
+        val existing = imageConfig(
+            id = "id-existing",
+            model = "model-existing",
+            name = "existing",
+        ).copy(maxTokens = 7_777)
+        val stateHolder = ViewModelStateHolder().apply {
+            _imageGenApiConfigs.value = listOf(existing)
+        }
+        val modelFetchManager = ModelFetchManager().apply {
+            setFetchedCatalog(
+                listOf(
+                    ModelCapabilityCandidate(
+                        modelId = "model-new",
+                        protocol = ModelParameterProtocol.OPENAI_COMPATIBLE,
+                        endpointIdentity = "https://image.example",
+                        contextWindowTokens = 512_000,
+                        maxOutputTokens = 24_000,
+                        source = ModelCapabilitySource.LIVE_ENDPOINT,
+                    )
+                )
+            )
+        }
+        val controller = controller(
+            scope = this,
+            stateHolder = stateHolder,
+            modelFetchManager = modelFetchManager,
+        )
+
+        controller.replaceModelsForConfigGroup(
+            PendingConfigParams(
+                provider = existing.provider,
+                address = existing.address,
+                key = existing.key,
+                channel = existing.channel,
+                isImageGen = true,
+                isRefresh = true,
+            ),
+            listOf("model-existing", "model-new"),
+        )
+        modelFetchManager.setFetchedModels(emptyList())
+        advanceUntilIdle()
+
+        val refreshed = stateHolder._imageGenApiConfigs.value
+        assertEquals(7_777, refreshed.single { it.model == "model-existing" }.maxTokens)
+        val newConfig = refreshed.single { it.model == "model-new" }
+        assertEquals(24_000, newConfig.maxTokens)
+        assertEquals(512_000, newConfig.modelParameters.maxContextTokens)
+        assertEquals(
+            ModelCapabilitySource.LIVE_ENDPOINT,
+            newConfig.modelParameters.resolvedCapability?.contextWindowSource,
+        )
     }
 
     @Test
@@ -191,11 +347,12 @@ class ModelAndConfigControllerTest {
         stateHolder: ViewModelStateHolder,
         modelFetchManager: ModelFetchManager = ModelFetchManager(),
         persistenceManager: DataPersistenceManager = mockk(relaxed = true),
+        configManager: ConfigManager = mockk(relaxed = true),
     ) = ModelAndConfigController(
         stateHolder = stateHolder,
         persistenceManager = persistenceManager,
         modelFetchManager = modelFetchManager,
-        configManager = mockk<ConfigManager>(relaxed = true),
+        configManager = configManager,
         scope = scope,
         showSnackbar = {},
     )
