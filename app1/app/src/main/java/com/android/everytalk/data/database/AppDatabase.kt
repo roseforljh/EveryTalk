@@ -15,7 +15,6 @@ import com.android.everytalk.data.database.daos.VoiceConfigDao
 import com.android.everytalk.data.database.entities.ApiConfigEntity
 import com.android.everytalk.data.database.entities.ChatSessionEntity
 import com.android.everytalk.data.database.entities.ConversationGroupEntity
-import com.android.everytalk.data.database.entities.ConversationParamsEntity
 import com.android.everytalk.data.database.entities.ExpandedGroupEntity
 import com.android.everytalk.data.database.entities.McpServerConfigEntity
 import com.android.everytalk.data.database.entities.MessageEntity
@@ -33,10 +32,9 @@ import com.android.everytalk.data.database.entities.VoiceBackendConfigEntity
         PinnedItemEntity::class,
         ConversationGroupEntity::class,
         ExpandedGroupEntity::class,
-        ConversationParamsEntity::class,
         McpServerConfigEntity::class
     ],
-    version = 7,
+    version = 10,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -67,6 +65,9 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_4_5,
                     MIGRATION_5_6,
                     MIGRATION_6_7,
+                    MIGRATION_7_8,
+                    MIGRATION_8_9,
+                    MIGRATION_9_10,
                 )
                 .build()
                 INSTANCE = instance
@@ -162,6 +163,28 @@ abstract class AppDatabase : RoomDatabase() {
                 )
                 db.execSQL("DROP TABLE api_configs")
                 db.execSQL("ALTER TABLE api_configs_new RENAME TO api_configs")
+            }
+        }
+
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE api_configs ADD COLUMN modelParameters TEXT NOT NULL DEFAULT '{}'")
+                db.execSQL("DROP TABLE IF EXISTS conversation_params")
+            }
+        }
+
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE messages ADD COLUMN enabledToolIds TEXT NOT NULL DEFAULT '[]'"
+                )
+            }
+        }
+
+        val MIGRATION_9_10 = object : Migration(9, 10) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN tokenUsage TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN contextUsageSnapshot TEXT")
             }
         }
     }

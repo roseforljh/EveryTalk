@@ -4,6 +4,7 @@ import androidx.room.Entity
 import androidx.room.PrimaryKey
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.ModalityType
+import com.android.everytalk.data.DataClass.ModelParameters
 
 @Entity(tableName = "api_configs")
 data class ApiConfigEntity(
@@ -24,6 +25,7 @@ data class ApiConfigEntity(
     val imageSize: String?,
     val numInferenceSteps: Int?,
     val guidanceScale: Float?,
+    val modelParameters: ModelParameters,
     val toolsJson: String?,
     val enableCodeExecution: Boolean?,
     // Use this field to differentiate between text (false) and image (true) configs if needed by queries,
@@ -55,6 +57,7 @@ fun ApiConfigEntity.toApiConfig(): ApiConfig {
         imageSize = imageSize,
         numInferenceSteps = numInferenceSteps,
         guidanceScale = guidanceScale,
+        modelParameters = modelParameters,
         toolsJson = toolsJson,
         enableCodeExecution = enableCodeExecution
     )
@@ -78,6 +81,7 @@ fun ApiConfig.toEntity(isImageGenConfig: Boolean = false): ApiConfigEntity {
         imageSize = imageSize,
         numInferenceSteps = numInferenceSteps,
         guidanceScale = guidanceScale,
+        modelParameters = modelParameters,
         toolsJson = toolsJson,
         enableCodeExecution = enableCodeExecution,
         isImageGenConfig = isImageGenConfig

@@ -5,10 +5,12 @@ import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.android.everytalk.data.DataClass.Message
+import com.android.everytalk.data.DataClass.ContextUsageSnapshot
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.data.database.Converters
 import com.android.everytalk.models.SelectedMediaItem
+import com.android.everytalk.data.network.TokenUsage
 import com.android.everytalk.ui.components.MarkdownPart
 
 @Entity(tableName = "chat_sessions")
@@ -52,8 +54,11 @@ data class MessageEntity(
     val outputType: String,
     val parts: List<MarkdownPart>,
     val executionStatus: String?,
+    val enabledToolIds: List<String>,
     val modelName: String? = null,
-    val providerName: String? = null
+    val providerName: String? = null,
+    val tokenUsage: TokenUsage? = null,
+    val contextUsageSnapshot: ContextUsageSnapshot? = null,
 )
 
 /**
@@ -77,8 +82,11 @@ data class RawMessageRow(
     val outputType: String,
     val partsJson: String,
     val executionStatus: String?,
+    val enabledToolIdsJson: String,
     val modelName: String?,
     val providerName: String?,
+    val tokenUsageJson: String?,
+    val contextUsageSnapshotJson: String?,
 )
 
 fun RawMessageRow.toMessage(converters: Converters): Message = Message(
@@ -98,8 +106,11 @@ fun RawMessageRow.toMessage(converters: Converters): Message = Message(
     outputType = outputType,
     parts = converters.toMarkdownPartList(partsJson),
     executionStatus = executionStatus,
+    enabledToolIds = converters.toStringList(enabledToolIdsJson),
     modelName = modelName,
     providerName = providerName,
+    tokenUsage = converters.toTokenUsage(tokenUsageJson),
+    contextUsageSnapshot = converters.toContextUsageSnapshot(contextUsageSnapshotJson),
 )
 
 fun MessageEntity.toMessage(): Message {
@@ -120,8 +131,11 @@ fun MessageEntity.toMessage(): Message {
         outputType = outputType,
         parts = parts,
         executionStatus = executionStatus,
+        enabledToolIds = enabledToolIds,
         modelName = modelName,
-        providerName = providerName
+        providerName = providerName,
+        tokenUsage = tokenUsage,
+        contextUsageSnapshot = contextUsageSnapshot,
     )
 }
 
@@ -144,7 +158,10 @@ fun Message.toEntity(sessionId: String): MessageEntity {
         outputType = outputType,
         parts = parts,
         executionStatus = executionStatus,
+        enabledToolIds = enabledToolIds,
         modelName = modelName,
-        providerName = providerName
+        providerName = providerName,
+        tokenUsage = tokenUsage,
+        contextUsageSnapshot = contextUsageSnapshot,
     )
 }

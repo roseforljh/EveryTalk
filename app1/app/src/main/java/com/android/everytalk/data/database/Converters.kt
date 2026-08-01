@@ -2,11 +2,13 @@ package com.android.everytalk.data.database
 
 import android.net.Uri
 import androidx.room.TypeConverter
-import com.android.everytalk.data.DataClass.GenerationConfig
+import com.android.everytalk.data.DataClass.ModelParameters
+import com.android.everytalk.data.DataClass.ContextUsageSnapshot
 import com.android.everytalk.data.DataClass.ModalityType
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.models.SelectedMediaItem
+import com.android.everytalk.data.network.TokenUsage
 import com.android.everytalk.ui.components.MarkdownPart
 import com.android.everytalk.ui.components.MarkdownPartSerializer
 import com.android.everytalk.util.serialization.UriSerializer
@@ -124,19 +126,48 @@ class Converters {
         return json.decodeFromString(MarkdownPartSerializer, value)
     }
     
-    // GenerationConfig
+    // 模型参数
     @TypeConverter
-    fun fromGenerationConfig(value: GenerationConfig?): String {
-        if (value == null) return "{}"
-        return json.encodeToString(GenerationConfig.serializer(), value)
+    fun fromModelParameters(value: ModelParameters): String {
+        return json.encodeToString(ModelParameters.serializer(), value)
     }
 
     @TypeConverter
-    fun toGenerationConfig(value: String?): GenerationConfig? {
+    fun toModelParameters(value: String?): ModelParameters {
+        if (value.isNullOrEmpty()) return ModelParameters()
+        return try {
+            json.decodeFromString(ModelParameters.serializer(), value)
+        } catch (e: Exception) {
+            ModelParameters()
+        }
+    }
+
+    @TypeConverter
+    fun fromTokenUsage(value: TokenUsage?): String? = value?.let {
+        json.encodeToString(TokenUsage.serializer(), it)
+    }
+
+    @TypeConverter
+    fun toTokenUsage(value: String?): TokenUsage? {
         if (value.isNullOrEmpty()) return null
         return try {
-            json.decodeFromString(GenerationConfig.serializer(), value)
-        } catch (e: Exception) {
+            json.decodeFromString(TokenUsage.serializer(), value)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    @TypeConverter
+    fun fromContextUsageSnapshot(value: ContextUsageSnapshot?): String? = value?.let {
+        json.encodeToString(ContextUsageSnapshot.serializer(), it)
+    }
+
+    @TypeConverter
+    fun toContextUsageSnapshot(value: String?): ContextUsageSnapshot? {
+        if (value.isNullOrEmpty()) return null
+        return try {
+            json.decodeFromString(ContextUsageSnapshot.serializer(), value)
+        } catch (_: Exception) {
             null
         }
     }

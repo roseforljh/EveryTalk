@@ -90,6 +90,103 @@ class AppDatabaseMigrationTest {
         migrateHelper.close()
     }
 
+    @Test
+    fun `migration 7 to 8 adds model parameters and removes conversation parameters`() {
+        val createHelper = openHelper(
+            version = 7,
+            onCreate = { db ->
+                createVersion7ApiConfigsTable(db)
+                db.execSQL(
+                    "CREATE TABLE conversation_params (conversationId TEXT NOT NULL PRIMARY KEY, config TEXT NOT NULL)"
+                )
+            },
+        )
+        createHelper.writableDatabase.close()
+        createHelper.close()
+
+        val migrateHelper = openHelper(
+            version = 8,
+            onUpgrade = { db, oldVersion, newVersion ->
+                assertEquals(7, oldVersion)
+                assertEquals(8, newVersion)
+                AppDatabase.MIGRATION_7_8.migrate(db)
+            },
+        )
+        val db = migrateHelper.writableDatabase
+        val columns = mutableListOf<String>()
+        db.query("PRAGMA table_info(api_configs)").use { tableInfo ->
+            while (tableInfo.moveToNext()) columns += tableInfo.getString(1)
+        }
+        assertTrue(columns.contains("modelParameters"))
+        db.query("SELECT modelParameters FROM api_configs").use { cursor ->
+            assertFalse(cursor.moveToFirst())
+        }
+        db.query("SELECT name FROM sqlite_master WHERE type='table' AND name='conversation_params'").use { cursor ->
+            assertFalse(cursor.moveToFirst())
+        }
+        db.close()
+        migrateHelper.close()
+    }
+
+    @Test
+    fun `migration 8 to 9 preserves messages and adds enabled tools`() {
+        val createHelper = openHelper(
+            version = 8,
+            onCreate = { db ->
+                db.execSQL("CREATE TABLE messages (id TEXT NOT NULL PRIMARY KEY)")
+                db.execSQL("INSERT INTO messages (id) VALUES ('message-1')")
+            },
+        )
+        createHelper.writableDatabase.close()
+        createHelper.close()
+
+        val migrateHelper = openHelper(
+            version = 9,
+            onUpgrade = { db, oldVersion, newVersion ->
+                assertEquals(8, oldVersion)
+                assertEquals(9, newVersion)
+                AppDatabase.MIGRATION_8_9.migrate(db)
+            },
+        )
+        val db = migrateHelper.writableDatabase
+        db.query("SELECT enabledToolIds FROM messages WHERE id = 'message-1'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("[]", cursor.getString(0))
+        }
+        db.close()
+        migrateHelper.close()
+    }
+
+    @Test
+    fun `migration 9 to 10 preserves messages and leaves old usage empty`() {
+        val createHelper = openHelper(
+            version = 9,
+            onCreate = { db ->
+                db.execSQL("CREATE TABLE messages (id TEXT NOT NULL PRIMARY KEY)")
+                db.execSQL("INSERT INTO messages (id) VALUES ('message-1')")
+            },
+        )
+        createHelper.writableDatabase.close()
+        createHelper.close()
+
+        val migrateHelper = openHelper(
+            version = 10,
+            onUpgrade = { db, oldVersion, newVersion ->
+                assertEquals(9, oldVersion)
+                assertEquals(10, newVersion)
+                AppDatabase.MIGRATION_9_10.migrate(db)
+            },
+        )
+        val db = migrateHelper.writableDatabase
+        db.query("SELECT tokenUsage, contextUsageSnapshot FROM messages WHERE id = 'message-1'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue(cursor.isNull(0))
+            assertTrue(cursor.isNull(1))
+        }
+        db.close()
+        migrateHelper.close()
+    }
+
     private fun openHelper(
         version: Int,
         onCreate: (SupportSQLiteDatabase) -> Unit = {},
@@ -140,6 +237,34 @@ class AppDatabaseMigrationTest {
                 toolsJson TEXT,
                 enableCodeExecution INTEGER,
                 legacyFeatureState TEXT,
+                isImageGenConfig INTEGER NOT NULL
+            )
+            """.trimIndent()
+        )
+    }
+
+    private fun createVersion7ApiConfigsTable(db: SupportSQLiteDatabase) {
+        db.execSQL(
+            """
+            CREATE TABLE api_configs (
+                id TEXT NOT NULL PRIMARY KEY,
+                address TEXT NOT NULL,
+                key TEXT NOT NULL,
+                model TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                name TEXT NOT NULL,
+                channel TEXT NOT NULL,
+                isValid INTEGER NOT NULL,
+                modalityType TEXT NOT NULL,
+                temperature REAL NOT NULL,
+                topP REAL,
+                maxTokens INTEGER,
+                defaultUseWebSearch INTEGER,
+                imageSize TEXT,
+                numInferenceSteps INTEGER,
+                guidanceScale REAL,
+                toolsJson TEXT,
+                enableCodeExecution INTEGER,
                 isImageGenConfig INTEGER NOT NULL
             )
             """.trimIndent()

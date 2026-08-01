@@ -41,7 +41,10 @@ interface ChatDao {
         SELECT id, sessionId, text, sender, reasoning, contentStarted, isError, name, timestamp,
                isPlaceholderName, webSearchResults AS webSearchResultsJson,
                currentWebSearchStage, imageUrls AS imageUrlsJson, attachments AS attachmentsJson,
-               outputType, parts AS partsJson, executionStatus, modelName, providerName
+               outputType, parts AS partsJson, executionStatus,
+               enabledToolIds AS enabledToolIdsJson, modelName, providerName,
+               tokenUsage AS tokenUsageJson,
+               contextUsageSnapshot AS contextUsageSnapshotJson
         FROM messages
         WHERE sessionId IN (
             SELECT id FROM chat_sessions WHERE isImageGeneration = :isImageGen
