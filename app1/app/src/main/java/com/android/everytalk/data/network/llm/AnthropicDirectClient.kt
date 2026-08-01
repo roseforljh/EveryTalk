@@ -6,6 +6,7 @@ import com.android.everytalk.data.DataClass.ApiContentPart
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.PartsApiMessage
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
+import com.android.everytalk.data.DataClass.ReasoningMode
 import com.android.everytalk.data.network.NetworkUtils.configureSSERequest
 import io.ktor.client.HttpClient
 import io.ktor.client.request.header
@@ -35,6 +36,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
@@ -236,10 +238,13 @@ object AnthropicDirectClient {
         val maxTokens = request.generationConfig?.maxOutputTokens
             ?.takeIf { it > 0 }
             ?: DEFAULT_MAX_TOKENS
-        val thinkingBudget = request.generationConfig?.thinkingConfig
-            ?.takeIf { it.includeThoughts == true }
+        val thinkingConfig = request.generationConfig?.thinkingConfig
+        val thinkingBudget = thinkingConfig
+            ?.takeIf { it.reasoningMode == ReasoningMode.BUDGET && it.includeThoughts == true }
             ?.let { config -> config.thinkingBudget?.takeIf { it > 0 } ?: DEFAULT_THINKING_BUDGET }
             ?.takeIf { it >= DEFAULT_THINKING_BUDGET && it < maxTokens }
+        val usesAdaptiveThinking = thinkingConfig?.reasoningMode == ReasoningMode.EFFORT &&
+            thinkingConfig.includeThoughts == true
 
         return buildJsonObject {
             put("model", request.model)
@@ -251,7 +256,14 @@ object AnthropicDirectClient {
                 continuationMessages.forEach(::add)
             }
 
-            if (thinkingBudget != null) {
+            if (usesAdaptiveThinking) {
+                putJsonObject("thinking") {
+                    put("type", "adaptive")
+                }
+                putJsonObject("output_config") {
+                    put("effort", thinkingConfig.reasoningEffort)
+                }
+            } else if (thinkingBudget != null) {
                 putJsonObject("thinking") {
                     put("type", "enabled")
                     put("budget_tokens", thinkingBudget)
@@ -453,6 +465,7 @@ object AnthropicDirectClient {
         var errorMessage: String? = null
         var reasoningOpen = false
         var messageStopped = false
+        var latestUsage: TokenUsage? = null
 
         suspend fun processEvent() {
             if (dataLines.isEmpty()) return
@@ -460,6 +473,13 @@ object AnthropicDirectClient {
             dataLines.clear()
             val event = Json.parseToJsonElement(raw).jsonObject
             when (event["type"]?.jsonPrimitive?.contentOrNull) {
+                "message_start" -> {
+                    val usage = ((event["message"] as? JsonObject)?.get("usage") as? JsonObject)
+                    usage?.let {
+                        latestUsage = parseAnthropicTokenUsage(it, previous = null, isFinal = false)
+                        latestUsage?.let { parsed -> emitEvent(AppStreamEvent.Usage(parsed)) }
+                    }
+                }
                 "content_block_start" -> {
                     val index = event["index"]?.jsonPrimitive?.intOrNull ?: return
                     val block = event["content_block"] as? JsonObject ?: return
@@ -512,6 +532,10 @@ object AnthropicDirectClient {
                         ?.jsonPrimitive
                         ?.contentOrNull
                         ?: stopReason
+                    (event["usage"] as? JsonObject)?.let { usage ->
+                        latestUsage = parseAnthropicTokenUsage(usage, previous = latestUsage, isFinal = true)
+                        latestUsage?.let { parsed -> emitEvent(AppStreamEvent.Usage(parsed)) }
+                    }
                 }
                 "message_stop" -> messageStopped = true
                 "error" -> {
@@ -579,6 +603,27 @@ object AnthropicDirectClient {
             stopReason = stopReason,
             errorMessage = errorMessage,
         )
+    }
+
+    private fun parseAnthropicTokenUsage(
+        usage: JsonObject,
+        previous: TokenUsage?,
+        isFinal: Boolean,
+    ): TokenUsage? {
+        val parsed = TokenUsage(
+            inputTokens = usage["input_tokens"]?.jsonPrimitive?.longOrNull ?: previous?.inputTokens,
+            outputTokens = usage["output_tokens"]?.jsonPrimitive?.longOrNull ?: previous?.outputTokens,
+            cachedInputTokens = usage["cache_read_input_tokens"]?.jsonPrimitive?.longOrNull
+                ?: previous?.cachedInputTokens,
+            cacheWriteTokens = usage["cache_creation_input_tokens"]?.jsonPrimitive?.longOrNull
+                ?: previous?.cacheWriteTokens,
+            isFinal = isFinal,
+            source = TokenUsageSource.ANTHROPIC,
+        )
+        return parsed.takeIf {
+            it.inputTokens != null || it.outputTokens != null ||
+                it.cachedInputTokens != null || it.cacheWriteTokens != null
+        }
     }
 
     private data class AnthropicStreamBlock(

@@ -5,6 +5,11 @@ import com.android.everytalk.config.PerformanceConfig
 import io.ktor.client.plugins.*
 import io.ktor.client.request.*
 import io.ktor.http.*
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonPrimitive
 
 /**
  * 错误处理结果，包含 Error 事件和 Finish 事件
@@ -56,6 +61,7 @@ object NetworkUtils {
     ): ErrorWithFinish {
         val body = errorBody ?: "(no body)"
         Log.e(TAG, "$apiName API 错误 $statusCode: bodyChars=${body.length}")
+        val upstream = parseProviderErrorBody(body)
         
         val errorMessage = when {
             statusCode.value == 401 -> "$apiName: API 密钥无效或已过期"
@@ -67,7 +73,16 @@ object NetworkUtils {
         }
         
         return ErrorWithFinish(
-            AppStreamEvent.Error(errorMessage, statusCode.value),
+            AppStreamEvent.Error(
+                message = errorMessage,
+                upstreamStatus = statusCode.value,
+                code = upstream.code,
+                type = upstream.type,
+                parameter = upstream.parameter,
+                rawMessage = upstream.message,
+                maxContextTokens = upstream.maxContextTokens,
+                maxOutputTokens = upstream.maxOutputTokens,
+            ),
             AppStreamEvent.Finish("api_error")
         )
     }
@@ -90,4 +105,43 @@ object NetworkUtils {
             AppStreamEvent.Finish("connection_failed")
         )
     }
+
+    private fun parseProviderErrorBody(body: String): ParsedProviderError {
+        val root = runCatching { Json.parseToJsonElement(body) as? JsonObject }.getOrNull()
+            ?: return ParsedProviderError()
+        val error = root["error"] as? JsonObject ?: root
+        fun stringValue(vararg keys: String): String? = keys.firstNotNullOfOrNull { key ->
+            runCatching { error[key]?.jsonPrimitive?.contentOrNull }.getOrNull()
+                ?: runCatching { root[key]?.jsonPrimitive?.contentOrNull }.getOrNull()
+        }
+        fun intValue(vararg keys: String): Int? = keys.firstNotNullOfOrNull { key ->
+            runCatching { error[key]?.jsonPrimitive?.intOrNull }.getOrNull()
+                ?: runCatching { root[key]?.jsonPrimitive?.intOrNull }.getOrNull()
+        }
+        return ParsedProviderError(
+            message = stringValue("message", "detail"),
+            code = stringValue("code", "error_code"),
+            type = stringValue("type", "status"),
+            parameter = stringValue("param", "parameter"),
+            maxContextTokens = intValue(
+                "max_context_tokens",
+                "maximum_context_tokens",
+                "context_length",
+            ),
+            maxOutputTokens = intValue(
+                "max_output_tokens",
+                "maximum_output_tokens",
+                "max_tokens_limit",
+            ),
+        )
+    }
+
+    private data class ParsedProviderError(
+        val message: String? = null,
+        val code: String? = null,
+        val type: String? = null,
+        val parameter: String? = null,
+        val maxContextTokens: Int? = null,
+        val maxOutputTokens: Int? = null,
+    )
 }

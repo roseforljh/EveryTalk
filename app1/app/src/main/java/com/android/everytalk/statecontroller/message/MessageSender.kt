@@ -25,7 +25,6 @@ import com.android.everytalk.data.DataClass.ImageGenRequest
 import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.network.WebSearchSupport
 import com.android.everytalk.data.network.ExternalWebSearchProvider
-import com.android.everytalk.statecontroller.defaultReasoningBudgetForModel
 import com.android.everytalk.statecontroller.mcp.dispatch.McpToolCandidate
 import com.android.everytalk.statecontroller.mcp.dispatch.QueryIntent
 import com.android.everytalk.statecontroller.mcp.dispatch.classifyMcpIntent

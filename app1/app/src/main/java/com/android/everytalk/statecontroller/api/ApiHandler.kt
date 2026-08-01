@@ -4,6 +4,7 @@ import android.content.Context
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.ChatRequest
+import com.android.everytalk.data.DataClass.ContextUsageSnapshot
 import com.android.everytalk.ui.components.MarkdownPart
 import com.android.everytalk.ui.components.toRecoveredMarkdown
 import com.android.everytalk.data.network.AppStreamEvent
@@ -23,9 +24,8 @@ import io.ktor.client.statement.HttpResponse
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.flow.catch
-import kotlinx.coroutines.flow.onCompletion
-import kotlinx.coroutines.flow.onStart
+import kotlinx.coroutines.flow.takeWhile
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
@@ -156,6 +156,7 @@ class ApiHandler(
     private val messageProcessorMap = ConcurrentHashMap<String, MessageProcessor>()
     private val processedMessageIds = ConcurrentHashMap.newKeySet<String>()
     private val generatedImageSourceFingerprints = ConcurrentHashMap<String, MutableSet<String>>()
+    private val messageTokenUsageStore = MessageTokenUsageStore()
     
     // 🛡️ 防 prompt 泄露：为每个消息创建独立的流式检测器
     private val promptLeakDetectors = ConcurrentHashMap<String, PromptLeakGuard.StreamingDetector>()
@@ -184,6 +185,7 @@ class ApiHandler(
             generatedImageSourceFingerprints = generatedImageSourceFingerprints,
             promptLeakDetectors = promptLeakDetectors,
             retryCountMap = retryCountMap,
+            messageTokenUsageStore = messageTokenUsageStore,
             logger = logger,
             onAiMessageFullTextChanged = onAiMessageFullTextChanged,
             errorHandler = errorHandler,
@@ -199,6 +201,7 @@ class ApiHandler(
             generatedImageSourceFingerprints = generatedImageSourceFingerprints,
             promptLeakDetectors = promptLeakDetectors,
             retryCountMap = retryCountMap,
+            messageTokenUsageStore = messageTokenUsageStore,
             logger = logger,
             onAiMessageFullTextChanged = onAiMessageFullTextChanged,
         )
@@ -214,6 +217,7 @@ class ApiHandler(
         isImageGeneration: Boolean = false,
         onNewAiMessageAdded: () -> Unit = {},
         afterUserMessageId: String? = null,
+        contextUsageSnapshot: ContextUsageSnapshot? = null,
     ): String {
         val aiMessageId = UUID.randomUUID().toString()
         logger.debug("Preparing streaming AI message: $aiMessageId, model=$modelName, isImageGeneration=$isImageGeneration")
@@ -243,7 +247,8 @@ class ApiHandler(
             sender = Sender.AI,
             contentStarted = false,
             modelName = modelName,
-            providerName = providerName
+            providerName = providerName,
+            contextUsageSnapshot = contextUsageSnapshot?.copy(messageId = aiMessageId),
         )
 
         viewModelScope.launch(Dispatchers.Main.immediate) {
@@ -372,7 +377,8 @@ class ApiHandler(
         audioBase64: String? = null,
         mimeType: String? = null,
         isImageGeneration: Boolean = false,
-        preCreatedAiMessageId: String? = null
+        preCreatedAiMessageId: String? = null,
+        contextUsageSnapshot: ContextUsageSnapshot? = null,
     ) {
         logger.debug(
             "streamChatResponse request summary: inputChars=${userMessageTextForContext.length}, trimmedChars=${userMessageTextForContext.trim().length}, messages.size=${requestBody.messages.size}, conversationId=${requestBody.conversationId}, preCreatedId=$preCreatedAiMessageId"
@@ -415,7 +421,8 @@ class ApiHandler(
                 sender = Sender.AI,
                 contentStarted = false,
                 modelName = requestBody.model,
-                providerName = requestBody.provider
+                providerName = requestBody.provider,
+                contextUsageSnapshot = contextUsageSnapshot?.copy(messageId = aiMessageId),
             )
             PerformanceMonitor.setContext(aiMessageId, mode = if (isImageGeneration) "image" else "text")
 
@@ -563,47 +570,17 @@ class ApiHandler(
                     finalAttachments.add(Audio(id = UUID.randomUUID().toString(), mimeType = mimeType ?: "audio/3gpp", data = audioBase64))
                 }
                 // 强制使用直连模式
-                ApiClient.streamChatResponse(
-                    requestBody,
-                    finalAttachments,
-                    applicationContextForApiClient
-                )
-                    .onStart { logger.debug("Stream started for message $aiMessageId") }
-                    .catch { e ->
-                        if (e !is CancellationException) {
-                            logger.error("Stream error", e)
-                            updateMessageWithError(aiMessageId, e, isImageGeneration)
-                            onRequestFailed(e)
-                        }
-                    }
-                        .onCompletion { cause ->
-                            logger.debug("Stream completed for message $aiMessageId, cause: ${cause?.message}")
-                            // 🎯 无论成功还是取消/错误，都必须在此处进行最终的同步
-                            // 确保流式缓冲区中的残余内容被刷新并写入消息列表
-                            ensureFinalStreamingSync("flow.onCompletion")
-                            
-                            val currentJob = if (isImageGeneration) stateHolder.imageApiJob else stateHolder.textApiJob
-                            val isThisJobStillTheCurrentOne = currentJob == thisJob
-
-                            if (isThisJobStillTheCurrentOne) {
-                                if (isImageGeneration) {
-                                    stateHolder._isImageApiCalling.value = false
-                                    stateHolder._currentImageStreamingAiMessageId.value = null
-                                } else {
-                                    stateHolder._isTextApiCalling.value = false
-                                    stateHolder._currentTextStreamingAiMessageId.value = null
-                                }
-                            }
-                        }
-                        .catch { e: Throwable ->
-                            if (e !is CancellationException) {
-                                logger.error("Stream catch block", e)
-                            }
-                        }
-                        .onCompletion { cause ->
-                            logger.debug("Stream completion for messageId: $aiMessageId, cause: $cause, isImageGeneration: $isImageGeneration")
-                        }
-                        .collect { appEvent ->
+                var activeRequest = requestBody
+                var activeContextSnapshot = contextUsageSnapshot?.copy(messageId = aiMessageId)
+                val attemptedRecoveries = mutableSetOf<RequestErrorCategory>()
+                while (true) {
+                    var recoveryDecision: ContextRecoveryDecision? = null
+                    logger.debug("Stream started for message $aiMessageId")
+                    ApiClient.streamChatResponse(
+                        activeRequest,
+                        finalAttachments,
+                        applicationContextForApiClient
+                    ).takeWhile { appEvent ->
                             val currentJob = if (isImageGeneration) stateHolder.imageApiJob else stateHolder.textApiJob
                             val currentStreamingId = if (isImageGeneration)
                                 stateHolder._currentImageStreamingAiMessageId.value
@@ -611,7 +588,7 @@ class ApiHandler(
                                 stateHolder._currentTextStreamingAiMessageId.value
                             if (currentJob != thisJob || currentStreamingId != aiMessageId) {
                                 thisJob?.cancel(CancellationException("API job 或 streaming ID 已更改，停止收集旧数据块"))
-                                return@collect
+                                return@takeWhile false
                             }
                             // 🎯 Task 11: Monitor memory usage during long streaming sessions
                             // Check memory periodically to detect potential issues
@@ -624,54 +601,112 @@ class ApiHandler(
                                 val maxMB = (rt.maxMemory() / (1024 * 1024)).toInt()
                                 PerformanceMonitor.recordMemory(aiMessageId, usedMB, maxMB)
                             }
-                            
+
+                            if (appEvent is AppStreamEvent.Error) {
+                                val currentProcessor = messageProcessorMap[aiMessageId]
+                                val messageList = if (isImageGeneration) {
+                                    stateHolder.imageGenerationMessages
+                                } else {
+                                    stateHolder.messages
+                                }
+                                val currentMessage = messageList.firstOrNull { it.id == aiMessageId }
+                                val hasPartialOutput = !currentProcessor?.getCurrentText().isNullOrBlank() ||
+                                    !currentProcessor?.getCurrentReasoning().isNullOrBlank() ||
+                                    !currentMessage?.text.isNullOrBlank() ||
+                                    !currentMessage?.reasoning.isNullOrBlank()
+                                recoveryDecision = ContextRecoveryPolicy.recover(
+                                    request = activeRequest,
+                                    error = appEvent.toProviderErrorInfo(),
+                                    hasPartialOutput = hasPartialOutput,
+                                    attemptedCategories = attemptedRecoveries,
+                                )
+                                if (recoveryDecision != null) return@takeWhile false
+                            }
+
                             processStreamEvent(appEvent, aiMessageId, isImageGeneration)
+                            appEvent !is AppStreamEvent.StreamEnd && appEvent !is AppStreamEvent.Error
+                        }.collect { }
 
-                            // 🎯 如果收到终止事件，主动结束流收集，确保触发 onCompletion 从而重置按钮状态
-                            if (appEvent is AppStreamEvent.Finish || appEvent is AppStreamEvent.StreamEnd || appEvent is AppStreamEvent.Error) {
-                                throw CancellationException("Stream finished with event: ${appEvent::class.simpleName}")
-                            }
-                        }
-               }
-            } catch (e: Exception) {
-                // Handle stream cancellation/error - 获取对应的消息处理器进行重置
-                val currentMessageProcessor = messageProcessorMap[aiMessageId] ?: MessageProcessor()
-                currentMessageProcessor.reset()
-                if (e !is CancellationException) {
-                    logger.error("Stream exception", e)
-                    updateMessageWithError(aiMessageId, e, isImageGeneration)
-                    onRequestFailed(e)
-                } else {
-                    // 🎯 判断是正常结束还是用户取消
-                    val isNormalFinish = e.message?.contains("Stream finished with event:") == true
-                    if (isNormalFinish) {
-                        logger.debug("Stream finished normally: ${e.message}")
-                    } else {
-                        logger.debug("Stream cancelled: ${e.message}")
+                    val decision = recoveryDecision ?: break
+                    attemptedRecoveries += decision.category
+                    activeRequest = decision.request
+                    val currentSnapshot = activeContextSnapshot
+                    val refreshedSnapshot = currentSnapshot?.let { snapshot ->
+                        RequestTokenEstimator.estimate(
+                            messages = activeRequest.messages,
+                            tools = activeRequest.tools,
+                        ).toContextUsageSnapshot(
+                            messageId = aiMessageId,
+                            configId = snapshot.configId,
+                            reservedOutputTokens = activeRequest.generationConfig?.maxOutputTokens
+                                ?.toLong()
+                                ?: snapshot.reservedOutputTokens,
+                            contextWindowTokens = decision.effectiveMaxContextTokens
+                                ?.toLong()
+                                ?: snapshot.contextWindowTokens,
+                        )
                     }
-
-                    // 🎯 Save partial content to history on cancellation (Requirements: 7.5)
-                    ensureFinalStreamingSync("stream cancellation")
-
-                    // Get partial content from message processor
-                    val partialText = currentMessageProcessor.getCurrentText().trim()
-                    if (partialText.isNotBlank()) {
-                        logger.debug("Saving partial content (${partialText.length} chars) to history on cancellation")
-                        viewModelScope.launch(Dispatchers.IO) {
-                            try {
-                                historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = isImageGeneration)
-                                logger.debug("Successfully saved partial content to history")
-                            } catch (saveError: Exception) {
-                                logger.error("Failed to save partial content to history", saveError)
+                    if (refreshedSnapshot != null) {
+                        activeContextSnapshot = refreshedSnapshot
+                        withContext(Dispatchers.Main.immediate) {
+                            val messageList = if (isImageGeneration) {
+                                stateHolder.imageGenerationMessages
+                            } else {
+                                stateHolder.messages
+                            }
+                            val index = messageList.indexOfFirst { it.id == aiMessageId }
+                            if (index >= 0) {
+                                messageList[index] = messageList[index].copy(
+                                    contextUsageSnapshot = refreshedSnapshot
+                                )
                             }
                         }
                     }
-
-                    // 🎯 只有在用户主动取消时才立即清理 StreamingBuffer
-                    // 正常结束时，延迟到 finally 块中 sync 完成后再清理
-                    if (!isNormalFinish) logger.debug("User cancellation detected, buffer cleanup deferred to finally")
+                    messageProcessorMap[aiMessageId]?.reset()
+                    stateHolder.updateMessageStatus(
+                        aiMessageId,
+                        when (decision.category) {
+                            RequestErrorCategory.INPUT_CONTEXT_TOO_LONG -> "正在缩减上下文并重试"
+                            RequestErrorCategory.OUTPUT_LIMIT_TOO_HIGH -> "正在调整输出上限并重试"
+                            else -> "正在重试"
+                        },
+                        isImageGeneration,
+                    )
+                    logger.debug(
+                        "Context recovery retry: category=${decision.category}, " +
+                            "messages=${activeRequest.messages.size}, " +
+                            "maxOutput=${activeRequest.generationConfig?.maxOutputTokens}"
+                    )
                 }
-            } finally {
+               }
+             } catch (e: CancellationException) {
+                 val currentMessageProcessor = messageProcessorMap[aiMessageId] ?: MessageProcessor()
+                 val partialText = currentMessageProcessor.getCurrentText().trim()
+                 currentMessageProcessor.reset()
+                 logger.debug("Stream cancelled: ${e.message}")
+                 ensureFinalStreamingSync("stream cancellation")
+                 if (partialText.isNotBlank()) {
+                     logger.debug("Saving partial content (${partialText.length} chars) to history on cancellation")
+                     viewModelScope.launch(Dispatchers.IO) {
+                         try {
+                             historyManager.saveCurrentChatToHistoryIfNeeded(
+                                 forceSave = true,
+                                 isImageGeneration = isImageGeneration,
+                             )
+                             logger.debug("Successfully saved partial content to history")
+                         } catch (saveError: Exception) {
+                             logger.error("Failed to save partial content to history", saveError)
+                         }
+                     }
+                 }
+                 throw e
+             } catch (e: Exception) {
+                 val currentMessageProcessor = messageProcessorMap[aiMessageId] ?: MessageProcessor()
+                 currentMessageProcessor.reset()
+                 logger.error("Stream exception", e)
+                 updateMessageWithError(aiMessageId, e, isImageGeneration)
+                 onRequestFailed(e)
+             } finally {
                 // 🎯 最终安全网：如果在 onCompletion 中因异常未执行同步，这里再尝试一次
                 // 但为了避免重复执行，syncStreamingMessageToList 内部有空值检查
                 // 注意：在 finally 中不应抛出异常
@@ -691,6 +726,7 @@ class ApiHandler(
                 promptLeakDetectors.remove(aiMessageId)
                 generatedImageSourceFingerprints.remove(aiMessageId)
                 retryCountMap.remove(aiMessageId)
+                messageTokenUsageStore.remove(aiMessageId)
 
                 val currentJob = if (isImageGeneration) stateHolder.imageApiJob else stateHolder.textApiJob
                 if (currentJob == thisJob) {

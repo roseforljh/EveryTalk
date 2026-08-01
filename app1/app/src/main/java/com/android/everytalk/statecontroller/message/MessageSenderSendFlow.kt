@@ -16,18 +16,23 @@ import com.android.everytalk.data.DataClass.AbstractApiMessage
 import com.android.everytalk.data.DataClass.ApiContentPart
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.ChatRequest
+import com.android.everytalk.data.DataClass.ContextUsageSnapshot
+import com.android.everytalk.data.DataClass.ModelParameterProtocol
+import com.android.everytalk.data.DataClass.MessageToolIds
 import com.android.everytalk.data.DataClass.PartsApiMessage
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.DataClass.Message as UiMessage
 import com.android.everytalk.data.DataClass.Sender as UiSender
-import com.android.everytalk.data.DataClass.ThinkingConfig
 import com.android.everytalk.data.DataClass.ImageGenRequest
 import com.android.everytalk.data.DataClass.GenerationConfig
+import com.android.everytalk.data.DataClass.modelParameterProtocol
+import com.android.everytalk.data.DataClass.openAICompatibleRequestParameters
+import com.android.everytalk.data.DataClass.resolvedModelTokenLimits
+import com.android.everytalk.data.DataClass.toThinkingConfig
 import com.android.everytalk.data.network.WebSearchSupport
 import com.android.everytalk.data.network.ExternalWebSearchProvider
 import com.android.everytalk.data.network.PromptCapabilityCatalog
 import com.android.everytalk.data.network.PromptCachePolicy
-import com.android.everytalk.statecontroller.defaultReasoningBudgetForModel
 import com.android.everytalk.statecontroller.mcp.dispatch.McpToolCandidate
 import com.android.everytalk.statecontroller.mcp.dispatch.QueryIntent
 import com.android.everytalk.statecontroller.mcp.dispatch.classifyMcpIntent
@@ -56,6 +61,18 @@ import kotlinx.serialization.json.longOrNull
 internal fun shouldUsePromptCapabilities(
     isImageGeneration: Boolean,
 ): Boolean = !isImageGeneration
+
+internal fun enabledMessageToolIdsForRequest(
+    isImageGeneration: Boolean,
+    webSearchEnabled: Boolean,
+    mcpEnabled: Boolean,
+): List<String> {
+    if (isImageGeneration) return emptyList()
+    return buildList {
+        if (webSearchEnabled) add(MessageToolIds.WEB_SEARCH)
+        if (mcpEnabled) add(MessageToolIds.MCP)
+    }
+}
 
 internal fun MessageSender.sendMessageInternal(
         messageText: String,
@@ -126,10 +143,31 @@ internal fun MessageSender.sendMessageInternal(
         }
 
         viewModelScope.launch {
-            val modelIsGeminiType = WebSearchSupport.isGeminiModel(currentConfig)
+            val parameterProtocol = modelParameterProtocol(currentConfig.channel)
+            val modelIsGeminiType = parameterProtocol == ModelParameterProtocol.GEMINI
             val shouldUsePartsApiMessage = modelIsGeminiType
             val providerForRequestBackend = currentConfig.provider
+            val webSearchEnabledForRequest = !isImageGeneration && stateHolder._isWebSearchEnabled.value
+            val isMcpEnabledForRequest = !isImageGeneration && stateHolder._isMcpEnabledForNextRequest.value
+            val enabledToolIdsForRequest = enabledMessageToolIdsForRequest(
+                isImageGeneration = isImageGeneration,
+                webSearchEnabled = webSearchEnabledForRequest,
+                mcpEnabled = isMcpEnabledForRequest,
+            )
             val isDefaultProvider = currentConfig.provider.trim().lowercase() in listOf("默认", "default")
+            val customModelParameters = if (parameterProtocol == ModelParameterProtocol.OPENAI_COMPATIBLE) {
+                try {
+                    currentConfig.modelParameters.openAICompatibleRequestParameters()
+                } catch (e: IllegalArgumentException) {
+                    Log.e("MessageSender", "模型参数校验失败", e)
+                    withContext(Dispatchers.Main.immediate) {
+                        showSnackbar(e.message ?: "模型参数无效")
+                    }
+                    return@launch
+                }
+            } else {
+                emptyMap()
+            }
 
             // 自动注入"上一轮AI出图"作为参考，以支持"在上一张基础上修改"等编辑语义
             if (isImageGeneration && allAttachments.isEmpty()) {
@@ -198,6 +236,7 @@ internal fun MessageSender.sendMessageInternal(
                 timestamp = System.currentTimeMillis(), contentStarted = true,
                 imageUrls = attachmentResult.imageUriStringsForUi,
                 attachments = attachmentResult.processedAttachmentsForUi,
+                enabledToolIds = enabledToolIdsForRequest,
                 modelName = currentConfig.model,
                 providerName = currentConfig.provider
             )
@@ -216,7 +255,6 @@ internal fun MessageSender.sendMessageInternal(
                     stateHolder._lastSentImageUserMessageId.value = newUserMessageForUi.id
                 } else {
                     stateHolder._lastSentUserMessageId.value = newUserMessageForUi.id
-                    stateHolder.persistPendingParamsIfNeeded(isImageGeneration = false)
                 }
                 if (!isFromRegeneration) {
                    stateHolder._text.value = ""
@@ -286,7 +324,6 @@ internal fun MessageSender.sendMessageInternal(
 
                 val apiMessagesForBackend = ensureUserMessagePresentForRequest(historyApiMessages, currentUserApiMessage)
 
-                val isMcpEnabledForRequest = stateHolder._isMcpEnabledForNextRequest.value
                 val dispatchCandidates = if (isMcpEnabledForRequest) {
                     getMcpDispatchCandidates()
                 } else {
@@ -359,7 +396,7 @@ internal fun MessageSender.sendMessageInternal(
                 val selectedExternalProviderApiKey = getSelectedExternalWebSearchProviderApiKey()
                 val webSearchRouting = WebSearchSupport.resolveWebSearchRouting(
                     config = currentConfig,
-                    isWebSearchEnabled = stateHolder._isWebSearchEnabled.value,
+                    isWebSearchEnabled = webSearchEnabledForRequest,
                     selectedExternalProvider = selectedExternalProvider,
                     selectedExternalProviderApiKey = selectedExternalProviderApiKey,
                 )
@@ -390,7 +427,86 @@ internal fun MessageSender.sendMessageInternal(
                     }
                 }
 
-                val finalApiMessages = apiMessagesForBackend.toList()
+                val enableCodeExecutionForRequest: Boolean? = if (!isGeminiChannel) {
+                    null
+                } else {
+                    stateHolder._isCodeExecutionEnabled.value
+                }
+                val requestTools = PromptCachePolicy.normalizeTools(run {
+                    val toolsList = mutableListOf<Map<String, Any>>()
+
+                    val customToolsJson = currentConfig.toolsJson
+                    if (!customToolsJson.isNullOrBlank()) {
+                        try {
+                            val jsonElement = Json.parseToJsonElement(customToolsJson)
+                            if (jsonElement is JsonArray) {
+                                jsonElement.forEach { element: JsonElement ->
+                                    if (element is JsonObject) {
+                                        toolsList.add(jsonObjectToMap(element))
+                                    }
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.e("MessageSender", "Failed to parse custom tools JSON", e)
+                        }
+                    }
+
+                    if (shouldEnableGoogleSearch) {
+                        Log.d("MessageSender", "启用Google搜索工具用于Gemini渠道")
+                        toolsList.add(mapOf("googleSearch" to emptyMap<String, Any>()))
+                    }
+                    if (isGeminiChannel && stateHolder._isCodeExecutionEnabled.value) {
+                        Log.d("MessageSender", "启用代码执行工具 (code_execution)")
+                        toolsList.add(mapOf("code_execution" to emptyMap<String, Any>()))
+                    }
+                    if (mcpToolsForRequest.isNotEmpty()) {
+                        Log.d("MessageSender", "注入 ${mcpToolsForRequest.size} 个 MCP 工具")
+                        toolsList.addAll(mcpToolsForRequest)
+                    }
+                    if (shouldInjectWebSearchTool) {
+                        Log.d("MessageSender", "注入内建 web_search 工具")
+                        toolsList.add(builtInWebSearchToolDefinition())
+                    }
+                    if (shouldUsePromptCapabilities(isImageGeneration = isImageGeneration)) {
+                        toolsList.add(PromptCapabilityCatalog.selectionToolDefinition())
+                    }
+
+                    val effectiveTools = appendBuiltInWebFetchToolIfNeeded(toolsList)
+                    if (effectiveTools.size != toolsList.size) {
+                        Log.d("MessageSender", "注入内建 webfetch 工具")
+                    }
+                    val effectiveToolsWithCurrentTime = appendBuiltInCurrentTimeTool(effectiveTools)
+                    if (effectiveToolsWithCurrentTime.size != effectiveTools.size) {
+                        Log.d("MessageSender", "注入内建当前时间工具")
+                    }
+                    effectiveToolsWithCurrentTime.ifEmpty { null }
+                })
+
+                val tokenLimits = resolvedModelTokenLimits(
+                    maxOutputTokens = currentConfig.maxTokens,
+                    maxContextTokens = currentConfig.modelParameters.maxContextTokens,
+                )
+                val finalApiMessages = trimMessagesToContextWindow(
+                    messages = apiMessagesForBackend,
+                    limits = tokenLimits,
+                    tools = requestTools,
+                )
+                val contextUsageSnapshot = RequestTokenEstimator.estimate(
+                    messages = finalApiMessages,
+                    tools = requestTools,
+                ).toContextUsageSnapshot(
+                    messageId = "",
+                    configId = currentConfig.id,
+                    reservedOutputTokens = tokenLimits.maxOutputTokens.toLong(),
+                    contextWindowTokens = tokenLimits.maxContextTokens.toLong(),
+                )
+                if (finalApiMessages.size < apiMessagesForBackend.size) {
+                    Log.i(
+                        "MessageSender",
+                        "上下文窗口裁剪消息: ${apiMessagesForBackend.size} -> ${finalApiMessages.size}, " +
+                            "context=${tokenLimits.maxContextTokens}, output=${tokenLimits.maxOutputTokens}",
+                    )
+                }
 
                 logApiMessages("finalMessages", finalApiMessages)
 
@@ -405,7 +521,7 @@ internal fun MessageSender.sendMessageInternal(
 
                 Log.d(
                     "MessageSender",
-                    "config=${safeApiConfigSummary(currentConfig)}, supportsNativeWebSearch: $supportsNativeWebSearch, webSearchEnabled: ${stateHolder._isWebSearchEnabled.value}, shouldEnableGoogleSearch: $shouldEnableGoogleSearch, externalProvider=${webSearchRouting.externalProvider?.providerId}"
+                    "config=${safeApiConfigSummary(currentConfig)}, supportsNativeWebSearch: $supportsNativeWebSearch, webSearchEnabled: $webSearchEnabledForRequest, shouldEnableGoogleSearch: $shouldEnableGoogleSearch, externalProvider=${webSearchRouting.externalProvider?.providerId}"
                 )
 
                 // 🎯 优化：在开始可能的外部联网搜索之前，预先创建 AI 占位消息。
@@ -417,20 +533,9 @@ internal fun MessageSender.sendMessageInternal(
                         providerName = currentConfig.provider,
                         isImageGeneration = false,
                         afterUserMessageId = newUserMessageForUi.id,
+                        contextUsageSnapshot = contextUsageSnapshot,
                     )
                 } else null
-
-                // 3. 代码执行启用逻辑 - 用户全权控制
-                val enableCodeExecutionForRequest: Boolean? =
-                    if (!isGeminiChannel) {
-                        null // 非 Gemini 渠道，不支持原生 code_execution，且不显示开关
-                    } else {
-                        // Gemini 渠道下，完全由 UI 开关决定：
-                        // ON -> true (注入工具)
-                        // OFF -> false (不注入)
-                        // 这样就覆盖了底层的自动意图检测逻辑
-                        stateHolder._isCodeExecutionEnabled.value
-                    }
 
                 val chatRequestForApi = ChatRequest(
                     messages = finalApiMessages,
@@ -444,98 +549,18 @@ internal fun MessageSender.sendMessageInternal(
                     useWebSearch = webSearchRouting.useNativeWebSearch,
                     // 显式传递代码执行开关状态
                     enableCodeExecution = enableCodeExecutionForRequest,
-                    // 新会话未设置时，只回落温度/TopP；maxTokens 一律保持关闭（null）
-                    generationConfig = stateHolder.getCurrentConversationConfig() ?: GenerationConfig(
+                    generationConfig = GenerationConfig(
                         temperature = currentConfig.temperature,
                         topP = currentConfig.topP,
-                        maxOutputTokens = null,
-                        thinkingConfig = if (modelIsGeminiType) {
-                            ThinkingConfig(
-                                includeThoughts = true,
-                                thinkingBudget = defaultReasoningBudgetForModel(currentConfig.model)
-                            )
-                        } else null
+                        maxOutputTokens = tokenLimits.maxOutputTokens,
+                        thinkingConfig = currentConfig.modelParameters.toThinkingConfig(
+                            channel = currentConfig.channel,
+                            model = currentConfig.model,
+                        )
                     ).let { if (it.temperature != null || it.topP != null || it.maxOutputTokens != null || it.thinkingConfig != null) it else null },
                     qwenEnableSearch = if (WebSearchSupport.shouldEnableQwenNativeSearch(currentConfig, webSearchRouting.useNativeWebSearch)) true else null,
-                    customModelParameters = if (modelIsGeminiType) {
-                        // 为Gemini模型添加reasoning_effort参数
-                        // 根据模型类型设置不同的思考级别
-                        val reasoningEffort = when {
-                            currentConfig.model.contains("flash", ignoreCase = true) -> "low"  // 对应1024个令牌
-                            currentConfig.model.contains("pro", ignoreCase = true) -> "medium" // 对应8192个令牌
-                            else -> "high" // 对应24576个令牌
-                        }
-                        mapOf("reasoning_effort" to reasoningEffort)
-                    } else null,
-                    // 工具注入逻辑
-                    tools = PromptCachePolicy.normalizeTools(run {
-                        val toolsList = mutableListOf<Map<String, Any>>()
-                        
-                        // 1. 用户自定义工具
-                        val customToolsJson = currentConfig.toolsJson
-                        if (!customToolsJson.isNullOrBlank()) {
-                            try {
-                                val jsonElement = Json.parseToJsonElement(customToolsJson)
-                                if (jsonElement is JsonArray) {
-                                    jsonElement.forEach { element: JsonElement ->
-                                        if (element is JsonObject) {
-                                            // 递归转换 JsonObject 为 Map
-                                            val map = jsonObjectToMap(element)
-                                            toolsList.add(map)
-                                        }
-                                    }
-                                }
-                            } catch (e: Exception) {
-                                Log.e("MessageSender", "Failed to parse custom tools JSON", e)
-                            }
-                        }
-                        
-                        // 2. 联网搜索 (Gemini Native)
-                        if (shouldEnableGoogleSearch) {
-                            Log.d("MessageSender", "启用Google搜索工具用于Gemini渠道")
-                            toolsList.add(mapOf("googleSearch" to emptyMap<String, Any>()))
-                        }
-                        
-                        // 3. 代码执行 (Gemini Native)
-                        // 修复：显式注入 code_execution 工具，确保通过代理/后端请求时生效
-                        // (GeminiDirectClient 会忽略此 tools 列表自行构建，因此不会冲突)
-                        if (isGeminiChannel && stateHolder._isCodeExecutionEnabled.value) {
-                            Log.d("MessageSender", "启用代码执行工具 (code_execution)")
-                            toolsList.add(mapOf("code_execution" to emptyMap<String, Any>()))
-                        }
-                        
-                        // 4. MCP 工具 (来自 MCP 服务器)
-                        if (mcpToolsForRequest.isNotEmpty()) {
-                            Log.d("MessageSender", "注入 ${mcpToolsForRequest.size} 个 MCP 工具")
-                            toolsList.addAll(mcpToolsForRequest)
-                        }
-
-                        // 5. 联网搜索工具 (外部/Jina，模型自行决定是否调用)
-                        if (shouldInjectWebSearchTool) {
-                            Log.d("MessageSender", "注入内建 web_search 工具")
-                            toolsList.add(builtInWebSearchToolDefinition())
-                        }
-
-                        if (shouldUsePromptCapabilities(
-                                isImageGeneration = isImageGeneration,
-                            )
-                        ) {
-                            toolsList.add(PromptCapabilityCatalog.selectionToolDefinition())
-                        }
-
-                        val effectiveTools = appendBuiltInWebFetchToolIfNeeded(
-                            tools = toolsList,
-                        )
-                        if (effectiveTools.size != toolsList.size) {
-                            Log.d("MessageSender", "注入内建 webfetch 工具")
-                        }
-                        val effectiveToolsWithCurrentTime = appendBuiltInCurrentTimeTool(effectiveTools)
-                        if (effectiveToolsWithCurrentTime.size != effectiveTools.size) {
-                            Log.d("MessageSender", "注入内建当前时间工具")
-                        }
-
-                        effectiveToolsWithCurrentTime.ifEmpty { null }
-                    }),
+                    customModelParameters = customModelParameters.ifEmpty { null },
+                    tools = requestTools,
                     imageGenRequest = if (isImageGeneration) {
                         // 调试信息：检查发送的配置
                         Log.d("MessageSender", "Image generation config: ${safeApiConfigSummary(currentConfig)}")
@@ -638,7 +663,8 @@ internal fun MessageSender.sendMessageInternal(
                     audioBase64 = audioBase64,
                     mimeType = mimeType,
                     isImageGeneration = isImageGeneration,
-                    preCreatedAiMessageId = preCreatedAiMessageId
+                    preCreatedAiMessageId = preCreatedAiMessageId,
+                    contextUsageSnapshot = if (isImageGeneration) null else contextUsageSnapshot,
                 )
             }
         }

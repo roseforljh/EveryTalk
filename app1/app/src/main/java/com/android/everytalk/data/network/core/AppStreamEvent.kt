@@ -5,6 +5,27 @@ import com.android.everytalk.data.DataClass.WebSearchResult
 import kotlinx.serialization.json.JsonObject
 
 @Serializable
+enum class TokenUsageSource {
+    OPENAI_CHAT,
+    OPENAI_RESPONSES,
+    GEMINI,
+    ANTHROPIC,
+    ESTIMATED,
+}
+
+@Serializable
+data class TokenUsage(
+    val inputTokens: Long? = null,
+    val outputTokens: Long? = null,
+    val reasoningTokens: Long? = null,
+    val cachedInputTokens: Long? = null,
+    val cacheWriteTokens: Long? = null,
+    val totalTokens: Long? = null,
+    val isFinal: Boolean,
+    val source: TokenUsageSource,
+)
+
+@Serializable
 sealed class AppStreamEvent {
     @Serializable
     @SerialName("text")
@@ -25,6 +46,10 @@ sealed class AppStreamEvent {
     @Serializable
     @SerialName("reasoning_finish")
     data class ReasoningFinish(val timestamp: String? = null) : AppStreamEvent()
+
+    @Serializable
+    @SerialName("usage")
+    data class Usage(val usage: TokenUsage) : AppStreamEvent()
 
     @Serializable
     @SerialName("output_type")
@@ -62,7 +87,16 @@ sealed class AppStreamEvent {
 
     @Serializable
     @SerialName("error")
-    data class Error(val message: String, val upstreamStatus: Int? = null) : AppStreamEvent()
+    data class Error(
+        val message: String,
+        val upstreamStatus: Int? = null,
+        val code: String? = null,
+        val type: String? = null,
+        val parameter: String? = null,
+        val rawMessage: String? = null,
+        val maxContextTokens: Int? = null,
+        val maxOutputTokens: Int? = null,
+    ) : AppStreamEvent()
     @Serializable
     @SerialName("finish")
     data class Finish(val reason: String) : AppStreamEvent()

@@ -7,6 +7,7 @@ import kotlinx.serialization.Serializable
 import java.io.File
 import java.util.UUID
 import com.android.everytalk.ui.components.MarkdownPartSerializer
+import com.android.everytalk.data.network.TokenUsage
 
 private fun SelectedMediaItem.ImageFromBitmap.encodedDataOrNull(
     uriEncoder: (Uri) -> String?,
@@ -24,6 +25,11 @@ enum class Sender {
     AI,
     System,
     Tool
+}
+
+object MessageToolIds {
+    const val WEB_SEARCH = "web_search"
+    const val MCP = "mcp"
 }
 
 // 将Sender枚举值映射到API角色字符串
@@ -53,10 +59,13 @@ data class Message(
     @Serializable(with = MarkdownPartSerializer::class)
     val parts: List<MarkdownPart> = emptyList(),
     val executionStatus: String? = null,
+    val enabledToolIds: List<String> = emptyList(),
     // 新增：记录发送消息时使用的模型名称
     val modelName: String? = null,
     // 新增：记录发送消息时使用的提供商名称
-    val providerName: String? = null
+    val providerName: String? = null,
+    val tokenUsage: TokenUsage? = null,
+    val contextUsageSnapshot: ContextUsageSnapshot? = null,
 ) : IMessage {
     // 检查消息是否包含内联图片
     fun hasInlineImages(): Boolean {

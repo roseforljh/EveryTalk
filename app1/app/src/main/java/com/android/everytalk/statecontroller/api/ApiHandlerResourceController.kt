@@ -16,6 +16,7 @@ internal class ApiHandlerResourceController(
     private val generatedImageSourceFingerprints: ConcurrentHashMap<String, MutableSet<String>>,
     private val promptLeakDetectors: ConcurrentHashMap<String, PromptLeakGuard.StreamingDetector>,
     private val retryCountMap: ConcurrentHashMap<String, Int>,
+    private val messageTokenUsageStore: MessageTokenUsageStore,
     private val logger: AppLogger.ComponentLogger,
     private val onAiMessageFullTextChanged: (messageId: String, currentFullText: String) -> Unit,
 ) {
@@ -25,6 +26,7 @@ internal class ApiHandlerResourceController(
         promptLeakDetectors.remove(messageId)
         generatedImageSourceFingerprints.remove(messageId)
         retryCountMap.remove(messageId)
+        messageTokenUsageStore.remove(messageId)
     }
 
     fun clearTextChatResources() {
@@ -55,6 +57,7 @@ internal class ApiHandlerResourceController(
             // 🛡️ 清理 prompt 泄露检测器
             promptLeakDetectors.remove(messageId)
             generatedImageSourceFingerprints.remove(messageId)
+            messageTokenUsageStore.remove(messageId)
         }
         
         // 清理已处理的消息ID集合
@@ -65,10 +68,6 @@ internal class ApiHandlerResourceController(
         logger.debug("Cleared $processedIdsBeforeCleanup processed message IDs")
         logger.debug("Remaining active processors: ${messageProcessorMap.size}")
         logger.debug("Active processor IDs: ${messageProcessorMap.keys}")
-        
-        // 🎯 触发会话参数清理（Requirements: 6.4）
-        stateHolder.cleanupOldConversationParameters()
-        logger.debug("Triggered conversation parameter cleanup (keep last 50)")
         
         logger.debug("=== TEXT CHAT RESOURCE CLEANUP END ===")
     }
@@ -85,7 +84,6 @@ internal class ApiHandlerResourceController(
      * - 只清理不在当前消息列表中的处理器（inactive processors）
      * - 保留当前活跃会话的所有处理器
      * - 清理已处理的消息ID集合
-     * - 触发会话参数清理（保留最近50个）
      */
     fun clearImageChatResources() {
         logger.debug("=== IMAGE CHAT RESOURCE CLEANUP START ===")
@@ -115,6 +113,7 @@ internal class ApiHandlerResourceController(
             // 🛡️ 清理 prompt 泄露检测器
             promptLeakDetectors.remove(messageId)
             generatedImageSourceFingerprints.remove(messageId)
+            messageTokenUsageStore.remove(messageId)
         }
         
         // 清理已处理的消息ID集合
@@ -125,10 +124,6 @@ internal class ApiHandlerResourceController(
         logger.debug("Cleared $processedIdsBeforeCleanup processed message IDs")
         logger.debug("Remaining active processors: ${messageProcessorMap.size}")
         logger.debug("Active processor IDs: ${messageProcessorMap.keys}")
-        
-        // 🎯 触发会话参数清理（Requirements: 6.4）
-        stateHolder.cleanupOldConversationParameters()
-        logger.debug("Triggered conversation parameter cleanup (keep last 50)")
         
         logger.debug("=== IMAGE CHAT RESOURCE CLEANUP END ===")
     }
@@ -173,7 +168,6 @@ internal class ApiHandlerResourceController(
      * - 监控消息处理器数量
      * - 当处理器数量超过阈值时触发清理
      * - 优先清理不活跃的处理器
-     * - 清理旧的会话参数
      * 
      * @return true if cleanup was triggered, false otherwise
      */
@@ -210,13 +204,11 @@ internal class ApiHandlerResourceController(
                 }
                 promptLeakDetectors.remove(messageId)
                 generatedImageSourceFingerprints.remove(messageId)
+                messageTokenUsageStore.remove(messageId)
             }
             
             // 清理已处理的消息ID集合
             processedMessageIds.clear()
-            
-            // 清理旧的会话参数
-            stateHolder.cleanupOldConversationParameters()
             
             logger.debug("Memory pressure cleanup complete:")
             logger.debug("  - Removed $removedCount inactive processors")
@@ -242,9 +234,7 @@ internal class ApiHandlerResourceController(
             appendLine("Processed Message IDs: ${processedMessageIds.size}")
             appendLine("Active Text Messages: ${stateHolder.messages.size}")
             appendLine("Active Image Messages: ${stateHolder.imageGenerationMessages.size}")
-            appendLine("Conversation Parameters: ${stateHolder.conversationGenerationConfigs.value.size}")
             appendLine("Streaming Buffers: ${stateHolder.getStreamingBufferCount()}")
         }
     }
 }
-

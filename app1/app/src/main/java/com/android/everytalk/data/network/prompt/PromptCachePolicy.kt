@@ -42,6 +42,9 @@ internal object PromptCachePolicy {
     fun toolSchemaHash(tools: List<Map<String, Any>>?): String =
         sha256(canonicalJson(normalizeTools(tools).orEmpty()))
 
+    fun normalizedToolSchemaJson(tools: List<Map<String, Any>>?): String =
+        canonicalJson(normalizeTools(tools).orEmpty())
+
     fun systemFingerprint(messages: List<AbstractApiMessage>): String =
         sha256(
             messages.firstOrNull { it.role.equals("system", ignoreCase = true) }

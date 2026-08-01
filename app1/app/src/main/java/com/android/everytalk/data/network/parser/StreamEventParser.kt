@@ -150,7 +150,16 @@ object StreamEventParser {
     private fun parseErrorEvent(jsonObject: JsonObject): AppStreamEvent.Error {
         val message = jsonObject["message"]?.jsonPrimitive?.content ?: ""
         val upstreamStatus = jsonObject["upstreamStatus"]?.jsonPrimitive?.intOrNull
-        return AppStreamEvent.Error(message, upstreamStatus)
+        return AppStreamEvent.Error(
+            message = message,
+            upstreamStatus = upstreamStatus,
+            code = jsonObject["code"]?.jsonPrimitive?.contentOrNull,
+            type = jsonObject["type"]?.jsonPrimitive?.contentOrNull,
+            parameter = jsonObject["parameter"]?.jsonPrimitive?.contentOrNull,
+            rawMessage = jsonObject["rawMessage"]?.jsonPrimitive?.contentOrNull,
+            maxContextTokens = jsonObject["maxContextTokens"]?.jsonPrimitive?.intOrNull,
+            maxOutputTokens = jsonObject["maxOutputTokens"]?.jsonPrimitive?.intOrNull,
+        )
     }
     
     private fun parseFinishEvent(jsonObject: JsonObject): AppStreamEvent.Finish {

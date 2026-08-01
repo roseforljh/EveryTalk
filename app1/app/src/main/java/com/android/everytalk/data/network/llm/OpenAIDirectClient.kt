@@ -526,16 +526,14 @@ object OpenAIDirectClient {
             request.generationConfig?.let { config ->
                 config.temperature?.let { put("temperature", it) }
                 config.topP?.let { put("top_p", it) }
-                config.maxOutputTokens?.let { put("max_tokens", it) }
-            }
-
-            // Gemini-in-OpenAI 格式支持 (Gemini 通过 OpenAI 兼容接口调用)
-            val isGemini = request.channel.contains("gemini", ignoreCase = true) ||
-                WebSearchSupport.isGeminiModelName(request.model)
-            if (isGemini) {
-                val reasoningEffort = request.customModelParameters?.get("reasoning_effort")?.toString()
-                    ?: defaultGeminiReasoningEffort(request.model)
-                put("reasoning_effort", reasoningEffort)
+                config.maxOutputTokens?.let { maxOutputTokens ->
+                    val parameterName = if (PromptCachePolicy.isOfficialOpenAIEndpoint(request.apiAddress)) {
+                        "max_completion_tokens"
+                    } else {
+                        "max_tokens"
+                    }
+                    put(parameterName, maxOutputTokens)
+                }
             }
 
             // Qwen 联网搜索支持
@@ -550,46 +548,18 @@ object OpenAIDirectClient {
                 }
             }
 
-            if (isGemini || isQwenSearchEnabled) {
+            if (isQwenSearchEnabled) {
                  putJsonObject("extra_body") {
-                    if (isGemini) {
-                        putJsonObject("google") {
-                            // 工具配置
-                            val toolsToAdd = mutableListOf<String>()
-                            if (request.useWebSearch == true) {
-                                toolsToAdd.add("google_search")
-                            }
-                            // 代码执行工具
-                            if (request.enableCodeExecution == true) {
-                                 toolsToAdd.add("code_execution")
-                            }
-                            
-                            if (toolsToAdd.isNotEmpty()) {
-                                putJsonArray("tools") {
-                                    toolsToAdd.forEach { toolName ->
-                                        addJsonObject { putJsonObject(toolName) {} }
-                                    }
-                                }
-                            }
-                            
-                            // thinking_config 支持
-                            request.generationConfig?.thinkingConfig?.let { tc ->
-                                putJsonObject("thinking_config") {
-                                    tc.includeThoughts?.let { put("include_thoughts", it) }
-                                    tc.thinkingBudget?.let { put("thinking_budget", it) }
-                                }
-                            }
-                        }
-                    }
-
-                    if (isQwenSearchEnabled) {
-                        put("enable_search", true)
-                        putJsonObject("search_options") {
-                            put("forced_search", true)
-                            put("search_strategy", "max")
-                        }
+                    put("enable_search", true)
+                    putJsonObject("search_options") {
+                        put("forced_search", true)
+                        put("search_strategy", "max")
                     }
                 }
+            }
+
+            request.customModelParameters.orEmpty().forEach { (name, value) ->
+                put(name, anyToJsonElement(value))
             }
 
             // MCP 工具注入 (OpenAI function calling 格式)
@@ -773,15 +743,18 @@ object OpenAIDirectClient {
             request.generationConfig?.let { config ->
                 config.temperature?.let { put("temperature", it) }
                 config.topP?.let { put("top_p", it) }
-                config.maxOutputTokens?.let { put("max_tokens", it) }
+                config.maxOutputTokens?.let { maxOutputTokens ->
+                    val parameterName = if (PromptCachePolicy.isOfficialOpenAIEndpoint(request.apiAddress)) {
+                        "max_completion_tokens"
+                    } else {
+                        "max_tokens"
+                    }
+                    put(parameterName, maxOutputTokens)
+                }
             }
 
-            val isGemini = request.channel.contains("gemini", ignoreCase = true) ||
-                WebSearchSupport.isGeminiModelName(request.model)
-            if (isGemini) {
-                val reasoningEffort = request.customModelParameters?.get("reasoning_effort")?.toString()
-                    ?: defaultGeminiReasoningEffort(request.model)
-                put("reasoning_effort", reasoningEffort)
+            request.customModelParameters.orEmpty().forEach { (name, value) ->
+                put(name, anyToJsonElement(value))
             }
 
             // MCP 工具注入
@@ -839,10 +812,9 @@ object OpenAIDirectClient {
                             try {
                                 val jsonChunk = Json.parseToJsonElement(chunk).jsonObject
                                 (jsonChunk["usage"] as? JsonObject)?.let { usage ->
-                                    val details = usage["prompt_tokens_details"] as? JsonObject
-                                    val cachedTokens = (details?.get("cached_tokens") as? JsonPrimitive)?.longOrNull ?: 0L
-                                    val cacheWriteTokens = (details?.get("cache_write_tokens") as? JsonPrimitive)?.longOrNull ?: 0L
-                                    Log.d(TAG, "Prompt cache usage: cached=$cachedTokens write=$cacheWriteTokens")
+                                    parseOpenAIChatTokenUsage(usage)?.let { parsedUsage ->
+                                        emitEvent(AppStreamEvent.Usage(parsedUsage))
+                                    }
                                 }
                                 val choicesElement = jsonChunk["choices"]
                                 val choice = (choicesElement as? JsonArray)
@@ -1003,5 +975,24 @@ object OpenAIDirectClient {
             fullText = completedText,
             reasoningContent = completedReasoning
         )
+    }
+
+    private fun parseOpenAIChatTokenUsage(usage: JsonObject): TokenUsage? {
+        val promptDetails = usage["prompt_tokens_details"] as? JsonObject
+        val completionDetails = usage["completion_tokens_details"] as? JsonObject
+        val parsed = TokenUsage(
+            inputTokens = (usage["prompt_tokens"] as? JsonPrimitive)?.longOrNull,
+            outputTokens = (usage["completion_tokens"] as? JsonPrimitive)?.longOrNull,
+            reasoningTokens = (completionDetails?.get("reasoning_tokens") as? JsonPrimitive)?.longOrNull,
+            cachedInputTokens = (promptDetails?.get("cached_tokens") as? JsonPrimitive)?.longOrNull,
+            cacheWriteTokens = (promptDetails?.get("cache_write_tokens") as? JsonPrimitive)?.longOrNull,
+            totalTokens = (usage["total_tokens"] as? JsonPrimitive)?.longOrNull,
+            isFinal = true,
+            source = TokenUsageSource.OPENAI_CHAT,
+        )
+        return parsed.takeIf {
+            it.inputTokens != null || it.outputTokens != null || it.reasoningTokens != null ||
+                it.cachedInputTokens != null || it.cacheWriteTokens != null || it.totalTokens != null
+        }
     }
 }

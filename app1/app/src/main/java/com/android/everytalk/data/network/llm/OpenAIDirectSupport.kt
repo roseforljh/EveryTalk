@@ -389,14 +389,6 @@ internal data class OpenAIParseResult(
 )
 
 
-internal fun defaultGeminiReasoningEffort(model: String): String {
-    return when {
-        model.contains("flash", ignoreCase = true) -> "low"
-        model.contains("pro", ignoreCase = true) -> "medium"
-        else -> "high"
-    }
-}
-
 internal fun mapToJsonElement(map: Map<String, Any>): JsonElement {
     return buildJsonObject {
         map.forEach { (key, value) ->

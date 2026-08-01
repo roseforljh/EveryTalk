@@ -305,8 +305,16 @@ object OpenAIResponsesClient {
             }
 
             // reasoning 参数（Responses API 专用）
+            val thinkingConfig = request.generationConfig?.thinkingConfig
             putJsonObject("reasoning") {
-                put("effort", "medium")
+                put(
+                    "effort",
+                    if (thinkingConfig?.reasoningMode == com.android.everytalk.data.DataClass.ReasoningMode.DISABLED) {
+                        "none"
+                    } else {
+                        thinkingConfig?.reasoningEffort ?: com.android.everytalk.data.DataClass.DEFAULT_REASONING_EFFORT
+                    }
+                )
                 put("summary", "auto")
             }
 
@@ -446,10 +454,9 @@ object OpenAIResponsesClient {
                                     "response.completed" -> {
                                         val responseObject = event["response"] as? JsonObject
                                         val usage = responseObject?.get("usage") as? JsonObject
-                                        val details = usage?.get("input_tokens_details") as? JsonObject
-                                        val cachedTokens = (details?.get("cached_tokens") as? JsonPrimitive)?.longOrNull ?: 0L
-                                        val cacheWriteTokens = (details?.get("cache_write_tokens") as? JsonPrimitive)?.longOrNull ?: 0L
-                                        Log.d(TAG, "Prompt cache usage: cached=$cachedTokens write=$cacheWriteTokens")
+                                        usage?.let(::parseOpenAIResponsesTokenUsage)?.let { parsedUsage ->
+                                            emitEvent(AppStreamEvent.Usage(parsedUsage))
+                                        }
                                     }
                                     "error" -> {
                                         val errorMsg = event["message"]?.jsonPrimitive?.contentOrNull
@@ -519,6 +526,25 @@ object OpenAIResponsesClient {
             fullText = completedText,
             reasoningContent = completedReasoning
         )
+    }
+
+    private fun parseOpenAIResponsesTokenUsage(usage: JsonObject): TokenUsage? {
+        val inputDetails = usage["input_tokens_details"] as? JsonObject
+        val outputDetails = usage["output_tokens_details"] as? JsonObject
+        val parsed = TokenUsage(
+            inputTokens = (usage["input_tokens"] as? JsonPrimitive)?.longOrNull,
+            outputTokens = (usage["output_tokens"] as? JsonPrimitive)?.longOrNull,
+            reasoningTokens = (outputDetails?.get("reasoning_tokens") as? JsonPrimitive)?.longOrNull,
+            cachedInputTokens = (inputDetails?.get("cached_tokens") as? JsonPrimitive)?.longOrNull,
+            cacheWriteTokens = (inputDetails?.get("cache_write_tokens") as? JsonPrimitive)?.longOrNull,
+            totalTokens = (usage["total_tokens"] as? JsonPrimitive)?.longOrNull,
+            isFinal = true,
+            source = TokenUsageSource.OPENAI_RESPONSES,
+        )
+        return parsed.takeIf {
+            it.inputTokens != null || it.outputTokens != null || it.reasoningTokens != null ||
+                it.cachedInputTokens != null || it.cacheWriteTokens != null || it.totalTokens != null
+        }
     }
 
     @Suppress("UNCHECKED_CAST")

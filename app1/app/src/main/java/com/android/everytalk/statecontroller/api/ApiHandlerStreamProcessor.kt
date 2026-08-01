@@ -53,6 +53,7 @@ internal class ApiHandlerStreamProcessor(
     private val generatedImageSourceFingerprints: ConcurrentHashMap<String, MutableSet<String>>,
     private val promptLeakDetectors: ConcurrentHashMap<String, PromptLeakGuard.StreamingDetector>,
     private val retryCountMap: ConcurrentHashMap<String, Int>,
+    private val messageTokenUsageStore: MessageTokenUsageStore,
     private val logger: AppLogger.ComponentLogger,
     private val onAiMessageFullTextChanged: (messageId: String, currentFullText: String) -> Unit,
     private val errorHandler: ApiHandlerErrorController,
@@ -346,6 +347,24 @@ internal class ApiHandlerStreamProcessor(
                         timestamp = System.currentTimeMillis()
                     )
                 }
+                is AppStreamEvent.Usage -> {
+                    updatedMessage = messageTokenUsageStore.apply(latestMessageForUpdate(), appEvent)
+                    val usage = updatedMessage.tokenUsage
+                    logger.debug(
+                        "Token usage: input=${usage?.inputTokens}, output=${usage?.outputTokens}, " +
+                            "reasoning=${usage?.reasoningTokens}, cached=${usage?.cachedInputTokens}, " +
+                            "total=${usage?.totalTokens}, final=${usage?.isFinal}"
+                    )
+                    if (usage?.isFinal == true) {
+                        messageList[messageIndex] = updatedMessage
+                        viewModelScope.launch(Dispatchers.IO) {
+                            historyManager.saveCurrentChatToHistoryIfNeeded(
+                                forceSave = true,
+                                isImageGeneration = isImageGeneration,
+                            )
+                        }
+                    }
+                }
                 is AppStreamEvent.OutputType -> {
                     updatedMessage = updatedMessage.copy(outputType = appEvent.type)
                 }
@@ -440,6 +459,7 @@ internal class ApiHandlerStreamProcessor(
                         syncedMessage = messageList[messageIndex],
                         finalizedMessage = finalizedMessage,
                     )
+                    updatedMessage = applyEstimatedTokenUsageFallback(updatedMessage)
                     logger.debug("Synced streaming message $aiMessageId to messages list")
                     
                     // 暂停时不触发UI刷新，等待恢复后统一刷新
@@ -454,6 +474,7 @@ internal class ApiHandlerStreamProcessor(
                     }
     
                     // 核心修复：在消息处理完成并最终化之后，在这里触发强制保存
+                    messageList[messageIndex] = updatedMessage
                     viewModelScope.launch(Dispatchers.IO) {
                         historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = isImageGeneration)
                     }
@@ -464,22 +485,10 @@ internal class ApiHandlerStreamProcessor(
                         clearedMessage = messageList[messageIndex],
                     )
     
-                    if (!isImageGeneration) {
-                        if (stateHolder._currentTextStreamingAiMessageId.value == aiMessageId) {
-                            stateHolder._isTextApiCalling.value = false
-                            stateHolder._currentTextStreamingAiMessageId.value = null
-                        }
-                    } else {
-                        if (stateHolder._currentImageStreamingAiMessageId.value == aiMessageId) {
-                            stateHolder._isImageApiCalling.value = false
-                            stateHolder._currentImageStreamingAiMessageId.value = null
-                        }
-                    }
-                    
                     // 按用户期望：不要在 finish 事件处强制切 isStreaming=false
                     // 说明：
                     // - 是否呈现“最终渲染”由统一 Markdown 渲染层的 looksFinalized 判定决定
-                    // - 流程收尾的 isApiCalling 状态与 streamingId 归位交由上游 onCompletion 分支处理
+                    // - 流程收尾的 isApiCalling 状态与 streamingId 归位交由上游 finally 处理
                     // - 此处仅记录会话摘要，避免二次清空引发 UI 抖动
                     PerformanceMonitor.onFinish(aiMessageId)
                 }
@@ -500,14 +509,12 @@ internal class ApiHandlerStreamProcessor(
                         )
                     }
                 }
-                // 其他事件类型（如 ImageGeneration）暂时不直接更新消息UI，由特定逻辑处理
-                else -> {
-                    logger.debug("Handling other event type: ${appEvent::class.simpleName}")
-                }
             }
     
             // 若处于"暂停流式显示"状态，则不更新UI，仅由恢复时一次性刷新
-            if (!stateHolder._isStreamingPaused.value && updatedMessage != currentMessage) {
+            if ((!stateHolder._isStreamingPaused.value || appEvent is AppStreamEvent.Usage) &&
+                updatedMessage != currentMessage
+            ) {
                 messageList[messageIndex] = updatedMessage
             }
         }

@@ -384,6 +384,7 @@ object GeminiDirectClient {
                             putJsonObject("thinkingConfig") {
                                 thinkingConfig.includeThoughts?.let { put("includeThoughts", it) }
                                 thinkingConfig.thinkingBudget?.let { put("thinkingBudget", it) }
+                                thinkingConfig.thinkingLevel?.let { put("thinkingLevel", it) }
                             }
                         }
                     } else {
@@ -627,6 +628,23 @@ object GeminiDirectClient {
         val hasToolCalls: Boolean,
         val fullText: String
     )
+
+    private fun parseGeminiTokenUsage(usage: JsonObject): TokenUsage? {
+        val totalTokens = usage["totalTokenCount"]?.jsonPrimitive?.longOrNull
+        val parsed = TokenUsage(
+            inputTokens = usage["promptTokenCount"]?.jsonPrimitive?.longOrNull,
+            outputTokens = usage["candidatesTokenCount"]?.jsonPrimitive?.longOrNull,
+            reasoningTokens = usage["thoughtsTokenCount"]?.jsonPrimitive?.longOrNull,
+            cachedInputTokens = usage["cachedContentTokenCount"]?.jsonPrimitive?.longOrNull,
+            totalTokens = totalTokens,
+            isFinal = totalTokens != null,
+            source = TokenUsageSource.GEMINI,
+        )
+        return parsed.takeIf {
+            it.inputTokens != null || it.outputTokens != null || it.reasoningTokens != null ||
+                it.cachedInputTokens != null || it.totalTokens != null
+        }
+    }
     
     @OptIn(ExperimentalCoroutinesApi::class)
     private suspend fun parseGeminiSSEStreamWithToolCapture(
@@ -661,6 +679,9 @@ object GeminiDirectClient {
                             
                             try {
                                 val jsonChunk = Json.parseToJsonElement(chunk).jsonObject
+                                (jsonChunk["usageMetadata"] as? JsonObject)
+                                    ?.let(::parseGeminiTokenUsage)
+                                    ?.let { usage -> emitEvent(AppStreamEvent.Usage(usage)) }
                                 jsonChunk["candidates"]?.jsonArray?.firstOrNull()?.let { candidate ->
                                     val candidateObj = candidate.jsonObject
                                     candidateObj["content"]?.jsonObject?.get("parts")?.jsonArray?.forEach { part ->
