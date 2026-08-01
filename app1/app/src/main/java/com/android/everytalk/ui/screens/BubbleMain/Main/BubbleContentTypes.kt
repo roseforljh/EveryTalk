@@ -229,6 +229,11 @@ internal fun UserOrErrorMessageContent(
             var isExpanded by remember(message.id) { mutableStateOf(false) }
             var hasOverflow by remember(message.id) { mutableStateOf(false) }
             val contentScrollState = rememberScrollState()
+            val enabledToolIds = if (message.sender == Sender.User) {
+                supportedUserMessageToolIds(message.enabledToolIds)
+            } else {
+                emptyList()
+            }
             val maxUserBubbleHeight = resolveUserBubbleMaxHeightDp(
                 screenHeightDp = with(density) { windowSize.height.toDp().value },
                 isExpanded = isExpanded,
@@ -291,8 +296,14 @@ internal fun UserOrErrorMessageContent(
                         modifier = Modifier
                             .wrapContentWidth()
                             .padding(
-                                horizontal = if (message.sender == Sender.User) 10.dp else 0.dp,
-                                vertical = if (message.sender == Sender.User) 6.dp else 0.dp,
+                                start = if (message.sender == Sender.User) 10.dp else 0.dp,
+                                end = if (message.sender == Sender.User) {
+                                    resolveUserMessageContentEndPaddingDp(enabledToolIds.size).dp
+                                } else {
+                                    0.dp
+                                },
+                                top = if (message.sender == Sender.User) 6.dp else 0.dp,
+                                bottom = if (message.sender == Sender.User) 6.dp else 0.dp,
                             )
                             // 如果显示按钮，给底部留出空间，防止内容被按钮遮挡
                             .padding(
@@ -325,6 +336,18 @@ internal fun UserOrErrorMessageContent(
                             )
                         }
                     }
+                }
+
+                if (enabledToolIds.isNotEmpty()) {
+                    UserMessageToolLogos(
+                        enabledToolIds = enabledToolIds,
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(
+                                end = 10.dp,
+                                top = 7.dp,
+                            ),
+                    )
                 }
                 
                 // 展开/收起按钮 - 浮动在底部，带有渐变背景

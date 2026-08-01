@@ -4,7 +4,6 @@ import android.util.Log
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.WebSearchResult
-import com.android.everytalk.data.network.WebSearchSupport
 import com.android.everytalk.statecontroller.StreamingMessageStateManager
 import com.android.everytalk.statecontroller.ViewModelStateHolder
 import com.android.everytalk.statecontroller.freezeWhileStreamingPaused
@@ -199,19 +198,6 @@ open class MessageItemsController(
         cache.keys.retainAll(currentIds)
     }
 
-    private fun shouldShowReasoningWhileConnecting(
-        message: Message,
-        isImageGeneration: Boolean,
-    ): Boolean {
-        if (isImageGeneration) return false
-        val isGeminiModel = message.modelName?.let(WebSearchSupport::isGeminiModelName) == true
-        if (isGeminiModel && stateHolder._isCodeExecutionEnabled.value) return false
-        return stateHolder.getCurrentConversationConfig()
-            ?.thinkingConfig
-            ?.includeThoughts
-            ?: isGeminiModel
-    }
-
     val chatListItems: StateFlow<List<ChatListItem>> =
         combine(
             snapshotFlow { stateHolder.messages.toList() },
@@ -255,10 +241,11 @@ open class MessageItemsController(
                                 resolveStreamingStageText(effectiveMessage, elapsedMs, reasoningComplete)
                             } else null
 
-                            val hasLoadingIndicator = cached?.items?.any { it is ChatListItem.LoadingIndicator } ?: false
-                            val loadingTextMatches = if (hasLoadingIndicator && expectedStageText != null) {
-                                cached.items.any { it is ChatListItem.LoadingIndicator && it.text == expectedStageText }
-                            } else true
+                            val activityStatusMatches = cached
+                                ?.items
+                                ?.filterIsInstance<ChatListItem.AiMessageReasoning>()
+                                ?.firstOrNull()
+                                ?.activityStatusText == expectedStageText
                             val cachedFooter = cached?.items
                                 ?.filterIsInstance<ChatListItem.AiMessageFooter>()
                                 ?.firstOrNull()
@@ -287,7 +274,7 @@ open class MessageItemsController(
                                 cached.contentStarted == effectiveMessage.contentStarted &&
                                 cached.executionStatus == message.executionStatus &&
                                 cached.currentWebSearchStage == message.currentWebSearchStage &&
-                                loadingTextMatches &&
+                                activityStatusMatches &&
                                 (cached.items.isNotEmpty() || message.text.isBlank()) &&
                                 footerMatches &&
                                 // 校验流式状态兼容性：
@@ -363,10 +350,11 @@ open class MessageItemsController(
                                 val elapsedMs = streamingStartTimestamps[message.id]?.let { System.currentTimeMillis() - it } ?: 0L
                                 resolveStreamingStageText(effectiveMessage, elapsedMs, reasoningComplete)
                             } else null
-                            val hasLoadingIndicator = cached?.items?.any { it is ChatListItem.LoadingIndicator } ?: false
-                            val loadingTextMatches = if (hasLoadingIndicator && expectedStageText != null) {
-                                cached.items.any { it is ChatListItem.LoadingIndicator && it.text == expectedStageText }
-                            } else true
+                            val activityStatusMatches = cached
+                                ?.items
+                                ?.filterIsInstance<ChatListItem.AiMessageReasoning>()
+                                ?.firstOrNull()
+                                ?.activityStatusText == expectedStageText
 
                             val cacheValid = cached != null &&
                                 cached.text == message.text &&
@@ -379,8 +367,7 @@ open class MessageItemsController(
                                 cached.contentStarted == effectiveMessage.contentStarted &&
                                 cached.executionStatus == message.executionStatus &&
                                 cached.currentWebSearchStage == message.currentWebSearchStage &&
-                                loadingTextMatches &&
-                                (isCurrentlyStreaming == (cached.items.any { it is ChatListItem.LoadingIndicator }))
+                                activityStatusMatches
 
                             if (cacheValid) {
                                 cached.items
@@ -540,21 +527,21 @@ open class MessageItemsController(
         return when (state) {
             is com.android.everytalk.ui.state.AiBubbleState.Connecting -> {
                 val elapsedMs = streamingStartTimestamps[message.id]?.let { System.currentTimeMillis() - it } ?: 0L
-                val items = mutableListOf<ChatListItem>()
-                if (shouldShowReasoningWhileConnecting(message, isImageGeneration)) {
-                    items.add(ChatListItem.AiMessageReasoning(message))
-                } else {
-                    items.add(
-                        ChatListItem.LoadingIndicator(
-                            messageId = message.id,
-                            text = resolveStreamingStageText(message, elapsedMs, reasoningComplete),
-                        )
+                listOf(
+                    ChatListItem.AiMessageReasoning(
+                        message = message,
+                        activityStatusText = resolveStreamingStageText(message, elapsedMs, reasoningComplete),
                     )
-                }
-                items
+                )
             }
             is com.android.everytalk.ui.state.AiBubbleState.Reasoning -> {
-                listOf(ChatListItem.AiMessageReasoning(message))
+                val elapsedMs = streamingStartTimestamps[message.id]?.let { System.currentTimeMillis() - it } ?: 0L
+                listOf(
+                    ChatListItem.AiMessageReasoning(
+                        message = message,
+                        activityStatusText = resolveStreamingStageText(message, elapsedMs, reasoningComplete),
+                    )
+                )
             }
             is com.android.everytalk.ui.state.AiBubbleState.Streaming -> {
                 val items = mutableListOf<ChatListItem>()

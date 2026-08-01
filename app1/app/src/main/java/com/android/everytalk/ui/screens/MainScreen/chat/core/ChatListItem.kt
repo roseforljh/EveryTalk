@@ -136,7 +136,10 @@ sealed interface ChatListItem {
     // 新增结束
 
 
-    data class AiMessageReasoning(val message: Message) : ChatListItem {
+    data class AiMessageReasoning(
+        val message: Message,
+        val activityStatusText: String? = null,
+    ) : ChatListItem {
         override val stableId: String = "${message.id}_reasoning"
     }
 

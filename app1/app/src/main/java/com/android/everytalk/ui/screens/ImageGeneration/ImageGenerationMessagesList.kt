@@ -149,20 +149,18 @@ fun ImageGenerationLoadingView() {
         modifier = Modifier.fillMaxSize(),
         contentAlignment = Alignment.CenterStart
     ) {
-        ImageGenLoadingIndicator(text = "等待首个响应")
+        com.android.everytalk.ui.screens.BubbleMain.Main.ReasoningToggleAndContent(
+            currentMessageId = "image-generation-loading",
+            displayedReasoningText = "",
+            activityStatusText = "等待首个响应",
+            isReasoningStreaming = true,
+            isReasoningComplete = false,
+            messageIsError = false,
+            mainContentHasStarted = false,
+            reasoningTextColor = MaterialTheme.chatColors.reasoningText,
+            reasoningToggleDotColor = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.fillMaxWidth(),
+            onVisibilityChanged = {},
+        )
     }
-}
-
-@Composable
-internal fun ImageGenLoadingIndicator(
-    modifier: Modifier = Modifier,
-    text: String? = null,
-) {
-    val displayText = com.android.everytalk.ui.screens.MainScreen.chat.text.ui.resolveLoadingStageDisplayText(
-        text
-    )
-    com.android.everytalk.ui.screens.MainScreen.chat.text.ui.LoadingStageIndicator(
-        text = displayText,
-        modifier = modifier,
-    )
 }

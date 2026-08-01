@@ -575,7 +575,7 @@ fun ChatMessagesList(
                                                 onImageClick = onImageClick
                                             )
                                         }
-                                        if (item.text.isNotBlank()) {
+                                        if (item.text.isNotBlank() || message.enabledToolIds.isNotEmpty()) {
                                             // 纯文本用户消息内容
                                             UserOrErrorMessageContent(
                                                 message = message,
@@ -663,6 +663,7 @@ fun ChatMessagesList(
                                     modifier = Modifier.fillMaxWidth(),
                                     currentMessageId = item.message.id,
                                     displayedReasoningText = displayedReasoningText,
+                                    activityStatusText = item.activityStatusText,
                                     isReasoningStreaming = isReasoningStreaming,
                                     isReasoningComplete = isReasoningComplete,
                                     messageIsError = item.message.isError,

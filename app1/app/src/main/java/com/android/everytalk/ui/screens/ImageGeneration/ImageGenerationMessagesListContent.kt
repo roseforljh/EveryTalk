@@ -116,6 +116,7 @@ import com.android.everytalk.ui.screens.MainScreen.chat.text.state.ChatScrollSta
 import com.android.everytalk.ui.screens.BubbleMain.Main.AttachmentsContent
 import com.android.everytalk.ui.screens.BubbleMain.Main.MessageContextMenu
 import com.android.everytalk.ui.screens.BubbleMain.Main.ImageContextMenu
+import com.android.everytalk.ui.screens.BubbleMain.Main.ReasoningToggleAndContent
 import com.android.everytalk.ui.screens.BubbleMain.Main.UserOrErrorMessageContent
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.HistoryLoadingBubblePlaceholderItem
 import com.android.everytalk.ui.components.ChatMarkdownTextStyle
@@ -581,6 +582,48 @@ fun ImageGenerationMessagesList(
                                 modifier = Modifier
                             )
                         }
+                        is ChatListItem.AiMessageReasoning -> {
+                            val reasoningCompleteMap = viewModel.imageReasoningCompleteMap
+                            val streamingReasoningSource = remember(item.message.id, viewModel) {
+                                viewModel.getStreamingReasoning(item.message.id)
+                            }
+                            val pauseAwareReasoning = remember(streamingReasoningSource, viewModel) {
+                                streamingReasoningSource.freezeWhileStreamingPaused(viewModel.isStreamingPaused)
+                            }
+                            val streamingReasoning by pauseAwareReasoning.collectAsState(
+                                initial = streamingReasoningSource.value.ifBlank { item.message.reasoning ?: "" }
+                            )
+                            val displayedReasoningText =
+                                if (currentStreamingId == item.message.id && streamingReasoning.isNotBlank()) {
+                                    streamingReasoning
+                                } else {
+                                    item.message.reasoning.orEmpty()
+                                }
+                            val isReasoningStreaming = remember(
+                                currentStreamingId,
+                                item.message.id,
+                                reasoningCompleteMap[item.message.id],
+                                item.message.contentStarted,
+                            ) {
+                                currentStreamingId == item.message.id &&
+                                    reasoningCompleteMap[item.message.id] != true &&
+                                    !item.message.contentStarted
+                            }
+
+                            ReasoningToggleAndContent(
+                                modifier = Modifier.fillMaxWidth(),
+                                currentMessageId = item.message.id,
+                                displayedReasoningText = displayedReasoningText,
+                                activityStatusText = item.activityStatusText,
+                                isReasoningStreaming = isReasoningStreaming,
+                                isReasoningComplete = reasoningCompleteMap[item.message.id] ?: false,
+                                messageIsError = item.message.isError,
+                                mainContentHasStarted = item.message.contentStarted,
+                                reasoningTextColor = MaterialTheme.chatColors.reasoningText,
+                                reasoningToggleDotColor = MaterialTheme.colorScheme.onSurface,
+                                onVisibilityChanged = {},
+                            )
+                        }
                         is ChatListItem.ErrorMessage -> {
                             val message = viewModel.getMessageById(item.messageId)
                             if (message != null) {
@@ -600,16 +643,6 @@ fun ImageGenerationMessagesList(
                                     },
                                     scrollStateManager = scrollStateManager
                                 )
-                            }
-                        }
-                        is ChatListItem.LoadingIndicator -> {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 16.dp),
-                                contentAlignment = Alignment.CenterStart
-                            ) {
-                                ImageGenLoadingIndicator(text = item.text)
                             }
                         }
                         is ChatListItem.LoadingBubblePlaceholder -> {
