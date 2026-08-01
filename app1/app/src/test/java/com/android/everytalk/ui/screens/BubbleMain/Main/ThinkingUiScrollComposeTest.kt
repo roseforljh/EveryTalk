@@ -244,7 +244,7 @@ class ThinkingUiScrollComposeTest {
             .boundsInRoot
             .top
         composeRule
-            .onNodeWithTag("reasoning-sheet-drag-handle-disabled", useUnmergedTree = true)
+            .onNodeWithTag("reasoning-sheet-drag-handle-enabled", useUnmergedTree = true)
             .performTouchInput {
             val start = center
             swipe(start, start.copy(y = start.y - 600f), durationMillis = 500L)

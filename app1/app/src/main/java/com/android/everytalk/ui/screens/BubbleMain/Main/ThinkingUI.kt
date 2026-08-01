@@ -52,8 +52,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.layout.boundsInWindow
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
@@ -71,6 +69,7 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 
 private const val REASONING_SHEET_TALL_HEIGHT_FRACTION = 0.9f
+private const val REASONING_SHEET_PARTIAL_HEIGHT_FRACTION = 0.5f
 // Material 3 默认拖动条高 4dp，并带上下各 22dp 内边距。
 private val ReasoningSheetDragHandleSpace = 48.dp
 
@@ -331,7 +330,7 @@ private fun ReasoningBottomSheet(
     val contentTopPaddingPx = with(density) { 16.dp.roundToPx() }
     val overflowTolerancePx = with(density) { 1.dp.roundToPx() }
     var processContentHeightPx by remember { mutableIntStateOf(0) }
-    var visibleProcessViewportHeightPx by remember { mutableIntStateOf(0) }
+    var processViewportHeightPx by remember { mutableIntStateOf(0) }
     var initialOverflowEvaluated by remember { mutableStateOf(false) }
     val sheetText = reasoningSheetText(
         displayedReasoningText = displayedReasoningText,
@@ -340,6 +339,12 @@ private fun ReasoningBottomSheet(
     )
     val sheetGesturesEnabled =
         sheetState.currentValue != SheetValue.Expanded || scrollState.value == 0
+    val partiallyExpandedHiddenHeightPx =
+        (windowHeightPx *
+            (REASONING_SHEET_TALL_HEIGHT_FRACTION - REASONING_SHEET_PARTIAL_HEIGHT_FRACTION))
+            .toInt()
+    val visibleProcessViewportHeightPx =
+        (processViewportHeightPx - partiallyExpandedHiddenHeightPx).coerceAtLeast(0)
     LaunchedEffect(
         sheetState.currentValue,
         processContentHeightPx,
@@ -425,13 +430,7 @@ private fun ReasoningBottomSheet(
                     modifier = Modifier
                         .fillMaxSize()
                         .verticalScroll(scrollState)
-                        .onGloballyPositioned { coordinates ->
-                            val bounds = coordinates.boundsInWindow()
-                            val visibleTop = bounds.top.coerceAtLeast(0f)
-                            val visibleBottom = bounds.bottom.coerceAtMost(windowHeightPx.toFloat())
-                            visibleProcessViewportHeightPx =
-                                (visibleBottom - visibleTop).coerceAtLeast(0f).toInt()
-                        }
+                        .onSizeChanged { processViewportHeightPx = it.height }
                         .testTag("reasoning-sheet-scroll")
                         .padding(start = 20.dp, top = 16.dp, end = 20.dp),
                 ) {
