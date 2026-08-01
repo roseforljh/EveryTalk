@@ -4,6 +4,7 @@ import android.util.Log
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.WebSearchResult
+import com.android.everytalk.data.network.WebSearchSupport
 import com.android.everytalk.statecontroller.StreamingMessageStateManager
 import com.android.everytalk.statecontroller.ViewModelStateHolder
 import com.android.everytalk.statecontroller.freezeWhileStreamingPaused
@@ -196,6 +197,19 @@ open class MessageItemsController(
     ) {
         val currentIds = messages.mapTo(HashSet(messages.size)) { it.id }
         cache.keys.retainAll(currentIds)
+    }
+
+    private fun shouldShowReasoningWhileConnecting(
+        message: Message,
+        isImageGeneration: Boolean,
+    ): Boolean {
+        if (isImageGeneration) return false
+        val isGeminiModel = message.modelName?.let(WebSearchSupport::isGeminiModelName) == true
+        if (isGeminiModel && stateHolder._isCodeExecutionEnabled.value) return false
+        return stateHolder.getCurrentConversationConfig()
+            ?.thinkingConfig
+            ?.includeThoughts
+            ?: isGeminiModel
     }
 
     val chatListItems: StateFlow<List<ChatListItem>> =
@@ -526,29 +540,21 @@ open class MessageItemsController(
         return when (state) {
             is com.android.everytalk.ui.state.AiBubbleState.Connecting -> {
                 val elapsedMs = streamingStartTimestamps[message.id]?.let { System.currentTimeMillis() - it } ?: 0L
-                listOf(
-                    ChatListItem.LoadingIndicator(
-                        messageId = message.id,
-                        text = resolveStreamingStageText(message, elapsedMs, reasoningComplete)
-                    )
-                )
-            }
-            is com.android.everytalk.ui.state.AiBubbleState.Reasoning -> {
-                val elapsedMs = streamingStartTimestamps[message.id]?.let { System.currentTimeMillis() - it } ?: 0L
-                val stageText = resolveStreamingStageText(message, elapsedMs, reasoningComplete)
-                
                 val items = mutableListOf<ChatListItem>()
-                items.add(ChatListItem.AiMessageReasoning(message))
-                
-                if (!stageText.isNullOrBlank()) {
+                if (shouldShowReasoningWhileConnecting(message, isImageGeneration)) {
+                    items.add(ChatListItem.AiMessageReasoning(message))
+                } else {
                     items.add(
                         ChatListItem.LoadingIndicator(
                             messageId = message.id,
-                            text = stageText
+                            text = resolveStreamingStageText(message, elapsedMs, reasoningComplete),
                         )
                     )
                 }
                 items
+            }
+            is com.android.everytalk.ui.state.AiBubbleState.Reasoning -> {
+                listOf(ChatListItem.AiMessageReasoning(message))
             }
             is com.android.everytalk.ui.state.AiBubbleState.Streaming -> {
                 val items = mutableListOf<ChatListItem>()

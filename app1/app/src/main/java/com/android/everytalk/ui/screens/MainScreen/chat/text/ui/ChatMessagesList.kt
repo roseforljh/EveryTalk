@@ -643,11 +643,12 @@ fun ChatMessagesList(
                                     item.message.reasoning ?: ""
                                 }
                             val isReasoningStreaming = remember(
-                                displayedReasoningText,
+                                currentStreamingId,
+                                item.message.id,
                                 reasoningCompleteMap[item.message.id],
                                 item.message.contentStarted
                             ) {
-                                displayedReasoningText.isNotBlank() &&
+                                currentStreamingId == item.message.id &&
                                 (reasoningCompleteMap[item.message.id] != true) &&
                                 !item.message.contentStarted
                             }

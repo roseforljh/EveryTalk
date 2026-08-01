@@ -1,7 +1,9 @@
 package com.android.everytalk.statecontroller.facade
 
 import com.android.everytalk.data.DataClass.Message
+import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.data.DataClass.ThinkingConfig
 import com.android.everytalk.ui.components.markdown.footnoteDefinitionUri
 import com.android.everytalk.ui.components.markdown.footnoteReferenceUri
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
@@ -572,6 +574,99 @@ class MessageItemsControllerStatusTest {
         assertEquals("等待首个响应", loading.text)
         assertFalse(loading.text.orEmpty().contains("OpenAI"))
         assertFalse(loading.text.orEmpty().contains("gpt-4o"))
+    }
+
+    @Test
+    fun `gemini connecting stage exposes reasoning item before first reasoning token`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.stateHolder.messages.add(
+            Message(
+                id = "ai-gemini-connecting",
+                text = "",
+                sender = Sender.AI,
+                providerName = "Gemini",
+                modelName = "gemini-2.5-pro",
+            )
+        )
+        controller.stateHolder._isTextApiCalling.value = true
+        controller.stateHolder._currentTextStreamingAiMessageId.value = "ai-gemini-connecting"
+
+        val items = controller.chatListItemsForTest()
+
+        assertTrue(items.any { it is ChatListItem.AiMessageReasoning })
+        assertFalse(items.any { it is ChatListItem.LoadingIndicator })
+    }
+
+    @Test
+    fun `reasoning stage does not render a second loading status below thinking`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.stateHolder.messages.add(
+            Message(
+                id = "ai-reasoning-only",
+                text = "",
+                sender = Sender.AI,
+                reasoning = "正在分析问题",
+                providerName = "Gemini",
+                modelName = "gemini-2.5-pro",
+            )
+        )
+        controller.stateHolder._isTextApiCalling.value = true
+        controller.stateHolder._currentTextStreamingAiMessageId.value = "ai-reasoning-only"
+
+        val items = controller.chatListItemsForTest()
+
+        assertTrue(items.any { it is ChatListItem.AiMessageReasoning })
+        assertFalse(items.any { it is ChatListItem.LoadingIndicator })
+    }
+
+    @Test
+    fun `explicitly disabled reasoning keeps gemini connecting stage compact`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.stateHolder.updateCurrentConversationConfig(
+            GenerationConfig(
+                thinkingConfig = ThinkingConfig(
+                    includeThoughts = false,
+                    thinkingBudget = 0,
+                )
+            )
+        )
+        controller.stateHolder.messages.add(
+            Message(
+                id = "ai-gemini-no-reasoning",
+                text = "",
+                sender = Sender.AI,
+                providerName = "Gemini",
+                modelName = "gemini-2.5-pro",
+            )
+        )
+        controller.stateHolder._isTextApiCalling.value = true
+        controller.stateHolder._currentTextStreamingAiMessageId.value = "ai-gemini-no-reasoning"
+
+        val items = controller.chatListItemsForTest()
+
+        assertFalse(items.any { it is ChatListItem.AiMessageReasoning })
+        assertTrue(items.any { it is ChatListItem.LoadingIndicator })
+    }
+
+    @Test
+    fun `ordinary model connecting stage does not expose speculative reasoning item`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.stateHolder.messages.add(
+            Message(
+                id = "ai-openai-connecting",
+                text = "",
+                sender = Sender.AI,
+                providerName = "OpenAI",
+                modelName = "gpt-4o",
+            )
+        )
+        controller.stateHolder._isTextApiCalling.value = true
+        controller.stateHolder._currentTextStreamingAiMessageId.value = "ai-openai-connecting"
+
+        val items = controller.chatListItemsForTest()
+
+        assertFalse(items.any { it is ChatListItem.AiMessageReasoning })
+        assertTrue(items.any { it is ChatListItem.LoadingIndicator })
     }
 
     @Test
