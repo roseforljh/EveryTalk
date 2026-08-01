@@ -28,6 +28,19 @@ class BubbleContentTypesRenderRouteTest {
     }
 
     @Test
+    fun `user tool logos are embedded at top end without a separate bottom row`() {
+        val source = bubbleContentTypesSource()
+        val logoBlock = source
+            .substringAfter("UserMessageToolLogos(")
+            .substringBefore("// 展开/收起按钮")
+
+        assertTrue(source.contains("resolveUserMessageContentEndPaddingDp(enabledToolIds.size)"))
+        assertTrue(logoBlock.contains(".align(Alignment.TopEnd)"))
+        assertFalse(logoBlock.contains(".align(Alignment.BottomEnd)"))
+        assertFalse(source.contains("hasToolLogos"))
+    }
+
+    @Test
     fun `multiple image attachments use visible bounds instead of fixed square whitespace`() {
         val source = bubbleContentTypesSource()
 
