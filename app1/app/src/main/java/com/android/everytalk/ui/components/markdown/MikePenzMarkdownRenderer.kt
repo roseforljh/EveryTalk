@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredWidth
@@ -437,9 +438,10 @@ fun MikePenzMarkdownRenderer(
                                 placeholderVerticalAlign = metrics.verticalAlign,
                             ),
                         ) {
-                            MathInline(
+                            InlineFormulaContent(
                                 formula = formula,
                                 state = state,
+                                metrics = metrics,
                                 modifier = Modifier.fillMaxSize(),
                             )
                         }
@@ -487,6 +489,7 @@ fun MikePenzMarkdownRenderer(
             val currentPreparedMessage = rememberUpdatedState(visiblePreparedMessage)
             val currentFormulaMessage = rememberUpdatedState(renderFormulaMessage)
             val currentFormulaStates = rememberUpdatedState(formulaStates)
+            val currentFormulaFontSizePx = rememberUpdatedState(formulaFontSizePx)
             val currentInlineContentMap = rememberUpdatedState(markdownInlineContentMap)
             val currentAnnotator = rememberUpdatedState(annotator)
             val currentLogoFreeAnnotator = rememberUpdatedState(logoFreeAnnotator)
@@ -533,14 +536,22 @@ fun MikePenzMarkdownRenderer(
                             requests = currentLinkLogoRequests.value,
                         )
                         if (linkLogoRequest == null) {
+                            val paragraphStyle = markdownParagraphStyle(
+                                content = model.content,
+                                node = model.node,
+                                baseStyle = model.typography.paragraph,
+                            )
                             MarkdownParagraph(
                                 content = model.content,
                                 node = model.node,
                                 modifier = targetModifier,
-                                style = markdownParagraphStyle(
+                                style = inlineFormulaAwareParagraphStyle(
                                     content = model.content,
                                     node = model.node,
-                                    baseStyle = model.typography.paragraph,
+                                    baseStyle = paragraphStyle,
+                                    preparedMessage = currentFormulaMessage.value,
+                                    formulaStates = currentFormulaStates.value,
+                                    formulaFontSizePx = currentFormulaFontSizePx.value,
                                 ),
                             )
                         } else {
@@ -918,5 +929,26 @@ fun MikePenzMarkdownRenderer(
         SelectionContainer { markdownContent() }
     } else {
         markdownContent()
+    }
+}
+
+@Composable
+internal fun InlineFormulaContent(
+    formula: FormulaRequest,
+    state: MathFormulaRenderState,
+    metrics: InlineFormulaMetrics,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier,
+        contentAlignment = Alignment.Center,
+    ) {
+        MathInline(
+            formula = formula,
+            state = state,
+            modifier = Modifier
+                .fillMaxWidth()
+                .fillMaxHeight(metrics.contentHeightFraction),
+        )
     }
 }

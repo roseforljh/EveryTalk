@@ -513,8 +513,13 @@ internal fun ASTNode.collectInlineLinks(
 internal data class InlineFormulaMetrics(
     val widthEm: Float,
     val heightEm: Float,
+    val contentHeightFraction: Float = 1f,
     val verticalAlign: PlaceholderVerticalAlign,
 )
+
+// ponytail: 部分 Android 硬件文本管线会裁切贴近行内子容器边缘的 SVG 下降区。
+// 上下各留四分之一 em，并让 SVG 保持原始高度居中，避免分母落在裁切边界上。
+private const val INLINE_FORMULA_VERTICAL_INSET_EM = 0.25f
 
 internal fun inlineFormulaMetrics(
     state: MathFormulaRenderState,
@@ -532,11 +537,51 @@ internal fun inlineFormulaMetrics(
         verticalAlign = PlaceholderVerticalAlign.TextCenter,
     )
 
-    is MathFormulaRenderState.Ready -> InlineFormulaMetrics(
-        widthEm = (state.result.requireWidthPx() / fontSizePx).coerceAtLeast(0.01f),
-        heightEm = (state.result.requireHeightPx() / fontSizePx).coerceAtLeast(0.01f),
-        verticalAlign = PlaceholderVerticalAlign.TextCenter,
-    )
+    is MathFormulaRenderState.Ready -> {
+        val contentHeightEm = (state.result.requireHeightPx() / fontSizePx)
+            .coerceAtLeast(0.01f)
+        val placeholderHeightEm = contentHeightEm + INLINE_FORMULA_VERTICAL_INSET_EM * 2f
+        InlineFormulaMetrics(
+            widthEm = (state.result.requireWidthPx() / fontSizePx).coerceAtLeast(0.01f),
+            heightEm = placeholderHeightEm,
+            contentHeightFraction = contentHeightEm / placeholderHeightEm,
+            verticalAlign = PlaceholderVerticalAlign.TextCenter,
+        )
+    }
+}
+
+internal fun inlineFormulaAwareParagraphStyle(
+    content: String,
+    node: ASTNode,
+    baseStyle: TextStyle,
+    preparedMessage: PreparedMessage,
+    formulaStates: Map<String, MathFormulaRenderState>,
+    formulaFontSizePx: Float,
+): TextStyle {
+    if (!formulaFontSizePx.isFinite() || formulaFontSizePx <= 0f) return baseStyle
+    if (!baseStyle.fontSize.isSpecified || !baseStyle.lineHeight.isSpecified) return baseStyle
+    val paragraphSource = node.safeTextInNode(content) ?: return baseStyle
+    val maxFormulaHeightEm = preparedMessage.formulas
+        .asSequence()
+        .filter { (id, formula) ->
+            id == formula.id &&
+                formula.displayMode == FormulaDisplayMode.INLINE &&
+                formula.contentVersion == preparedMessage.contentVersion &&
+                paragraphSource.contains(INLINE_FORMULA_SCHEME + id)
+        }
+        .mapNotNull { (id, _) ->
+            val ready = formulaStates[id] as? MathFormulaRenderState.Ready
+                ?: return@mapNotNull null
+            inlineFormulaMetrics(ready, formulaFontSizePx).heightEm
+        }
+        .maxOrNull()
+        ?: return baseStyle
+    val requiredLineHeight = baseStyle.fontSize * maxFormulaHeightEm
+    return if (requiredLineHeight > baseStyle.lineHeight) {
+        baseStyle.copy(lineHeight = requiredLineHeight)
+    } else {
+        baseStyle
+    }
 }
 
 internal fun inlineFormulaAlternateText(formula: FormulaRequest): String =

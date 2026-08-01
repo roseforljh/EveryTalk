@@ -8,6 +8,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.sp
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.ui.components.math.MathFormulaErrorKind
 import com.android.everytalk.ui.components.math.MathFormulaRenderState
 import com.android.everytalk.ui.components.math.MathJaxRenderRequest
 import com.android.everytalk.ui.components.math.MathJaxRenderResult
@@ -35,7 +36,7 @@ import org.junit.Test
 class MikePenzMarkdownRendererTest {
 
     @Test
-    fun `行内公式占位框保留MathJax下降区`() {
+    fun `行内公式占位框在SVG上下保留安全区`() {
         val request = MathJaxRenderRequest(
             id = "a".repeat(64),
             latex = "\\boxed{36^{37}}",
@@ -58,8 +59,128 @@ class MikePenzMarkdownRendererTest {
         val metrics = inlineFormulaMetrics(state, fontSizePx = 10f)
 
         assertEquals(2f, metrics.widthEm, 0f)
-        assertEquals(1f, metrics.heightEm, 0f)
+        assertEquals(1.5f, metrics.heightEm, 0f)
+        assertEquals(2f / 3f, metrics.contentHeightFraction, 0.0001f)
         assertEquals(PlaceholderVerticalAlign.TextCenter, metrics.verticalAlign)
+    }
+
+    @Test
+    fun `高行内公式按实际高度扩展段落行高`() {
+        val id = "a".repeat(64)
+        val prepared = inlineFormulaPreparedMessage(id)
+        val paragraph = prepared.paragraphNode()
+        val baseStyle = TextStyle(fontSize = 16.sp, lineHeight = 24.sp)
+
+        val style = inlineFormulaAwareParagraphStyle(
+            content = prepared.markdown,
+            node = paragraph,
+            baseStyle = baseStyle,
+            preparedMessage = prepared,
+            formulaStates = mapOf(id to readyFormulaState(id, heightPx = 18f)),
+            formulaFontSizePx = 10f,
+        )
+
+        assertEquals(36.8f, style.lineHeight.value, 0.001f)
+    }
+
+    @Test
+    fun `普通段落不改变正文行高`() {
+        val state = parseMarkdown("普通正文") as State.Success
+        val paragraph = state.node.children.single { it.type == MarkdownElementTypes.PARAGRAPH }
+        val baseStyle = TextStyle(fontSize = 16.sp, lineHeight = 24.sp)
+
+        assertEquals(
+            baseStyle,
+            inlineFormulaAwareParagraphStyle(
+                content = state.content,
+                node = paragraph,
+                baseStyle = baseStyle,
+                preparedMessage = PreparedMessage("普通正文", emptyMap(), false, 1L),
+                formulaStates = emptyMap(),
+                formulaFontSizePx = 10f,
+            ),
+        )
+    }
+
+    @Test
+    fun `未就绪及无关公式不改变正文行高`() {
+        val id = "a".repeat(64)
+        val unrelatedId = "b".repeat(64)
+        val prepared = inlineFormulaPreparedMessage(id)
+        val paragraph = prepared.paragraphNode()
+        val baseStyle = TextStyle(fontSize = 16.sp, lineHeight = 24.sp)
+
+        listOf(
+            mapOf(id to MathFormulaRenderState.Loading),
+            mapOf(id to MathFormulaRenderState.Error(MathFormulaErrorKind.ENGINE)),
+            mapOf(unrelatedId to readyFormulaState(unrelatedId, heightPx = 24f)),
+        ).forEach { states ->
+            assertEquals(
+                baseStyle,
+                inlineFormulaAwareParagraphStyle(
+                    content = prepared.markdown,
+                    node = paragraph,
+                    baseStyle = baseStyle,
+                    preparedMessage = prepared,
+                    formulaStates = states,
+                    formulaFontSizePx = 10f,
+                ),
+            )
+        }
+    }
+
+    @Test
+    fun `同段多个行内公式使用最高公式扩展行高`() {
+        val firstId = "a".repeat(64)
+        val secondId = "b".repeat(64)
+        val formulas = listOf(firstId, secondId).associateWith { id ->
+            FormulaRequest(id, "x", FormulaDisplayMode.INLINE, 1L)
+        }
+        val markdown = "前缀 ![math]($INLINE_FORMULA_SCHEME$firstId) 中间 " +
+            "![math]($INLINE_FORMULA_SCHEME$secondId) 后缀"
+        val prepared = PreparedMessage(markdown, formulas, false, 1L)
+
+        val style = inlineFormulaAwareParagraphStyle(
+            content = markdown,
+            node = prepared.paragraphNode(),
+            baseStyle = TextStyle(fontSize = 16.sp, lineHeight = 24.sp),
+            preparedMessage = prepared,
+            formulaStates = mapOf(
+                firstId to readyFormulaState(firstId, heightPx = 16f),
+                secondId to readyFormulaState(secondId, heightPx = 22f),
+            ),
+            formulaFontSizePx = 10f,
+        )
+
+        assertEquals(43.2f, style.lineHeight.value, 0.001f)
+    }
+
+    @Test
+    fun `用户原文中的两个分式进入带安全区的行内公式布局`() {
+        val source = "比较 ${'$'}\\frac{\\ln(37)}{37}${'$'} 和 " +
+            "${'$'}\\frac{\\ln(36)}{36}${'$'}"
+        val prepared = StreamBlockParser.prepareMessage(
+            content = source,
+            messageId = "fraction-regression",
+            contentVersion = 1L,
+        )
+        val paragraph = prepared.paragraphNode()
+        val formulaStates = prepared.formulas.keys.associateWith { id ->
+            readyFormulaState(id, heightPx = 111.125f)
+        }
+
+        val style = inlineFormulaAwareParagraphStyle(
+            content = prepared.markdown,
+            node = paragraph,
+            baseStyle = TextStyle(fontSize = 16.sp, lineHeight = 24.sp),
+            preparedMessage = prepared,
+            formulaStates = formulaStates,
+            formulaFontSizePx = 64.4f,
+        )
+
+        assertEquals(2, prepared.formulas.size)
+        assertTrue(prepared.formulas.values.all { it.latex.startsWith("\\frac") })
+        assertTrue(style.lineHeight.value > 35f)
     }
 
     @Test
@@ -488,5 +609,43 @@ class MikePenzMarkdownRendererTest {
         assertTrue(state is State.Success)
         assertEquals(prepared.markdown, (state as State.Success).content)
         assertEquals(2, prepared.formulas.size)
+    }
+
+    private fun inlineFormulaPreparedMessage(id: String): PreparedMessage {
+        val markdown = "前缀 ![math]($INLINE_FORMULA_SCHEME$id) 后缀"
+        return PreparedMessage(
+            markdown = markdown,
+            formulas = mapOf(id to FormulaRequest(id, "x", FormulaDisplayMode.INLINE, 1L)),
+            hasPendingFormula = false,
+            contentVersion = 1L,
+        )
+    }
+
+    private fun PreparedMessage.paragraphNode() =
+        (parseMarkdown(markdown) as State.Success).node.children.single {
+            it.type == MarkdownElementTypes.PARAGRAPH
+        }
+
+    private fun readyFormulaState(
+        id: String,
+        heightPx: Float,
+    ): MathFormulaRenderState.Ready {
+        val request = MathJaxRenderRequest(
+            id = id,
+            latex = "x",
+            display = false,
+            fontSizePx = 10f,
+            color = "#000000",
+        )
+        return MathFormulaRenderState.Ready(
+            result = MathJaxRenderResult(
+                id = id,
+                status = MathJaxRenderStatus.READY,
+                svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 10 $heightPx\"/>",
+                widthPx = 10f,
+                heightPx = heightPx,
+            ),
+            cacheKey = cacheKeyOf(request),
+        )
     }
 }
