@@ -143,15 +143,6 @@ class HistoryManager(
             Log.d(TAG_HM, "Pruned ${toggleStates.size - prunedToggleStates.size} orphan function toggle states")
         }
 
-        val generationConfigs = stateHolder.conversationGenerationConfigs.value
-        val prunedGenerationConfigs = stateHolder.conversationGenerationConfigs.updateAndGet { current ->
-            current.retainKnownKeys()
-        }
-        if (prunedGenerationConfigs.size != generationConfigs.size) {
-            persistenceManager.saveConversationParameters(prunedGenerationConfigs)
-            Log.d(TAG_HM, "Pruned ${generationConfigs.size - prunedGenerationConfigs.size} orphan generation configs")
-        }
-
         val systemPromptKeys = stateHolder.systemPrompts.keys.toList()
         systemPromptKeys.filterNot(::shouldRetain).forEach { stateHolder.systemPrompts.remove(it) }
         val systemPromptEngagedKeys = stateHolder.systemPromptEngagedState.keys.toList()
@@ -669,26 +660,6 @@ class HistoryManager(
         
         if (stableKeyFromMessages != null) {
             val stableId = stableKeyFromMessages
-            
-            // 文本模式：迁移会话生成参数（如果存在）
-            if (!isImageGeneration) {
-                val currentConfigs = stateHolder.conversationGenerationConfigs.value
-                val newMap = stateHolder.conversationGenerationConfigs.updateAndGet { current ->
-                    val currentConfigForSession = current[migrationSourceId]
-                    if (currentConfigForSession == null) {
-                        current
-                    } else {
-                        current.toMutableMap().apply {
-                            this[stableId] = currentConfigForSession
-                            if (migrationSourceId != stableId) remove(migrationSourceId)
-                        }
-                    }
-                }
-                if (newMap != currentConfigs) {
-                    persistenceManager.saveConversationParameters(newMap)
-                    Log.d(TAG_HM, "Migrated generation parameters from '$migrationSourceId' to stable key '$stableId'")
-                }
-            }
             
             // 修复：统一迁移会话绑定的配置ID（文本模式和图像模式都适用）
             // 这确保即使用户只选择了模型但没有发送消息，配置ID映射也能被正确迁移

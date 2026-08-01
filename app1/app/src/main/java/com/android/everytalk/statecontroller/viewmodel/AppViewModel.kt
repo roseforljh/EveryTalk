@@ -583,21 +583,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             )
          }
 
-        // 初始化 StateHolder 的持久化回调
         viewModelScope.launch(Dispatchers.IO) {
-            // 加载初始会话参数
-            val initialParams = persistenceManager.loadConversationParameters()
             val initialToggleStates = persistenceManager.loadConversationFunctionToggleStates()
 
             withContext(Dispatchers.Main) {
-                stateHolder.initializePersistence(
-                    saveCallback = { params ->
-                        viewModelScope.launch(Dispatchers.IO) {
-                            persistenceManager.saveConversationParameters(params)
-                        }
-                    },
-                    initialParams = initialParams
-                )
                 stateHolder.conversationFunctionToggleStates.value = initialToggleStates
             }
         }

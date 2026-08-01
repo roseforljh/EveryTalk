@@ -44,8 +44,7 @@ object AttachmentMimeTypes {
 
 enum class MoreOptionsType(val label: String, val icon: ImageVector, val mimeTypes: Array<String>) {
     ATTACHMENT("附件", Icons.Outlined.AttachFile, AttachmentMimeTypes.TYPES),
-    MCP("MCP", Icons.Outlined.Extension, arrayOf()),
-    CONVERSATION_PARAMS("会话参数", Icons.Outlined.Settings, arrayOf())
+    MCP("MCP", Icons.Outlined.Extension, arrayOf())
 }
 
 @Serializable

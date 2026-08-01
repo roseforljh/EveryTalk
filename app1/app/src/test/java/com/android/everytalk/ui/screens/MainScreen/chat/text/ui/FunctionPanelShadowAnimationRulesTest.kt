@@ -7,6 +7,18 @@ import java.io.File
 
 class FunctionPanelShadowAnimationRulesTest {
     @Test
+    fun `功能面板优先显示图片相机和附件`() {
+        val functionPanel = chatInputPanelsSource().readText(Charsets.UTF_8)
+            .substringAfter("fun FunctionPanelContent(")
+            .substringBefore("fun FunctionPanelRow(")
+        val labels = listOf("图片", "相机", "附件", "联网搜索", "MCP", "提示词")
+        val positions = labels.map { label -> functionPanel.indexOf("label = \"$label\"") }
+
+        assertTrue("功能面板选项缺失", positions.all { it >= 0 })
+        assertTrue("功能面板选项顺序错误", positions.zipWithNext().all { (left, right) -> left < right })
+    }
+
+    @Test
     fun `功能面板阴影与内容处于同一缩放层`() {
         val source = chatInputSource().readText(Charsets.UTF_8) + "\n" +
             chatInputPanelsSource().readText(Charsets.UTF_8)

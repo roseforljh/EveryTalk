@@ -121,7 +121,6 @@ internal fun FunctionPanelContent(
     onDismiss: () -> Unit,
     isMcpEnabled: Boolean = false,
     onToggleMcp: () -> Unit = {},
-    onOpenConversationParams: () -> Unit = {},
     onOpenFilePicker: () -> Unit = {},
     onOpenCamera: () -> Unit = {},
     onOpenGallery: () -> Unit = {},
@@ -149,6 +148,33 @@ internal fun FunctionPanelContent(
                 .verticalScroll(rememberScrollState())
         ) {
             FunctionPanelRow(
+                iconRes = R.drawable.ic_image_gallery,
+                label = "图片",
+                iconBg = iconBg,
+                iconTint = iconTint,
+                textColor = textColor,
+                isChecked = false,
+                onClick = { onOpenGallery(); onDismiss() }
+            )
+            FunctionPanelRow(
+                iconRes = R.drawable.ic_camera,
+                label = "相机",
+                iconBg = iconBg,
+                iconTint = iconTint,
+                textColor = textColor,
+                isChecked = false,
+                onClick = { onOpenCamera(); onDismiss() }
+            )
+            FunctionPanelRow(
+                iconRes = R.drawable.ic_paperclip,
+                label = "附件",
+                iconBg = iconBg,
+                iconTint = iconTint,
+                textColor = textColor,
+                isChecked = false,
+                onClick = { onOpenFilePicker(); onDismiss() }
+            )
+            FunctionPanelRow(
                 iconRes = R.drawable.ic_globe,
                 label = "联网搜索",
                 iconBg = iconBg,
@@ -167,15 +193,6 @@ internal fun FunctionPanelContent(
                 onClick = { onToggleMcp() }
             )
             FunctionPanelRow(
-                iconRes = R.drawable.ic_settings_slider,
-                label = "会话参数",
-                iconBg = iconBg,
-                iconTint = iconTint,
-                textColor = textColor,
-                isChecked = false,
-                onClick = { onOpenConversationParams(); onDismiss() }
-            )
-            FunctionPanelRow(
                 iconRes = R.drawable.ic_prompt,
                 label = "提示词",
                 iconBg = iconBg,
@@ -183,33 +200,6 @@ internal fun FunctionPanelContent(
                 textColor = textColor,
                 isChecked = false,
                 onClick = { onOpenSystemPrompt(); onDismiss() }
-            )
-            FunctionPanelRow(
-                iconRes = R.drawable.ic_paperclip,
-                label = "附件",
-                iconBg = iconBg,
-                iconTint = iconTint,
-                textColor = textColor,
-                isChecked = false,
-                onClick = { onOpenFilePicker(); onDismiss() }
-            )
-            FunctionPanelRow(
-                iconRes = R.drawable.ic_image_gallery,
-                label = "图片",
-                iconBg = iconBg,
-                iconTint = iconTint,
-                textColor = textColor,
-                isChecked = false,
-                onClick = { onOpenGallery(); onDismiss() }
-            )
-            FunctionPanelRow(
-                iconRes = R.drawable.ic_camera,
-                label = "相机",
-                iconBg = iconBg,
-                iconTint = iconTint,
-                textColor = textColor,
-                isChecked = false,
-                onClick = { onOpenCamera(); onDismiss() }
             )
         }
     }

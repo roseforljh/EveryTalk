@@ -12,7 +12,6 @@ import com.android.everytalk.statecontroller.ViewModelStateHolder
 import com.android.everytalk.statecontroller.ConversationScrollState
 import com.android.everytalk.statecontroller.rethrowIfCancellation
 import com.android.everytalk.statecontroller.safeApiConfigSummary
-import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.DataClass.VoiceBackendConfig
 import com.android.everytalk.ui.components.toRecoveredMarkdown
 import com.android.everytalk.ui.components.MarkdownPart
@@ -593,31 +592,6 @@ class DataPersistenceManager(
         }
     }
     
-    // 新增：持久化保存"会话ID -> GenerationConfig"映射
-    suspend fun saveConversationParameters(parameters: Map<String, GenerationConfig>) {
-        withContext(Dispatchers.IO) {
-            try {
-                roomDataSource.saveConversationParameters(parameters)
-                Log.d(TAG, "saveConversationParameters: 已持久化 ${parameters.size} 个会话参数映射")
-            } catch (e: Exception) {
-                e.rethrowIfCancellation()
-                Log.e(TAG, "saveConversationParameters 失败", e)
-            }
-        }
-    }
-
-    suspend fun loadConversationParameters(): Map<String, GenerationConfig> {
-        return withContext(Dispatchers.IO) {
-            try {
-                roomDataSource.loadConversationParameters()
-            } catch (e: Exception) {
-                e.rethrowIfCancellation()
-                Log.e(TAG, "loadConversationParameters 失败", e)
-                emptyMap()
-            }
-        }
-    }
-
     suspend fun saveConversationApiConfigIds(mapping: Map<String, String>) {
         withContext(Dispatchers.IO) {
             try {

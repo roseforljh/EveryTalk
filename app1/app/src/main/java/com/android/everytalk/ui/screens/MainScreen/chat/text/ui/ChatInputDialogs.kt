@@ -109,8 +109,6 @@ import java.util.UUID
 
 @Composable
 internal fun ChatInputDialogs(
-    showConversationParamsDialog: Boolean,
-    onShowConversationParamsDialogChange: (Boolean) -> Unit,
     showMcpServerListDialog: Boolean,
     onShowMcpServerListDialogChange: (Boolean) -> Unit,
     viewModel: com.android.everytalk.statecontroller.AppViewModel,
@@ -121,24 +119,6 @@ internal fun ChatInputDialogs(
     tempCameraImageUri: Uri?,
     context: Context,
 ) {
-    // Conversation Parameters Dialog
-    if (showConversationParamsDialog) {
-        // Get current conversation parameters if they exist
-        val currentParams = viewModel.getCurrentConversationParameters()
-        
-        com.android.everytalk.ui.screens.MainScreen.chat.dialog.ConversationParametersDialog(
-            onDismissRequest = { onShowConversationParamsDialogChange(false) },
-            onConfirm = { temperature, topP, maxTokens ->
-                // Save parameters to current conversation
-                viewModel.updateConversationParameters(temperature, topP, maxTokens)
-                onShowConversationParamsDialogChange(false)
-            },
-            initialTemperature = currentParams?.temperature,
-            initialTopP = currentParams?.topP,
-            initialMaxTokens = currentParams?.maxOutputTokens
-        )
-    }
-
     // MCP Server List Dialog
     if (showMcpServerListDialog) {
         McpServerListDialog(

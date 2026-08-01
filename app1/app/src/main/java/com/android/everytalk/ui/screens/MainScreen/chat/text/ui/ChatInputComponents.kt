@@ -315,7 +315,6 @@ fun OptimizedMoreOptionsPanel(
                         val iconTint = when (option) {
                             MoreOptionsType.ATTACHMENT -> Color(0xff607D8B)
                             MoreOptionsType.MCP -> if (isMcpEnabled) Color(0xff9C27B0) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                            MoreOptionsType.CONVERSATION_PARAMS -> Color(0xfff76213)
                         }
                         Icon(
                             imageVector = option.icon,

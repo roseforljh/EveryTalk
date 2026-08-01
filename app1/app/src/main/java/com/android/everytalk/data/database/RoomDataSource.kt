@@ -2,12 +2,10 @@ package com.android.everytalk.data.database
 
 import android.content.Context
 import com.android.everytalk.data.DataClass.ApiConfig
-import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.VoiceBackendConfig
 import com.android.everytalk.data.database.entities.ChatSessionEntity
 import com.android.everytalk.data.database.entities.ConversationGroupEntity
-import com.android.everytalk.data.database.entities.ConversationParamsEntity
 import com.android.everytalk.data.database.entities.ExpandedGroupEntity
 import com.android.everytalk.data.database.entities.PinnedItemEntity
 import com.android.everytalk.data.database.entities.SystemSettingEntity
@@ -382,17 +380,6 @@ class RoomDataSource(context: Context) {
     suspend fun saveExpandedGroupKeys(keys: Set<String>) {
         val entities = keys.map { ExpandedGroupEntity(it) }
         settingsDao.replaceExpandedGroups(entities)
-    }
-
-    // --- Conversation Params ---
-    suspend fun loadConversationParameters(): Map<String, GenerationConfig> {
-        val params = settingsDao.getAllConversationParams()
-        return params.associate { it.conversationId to it.config }
-    }
-
-    suspend fun saveConversationParameters(parameters: Map<String, GenerationConfig>) {
-        val entities = parameters.map { ConversationParamsEntity(it.key, it.value) }
-        settingsDao.replaceConversationParams(entities)
     }
 
     // --- Conversation Api Config Mapping ---

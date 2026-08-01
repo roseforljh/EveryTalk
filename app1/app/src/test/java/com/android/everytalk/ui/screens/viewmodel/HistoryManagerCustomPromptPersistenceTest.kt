@@ -637,7 +637,7 @@ class HistoryManagerCustomPromptPersistenceTest {
         stateHolder.systemPrompts["orphan-system"] = "old"
         stateHolder.conversationScrollStates["user-keep"] = ConversationScrollState(firstVisibleItemIndex = 1)
         stateHolder.conversationScrollStates["orphan-scroll"] = ConversationScrollState(firstVisibleItemIndex = 9)
-        stateHolder.markTextHistoryReadyForParameterCleanup()
+        stateHolder.markTextHistoryReadyForStateCleanup()
         stateHolder.markImageHistoryReadyForStateCleanup()
 
         try {

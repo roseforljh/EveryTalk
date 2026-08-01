@@ -16,7 +16,6 @@ import com.android.everytalk.data.DataClass.GitHubRelease
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.WebSearchResult
-import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.DataClass.ThinkingConfig
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
@@ -459,26 +458,6 @@ import java.util.TimeZone
         stateHolder.clearSelectedMedia()
     }
 
-    internal fun AppViewModel.updateConversationParameters(temperature: Float, topP: Float, maxTokens: Int?) {
-        val config = GenerationConfig(
-            temperature = temperature,
-            topP = topP,
-            maxOutputTokens = maxTokens
-        )
-        // 1) 立即让本会话生效（UI与请求立刻可见）
-        stateHolder.updateCurrentConversationConfig(config)
-        // 2) 若会话非空，强制保存到历史，确保将参数映射迁移/写入稳定的 history_chat_{index} 键，避免重启后丢回默认
-        if (stateHolder.messages.isNotEmpty()) {
-            viewModelScope.launch(Dispatchers.IO) {
-                try {
-                    historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = false)
-                } catch (_: Exception) {
-                    // 避免影响UI流
-                }
-            }
-        }
-    }
-
     internal fun AppViewModel.saveCurrentChatToHistory(forceSave: Boolean = true, isImageGeneration: Boolean = false) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -489,11 +468,6 @@ import java.util.TimeZone
                 Log.e("AppViewModel", "Failed to save chat to history", e)
             }
         }
-    }
-
-    internal fun AppViewModel.getCurrentConversationParameters(): GenerationConfig? {
-        // 严格按会话返回；新会话默认无配置（maxTokens 关闭）
-        return stateHolder.getCurrentConversationConfig()
     }
 
     internal fun AppViewModel.onEditDialogTextChanged(newText: String) {

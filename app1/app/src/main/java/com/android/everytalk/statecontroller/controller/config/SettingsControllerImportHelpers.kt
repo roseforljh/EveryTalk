@@ -3,9 +3,11 @@ package com.android.everytalk.statecontroller.controller.config
 import android.util.Base64
 import android.util.Log
 import com.android.everytalk.data.DataClass.ApiConfig
+import com.android.everytalk.data.DataClass.DEFAULT_MAX_OUTPUT_TOKENS
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.VoiceBackendConfig
+import com.android.everytalk.data.DataClass.validateModelTokenLimits
 import com.android.everytalk.statecontroller.ViewModelStateHolder
 import com.android.everytalk.statecontroller.rethrowIfCancellation
 import com.android.everytalk.statecontroller.safeApiConfigSummary
@@ -295,16 +297,6 @@ internal suspend fun SettingsController.importCustomProvidersInternal(settings: 
     }
 
     /**
-     * 导入会话生成参数
-     */
-internal suspend fun SettingsController.importConversationParametersInternal(settings: ExportedSettings, result: ImportResult) {
-        if (settings.conversationParameters.isNotEmpty()) {
-            stateHolder.conversationGenerationConfigs.value = settings.conversationParameters
-            persistenceManager.saveConversationParameters(settings.conversationParameters)
-        }
-    }
-
-    /**
      * 导入语音后端配置（带验证）
      * 自动还原混淆的API密钥
      */
@@ -586,12 +578,13 @@ internal fun SettingsController.validateApiConfigInternal(config: ApiConfig): Va
             }
         }
         
-        // 验证maxTokens
-        config.maxTokens?.let { tokens ->
-            if (tokens < 1 || tokens > 10000000) {
-                errors.add("maxTokens超出范围 (1-10000000): $tokens")
-            }
-        }
+        // 最大上下文只用于本地历史裁剪，仍需与最大输出保持有效关系。
+        runCatching {
+            validateModelTokenLimits(
+                maxOutputTokens = config.maxTokens ?: DEFAULT_MAX_OUTPUT_TOKENS,
+                maxContextTokens = config.modelParameters.maxContextTokens,
+            )
+        }.exceptionOrNull()?.message?.let { errors.add(it) }
         
         // 验证guidanceScale（图像生成）
         config.guidanceScale?.let { scale ->

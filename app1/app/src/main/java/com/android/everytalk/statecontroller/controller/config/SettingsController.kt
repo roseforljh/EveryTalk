@@ -205,8 +205,6 @@ class SettingsController(
         @EncodeDefault
         val customProviders: Set<String> = emptySet(),
         @EncodeDefault
-        val conversationParameters: Map<String, com.android.everytalk.data.DataClass.GenerationConfig> = emptyMap(),
-        @EncodeDefault
         val voiceBackendConfigs: List<VoiceBackendConfig> = emptyList(),
         // 新增：聊天历史
         @EncodeDefault
@@ -243,10 +241,7 @@ class SettingsController(
                     Log.i(TAG, "  图像配置[$index]: ${safeApiConfigSummary(config)}")
                 }
                 
-                // 2. 导出会话生成参数 (conversationGenerationConfigs)
-                val conversationParams = stateHolder.conversationGenerationConfigs.value
-                
-                // 3. 导出语音后端配置 (STT/Chat/TTS) - 混淆密钥后导出，并去重
+                // 2. 导出语音后端配置 (STT/Chat/TTS) - 混淆密钥后导出，并去重
                 val rawVoiceConfigs = stateHolder._voiceBackendConfigs.value
                 
                 // 基于配置内容去重（忽略id、createdAt、updatedAt）
@@ -306,7 +301,6 @@ class SettingsController(
                     exportTimestamp = System.currentTimeMillis(),
                     apiConfigs = allConfigsToExport,
                     customProviders = providerManager.customProviders.value,
-                    conversationParameters = conversationParams,
                     voiceBackendConfigs = voiceConfigsToExport,
                     chatHistory = chatHistoryToExport,
                     imageGenerationHistory = imageHistoryToExport,
@@ -410,10 +404,7 @@ class SettingsController(
                 // 3. 导入自定义提供商
                 importCustomProviders(importedSettings, result)
                 
-                // 4. 导入会话生成参数
-                importConversationParameters(importedSettings, result)
-                
-                // 5. 导入语音后端配置（会自动还原混淆的密钥）
+                // 4. 导入语音后端配置（会自动还原混淆的密钥）
                 importVoiceConfigs(importedSettings, result)
                 
                 // 6. 导入聊天历史
@@ -482,9 +473,6 @@ class SettingsController(
 
     private suspend fun importCustomProviders(settings: ExportedSettings, result: ImportResult) =
         importCustomProvidersInternal(settings, result)
-
-    private suspend fun importConversationParameters(settings: ExportedSettings, result: ImportResult) =
-        importConversationParametersInternal(settings, result)
 
     private suspend fun importVoiceConfigs(settings: ExportedSettings, result: ImportResult) =
         importVoiceConfigsInternal(settings, result)

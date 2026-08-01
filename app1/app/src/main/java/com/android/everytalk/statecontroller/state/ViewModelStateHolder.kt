@@ -10,11 +10,9 @@ import androidx.compose.runtime.snapshots.SnapshotStateMap
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.WebSearchResult
-import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.DataClass.VoiceBackendConfig
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.util.AppLogger
-import com.android.everytalk.util.ConversationNameHelper
 import com.android.everytalk.util.ScrollController
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.CoroutineScope
@@ -23,7 +21,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
-import kotlinx.coroutines.flow.updateAndGet
  
  class ViewModelStateHolder {
     // 🎯 Streaming message state manager for efficient UI updates
@@ -65,30 +62,13 @@ import kotlinx.coroutines.flow.updateAndGet
     // 分组展开/折叠状态（默认全部折叠）
     val expandedGroups = MutableStateFlow<Set<String>>(emptySet())
     
-    // 持久化回调 - 由 AppViewModel 设置，用于保存会话参数
-    private var onSaveConversationParams: ((Map<String, GenerationConfig>) -> Unit)? = null
     @Volatile
-    private var isTextHistoryReadyForParameterCleanup = false
+    private var isTextHistoryReadyForStateCleanup = false
     @Volatile
     private var isImageHistoryReadyForStateCleanup = false
     
-    /**
-     * 初始化持久化回调
-     * @param saveCallback 保存会话参数的回调函数
-     * @param initialParams 初始加载的会话参数（从持久化存储加载）
-     */
-    fun initializePersistence(
-        saveCallback: (Map<String, GenerationConfig>) -> Unit,
-        initialParams: Map<String, GenerationConfig> = emptyMap()
-    ) {
-        onSaveConversationParams = saveCallback
-        if (initialParams.isNotEmpty()) {
-            conversationGenerationConfigs.value = initialParams
-        }
-    }
-
-    fun markTextHistoryReadyForParameterCleanup() {
-        isTextHistoryReadyForParameterCleanup = true
+    fun markTextHistoryReadyForStateCleanup() {
+        isTextHistoryReadyForStateCleanup = true
     }
 
     fun markImageHistoryReadyForStateCleanup() {
@@ -96,7 +76,7 @@ import kotlinx.coroutines.flow.updateAndGet
     }
 
     fun isConversationStateCleanupReady(): Boolean =
-        isTextHistoryReadyForParameterCleanup && isImageHistoryReadyForStateCleanup
+        isTextHistoryReadyForStateCleanup && isImageHistoryReadyForStateCleanup
 
     fun getStreamingReasoning(messageId: String): StateFlow<String> {
         return streamingReasoningStates.getOrPut(messageId) { MutableStateFlow("") }.asStateFlow()
@@ -136,10 +116,6 @@ val _isStreamingPaused = MutableStateFlow(false)
     val textReasoningCompleteMap: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
     val imageReasoningCompleteMap: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
     
-    // 每个会话独立的生成配置参数
-    val conversationGenerationConfigs: MutableStateFlow<Map<String, GenerationConfig>> =
-        MutableStateFlow(emptyMap())
-
     // 会话ID -> 使用的API配置ID的映射
     val conversationApiConfigIds: MutableStateFlow<Map<String, String>> = MutableStateFlow(emptyMap())
     val conversationFunctionToggleStates: MutableStateFlow<Map<String, ConversationFunctionToggleState>> =
@@ -161,59 +137,6 @@ val _isStreamingPaused = MutableStateFlow(false)
         conversationFunctionToggleStates.update { currentMap ->
             val currentState = currentMap[conversationId] ?: ConversationFunctionToggleState()
             currentMap + (conversationId to update(currentState))
-        }
-    }
-    
-    // 获取当前会话的生成配置（仅按当前会话ID的内存映射读取）
-    fun getCurrentConversationConfig(): GenerationConfig? {
-        val id = _currentConversationId.value
-        return conversationGenerationConfigs.value[id]
-    }
-    
-    // 标记"空会话但已应用过参数（仅在内存映射中）"
-    // 用于离开/切换会话时判定是否需要丢弃该空会话的会话参数
-    fun hasPendingConversationParams(): Boolean {
-        val id = _currentConversationId.value
-        return messages.isEmpty() && conversationGenerationConfigs.value.containsKey(id)
-    }
-    
-    // 更新当前会话的生成配置
-    // 规则：
-    // - 点击"应用"后，本会话立刻生效：总是写入当前会话ID的内存映射（UI 和请求立刻可见）
-    // - 仅当会话内容不为空时才持久化；空会话不落库
-    fun updateCurrentConversationConfig(config: GenerationConfig) {
-        val id = _currentConversationId.value
-        // 立即更新内存映射（立刻生效）
-        conversationGenerationConfigs.update { currentConfigs -> currentConfigs + (id to config) }
-        val currentConfigs = conversationGenerationConfigs.value
-        
-        // 仅非空会话才持久化
-        if (messages.isNotEmpty()) {
-            onSaveConversationParams?.invoke(currentConfigs)
-        }
-    }
-    
-    // 首条用户消息产生时，若当前会话存在仅内存的参数映射，则补做持久化
-    fun persistPendingParamsIfNeeded(isImageGeneration: Boolean = false) {
-        if (isImageGeneration) return // 当前参数系统仅绑定文本会话
-        val id = _currentConversationId.value
-        val cfg = conversationGenerationConfigs.value[id] ?: return
-        // 写盘（如果之前未写过，也无害）
-        onSaveConversationParams?.invoke(conversationGenerationConfigs.value)
-    }
-    
-    // 放弃一个"仅应用过参数但未发消息"的空会话：
-    // 清除当前会话ID在内存中的参数映射，并同步到持久化（若存在）
-    fun abandonEmptyPendingConversation() {
-        if (messages.isEmpty()) {
-            val id = _currentConversationId.value
-            val currentMap = conversationGenerationConfigs.value
-            val newMap = conversationGenerationConfigs.updateAndGet { configs ->
-                if (id in configs) configs - id else configs
-            }
-            if (newMap != currentMap) {
-                onSaveConversationParams?.invoke(newMap)
-            }
         }
     }
     
@@ -243,56 +166,10 @@ val _isStreamingPaused = MutableStateFlow(false)
         _isMcpEnabledForNextRequest.value = toggleState.mcpEnabled
     }
 
-    // 仅保留现存历史及当前会话的参数，避免按数量裁剪仍有效的 UUID 会话。
-    fun cleanupOldConversationParameters() {
-        if (!isTextHistoryReadyForParameterCleanup) return
-        val retainedIds = buildSet {
-            _historicalConversations.value.forEach { conversation ->
-                ConversationNameHelper.resolveStableId(conversation)?.let(::add)
-            }
-            _currentConversationId.value.takeIf { it.isNotBlank() }?.let(::add)
-        }
-        val currentConfigs = conversationGenerationConfigs.value
-        if (currentConfigs.isEmpty()) return
-        val cleanedConfigs = conversationGenerationConfigs.updateAndGet { current ->
-            current.filterKeys { it in retainedIds }
-        }
-        if (cleanedConfigs.size != currentConfigs.size) {
-            onSaveConversationParams?.invoke(cleanedConfigs)
-        }
-    }
-
     // 分离的展开推理状态
     val textExpandedReasoningStates: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
     val imageExpandedReasoningStates: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
     
-    // 会话ID切换时参数迁移（仅在"尚未开始对话"的空会话场景执行）
-    // 解决：用户在空会话开启参数后，内部刷新/切换会话ID导致参数丢失的问题
-    fun migrateParamsOnConversationIdChange(newId: String) {
-        val oldId = _currentConversationId.value
-        if (oldId == newId) {
-            _currentConversationId.value = newId
-            return
-        }
-        // 切换ID
-        _currentConversationId.value = newId
-        // 若仍处于空会话（未开始发消息），则迁移已落库的旧ID参数到新ID；
-        // 若参数尚未落库（pending），保持 pending 即可，由首次发消息时写入
-        if (messages.isEmpty()) {
-            var newMap = conversationGenerationConfigs.value
-            var changed = false
-            conversationGenerationConfigs.update { current ->
-                val cfg = current[oldId]
-                changed = cfg != null
-                newMap = cfg?.let { current - oldId + (newId to it) } ?: current
-                newMap
-            }
-            if (changed) {
-                onSaveConversationParams?.invoke(newMap)
-            }
-        }
-    }
-
     // 分离的消息动画状态
     val textMessageAnimationStates: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
     val imageMessageAnimationStates: SnapshotStateMap<String, Boolean> = mutableStateMapOf()
@@ -338,19 +215,9 @@ val _isStreamingPaused = MutableStateFlow(false)
         
         android.util.Log.d("ViewModelStateHolder", "Cleared all StreamingBuffers and streaming states for text chat")
         
-        // 若当前会话为空且仅"应用未发"，按要求删除该空会话（丢弃pending、不落库）
-        if (messages.isEmpty() && hasPendingConversationParams()) {
-            abandonEmptyPendingConversation()
-        }
-        
-        // 分配全新会话ID（不迁移任何旧会话参数，保持完全独立）
+        // 分配全新会话ID
         _currentConversationId.value = "new_chat_${System.currentTimeMillis()}"
         applyCurrentConversationFunctionToggleState()
-        
-        // 新会话默认关闭参数：不做任何继承或默认值注入
-        
-        // Clean up old parameters periodically
-        cleanupOldConversationParameters()
         
         // 🎯 关键修复：确保ApiHandler中的会话状态完全清理
         _apiHandler?.clearTextChatResources()

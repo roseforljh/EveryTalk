@@ -87,11 +87,6 @@ class SimpleModeManager(
         _lastModeSwitch = System.currentTimeMillis()
         _uiMode.value = ModeType.TEXT
         
-        // 若当前文本会话为空且仅"应用了参数未发消息"，按要求删除该空会话（丢弃pending）
-        if (stateHolder.messages.isEmpty() && stateHolder.hasPendingConversationParams()) {
-            stateHolder.abandonEmptyPendingConversation()
-        }
-        
         // 关键修复1：在保存前记录图像会话的状态
         val imageHistoryIndexBeforeSave = stateHolder._loadedImageGenerationHistoryIndex.value
         val imageMessagesBeforeSave = stateHolder.imageGenerationMessages.toList()
@@ -146,7 +141,6 @@ class SimpleModeManager(
             val newId = "chat_${UUID.randomUUID()}"
             stateHolder.setCurrentConversationId(newId)
             stateHolder.systemPrompts[newId] = ""
-            // 不为新会话自动回填会话参数，保持默认关闭
         }
         
         // 重置输入框
@@ -186,12 +180,6 @@ class SimpleModeManager(
         _currentMode = ModeType.IMAGE
         _lastModeSwitch = System.currentTimeMillis()
         _uiMode.value = ModeType.IMAGE
-        
-        // 若当前文本会话为空且仅"应用了参数未发消息"，按要求删除该空会话（丢弃pending）
-        if (stateHolder.messages.isEmpty() && stateHolder.hasPendingConversationParams()) {
-            stateHolder.abandonEmptyPendingConversation()
-        }
-        
         
         val textHistoryIndexBeforeSave = stateHolder._loadedHistoryIndex.value
         val textMessagesBeforeSave = stateHolder.messages.toList()

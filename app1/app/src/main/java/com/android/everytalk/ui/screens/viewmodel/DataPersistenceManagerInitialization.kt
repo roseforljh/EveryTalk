@@ -358,7 +358,7 @@ internal fun DataPersistenceManager.loadInitialDataInternal(
                                 }
                             }
                             if (textHistoryLoadedCompletely) {
-                                stateHolder.markTextHistoryReadyForParameterCleanup()
+                                stateHolder.markTextHistoryReadyForStateCleanup()
                             }
                         }
                     } catch (e: CancellationException) {

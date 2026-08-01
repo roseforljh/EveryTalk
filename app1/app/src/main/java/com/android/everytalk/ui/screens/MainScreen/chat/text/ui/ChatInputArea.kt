@@ -130,7 +130,6 @@ fun ChatInputArea(
     // 记录由外点关闭触发的时间戳，用于忽略紧随其后的按钮抬起点击，避免"先关后开"
     var lastImagePanelDismissAt by remember { mutableLongStateOf(0L) }
     var lastMorePanelDismissAt by remember { mutableLongStateOf(0L) }
-    var showConversationParamsDialog by remember { mutableStateOf(false) }
     var showMcpServerListDialog by remember { mutableStateOf(false) }
     var tempCameraImageUri by remember { mutableStateOf<Uri?>(null) }
     val isMcpEnabled by viewModel.stateHolder._isMcpEnabledForNextRequest.collectAsState()
@@ -707,7 +706,6 @@ fun ChatInputArea(
                                             },
                                             isMcpEnabled = isMcpEnabled,
                                             onToggleMcp = { viewModel.setMcpEnabledForNextRequest(!isMcpEnabled) },
-                                            onOpenConversationParams = { showConversationParamsDialog = true },
                                             onOpenFilePicker = { filePickerLauncher.launch(arrayOf("*/*")) },
                                             onOpenCamera = { cameraPermissionLauncher.launch(Manifest.permission.CAMERA) },
                                             onOpenGallery = {
@@ -770,10 +768,6 @@ fun ChatInputArea(
                                     }) {
                                         OptimizedMoreOptionsPanel(isMcpEnabled = isMcpEnabled) { selectedOption ->
                                             when (selectedOption) {
-                                                MoreOptionsType.CONVERSATION_PARAMS -> {
-                                                    if (showMoreOptionsPanel) showMoreOptionsPanel = false
-                                                    showConversationParamsDialog = true
-                                                }
                                                 MoreOptionsType.MCP -> {
                                                     viewModel.setMcpEnabledForNextRequest(!isMcpEnabled)
                                                 }
@@ -984,8 +978,6 @@ fun ChatInputArea(
     }
 
     ChatInputDialogs(
-        showConversationParamsDialog = showConversationParamsDialog,
-        onShowConversationParamsDialogChange = { showConversationParamsDialog = it },
         showMcpServerListDialog = showMcpServerListDialog,
         onShowMcpServerListDialogChange = { showMcpServerListDialog = it },
         viewModel = viewModel,
