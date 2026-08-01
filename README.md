@@ -48,8 +48,8 @@
 ## 📚 Document Index
 
 - **Project Overview**: Current `README.md` (English) / `README_zh.md` (中文).
-- **OpenClaw Integration**: [`docs/openclaw-integration.md`](docs/openclaw-integration.md), detailing the setup of EveryTalk -> Bridge -> Gateway.
-- **Markdown and Math Rendering Record**: [`docs/plans/markdown-mathjax-rendering-plan.md`](docs/plans/markdown-mathjax-rendering-plan.md), recording the completed MikePenz + CodeBlockCard + MathJax 4 SVG architecture, verification results, and remaining device acceptance items.
+- **OpenClaw Integration**: [`docs/OpenClaw接入指南.md`](docs/OpenClaw接入指南.md), detailing the setup of EveryTalk -> Bridge -> Gateway.
+- **Markdown and Math Rendering Record**: [`docs/plans/Markdown与MathJax统一渲染方案.md`](docs/plans/Markdown与MathJax统一渲染方案.md), recording the completed MikePenz + CodeBlockCard + MathJax 4 SVG architecture, verification results, and remaining device acceptance items.
 - **Design Logs**: `docs/plans/`, containing design documentation and historical architectural decisions.
 - **Developer / Agent Docs**: `CLAUDE.md` and `AGENTS.md`, helpful for maintainers wanting to build and run tests.
 
@@ -288,7 +288,7 @@ If you wish to control your remote VPS instances running Claw via EveryTalk:
 curl -fsSL https://claw.everytalk.cc | bash
 ```
 
-See [OpenClaw Integration](docs/openclaw-integration.md) for full configuration steps.
+See [OpenClaw Integration](docs/OpenClaw接入指南.md) for full configuration steps.
 
 ---
 

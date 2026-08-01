@@ -1,6 +1,6 @@
 ﻿# EveryTalk 接近 Gemini 的流式渲染新架构方案
 
-> 状态说明（2026-07-19）：本文保留为流式架构历史方案。数学渲染部分已由 `docs/plans/markdown-mathjax-rendering-plan.md` 取代，当前实现统一使用 `StreamBlockParser + PreparedMessage + MathJax 4 SVG`，不再规划自研 `MathLexer` 或 `MathParser`。
+> 状态说明（2026-07-19）：本文保留为流式架构历史方案。数学渲染部分已由 `docs/plans/Markdown与MathJax统一渲染方案.md` 取代，当前实现统一使用 `StreamBlockParser + PreparedMessage + MathJax 4 SVG`，不再规划自研 `MathLexer` 或 `MathParser`。
 
 ## 1. 背景与目标
 

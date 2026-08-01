@@ -42,14 +42,14 @@
 - 应用支持 **无后端直连模式**，但并不是所有模型都具备一致能力；例如联网搜索只对支持原生搜索的模型生效。
 - 图像生成、语音链路、后端代理、OpenClaw 等能力，是否可用取决于你接入的服务端或上游模型是否支持。
 - README 中的“支持”表示项目已经提供对应接入链路或消费能力，不等于任意模型在任意配置下都默认可用。
-- 仓库中同时包含 Android 客户端与可选后端相关代码，初次阅读时建议优先从 `README_zh.md`、`docs/openclaw-integration.md` 和 `docs/plans/` 进入。
+- 仓库中同时包含 Android 客户端与可选后端相关代码，初次阅读时建议优先从 `README_zh.md`、`docs/OpenClaw接入指南.md` 和 `docs/plans/` 进入。
 
 ---
 
 ## 📚 文档入口
 
 - **项目总览**: 当前 `README_zh.md`（中文）/ `README.md`（英文）。
-- **OpenClaw 专题**: [`docs/openclaw-integration.md`](docs/openclaw-integration.md)，说明 EveryTalk -> Bridge -> Gateway 的接入链路与部署方式。
+- **OpenClaw 专题**: [`docs/OpenClaw接入指南.md`](docs/OpenClaw接入指南.md)，说明 EveryTalk -> Bridge -> Gateway 的接入链路与部署方式。
 - **方案沉淀**: `docs/plans/`，包含部分功能设计与演进方案，可用于理解历史决策与结构调整方向。
 - **Claude / Agent 相关文档**: `CLAUDE.md` 与 `AGENTS.md`，适合需要在本仓库内继续开发或协作的维护者。
 
@@ -328,7 +328,7 @@ X-Timestamp: Unix timestamp
 
 | 主题 | 说明 | 链接 |
 |------|------|------|
-| **OpenClaw 远程接入** | 说明如何通过 EveryTalk + VPS Bridge + OpenClaw Gateway 的方式远程控制龙虾。 | [👉 查看文档](docs/openclaw-integration.md) |
+| **OpenClaw 远程接入** | 说明如何通过 EveryTalk + VPS Bridge + OpenClaw Gateway 的方式远程控制龙虾。 | [👉 查看文档](docs/OpenClaw接入指南.md) |
 
 ---
 
@@ -340,7 +340,7 @@ X-Timestamp: Unix timestamp
 curl -fsSL https://claw.everytalk.cc | bash
 ```
 
-详细信息请参见 [OpenClaw 接入指南](docs/openclaw-integration.md)。
+详细信息请参见 [OpenClaw 接入指南](docs/OpenClaw接入指南.md)。
 
 ---
 

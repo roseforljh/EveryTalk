@@ -73,7 +73,8 @@ app1/app/src/main/java/**/graphify-out/
 docs/plans/*
 !docs/plans/2026-06-19-gpt-android-markdown-typography-alignment.md
 !docs/plans/2026-06-19-gpt-level-native-markdown-renderer.md
-!docs/plans/markdown-mathjax-rendering-plan.md
+!docs/plans/Markdown与MathJax统一渲染方案.md
+!docs/plans/动态系统提示词路由方案.md
 !app1/*.md
 !app1/preview/
 !app1/preview/**
