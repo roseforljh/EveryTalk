@@ -18,14 +18,7 @@ class GeminiProvider(
     
     override fun canHandle(request: ChatRequest): Boolean {
         val channel = request.channel.lowercase()
-        val provider = request.provider.lowercase()
-        val model = request.model.lowercase()
-        
-        if (channel.contains("openai")) return false
-        
-        return channel.contains("gemini") || 
-               provider.contains("gemini") || 
-               model.contains("gemini")
+        return channel.contains("gemini")
     }
     
     override suspend fun streamChat(

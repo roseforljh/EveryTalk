@@ -5,7 +5,6 @@ import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.network.AppStreamEvent
 import com.android.everytalk.data.network.OpenAIDirectClient
 import com.android.everytalk.data.network.OpenAIResponsesClient
-import com.android.everytalk.data.network.WebSearchSupport
 import com.android.everytalk.models.SelectedMediaItem
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.flow.Flow
@@ -29,13 +28,10 @@ class OpenAICompatibleProvider(
 
     override fun canHandle(request: ChatRequest): Boolean {
         val channel = request.channel.lowercase()
-        val provider = request.provider.lowercase()
-
-        if (channel.contains("anthropic") || provider.contains("anthropic")) return false
+        if (channel.contains("anthropic")) return false
         if (supportedChannels.any { channel.contains(it) }) return true
         if (channel.contains("gemini")) return false
-
-        return !provider.contains("gemini") && !WebSearchSupport.isGeminiModelName(request.model)
+        return true
     }
 
     override suspend fun streamChat(

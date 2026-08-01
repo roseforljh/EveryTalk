@@ -17,8 +17,7 @@ class AnthropicProvider(
 
     override fun canHandle(request: ChatRequest): Boolean {
         val channel = request.channel.trim().lowercase()
-        val provider = request.provider.trim().lowercase()
-        return supportedChannels.any(channel::contains) || provider.contains("anthropic")
+        return supportedChannels.any(channel::contains)
     }
 
     override suspend fun streamChat(

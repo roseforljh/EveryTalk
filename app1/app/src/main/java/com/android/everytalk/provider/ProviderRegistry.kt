@@ -2,6 +2,8 @@ package com.android.everytalk.provider
 
 import android.content.Context
 import com.android.everytalk.data.DataClass.ChatRequest
+import com.android.everytalk.data.DataClass.ModelParameterProtocol
+import com.android.everytalk.data.DataClass.modelParameterProtocol
 import com.android.everytalk.data.network.AppStreamEvent
 import com.android.everytalk.models.SelectedMediaItem
 import io.ktor.client.HttpClient
@@ -10,19 +12,23 @@ import kotlinx.coroutines.flow.Flow
 class ProviderRegistry(
     httpClient: HttpClient
 ) {
-    private val providers: List<LLMProvider> = listOf(
-        GeminiProvider(httpClient),
-        AnthropicProvider(httpClient),
-        OpenAICompatibleProvider(httpClient)
-    )
+    private val geminiProvider = GeminiProvider(httpClient)
+    private val anthropicProvider = AnthropicProvider(httpClient)
+    private val openAICompatibleProvider = OpenAICompatibleProvider(httpClient)
+    private val providers: List<LLMProvider> = listOf(geminiProvider, anthropicProvider, openAICompatibleProvider)
     
     fun getProvider(request: ChatRequest): LLMProvider {
-        val matched = providers.find { it.canHandle(request) }
+        val matched = when (modelParameterProtocol(request.channel)) {
+            ModelParameterProtocol.GEMINI -> geminiProvider
+            ModelParameterProtocol.ANTHROPIC -> anthropicProvider
+            ModelParameterProtocol.CODEX,
+            ModelParameterProtocol.OPENAI_COMPATIBLE -> openAICompatibleProvider
+        }
         android.util.Log.i(
             "ProviderRegistry",
-            "resolved provider=${matched?.providerName ?: providers.last().providerName}, request.provider=${request.provider}, channel=${request.channel}, model=${request.model}"
+            "resolved provider=${matched.providerName}, request.provider=${request.provider}, channel=${request.channel}, model=${request.model}"
         )
-        return matched ?: providers.last()
+        return matched
     }
     
     suspend fun streamChat(

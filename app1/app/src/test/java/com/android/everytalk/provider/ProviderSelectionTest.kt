@@ -62,11 +62,12 @@ class ProviderSelectionTest {
     }
 
     @Test
-    fun `anthropic provider name uses anthropic provider`() {
+    fun `provider name cannot override selected channel`() {
         val request = createRequest(channel = "custom", model = "custom-model", provider = "Anthropic")
 
-        assertTrue(anthropicProvider.canHandle(request))
-        assertFalse(openAIProvider.canHandle(request))
+        assertFalse(anthropicProvider.canHandle(request))
+        assertTrue(openAIProvider.canHandle(request))
+        assertTrue(ProviderRegistry(mockHttpClient).getProvider(request) is OpenAICompatibleProvider)
     }
     
     @Test
