@@ -20,7 +20,6 @@ import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.DataClass.ThinkingConfig
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
-import com.android.everytalk.data.network.openclaw.OpenClawRuntimeStatusService
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
 import com.android.everytalk.ui.components.math.MathJaxSvgRenderer
@@ -84,6 +83,7 @@ import com.android.everytalk.data.mcp.McpServerConfig
 import com.android.everytalk.data.mcp.McpServerState
 import com.android.everytalk.data.mcp.McpStatus
 import com.android.everytalk.data.network.GeminiDirectClient
+import com.android.everytalk.data.network.AnthropicDirectClient
 import com.android.everytalk.data.network.ExternalWebSearchProvider
 import com.android.everytalk.data.network.ExternalWebSearchProviderConfig
 import com.android.everytalk.data.network.ExternalWebSearchService
@@ -228,14 +228,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    internal val openClawRuntimeStatusService by lazy {
-        OpenClawRuntimeStatusService(
-            context = getApplication(),
-            httpClient = org.koin.java.KoinJavaComponent.getKoin().get(),
-            json = org.koin.java.KoinJavaComponent.getKoin().get()
-        )
-    }
-
     val drawerState: DrawerState
         get() = stateHolder.drawerState
     val text: StateFlow<String>
@@ -260,10 +252,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         get() = stateHolder._isLoadingHistoryData.asStateFlow()
     val currentConversationId: StateFlow<String>
         get() = stateHolder._currentConversationId.asStateFlow()
-    val currentOpenClawSessionId: StateFlow<String>
-        get() = stateHolder._currentOpenClawSessionId.asStateFlow()
-    val openClawGatewayStatus: StateFlow<OpenClawGatewayStatus>
-        get() = stateHolder._openClawGatewayStatus.asStateFlow()
     val currentImageGenerationConversationId: StateFlow<String>
         get() = stateHolder._currentImageGenerationConversationId.asStateFlow()
     val apiConfigs: StateFlow<List<ApiConfig>>
@@ -582,6 +570,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 }
             )
          }
+         AnthropicDirectClient.setMcpToolExecutor(mcpToolExecutorOwner) { toolName, arguments, updateStatus ->
+            executeSharedToolCall(
+                toolName = toolName,
+                arguments = arguments,
+                updateStatus = updateStatus,
+                mcpWebFetchFallback = buildMcpWebFetchFallback(),
+                localWebSearchExecutor = buildLocalWebSearchExecutor(),
+                fallbackExecutor = { fallbackToolName, fallbackArguments ->
+                    mcpManager.callTool(fallbackToolName, fallbackArguments)
+                }
+            )
+         }
 
         // 初始化 StateHolder 的持久化回调
         viewModelScope.launch(Dispatchers.IO) {
@@ -858,6 +858,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         GeminiDirectClient.clearMcpToolExecutor(mcpToolExecutorOwner)
         OpenAIDirectClient.clearMcpToolExecutor(mcpToolExecutorOwner)
         OpenAIResponsesClient.clearMcpToolExecutor(mcpToolExecutorOwner)
+        AnthropicDirectClient.clearMcpToolExecutor(mcpToolExecutorOwner)
         // 清理消息内容控制器（若未来扩展内部资源）
         messageContentController.cleanup()
         // 统一的生命周期清理

@@ -8,15 +8,11 @@ import io.ktor.client.HttpClient
 import kotlinx.coroutines.flow.Flow
 
 class ProviderRegistry(
-    private val context: Context,
     httpClient: HttpClient
 ) {
     private val providers: List<LLMProvider> = listOf(
         GeminiProvider(httpClient),
-        OpenClawProvider(
-            httpClient = httpClient,
-            deviceIdentityManager = com.android.everytalk.data.network.openclaw.OpenClawDeviceIdentityManager(context)
-        ),
+        AnthropicProvider(httpClient),
         OpenAICompatibleProvider(httpClient)
     )
     

@@ -71,6 +71,10 @@ class DirectClientLifecycleTest {
                 OpenAIResponsesClient.streamChatResponses(client, request("OpenAI", "OpenAI")),
                 "api_error",
             )
+            assertSingleErrorTerminal(
+                AnthropicDirectClient.streamChatDirect(client, request("Anthropic", "Anthropic")),
+                "api_error",
+            )
         }
     }
 
@@ -87,6 +91,10 @@ class DirectClientLifecycleTest {
             )
             assertSingleErrorTerminal(
                 OpenAIResponsesClient.streamChatResponses(client, request("OpenAI", "OpenAI")),
+                "connection_failed",
+            )
+            assertSingleErrorTerminal(
+                AnthropicDirectClient.streamChatDirect(client, request("Anthropic", "Anthropic")),
                 "connection_failed",
             )
         }

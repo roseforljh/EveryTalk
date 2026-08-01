@@ -34,7 +34,7 @@ val networkModule = module {
         }
     }
     
-    single { ProviderRegistry(androidContext(), get()) }
+    single { ProviderRegistry(get()) }
 }
 
 val appModule = module {

@@ -31,7 +31,7 @@ class OpenAICompatibleProvider(
         val channel = request.channel.lowercase()
         val provider = request.provider.lowercase()
 
-        if (channel.contains("openclaw") || provider.contains("openclaw")) return false
+        if (channel.contains("anthropic") || provider.contains("anthropic")) return false
         if (supportedChannels.any { channel.contains(it) }) return true
         if (channel.contains("gemini")) return false
 

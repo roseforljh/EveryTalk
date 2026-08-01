@@ -571,6 +571,7 @@ object ApiClient {
     
         // 优化：当渠道为Gemini或为Google Gemini官方域名时，使用Gemini格式的API
         val isGeminiChannel = channel?.lowercase()?.trim() == "gemini"
+        val isAnthropicChannel = channel?.lowercase()?.trim() == "anthropic"
         val isGoogleOfficialDomain = hostLower == "generativelanguage.googleapis.com" ||
                 (hostLower?.endsWith("googleapis.com") == true &&
                  baseForModels.contains("generativelanguage", ignoreCase = true))
@@ -592,6 +593,7 @@ object ApiClient {
                 android.util.Log.i("ApiClient", "检测到 Gemini 渠道(反代)，使用代理地址 + Bearer Token: $geminiProxyUrl")
                 geminiProxyUrl
             }
+            isAnthropicChannel -> AnthropicDirectClient.resolveModelsUrl(normalizedBase)
             // 智谱 BigModel 官方特判
             hostLower?.contains("open.bigmodel.cn") == true -> {
                 val zhipu = "$scheme://open.bigmodel.cn/api/paas/v4/models"
@@ -608,7 +610,10 @@ object ApiClient {
             val response = client.get {
                 url(url)
                 // Google 官方域名使用 ?key=（已在 URL 中）；其余所有情况（包括 Gemini 反代）使用 Bearer Token
-                if (!useKeyQueryParam) {
+                if (isAnthropicChannel) {
+                    header("x-api-key", cleanedApiKey)
+                    header("anthropic-version", "2023-06-01")
+                } else if (!useKeyQueryParam) {
                     header(HttpHeaders.Authorization, "Bearer $cleanedApiKey")
                 }
                 header(HttpHeaders.Accept, "application/json")

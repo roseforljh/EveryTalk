@@ -1,22 +1,30 @@
 package com.android.everytalk.provider
 
+import android.app.Application
 import com.android.everytalk.data.DataClass.ChatRequest
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import io.mockk.mockk
 import io.ktor.client.HttpClient
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34], application = Application::class)
 class ProviderSelectionTest {
     
     private lateinit var geminiProvider: GeminiProvider
+    private lateinit var anthropicProvider: AnthropicProvider
     private lateinit var openAIProvider: OpenAICompatibleProvider
     private val mockHttpClient = mockk<HttpClient>(relaxed = true)
     
     @Before
     fun setup() {
         geminiProvider = GeminiProvider(mockHttpClient)
+        anthropicProvider = AnthropicProvider(mockHttpClient)
         openAIProvider = OpenAICompatibleProvider(mockHttpClient)
     }
     
@@ -42,6 +50,23 @@ class ProviderSelectionTest {
         
         assertFalse(geminiProvider.canHandle(request))
         assertTrue(openAIProvider.canHandle(request))
+    }
+
+    @Test
+    fun `anthropic channel uses anthropic provider`() {
+        val request = createRequest(channel = "Anthropic", model = "claude-sonnet-4-5")
+
+        assertTrue(anthropicProvider.canHandle(request))
+        assertFalse(openAIProvider.canHandle(request))
+        assertTrue(ProviderRegistry(mockHttpClient).getProvider(request) is AnthropicProvider)
+    }
+
+    @Test
+    fun `anthropic provider name uses anthropic provider`() {
+        val request = createRequest(channel = "custom", model = "custom-model", provider = "Anthropic")
+
+        assertTrue(anthropicProvider.canHandle(request))
+        assertFalse(openAIProvider.canHandle(request))
     }
     
     @Test

@@ -12,6 +12,7 @@ class McpToolExecutorLifecycleTest {
             "data/network/llm/GeminiDirectClient.kt",
             "data/network/llm/OpenAIDirectClient.kt",
             "data/network/llm/OpenAIResponsesClient.kt",
+            "data/network/llm/AnthropicDirectClient.kt",
         ).forEach { relativePath ->
             val source = source(relativePath)
             assertTrue(source.contains("private var mcpToolExecutorOwner: Any? = null"))
@@ -26,6 +27,7 @@ class McpToolExecutorLifecycleTest {
         assertTrue(viewModel.contains("GeminiDirectClient.clearMcpToolExecutor(mcpToolExecutorOwner)"))
         assertTrue(viewModel.contains("OpenAIDirectClient.clearMcpToolExecutor(mcpToolExecutorOwner)"))
         assertTrue(viewModel.contains("OpenAIResponsesClient.clearMcpToolExecutor(mcpToolExecutorOwner)"))
+        assertTrue(viewModel.contains("AnthropicDirectClient.clearMcpToolExecutor(mcpToolExecutorOwner)"))
     }
 
     private fun source(relativePath: String): String {
