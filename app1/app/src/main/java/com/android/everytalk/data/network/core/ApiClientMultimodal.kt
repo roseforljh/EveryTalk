@@ -39,7 +39,8 @@ private const val MAX_MODELS_RESPONSE_BYTES = 4L * 1024L * 1024L
 internal suspend fun buildDirectMultimodalRequest(
     request: ChatRequest,
     attachments: List<com.android.everytalk.models.SelectedMediaItem>,
-    context: Context
+    context: Context,
+    extractDocumentsForContextControl: Boolean = false,
 ): ChatRequest {
     val inlineParts = mutableListOf<com.android.everytalk.data.DataClass.ApiContentPart.InlineData>()
     val documentTexts = mutableListOf<String>()
@@ -102,7 +103,7 @@ internal suspend fun buildDirectMultimodalRequest(
                     val isGemini = request.model.contains("gemini", ignoreCase = true)
                     val isPdf = mime == "application/pdf"
 
-                    if (isQwen) {
+                    if (isQwen && !extractDocumentsForContextControl) {
                         val fileName = item.displayName
                         // 读取文件字节并转为 Base64，以便 OpenAIDirectClient 上传
                         val bytes = readInlineAttachmentBytes(context, item.uri, fileName)
@@ -116,7 +117,7 @@ internal suspend fun buildDirectMultimodalRequest(
                                 )
                             )
                         }
-                    } else if (isGemini && isPdf) {
+                    } else if (isGemini && isPdf && !extractDocumentsForContextControl) {
                         // Gemini 原生支持 PDF，直接通过 inlineData 传递
                         val bytes = readInlineAttachmentBytes(context, item.uri, item.displayName)
 
@@ -131,10 +132,9 @@ internal suspend fun buildDirectMultimodalRequest(
                         }
                     } else {
                         val text = DocumentProcessor.extractText(context, item.uri, mime)
-                        if (!text.isNullOrBlank()) {
-                            val fileName = item.displayName
-                            documentTexts.add("--- Begin of document: $fileName ---\n$text\n--- End of document ---")
-                        }
+                        if (text.isNullOrBlank()) throw IOException("文件 ${item.displayName} 未提取到可用文本")
+                        val fileName = item.displayName
+                        documentTexts.add("--- Begin of document: $fileName ---\n$text\n--- End of document ---")
                     }
                 }
             }
@@ -174,8 +174,10 @@ internal suspend fun buildDirectMultimodalRequest(
     }
 
     val upgraded = com.android.everytalk.data.DataClass.PartsApiMessage(
+        id = lastMsg.id,
         role = "user",
-        parts = newParts
+        parts = newParts,
+        name = lastMsg.name,
     )
     msgs[lastUserIdx] = upgraded
     return request.copy(messages = msgs)

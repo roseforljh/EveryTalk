@@ -23,6 +23,7 @@ data class TokenUsage(
     val totalTokens: Long? = null,
     val isFinal: Boolean,
     val source: TokenUsageSource,
+    val requestOrdinal: Int? = null,
 )
 
 @Serializable
@@ -50,6 +51,19 @@ sealed class AppStreamEvent {
     @Serializable
     @SerialName("usage")
     data class Usage(val usage: TokenUsage) : AppStreamEvent()
+
+    @Serializable
+    @SerialName("native_context_compaction")
+    data class NativeContextCompaction(
+        val inputJson: String,
+        val configId: String,
+        val provider: String,
+        val channel: String,
+        val model: String,
+        val compactionItemId: String? = null,
+        val estimatedTokens: Long = 0L,
+        val reset: Boolean = false,
+    ) : AppStreamEvent()
 
     @Serializable
     @SerialName("output_type")
@@ -119,4 +133,9 @@ sealed class AppStreamEvent {
         @SerialName("executableCode") val executableCode: String? = null,
         @SerialName("codeLanguage") val codeLanguage: String? = null
     ) : AppStreamEvent()
+}
+
+internal fun AppStreamEvent.withRequestOrdinal(ordinal: Int): AppStreamEvent = when (this) {
+    is AppStreamEvent.Usage -> copy(usage = usage.copy(requestOrdinal = ordinal))
+    else -> this
 }

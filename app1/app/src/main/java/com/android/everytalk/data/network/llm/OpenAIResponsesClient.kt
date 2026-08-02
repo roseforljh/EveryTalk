@@ -71,17 +71,25 @@ object OpenAIResponsesClient {
             val url = "$baseUrl/v1/responses"
             Log.d(TAG, "Responses URL: $url")
 
-            val conversationInput = mutableListOf<JsonElement>()
+            val conversationInput = buildInitialResponsesInput(request).toMutableList()
+            var latestCompactionItemId = latestCompactionItemId(conversationInput)
+            var nativeContextManagementEnabled = shouldUseNativeContextManagement(request)
+            var resetNativeStateAfterCompletion = false
             var loopCount = 0
 
-            while (loopCount < MAX_TOOL_LOOPS) {
+            responseLoop@ while (loopCount < MAX_TOOL_LOOPS) {
                 loopCount++
                 Log.i(TAG, "循环 #$loopCount, 历史输入数: ${conversationInput.size}")
 
-                val payload = buildResponsesPayload(request, conversationInput)
+                val payload = buildResponsesPayloadFromInput(
+                    request = request,
+                    input = conversationInput,
+                    nativeContextManagementEnabled = nativeContextManagementEnabled,
+                )
 
                 var pendingToolCalls = mutableListOf<ResponsesToolCallInfo>()
                 var parseResult: ResponsesParseResult? = null
+                var retryWithoutNativeContextManagement = false
 
                 client.preparePost(url) {
                     contentType(ContentType.Application.Json)
@@ -91,6 +99,16 @@ object OpenAIResponsesClient {
                 }.execute { response ->
                     if (!response.status.isSuccess()) {
                         val errorBody = response.readErrorTextAtMost()
+                        if (
+                            nativeContextManagementEnabled &&
+                            isUnsupportedNativeContextManagement(response.status.value, errorBody.orEmpty())
+                        ) {
+                            Log.w(TAG, "服务端不支持 context_management，本轮关闭原生压缩后重试")
+                            nativeContextManagementEnabled = false
+                            resetNativeStateAfterCompletion = latestCompactionItemId != null
+                            retryWithoutNativeContextManagement = true
+                            return@execute
+                        }
                         val result = NetworkUtils.handleApiError(response.status, errorBody, "OpenAI-Responses")
                         terminalSent = true
                         send(result.error)
@@ -107,13 +125,23 @@ object OpenAIResponsesClient {
                             pendingToolCalls.add(toolInfo)
                         },
                         emitEvent = { event ->
-                            send(event)
+                            send(event.withRequestOrdinal(loopCount))
                             kotlinx.coroutines.yield()
                         }
                     )
                 }
 
                 if (terminalSent) return@channelFlow
+                if (retryWithoutNativeContextManagement) {
+                    loopCount--
+                    continue@responseLoop
+                }
+
+                val completedResponse = parseResult
+                    ?: throw IllegalStateException("Responses 流未返回可解析结果")
+                conversationInput.addAll(completedResponse.outputItems)
+                latestCompactionItemId = pruneBeforeLatestCompaction(conversationInput)
+                    ?: latestCompactionItemId
 
                 Log.i(TAG, "循环 #$loopCount 结束, pendingToolCalls=${pendingToolCalls.size}")
 
@@ -191,11 +219,49 @@ object OpenAIResponsesClient {
                     }
                 }
 
+                if (
+                    compactResponsesToolHistoryIfNeeded(
+                        history = conversationInput,
+                        management = request.contextManagement,
+                        usage = completedResponse.usage?.copy(requestOrdinal = loopCount),
+                    )
+                ) {
+                    send(AppStreamEvent.ExecutionStatusUpdate(TOOL_CONTEXT_COMPRESSION_STATUS))
+                }
+
                 pendingToolCalls.clear()
             }
 
             Log.i(TAG, "工具循环完成，发送 Finish")
             if (!terminalSent) {
+                val management = request.contextManagement
+                when {
+                    resetNativeStateAfterCompletion && management != null -> {
+                        send(
+                            AppStreamEvent.NativeContextCompaction(
+                                inputJson = "",
+                                configId = management.configId,
+                                provider = request.provider,
+                                channel = request.channel,
+                                model = request.model,
+                                reset = true,
+                            )
+                        )
+                    }
+                    latestCompactionItemId != null && management != null -> {
+                        send(
+                            AppStreamEvent.NativeContextCompaction(
+                                inputJson = JsonArray(conversationInput).toString(),
+                                configId = management.configId,
+                                provider = request.provider,
+                                channel = request.channel,
+                                model = request.model,
+                                compactionItemId = latestCompactionItemId,
+                                estimatedTokens = estimateToolLoopJsonTokens(JsonArray(conversationInput)),
+                            )
+                        )
+                    }
+                }
                 terminalSent = true
                 send(AppStreamEvent.Finish("stop"))
             }
@@ -221,12 +287,24 @@ object OpenAIResponsesClient {
     private data class ResponsesParseResult(
         val hasToolCalls: Boolean,
         val fullText: String,
-        val reasoningContent: String = ""
+        val reasoningContent: String = "",
+        val outputItems: List<JsonElement> = emptyList(),
+        val usage: TokenUsage? = null,
     )
 
     private fun buildResponsesPayload(
         request: ChatRequest,
         previousOutput: List<JsonElement>
+    ): String = buildResponsesPayloadFromInput(
+        request = request,
+        input = buildInitialResponsesInput(request) + previousOutput,
+        nativeContextManagementEnabled = shouldUseNativeContextManagement(request),
+    )
+
+    private fun buildResponsesPayloadFromInput(
+        request: ChatRequest,
+        input: List<JsonElement>,
+        nativeContextManagementEnabled: Boolean,
     ): String {
         val messagesWithSystemPrompt = SystemPromptInjector.smartInjectSystemPrompt(request.messages)
         val normalizedTools = PromptCachePolicy.normalizeTools(request.tools)
@@ -248,6 +326,20 @@ object OpenAIResponsesClient {
         return buildJsonObject {
             put("model", request.model)
             put("stream", true)
+            if (isOfficialOpenAIResponsesAddress(resolvedOpenAIApiAddress(request))) {
+                put("store", false)
+            }
+            if (nativeContextManagementEnabled) {
+                putJsonArray("context_management") {
+                    addJsonObject {
+                        put("type", "compaction")
+                        put(
+                            "compact_threshold",
+                            checkNotNull(request.contextManagement).compactThresholdTokens,
+                        )
+                    }
+                }
+            }
             promptCacheKey?.let { put("prompt_cache_key", it) }
 
             // instructions: 提取 system message
@@ -263,64 +355,9 @@ object OpenAIResponsesClient {
                 }
             }
 
-            // input: 非 system 消息 + 之前的工具输出
+            // input 已包含恢复的权威状态、新消息、完整模型输出项和工具结果。
             putJsonArray("input") {
-                messagesWithSystemPrompt.filter { it.role != "system" }.forEach { message ->
-                    when (message) {
-                        is SimpleTextApiMessage -> {
-                            addJsonObject {
-                                put("role", message.role)
-                                put("content", message.content)
-                            }
-                        }
-                        is PartsApiMessage -> {
-                            val parts = message.parts.filterNot {
-                                it is ApiContentPart.FileUri && it.mimeType == "qwen-file-id"
-                            }
-                            val allText = parts.all { it is ApiContentPart.Text }
-                            if (allText) {
-                                addJsonObject {
-                                    put("role", message.role)
-                                    put("content", parts.joinToString("\n") {
-                                        (it as ApiContentPart.Text).text
-                                    })
-                                }
-                            } else {
-                                addJsonObject {
-                                    put("role", message.role)
-                                    putJsonArray("content") {
-                                        parts.forEach { part ->
-                                            when (part) {
-                                                is ApiContentPart.Text -> {
-                                                    addJsonObject {
-                                                        put("type", "input_text")
-                                                        put("text", part.text)
-                                                    }
-                                                }
-                                                is ApiContentPart.InlineData -> {
-                                                    val dataUri = "data:${part.mimeType};base64,${part.base64Data}"
-                                                    addJsonObject {
-                                                        put("type", "input_image")
-                                                        put("image_url", dataUri)
-                                                    }
-                                                }
-                                                is ApiContentPart.FileUri -> {
-                                                    addJsonObject {
-                                                        put("type", "input_text")
-                                                        put("text", "[Attachment: ${part.uri}]")
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // 追加之前的工具调用输出
-                previousOutput.forEach { add(it) }
+                input.forEach(::add)
             }
 
             // 参数
@@ -375,6 +412,75 @@ object OpenAIResponsesClient {
         }.toString()
     }
 
+    private fun buildInitialResponsesInput(request: ChatRequest): List<JsonElement> = buildList {
+        restoredNativeInput(request)?.let(::addAll)
+        val messagesWithSystemPrompt = SystemPromptInjector.smartInjectSystemPrompt(request.messages)
+        messagesWithSystemPrompt
+            .filterNot { it.role.equals("system", ignoreCase = true) }
+            .mapTo(this) { message -> message.toResponsesInputItem() }
+    }
+
+    private fun restoredNativeInput(request: ChatRequest): List<JsonElement>? {
+        if (!shouldUseNativeContextManagement(request)) return null
+        val management = request.contextManagement ?: return null
+        val state = management.restoredState ?: return null
+        if (
+            state.configId != management.configId ||
+            !state.provider.equals(request.provider, ignoreCase = true) ||
+            !state.channel.equals(request.channel, ignoreCase = true) ||
+            !state.model.equals(request.model, ignoreCase = true)
+        ) {
+            return null
+        }
+        val inputJson = state.openAiResponsesInputJson?.takeIf { it.isNotBlank() } ?: return null
+        return runCatching { Json.parseToJsonElement(inputJson) as? JsonArray }
+            .getOrNull()
+            ?.toList()
+    }
+
+    private fun com.android.everytalk.data.DataClass.AbstractApiMessage.toResponsesInputItem(): JsonElement =
+        when (this) {
+            is SimpleTextApiMessage -> buildJsonObject {
+                put("role", role)
+                put("content", content)
+            }
+            is PartsApiMessage -> {
+                val supportedParts = parts.filterNot {
+                    it is ApiContentPart.FileUri && it.mimeType == "qwen-file-id"
+                }
+                if (supportedParts.all { it is ApiContentPart.Text }) {
+                    buildJsonObject {
+                        put("role", role)
+                        put("content", supportedParts.joinToString("\n") {
+                            (it as ApiContentPart.Text).text
+                        })
+                    }
+                } else {
+                    buildJsonObject {
+                        put("role", role)
+                        putJsonArray("content") {
+                            supportedParts.forEach { part ->
+                                when (part) {
+                                    is ApiContentPart.Text -> addJsonObject {
+                                        put("type", "input_text")
+                                        put("text", part.text)
+                                    }
+                                    is ApiContentPart.InlineData -> addJsonObject {
+                                        put("type", "input_image")
+                                        put("image_url", "data:${part.mimeType};base64,${part.base64Data}")
+                                    }
+                                    is ApiContentPart.FileUri -> addJsonObject {
+                                        put("type", "input_text")
+                                        put("text", "[Attachment: ${part.uri}]")
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
     private suspend fun parseResponsesSSEStream(
         channel: ByteReadChannel,
         onToolCall: (ResponsesToolCallInfo) -> Unit,
@@ -385,6 +491,9 @@ object OpenAIResponsesClient {
         val fullText = StringBuilder()
         val fullReasoningContent = StringBuilder()
         var hasToolCalls = false
+        val streamedOutputItems = linkedMapOf<String, JsonElement>()
+        var completedOutputItems: List<JsonElement>? = null
+        var finalUsage: TokenUsage? = null
 
         // 聚合 function_call 参数
         val toolCallsMap = mutableMapOf<String, Triple<String, String, StringBuilder>>() // callId -> (callId, name, args)
@@ -453,6 +562,10 @@ object OpenAIResponsesClient {
                                     }
                                     "response.output_item.added" -> {
                                         val item = event["item"]?.jsonObject
+                                        val outputIndex = event["output_index"]?.jsonPrimitive?.intOrNull
+                                        if (item != null) {
+                                            streamedOutputItems[responseOutputItemKey(item, outputIndex)] = item
+                                        }
                                         val itemType = item?.get("type")?.jsonPrimitive?.contentOrNull
                                         if (itemType == "function_call") {
                                             val callId = item["call_id"]?.jsonPrimitive?.contentOrNull
@@ -462,6 +575,12 @@ object OpenAIResponsesClient {
                                                 toolCallsMap[callId] = Triple(callId, name, StringBuilder())
                                             }
                                             hasToolCalls = true
+                                        } else if (itemType == "compaction") {
+                                            emitEvent(
+                                                AppStreamEvent.ExecutionStatusUpdate(
+                                                    TOOL_CONTEXT_COMPRESSION_STATUS
+                                                )
+                                            )
                                         } else if (itemType == "reasoning") {
                                             // 推理输出项开始
                                             val summary = item["summary"]
@@ -477,10 +596,59 @@ object OpenAIResponsesClient {
                                             }
                                         }
                                     }
+                                    "response.output_item.done" -> {
+                                        val item = event["item"] as? JsonObject
+                                        val outputIndex = event["output_index"]?.jsonPrimitive?.intOrNull
+                                        if (item != null) {
+                                            streamedOutputItems[responseOutputItemKey(item, outputIndex)] = item
+                                            val itemType = item["type"]?.jsonPrimitive?.contentOrNull
+                                            if (itemType == "compaction") {
+                                                emitEvent(
+                                                    AppStreamEvent.ExecutionStatusUpdate(
+                                                        TOOL_CONTEXT_COMPRESSION_STATUS
+                                                    )
+                                                )
+                                            }
+                                            if (itemType == "function_call") {
+                                                val callId = item["call_id"]?.jsonPrimitive?.contentOrNull
+                                                    ?: item["id"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                                                val name = item["name"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                                                val arguments = item["arguments"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                                                if (callId.isNotBlank()) {
+                                                    toolCallsMap[callId] = Triple(
+                                                        callId,
+                                                        name,
+                                                        StringBuilder(arguments),
+                                                    )
+                                                    hasToolCalls = true
+                                                }
+                                            }
+                                        }
+                                    }
                                     "response.completed" -> {
                                         val responseObject = event["response"] as? JsonObject
+                                        completedOutputItems = (responseObject?.get("output") as? JsonArray)?.toList()
+                                        completedOutputItems.orEmpty().forEach { outputItem ->
+                                            val item = outputItem as? JsonObject ?: return@forEach
+                                            if (item["type"]?.jsonPrimitive?.contentOrNull != "function_call") {
+                                                return@forEach
+                                            }
+                                            val callId = item["call_id"]?.jsonPrimitive?.contentOrNull
+                                                ?: item["id"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                                            if (callId.isNotBlank()) {
+                                                toolCallsMap[callId] = Triple(
+                                                    callId,
+                                                    item["name"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                                                    StringBuilder(
+                                                        item["arguments"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                                                    ),
+                                                )
+                                                hasToolCalls = true
+                                            }
+                                        }
                                         val usage = responseObject?.get("usage") as? JsonObject
-                                        usage?.let(::parseOpenAIResponsesTokenUsage)?.let { parsedUsage ->
+                                        finalUsage = usage?.let(::parseOpenAIResponsesTokenUsage)
+                                        finalUsage?.let { parsedUsage ->
                                             emitEvent(AppStreamEvent.Usage(parsedUsage))
                                         }
                                     }
@@ -547,12 +715,42 @@ object OpenAIResponsesClient {
             emitEvent(AppStreamEvent.ContentFinal(completedText, null, null))
         }
 
+        val canonicalOutput = (
+            completedOutputItems?.takeIf { it.isNotEmpty() }
+                ?: streamedOutputItems.values.toList()
+            ).toMutableList()
+        toolCallsMap.values.forEach { (callId, name, arguments) ->
+            val alreadyPresent = canonicalOutput.any { item ->
+                val itemObject = item as? JsonObject
+                itemObject?.get("type")?.jsonPrimitive?.contentOrNull == "function_call" &&
+                    (
+                        itemObject["call_id"]?.jsonPrimitive?.contentOrNull == callId ||
+                            itemObject["id"]?.jsonPrimitive?.contentOrNull == callId
+                        )
+            }
+            if (!alreadyPresent && name.isNotBlank()) {
+                canonicalOutput += buildJsonObject {
+                    put("type", "function_call")
+                    put("call_id", callId)
+                    put("name", name)
+                    put("arguments", arguments.toString())
+                }
+            }
+        }
+
         return ResponsesParseResult(
             hasToolCalls = hasToolCalls,
             fullText = completedText,
-            reasoningContent = completedReasoning
+            reasoningContent = completedReasoning,
+            outputItems = canonicalOutput,
+            usage = finalUsage,
         )
     }
+
+    private fun responseOutputItemKey(item: JsonObject, outputIndex: Int?): String =
+        item["id"]?.jsonPrimitive?.contentOrNull
+            ?: item["call_id"]?.jsonPrimitive?.contentOrNull
+            ?: "output:${outputIndex ?: item.hashCode()}"
 
     private fun parseOpenAIResponsesTokenUsage(usage: JsonObject): TokenUsage? {
         val inputDetails = usage["input_tokens_details"] as? JsonObject
@@ -571,6 +769,37 @@ object OpenAIResponsesClient {
             it.inputTokens != null || it.outputTokens != null || it.reasoningTokens != null ||
                 it.cachedInputTokens != null || it.cacheWriteTokens != null || it.totalTokens != null
         }
+    }
+
+    private fun shouldUseNativeContextManagement(request: ChatRequest): Boolean =
+        request.channel.contains("codex", ignoreCase = true) &&
+            request.contextManagement?.autoCompressionEnabled == true &&
+            request.contextManagement.compactThresholdTokens > 0L &&
+            isOfficialOpenAIResponsesAddress(resolvedOpenAIApiAddress(request))
+
+    private fun isUnsupportedNativeContextManagement(status: Int, errorBody: String): Boolean {
+        if (status != 400 && status != 422) return false
+        val normalized = errorBody.lowercase()
+        if (!normalized.contains("context_management")) return false
+        return listOf("unknown", "unsupported", "unrecognized", "invalid parameter", "extra inputs")
+            .any(normalized::contains)
+    }
+
+    private fun latestCompactionItemId(input: List<JsonElement>): String? {
+        val item = input.asReversed().firstOrNull { element ->
+            (element as? JsonObject)?.get("type")?.jsonPrimitive?.contentOrNull == "compaction"
+        } as? JsonObject ?: return null
+        return item["id"]?.jsonPrimitive?.contentOrNull
+            ?: "compaction:${item.hashCode()}"
+    }
+
+    private fun pruneBeforeLatestCompaction(input: MutableList<JsonElement>): String? {
+        val index = input.indexOfLast { element ->
+            (element as? JsonObject)?.get("type")?.jsonPrimitive?.contentOrNull == "compaction"
+        }
+        if (index < 0) return null
+        repeat(index) { input.removeAt(0) }
+        return latestCompactionItemId(input)
     }
 
     @Suppress("UNCHECKED_CAST")
@@ -595,4 +824,12 @@ object OpenAIResponsesClient {
         request.apiAddress?.trim()?.takeIf { it.isNotEmpty() }
             ?: com.android.everytalk.BuildConfig.DEFAULT_OPENAI_API_BASE_URL.trim().takeIf { it.isNotEmpty() }
             ?: "https://api.openai.com"
+}
+
+internal fun isOfficialOpenAIResponsesAddress(apiAddress: String?): Boolean {
+    val resolved = apiAddress?.trim()?.takeIf { it.isNotEmpty() }
+        ?: com.android.everytalk.BuildConfig.DEFAULT_OPENAI_API_BASE_URL.trim().takeIf { it.isNotEmpty() }
+        ?: "https://api.openai.com"
+    return runCatching { Url(resolved).host.equals("api.openai.com", ignoreCase = true) }
+        .getOrDefault(false)
 }

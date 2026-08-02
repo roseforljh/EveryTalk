@@ -87,6 +87,7 @@ object OpenAIDirectClient {
             val conversationHistory = mutableListOf<JsonObject>()
             var currentRequest = effectiveRequest
             var loopCount = 0
+            var latestActiveUsage: TokenUsage? = null
 
             while (loopCount < MAX_TOOL_LOOPS) {
                 loopCount++
@@ -144,20 +145,24 @@ object OpenAIDirectClient {
                             pendingToolCalls.add(toolInfo)
                         },
                         emitEvent = { event ->
-                            when (event) {
+                            val orderedEvent = event.withRequestOrdinal(loopCount)
+                            if (orderedEvent is AppStreamEvent.Usage) {
+                                latestActiveUsage = orderedEvent.usage
+                            }
+                            when (orderedEvent) {
                                 is AppStreamEvent.Content -> {
                                     hasContent = true
-                                    Log.d(TAG, "收到内容: ${event.text.take(50)}...")
+                                    Log.d(TAG, "收到内容: ${orderedEvent.text.take(50)}...")
                                 }
                                 is AppStreamEvent.ToolCall -> {
-                                    Log.d(TAG, "流中收到 ToolCall: ${event.name}")
+                                    Log.d(TAG, "流中收到 ToolCall: ${orderedEvent.name}")
                                 }
                                 is AppStreamEvent.Error -> {
-                                    Log.e(TAG, "收到错误事件: ${event.message}")
+                                    Log.e(TAG, "收到错误事件: ${orderedEvent.message}")
                                 }
                                 else -> {}
                             }
-                            send(event)
+                            send(orderedEvent)
                             kotlinx.coroutines.yield()
                         }
                     )
@@ -250,6 +255,15 @@ object OpenAIDirectClient {
                             put("content", "Error: ${e.message ?: "Unknown error"}")
                         })
                     }
+                }
+                if (
+                    compactOpenAIChatToolHistoryIfNeeded(
+                        history = conversationHistory,
+                        management = currentRequest.contextManagement,
+                        usage = latestActiveUsage,
+                    )
+                ) {
+                    send(AppStreamEvent.ExecutionStatusUpdate(TOOL_CONTEXT_COMPRESSION_STATUS))
                 }
                 pendingToolCalls.clear()
             }

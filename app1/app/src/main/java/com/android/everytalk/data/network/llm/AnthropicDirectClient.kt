@@ -85,6 +85,7 @@ object AnthropicDirectClient {
         try {
             val url = resolveMessagesUrl(request.apiAddress)
             val continuationMessages = mutableListOf<JsonObject>()
+            var latestActiveUsage: TokenUsage? = null
 
             repeat(MAX_TOOL_LOOPS) { loopIndex ->
                 val payload = buildAnthropicPayload(request, continuationMessages)
@@ -110,7 +111,11 @@ object AnthropicDirectClient {
                     }
 
                     parseResult = parseAnthropicSse(response.bodyAsChannel()) { event ->
-                        send(event)
+                        val orderedEvent = event.withRequestOrdinal(loopIndex + 1)
+                        if (orderedEvent is AppStreamEvent.Usage) {
+                            latestActiveUsage = orderedEvent.usage
+                        }
+                        send(orderedEvent)
                         yield()
                     }
                 }
@@ -179,6 +184,15 @@ object AnthropicDirectClient {
                 continuationMessages += buildJsonObject {
                     put("role", "user")
                     put("content", toolResults)
+                }
+                if (
+                    compactAnthropicToolHistoryIfNeeded(
+                        history = continuationMessages,
+                        management = request.contextManagement,
+                        usage = latestActiveUsage,
+                    )
+                ) {
+                    send(AppStreamEvent.ExecutionStatusUpdate(TOOL_CONTEXT_COMPRESSION_STATUS))
                 }
                 Log.d(TAG, "完成 Anthropic 工具循环 ${loopIndex + 1}")
             }

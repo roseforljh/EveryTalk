@@ -70,14 +70,14 @@ object DocumentProcessor {
                     effectiveMime.contains("spreadsheetml") -> extractFromExcel(context, uri)
                     else -> {
                         Log.w(TAG, "不支持的文档类型: $effectiveMime")
-                        null
+                        throw IOException("不支持的文档类型: $effectiveMime")
                     }
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 Log.e(TAG, "文档提取失败", e)
-                null
+                throw DocumentExtractionException(e.message ?: "文档提取失败", e)
             }
         }
     }
@@ -105,7 +105,9 @@ object DocumentProcessor {
                 val read = reader.read(buffer)
                 if (read < 0) break
                 val remaining = maxOutputChars - result.length
-                if (remaining > 0) result.append(buffer, 0, minOf(read, remaining))
+                if (remaining <= 0) throw OutputLimitExceededException(maxOutputChars)
+                result.append(buffer, 0, minOf(read, remaining))
+                if (read > remaining) throw OutputLimitExceededException(maxOutputChars)
             }
         }
         return result.toString()
@@ -131,6 +133,7 @@ object DocumentProcessor {
                 currentCoroutineContext().ensureActive()
                 val writer = LimitedStringWriter(MAX_OUTPUT_CHARS)
                 PDFTextStripper().apply { sortByPosition = true }.writeText(document, writer)
+                if (writer.outputLimitExceeded) throw OutputLimitExceededException(MAX_OUTPUT_CHARS)
                 currentCoroutineContext().ensureActive()
                 writer.toString()
             }
@@ -187,10 +190,13 @@ object DocumentProcessor {
             }
             eventType = xpp.next()
         }
+        if (eventType != XmlPullParser.END_DOCUMENT) throw OutputLimitExceededException(MAX_OUTPUT_CHARS)
         return sb.toString().trim()
     }
 
+    internal class DocumentExtractionException(message: String, cause: Throwable) : IOException(message, cause)
     internal class InputLimitExceededException(maxBytes: Long) : IOException("文档超过 ${maxBytes} 字节上限")
+    internal class OutputLimitExceededException(maxChars: Int) : IOException("文档文本超过 ${maxChars} 字符本地处理上限")
 
     internal class BoundedInputStream(
         input: InputStream,
@@ -229,10 +235,13 @@ object DocumentProcessor {
 
     private class LimitedStringWriter(private val maxChars: Int) : Writer() {
         private val content = StringBuilder(minOf(maxChars, 8192))
+        var outputLimitExceeded: Boolean = false
+            private set
 
         override fun write(buffer: CharArray, offset: Int, length: Int) {
             val writable = minOf(length, maxChars - content.length)
             if (writable > 0) content.append(buffer, offset, writable)
+            if (writable < length) outputLimitExceeded = true
         }
 
         override fun flush() = Unit
