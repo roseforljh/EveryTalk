@@ -3,11 +3,13 @@ package com.android.everytalk.data.network
 import android.app.Application
 import com.android.everytalk.data.DataClass.ApiContentPart
 import com.android.everytalk.data.DataClass.ChatRequest
+import com.android.everytalk.data.DataClass.ContextCompressionState
 import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.DataClass.PartsApiMessage
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.DataClass.ThinkingConfig
 import com.android.everytalk.data.DataClass.ReasoningMode
+import com.android.everytalk.data.DataClass.RequestContextManagement
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -16,16 +18,19 @@ import io.ktor.http.ContentType
 import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.content.TextContent
 import io.ktor.utils.io.ByteReadChannel
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -147,6 +152,64 @@ class AnthropicDirectClientTest {
     }
 
     @Test
+    fun `sse parser preserves compaction block and encrypted metadata`() = runTest {
+        val sse = buildString {
+            event("""{"type":"content_block_start","index":0,"content_block":{"type":"compaction","content":null,"encrypted_content":null}}""")
+            event("""{"type":"content_block_delta","index":0,"delta":{"type":"compaction_delta","content":"继续任务所需摘要","encrypted_content":"opaque-state"}}""")
+            event("""{"type":"message_delta","delta":{"stop_reason":"end_turn"}}""")
+            event("""{"type":"message_stop"}""")
+        }
+
+        val result = AnthropicDirectClient.parseAnthropicSse(ByteReadChannel(sse.toByteArray())) {}
+
+        val compaction = result.assistantContent.single().jsonObject
+        assertEquals("compaction", compaction.getValue("type").jsonPrimitive.content)
+        assertEquals("继续任务所需摘要", compaction.getValue("content").jsonPrimitive.content)
+        assertEquals("opaque-state", compaction.getValue("encrypted_content").jsonPrimitive.content)
+    }
+
+    @Test
+    fun `null compaction content does not replace authoritative history`() = runTest {
+        val body = buildString {
+            event("""{"type":"content_block_start","index":0,"content_block":{"type":"compaction","content":null,"encrypted_content":null}}""")
+            event("""{"type":"content_block_start","index":1,"content_block":{"type":"text","text":"继续回答"}}""")
+            event("""{"type":"message_delta","delta":{"stop_reason":"end_turn"}}""")
+            event("""{"type":"message_stop"}""")
+        }
+        val engine = MockEngine {
+            respond(
+                content = ByteReadChannel(body.toByteArray()),
+                status = HttpStatusCode.OK,
+                headers = Headers.build { append(HttpHeaders.ContentType, ContentType.Text.EventStream.toString()) },
+            )
+        }
+        val client = HttpClient(engine) {
+            expectSuccess = false
+            install(HttpTimeout)
+        }
+
+        try {
+            val events = AnthropicDirectClient.streamChatDirect(
+                client,
+                request(
+                    contextManagement = RequestContextManagement(
+                        configId = "config-1",
+                        maxContextTokens = 200_000,
+                        reservedOutputTokens = 8_192,
+                        compactThresholdTokens = 180_000,
+                        autoCompressionEnabled = true,
+                    ),
+                ),
+            ).toList()
+
+            assertTrue(events.none { it is AppStreamEvent.NativeContextCompaction })
+            assertEquals("继续回答", events.filterIsInstance<AppStreamEvent.ContentFinal>().single().text)
+        } finally {
+            client.close()
+        }
+    }
+
+    @Test
     fun `stream request uses official headers and emits one terminal event`() = runTest {
         var capturedUrl: String? = null
         var capturedApiKey: String? = null
@@ -186,6 +249,430 @@ class AnthropicDirectClientTest {
     }
 
     @Test
+    fun `official request enables native compaction with configured threshold`() = runTest {
+        var capturedBeta: String? = null
+        var capturedPayload: String? = null
+        val body = buildString {
+            event("""{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"完成"}}""")
+            event("""{"type":"message_delta","delta":{"stop_reason":"end_turn"}}""")
+            event("""{"type":"message_stop"}""")
+        }
+        val engine = MockEngine { requestData ->
+            capturedBeta = requestData.headers["anthropic-beta"]
+            capturedPayload = (requestData.body as TextContent).text
+            respond(
+                content = ByteReadChannel(body.toByteArray()),
+                status = HttpStatusCode.OK,
+                headers = Headers.build { append(HttpHeaders.ContentType, ContentType.Text.EventStream.toString()) },
+            )
+        }
+        val client = HttpClient(engine) {
+            expectSuccess = false
+            install(HttpTimeout)
+        }
+
+        try {
+            AnthropicDirectClient.streamChatDirect(
+                client,
+                request(
+                    contextManagement = RequestContextManagement(
+                        configId = "config-1",
+                        maxContextTokens = 200_000,
+                        reservedOutputTokens = 8_192,
+                        compactThresholdTokens = 180_000,
+                        autoCompressionEnabled = true,
+                    ),
+                ),
+            ).toList()
+
+            assertEquals("compact-2026-01-12", capturedBeta)
+            val contextManagement = Json.parseToJsonElement(checkNotNull(capturedPayload))
+                .jsonObject.getValue("context_management").jsonObject
+            val edit = contextManagement.getValue("edits").jsonArray.single().jsonObject
+            assertEquals("compact_20260112", edit.getValue("type").jsonPrimitive.content)
+            assertEquals(
+                180_000L,
+                edit.getValue("trigger").jsonObject.getValue("value").jsonPrimitive.content.toLong(),
+            )
+        } finally {
+            client.close()
+        }
+    }
+
+    @Test
+    fun `native compaction emits canonical anthropic messages and active context size`() = runTest {
+        val body = buildString {
+            event("""{"type":"message_start","message":{"usage":{"input_tokens":23000,"output_tokens":0}}}""")
+            event("""{"type":"content_block_start","index":0,"content_block":{"type":"compaction","content":null,"encrypted_content":null}}""")
+            event("""{"type":"content_block_delta","index":0,"delta":{"type":"compaction_delta","content":"权威摘要","encrypted_content":"opaque-state"}}""")
+            event("""{"type":"content_block_start","index":1,"content_block":{"type":"text","text":"完成"}}""")
+            event(
+                """{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1000,"iterations":[{"type":"compaction","input_tokens":180000,"output_tokens":3500,"cache_read_input_tokens":10000,"cache_creation_input_tokens":2000},{"type":"message","input_tokens":23000,"output_tokens":1000,"cache_read_input_tokens":5000,"cache_creation_input_tokens":0}]}}""",
+            )
+            event("""{"type":"message_stop"}""")
+        }
+        val engine = MockEngine {
+            respond(
+                content = ByteReadChannel(body.toByteArray()),
+                status = HttpStatusCode.OK,
+                headers = Headers.build { append(HttpHeaders.ContentType, ContentType.Text.EventStream.toString()) },
+            )
+        }
+        val client = HttpClient(engine) {
+            expectSuccess = false
+            install(HttpTimeout)
+        }
+
+        try {
+            val events = AnthropicDirectClient.streamChatDirect(
+                client,
+                request(
+                    contextManagement = RequestContextManagement(
+                        configId = "config-1",
+                        maxContextTokens = 200_000,
+                        reservedOutputTokens = 8_192,
+                        compactThresholdTokens = 180_000,
+                        autoCompressionEnabled = true,
+                    ),
+                ),
+            ).toList()
+
+            val native = events.filterIsInstance<AppStreamEvent.NativeContextCompaction>().single()
+            assertEquals(24_000L, native.estimatedTokens)
+            val billedUsage = events.filterIsInstance<AppStreamEvent.Usage>().last().usage
+            assertEquals(203_000L, billedUsage.inputTokens)
+            assertEquals(4_500L, billedUsage.outputTokens)
+            assertEquals(15_000L, billedUsage.cachedInputTokens)
+            assertEquals(2_000L, billedUsage.cacheWriteTokens)
+            assertEquals(207_500L, billedUsage.totalTokens)
+            val canonicalMessage = Json.parseToJsonElement(native.inputJson).jsonArray.single().jsonObject
+            assertEquals("assistant", canonicalMessage.getValue("role").jsonPrimitive.content)
+            val content = canonicalMessage.getValue("content").jsonArray
+            assertEquals("compaction", content.first().jsonObject.getValue("type").jsonPrimitive.content)
+            assertEquals("opaque-state", content.first().jsonObject.getValue("encrypted_content").jsonPrimitive.content)
+            assertEquals("完成", content.last().jsonObject.getValue("text").jsonPrimitive.content)
+        } finally {
+            client.close()
+        }
+    }
+
+    @Test
+    fun `payload restores anthropic compaction window and appends only uncovered messages`() {
+        val canonical = """[{"role":"assistant","content":[{"type":"compaction","content":"权威摘要","encrypted_content":"opaque-state"}]}]"""
+        val restoredState = ContextCompressionState(
+            configId = "config-1",
+            provider = "Anthropic",
+            channel = "Anthropic",
+            model = "claude-sonnet-4-5",
+            windowId = "window-1",
+            anthropicMessagesJson = canonical,
+            anthropicThroughMessageId = "assistant-old",
+            anthropicEstimatedTokens = 24_000,
+        )
+        val payload = Json.parseToJsonElement(
+            AnthropicDirectClient.buildAnthropicPayload(
+                request(
+                    messages = listOf(
+                        SimpleTextApiMessage(id = "user-old", role = "user", content = "旧问题"),
+                        SimpleTextApiMessage(id = "assistant-old", role = "assistant", content = "旧回答"),
+                        SimpleTextApiMessage(id = "user-new", role = "user", content = "新问题"),
+                    ),
+                    contextManagement = RequestContextManagement(
+                        configId = "config-1",
+                        maxContextTokens = 200_000,
+                        reservedOutputTokens = 8_192,
+                        compactThresholdTokens = 180_000,
+                        autoCompressionEnabled = true,
+                        restoredState = restoredState,
+                    ),
+                ),
+            ),
+        ).jsonObject
+
+        val messages = payload.getValue("messages").jsonArray
+        assertEquals(2, messages.size)
+        assertEquals(
+            "compaction",
+            messages.first().jsonObject.getValue("content").jsonArray
+                .first().jsonObject.getValue("type").jsonPrimitive.content,
+        )
+        assertEquals(
+            "新问题",
+            messages.last().jsonObject.getValue("content").jsonArray
+                .single().jsonObject.getValue("text").jsonPrimitive.content,
+        )
+    }
+
+    @Test
+    fun `unsupported native compaction retries same turn without beta fields`() = runTest {
+        val payloads = mutableListOf<String>()
+        val betaHeaders = mutableListOf<String?>()
+        var requestCount = 0
+        val successBody = buildString {
+            event("""{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"降级成功"}}""")
+            event("""{"type":"message_delta","delta":{"stop_reason":"end_turn"}}""")
+            event("""{"type":"message_stop"}""")
+        }
+        val engine = MockEngine { requestData ->
+            requestCount++
+            payloads += (requestData.body as TextContent).text
+            betaHeaders += requestData.headers["anthropic-beta"]
+            if (requestCount == 1) {
+                respond(
+                    content = ByteReadChannel(
+                        """{"type":"error","error":{"type":"invalid_request_error","message":"context_management: Extra inputs are not permitted"}}"""
+                            .toByteArray(),
+                    ),
+                    status = HttpStatusCode.BadRequest,
+                    headers = Headers.build { append(HttpHeaders.ContentType, ContentType.Application.Json.toString()) },
+                )
+            } else {
+                respond(
+                    content = ByteReadChannel(successBody.toByteArray()),
+                    status = HttpStatusCode.OK,
+                    headers = Headers.build { append(HttpHeaders.ContentType, ContentType.Text.EventStream.toString()) },
+                )
+            }
+        }
+        val client = HttpClient(engine) {
+            expectSuccess = false
+            install(HttpTimeout)
+        }
+
+        try {
+            val events = AnthropicDirectClient.streamChatDirect(
+                client,
+                request(
+                    model = "claude-fallback-test",
+                    contextManagement = RequestContextManagement(
+                        configId = "config-1",
+                        maxContextTokens = 200_000,
+                        reservedOutputTokens = 8_192,
+                        compactThresholdTokens = 180_000,
+                        autoCompressionEnabled = true,
+                    ),
+                ),
+            ).toList()
+
+            assertEquals(2, requestCount)
+            assertEquals("compact-2026-01-12", betaHeaders.first())
+            assertNull(betaHeaders.last())
+            assertTrue(Json.parseToJsonElement(payloads.first()).jsonObject.containsKey("context_management"))
+            assertFalse(Json.parseToJsonElement(payloads.last()).jsonObject.containsKey("context_management"))
+            assertTrue(events.none { it is AppStreamEvent.Error })
+            assertEquals("降级成功", events.filterIsInstance<AppStreamEvent.ContentFinal>().single().text)
+        } finally {
+            client.close()
+        }
+    }
+
+    @Test
+    fun `restored compaction survives unsupported trigger retry then resets native state`() = runTest {
+        val payloads = mutableListOf<String>()
+        val betaHeaders = mutableListOf<String?>()
+        var requestCount = 0
+        val canonical = """[{"role":"assistant","content":[{"type":"compaction","content":"权威摘要","encrypted_content":"opaque-state"}]}]"""
+        val successBody = buildString {
+            event("""{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"安全降级"}}""")
+            event("""{"type":"message_delta","delta":{"stop_reason":"end_turn"}}""")
+            event("""{"type":"message_stop"}""")
+        }
+        val engine = MockEngine { requestData ->
+            requestCount++
+            payloads += (requestData.body as TextContent).text
+            betaHeaders += requestData.headers["anthropic-beta"]
+            if (requestCount == 1) {
+                respond(
+                    content = ByteReadChannel(
+                        """{"type":"error","error":{"type":"invalid_request_error","message":"context_management is unsupported"}}"""
+                            .toByteArray(),
+                    ),
+                    status = HttpStatusCode.UnprocessableEntity,
+                    headers = Headers.build { append(HttpHeaders.ContentType, ContentType.Application.Json.toString()) },
+                )
+            } else {
+                respond(
+                    content = ByteReadChannel(successBody.toByteArray()),
+                    status = HttpStatusCode.OK,
+                    headers = Headers.build { append(HttpHeaders.ContentType, ContentType.Text.EventStream.toString()) },
+                )
+            }
+        }
+        val client = HttpClient(engine) {
+            expectSuccess = false
+            install(HttpTimeout)
+        }
+        val restoredState = ContextCompressionState(
+            configId = "config-1",
+            provider = "Anthropic",
+            channel = "Anthropic",
+            model = "claude-restored-fallback-test",
+            windowId = "window-1",
+            anthropicMessagesJson = canonical,
+            anthropicThroughMessageId = "assistant-old",
+            anthropicEstimatedTokens = 24_000,
+        )
+        val chatRequest = request(
+            model = "claude-restored-fallback-test",
+            messages = listOf(
+                SimpleTextApiMessage(id = "assistant-old", role = "assistant", content = "旧回答"),
+                SimpleTextApiMessage(id = "user-new", role = "user", content = "新问题"),
+            ),
+            contextManagement = RequestContextManagement(
+                configId = "config-1",
+                maxContextTokens = 200_000,
+                reservedOutputTokens = 8_192,
+                compactThresholdTokens = 180_000,
+                autoCompressionEnabled = true,
+                restoredState = restoredState,
+            ),
+        )
+
+        try {
+            val events = AnthropicDirectClient.streamChatDirect(
+                client,
+                chatRequest,
+            ).toList()
+
+            assertEquals(2, requestCount)
+            assertEquals(listOf("compact-2026-01-12", "compact-2026-01-12"), betaHeaders)
+            assertTrue(Json.parseToJsonElement(payloads.first()).jsonObject.containsKey("context_management"))
+            val retryPayload = Json.parseToJsonElement(payloads.last()).jsonObject
+            assertFalse(retryPayload.containsKey("context_management"))
+            assertEquals(
+                "compaction",
+                retryPayload.getValue("messages").jsonArray.first().jsonObject
+                    .getValue("content").jsonArray.first().jsonObject
+                    .getValue("type").jsonPrimitive.content,
+            )
+            val reset = events.filterIsInstance<AppStreamEvent.NativeContextCompaction>().single()
+            assertTrue(reset.reset)
+            assertEquals(NativeContextCompactionKind.ANTHROPIC_MESSAGES, reset.kind)
+            assertEquals("安全降级", events.filterIsInstance<AppStreamEvent.ContentFinal>().single().text)
+
+            val cachedFallbackEvents = AnthropicDirectClient.streamChatDirect(client, chatRequest).toList()
+            assertEquals(3, requestCount)
+            assertEquals("compact-2026-01-12", betaHeaders.last())
+            assertFalse(Json.parseToJsonElement(payloads.last()).jsonObject.containsKey("context_management"))
+            assertTrue(cachedFallbackEvents.filterIsInstance<AppStreamEvent.NativeContextCompaction>().single().reset)
+        } finally {
+            client.close()
+        }
+    }
+
+    @Test
+    fun `compaction tool loop carries only canonical compacted history`() = runTest {
+        val payloads = mutableListOf<String>()
+        var requestCount = 0
+        val firstBody = buildString {
+            event("""{"type":"content_block_start","index":0,"content_block":{"type":"compaction","content":"权威摘要","encrypted_content":"opaque-state"}}""")
+            event("""{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tool-1","name":"lookup","input":{}}}""")
+            event("""{"type":"message_delta","delta":{"stop_reason":"tool_use"}}""")
+            event("""{"type":"message_stop"}""")
+        }
+        val secondBody = buildString {
+            event("""{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"工具完成"}}""")
+            event("""{"type":"message_delta","delta":{"stop_reason":"end_turn"}}""")
+            event("""{"type":"message_stop"}""")
+        }
+        val engine = MockEngine { requestData ->
+            payloads += (requestData.body as TextContent).text
+            requestCount++
+            respond(
+                content = ByteReadChannel((if (requestCount == 1) firstBody else secondBody).toByteArray()),
+                status = HttpStatusCode.OK,
+                headers = Headers.build { append(HttpHeaders.ContentType, ContentType.Text.EventStream.toString()) },
+            )
+        }
+        val client = HttpClient(engine) {
+            expectSuccess = false
+            install(HttpTimeout)
+        }
+        AnthropicDirectClient.setMcpToolExecutor { _, _, _ -> JsonPrimitive("工具结果") }
+
+        try {
+            val events = AnthropicDirectClient.streamChatDirect(
+                client,
+                request(
+                    contextManagement = RequestContextManagement(
+                        configId = "config-1",
+                        maxContextTokens = 200_000,
+                        reservedOutputTokens = 8_192,
+                        compactThresholdTokens = 180_000,
+                        autoCompressionEnabled = true,
+                    ),
+                ),
+            ).toList()
+
+            assertEquals(2, requestCount)
+            val followUpMessages = Json.parseToJsonElement(payloads.last()).jsonObject
+                .getValue("messages").jsonArray
+            assertEquals(listOf("assistant", "user"), followUpMessages.map { it.jsonObject.getValue("role").jsonPrimitive.content })
+            val assistantTypes = followUpMessages.first().jsonObject.getValue("content").jsonArray
+                .map { it.jsonObject.getValue("type").jsonPrimitive.content }
+            assertEquals(listOf("compaction", "tool_use"), assistantTypes)
+            assertEquals(
+                "tool_result",
+                followUpMessages.last().jsonObject.getValue("content").jsonArray.single().jsonObject
+                    .getValue("type").jsonPrimitive.content,
+            )
+            val canonical = Json.parseToJsonElement(
+                events.filterIsInstance<AppStreamEvent.NativeContextCompaction>().single().inputJson,
+            ).jsonArray
+            assertEquals(listOf("assistant", "user", "assistant"), canonical.map { it.jsonObject.getValue("role").jsonPrimitive.content })
+            assertEquals("工具完成", events.filterIsInstance<AppStreamEvent.ContentFinal>().single().text)
+        } finally {
+            AnthropicDirectClient.setMcpToolExecutor(null)
+            client.close()
+        }
+    }
+
+    @Test
+    fun `custom anthropic address omits native compaction beta fields`() = runTest {
+        var capturedBeta: String? = null
+        var capturedPayload: String? = null
+        val body = buildString {
+            event("""{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"完成"}}""")
+            event("""{"type":"message_delta","delta":{"stop_reason":"end_turn"}}""")
+            event("""{"type":"message_stop"}""")
+        }
+        val engine = MockEngine { requestData ->
+            capturedBeta = requestData.headers["anthropic-beta"]
+            capturedPayload = (requestData.body as TextContent).text
+            respond(
+                content = ByteReadChannel(body.toByteArray()),
+                status = HttpStatusCode.OK,
+                headers = Headers.build { append(HttpHeaders.ContentType, ContentType.Text.EventStream.toString()) },
+            )
+        }
+        val client = HttpClient(engine) {
+            expectSuccess = false
+            install(HttpTimeout)
+        }
+
+        try {
+            AnthropicDirectClient.streamChatDirect(
+                client,
+                request(
+                    apiAddress = "https://proxy.example/v1/messages",
+                    contextManagement = RequestContextManagement(
+                        configId = "config-1",
+                        maxContextTokens = 200_000,
+                        reservedOutputTokens = 8_192,
+                        compactThresholdTokens = 180_000,
+                        autoCompressionEnabled = true,
+                    ),
+                ),
+            ).toList()
+
+            assertNull(capturedBeta)
+            assertFalse(Json.parseToJsonElement(checkNotNull(capturedPayload)).jsonObject.containsKey("context_management"))
+        } finally {
+            client.close()
+        }
+    }
+
+    @Test
     fun `endpoint resolver accepts root v1 full path and direct marker`() {
         assertEquals("https://api.anthropic.com/v1/messages", AnthropicDirectClient.resolveMessagesUrl("https://api.anthropic.com"))
         assertEquals("https://proxy.example/v1/messages", AnthropicDirectClient.resolveMessagesUrl("https://proxy.example/v1"))
@@ -199,15 +686,19 @@ class AnthropicDirectClientTest {
         ),
         generationConfig: GenerationConfig? = null,
         tools: List<Map<String, Any>>? = null,
+        contextManagement: RequestContextManagement? = null,
+        model: String = "claude-sonnet-4-5",
+        apiAddress: String = "https://api.anthropic.com",
     ) = ChatRequest(
         messages = messages,
         provider = "Anthropic",
         channel = "Anthropic",
-        apiAddress = "https://api.anthropic.com",
+        apiAddress = apiAddress,
         apiKey = "test-key",
-        model = "claude-sonnet-4-5",
+        model = model,
         generationConfig = generationConfig,
         tools = tools,
+        contextManagement = contextManagement,
     )
 
     private fun StringBuilder.event(json: String) {

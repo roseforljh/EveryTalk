@@ -14,6 +14,7 @@
 6. 应用重启后继续复用已经完成的压缩检查点。
 7. 工具调用期间继续监控窗口，优先缩减旧工具输出。
 8. 官方 OpenAI Responses 返回的压缩项作为权威状态原样传递。
+9. 官方 Anthropic Messages 返回的 compaction 内容块和加密元数据原样续传。
 
 ## 2. 官方依据
 
@@ -21,6 +22,8 @@
 
 - OpenAI Compaction 指南：https://developers.openai.com/api/docs/guides/compaction
 - OpenAI Responses `/responses/compact` 规范：https://developers.openai.com/api/reference/resources/responses/methods/compact
+- Anthropic Compaction 指南：https://platform.claude.com/docs/en/build-with-claude/compaction
+- Anthropic Context Editing 指南：https://platform.claude.com/docs/en/build-with-claude/context-editing
 - Codex CLI `compact.rs`、`compact_remote.rs`、`compact_remote_v2.rs`
 - Codex CLI `session/context_window.rs` 与 `session/turn.rs`
 
@@ -39,7 +42,7 @@
 
 1. Codex 本地 20K 与远端 64K 的固定保留预算改为按模型窗口比例计算。
 2. OpenAI 加密压缩项只在官方 Responses 地址启用。
-3. Gemini、Anthropic 和普通 OpenAI Compatible 渠道继续使用本地摘要。
+3. 官方 Anthropic Messages 使用 Beta 原生压缩；Gemini、OpenAI Chat 和普通兼容渠道继续使用本地摘要。
 4. 压缩请求超窗时优先缩小分块，禁止静默删除尚未总结的用户原文。
 5. 用户界面历史保持完整，压缩只改变模型可见请求状态。
 
@@ -55,6 +58,8 @@
 - 自动压缩开关。
 - 官方 Responses 权威输入状态。
 - 权威输入状态的估算令牌数。
+- 官方 Anthropic compaction 消息状态。
+- Anthropic 原生压缩状态的估算令牌数。
 
 该配置只供客户端构建请求使用，普通渠道不会把它作为未知字段发送给上游。
 
@@ -71,6 +76,7 @@ AI 消息增加 `ContextCompressionState`，通过 Room JSON 字段持久化：
 - 官方 Responses 权威输入 JSON。
 - 权威状态覆盖到的 AI 消息 ID。
 - 权威状态估算令牌数。
+- 官方 Anthropic compaction 消息 JSON、覆盖到的 AI 消息 ID和估算令牌数。
 
 检查点在摘要完整成功后创建，并随预创建 AI 消息一起保存。Room 迁移只增加一个可空 JSON 列，旧历史无需转换。
 
@@ -179,7 +185,34 @@ min(用户设置百分比, 90%) × 模型上下文窗口
 - 自定义兼容地址不发送原生压缩字段。
 - 权威压缩项禁止解析、改写或转成可读摘要。
 
-## 9. 原子安装与恢复
+## 9. Anthropic Messages 原生压缩
+
+启用条件：
+
+- 自动上下文压缩已开启。
+- 实际请求地址主机为 `api.anthropic.com`。
+- 当前渠道使用 Anthropic Messages 客户端。
+- 当前端点没有在本进程中因明确的不兼容响应被禁用。
+
+请求行为：
+
+1. 添加 `anthropic-beta: compact-2026-01-12`。
+2. 添加 `context_management.edits=[{"type":"compact_20260112","trigger":{"type":"input_tokens","value":...}}]`。
+3. 解析 `type=compaction` 内容块及 `compaction_delta`，保留 `content` 和 `encrypted_content`。
+4. 工具循环必须把包含 compaction 的完整 assistant content、工具结果和后续 assistant content 一起续传。
+5. 出现新的 compaction 内容块后，丢弃该块之前的旧模型可见消息。
+6. 最终把最近 compaction 开始的 Anthropic 消息 JSON 写入 AI 消息。
+7. 下一轮从权威消息开始，只追加其覆盖点之后的新消息。
+8. `usage.iterations` 用于累计压缩与回答消耗，顶层 message usage 用于压缩后的活跃上下文校准。
+
+兼容处理：
+
+- 官方端点返回明确的 Beta 或 `context_management` 不支持错误时，本轮关闭原生触发并重试。
+- 不兼容端点在当前进程内改用本地摘要，避免每轮重复试错。
+- 自定义 Anthropic 兼容地址不发送 Beta 和原生压缩字段。
+- compaction 内容块中的 `encrypted_content` 禁止解析和改写。
+
+## 10. 原子安装与恢复
 
 1. 压缩前保存当前有效检查点。
 2. 所有摘要片段完成并通过最终窗口校验后生成新状态。
@@ -189,7 +222,7 @@ min(用户设置百分比, 90%) × 模型上下文窗口
 6. 前缀 SHA-256 不匹配时废弃本地摘要。
 7. 模型、渠道或配置不匹配时废弃服务端权威状态。
 
-## 10. 实施顺序
+## 11. 实施顺序
 
 1. 增加数据模型、90% 硬上限和令牌轮次标识。
 2. 修复活跃 usage、圆环同步与发送前校准。
@@ -198,9 +231,10 @@ min(用户设置百分比, 90%) × 模型上下文窗口
 5. 增加工具循环输出治理。
 6. 增加 Room 持久化检查点和恢复。
 7. 接入官方 Responses 原生压缩和权威状态续传。
-8. 完成相关单元测试、全量单元测试和 Debug APK 构建。
+8. 接入官方 Anthropic 原生压缩、工具循环续传和兼容降级。
+9. 完成相关单元测试、全量单元测试和 Debug APK 构建。
 
-## 11. 验收标准
+## 12. 验收标准
 
 - 自动压缩阈值配置和运行时均不超过 90%。
 - 两轮超窗会话不会静默丢失第一轮。
@@ -212,11 +246,16 @@ min(用户设置百分比, 90%) × 模型上下文窗口
 - 官方 Responses payload 包含正确的 `context_management` 和 `store=false`。
 - 原生 compaction 项原样进入下一次请求。
 - 普通兼容地址不出现 OpenAI 专属压缩字段。
+- 官方 Anthropic payload 包含正确的 Beta、触发阈值和 `context_management`。
+- Anthropic compaction 块及加密元数据原样进入下一次请求。
+- Anthropic 压缩迭代计入累计 usage，圆环只显示压缩后的活跃上下文。
+- Anthropic 明确不兼容时同一轮无原生字段重试，后续请求回到本地压缩。
+- 自定义 Anthropic 地址不出现 Beta 或原生压缩字段。
 - 相关单元测试通过。
 - 全量 `:app:testDebugUnitTest` 通过。
 - `:app:assembleDebug` 成功。
 
-## 12. 实施结果
+## 13. 实施结果
 
 以下项目已全部落地：
 
@@ -227,10 +266,14 @@ min(用户设置百分比, 90%) × 模型上下文窗口
 - 活跃请求 usage 与整轮累计 usage 分离，原生压缩后圆环立即切换到当前活跃上下文。
 - Room 12 压缩检查点持久化、11 到 12 迁移、SHA-256 前缀校验和重启恢复。
 - 官方 OpenAI Responses 的 `store=false`、`context_management`、完整 output item 续传、compaction 权威状态裁剪和兼容降级。
+- 官方 Anthropic Messages 的 Beta 请求、`context_management` 触发、compaction 块与加密元数据解析、权威消息窗口持久化和重启续传。
+- Anthropic 压缩后工具循环只续传权威窗口，`usage.iterations` 汇总计费用量，顶层 usage 同步圆环活跃上下文。
+- Anthropic 明确不兼容时按地址和模型缓存能力，同一轮安全关闭新触发；已有权威窗口完成续传后自动清理并回到本地压缩。
+- 自定义 Anthropic 地址不发送 Beta 或原生上下文管理字段，`content=null` 的压缩空操作不会覆盖已有历史。
 - 执行状态抽屉中的“正在压缩上下文”扫描高光，以及压缩失败具体原因展示。
 
 验证结果：
 
 - 关键路径定向单元测试通过。
-- 全量 `:app:testDebugUnitTest`：979 项，0 失败，0 错误，1 项按既有条件跳过。
+- 全量 `:app:testDebugUnitTest`：990 项，0 失败，0 错误，1 项按既有条件跳过。
 - `:app:assembleDebug`：成功。
