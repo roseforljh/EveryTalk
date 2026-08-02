@@ -5,6 +5,8 @@ import com.android.everytalk.data.DataClass.ModelCapabilitySource
 import com.android.everytalk.data.DataClass.ModelParameterProtocol
 import com.android.everytalk.data.DataClass.normalizeModelEndpointIdentity
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -42,11 +44,26 @@ internal class ModelCapabilityCache(
         }
         if (incoming.isEmpty()) return
         val merged = (readEntries().filter { it.isFresh(now) } + incoming)
-            .associateBy { it.cacheKey() }
+            .groupBy { it.cacheKey() }
             .values
-            .toList()
+            .map { sameModel -> sameModel.reduce { previous, newer -> previous.mergeWith(newer) } }
         cacheFile.parentFile?.mkdirs()
-        cacheFile.writeText(json.encodeToString(merged), Charsets.UTF_8)
+        val temporary = File(cacheFile.parentFile, "${cacheFile.name}.tmp")
+        temporary.writeText(json.encodeToString(merged), Charsets.UTF_8)
+        try {
+            Files.move(
+                temporary.toPath(),
+                cacheFile.toPath(),
+                StandardCopyOption.REPLACE_EXISTING,
+                StandardCopyOption.ATOMIC_MOVE,
+            )
+        } catch (_: Exception) {
+            Files.move(
+                temporary.toPath(),
+                cacheFile.toPath(),
+                StandardCopyOption.REPLACE_EXISTING,
+            )
+        }
     }
 
     @Synchronized
@@ -84,4 +101,35 @@ internal class ModelCapabilityCache(
         normalizeModelEndpointIdentity(candidate.endpointIdentity.orEmpty()),
         candidate.modelId.trim().lowercase(),
     ).joinToString("\u0000")
+
+    private fun CachedModelCapability.mergeWith(newer: CachedModelCapability): CachedModelCapability {
+        val previous = candidate
+        val incoming = newer.candidate
+        return CachedModelCapability(
+            candidate = incoming.copy(
+                providerId = incoming.providerId ?: previous.providerId,
+                family = incoming.family ?: previous.family,
+                contextWindowTokens = incoming.contextWindowTokens ?: previous.contextWindowTokens,
+                maxInputTokens = incoming.maxInputTokens ?: previous.maxInputTokens,
+                maxOutputTokens = incoming.maxOutputTokens ?: previous.maxOutputTokens,
+                inputModalities = incoming.inputModalities.ifEmpty { previous.inputModalities },
+                outputModalities = incoming.outputModalities.ifEmpty { previous.outputModalities },
+                supportsReasoning = incoming.supportsReasoning ?: previous.supportsReasoning,
+                reasoningEfforts = when {
+                    incoming.supportsReasoning == false -> emptySet()
+                    incoming.reasoningEfforts.isNotEmpty() -> incoming.reasoningEfforts
+                    else -> previous.reasoningEfforts
+                },
+                cachedSource = incoming.cachedSource ?: previous.cachedSource,
+                sourceUpdatedAt = maxOfNullable(previous.sourceUpdatedAt, incoming.sourceUpdatedAt),
+            ),
+            cachedAtEpochMillis = maxOf(cachedAtEpochMillis, newer.cachedAtEpochMillis),
+        )
+    }
+}
+
+private fun maxOfNullable(first: Long?, second: Long?): Long? = when {
+    first == null -> second
+    second == null -> first
+    else -> maxOf(first, second)
 }

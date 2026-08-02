@@ -8,7 +8,6 @@ import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.ImageGenerationResponse
 import com.android.everytalk.data.DataClass.GitHubRelease
 import com.android.everytalk.data.DataClass.ModelCapabilityCandidate
-import com.android.everytalk.data.DataClass.modelParameterProtocol
 import com.android.everytalk.models.SelectedMediaItem
 import io.ktor.client.*
 import io.ktor.client.call.*
@@ -37,7 +36,6 @@ import android.util.Base64
 import kotlinx.coroutines.CancellationException as CoroutineCancellationException
 
 private const val MAX_INLINE_ATTACHMENT_BYTES = 10L * 1024L * 1024L
-private const val MAX_MODELS_RESPONSE_BYTES = 4L * 1024L * 1024L
 
 private class AttachmentTooLargeException(message: String) : IllegalStateException(message)
 
@@ -151,7 +149,7 @@ object ApiClient {
     }
 
     private lateinit var client: HttpClient
-    private lateinit var modelCapabilityCache: ModelCapabilityCache
+    private lateinit var modelCatalogService: ModelCatalogService
     private var isInitialized = false
 
     // 将 localhost/127.0.0.1 识别为本机地址（在真机上通常不可达），用于回退排序
@@ -168,9 +166,6 @@ object ApiClient {
         if (isInitialized) return
         synchronized(this) {
             if (isInitialized) return
-            modelCapabilityCache = ModelCapabilityCache(
-                context.applicationContext.cacheDir.resolve("model-capabilities-v1.json")
-            )
             client = HttpClient(io.ktor.client.engine.okhttp.OkHttp) {
                 engine {
                     // 跨境延迟优化配置
@@ -212,37 +207,24 @@ object ApiClient {
                         }
                     }
                     level = io.ktor.client.plugins.logging.LogLevel.INFO
+                    sanitizeHeader { header ->
+                        header.equals(HttpHeaders.Authorization, ignoreCase = true) ||
+                            header.equals("x-api-key", ignoreCase = true) ||
+                            header.equals("x-goog-api-key", ignoreCase = true)
+                    }
                 }
             }
+            modelCatalogService = ModelCatalogService(
+                client = client,
+                endpointCache = ModelCapabilityCache(
+                    context.applicationContext.cacheDir.resolve("model-capabilities-v1.json")
+                ),
+                modelsDevCatalog = ModelsDevCatalog(
+                    context.applicationContext.cacheDir.resolve("models-dev-v1.json")
+                ),
+            )
             isInitialized = true
         }
-    }
-
-    private fun buildFinalUrl(baseAddress: String, defaultPath: String): String {
-        val sanitizedDefault = if (defaultPath.startsWith("/")) defaultPath else "/$defaultPath"
-        val trimmedAddress = baseAddress.trim().removeSuffix("#").trimEnd('/')
-        val withScheme = when {
-            trimmedAddress.startsWith("http://") || trimmedAddress.startsWith("https://") -> trimmedAddress
-            trimmedAddress.isNotEmpty() -> "https://$trimmedAddress"
-            else -> trimmedAddress
-        }
-        val uri = try { java.net.URI(withScheme) } catch (_: Exception) { java.net.URI("https://$trimmedAddress") }
-        val existingPath = uri.rawPath ?: ""
-        val basePath = existingPath
-            .replace(Regex("/v1/chat/completions/?$"), "/v1")
-            .replace(Regex("/chat/completions/?$"), "")
-            .replace(Regex("/v1/completions/?$"), "/v1")
-            .replace(Regex("/completions/?$"), "")
-        
-        val finalPath = when {
-            basePath.isEmpty() -> sanitizedDefault
-            basePath.contains("/models") -> basePath
-            basePath.endsWith("/v1") -> "$basePath/models"
-            basePath.endsWith("/") -> basePath + sanitizedDefault.removePrefix("/")
-            sanitizedDefault.startsWith("/v1") && basePath.contains("/v1") -> basePath + sanitizedDefault.removePrefix("/v1")
-            else -> basePath + sanitizedDefault
-        }.replace(Regex("/{2,}"), "/")
-        return java.net.URI(uri.scheme, uri.userInfo, uri.host, uri.port, finalPath, uri.rawQuery, uri.rawFragment).toString()
     }
 
     private fun getFileNameFromUri(context: Context, uri: Uri): String {
@@ -564,103 +546,26 @@ object ApiClient {
         if (!isInitialized) {
             throw IllegalStateException("ApiClient not initialized. Call initialize() first.")
         }
-    
-        // 统一去掉尾部 '#' 并清理 apiKey 中的换行符和多余空白
-        val baseForModels = apiUrl.trim().removeSuffix("#").trim()
-        val cleanedApiKey = apiKey.trim().replace(Regex("[\\r\\n\\s]+"), "")
-        val normalizedBase = when {
-            baseForModels.startsWith("http://") || baseForModels.startsWith("https://") -> baseForModels
-            baseForModels.isNotEmpty() -> "https://$baseForModels"
-            else -> baseForModels
+        return modelCatalogService.getCatalog(apiUrl, apiKey, channel)
+    }
+
+    suspend fun getModelCapabilities(
+        apiUrl: String,
+        apiKey: String,
+        channel: String?,
+        modelId: String,
+        providerHint: String,
+    ): List<ModelCapabilityCandidate> {
+        if (!isInitialized) {
+            throw IllegalStateException("ApiClient not initialized. Call initialize() first.")
         }
-        val parsedUri = try { java.net.URI(normalizedBase) } catch (_: Exception) { null }
-        val hostLower = parsedUri?.host?.lowercase()
-        val scheme = parsedUri?.scheme ?: "https"
-    
-        // 优化：当渠道为Gemini或为Google Gemini官方域名时，使用Gemini格式的API
-        val isGeminiChannel = channel?.lowercase()?.trim() == "gemini"
-        val isAnthropicChannel = channel?.lowercase()?.trim() == "anthropic"
-        val protocol = modelParameterProtocol(channel.orEmpty())
-        val isGoogleOfficialDomain = hostLower == "generativelanguage.googleapis.com" ||
-                (hostLower?.endsWith("googleapis.com") == true &&
-                 baseForModels.contains("generativelanguage", ignoreCase = true))
-    
-        // 对于 Gemini 反代，判断是否需要使用 Bearer Token 而非 ?key= 查询参数
-        // 大多数反代服务器期望 Authorization: Bearer 头，而非 Google 官方的 ?key= 格式
-        val useKeyQueryParam = isGoogleOfficialDomain // 只有 Google 官方域名才使用 ?key=
-    
-        val url = when {
-            // 只有当是Google官方域名时才强制使用官方地址 + ?key=
-            isGoogleOfficialDomain -> {
-                val googleUrl = "$scheme://generativelanguage.googleapis.com/v1beta/models?key=$cleanedApiKey"
-                android.util.Log.i("ApiClient", "检测到 Google Gemini 官方域名，使用官方模型列表端点: ${googleUrl.replace(cleanedApiKey, "***")}")
-                googleUrl
-            }
-            // Gemini渠道但非官方域名(如反代),使用用户提供的地址 + Gemini路径，Bearer Token 认证
-            isGeminiChannel -> {
-                val geminiProxyUrl = "${normalizedBase.trimEnd('/')}/v1beta/models"
-                android.util.Log.i("ApiClient", "检测到 Gemini 渠道(反代)，使用代理地址 + Bearer Token: $geminiProxyUrl")
-                geminiProxyUrl
-            }
-            isAnthropicChannel -> AnthropicDirectClient.resolveModelsUrl(normalizedBase)
-            // 智谱 BigModel 官方特判
-            hostLower?.contains("open.bigmodel.cn") == true -> {
-                val zhipu = "$scheme://open.bigmodel.cn/api/paas/v4/models"
-                android.util.Log.i("ApiClient", "检测到智谱 BigModel，改用官方模型列表端点: $zhipu")
-                zhipu
-            }
-            else -> {
-                buildFinalUrl(normalizedBase, "/v1/models")
-            }
-        }
-        val displayUrl = if (cleanedApiKey.isEmpty()) url else url.replace(cleanedApiKey, "***")
-        android.util.Log.d("ApiClient", "获取模型列表 - 最终请求URL: '$displayUrl'")
-    
-        return try {
-            val response = client.get {
-                url(url)
-                // Google 官方域名使用 ?key=（已在 URL 中）；其余所有情况（包括 Gemini 反代）使用 Bearer Token
-                if (isAnthropicChannel) {
-                    header("x-api-key", cleanedApiKey)
-                    header("anthropic-version", "2023-06-01")
-                } else if (!useKeyQueryParam) {
-                    header(HttpHeaders.Authorization, "Bearer $cleanedApiKey")
-                }
-                header(HttpHeaders.Accept, "application/json")
-                header(HttpHeaders.UserAgent, "EveryTalk/1.0 (Android)")
-            }
-    
-            if (!response.status.isSuccess()) {
-                val errorBody = response.readErrorTextAtMost()?.take(500).orEmpty()
-                throw IOException("获取模型列表失败: HTTP ${response.status.value} $errorBody".trim())
-            }
-            val responseBody = response.readTextAtMost(MAX_MODELS_RESPONSE_BYTES)
-    
-            val catalog = try {
-                parseModelCatalog(
-                    responseBody = responseBody,
-                    protocol = protocol,
-                    apiAddress = normalizedBase,
-                )
-            } catch (error: Exception) {
-                throw IOException("无法解析模型列表的响应。请检查API端点返回的数据格式是否正确。", error)
-            }
-            if (catalog.isEmpty()) {
-                throw IOException("无法解析模型列表的响应。请检查API端点返回的数据格式是否正确。")
-            }
-            modelCapabilityCache.put(catalog)
-            return catalog
-        } catch (e: CoroutineCancellationException) {
-            throw e
-        } catch (e: Exception) {
-            val cachedCatalog = modelCapabilityCache.get(protocol, normalizedBase)
-            if (cachedCatalog.isNotEmpty()) {
-                android.util.Log.w("ApiClient", "从 $displayUrl 获取模型列表失败，使用未过期的本地能力缓存")
-                return cachedCatalog
-            }
-            android.util.Log.e("ApiClient", "从 $displayUrl 获取模型列表失败", e)
-            throw IOException("从 $displayUrl 获取模型列表失败: ${e.message}", e)
-        }
+        return modelCatalogService.getCapabilities(
+            apiUrl = apiUrl,
+            apiKey = apiKey,
+            channel = channel,
+            modelId = modelId,
+            providerHint = providerHint,
+        )
     }
     /**
      * 强制直连模式 - 图像生成直接调用 API 提供商
