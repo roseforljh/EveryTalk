@@ -18,12 +18,16 @@ enum class ModelCapabilitySource {
 data class ModelCapabilityCandidate(
     val modelId: String,
     val protocol: ModelParameterProtocol,
+    val providerId: String? = null,
+    val family: String? = null,
     val endpointIdentity: String? = null,
     val contextWindowTokens: Int? = null,
+    val maxInputTokens: Int? = null,
     val maxOutputTokens: Int? = null,
     val inputModalities: Set<String> = emptySet(),
     val outputModalities: Set<String> = emptySet(),
     val supportsReasoning: Boolean? = null,
+    val reasoningEfforts: Set<String> = emptySet(),
     val source: ModelCapabilitySource,
     val cachedSource: ModelCapabilitySource? = null,
     val sourceUpdatedAt: Long? = null,
@@ -33,13 +37,26 @@ data class ModelCapabilityCandidate(
 data class ResolvedModelCapability(
     val modelId: String,
     val endpointIdentity: String,
+    val family: String? = null,
+    val familySource: ModelCapabilitySource? = null,
+    val familyUpdatedAt: Long? = null,
     val contextWindowTokens: Int,
+    val maxInputTokens: Int? = null,
     val maxOutputTokens: Int,
     val contextWindowSource: ModelCapabilitySource,
+    val contextWindowUpdatedAt: Long? = null,
+    val maxInputSource: ModelCapabilitySource? = null,
+    val maxInputUpdatedAt: Long? = null,
     val maxOutputSource: ModelCapabilitySource,
+    val maxOutputUpdatedAt: Long? = null,
     val inputModalities: Set<String>,
     val outputModalities: Set<String>,
+    val modalitiesSource: ModelCapabilitySource? = null,
+    val modalitiesUpdatedAt: Long? = null,
     val supportsReasoning: Boolean?,
+    val reasoningEfforts: Set<String> = emptySet(),
+    val reasoningSource: ModelCapabilitySource? = null,
+    val reasoningUpdatedAt: Long? = null,
 )
 
 fun normalizeModelEndpointIdentity(apiAddress: String): String {
@@ -82,6 +99,9 @@ fun resolveModelCapability(
         it.contextWindowTokens != null && it.contextWindowTokens >= 2
     }
     val contextWindowTokens = contextCandidate?.contextWindowTokens ?: DEFAULT_MAX_CONTEXT_TOKENS
+    val maxInputCandidate = applicableCandidates.firstOrNull {
+        it.maxInputTokens != null && it.maxInputTokens > 0 && it.maxInputTokens <= contextWindowTokens
+    }
     val maxOutputCandidate = applicableCandidates.firstOrNull {
         it.maxOutputTokens != null && it.maxOutputTokens > 0 && it.maxOutputTokens < contextWindowTokens
     }
@@ -90,18 +110,35 @@ fun resolveModelCapability(
     val modalityCandidate = applicableCandidates.firstOrNull {
         it.inputModalities.isNotEmpty() || it.outputModalities.isNotEmpty()
     }
-    val reasoningCandidate = applicableCandidates.firstOrNull { it.supportsReasoning != null }
+    val familyCandidate = applicableCandidates.firstOrNull { !it.family.isNullOrBlank() }
+    val reasoningCandidate = applicableCandidates.firstOrNull {
+        it.supportsReasoning != null || it.reasoningEfforts.isNotEmpty()
+    }
 
     return ResolvedModelCapability(
         modelId = normalizedModelId,
         endpointIdentity = endpointIdentity,
+        family = familyCandidate?.family,
+        familySource = familyCandidate?.source,
+        familyUpdatedAt = familyCandidate?.sourceUpdatedAt,
         contextWindowTokens = contextWindowTokens,
+        maxInputTokens = maxInputCandidate?.maxInputTokens,
         maxOutputTokens = maxOutputTokens,
         contextWindowSource = contextCandidate?.source ?: ModelCapabilitySource.CONSERVATIVE_DEFAULT,
+        contextWindowUpdatedAt = contextCandidate?.sourceUpdatedAt,
+        maxInputSource = maxInputCandidate?.source,
+        maxInputUpdatedAt = maxInputCandidate?.sourceUpdatedAt,
         maxOutputSource = maxOutputCandidate?.source ?: ModelCapabilitySource.CONSERVATIVE_DEFAULT,
+        maxOutputUpdatedAt = maxOutputCandidate?.sourceUpdatedAt,
         inputModalities = modalityCandidate?.inputModalities.orEmpty(),
         outputModalities = modalityCandidate?.outputModalities.orEmpty(),
-        supportsReasoning = reasoningCandidate?.supportsReasoning,
+        modalitiesSource = modalityCandidate?.source,
+        modalitiesUpdatedAt = modalityCandidate?.sourceUpdatedAt,
+        supportsReasoning = reasoningCandidate?.supportsReasoning
+            ?: true.takeIf { reasoningCandidate?.reasoningEfforts?.isNotEmpty() == true },
+        reasoningEfforts = reasoningCandidate?.reasoningEfforts.orEmpty(),
+        reasoningSource = reasoningCandidate?.source,
+        reasoningUpdatedAt = reasoningCandidate?.sourceUpdatedAt,
     )
 }
 
@@ -119,11 +156,30 @@ fun ApiConfig.withModelCapabilityDefaults(
     candidates: List<ModelCapabilityCandidate>,
 ): ApiConfig {
     val protocol = modelParameterProtocol(channel)
+    val currentCapability = modelParameters.resolvedCapability
+    val userOverride = currentCapability?.let { current ->
+        ModelCapabilityCandidate(
+            modelId = model,
+            protocol = protocol,
+            endpointIdentity = address,
+            contextWindowTokens = modelParameters.maxContextTokens.takeIf {
+                current.contextWindowSource == ModelCapabilitySource.USER_OVERRIDE
+            },
+            maxOutputTokens = maxTokens.takeIf {
+                current.maxOutputSource == ModelCapabilitySource.USER_OVERRIDE
+            },
+            source = ModelCapabilitySource.USER_OVERRIDE,
+        ).takeIf { it.contextWindowTokens != null || it.maxOutputTokens != null }
+    }
     val resolved = resolveModelCapability(
         modelId = model,
         protocol = protocol,
         apiAddress = address,
-        candidates = candidates + listOfNotNull(officialModelCapability(model, protocol)),
+        candidates = candidates + listOfNotNull(
+            userOverride,
+            officialModelCapability(model, protocol),
+            familyModelCapability(model, protocol),
+        ),
     )
     return copy(
         maxTokens = resolved.maxOutputTokens,
@@ -140,13 +196,26 @@ fun ApiConfig.withUserTokenLimits(limits: ModelTokenLimits): ApiConfig {
     val currentCapability = modelParameters.resolvedCapability ?: ResolvedModelCapability(
         modelId = model,
         endpointIdentity = normalizeModelEndpointIdentity(address),
+        family = null,
+        familySource = null,
+        familyUpdatedAt = null,
         contextWindowTokens = currentContextTokens,
+        maxInputTokens = null,
         maxOutputTokens = currentOutputTokens,
         contextWindowSource = ModelCapabilitySource.USER_OVERRIDE,
+        contextWindowUpdatedAt = null,
+        maxInputSource = null,
+        maxInputUpdatedAt = null,
         maxOutputSource = ModelCapabilitySource.USER_OVERRIDE,
+        maxOutputUpdatedAt = null,
         inputModalities = emptySet(),
         outputModalities = emptySet(),
+        modalitiesSource = null,
+        modalitiesUpdatedAt = null,
         supportsReasoning = null,
+        reasoningEfforts = emptySet(),
+        reasoningSource = null,
+        reasoningUpdatedAt = null,
     )
     val updatedCapability = currentCapability.copy(
         contextWindowTokens = limits.maxContextTokens,

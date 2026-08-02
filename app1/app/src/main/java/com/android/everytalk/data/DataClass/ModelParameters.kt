@@ -115,7 +115,7 @@ fun reasoningBudgetForEffort(effort: String): Int = when (effort.trim().lowercas
 fun ModelParameters.toThinkingConfig(channel: String, model: String): ThinkingConfig? {
     val protocol = modelParameterProtocol(channel)
     val allowedEfforts = when (protocol) {
-        ModelParameterProtocol.CODEX -> setOf("none", "low", "medium", "high", "xhigh", "max")
+        ModelParameterProtocol.CODEX -> setOf("none", "minimal", "low", "medium", "high", "xhigh", "max")
         ModelParameterProtocol.ANTHROPIC -> setOf("low", "medium", "high", "max")
         ModelParameterProtocol.GEMINI -> setOf("minimal", "low", "medium", "high")
         ModelParameterProtocol.OPENAI_COMPATIBLE -> emptySet()

@@ -76,6 +76,23 @@ class ModelAndConfigController(
         }
     }
 
+    suspend fun loadModelParameters(config: ApiConfig): Result<ApiConfig> = try {
+        val candidates = withContext(Dispatchers.IO) {
+            ApiClient.getModelCapabilities(
+                apiUrl = config.address,
+                apiKey = config.key,
+                channel = config.channel,
+                modelId = config.model,
+                providerHint = config.provider,
+            )
+        }
+        Result.success(config.withModelCapabilityDefaults(candidates))
+    } catch (error: Exception) {
+        error.rethrowIfCancellation()
+        Log.e("ModelAndConfig", "自动获取模型参数失败", error)
+        Result.failure(error)
+    }
+
     fun createMultipleConfigs(
         provider: String,
         address: String,

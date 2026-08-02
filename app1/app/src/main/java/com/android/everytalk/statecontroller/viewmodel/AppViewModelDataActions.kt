@@ -130,6 +130,10 @@ import java.util.TimeZone
         modelAndConfigController.refreshModelsForConfig(config)
     }
 
+    internal suspend fun AppViewModel.loadModelParameters(config: ApiConfig): Result<ApiConfig> {
+        return modelAndConfigController.loadModelParameters(config)
+    }
+
     internal fun AppViewModel.getMessageById(id: String): Message? {
         return messages.find { it.id == id } ?: imageGenerationMessages.find { it.id == id }
     }
