@@ -1,5 +1,37 @@
 # Changelog
 
+## [1.23.0](https://github.com/roseforljh/EveryTalk/compare/v1.22.0...v1.23.0) (2026-08-02)
+
+
+### Features
+
+* Anthropic Messages 原生压缩支持 ([b6cdb1a](https://github.com/roseforljh/EveryTalk/commit/b6cdb1aa87dc06db248fd1e60cfc88d918a4b8c8))
+* 上下文用量弹窗与自动压缩设置 UI ([1196623](https://github.com/roseforljh/EveryTalk/commit/119662363e774c476c9d458ba7945adcc766f32d))
+* 上下文窗口裁剪与 Token 用量追踪 ([966c280](https://github.com/roseforljh/EveryTalk/commit/966c2806d782137e5b73c6afc6070467a6792d1b))
+* 发送前自动压缩与 ApiHandler 预创建消息集成 ([dda363d](https://github.com/roseforljh/EveryTalk/commit/dda363d8ddd0a1793abafda992cf4d3f492a98de))
+* 各渠道工具循环上下文压缩与原生压缩事件 ([51f30e6](https://github.com/roseforljh/EveryTalk/commit/51f30e69ea24dde422941b1dfc6ea5fe0927d07c))
+* 执行步骤时间线与通用底部弹窗组件 ([5f2b958](https://github.com/roseforljh/EveryTalk/commit/5f2b95872dd6756bdb0ce3ff6cf7f6ead5639b70))
+* 接入 Anthropic 原生 Messages API 与端点规则 ([bd78ce9](https://github.com/roseforljh/EveryTalk/commit/bd78ce92cac9509df81195c082e756f90050cd28))
+* 数据库迁移 v7 移除 OpenClaw 配置字段 ([4958b0c](https://github.com/roseforljh/EveryTalk/commit/4958b0ce6eae7bc59be980bda65bb66e49cb4225))
+* 数据库迁移 v8-v10 支持模型参数与 token 用量 ([5b887fe](https://github.com/roseforljh/EveryTalk/commit/5b887fe283b03294997a0417134d087fba8406d1))
+* 模型参数对话框自动加载与用户工具徽标内联 ([612e4b6](https://github.com/roseforljh/EveryTalk/commit/612e4b660f0709bbe7d5a8348e73c4ea76981775))
+* 模型目录协议与服务接入 ([a2c5863](https://github.com/roseforljh/EveryTalk/commit/a2c5863dadbe8b506939587add525cad40f835f0))
+* 模型能力目录与参数配置体系 ([647ea19](https://github.com/roseforljh/EveryTalk/commit/647ea196971fe4b6f7d49bea705f2522f4f8736d))
+* 模型选择下拉打开时定位选中模型居中 ([28e1246](https://github.com/roseforljh/EveryTalk/commit/28e1246e88b5caa73e6c0646e81b0b4f16f00e78))
+* 能力解析支持 maxInputTokens 与家族兜底 ([956a7f2](https://github.com/roseforljh/EveryTalk/commit/956a7f23767e484f3bf2f44bb5a7064edbc3a6d8))
+* 自动上下文压缩核心与检查点持久化 ([5c04e43](https://github.com/roseforljh/EveryTalk/commit/5c04e43532159b4a33812a9337102ca64345ec8c))
+* 连接阶段按配置提前展示 Gemini 推理状态 ([6e75570](https://github.com/roseforljh/EveryTalk/commit/6e75570145ec31d18c1f76ead806ea4df9536b8c))
+
+
+### Bug Fixes
+
+* Gemini 工具图片嵌套在对应 functionResponse 中 ([d20a66a](https://github.com/roseforljh/EveryTalk/commit/d20a66a84d586a2ffd464854f46172c9f13d05c7))
+* 执行抽屉视口测量改用内容高度计算 ([1861daf](https://github.com/roseforljh/EveryTalk/commit/1861daf02e571b059de15731b21d8cb414d7337b))
+* 正文冒号粘连无序列表时拆分独立列表 ([a86b61b](https://github.com/roseforljh/EveryTalk/commit/a86b61be718b1b799e6f70938d4d0b52947a855d))
+* 独占加粗小标题段落边界修复与间距优化 ([e1bf19e](https://github.com/roseforljh/EveryTalk/commit/e1bf19eed5b6108488428ab091abf6c2914bccfe))
+* 行内公式占位框上下保留安全区并扩展段落行高 ([9661c1f](https://github.com/roseforljh/EveryTalk/commit/9661c1ff628b82a2bdb20700a6bb4b9f47e8843a))
+* 金额与数字开头公式按完整定界符对消解歧义 ([d637359](https://github.com/roseforljh/EveryTalk/commit/d63735965864301509e6fa9fcb2cc67efbf4c9ec))
+
 ## [1.22.0](https://github.com/roseforljh/EveryTalk/compare/v1.21.0...v1.22.0) (2026-07-24)
 
 
