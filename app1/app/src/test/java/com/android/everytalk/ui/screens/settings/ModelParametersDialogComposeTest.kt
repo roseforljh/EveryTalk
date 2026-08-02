@@ -13,15 +13,12 @@ import androidx.compose.ui.test.performTextReplacement
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.CustomModelParameter
-import com.android.everytalk.data.DataClass.ContextUsageSnapshot
 import com.android.everytalk.data.DataClass.ModelCapabilityCandidate
 import com.android.everytalk.data.DataClass.ModelCapabilitySource
 import com.android.everytalk.data.DataClass.ModelParameterProtocol
 import com.android.everytalk.data.DataClass.ModelParameters
 import com.android.everytalk.data.DataClass.ReasoningMode
 import com.android.everytalk.data.DataClass.withModelCapabilityDefaults
-import com.android.everytalk.data.network.TokenUsage
-import com.android.everytalk.data.network.TokenUsageSource
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -157,6 +154,36 @@ class ModelParametersDialogComposeTest {
     }
 
     @Test
+    fun `自动压缩开启后显示阈值并随模型保存`() {
+        val config = openAICompatibleConfig()
+        var confirmedConfig: ApiConfig? = null
+
+        composeRule.setContent {
+            MaterialTheme {
+                ModelParametersDialog(
+                    config = config,
+                    onDismissRequest = {},
+                    onConfirm = { confirmedConfig = it },
+                )
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("自动压缩开关")
+            .performScrollTo()
+            .performClick()
+        composeRule.onNodeWithText("80%").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("自动压缩触发阈值")
+            .performScrollTo()
+            .assertIsDisplayed()
+        composeRule.onNodeWithText("保存").performClick()
+
+        composeRule.runOnIdle {
+            assertEquals(true, confirmedConfig?.modelParameters?.autoContextCompressionEnabled)
+            assertEquals(80, confirmedConfig?.modelParameters?.autoContextCompressionThresholdPercent)
+        }
+    }
+
+    @Test
     fun `右上角加载按钮自动更新思考能力和 token 限制`() {
         val config = ApiConfig(
             address = "https://api.example.com",
@@ -209,43 +236,6 @@ class ModelParametersDialogComposeTest {
                 confirmedConfig?.modelParameters?.resolvedCapability?.contextWindowSource,
             )
         }
-    }
-
-    @Test
-    fun `参数对话框显示最近请求的上下文占用和数据来源`() {
-        val snapshot = ContextUsageSnapshot(
-            messageId = "ai-1",
-            systemPromptTokens = 10,
-            conversationTextTokens = 70,
-            mediaTokens = 0,
-            toolSchemaTokens = 15,
-            protocolOverheadTokens = 5,
-            reservedOutputTokens = 50,
-            contextWindowTokens = 1_000,
-        ).withFinalUsage(
-            TokenUsage(
-                inputTokens = 100,
-                outputTokens = 20,
-                totalTokens = 120,
-                isFinal = true,
-                source = TokenUsageSource.OPENAI_CHAT,
-            )
-        )
-
-        composeRule.setContent {
-            MaterialTheme {
-                ModelParametersDialog(
-                    config = openAICompatibleConfig(),
-                    contextUsageSnapshot = snapshot,
-                    onDismissRequest = {},
-                    onConfirm = {},
-                )
-            }
-        }
-
-        composeRule.onNodeWithText("上下文占用").performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithText("120 / 1,000 tokens").performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithText("实测").performScrollTo().assertIsDisplayed()
     }
 
     private fun openAICompatibleConfig() = ApiConfig(

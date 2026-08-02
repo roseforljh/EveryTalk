@@ -67,4 +67,34 @@ class TokenUsageAccumulatorTest {
         assertEquals(25L, revised.outputTokens)
         assertEquals(125L, revised.totalTokens)
     }
+
+    @Test
+    fun `工具循环按请求序号分离活跃用量和整轮累计用量`() {
+        val accumulator = TokenUsageAccumulator()
+        accumulator.updateDetailed(
+            TokenUsage(
+                inputTokens = 100,
+                outputTokens = 20,
+                totalTokens = 120,
+                isFinal = true,
+                source = TokenUsageSource.OPENAI_RESPONSES,
+                requestOrdinal = 1,
+            )
+        )
+
+        val update = accumulator.updateDetailed(
+            TokenUsage(
+                inputTokens = 60,
+                outputTokens = 10,
+                totalTokens = 70,
+                isFinal = true,
+                source = TokenUsageSource.OPENAI_RESPONSES,
+                requestOrdinal = 2,
+            )
+        )
+
+        assertEquals(190L, update.cumulative.totalTokens)
+        assertEquals(70L, update.activeRequest.totalTokens)
+        assertEquals(2, update.activeRequest.requestOrdinal)
+    }
 }

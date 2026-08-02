@@ -2,9 +2,12 @@ package com.android.everytalk.statecontroller.facade
 
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.ApiConfig
+import com.android.everytalk.data.DataClass.ExecutionStep
+import com.android.everytalk.data.DataClass.ExecutionStepType
 import com.android.everytalk.data.DataClass.ModelParameters
 import com.android.everytalk.data.DataClass.ReasoningMode
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.ui.components.markdown.footnoteDefinitionUri
 import com.android.everytalk.ui.components.markdown.footnoteReferenceUri
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
@@ -824,4 +827,162 @@ class MessageItemsControllerStatusTest {
         assertFalse(items.any { it is ChatListItem.AiMarkdownNode })
     }
 
+    @Test
+    fun `completed tool-only message keeps execution review item`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.stateHolder.messages.add(
+            Message(
+                id = "ai-completed-tool-only",
+                text = "工具执行完成",
+                sender = Sender.AI,
+                contentStarted = true,
+                executionSteps = listOf(completedToolStep()),
+            )
+        )
+
+        val items = controller.chatListItemsForTest()
+
+        assertTrue(items.any { it is ChatListItem.AiMessageReasoning })
+    }
+
+    @Test
+    fun `streaming content keeps execution review item without reasoning text`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.stateHolder.messages.add(
+            Message(
+                id = "ai-streaming-tool-only",
+                text = "正在输出正文",
+                sender = Sender.AI,
+                contentStarted = true,
+                executionSteps = listOf(completedToolStep()),
+            )
+        )
+        controller.stateHolder._isTextApiCalling.value = true
+        controller.stateHolder._currentTextStreamingAiMessageId.value = "ai-streaming-tool-only"
+
+        val items = controller.chatListItemsForTest()
+
+        assertTrue(items.any { it is ChatListItem.AiMessageReasoning })
+    }
+
+    @Test
+    fun `completed web-only message keeps execution review item`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.stateHolder.messages.add(
+            Message(
+                id = "ai-completed-web-only",
+                text = "网页资料整理完成",
+                sender = Sender.AI,
+                contentStarted = true,
+                webSearchResults = listOf(
+                    WebSearchResult(
+                        index = 1,
+                        title = "Android Developers",
+                        href = "https://developer.android.com/compose",
+                        snippet = "Compose documentation",
+                    )
+                ),
+            )
+        )
+
+        val items = controller.chatListItemsForTest()
+
+        assertTrue(items.any { it is ChatListItem.AiMessageReasoning })
+    }
+
+    @Test
+    fun `failed execution keeps review item when durable process exists`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.stateHolder.messages.add(
+            Message(
+                id = "ai-failed-tool",
+                text = "工具执行失败",
+                sender = Sender.AI,
+                contentStarted = true,
+                isError = true,
+                executionSteps = listOf(completedToolStep()),
+            )
+        )
+
+        val items = controller.chatListItemsForTest()
+
+        assertTrue(items.any { it is ChatListItem.AiMessageReasoning })
+        assertTrue(items.any { it is ChatListItem.ErrorMessage })
+    }
+
+    @Test
+    fun `completed ordinary answer does not create empty execution review item`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.stateHolder.messages.add(
+            Message(
+                id = "ai-completed-without-process",
+                text = "普通回答",
+                sender = Sender.AI,
+                contentStarted = true,
+            )
+        )
+
+        val items = controller.chatListItemsForTest()
+
+        assertFalse(items.any { it is ChatListItem.AiMessageReasoning })
+    }
+
+    @Test
+    fun `tool execution review item keeps stable id when stream completes`() = runBlocking {
+        val controller = MessageItemsControllerTestAccess.newController()
+        val messageId = "ai-tool-stream-to-complete"
+        controller.stateHolder.messages.add(
+            Message(
+                id = messageId,
+                text = "",
+                sender = Sender.AI,
+                executionSteps = listOf(completedToolStep().copy(completed = false)),
+            )
+        )
+        controller.stateHolder._isTextApiCalling.value = true
+        controller.stateHolder._currentTextStreamingAiMessageId.value = messageId
+
+        val streamingItems = controller.chatListItems.first { items ->
+            items.any { it is ChatListItem.AiMessageReasoning }
+        }
+        val streamingId = streamingItems.filterIsInstance<ChatListItem.AiMessageReasoning>()
+            .single().stableId
+        val completedItemsDeferred = async {
+            withTimeout(1_000) {
+                controller.chatListItems.first { items ->
+                    items.filterIsInstance<ChatListItem.AiMessage>()
+                        .firstOrNull()?.text == "工具执行完成" &&
+                        items.any { it is ChatListItem.AiMessageReasoning }
+                }
+            }
+        }
+
+        controller.stateHolder.messages.clear()
+        controller.stateHolder.messages.add(
+            Message(
+                id = messageId,
+                text = "工具执行完成",
+                sender = Sender.AI,
+                contentStarted = true,
+                executionSteps = listOf(completedToolStep()),
+            )
+        )
+        controller.stateHolder._isTextApiCalling.value = false
+        controller.stateHolder._currentTextStreamingAiMessageId.value = null
+        Snapshot.sendApplyNotifications()
+
+        val completedItems = completedItemsDeferred.await()
+        val completedId = completedItems.filterIsInstance<ChatListItem.AiMessageReasoning>()
+            .single().stableId
+        assertEquals(streamingId, completedId)
+        assertEquals("${messageId}_reasoning", completedId)
+    }
+
+    private fun completedToolStep() = ExecutionStep(
+        id = "tool-1",
+        type = ExecutionStepType.Tool,
+        title = "调用工具",
+        labels = listOf("local_clock"),
+        completed = true,
+    )
 }

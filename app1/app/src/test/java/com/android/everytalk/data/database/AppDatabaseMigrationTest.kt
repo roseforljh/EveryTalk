@@ -216,6 +216,35 @@ class AppDatabaseMigrationTest {
         migrateHelper.close()
     }
 
+    @Test
+    fun `migration 11 to 12 preserves messages and leaves compression state empty`() {
+        val createHelper = openHelper(
+            version = 11,
+            onCreate = { db ->
+                db.execSQL("CREATE TABLE messages (id TEXT NOT NULL PRIMARY KEY)")
+                db.execSQL("INSERT INTO messages (id) VALUES ('message-1')")
+            },
+        )
+        createHelper.writableDatabase.close()
+        createHelper.close()
+
+        val migrateHelper = openHelper(
+            version = 12,
+            onUpgrade = { db, oldVersion, newVersion ->
+                assertEquals(11, oldVersion)
+                assertEquals(12, newVersion)
+                AppDatabase.MIGRATION_11_12.migrate(db)
+            },
+        )
+        val db = migrateHelper.writableDatabase
+        db.query("SELECT contextCompressionState FROM messages WHERE id = 'message-1'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue(cursor.isNull(0))
+        }
+        db.close()
+        migrateHelper.close()
+    }
+
     private fun openHelper(
         version: Int,
         onCreate: (SupportSQLiteDatabase) -> Unit = {},

@@ -1,6 +1,7 @@
 package com.android.everytalk.data.database
 
 import com.android.everytalk.data.DataClass.ContextUsageSnapshot
+import com.android.everytalk.data.DataClass.ContextCompressionState
 import com.android.everytalk.data.network.TokenUsage
 import com.android.everytalk.data.network.TokenUsageSource
 import org.junit.Assert.assertEquals
@@ -49,5 +50,30 @@ class TokenUsageConverterTest {
             converters.toContextUsageSnapshot(converters.fromContextUsageSnapshot(snapshot)),
         )
         assertNull(converters.toContextUsageSnapshot("{损坏的JSON"))
+    }
+
+    @Test
+    fun `压缩检查点和Responses权威状态可以持久化和恢复`() {
+        val state = ContextCompressionState(
+            configId = "config-1",
+            provider = "OpenAI",
+            channel = "codex",
+            model = "gpt-5.6",
+            summary = "较早会话摘要",
+            summarizedThroughMessageId = "a1",
+            summarizedPrefixFingerprint = "abcdef",
+            windowNumber = 2,
+            windowId = "window-2",
+            previousWindowId = "window-1",
+            openAiResponsesInputJson = "[{\"type\":\"compaction\",\"encrypted_content\":\"opaque\"}]",
+            openAiResponsesThroughMessageId = "a2",
+            openAiResponsesEstimatedTokens = 321,
+        )
+
+        assertEquals(
+            state,
+            converters.toContextCompressionState(converters.fromContextCompressionState(state)),
+        )
+        assertNull(converters.toContextCompressionState("{损坏的JSON"))
     }
 }

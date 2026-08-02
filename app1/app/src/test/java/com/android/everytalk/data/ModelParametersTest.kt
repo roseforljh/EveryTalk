@@ -2,6 +2,7 @@ package com.android.everytalk.data
 
 import com.android.everytalk.data.DataClass.CustomModelParameter
 import com.android.everytalk.data.DataClass.CustomParameterType
+import com.android.everytalk.data.DataClass.DEFAULT_AUTO_CONTEXT_COMPRESSION_THRESHOLD_PERCENT
 import com.android.everytalk.data.DataClass.DEFAULT_MAX_CONTEXT_TOKENS
 import com.android.everytalk.data.DataClass.DEFAULT_MAX_OUTPUT_TOKENS
 import com.android.everytalk.data.DataClass.ModelParameters
@@ -9,6 +10,7 @@ import com.android.everytalk.data.DataClass.ReasoningMode
 import com.android.everytalk.data.DataClass.openAICompatibleRequestParameters
 import com.android.everytalk.data.DataClass.toThinkingConfig
 import com.android.everytalk.data.DataClass.validateModelTokenLimits
+import com.android.everytalk.data.DataClass.validateAutoContextCompressionThreshold
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
@@ -25,6 +27,11 @@ class ModelParametersTest {
         assertEquals("medium", parameters.toThinkingConfig("Anthropic", "claude-sonnet-4-6")?.reasoningEffort)
         assertEquals("medium", parameters.toThinkingConfig("Gemini", "gemini-3-flash")?.thinkingLevel)
         assertEquals(DEFAULT_MAX_CONTEXT_TOKENS, parameters.maxContextTokens)
+        assertEquals(false, parameters.autoContextCompressionEnabled)
+        assertEquals(
+            DEFAULT_AUTO_CONTEXT_COMPRESSION_THRESHOLD_PERCENT,
+            parameters.autoContextCompressionThresholdPercent,
+        )
     }
 
     @Test
@@ -34,6 +41,19 @@ class ModelParametersTest {
         assertEquals("high", parameters.reasoningEffort)
         assertEquals(emptyList<String>(), parameters.customReasoningEfforts)
         assertEquals(DEFAULT_MAX_CONTEXT_TOKENS, parameters.maxContextTokens)
+        assertEquals(false, parameters.autoContextCompressionEnabled)
+        assertEquals(80, parameters.autoContextCompressionThresholdPercent)
+    }
+
+    @Test
+    fun `自动压缩触发值接受安全边界`() {
+        assertEquals(50, validateAutoContextCompressionThreshold(50))
+        assertEquals(90, validateAutoContextCompressionThreshold(90))
+    }
+
+    @Test(expected = IllegalArgumentException::class)
+    fun `自动压缩触发值拒绝硬上限附近的配置`() {
+        validateAutoContextCompressionThreshold(99)
     }
 
     @Test

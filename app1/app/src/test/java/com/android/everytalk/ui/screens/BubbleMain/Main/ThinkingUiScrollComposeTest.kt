@@ -369,6 +369,45 @@ class ThinkingUiScrollComposeTest {
     }
 
     @Test
+    fun `执行失败且有工具记录时仍可通过圆点回看`() {
+        composeRule.mainClock.autoAdvance = false
+        composeRule.setContent {
+            MaterialTheme {
+                ReasoningToggleAndContent(
+                    currentMessageId = "failed-tool-review",
+                    displayedReasoningText = "",
+                    executionSteps = listOf(
+                        ExecutionStep(
+                            id = "failed-tool-1",
+                            type = ExecutionStepType.Tool,
+                            title = "调用工具",
+                            labels = listOf("local_clock"),
+                            completed = true,
+                        )
+                    ),
+                    isReasoningStreaming = false,
+                    isReasoningComplete = true,
+                    messageIsError = true,
+                    mainContentHasStarted = true,
+                    reasoningTextColor = Color.Black,
+                    reasoningToggleDotColor = Color.Black,
+                    onVisibilityChanged = {},
+                )
+            }
+        }
+
+        composeRule.mainClock.advanceTimeBy(1_000L)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("reasoning-sheet-review-toggle").performClick()
+        composeRule.mainClock.advanceTimeBy(1_000L)
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("reasoning-execution-step-0").fetchSemanticsNode("")
+        composeRule.onNodeWithText("local_clock").fetchSemanticsNode("")
+        composeRule.onNodeWithText("执行失败").fetchSemanticsNode("")
+    }
+
+    @Test
     fun `抽屉渲染Markdown并分隔连续加粗段落`() {
         composeRule.mainClock.autoAdvance = false
         val reasoning =

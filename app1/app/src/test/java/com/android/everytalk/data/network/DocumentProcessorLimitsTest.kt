@@ -11,6 +11,19 @@ import org.junit.Test
 import java.io.ByteArrayInputStream
 
 class DocumentProcessorLimitsTest {
+    @Test
+    fun `文档文本超过输出上限时显式报错`() = runBlocking {
+        try {
+            DocumentProcessor.extractPlainText(
+                ByteArrayInputStream("123456".toByteArray()),
+                maxInputBytes = 20,
+                maxOutputChars = 5,
+            )
+            fail("应抛出文本输出上限错误")
+        } catch (_: DocumentProcessor.OutputLimitExceededException) {
+        }
+    }
+
 
     @Test
     fun `plain text rejects oversized input`() = runBlocking {
@@ -31,16 +44,6 @@ class DocumentProcessorLimitsTest {
             fail("应继续抛出取消异常")
         } catch (_: CancellationException) {
         }
-    }
-
-    @Test
-    fun `plain text truncates extracted output`() = runBlocking {
-        val result = DocumentProcessor.extractPlainText(
-            ByteArrayInputStream("abcdefghijklmnop".toByteArray()),
-            maxInputBytes = 32,
-            maxOutputChars = 8,
-        )
-        assertEquals("abcdefgh", result)
     }
 
     @Test
