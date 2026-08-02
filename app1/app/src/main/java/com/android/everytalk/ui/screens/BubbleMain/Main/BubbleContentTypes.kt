@@ -297,11 +297,7 @@ internal fun UserOrErrorMessageContent(
                             .wrapContentWidth()
                             .padding(
                                 start = if (message.sender == Sender.User) 10.dp else 0.dp,
-                                end = if (message.sender == Sender.User) {
-                                    resolveUserMessageContentEndPaddingDp(enabledToolIds.size).dp
-                                } else {
-                                    0.dp
-                                },
+                                end = if (message.sender == Sender.User) 10.dp else 0.dp,
                                 top = if (message.sender == Sender.User) 6.dp else 0.dp,
                                 bottom = if (message.sender == Sender.User) 6.dp else 0.dp,
                             )
@@ -320,34 +316,35 @@ internal fun UserOrErrorMessageContent(
                                     .align(Alignment.Center)
                                     .offset(y = (-6).dp)
                             )
-                        } else if (displayedText.isNotBlank() || isError) {
-                            UnifiedMarkdownRenderer(
-                                preparedMessage = preparedMessage,
-                                sender = message.sender,
-                                modifier = Modifier
-                                    .wrapContentWidth()
-                                    .offset(
-                                        y = if (message.sender == Sender.User) {
-                                            USER_BUBBLE_TEXT_OPTICAL_OFFSET
-                                        } else {
-                                            0.dp
-                                        }
-                                    ),
-                            )
+                        } else if (renderText.isNotBlank() || isError || enabledToolIds.isNotEmpty()) {
+                            if (message.sender == Sender.User && enabledToolIds.isNotEmpty()) {
+                                UserMessageInlineContent(
+                                    enabledToolIds = enabledToolIds,
+                                    modifier = Modifier.offset(y = USER_BUBBLE_TEXT_OPTICAL_OFFSET),
+                                ) {
+                                    UnifiedMarkdownRenderer(
+                                        preparedMessage = preparedMessage,
+                                        sender = message.sender,
+                                        modifier = Modifier.wrapContentWidth(),
+                                    )
+                                }
+                            } else {
+                                UnifiedMarkdownRenderer(
+                                    preparedMessage = preparedMessage,
+                                    sender = message.sender,
+                                    modifier = Modifier
+                                        .wrapContentWidth()
+                                        .offset(
+                                            y = if (message.sender == Sender.User) {
+                                                USER_BUBBLE_TEXT_OPTICAL_OFFSET
+                                            } else {
+                                                0.dp
+                                            }
+                                        ),
+                                )
+                            }
                         }
                     }
-                }
-
-                if (enabledToolIds.isNotEmpty()) {
-                    UserMessageToolLogos(
-                        enabledToolIds = enabledToolIds,
-                        modifier = Modifier
-                            .align(Alignment.TopEnd)
-                            .padding(
-                                end = 10.dp,
-                                top = 7.dp,
-                            ),
-                    )
                 }
                 
                 // 展开/收起按钮 - 浮动在底部，带有渐变背景

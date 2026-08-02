@@ -894,6 +894,7 @@ fun ChatScreen(
                     )
                     modelParametersTarget = null
                 },
+                onAutoLoad = { config -> viewModel.loadModelParameters(config) },
             )
         }
 

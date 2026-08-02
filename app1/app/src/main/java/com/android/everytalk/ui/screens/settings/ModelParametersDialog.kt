@@ -1,6 +1,10 @@
 package com.android.everytalk.ui.screens.settings
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -42,6 +46,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -87,8 +92,10 @@ import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.components.dialog.appDialogSubtextColor
 import java.util.Locale
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 
-private val codexThinkingLevels = listOf("none", "low", "medium", "high", "xhigh", "max")
+private val codexThinkingLevels = listOf("none", "minimal", "low", "medium", "high", "xhigh", "max")
 private val anthropicThinkingLevels = listOf("none", "low", "medium", "high", "max")
 private val geminiThinkingLevels = listOf("none", "minimal", "low", "medium", "high")
 private val openAICompatibleThinkingLevels = listOf("none", "low", "medium", "high", "xhigh", "max")
@@ -121,18 +128,33 @@ internal fun thinkingLevelOptions(protocol: ModelParameterProtocol): List<String
     ModelParameterProtocol.OPENAI_COMPATIBLE -> openAICompatibleThinkingLevels
 }
 
+internal fun effectiveThinkingLevelOptions(
+    protocol: ModelParameterProtocol,
+    modelEfforts: Set<String> = emptySet(),
+): List<String> {
+    if (modelEfforts.isEmpty()) return thinkingLevelOptions(protocol)
+    val defaults = thinkingLevelOptions(protocol)
+    val normalized = modelEfforts
+        .map(String::trim)
+        .filter(String::isNotEmpty)
+        .distinctBy(String::lowercase)
+    return defaults.filter { preset -> normalized.any { it.equals(preset, ignoreCase = true) } } +
+        normalized.filter { value -> defaults.none { it.equals(value, ignoreCase = true) } }
+}
+
 internal fun thinkingLevelMenuOptions(
     protocol: ModelParameterProtocol,
     currentValue: String,
     customValues: List<String> = emptyList(),
+    modelEfforts: Set<String> = emptySet(),
 ): List<String> {
-    val presets = thinkingLevelOptions(protocol)
-    val normalizedCurrent = normalizeThinkingLevel(protocol, currentValue)
+    val presets = effectiveThinkingLevelOptions(protocol, modelEfforts)
+    val normalizedCurrent = normalizeThinkingLevel(protocol, currentValue, modelEfforts)
     if (protocol != ModelParameterProtocol.OPENAI_COMPATIBLE) return presets
-    return presets + normalizeCustomThinkingLevels(
+    return (presets + normalizeCustomThinkingLevels(
         protocol = protocol,
         values = customValues + normalizedCurrent,
-    )
+    )).distinctBy { it.lowercase() }
 }
 
 internal fun normalizeCustomThinkingLevels(
@@ -150,6 +172,7 @@ internal fun normalizeCustomThinkingLevels(
 internal fun selectedThinkingLevelValue(
     protocol: ModelParameterProtocol,
     parameters: ModelParameters,
+    modelEfforts: Set<String> = emptySet(),
 ): String {
     val selected = when (protocol) {
         ModelParameterProtocol.CODEX -> if (parameters.reasoningMode == ReasoningMode.DISABLED) {
@@ -173,10 +196,10 @@ internal fun selectedThinkingLevelValue(
             }
         }
     }
-    val normalized = normalizeThinkingLevel(protocol, selected).ifEmpty { DEFAULT_REASONING_EFFORT }
+    val normalized = normalizeThinkingLevel(protocol, selected, modelEfforts).ifEmpty { DEFAULT_REASONING_EFFORT }
     return if (
         protocol == ModelParameterProtocol.OPENAI_COMPATIBLE ||
-        normalized in thinkingLevelOptions(protocol)
+        normalized in effectiveThinkingLevelOptions(protocol, modelEfforts)
     ) {
         normalized
     } else {
@@ -184,15 +207,34 @@ internal fun selectedThinkingLevelValue(
     }
 }
 
+internal fun automaticThinkingLevelValue(
+    protocol: ModelParameterProtocol,
+    currentValue: String,
+    supportsReasoning: Boolean?,
+    modelEfforts: Set<String> = emptySet(),
+): String = when {
+    supportsReasoning == false -> "none"
+    modelEfforts.isNotEmpty() -> effectiveThinkingLevelOptions(protocol, modelEfforts).let { options ->
+        options.firstOrNull { it.equals(currentValue, ignoreCase = true) }
+            ?: options.firstOrNull { it == DEFAULT_REASONING_EFFORT }
+            ?: options.firstOrNull { it != "none" }
+            ?: "none"
+    }
+    supportsReasoning == true -> DEFAULT_REASONING_EFFORT
+    protocol == ModelParameterProtocol.OPENAI_COMPATIBLE -> currentValue
+    else -> DEFAULT_REASONING_EFFORT
+}
+
 internal fun applyThinkingLevelSelection(
     protocol: ModelParameterProtocol,
     parameters: ModelParameters,
     selectedValue: String,
+    modelEfforts: Set<String> = emptySet(),
 ): ModelParameters {
-    val normalizedValue = normalizeThinkingLevel(protocol, selectedValue)
+    val normalizedValue = normalizeThinkingLevel(protocol, selectedValue, modelEfforts)
     require(normalizedValue.isNotEmpty()) { "思考程度参数不能为空" }
     if (protocol != ModelParameterProtocol.OPENAI_COMPATIBLE) {
-        require(normalizedValue in thinkingLevelOptions(protocol)) {
+        require(normalizedValue in effectiveThinkingLevelOptions(protocol, modelEfforts)) {
             "当前渠道不支持参数：$normalizedValue"
         }
     }
@@ -236,9 +278,15 @@ internal fun applyThinkingLevelSelection(
     }
 }
 
-private fun normalizeThinkingLevel(protocol: ModelParameterProtocol, value: String): String {
+private fun normalizeThinkingLevel(
+    protocol: ModelParameterProtocol,
+    value: String,
+    modelEfforts: Set<String> = emptySet(),
+): String {
     val trimmed = value.trim()
-    return thinkingLevelOptions(protocol).firstOrNull { it.equals(trimmed, ignoreCase = true) } ?: trimmed
+    return effectiveThinkingLevelOptions(protocol, modelEfforts)
+        .firstOrNull { it.equals(trimmed, ignoreCase = true) }
+        ?: trimmed
 }
 
 private fun updateOpenAIReasoningParameter(
@@ -273,10 +321,19 @@ internal fun ModelParametersDialog(
     contextUsageSnapshot: ContextUsageSnapshot? = null,
     onDismissRequest: () -> Unit,
     onConfirm: (ApiConfig) -> Unit,
+    onAutoLoad: (suspend (ApiConfig) -> Result<ApiConfig>)? = null,
 ) {
     val protocol = remember(config.channel) { modelParameterProtocol(config.channel) }
+    val coroutineScope = rememberCoroutineScope()
+    var workingConfig by remember(config) { mutableStateOf(config) }
     var selectedValue by remember(config.id, protocol, config.modelParameters) {
-        mutableStateOf(selectedThinkingLevelValue(protocol, config.modelParameters))
+        mutableStateOf(
+            selectedThinkingLevelValue(
+                protocol,
+                config.modelParameters,
+                config.modelParameters.resolvedCapability?.reasoningEfforts.orEmpty(),
+            )
+        )
     }
     var customValues by remember(config.id, protocol, config.modelParameters) {
         mutableStateOf(
@@ -293,24 +350,95 @@ internal fun ModelParametersDialog(
         mutableStateOf(config.modelParameters.maxContextTokens.toString())
     }
     var errorText by remember(config.id) { mutableStateOf<String?>(null) }
-    val menuOptions = thinkingLevelMenuOptions(protocol, selectedValue, customValues)
+    var isAutoLoading by remember(config.id) { mutableStateOf(false) }
+    val resolvedCapability = workingConfig.modelParameters.resolvedCapability
+    val modelEfforts = resolvedCapability?.reasoningEfforts.orEmpty()
+    val menuOptions = thinkingLevelMenuOptions(
+        protocol,
+        selectedValue,
+        customValues,
+        modelEfforts,
+    )
     val dialogBackground = appDialogContainerColor()
     val contentColor = appDialogContentColor()
     val borderColor = appDialogBorderColor()
-    val resolvedCapability = config.modelParameters.resolvedCapability
     val maxOutputSource = resolvedCapability?.maxOutputSource ?: ModelCapabilitySource.USER_OVERRIDE
     val contextWindowSource = resolvedCapability?.contextWindowSource ?: ModelCapabilitySource.USER_OVERRIDE
+    val reasoningSource = resolvedCapability?.reasoningSource
+    val refreshRotation = if (isAutoLoading) {
+        val transition = rememberInfiniteTransition(label = "模型参数加载旋转")
+        val rotation by transition.animateFloat(
+            initialValue = 0f,
+            targetValue = 360f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(durationMillis = 800, easing = LinearEasing),
+            ),
+            label = "模型参数加载角度",
+        )
+        rotation
+    } else {
+        0f
+    }
+
+    fun autoLoad() {
+        val loader = onAutoLoad ?: return
+        if (isAutoLoading) return
+        coroutineScope.launch {
+            isAutoLoading = true
+            errorText = null
+            try {
+                loader(workingConfig).fold(
+                    onSuccess = { loadedConfig ->
+                        workingConfig = loadedConfig
+                        selectedValue = automaticThinkingLevelValue(
+                            protocol = protocol,
+                            currentValue = selectedThinkingLevelValue(
+                                protocol,
+                                loadedConfig.modelParameters,
+                                loadedConfig.modelParameters.resolvedCapability?.reasoningEfforts.orEmpty(),
+                            ),
+                            supportsReasoning = loadedConfig.modelParameters
+                                .resolvedCapability
+                                ?.supportsReasoning,
+                            modelEfforts = loadedConfig.modelParameters
+                                .resolvedCapability
+                                ?.reasoningEfforts
+                                .orEmpty(),
+                        )
+                        customValues = normalizeCustomThinkingLevels(
+                            protocol = protocol,
+                            values = loadedConfig.modelParameters.customReasoningEfforts,
+                        )
+                        maxOutputTokens = (
+                            loadedConfig.maxTokens ?: DEFAULT_MAX_OUTPUT_TOKENS
+                        ).toString()
+                        maxContextTokens = loadedConfig.modelParameters.maxContextTokens.toString()
+                    },
+                    onFailure = { error ->
+                        errorText = "自动获取失败：${error.message ?: "未知错误"}"
+                    },
+                )
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                errorText = "自动获取失败：${error.message ?: "未知错误"}"
+            } finally {
+                isAutoLoading = false
+            }
+        }
+    }
 
     fun save() {
         val update = try {
             val limits = parseModelTokenLimits(maxOutputTokens, maxContextTokens)
             val updated = applyThinkingLevelSelection(
                 protocol = protocol,
-                parameters = config.modelParameters.copy(
+                parameters = workingConfig.modelParameters.copy(
                     customReasoningEfforts = normalizeCustomThinkingLevels(protocol, customValues),
                     maxContextTokens = limits.maxContextTokens,
                 ),
                 selectedValue = selectedValue,
+                modelEfforts = modelEfforts,
             )
             if (protocol == ModelParameterProtocol.OPENAI_COMPATIBLE) {
                 updated.openAICompatibleRequestParameters()
@@ -324,7 +452,7 @@ internal fun ModelParametersDialog(
             return
         }
         onConfirm(
-            config.copy(modelParameters = update.first)
+            workingConfig.copy(modelParameters = update.first)
                 .withUserTokenLimits(update.second)
         )
     }
@@ -337,20 +465,46 @@ internal fun ModelParametersDialog(
         titleContentColor = contentColor,
         textContentColor = contentColor,
         title = {
-            Column {
-                Text(
-                    text = "模型参数",
-                    style = MaterialTheme.typography.titleLarge,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = config.name.ifBlank { config.model },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = appDialogSubtextColor(),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "模型参数",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = config.name.ifBlank { config.model },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = appDialogSubtextColor(),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                IconButton(
+                    onClick = ::autoLoad,
+                    enabled = onAutoLoad != null && !isAutoLoading,
+                    modifier = Modifier
+                        .size(40.dp)
+                        .semantics {
+                            contentDescription = if (isAutoLoading) {
+                                "正在自动获取模型参数"
+                            } else {
+                                "自动获取模型参数"
+                            }
+                        },
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_refresh),
+                        contentDescription = null,
+                        modifier = Modifier
+                            .size(20.dp)
+                            .rotate(refreshRotation),
+                    )
+                }
             }
         },
         text = {
@@ -362,7 +516,9 @@ internal fun ModelParametersDialog(
             ) {
                 ModelParameterRow(
                     label = "思考程度",
-                    supportingText = "模型推理强度",
+                    supportingText = reasoningSource?.let {
+                        "模型推理强度 · ${modelCapabilitySourceLabel(it)}"
+                    } ?: "模型推理强度",
                 ) {
                     ThinkingLevelDropdown(
                         options = menuOptions,

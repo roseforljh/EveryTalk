@@ -710,6 +710,7 @@ fun SettingsScreen(
                 viewModel.updateConfig(updatedConfig, isImageGen = false)
                 modelParametersTarget = null
             },
+            onAutoLoad = { config -> viewModel.loadModelParameters(config) },
         )
     }
     

@@ -1,6 +1,7 @@
 package com.android.everytalk.ui.screens.BubbleMain.Main
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Icon
@@ -8,6 +9,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
@@ -18,9 +20,52 @@ internal fun supportedUserMessageToolIds(toolIds: List<String>): List<String> = 
     .distinct()
     .filter { it == MessageToolIds.WEB_SEARCH || it == MessageToolIds.MCP }
 
-internal fun resolveUserMessageContentEndPaddingDp(toolCount: Int): Float {
-    if (toolCount <= 0) return 10f
-    return 10f + toolCount * 16f + (toolCount - 1) * 5f + 6f
+@Composable
+internal fun UserMessageInlineContent(
+    enabledToolIds: List<String>,
+    modifier: Modifier = Modifier,
+    textContent: @Composable () -> Unit,
+) {
+    val supportedToolIds = supportedUserMessageToolIds(enabledToolIds)
+    if (supportedToolIds.isEmpty()) {
+        Box(modifier = modifier) { textContent() }
+        return
+    }
+
+    Layout(
+        modifier = modifier.testTag("user-message-inline-content"),
+        content = {
+            Box { textContent() }
+            UserMessageToolLogos(enabledToolIds = supportedToolIds)
+        },
+    ) { measurables, constraints ->
+        val logoPlaceable = measurables[1].measure(
+            constraints.copy(minWidth = 0, minHeight = 0),
+        )
+        val spacingPx = 6.dp.roundToPx()
+        val textPlaceable = measurables[0].measure(
+            constraints.copy(
+                minWidth = 0,
+                minHeight = 0,
+                maxWidth = (constraints.maxWidth - logoPlaceable.width - spacingPx)
+                    .coerceAtLeast(0),
+            ),
+        )
+        val actualSpacingPx = if (textPlaceable.width > 0) spacingPx else 0
+        val width = (textPlaceable.width + actualSpacingPx + logoPlaceable.width)
+            .coerceIn(constraints.minWidth, constraints.maxWidth)
+        val height = maxOf(textPlaceable.height, logoPlaceable.height)
+            .coerceIn(constraints.minHeight, constraints.maxHeight)
+        val logoBaselineLiftPx = 2.dp.roundToPx()
+
+        layout(width, height) {
+            textPlaceable.placeRelative(0, 0)
+            logoPlaceable.placeRelative(
+                x = textPlaceable.width + actualSpacingPx,
+                y = (height - logoPlaceable.height - logoBaselineLiftPx).coerceAtLeast(0),
+            )
+        }
+    }
 }
 
 @Composable

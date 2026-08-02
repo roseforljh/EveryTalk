@@ -424,7 +424,11 @@ private fun ReasoningBottomSheet(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .weight(1f),
+                    .weight(1f)
+                    .testTag(
+                        "reasoning-sheet-state-${sheetState.currentValue.name}" +
+                            "-overflow-$manualExpansionEnabled",
+                    ),
             ) {
                 Box(
                     modifier = Modifier
