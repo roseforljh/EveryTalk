@@ -1,8 +1,9 @@
 # 参考 Hermes 的模型与上下文能力改进计划
 
-> 状态：第一至第五阶段已完成，后续架构阶段待实施  
+> 状态：第一至第六阶段已完成，后续架构阶段待实施
 > 记录日期：2026-08-02  
 > 首轮实施完成日期：2026-08-02  
+> 四协议完整能力加载完成日期：2026-08-02
 > 对照项目：`NousResearch/hermes-agent`  
 > 对照提交：`87bc710609f8b89b6e6b4aa418dde8ee30ec6873`  
 > 对照版本：Hermes Agent `v0.19.1`，仓库发布版 `v2026.7.30`  
@@ -52,7 +53,7 @@
 | 能力 | 当前基础 | 主要差距 |
 |---|---|---|
 | 模型参数 | `ModelParameters.kt` 已支持思考参数、自定义参数、最大输出和上下文窗口 | 默认值仍是通用的 `4096 / 128000`，缺少逐模型能力来源和可信度 |
-| 模型列表 | `ApiClient.fetchModels()` 兼容 Gemini、OpenAI 风格和常见反代格式 | 只保留模型 ID，丢弃上下文、最大输出、模态和能力字段 |
+| 模型列表 | `ApiClient.getModelCatalog()` 已保留常见能力字段并带 24 小时端点缓存 | 当前只读取第一页，自动加载只查模型列表，缺少单模型详情、社区目录真实数据和家族兜底 |
 | 请求裁剪 | `MessageContextWindow.kt` 按完整对话轮次裁剪，保留系统消息和最新一轮 | 字符数直接当 token，英文明显高估，工具 schema 未计入，媒体统一估算为 4096 |
 | 请求组装 | `MessageSenderSendFlow.kt` 已集中组装系统提示、历史和工具 | 当前先裁剪消息，后组装工具，裁剪阶段无法看到完整请求成本 |
 | usage | OpenAI Chat 和 Responses 已读取部分缓存 token 字段 | `AppStreamEvent` 没有 usage 事件，真实输入、输出、缓存和推理 token 没有进入状态层 |
@@ -93,18 +94,24 @@ Provider 请求与流式解析
 
 ### 5.2 能力结构
 
-首版最小字段：
+统一字段：
 
 ```text
 modelId
 providerProtocol
 endpointIdentity
 contextWindowTokens
+maxInputTokens
 maxOutputTokens
 inputModalities
 outputModalities
 supportsReasoning
-source
+reasoningEfforts
+contextWindowSource
+maxInputSource
+maxOutputSource
+modalitiesSource
+reasoningSource
 sourceUpdatedAt
 ```
 
@@ -135,12 +142,14 @@ FAMILY_FALLBACK
 
 ### 5.4 实施任务
 
-- [x] 新增最小 `ModelCapability` 数据结构和来源枚举。
-- [x] 把 `/models` 的公共解析逻辑从“只提取 ID”扩展为“保留可识别能力字段”。
+- [x] 扩展 `ModelCapability` 数据结构，为最大输入、推理等级和每类字段分别记录来源。
+- [x] 把 `/models` 和单模型详情的公共解析逻辑扩展为完整保留可识别能力字段。
 - [x] 保留现有模型 ID 列表接口，避免一次性改动全部调用方。
-- [x] 为 Gemini、Anthropic、OpenAI 官方渠道建立小型官方能力目录，实施时逐项核对最新官方文档。
+- [x] 为 Gemini、Anthropic、OpenAI 官方渠道采用官方详情端点或小型官方能力目录，实施时逐项核对最新官方文档。
 - [x] OpenAI 兼容渠道不推断统一思考参数，仅采纳端点元数据、用户值或保守回退。
-- [x] 给能力解析结果增加来源、更新时间和过期策略。
+- [x] 接入 `models.dev` 社区目录，并实现内存缓存、磁盘缓存、24 小时有效期、失败时过期缓存回退、响应体限制和原子写入。
+- [x] 新增小型模型家族兜底表，只在实时、官方、缓存和社区数据全部缺失时生效。
+- [x] 给每项能力解析结果增加独立来源、更新时间和过期策略。
 - [x] 参数对话框显示生效值及来源，用户填写的覆盖值始终优先。
 
 ### 5.5 主要涉及文件
@@ -158,7 +167,7 @@ FAMILY_FALLBACK
 - [x] 官方渠道未返回能力字段时，能按官方目录、缓存、社区目录、家族兜底依次降级。
 - [x] 界面能够区分“用户设置”“端点报告”“官方目录”“社区回退”“估算”。
 - [x] 旧配置没有能力字段时仍可正常解析。
-- [x] 单元测试覆盖来源优先级、缓存隔离、过期和旧数据兼容。
+- [x] 单元测试覆盖来源优先级、字段独立合并、缓存隔离、过期和旧数据兼容。
 
 ### 5.7 风险
 
@@ -336,9 +345,134 @@ OTHER
 - [x] 切换模型或端点后立即使用新的窗口值。
 - [x] 实测值和估算值不会被混成一个无来源数字。
 
-## 十、后续架构阶段
+## 十、第六阶段：四协议完整模型能力加载
 
-### 10.1 结构化滚动摘要与原消息软归档
+### 10.1 本阶段边界
+
+本阶段完整覆盖 EveryTalk 现有的四种 `ModelParameterProtocol`：`CODEX`、`ANTHROPIC`、`GEMINI`、`OPENAI_COMPATIBLE`。`CODEX` 继续表示当前应用已经实现的 OpenAI Responses API Key 协议。本阶段不引入 ChatGPT 订阅账号 OAuth、账号 ID 请求头或专用登录系统。
+
+“完整加载”表示应用会执行协议允许的单模型详情、完整分页列表、端点扩展字段解析、官方目录、端点缓存、`models.dev` 社区目录、模型家族兜底和保守默认值整条链路。上游接口没有公开精确限制时，界面必须标明回退来源，禁止把推测值显示成端点实测值。
+
+### 10.2 统一能力与字段独立合并
+
+每个候选能力至少包含：
+
+```text
+modelId
+providerId
+family
+providerProtocol
+endpointIdentity
+contextWindowTokens
+maxInputTokens
+maxOutputTokens
+inputModalities
+outputModalities
+supportsReasoning
+reasoningEfforts
+source
+cachedSource
+sourceUpdatedAt
+```
+
+解析结果分别保存上下文窗口、最大输入、最大输出、模态和推理参数的来源。某个高优先级候选只提供模型 ID 时，不得遮住低优先级候选提供的 Token 限制。最大输出必须小于上下文窗口；最大输入不得超过上下文窗口；无效值只丢弃对应字段。
+
+统一优先级：
+
+1. 用户已经保存的手动值。
+2. 当前端点的单模型详情。
+3. 当前端点的模型列表元数据。
+4. EveryTalk 已核对的官方目录。
+5. 当前端点未过期的本地缓存。
+6. `models.dev` 社区目录。
+7. 小型模型家族兜底。
+8. 保守默认值。
+
+自动加载只修改参数对话框草稿。用户点击保存后才写入配置。用户在加载后继续编辑时，以最后一次用户编辑为准。
+
+### 10.3 四协议实现矩阵
+
+| 协议 | 单模型详情 | 完整列表与分页 | 认证 | 能力字段 |
+|---|---|---|---|---|
+| `CODEX` | `GET /v1/models/{model_id}`，详情缺字段时继续回退 | `GET /v1/models`，兼容 `has_more/last_id` 形式 | `Authorization: Bearer` | 常见上下文、最大输入、最大输出、模态、推理能力和推理等级扩展字段；OpenAI 标准字段缺少限制时由官方目录或社区目录补齐 |
+| `ANTHROPIC` | `GET /v1/models/{model_id}` | `GET /v1/models?limit=1000`，按 `has_more` 和 `last_id` 追加 `after_id` | `x-api-key` 与 `anthropic-version` | `max_input_tokens`、`max_tokens`、`capabilities`、模态和端点扩展的推理等级 |
+| `GEMINI` | `GET /v1beta/models/{model_id}` | `GET /v1beta/models?pageSize=1000`，按 `nextPageToken` 继续请求 | Google 官方使用 `x-goog-api-key` 请求头，反代使用 Bearer | `inputTokenLimit`、`outputTokenLimit`、`supportedGenerationMethods`、模态、thinking 配置和端点扩展的思考等级 |
+| `OPENAI_COMPATIBLE` | 优先尝试 `GET /v1/models/{model_id}`，404、405 或不兼容响应时继续列表和回退链 | `GET /v1/models`，兼容 `has_more/last_id`、`next`、`next_page` 和游标形式 | `Authorization: Bearer` | 解析常见 snake_case、camelCase、OpenRouter 风格 `architecture`、能力对象、推理等级数组和 `supported_parameters`；始终保留用户自定义参数入口 |
+
+所有分页设置最大页数和模型数量上限，防止错误端点返回无限游标。模型 ID 放入路径时必须进行 URL 路径段编码。日志中的密钥和查询参数必须脱敏。
+
+### 10.4 `models.dev` 社区目录
+
+- [x] 从 `https://models.dev/api.json` 获取目录，并限制最大响应体。
+- [x] 解析 provider、模型 ID、`limit.context`、`limit.output`、`reasoning`、`modalities` 和 family。
+- [x] 优先按用户配置中的 provider、端点 host 和模型 ID匹配；精确 provider 无法确认时才做全目录模型 ID匹配。
+- [x] 多个厂商出现同名模型且无法确认来源时，Token 限制取安全的较小值，能力集合取共同支持项，来源保持 `COMMUNITY_CATALOG`。
+- [x] 使用进程内缓存和进程私有磁盘缓存，默认有效期 24 小时。
+- [x] 网络失败时允许读取过期磁盘缓存；损坏缓存直接忽略。
+- [x] 磁盘写入使用同目录临时文件和原子替换，写入失败不破坏旧缓存。
+
+### 10.5 家族兜底与官方目录
+
+- [x] 官方目录只写入已经从官方资料核对的精确模型规格和推理等级，并记录核对时间。
+- [x] 官方模型 ID 支持带日期版本和常见别名匹配，禁止让宽泛前缀覆盖无关模型。
+- [x] 家族兜底只保存少量稳定家族的安全下限，不维护 Hermes 那类大规模硬编码表。
+- [x] 家族兜底只补缺失字段，不覆盖端点、官方、缓存或社区提供的字段。
+- [x] 无任何可用数据时沿用 `4096 / 128000` 保守默认值，并显示“估算”。
+
+### 10.6 网络、缓存与失败策略
+
+- [x] 单模型详情失败后继续列表，不提前终止自动加载。
+- [x] 列表某一页失败时，已取得的页面仍可参与解析；第一页失败时读取端点缓存。
+- [x] 端点缓存键包含协议、规范化 API 地址和模型 ID，缓存保留原始来源。
+- [x] `CancellationException` 始终继续抛出。
+- [x] 详情、分页和社区目录均限制响应体大小、页数、模型总数和错误正文长度。
+- [x] 自动加载有并发防护，同一对话框只接受最后一次请求结果。
+
+### 10.7 UI 与交互
+
+- [x] 思考程度下拉选项优先采用当前模型解析出的 `reasoningEfforts`。
+- [x] 协议官方默认值只在模型没有返回具体等级时出现，四协议不再共用同一组等级。
+- [x] OpenAI 兼容渠道的“自定义”选项始终保留，用户自定义值不因自动加载被删除。
+- [x] 最大输出和上下文窗口继续保持简洁布局，并分别显示真实来源。
+- [x] 加载按钮展示加载中、成功和错误状态，失败不清空当前草稿。
+
+### 10.8 测试与验收矩阵
+
+| 验收项 | `CODEX` | `ANTHROPIC` | `GEMINI` | `OPENAI_COMPATIBLE` |
+|---|---:|---:|---:|---:|
+| 单模型对象解析 | [x] | [x] | [x] | [x] |
+| 详情 URL 与认证 | [x] | [x] | [x] | [x] |
+| 列表格式解析 | [x] | [x] | [x] | [x] |
+| 分页游标解析 | [x] | [x] | [x] | [x] |
+| Token 限制 | [x] | [x] | [x] | [x] |
+| 推理能力和等级 | [x] | [x] | [x] | [x] |
+| 端点失败回退 | [x] | [x] | [x] | [x] |
+| 用户值保持最高优先级 | [x] | [x] | [x] | [x] |
+
+公共验收项：
+
+- [x] `models.dev` 精确匹配、歧义匹配、网络缓存、过期缓存和损坏缓存测试通过。
+- [x] 家族兜底只补缺失字段，字段独立来源测试通过。
+- [x] 自动加载后只更新草稿，保存行为和旧配置兼容测试通过。
+- [x] 参数对话框 Compose 测试通过。
+- [x] `:app:compileDebugKotlin` 通过。
+- [x] `:app:assembleDebug` 通过。
+- [x] `:app:testDebugUnitTest` 全量通过，909 项执行、1 项按既有配置跳过。
+
+### 10.9 逐项实施顺序
+
+1. 修正统一数据结构和字段独立解析器。
+2. 实现四协议 URL、认证、详情请求和分页游标。
+3. 接入官方目录、`models.dev` 和家族兜底。
+4. 将当前模型自动加载入口切换到完整候选链。
+5. 让思考程度下拉使用模型级推理等级，同时保留兼容渠道自定义值。
+6. 补齐纯解析、缓存、网络请求、控制器和 Compose 测试。
+7. 执行定向单测、Kotlin 编译和 Debug APK 构建。
+8. 回读本节所有复选框，只按真实结果标记完成。
+
+## 十一、后续架构阶段
+
+### 11.1 结构化滚动摘要与原消息软归档
 
 目标：在长会话中保留事实、约束、决策和未完成事项，减少简单丢弃旧消息造成的信息断层。
 
@@ -351,7 +485,7 @@ OTHER
 
 验收重点：恢复历史后摘要连续、原消息可见、失败不丢数据、同一轮不会被重复摘要。
 
-### 10.2 MCP 工具渐进加载
+### 11.2 MCP 工具渐进加载
 
 目标：减少大型 MCP 工具集合占用的上下文，同时保证模型知道可用能力。
 
@@ -365,7 +499,7 @@ OTHER
 
 EveryTalk 首版不采用 Hermes 当前“只要存在可延迟工具就启用桥”的逻辑。激活条件必须由真实 schema 成本和兼容性测试决定。
 
-### 10.3 Room 全文搜索与小容量长期记忆
+### 11.3 Room 全文搜索与小容量长期记忆
 
 - [ ] 使用 Room FTS 为消息文本和必要的元数据建立本地全文索引。
 - [ ] 搜索结果定位到会话和原消息，不复制整份消息数据。
@@ -374,14 +508,14 @@ EveryTalk 首版不采用 Hermes 当前“只要存在可延迟工具就启用�
 - [ ] 用户可以查看、编辑、禁用和删除记忆。
 - [ ] 首版不引入向量数据库或云端记忆服务。
 
-### 10.4 辅助模型体系
+### 11.4 辅助模型体系
 
 - [ ] 将压缩模型、标题模型等辅助模型与主聊天模型分开配置。
 - [ ] 未配置辅助模型时回退到主模型或本地规则。
 - [ ] 辅助请求使用独立 usage 记录，不能计入主回答 token。
 - [ ] 摘要模型失败时不影响原会话继续发送。
 
-## 十一、明确暂不照搬的 Hermes 设计
+## 十二、明确暂不照搬的 Hermes 设计
 
 1. 不复制 Hermes 在不同运行路径和模型覆盖中使用的多套固定压缩阈值，例如 50% 与 85%。EveryTalk 先以能力元数据、预留输出和实测偏差确定自己的阈值。
 2. 不采用“存在任意可延迟工具就强制启用工具桥”的规则。
@@ -390,7 +524,7 @@ EveryTalk 首版不采用 Hermes 当前“只要存在可延迟工具就启用�
 5. 不把社区模型目录当作官方事实来源。
 6. 不在摘要或裁剪过程中删除 Room 原消息。
 
-## 十二、实施顺序与依赖
+## 十三、实施顺序与依赖
 
 ```text
 阶段 1 模型能力元数据
@@ -416,7 +550,7 @@ EveryTalk 首版不采用 Hermes 当前“只要存在可延迟工具就启用�
 
 每个阶段单独合并和验证。阶段 1 至阶段 3 完成前，不开始上下文占用 UI；完整请求估算完成前，不实现自动摘要阈值；工具 schema 成本可测量前，不实现 MCP 渐进加载。
 
-## 十三、验证矩阵
+## 十四、验证矩阵
 
 | 变更类型 | 必须验证 |
 |---|---|
@@ -429,7 +563,7 @@ EveryTalk 首版不采用 Hermes 当前“只要存在可延迟工具就启用�
 | 每个 Kotlin 阶段 | 相关单测通过后执行 `:app:compileDebugKotlin` |
 | Compose、资源或数据库阶段 | 至少执行一次 `:app:assembleDebug` |
 
-## 十四、阶段完成定义
+## 十五、阶段完成定义
 
 每一阶段只有同时满足以下条件才算完成：
 
@@ -440,7 +574,7 @@ EveryTalk 首版不采用 Hermes 当前“只要存在可延迟工具就启用�
 - [x] 相关测试、Kotlin 编译或 Debug APK 构建通过。
 - [x] 计划中的验收项已逐条回读核对。
 
-## 十五、参考链接
+## 十六、参考链接
 
 - [Hermes Agent 仓库固定提交](https://github.com/NousResearch/hermes-agent/tree/87bc710609f8b89b6e6b4aa418dde8ee30ec6873)
 - [模型元数据解析](https://github.com/NousResearch/hermes-agent/blob/87bc710609f8b89b6e6b4aa418dde8ee30ec6873/agent/model_metadata.py)

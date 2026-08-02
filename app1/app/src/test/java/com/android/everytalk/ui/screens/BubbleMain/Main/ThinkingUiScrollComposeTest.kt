@@ -337,8 +337,37 @@ class ThinkingUiScrollComposeTest {
         composeRule.mainClock.advanceTimeBy(1_000L)
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("reasoning-sheet-review-toggle").performClick()
-        composeRule.mainClock.advanceTimeBy(2_000L)
         composeRule.waitForIdle()
+        composeRule.mainClock.advanceTimeBy(1_000L)
+        composeRule.waitForIdle()
+        composeRule.mainClock.advanceTimeBy(1_000L)
+        composeRule.waitForIdle()
+        val expandedStateNodes = composeRule
+            .onAllNodesWithTag("reasoning-sheet-state-Expanded-overflow-true")
+            .fetchSemanticsNodes()
+        assertTrue(
+            "长内容未进入展开状态：partialOverflow=" +
+                composeRule.onAllNodesWithTag(
+                    "reasoning-sheet-state-PartiallyExpanded-overflow-true",
+                ).fetchSemanticsNodes().size +
+                ", partialNoOverflow=" +
+                composeRule.onAllNodesWithTag(
+                    "reasoning-sheet-state-PartiallyExpanded-overflow-false",
+                ).fetchSemanticsNodes().size +
+                ", expandedNoOverflow=" +
+                composeRule.onAllNodesWithTag(
+                    "reasoning-sheet-state-Expanded-overflow-false",
+                ).fetchSemanticsNodes().size +
+                ", hiddenOverflow=" +
+                composeRule.onAllNodesWithTag(
+                    "reasoning-sheet-state-Hidden-overflow-true",
+                ).fetchSemanticsNodes().size +
+                ", hiddenNoOverflow=" +
+                composeRule.onAllNodesWithTag(
+                    "reasoning-sheet-state-Hidden-overflow-false",
+                ).fetchSemanticsNodes().size,
+            expandedStateNodes.size == 1,
+        )
 
         val expandedTop = composeRule
             .onNodeWithTag("reasoning-sheet-content")
@@ -376,7 +405,10 @@ class ThinkingUiScrollComposeTest {
         composeRule.mainClock.advanceTimeBy(1_000L)
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("reasoning-sheet-review-toggle").performClick()
-        composeRule.mainClock.advanceTimeBy(2_000L)
+        composeRule.waitForIdle()
+        composeRule.mainClock.advanceTimeBy(1_000L)
+        composeRule.waitForIdle()
+        composeRule.mainClock.advanceTimeBy(1_000L)
         composeRule.waitForIdle()
 
         val defaultTop = composeRule

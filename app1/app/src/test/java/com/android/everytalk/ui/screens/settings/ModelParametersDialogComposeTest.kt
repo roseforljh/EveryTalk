@@ -14,7 +14,12 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.CustomModelParameter
 import com.android.everytalk.data.DataClass.ContextUsageSnapshot
+import com.android.everytalk.data.DataClass.ModelCapabilityCandidate
+import com.android.everytalk.data.DataClass.ModelCapabilitySource
+import com.android.everytalk.data.DataClass.ModelParameterProtocol
 import com.android.everytalk.data.DataClass.ModelParameters
+import com.android.everytalk.data.DataClass.ReasoningMode
+import com.android.everytalk.data.DataClass.withModelCapabilityDefaults
 import com.android.everytalk.data.network.TokenUsage
 import com.android.everytalk.data.network.TokenUsageSource
 import org.junit.Assert.assertEquals
@@ -148,6 +153,61 @@ class ModelParametersDialogComposeTest {
         composeRule.runOnIdle {
             assertEquals(8192, confirmedConfig?.maxTokens)
             assertEquals(200000, confirmedConfig?.modelParameters?.maxContextTokens)
+        }
+    }
+
+    @Test
+    fun `右上角加载按钮自动更新思考能力和 token 限制`() {
+        val config = ApiConfig(
+            address = "https://api.example.com",
+            key = "secret",
+            model = "model-a",
+            provider = "Gemini",
+            name = "测试模型",
+            channel = "Gemini",
+        )
+        val loadedConfig = config.withModelCapabilityDefaults(
+            listOf(
+                ModelCapabilityCandidate(
+                    modelId = "model-a",
+                    protocol = ModelParameterProtocol.GEMINI,
+                    endpointIdentity = config.address,
+                    contextWindowTokens = 1_000_000,
+                    maxOutputTokens = 64_000,
+                    supportsReasoning = false,
+                    source = ModelCapabilitySource.LIVE_ENDPOINT,
+                )
+            )
+        )
+        var confirmedConfig: ApiConfig? = null
+
+        composeRule.setContent {
+            MaterialTheme {
+                ModelParametersDialog(
+                    config = config,
+                    onDismissRequest = {},
+                    onConfirm = { confirmedConfig = it },
+                    onAutoLoad = { Result.success(loadedConfig) },
+                )
+            }
+        }
+
+        val titleBounds = composeRule.onNodeWithText("模型参数").fetchSemanticsNode().boundsInRoot
+        val loadButton = composeRule.onNodeWithContentDescription("自动获取模型参数")
+        assertTrue(loadButton.fetchSemanticsNode().boundsInRoot.left > titleBounds.right)
+        loadButton.performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("保存").performClick()
+
+        composeRule.runOnIdle {
+            assertEquals(64_000, confirmedConfig?.maxTokens)
+            assertEquals(1_000_000, confirmedConfig?.modelParameters?.maxContextTokens)
+            assertEquals(ReasoningMode.DISABLED, confirmedConfig?.modelParameters?.reasoningMode)
+            assertEquals("none", confirmedConfig?.modelParameters?.reasoningEffort)
+            assertEquals(
+                ModelCapabilitySource.LIVE_ENDPOINT,
+                confirmedConfig?.modelParameters?.resolvedCapability?.contextWindowSource,
+            )
         }
     }
 

@@ -1,10 +1,17 @@
 package com.android.everytalk.ui.screens.BubbleMain.Main
 
 import android.app.Application
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.android.everytalk.data.DataClass.MessageToolIds
 import org.junit.Assert.assertEquals
@@ -46,9 +53,43 @@ class UserMessageToolLogosComposeTest {
     }
 
     @Test
-    fun `tool logos reserve horizontal space without adding a bottom row`() {
-        assertEquals(10f, resolveUserMessageContentEndPaddingDp(0), 0.0001f)
-        assertEquals(32f, resolveUserMessageContentEndPaddingDp(1), 0.0001f)
-        assertEquals(53f, resolveUserMessageContentEndPaddingDp(2), 0.0001f)
+    fun `tool logos follow text in the same content layout`() {
+        var pixelsPerDp = 1f
+        composeRule.setContent {
+            pixelsPerDp = LocalDensity.current.density
+            MaterialTheme {
+                Box(modifier = Modifier.width(200.dp)) {
+                    UserMessageInlineContent(
+                        enabledToolIds = listOf(MessageToolIds.WEB_SEARCH, MessageToolIds.MCP),
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(width = 80.dp, height = 40.dp)
+                                .testTag("user-message-inline-text-test"),
+                        )
+                    }
+                }
+            }
+        }
+
+        val contentBounds = composeRule
+            .onNodeWithTag("user-message-inline-content")
+            .fetchSemanticsNode("")
+            .boundsInRoot
+        val textBounds = composeRule
+            .onNodeWithTag("user-message-inline-text-test")
+            .fetchSemanticsNode("")
+            .boundsInRoot
+        val logoBounds = composeRule
+            .onNodeWithTag("user-message-tool-logos")
+            .fetchSemanticsNode("")
+            .boundsInRoot
+
+        assertEquals(textBounds.height, contentBounds.height, pixelsPerDp)
+        assertTrue("Logo 没有排在正文后方", logoBounds.left > textBounds.right)
+        assertTrue(
+            "Logo 没有与正文底部对齐",
+            kotlin.math.abs(contentBounds.bottom - logoBounds.bottom) <= 3f * pixelsPerDp,
+        )
     }
 }

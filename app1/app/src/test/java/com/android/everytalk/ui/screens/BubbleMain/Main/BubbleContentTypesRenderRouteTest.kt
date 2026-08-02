@@ -28,16 +28,16 @@ class BubbleContentTypesRenderRouteTest {
     }
 
     @Test
-    fun `user tool logos are embedded at top end without a separate bottom row`() {
+    fun `user tool logos are part of the body content flow`() {
         val source = bubbleContentTypesSource()
-        val logoBlock = source
-            .substringAfter("UserMessageToolLogos(")
+        val inlineContentBlock = source
+            .substringAfter("UserMessageInlineContent(")
             .substringBefore("// 展开/收起按钮")
 
-        assertTrue(source.contains("resolveUserMessageContentEndPaddingDp(enabledToolIds.size)"))
-        assertTrue(logoBlock.contains(".align(Alignment.TopEnd)"))
-        assertFalse(logoBlock.contains(".align(Alignment.BottomEnd)"))
-        assertFalse(source.contains("hasToolLogos"))
+        assertTrue(inlineContentBlock.contains("UnifiedMarkdownRenderer("))
+        assertFalse(source.contains("resolveUserMessageContentEndPaddingDp"))
+        assertFalse(inlineContentBlock.contains(".align(Alignment.TopEnd)"))
+        assertFalse(inlineContentBlock.contains(".align(Alignment.BottomEnd)"))
     }
 
     @Test
