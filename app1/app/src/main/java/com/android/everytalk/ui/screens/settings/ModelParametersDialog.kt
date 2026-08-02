@@ -70,11 +70,11 @@ import androidx.compose.ui.unit.dp
 import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.CustomModelParameter
-import com.android.everytalk.data.DataClass.ContextUsageDataSource
-import com.android.everytalk.data.DataClass.ContextUsageSnapshot
 import com.android.everytalk.data.DataClass.CustomParameterType
 import com.android.everytalk.data.DataClass.DEFAULT_MAX_OUTPUT_TOKENS
 import com.android.everytalk.data.DataClass.DEFAULT_REASONING_EFFORT
+import com.android.everytalk.data.DataClass.MAX_AUTO_CONTEXT_COMPRESSION_THRESHOLD_PERCENT
+import com.android.everytalk.data.DataClass.MIN_AUTO_CONTEXT_COMPRESSION_THRESHOLD_PERCENT
 import com.android.everytalk.data.DataClass.ModelCapabilitySource
 import com.android.everytalk.data.DataClass.ModelTokenLimits
 import com.android.everytalk.data.DataClass.ModelParameterProtocol
@@ -83,6 +83,7 @@ import com.android.everytalk.data.DataClass.ReasoningMode
 import com.android.everytalk.data.DataClass.defaultOpenAICompatibleParameters
 import com.android.everytalk.data.DataClass.modelParameterProtocol
 import com.android.everytalk.data.DataClass.openAICompatibleRequestParameters
+import com.android.everytalk.data.DataClass.validateAutoContextCompressionThreshold
 import com.android.everytalk.data.DataClass.validateModelTokenLimits
 import com.android.everytalk.data.DataClass.withUserTokenLimits
 import com.android.everytalk.ui.components.dialog.AppDialogButtonShape
@@ -91,7 +92,6 @@ import com.android.everytalk.ui.components.dialog.appDialogBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.components.dialog.appDialogSubtextColor
-import java.util.Locale
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
@@ -318,7 +318,6 @@ private fun updateOpenAIReasoningParameter(
 @Composable
 internal fun ModelParametersDialog(
     config: ApiConfig,
-    contextUsageSnapshot: ContextUsageSnapshot? = null,
     onDismissRequest: () -> Unit,
     onConfirm: (ApiConfig) -> Unit,
     onAutoLoad: (suspend (ApiConfig) -> Result<ApiConfig>)? = null,
@@ -348,6 +347,20 @@ internal fun ModelParametersDialog(
     }
     var maxContextTokens by remember(config.id, config.modelParameters.maxContextTokens) {
         mutableStateOf(config.modelParameters.maxContextTokens.toString())
+    }
+    var autoCompressionEnabled by remember(config.id, config.modelParameters.autoContextCompressionEnabled) {
+        mutableStateOf(config.modelParameters.autoContextCompressionEnabled)
+    }
+    var autoCompressionThreshold by remember(
+        config.id,
+        config.modelParameters.autoContextCompressionThresholdPercent,
+    ) {
+        mutableStateOf(
+            config.modelParameters.autoContextCompressionThresholdPercent.coerceIn(
+                MIN_AUTO_CONTEXT_COMPRESSION_THRESHOLD_PERCENT,
+                MAX_AUTO_CONTEXT_COMPRESSION_THRESHOLD_PERCENT,
+            )
+        )
     }
     var errorText by remember(config.id) { mutableStateOf<String?>(null) }
     var isAutoLoading by remember(config.id) { mutableStateOf(false) }
@@ -431,11 +444,14 @@ internal fun ModelParametersDialog(
     fun save() {
         val update = try {
             val limits = parseModelTokenLimits(maxOutputTokens, maxContextTokens)
+            val compressionThreshold = validateAutoContextCompressionThreshold(autoCompressionThreshold)
             val updated = applyThinkingLevelSelection(
                 protocol = protocol,
                 parameters = workingConfig.modelParameters.copy(
                     customReasoningEfforts = normalizeCustomThinkingLevels(protocol, customValues),
                     maxContextTokens = limits.maxContextTokens,
+                    autoContextCompressionEnabled = autoCompressionEnabled,
+                    autoContextCompressionThresholdPercent = compressionThreshold,
                 ),
                 selectedValue = selectedValue,
                 modelEfforts = modelEfforts,
@@ -571,10 +587,19 @@ internal fun ModelParametersDialog(
                         },
                     )
                 }
-                contextUsageSnapshot?.let { snapshot ->
-                    HorizontalDivider(color = borderColor.copy(alpha = 0.55f))
-                    ContextUsageDetails(snapshot)
-                }
+                HorizontalDivider(color = borderColor.copy(alpha = 0.55f))
+                AutoContextCompressionSection(
+                    enabled = autoCompressionEnabled,
+                    thresholdPercent = autoCompressionThreshold,
+                    onEnabledChange = {
+                        autoCompressionEnabled = it
+                        errorText = null
+                    },
+                    onThresholdChange = {
+                        autoCompressionThreshold = it
+                        errorText = null
+                    },
+                )
                 errorText?.let { message ->
                     Spacer(Modifier.height(10.dp))
                     Text(
@@ -621,66 +646,6 @@ internal fun ModelParametersDialog(
         },
         dismissButton = {},
     )
-}
-
-internal fun formatContextTokenCount(tokens: Long): String =
-    String.format(Locale.US, "%,d", tokens.coerceAtLeast(0L))
-
-@Composable
-private fun ContextUsageDetails(snapshot: ContextUsageSnapshot) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
-    ) {
-        Text(
-            text = "上下文占用",
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.SemiBold,
-        )
-        ContextUsageLine(
-            label = "当前已用",
-            value = "${formatContextTokenCount(snapshot.displayedUsedTokens)} / " +
-                "${formatContextTokenCount(snapshot.contextWindowTokens)} tokens",
-        )
-        ContextUsageLine("系统提示", formatContextTokenCount(snapshot.systemPromptTokens))
-        ContextUsageLine("历史对话", formatContextTokenCount(snapshot.conversationTextTokens))
-        ContextUsageLine("工具 schema", formatContextTokenCount(snapshot.toolSchemaTokens))
-        ContextUsageLine("图片与文件", formatContextTokenCount(snapshot.mediaTokens))
-        ContextUsageLine("协议开销", formatContextTokenCount(snapshot.protocolOverheadTokens))
-        ContextUsageLine("预留输出", formatContextTokenCount(snapshot.reservedOutputTokens))
-        ContextUsageLine("剩余空间", formatContextTokenCount(snapshot.remainingTokens))
-        snapshot.inputEstimateDifferenceTokens?.let { difference ->
-            val prefix = if (difference > 0) "+" else ""
-            ContextUsageLine("输入估算偏差", "$prefix${String.format(Locale.US, "%,d", difference)}")
-        }
-        ContextUsageLine(
-            label = "数据来源",
-            value = if (snapshot.dataSource == ContextUsageDataSource.MEASURED) "实测" else "估算",
-        )
-    }
-}
-
-@Composable
-private fun ContextUsageLine(label: String, value: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            text = label,
-            style = MaterialTheme.typography.bodySmall,
-            color = appDialogSubtextColor(),
-        )
-        Text(
-            text = value,
-            style = MaterialTheme.typography.labelMedium,
-            color = appDialogContentColor(),
-            textAlign = TextAlign.End,
-        )
-    }
 }
 
 @Composable

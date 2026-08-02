@@ -51,10 +51,6 @@ import androidx.compose.ui.draw.shadow
 import androidx.navigation.NavController
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import com.android.everytalk.data.DataClass.Message
-import com.android.everytalk.data.DataClass.Sender
-import com.android.everytalk.data.DataClass.resolvedModelTokenLimits
-import com.android.everytalk.data.mcp.McpStatus
-import com.android.everytalk.data.network.PromptCapabilityCatalog
 import com.android.everytalk.navigation.Screen
 import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.statecontroller.ConversationScrollState
@@ -81,8 +77,6 @@ import com.android.everytalk.ui.screens.MainScreen.chat.models.ModelSelectionBot
 import com.android.everytalk.ui.screens.MainScreen.chat.text.state.rememberChatScrollStateManager
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
 import com.android.everytalk.ui.screens.MainScreen.chat.core.PlaceholderRole
-import com.android.everytalk.statecontroller.mcp.dispatch.toMcpToolCandidate
-import com.android.everytalk.statecontroller.mcp.dispatch.toToolDefinition
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.delay
@@ -814,78 +808,8 @@ fun ChatScreen(
         }
 
         modelParametersTarget?.let { target ->
-            val latestExactSnapshot = messages.asReversed().firstOrNull { message ->
-                message.sender == Sender.AI &&
-                    message.modelName == target.model &&
-                    message.providerName == target.provider &&
-                    message.contextUsageSnapshot?.configId == target.id
-            }?.contextUsageSnapshot
-            val currentToolIds = enabledMessageToolIdsForRequest(
-                isImageGeneration = false,
-                webSearchEnabled = isWebSearchEnabled,
-                mcpEnabled = isMcpEnabled,
-            )
-            val latestSentToolIds = messages.asReversed()
-                .firstOrNull { it.sender == Sender.User }
-                ?.enabledToolIds
-                .orEmpty()
-            val liveEstimate = remember(
-                target,
-                messages.toList(),
-                text,
-                systemPrompt,
-                isWebSearchEnabled,
-                isCodeExecutionEnabled,
-                isMcpEnabled,
-                mcpServerStates,
-            ) {
-                val visibleTools = mutableListOf<Map<String, Any>>()
-                target.toolsJson?.takeIf(String::isNotBlank)?.let { schema ->
-                    visibleTools += mapOf("type" to "custom_schema", "schema" to schema)
-                }
-                if (isWebSearchEnabled) visibleTools += builtInWebSearchToolDefinition()
-                if (isCodeExecutionEnabled) {
-                    visibleTools += mapOf("code_execution" to emptyMap<String, Any>())
-                }
-                if (isMcpEnabled) {
-                    mcpServerStates.values
-                        .asSequence()
-                        .filter { state -> state.config.enabled && state.status is McpStatus.Connected }
-                        .flatMap { state ->
-                            state.tools.asSequence()
-                                .filter { tool -> tool.enable }
-                                .map { tool ->
-                                    toMcpToolCandidate(state.config.name, tool).toToolDefinition()
-                                }
-                        }
-                        .forEach(visibleTools::add)
-                }
-                visibleTools += PromptCapabilityCatalog.selectionToolDefinition()
-                val toolsWithWebFetch = appendBuiltInWebFetchToolIfNeeded(visibleTools)
-                val finalTools = appendBuiltInCurrentTimeTool(toolsWithWebFetch)
-                estimateConversationDraftContextUsage(
-                    messages = messages,
-                    draftText = text,
-                    systemPrompt = systemPrompt,
-                    tools = finalTools,
-                    limits = resolvedModelTokenLimits(
-                        maxOutputTokens = target.maxTokens,
-                        maxContextTokens = target.modelParameters.maxContextTokens,
-                    ),
-                    configId = target.id,
-                )
-            }
             com.android.everytalk.ui.screens.settings.ModelParametersDialog(
                 config = target,
-                contextUsageSnapshot = if (
-                    text.isNotBlank() ||
-                    latestExactSnapshot == null ||
-                    currentToolIds != latestSentToolIds
-                ) {
-                    liveEstimate
-                } else {
-                    latestExactSnapshot
-                },
                 onDismissRequest = { modelParametersTarget = null },
                 onConfirm = { updatedConfig ->
                     viewModel.updateConfig(

@@ -7,8 +7,6 @@ import androidx.compose.ui.res.painterResource
 
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
@@ -34,8 +32,6 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -46,7 +42,6 @@ import android.content.Intent
 import android.os.SystemClock
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.input.nestedscroll.nestedScroll
@@ -61,9 +56,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.clipToBounds
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.window.Popup
-import androidx.compose.ui.window.PopupProperties
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.WebSearchResult
@@ -413,11 +405,13 @@ fun AiMessageItem(
 @Composable
 fun AiMessageFooterItem(
     message: Message,
+    conversationTotalTokens: Long,
     viewModel: AppViewModel,
     scrollStateManager: ChatScrollStateManager,
     onShowOptions: (Message) -> Unit = {},
 ) {
     var showPopupMenu by remember { mutableStateOf(false) }
+    var showContextUsage by remember(message.id) { mutableStateOf(false) }
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
@@ -465,9 +459,22 @@ fun AiMessageFooterItem(
                     tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )
             }
+            AiContextUsageButton(
+                message = message,
+                conversationTotalTokens = conversationTotalTokens,
+                expanded = showContextUsage,
+                onClick = {
+                    showPopupMenu = false
+                    showContextUsage = true
+                },
+                onDismiss = { showContextUsage = false },
+            )
             Box {
                 IconButton(
-                    onClick = { showPopupMenu = true },
+                    onClick = {
+                        showContextUsage = false
+                        showPopupMenu = true
+                    },
                     modifier = Modifier.size(36.dp)
                 ) {
                     Icon(
@@ -514,103 +521,54 @@ private fun AiMessagePopupMenu(
     onChangeModelConfirm: (ApiConfig) -> Unit,
     onExport: () -> Unit,
 ) {
-    var showPopup by remember { mutableStateOf(false) }
-    val scaleAnim = remember { Animatable(0.8f) }
-    val alphaAnim = remember { Animatable(0f) }
-
-    val emphasizedDecelerate = CubicBezierEasing(0.0f, 0.0f, 0.2f, 1.0f)
-    val decelerateEasing = CubicBezierEasing(0.4f, 0.0f, 0.2f, 1.0f)
-
-    LaunchedEffect(expanded) {
-        if (expanded) {
-            showPopup = true
-            scaleAnim.snapTo(0.8f)
-            alphaAnim.snapTo(0f)
-            coroutineScope {
-                launch { scaleAnim.animateTo(1f, tween(120, easing = emphasizedDecelerate)) }
-                launch { alphaAnim.animateTo(1f, tween(30, easing = decelerateEasing)) }
-            }
-        } else if (showPopup) {
-            coroutineScope {
-                launch { alphaAnim.animateTo(0f, tween(75, easing = decelerateEasing)) }
-                launch {
-                    delay(74)
-                    scaleAnim.snapTo(0.8f)
-                }
-            }
-            showPopup = false
-        }
-    }
-
     var showModelPicker by remember { mutableStateOf(false) }
     var pendingConfirmModel by remember { mutableStateOf<ApiConfig?>(null) }
-
-    if (!showPopup) return
-
-    val isDark = isSystemInDarkTheme()
-    val cardBg = if (isDark) Color(0xFF212121) else Color(0xFFFFFFFF)
     val textColor = MaterialTheme.colorScheme.onSurface
     val iconTint = textColor
-    val borderColor = if (isDark) Color.White.copy(alpha = 0.10f) else Color(0xFF0D0D0D).copy(alpha = 0.05f)
 
-    Popup(
-        alignment = Alignment.BottomStart,
-        onDismissRequest = {
+    AiMessageFloatingPopupCard(
+        expanded = expanded,
+        onDismiss = {
             showModelPicker = false
             onDismiss()
         },
-        properties = PopupProperties(focusable = true)
+        modifier = Modifier.wrapContentWidth(),
     ) {
-        Surface(
-            modifier = Modifier
-                .wrapContentWidth()
-                .widthIn(min = 200.dp)
-                .graphicsLayer {
-                    this.scaleX = scaleAnim.value
-                    this.scaleY = scaleAnim.value
-                    this.alpha = alphaAnim.value
-                    this.transformOrigin = TransformOrigin(0f, 1f)
-                }
-                .shadow(8.dp, RoundedCornerShape(28.dp))
-                .border(1.dp, borderColor, RoundedCornerShape(28.dp)),
-            shape = RoundedCornerShape(28.dp),
-            color = cardBg
-        ) {
-            if (showModelPicker) {
-                ModelPickerPopupContent(
-                    availableModels = availableModels,
-                    selectedModelId = selectedModelId,
+        if (showModelPicker) {
+            ModelPickerPopupContent(
+                availableModels = availableModels,
+                selectedModelId = selectedModelId,
+                textColor = textColor,
+                iconTint = iconTint,
+                onModelSelected = { pendingConfirmModel = it }
+            )
+        } else {
+            Column(
+                modifier = Modifier
+                    .width(IntrinsicSize.Max)
+                    .padding(vertical = 12.dp),
+            ) {
+                PopupMenuItem(
+                    painter = painterResource(R.drawable.ic_regenerate),
+                    text = "重新回答",
                     textColor = textColor,
                     iconTint = iconTint,
-                    onModelSelected = { pendingConfirmModel = it }
+                    onClick = { onRegenerate(); onDismiss() }
                 )
-            } else {
-                Column(modifier = Modifier
-                    .width(IntrinsicSize.Max)
-                    .padding(vertical = 12.dp)
-                ) {
-                    PopupMenuItem(
-                        painter = painterResource(R.drawable.ic_regenerate),
-                        text = "重新回答",
-                        textColor = textColor,
-                        iconTint = iconTint,
-                        onClick = { onRegenerate(); onDismiss() }
-                    )
-                    PopupMenuItem(
-                        painter = painterResource(R.drawable.ic_robot_head),
-                        text = modelName ?: "切换模型",
-                        textColor = textColor,
-                        iconTint = iconTint,
-                        onClick = { showModelPicker = true }
-                    )
-                    PopupMenuItem(
-                        painter = painterResource(R.drawable.ic_export),
-                        text = "导出文本",
-                        textColor = textColor,
-                        iconTint = iconTint,
-                        onClick = { onExport(); onDismiss() }
-                    )
-                }
+                PopupMenuItem(
+                    painter = painterResource(R.drawable.ic_robot_head),
+                    text = modelName ?: "切换模型",
+                    textColor = textColor,
+                    iconTint = iconTint,
+                    onClick = { showModelPicker = true }
+                )
+                PopupMenuItem(
+                    painter = painterResource(R.drawable.ic_export),
+                    text = "导出文本",
+                    textColor = textColor,
+                    iconTint = iconTint,
+                    onClick = { onExport(); onDismiss() }
+                )
             }
         }
     }

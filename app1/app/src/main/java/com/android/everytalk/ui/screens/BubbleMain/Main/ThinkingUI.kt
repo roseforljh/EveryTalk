@@ -59,6 +59,7 @@ import androidx.compose.ui.unit.dp
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.ExecutionStep
 import com.android.everytalk.data.DataClass.WebSearchResult
+import com.android.everytalk.data.DataClass.hasReviewableExecutionProcess
 import com.android.everytalk.ui.components.sheet.AppModalBottomSheet
 import com.android.everytalk.ui.components.sheet.AppModalBottomSheetMaximumHeightFraction
 import com.android.everytalk.ui.components.markdown.EveryTalkMarkdownFlavourDescriptor
@@ -176,11 +177,13 @@ internal fun ReasoningToggleAndContent(
     val showInlineThinkingStatus = !messageIsError &&
         !mainContentHasStarted &&
         (isReasoningStreaming || displayedReasoningText.isNotBlank() || activityStatusText != null)
-    val hasReviewableProcess = displayedReasoningText.isNotBlank() ||
-        executionSteps.isNotEmpty() ||
-        webSearchResults.isNotEmpty()
+    val hasReviewableProcess = hasReviewableExecutionProcess(
+        reasoningText = displayedReasoningText,
+        executionSteps = executionSteps,
+        webSearchResults = webSearchResults,
+        executionStatus = activityStatusText,
+    )
     val shouldShowReviewDotToggle = hasReviewableProcess &&
-        !messageIsError &&
         (isReasoningComplete || !isReasoningStreaming)
     val inlineStatusText = executionSummaryText(
         reasoningText = displayedReasoningText,

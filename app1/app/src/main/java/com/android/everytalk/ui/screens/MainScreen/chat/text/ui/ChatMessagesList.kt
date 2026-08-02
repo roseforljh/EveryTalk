@@ -302,6 +302,9 @@ fun ChatMessagesList(
     val currentStreamingId by pauseAwareStreamingId.collectAsState(
         initial = viewModel.currentTextStreamingAiMessageId.value
     )
+    val conversationTotalTokens by remember(viewModel) {
+        derivedStateOf { totalConversationTokenUsage(viewModel.messages) }
+    }
     val density = LocalDensity.current
     val windowHeightDp = with(density) { LocalWindowInfo.current.containerSize.height.toDp().value }
     val pinnedUserBubbleMaxHeightPx = with(density) {
@@ -780,6 +783,7 @@ fun ChatMessagesList(
                         is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageFooter -> {
                             AiMessageFooterItem(
                                 message = item.message,
+                                conversationTotalTokens = conversationTotalTokens,
                                 viewModel = viewModel,
                                 scrollStateManager = scrollStateManager,
                             )

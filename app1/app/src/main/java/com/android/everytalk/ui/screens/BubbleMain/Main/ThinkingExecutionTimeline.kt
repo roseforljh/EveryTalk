@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.screens.BubbleMain.Main
 
+import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -209,7 +210,13 @@ internal fun ThinkingExecutionTimeline(
                 } else {
                     TimelineWebGreen
                 },
-                title = if (messageIsError) "执行失败" else "完成",
+                title = if (messageIsError) {
+                    activityStatusText
+                        ?.takeIf { it.startsWith("上下文压缩失败：") }
+                        ?: "执行失败"
+                } else {
+                    "完成"
+                },
                 active = false,
                 completed = !messageIsError,
                 first = nodeIndex == 0,
@@ -328,46 +335,29 @@ private fun ActiveTimelineNodeIcon(
 ) {
     val transition = rememberInfiniteTransition(label = "执行步骤图标动画")
     val pulseScale by transition.animateFloat(
-        initialValue = 0.9f,
-        targetValue = 1.08f,
+        initialValue = 0.96f,
+        targetValue = 1.04f,
         animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 700),
+            animation = tween(
+                durationMillis = 1_200,
+                easing = CubicBezierEasing(0.42f, 0f, 0.58f, 1f),
+            ),
             repeatMode = RepeatMode.Reverse,
         ),
         label = "执行步骤图标缩放",
     )
-    val haloAlpha by transition.animateFloat(
-        initialValue = 0.1f,
-        targetValue = 0.28f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(durationMillis = 700),
-            repeatMode = RepeatMode.Reverse,
-        ),
-        label = "执行步骤图标光晕",
+    Icon(
+        imageVector = icon,
+        contentDescription = null,
+        tint = tint,
+        modifier = Modifier
+            .size(20.dp)
+            .graphicsLayer {
+                scaleX = pulseScale
+                scaleY = pulseScale
+            }
+            .testTag("reasoning-timeline-icon-active"),
     )
-    Box(contentAlignment = Alignment.Center) {
-        Box(
-            modifier = Modifier
-                .size(20.dp)
-                .graphicsLayer {
-                    scaleX = pulseScale
-                    scaleY = pulseScale
-                }
-                .background(tint.copy(alpha = haloAlpha), CircleShape),
-        )
-        Icon(
-            imageVector = icon,
-            contentDescription = null,
-            tint = tint,
-            modifier = Modifier
-                .size(17.dp)
-                .graphicsLayer {
-                    scaleX = pulseScale
-                    scaleY = pulseScale
-                }
-                .testTag("reasoning-timeline-icon-active"),
-        )
-    }
 }
 
 private fun stepIcon(type: ExecutionStepType): ImageVector = when (type) {
