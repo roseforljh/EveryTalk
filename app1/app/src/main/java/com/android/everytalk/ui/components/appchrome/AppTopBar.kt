@@ -28,6 +28,7 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -53,6 +54,23 @@ internal data class TopBarModelDisplayInfo(
     val label: String,
     val textColor: Color
 )
+
+private const val MODEL_SELECTION_SURROUNDING_ITEM_COUNT = 3
+private const val MODEL_SELECTION_VISIBLE_ITEM_COUNT = MODEL_SELECTION_SURROUNDING_ITEM_COUNT * 2 + 1
+private val ModelSelectionItemHeight = 40.dp
+private val ModelSelectionVerticalPadding = 8.dp
+
+internal fun modelSelectionInitialFirstVisibleIndex(
+    modelCount: Int,
+    selectedIndex: Int,
+): Int {
+    if (modelCount <= MODEL_SELECTION_VISIBLE_ITEM_COUNT || selectedIndex !in 0 until modelCount) {
+        return 0
+    }
+
+    return (selectedIndex - MODEL_SELECTION_SURROUNDING_ITEM_COUNT)
+        .coerceIn(0, modelCount - MODEL_SELECTION_VISIBLE_ITEM_COUNT)
+}
 
 internal fun resolveTopBarModelDisplayInfo(
     selectedConfigName: String,
@@ -494,6 +512,21 @@ private fun ModelSelectionDropdown(
     val popupBorderColor = if (isDark) Color.White.copy(alpha = 0.10f) else Color(0xFF0D0D0D).copy(alpha = 0.05f)
     val textColor = if (isDark) Color.White else Color(0xFF0D0D0D)
     val sortedModels = remember(models) { sortModelConfigs(models) }
+    val selectedIndex = remember(sortedModels, selectedApiConfig?.id) {
+        sortedModels.indexOfFirst { it.id == selectedApiConfig?.id }
+    }
+    val initialFirstVisibleIndex = modelSelectionInitialFirstVisibleIndex(
+        modelCount = sortedModels.size,
+        selectedIndex = selectedIndex,
+    )
+    val initialScrollOffset = with(androidx.compose.ui.platform.LocalDensity.current) {
+        (ModelSelectionItemHeight * initialFirstVisibleIndex).roundToPx()
+    }
+    val scrollState = key(sortedModels, selectedApiConfig?.id, initialScrollOffset) {
+        rememberScrollState(initial = initialScrollOffset)
+    }
+    val popupMaxHeight = ModelSelectionVerticalPadding * 2 +
+        ModelSelectionItemHeight * sortedModels.size.coerceAtMost(MODEL_SELECTION_VISIBLE_ITEM_COUNT)
 
     val scaleAnim = remember { Animatable(0.8f) }
     val alphaAnim = remember { Animatable(0f) }
@@ -513,9 +546,10 @@ private fun ModelSelectionDropdown(
     ) {
         Surface(
             modifier = Modifier
+                .testTag("model_selection_dropdown")
                 .width(IntrinsicSize.Max)
                 .widthIn(max = 280.dp)
-                .heightIn(max = 320.dp)
+                .heightIn(max = popupMaxHeight)
                 .graphicsLayer {
                     this.scaleX = scaleAnim.value
                     this.scaleY = scaleAnim.value
@@ -530,8 +564,8 @@ private fun ModelSelectionDropdown(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-                    .padding(vertical = 8.dp),
+                    .verticalScroll(scrollState)
+                    .padding(vertical = ModelSelectionVerticalPadding),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 sortedModels.forEach { modelConfig ->
@@ -550,7 +584,8 @@ private fun ModelSelectionDropdown(
                         modifier = Modifier
                             .fillMaxWidth()
                             .then(modelInteractionModifier)
-                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                            .height(ModelSelectionItemHeight)
+                            .padding(horizontal = 14.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.Center
                     ) {

@@ -6,6 +6,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.longClick
 import androidx.compose.ui.test.onAllNodesWithText
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.performTouchInput
@@ -24,6 +25,47 @@ import org.robolectric.annotation.Config
 class AppTopBarInteractionTest {
     @get:Rule
     val composeRule = createComposeRule()
+
+    @Test
+    fun `模型列表打开首帧将选中模型置于七项窗口中央`() {
+        val models = (0 until 10).map { index ->
+            ApiConfig(
+                address = "https://example.com",
+                key = "test-key",
+                model = "model-${index.toString().padStart(2, '0')}",
+                provider = "OpenAI",
+                id = "model-$index",
+                name = "模型 $index",
+            )
+        }
+
+        composeRule.setContent {
+            MaterialTheme {
+                AppTopBar(
+                    selectedConfigName = models[5].name,
+                    onMenuClick = {},
+                    onSettingsClick = {},
+                    onTitleClick = {},
+                    onSystemPromptClick = {},
+                    systemPrompt = "",
+                    isSystemPromptExpanded = false,
+                    showModelSelection = true,
+                    modelList = models,
+                    selectedApiConfig = models[5],
+                    onDismissModelSelection = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("模型 2").assertIsDisplayed()
+        composeRule.onNodeWithText("模型 5").assertIsDisplayed()
+        composeRule.onNodeWithText("模型 8").assertIsDisplayed()
+
+        val selectedCenter = composeRule.onNodeWithText("模型 5").fetchSemanticsNode().boundsInRoot.center.y
+        val dropdownCenter = composeRule.onNodeWithTag("model_selection_dropdown")
+            .fetchSemanticsNode().boundsInRoot.center.y
+        assertEquals(dropdownCenter, selectedCenter, 0.5f)
+    }
 
     @Test
     fun `长按模型列表中的具体模型触发参数对话框回调`() {

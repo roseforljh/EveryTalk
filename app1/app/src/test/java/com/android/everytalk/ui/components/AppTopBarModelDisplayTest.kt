@@ -7,6 +7,14 @@ import org.junit.Test
 class AppTopBarModelDisplayTest {
 
     @Test
+    fun `模型列表初始位置让选中模型处于七项窗口中央`() {
+        assertEquals(2, modelSelectionInitialFirstVisibleIndex(modelCount = 10, selectedIndex = 5))
+        assertEquals(0, modelSelectionInitialFirstVisibleIndex(modelCount = 10, selectedIndex = 1))
+        assertEquals(3, modelSelectionInitialFirstVisibleIndex(modelCount = 10, selectedIndex = 9))
+        assertEquals(0, modelSelectionInitialFirstVisibleIndex(modelCount = 7, selectedIndex = 3))
+    }
+
+    @Test
     fun `gpt text is black in light theme and white in dark theme`() {
         assertEquals(
             TopBarModelDisplayInfo(label = "GPT", textColor = Color.Black),
