@@ -52,12 +52,6 @@ class SafeHttpDownloaderTest {
     }
 
     @Test
-    fun `image extraction caps url count`() {
-        val markdown = (1..20).joinToString("\n") { "![image](https://example.com/content-$it.png)" }
-        assertEquals(WebFetchImageExtractor.MAX_IMAGE_URLS, WebFetchImageExtractor.extractImageUrls(markdown).size)
-    }
-
-    @Test
     fun `cross origin sensitive headers are recognized`() {
         assertTrue(SafeHttpDownloader.isSensitiveHeader("Authorization"))
         assertTrue(SafeHttpDownloader.isSensitiveHeader("X-Access-Token"))

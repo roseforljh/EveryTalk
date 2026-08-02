@@ -13,6 +13,4 @@ data class WebFetchResult(
     val truncationReason: String? = null,
     val statusCode: Int? = null,
     val error: String? = null,
-    @kotlinx.serialization.Transient
-    val images: List<ExtractedImage> = emptyList(),
 )

@@ -148,10 +148,36 @@ object OpenAIResponsesClient {
                         }
 
                         // Responses API 工具结果格式：function_call_output item
+                        val resultObject = result as? JsonObject
+                        val images = resultObject?.get("_images") as? JsonArray
+                        val textResult = resultObject
+                            ?.let { JsonObject(it.filterKeys { key -> key != "_images" }) }
+                            ?: result
                         conversationInput.add(buildJsonObject {
                             put("type", "function_call_output")
                             put("call_id", toolInfo.callId)
-                            put("output", result.toString())
+                            if (images.isNullOrEmpty()) {
+                                put("output", textResult.toString())
+                            } else {
+                                putJsonArray("output") {
+                                    addJsonObject {
+                                        put("type", "input_text")
+                                        put("text", textResult.toString())
+                                    }
+                                    images.forEach { image ->
+                                        val imageObject = image as? JsonObject ?: return@forEach
+                                        val base64 = imageObject["base64"]?.jsonPrimitive?.contentOrNull
+                                            ?.substringAfter("base64,")
+                                            ?: return@forEach
+                                        val mime = imageObject["mimeType"]?.jsonPrimitive?.contentOrNull
+                                            ?: "image/jpeg"
+                                        addJsonObject {
+                                            put("type", "input_image")
+                                            put("image_url", "data:$mime;base64,$base64")
+                                        }
+                                    }
+                                }
+                            }
                         })
                     } catch (e: CancellationException) {
                         throw e

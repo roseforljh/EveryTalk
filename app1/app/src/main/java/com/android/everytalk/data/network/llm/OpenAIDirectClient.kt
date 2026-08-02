@@ -232,51 +232,14 @@ object OpenAIDirectClient {
                             send(AppStreamEvent.WebSearchResults(webResults))
                         }
 
-                        val resultObject = result as? JsonObject
-                        val images = resultObject?.get("_images") as? JsonArray
-                        if (images != null && images.isNotEmpty()) {
-                            val textOnly = buildJsonObject {
-                                resultObject.entries.forEach { (k, v) ->
-                                    if (k != "_images") put(k, v)
-                                }
-                            }
-                            conversationHistory.add(buildJsonObject {
-                                put("role", "tool")
-                                put("tool_call_id", toolInfo.id)
-                                put("content", textOnly.toString())
-                            })
-                            val imageParts = buildJsonArray {
-                                images.forEach { imgElement ->
-                                    val imgObj = imgElement as? JsonObject ?: return@forEach
-                                    val b64 = imgObj["base64"]?.jsonPrimitive?.contentOrNull ?: return@forEach
-                                    val mime = imgObj["mimeType"]?.jsonPrimitive?.contentOrNull ?: "image/jpeg"
-                                    addJsonObject {
-                                        put("type", "image_url")
-                                        putJsonObject("image_url") {
-                                            put("url", "data:$mime;base64,$b64")
-                                        }
-                                    }
-                                }
-                            }
-                            if (imageParts.isNotEmpty()) {
-                                conversationHistory.add(buildJsonObject {
-                                    put("role", "user")
-                                    put("content", buildJsonArray {
-                                        addJsonObject {
-                                            put("type", "text")
-                                            put("text", "以上是从网页中提取的图片，请结合网页文本内容一起分析。")
-                                        }
-                                        imageParts.forEach { add(it) }
-                                    })
-                                })
-                            }
-                        } else {
-                            conversationHistory.add(buildJsonObject {
-                                put("role", "tool")
-                                put("tool_call_id", toolInfo.id)
-                                put("content", result.toString())
-                            })
-                        }
+                        val resultForHistory = (result as? JsonObject)
+                            ?.let { JsonObject(it.filterKeys { key -> key != "_images" }) }
+                            ?: result
+                        conversationHistory.add(buildJsonObject {
+                            put("role", "tool")
+                            put("tool_call_id", toolInfo.id)
+                            put("content", resultForHistory.toString())
+                        })
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
@@ -288,7 +251,6 @@ object OpenAIDirectClient {
                         })
                     }
                 }
-
                 pendingToolCalls.clear()
             }
 

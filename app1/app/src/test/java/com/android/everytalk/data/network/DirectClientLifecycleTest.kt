@@ -11,6 +11,7 @@ import io.ktor.http.ContentType
 import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.content.TextContent
 import io.ktor.utils.io.ByteReadChannel
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.awaitCancellation
@@ -20,7 +21,13 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import io.mockk.every
 import io.mockk.mockkStatic
 import io.mockk.unmockkStatic
@@ -177,6 +184,138 @@ class DirectClientLifecycleTest {
             }
         } finally {
             OpenAIResponsesClient.setMcpToolExecutor(null)
+        }
+    }
+
+    @Test
+    fun `OpenAI Chat工具图片不生成虚假用户消息`() = runBlocking {
+        val firstResponse = buildString {
+            append("data: ")
+            append(
+                """{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-image","function":{"name":"image-tool","arguments":"{}"}},{"index":1,"id":"call-tail","function":{"name":"tail-tool","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}"""
+            )
+            append("\n\ndata: [DONE]\n\n")
+        }
+        val finalResponse = "data: {\"choices\":[{\"delta\":{\"content\":\"完成\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n"
+        val requestCount = AtomicInteger()
+        var followUpPayload: String? = null
+        val client = HttpClient(MockEngine { request ->
+            val body = if (requestCount.incrementAndGet() == 1) {
+                firstResponse
+            } else {
+                followUpPayload = (request.body as TextContent).text
+                finalResponse
+            }
+            respond(
+                content = ByteReadChannel(body.toByteArray(Charsets.UTF_8)),
+                headers = Headers.build { append(HttpHeaders.ContentType, ContentType.Text.EventStream.toString()) },
+            )
+        }) {
+            expectSuccess = false
+            install(HttpTimeout)
+        }
+        OpenAIDirectClient.setMcpToolExecutor { name, _, _ ->
+            if (name == "image-tool") {
+                JsonObject(
+                    mapOf(
+                        "content" to JsonPrimitive("网页正文"),
+                        "_images" to JsonArray(
+                            listOf(
+                                JsonObject(
+                                    mapOf(
+                                        "base64" to JsonPrimitive("aGVsbG8="),
+                                        "mimeType" to JsonPrimitive("image/png"),
+                                    )
+                                )
+                            )
+                        ),
+                    )
+                )
+            } else {
+                JsonPrimitive("尾部工具结果")
+            }
+        }
+
+        try {
+            val events = OpenAIDirectClient.streamChatDirect(client, request("OpenAI", "OpenAI")).toList()
+            val messages = Json.parseToJsonElement(checkNotNull(followUpPayload))
+                .jsonObject.getValue("messages").jsonArray.map { it.jsonObject }
+            val history = messages.takeLast(3)
+
+            assertEquals(listOf("assistant", "tool", "tool"), history.map { it.getValue("role").jsonPrimitive.content })
+            assertEquals("call-image", history[1].getValue("tool_call_id").jsonPrimitive.content)
+            assertEquals("call-tail", history[2].getValue("tool_call_id").jsonPrimitive.content)
+            assertEquals(1, messages.count { it["role"]?.jsonPrimitive?.content == "user" })
+            assertFalse(history[1].getValue("content").jsonPrimitive.content.contains("_images"))
+            assertFalse(checkNotNull(followUpPayload).contains("aGVsbG8="))
+            assertFalse(events.any { it is AppStreamEvent.Error })
+            assertEquals(2, requestCount.get())
+        } finally {
+            OpenAIDirectClient.setMcpToolExecutor(null)
+            client.close()
+        }
+    }
+
+    @Test
+    fun `OpenAI Responses工具图片保留调用归属`() = runBlocking {
+        val firstResponse = buildString {
+            appendResponsesEvent("""{"type":"response.output_item.added","item":{"type":"function_call","call_id":"call-image","name":"image-tool"}}""")
+            appendResponsesEvent("""{"type":"response.function_call_arguments.done","call_id":"call-image","name":"image-tool","arguments":"{}"}""")
+            appendResponsesEvent("""{"type":"response.completed"}""")
+            append("data: [DONE]\n\n")
+        }
+        val finalResponse = "data: {\"type\":\"response.completed\"}\n\ndata: [DONE]\n\n"
+        val requestCount = AtomicInteger()
+        var followUpPayload: String? = null
+        val client = HttpClient(MockEngine { request ->
+            val body = if (requestCount.incrementAndGet() == 1) {
+                firstResponse
+            } else {
+                followUpPayload = (request.body as TextContent).text
+                finalResponse
+            }
+            respond(
+                content = ByteReadChannel(body.toByteArray(Charsets.UTF_8)),
+                headers = Headers.build { append(HttpHeaders.ContentType, ContentType.Text.EventStream.toString()) },
+            )
+        }) {
+            expectSuccess = false
+            install(HttpTimeout)
+        }
+        OpenAIResponsesClient.setMcpToolExecutor { _, _, _ ->
+            JsonObject(
+                mapOf(
+                    "content" to JsonPrimitive("网页正文"),
+                    "_images" to JsonArray(
+                        listOf(
+                            JsonObject(
+                                mapOf(
+                                    "base64" to JsonPrimitive("aGVsbG8="),
+                                    "mimeType" to JsonPrimitive("image/png"),
+                                )
+                            )
+                        )
+                    ),
+                )
+            )
+        }
+
+        try {
+            val events = OpenAIResponsesClient.streamChatResponses(client, request("OpenAI", "OpenAI")).toList()
+            val input = Json.parseToJsonElement(checkNotNull(followUpPayload))
+                .jsonObject.getValue("input").jsonArray.map { it.jsonObject }
+            val output = input.single { it["type"]?.jsonPrimitive?.content == "function_call_output" }
+
+            assertEquals("call-image", output.getValue("call_id").jsonPrimitive.content)
+            val parts = output.getValue("output").jsonArray.map { it.jsonObject }
+            assertEquals(listOf("input_text", "input_image"), parts.map { it.getValue("type").jsonPrimitive.content })
+            assertFalse(parts[0].getValue("text").jsonPrimitive.content.contains("_images"))
+            assertEquals("data:image/png;base64,aGVsbG8=", parts[1].getValue("image_url").jsonPrimitive.content)
+            assertFalse(events.any { it is AppStreamEvent.Error })
+            assertEquals(2, requestCount.get())
+        } finally {
+            OpenAIResponsesClient.setMcpToolExecutor(null)
+            client.close()
         }
     }
 
