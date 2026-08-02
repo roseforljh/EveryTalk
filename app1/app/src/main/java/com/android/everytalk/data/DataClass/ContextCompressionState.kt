@@ -26,6 +26,9 @@ data class ContextCompressionState(
     val openAiResponsesInputJson: String? = null,
     val openAiResponsesThroughMessageId: String? = null,
     val openAiResponsesEstimatedTokens: Long = 0L,
+    val anthropicMessagesJson: String? = null,
+    val anthropicThroughMessageId: String? = null,
+    val anthropicEstimatedTokens: Long = 0L,
 ) {
     fun matchesConfig(config: ApiConfig): Boolean =
         schemaVersion == CONTEXT_COMPRESSION_STATE_SCHEMA_VERSION &&
@@ -36,6 +39,9 @@ data class ContextCompressionState(
             provider.equals(config.provider, ignoreCase = true) &&
             channel.equals(config.channel, ignoreCase = true) &&
             model.equals(config.model, ignoreCase = true)
+
+    fun matchesNativeAnthropicConfig(config: ApiConfig): Boolean =
+        matchesNativeResponsesConfig(config)
 }
 
 /** 只在客户端内部使用，不作为普通供应商的扩展请求字段发送。 */
@@ -49,4 +55,5 @@ data class RequestContextManagement(
     val inputTokenCalibration: Long = 0L,
     val estimatedInputTokens: Long = 0L,
     val restoredState: ContextCompressionState? = null,
+    val restoredStateCoversRequestPrefix: Boolean = false,
 )

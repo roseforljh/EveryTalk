@@ -301,6 +301,9 @@ internal suspend fun MessageSender.applyAutoContextCompressionIfNeeded(
                 openAiResponsesInputJson = nativeState?.openAiResponsesInputJson,
                 openAiResponsesThroughMessageId = nativeState?.openAiResponsesThroughMessageId,
                 openAiResponsesEstimatedTokens = nativeState?.openAiResponsesEstimatedTokens ?: 0L,
+                anthropicMessagesJson = nativeState?.anthropicMessagesJson,
+                anthropicThroughMessageId = nativeState?.anthropicThroughMessageId,
+                anthropicEstimatedTokens = nativeState?.anthropicEstimatedTokens ?: 0L,
             )
             autoContextCompressionStates[key] = state
             Log.i(

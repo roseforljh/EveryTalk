@@ -36,7 +36,9 @@ import com.android.everytalk.data.network.WebSearchSupport
 import com.android.everytalk.data.network.ExternalWebSearchProvider
 import com.android.everytalk.data.network.PromptCapabilityCatalog
 import com.android.everytalk.data.network.PromptCachePolicy
+import com.android.everytalk.data.network.AnthropicDirectClient
 import com.android.everytalk.data.network.buildDirectMultimodalRequest
+import com.android.everytalk.data.network.isOfficialAnthropicMessagesAddress
 import com.android.everytalk.data.network.isOfficialOpenAIResponsesAddress
 import com.android.everytalk.statecontroller.mcp.dispatch.McpToolCandidate
 import com.android.everytalk.statecontroller.mcp.dispatch.QueryIntent
@@ -64,10 +66,23 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.longOrNull
+import kotlinx.serialization.json.jsonPrimitive
 
 internal fun shouldUsePromptCapabilities(
     isImageGeneration: Boolean,
 ): Boolean = !isImageGeneration
+
+private fun hasSuccessfulAnthropicCompaction(inputJson: String?): Boolean = runCatching {
+    val messages = Json.parseToJsonElement(inputJson.orEmpty()) as? JsonArray ?: return@runCatching false
+    messages.any { messageElement ->
+        val content = (messageElement as? JsonObject)?.get("content") as? JsonArray ?: return@any false
+        content.any { blockElement ->
+            val block = blockElement as? JsonObject ?: return@any false
+            block["type"]?.jsonPrimitive?.contentOrNull == "compaction" &&
+                block["content"]?.jsonPrimitive?.contentOrNull?.takeUnless { it == "null" }?.isNotBlank() == true
+        }
+    }
+}.getOrDefault(false)
 
 internal fun enabledMessageToolIdsForRequest(
     isImageGeneration: Boolean,
@@ -544,9 +559,26 @@ internal fun MessageSender.sendMessageInternal(
                             Json.parseToJsonElement(checkNotNull(it.openAiResponsesInputJson)) is JsonArray
                         }.getOrDefault(false)
                 }
-                val additionalContextTokens = nativeResponsesState?.openAiResponsesEstimatedTokens
-                    ?.coerceAtLeast(0L)
-                    ?: 0L
+                val nativeAnthropicState = restoredCompressionState?.takeIf {
+                    currentConfig.modelParameters.autoContextCompressionEnabled &&
+                        currentConfig.channel.contains("anthropic", ignoreCase = true) &&
+                        isOfficialAnthropicMessagesAddress(currentConfig.address) &&
+                        AnthropicDirectClient.isNativeCompactionAvailable(
+                            currentConfig.address,
+                            currentConfig.model,
+                        ) &&
+                        it.matchesNativeAnthropicConfig(currentConfig) &&
+                        !it.anthropicThroughMessageId.isNullOrBlank() &&
+                        historyUiMessages.any { message -> message.id == it.anthropicThroughMessageId } &&
+                        hasSuccessfulAnthropicCompaction(it.anthropicMessagesJson)
+                }
+                val additionalContextTokens = (
+                    nativeResponsesState?.openAiResponsesEstimatedTokens
+                        ?: nativeAnthropicState?.anthropicEstimatedTokens
+                        ?: 0L
+                    ).coerceAtLeast(0L)
+                val nativeThroughMessageId = nativeResponsesState?.openAiResponsesThroughMessageId
+                    ?: nativeAnthropicState?.anthropicThroughMessageId
                 var preCreatedAiMessageId: String? = null
                 suspend fun showCompressionStatus() {
                     if (preCreatedAiMessageId == null) {
@@ -584,9 +616,9 @@ internal fun MessageSender.sendMessageInternal(
                             extractDocumentsForContextControl = currentConfig.modelParameters.autoContextCompressionEnabled,
                         ).messages
                     }
-                    val messagesForContextControl = nativeResponsesState?.let { state ->
+                    val messagesForContextControl = nativeThroughMessageId?.let { throughMessageId ->
                         val throughIndex = messagesWithCurrentAttachments.indexOfFirst {
-                            it.id == state.openAiResponsesThroughMessageId
+                            it.id == throughMessageId
                         }
                         if (throughIndex < 0) {
                             messagesWithCurrentAttachments
@@ -762,6 +794,7 @@ internal fun MessageSender.sendMessageInternal(
                         inputTokenCalibration = inputTokenCalibration,
                         estimatedInputTokens = contextUsageSnapshot.estimatedInputTokens,
                         restoredState = activeCompressionState,
+                        restoredStateCoversRequestPrefix = nativeThroughMessageId != null,
                     ),
                     imageGenRequest = if (isImageGeneration) {
                         // 调试信息：检查发送的配置

@@ -14,6 +14,12 @@ enum class TokenUsageSource {
 }
 
 @Serializable
+enum class NativeContextCompactionKind {
+    OPENAI_RESPONSES,
+    ANTHROPIC_MESSAGES,
+}
+
+@Serializable
 data class TokenUsage(
     val inputTokens: Long? = null,
     val outputTokens: Long? = null,
@@ -63,6 +69,7 @@ sealed class AppStreamEvent {
         val compactionItemId: String? = null,
         val estimatedTokens: Long = 0L,
         val reset: Boolean = false,
+        val kind: NativeContextCompactionKind = NativeContextCompactionKind.OPENAI_RESPONSES,
     ) : AppStreamEvent()
 
     @Serializable

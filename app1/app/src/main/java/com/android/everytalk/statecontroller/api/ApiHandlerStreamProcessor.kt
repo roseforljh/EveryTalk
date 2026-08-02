@@ -6,6 +6,7 @@ import com.android.everytalk.data.DataClass.ExecutionStep
 import com.android.everytalk.data.DataClass.ExecutionStepType
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.network.AppStreamEvent
+import com.android.everytalk.data.network.NativeContextCompactionKind
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
 import com.android.everytalk.util.AppLogger
 import com.android.everytalk.util.PromptLeakGuard
@@ -44,18 +45,25 @@ internal fun mergeNativeContextCompaction(
 ): Message {
     val previousState = message.contextCompressionState
     val nextState = if (event.reset) {
-        previousState?.copy(
-            openAiResponsesInputJson = null,
-            openAiResponsesThroughMessageId = null,
-            openAiResponsesEstimatedTokens = 0L,
-        )
+        when (event.kind) {
+            NativeContextCompactionKind.OPENAI_RESPONSES -> previousState?.copy(
+                openAiResponsesInputJson = null,
+                openAiResponsesThroughMessageId = null,
+                openAiResponsesEstimatedTokens = 0L,
+            )
+            NativeContextCompactionKind.ANTHROPIC_MESSAGES -> previousState?.copy(
+                anthropicMessagesJson = null,
+                anthropicThroughMessageId = null,
+                anthropicEstimatedTokens = 0L,
+            )
+        }
     } else {
         val nextWindowId = nativeContextWindowId(
             messageId = message.id,
             compactionItemId = event.compactionItemId,
             inputJson = event.inputJson,
         )
-        if (previousState != null && previousState.configId == event.configId) {
+        val baseState = if (previousState != null && previousState.configId == event.configId) {
             previousState.copy(
                 provider = event.provider,
                 channel = event.channel,
@@ -64,9 +72,6 @@ internal fun mergeNativeContextCompaction(
                 windowId = nextWindowId,
                 previousWindowId = previousState.windowId,
                 estimatedTokensAfter = event.estimatedTokens,
-                openAiResponsesInputJson = event.inputJson,
-                openAiResponsesThroughMessageId = message.id,
-                openAiResponsesEstimatedTokens = event.estimatedTokens,
             )
         } else {
             ContextCompressionState(
@@ -77,9 +82,24 @@ internal fun mergeNativeContextCompaction(
                 windowNumber = 1L,
                 windowId = nextWindowId,
                 estimatedTokensAfter = event.estimatedTokens,
+            )
+        }
+        when (event.kind) {
+            NativeContextCompactionKind.OPENAI_RESPONSES -> baseState.copy(
                 openAiResponsesInputJson = event.inputJson,
                 openAiResponsesThroughMessageId = message.id,
                 openAiResponsesEstimatedTokens = event.estimatedTokens,
+                anthropicMessagesJson = null,
+                anthropicThroughMessageId = null,
+                anthropicEstimatedTokens = 0L,
+            )
+            NativeContextCompactionKind.ANTHROPIC_MESSAGES -> baseState.copy(
+                openAiResponsesInputJson = null,
+                openAiResponsesThroughMessageId = null,
+                openAiResponsesEstimatedTokens = 0L,
+                anthropicMessagesJson = event.inputJson,
+                anthropicThroughMessageId = message.id,
+                anthropicEstimatedTokens = event.estimatedTokens,
             )
         }
     }
