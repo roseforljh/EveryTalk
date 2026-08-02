@@ -575,7 +575,7 @@ fun ChatMessagesList(
                                                 onImageClick = onImageClick
                                             )
                                         }
-                                        if (item.text.isNotBlank() || message.enabledToolIds.isNotEmpty()) {
+                                        if (item.text.isNotBlank()) {
                                             // 纯文本用户消息内容
                                             UserOrErrorMessageContent(
                                                 message = message,

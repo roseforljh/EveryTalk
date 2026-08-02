@@ -229,11 +229,6 @@ internal fun UserOrErrorMessageContent(
             var isExpanded by remember(message.id) { mutableStateOf(false) }
             var hasOverflow by remember(message.id) { mutableStateOf(false) }
             val contentScrollState = rememberScrollState()
-            val enabledToolIds = if (message.sender == Sender.User) {
-                supportedUserMessageToolIds(message.enabledToolIds)
-            } else {
-                emptyList()
-            }
             val maxUserBubbleHeight = resolveUserBubbleMaxHeightDp(
                 screenHeightDp = with(density) { windowSize.height.toDp().value },
                 isExpanded = isExpanded,
@@ -316,33 +311,20 @@ internal fun UserOrErrorMessageContent(
                                     .align(Alignment.Center)
                                     .offset(y = (-6).dp)
                             )
-                        } else if (renderText.isNotBlank() || isError || enabledToolIds.isNotEmpty()) {
-                            if (message.sender == Sender.User && enabledToolIds.isNotEmpty()) {
-                                UserMessageInlineContent(
-                                    enabledToolIds = enabledToolIds,
-                                    modifier = Modifier.offset(y = USER_BUBBLE_TEXT_OPTICAL_OFFSET),
-                                ) {
-                                    UnifiedMarkdownRenderer(
-                                        preparedMessage = preparedMessage,
-                                        sender = message.sender,
-                                        modifier = Modifier.wrapContentWidth(),
-                                    )
-                                }
-                            } else {
-                                UnifiedMarkdownRenderer(
-                                    preparedMessage = preparedMessage,
-                                    sender = message.sender,
-                                    modifier = Modifier
-                                        .wrapContentWidth()
-                                        .offset(
-                                            y = if (message.sender == Sender.User) {
-                                                USER_BUBBLE_TEXT_OPTICAL_OFFSET
-                                            } else {
-                                                0.dp
-                                            }
-                                        ),
-                                )
-                            }
+                        } else if (renderText.isNotBlank() || isError) {
+                            UnifiedMarkdownRenderer(
+                                preparedMessage = preparedMessage,
+                                sender = message.sender,
+                                modifier = Modifier
+                                    .wrapContentWidth()
+                                    .offset(
+                                        y = if (message.sender == Sender.User) {
+                                            USER_BUBBLE_TEXT_OPTICAL_OFFSET
+                                        } else {
+                                            0.dp
+                                        }
+                                    ),
+                            )
                         }
                     }
                 }

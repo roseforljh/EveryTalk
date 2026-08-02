@@ -28,16 +28,11 @@ class BubbleContentTypesRenderRouteTest {
     }
 
     @Test
-    fun `user tool logos are part of the body content flow`() {
+    fun `user bubble does not render enabled tool metadata`() {
         val source = bubbleContentTypesSource()
-        val inlineContentBlock = source
-            .substringAfter("UserMessageInlineContent(")
-            .substringBefore("// 展开/收起按钮")
 
-        assertTrue(inlineContentBlock.contains("UnifiedMarkdownRenderer("))
-        assertFalse(source.contains("resolveUserMessageContentEndPaddingDp"))
-        assertFalse(inlineContentBlock.contains(".align(Alignment.TopEnd)"))
-        assertFalse(inlineContentBlock.contains(".align(Alignment.BottomEnd)"))
+        assertFalse(source.contains("message.enabledToolIds"))
+        assertFalse(source.contains("UserMessageTool"))
     }
 
     @Test
