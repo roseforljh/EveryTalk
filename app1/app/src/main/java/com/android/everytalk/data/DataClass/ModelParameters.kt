@@ -10,6 +10,9 @@ const val DEFAULT_THINKING_BUDGET = 2048
 const val DEFAULT_MAX_OUTPUT_TOKENS = 4096
 const val DEFAULT_MAX_CONTEXT_TOKENS = 128_000
 const val MAX_MODEL_TOKEN_LIMIT = 10_000_000
+const val DEFAULT_AUTO_CONTEXT_COMPRESSION_THRESHOLD_PERCENT = 80
+const val MIN_AUTO_CONTEXT_COMPRESSION_THRESHOLD_PERCENT = 50
+const val MAX_AUTO_CONTEXT_COMPRESSION_THRESHOLD_PERCENT = 90
 
 @Serializable
 enum class ReasoningMode {
@@ -45,9 +48,20 @@ data class ModelParameters(
     val customReasoningEfforts: List<String> = emptyList(),
     // 上下文窗口是模型能力限制，只用于发送前裁剪本地历史，不作为请求字段发送。
     val maxContextTokens: Int = DEFAULT_MAX_CONTEXT_TOKENS,
+    // 自动压缩按模型保存，默认关闭，避免旧配置升级后改变现有会话行为。
+    val autoContextCompressionEnabled: Boolean = false,
+    val autoContextCompressionThresholdPercent: Int = DEFAULT_AUTO_CONTEXT_COMPRESSION_THRESHOLD_PERCENT,
     // 记录自动解析后的能力及来源；旧配置缺少该字段时按用户现有值处理。
     val resolvedCapability: ResolvedModelCapability? = null,
 )
+
+fun validateAutoContextCompressionThreshold(percent: Int): Int {
+    require(percent in MIN_AUTO_CONTEXT_COMPRESSION_THRESHOLD_PERCENT..MAX_AUTO_CONTEXT_COMPRESSION_THRESHOLD_PERCENT) {
+        "自动压缩触发值需在 $MIN_AUTO_CONTEXT_COMPRESSION_THRESHOLD_PERCENT% 到 " +
+            "$MAX_AUTO_CONTEXT_COMPRESSION_THRESHOLD_PERCENT% 之间"
+    }
+    return percent
+}
 
 data class ModelTokenLimits(
     val maxOutputTokens: Int,

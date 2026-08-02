@@ -22,12 +22,14 @@ data class ContextUsageSnapshot(
     val protocolOverheadTokens: Long,
     val reservedOutputTokens: Long,
     val contextWindowTokens: Long,
+    val inputCalibrationTokens: Long = 0L,
     val measuredInputTokens: Long? = null,
     val measuredOutputTokens: Long? = null,
     val measuredTotalTokens: Long? = null,
     val measuredUsageSource: TokenUsageSource? = null,
+    val activeContextTokensOverride: Long? = null,
 ) {
-    val estimatedInputTokens: Long
+    val uncalibratedEstimatedInputTokens: Long
         get() = safeSum(
             systemPromptTokens,
             conversationTextTokens,
@@ -36,8 +38,16 @@ data class ContextUsageSnapshot(
             protocolOverheadTokens,
         )
 
+    val estimatedInputTokens: Long
+        get() = safeAddSigned(
+            uncalibratedEstimatedInputTokens,
+            inputCalibrationTokens,
+        ).coerceAtLeast(0L)
+
     val displayedUsedTokens: Long
-        get() = measuredTotalTokens ?: safeSum(estimatedInputTokens, reservedOutputTokens)
+        get() = activeContextTokensOverride
+            ?: measuredTotalTokens
+            ?: safeSum(estimatedInputTokens, reservedOutputTokens)
 
     val remainingTokens: Long
         get() = (contextWindowTokens - displayedUsedTokens).coerceAtLeast(0L)
@@ -65,6 +75,10 @@ data class ContextUsageSnapshot(
             measuredUsageSource = usage.source,
         )
     }
+
+    fun withActiveContextOverride(tokens: Long?): ContextUsageSnapshot = copy(
+        activeContextTokensOverride = tokens?.coerceAtLeast(0L),
+    )
 }
 
 private fun safeSum(vararg values: Long): Long = values.fold(0L) { total, value ->
@@ -75,5 +89,11 @@ private fun safeSumNullable(left: Long?, right: Long?): Long? = when {
     left == null -> right
     right == null -> left
     left > Long.MAX_VALUE - right -> Long.MAX_VALUE
+    else -> left + right
+}
+
+private fun safeAddSigned(left: Long, right: Long): Long = when {
+    right > 0L && left > Long.MAX_VALUE - right -> Long.MAX_VALUE
+    right < 0L && left < Long.MIN_VALUE - right -> Long.MIN_VALUE
     else -> left + right
 }

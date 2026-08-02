@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.room.TypeConverter
 import com.android.everytalk.data.DataClass.ModelParameters
 import com.android.everytalk.data.DataClass.ContextUsageSnapshot
+import com.android.everytalk.data.DataClass.ContextCompressionState
 import com.android.everytalk.data.DataClass.ExecutionStep
 import com.android.everytalk.data.DataClass.ModalityType
 import com.android.everytalk.data.DataClass.Sender
@@ -182,6 +183,21 @@ class Converters {
         if (value.isNullOrEmpty()) return null
         return try {
             json.decodeFromString(ContextUsageSnapshot.serializer(), value)
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    @TypeConverter
+    fun fromContextCompressionState(value: ContextCompressionState?): String? = value?.let {
+        json.encodeToString(ContextCompressionState.serializer(), it)
+    }
+
+    @TypeConverter
+    fun toContextCompressionState(value: String?): ContextCompressionState? {
+        if (value.isNullOrEmpty()) return null
+        return try {
+            json.decodeFromString(ContextCompressionState.serializer(), value)
         } catch (_: Exception) {
             null
         }

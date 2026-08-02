@@ -6,6 +6,7 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.ContextUsageSnapshot
+import com.android.everytalk.data.DataClass.ContextCompressionState
 import com.android.everytalk.data.DataClass.ExecutionStep
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.WebSearchResult
@@ -61,6 +62,7 @@ data class MessageEntity(
     val providerName: String? = null,
     val tokenUsage: TokenUsage? = null,
     val contextUsageSnapshot: ContextUsageSnapshot? = null,
+    val contextCompressionState: ContextCompressionState? = null,
 )
 
 /**
@@ -90,6 +92,7 @@ data class RawMessageRow(
     val providerName: String?,
     val tokenUsageJson: String?,
     val contextUsageSnapshotJson: String?,
+    val contextCompressionStateJson: String?,
 )
 
 fun RawMessageRow.toMessage(converters: Converters): Message = Message(
@@ -115,6 +118,7 @@ fun RawMessageRow.toMessage(converters: Converters): Message = Message(
     providerName = providerName,
     tokenUsage = converters.toTokenUsage(tokenUsageJson),
     contextUsageSnapshot = converters.toContextUsageSnapshot(contextUsageSnapshotJson),
+    contextCompressionState = converters.toContextCompressionState(contextCompressionStateJson),
 )
 
 fun MessageEntity.toMessage(): Message {
@@ -141,6 +145,7 @@ fun MessageEntity.toMessage(): Message {
         providerName = providerName,
         tokenUsage = tokenUsage,
         contextUsageSnapshot = contextUsageSnapshot,
+        contextCompressionState = contextCompressionState,
     )
 }
 
@@ -169,5 +174,6 @@ fun Message.toEntity(sessionId: String): MessageEntity {
         providerName = providerName,
         tokenUsage = tokenUsage,
         contextUsageSnapshot = contextUsageSnapshot,
+        contextCompressionState = contextCompressionState,
     )
 }

@@ -83,6 +83,7 @@ data class Message(
     val providerName: String? = null,
     val tokenUsage: TokenUsage? = null,
     val contextUsageSnapshot: ContextUsageSnapshot? = null,
+    val contextCompressionState: ContextCompressionState? = null,
 ) : IMessage {
     // 检查消息是否包含内联图片
     fun hasInlineImages(): Boolean {
@@ -167,3 +168,20 @@ data class Message(
         }
     }
 }
+
+fun hasReviewableExecutionProcess(
+    reasoningText: String?,
+    executionSteps: List<ExecutionStep>,
+    webSearchResults: List<WebSearchResult>?,
+    executionStatus: String? = null,
+): Boolean = !reasoningText.isNullOrBlank() ||
+    executionSteps.isNotEmpty() ||
+    !webSearchResults.isNullOrEmpty() ||
+    executionStatus?.startsWith("上下文压缩失败：") == true
+
+fun Message.hasReviewableExecutionProcess(): Boolean = hasReviewableExecutionProcess(
+    reasoningText = reasoning,
+    executionSteps = executionSteps,
+    webSearchResults = webSearchResults,
+    executionStatus = executionStatus,
+)

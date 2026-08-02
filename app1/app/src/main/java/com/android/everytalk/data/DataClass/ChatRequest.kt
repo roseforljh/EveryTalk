@@ -105,5 +105,8 @@ data class ChatRequest(
 
     // 代码执行工具控制：None=auto(智能判断), True=强制开启, False=强制关闭
     @SerialName("enableCodeExecution")
-    val enableCodeExecution: Boolean? = null
+    val enableCodeExecution: Boolean? = null,
+
+    @SerialName("contextManagement")
+    val contextManagement: RequestContextManagement? = null,
 )

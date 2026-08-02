@@ -45,7 +45,8 @@ interface ChatDao {
                executionSteps AS executionStepsJson,
                enabledToolIds AS enabledToolIdsJson, modelName, providerName,
                tokenUsage AS tokenUsageJson,
-               contextUsageSnapshot AS contextUsageSnapshotJson
+               contextUsageSnapshot AS contextUsageSnapshotJson,
+               contextCompressionState AS contextCompressionStateJson
         FROM messages
         WHERE sessionId IN (
             SELECT id FROM chat_sessions WHERE isImageGeneration = :isImageGen
