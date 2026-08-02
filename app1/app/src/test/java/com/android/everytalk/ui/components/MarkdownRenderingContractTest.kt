@@ -119,6 +119,38 @@ class MarkdownRenderingContractTest {
     }
 
     @Test
+    fun `正文冒号粘连无序列表时修复为独立列表`() {
+        val source = """
+            你有 **100U**：- 不用杠杆买股票：谷歌涨 1%，大约赚 **1U**；
+            - 如果使用 **10倍杠杆合约**，相当于控制约 1000U 的仓位：
+              - 谷歌涨 1%，理论上约赚 **10U**；
+        """.trimIndent()
+
+        val prepared = StreamBlockParser.prepareMessage(
+            content = source,
+            messageId = "embedded-unordered-list",
+            contentVersion = 47L,
+        )
+        val state = parseMarkdown(
+            prepared.markdown,
+            lookupLinks = false,
+            flavour = EveryTalkMarkdownFlavourDescriptor,
+        ) as State.Success
+
+        assertEquals(
+            """
+                你有 **100U**：
+
+                - 不用杠杆买股票：谷歌涨 1%，大约赚 **1U**；
+                - 如果使用 **10倍杠杆合约**，相当于控制约 1000U 的仓位：
+                  - 谷歌涨 1%，理论上约赚 **10U**；
+            """.trimIndent(),
+            prepared.markdown,
+        )
+        assertTrue(state.node.children.any { it.type == MarkdownElementTypes.UNORDERED_LIST })
+    }
+
+    @Test
     fun `正文粘连表头时只修复表格边界并交给 GFM 表格解析`() {
         val source = """
             特征：| 财务指标 | 2024 财年 | 2025 财年 | 年同比变化 |

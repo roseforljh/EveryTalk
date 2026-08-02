@@ -3,8 +3,8 @@ package com.android.everytalk.ui.components.markdown
 /**
  * 渲染前只修复可确定识别的 Markdown 结构边界。
  *
- * 模型把正文和表头粘在同一行时，GFM 解析器会把整行当作普通段落。独占一行的加粗小标题
- * 紧邻正文时，CommonMark 也会把两行合并为同一段。这里只补齐可确定的块边界，并避开代码围栏。
+ * 模型把正文与列表或表头粘在同一行时，GFM 解析器会把整行当作普通段落。独占一行的加粗
+ * 小标题紧邻正文时，CommonMark 也会把两行合并为同一段。这里只补齐可确定的块边界，并避开代码围栏。
  */
 internal object MarkdownContractValidator {
 
@@ -22,9 +22,11 @@ internal object MarkdownContractValidator {
             val line = lines[index]
             val protectedLine = fenceTracker.isFenceLine(line)
             val nextLine = lines.getOrNull(index + 1)
+            val listMarker = findEmbeddedUnorderedListMarker(line) ?: -1
             val firstPipe = findFirstTablePipe(line) ?: -1
             val prefix = if (firstPipe > 0) line.substring(0, firstPipe) else ""
             val tablePart = if (firstPipe >= 0) line.substring(firstPipe).trimStart() else ""
+            val canSplitList = !protectedLine && listMarker > 0
             val canSplit = !protectedLine &&
                 prefix.isNotBlank() &&
                 isPotentialTableRow(tablePart) &&
@@ -34,7 +36,12 @@ internal object MarkdownContractValidator {
                 isStandaloneStrongLine(line) &&
                 nextLine?.isNotBlank() == true
 
-            if (canSplit) {
+            if (canSplitList) {
+                output += line.substring(0, listMarker).trimEnd()
+                output += ""
+                output += line.substring(listMarker)
+                changed = true
+            } else if (canSplit) {
                 output += prefix.trimEnd()
                 output += ""
                 output += tablePart
@@ -51,6 +58,25 @@ internal object MarkdownContractValidator {
         }
 
         return if (changed) output.joinToString("\n") else markdown
+    }
+
+    private fun findEmbeddedUnorderedListMarker(line: String): Int? {
+        var inInlineCode = false
+        for (index in 1 until line.length - 2) {
+            if (line[index] == '`') {
+                inInlineCode = !inInlineCode
+                continue
+            }
+            if (!inInlineCode &&
+                (line[index - 1] == '：' || line[index - 1] == ':') &&
+                line[index] == '-' &&
+                line[index + 1].isWhitespace() &&
+                line.substring(index + 2).isNotBlank()
+            ) {
+                return index
+            }
+        }
+        return null
     }
 
     private fun isPotentialTableRow(line: String): Boolean {
