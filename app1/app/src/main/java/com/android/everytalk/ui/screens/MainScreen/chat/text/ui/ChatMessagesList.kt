@@ -664,6 +664,8 @@ fun ChatMessagesList(
                                     currentMessageId = item.message.id,
                                     displayedReasoningText = displayedReasoningText,
                                     activityStatusText = item.activityStatusText,
+                                    executionSteps = item.message.executionSteps,
+                                    webSearchResults = item.message.webSearchResults.orEmpty(),
                                     isReasoningStreaming = isReasoningStreaming,
                                     isReasoningComplete = isReasoningComplete,
                                     messageIsError = item.message.isError,

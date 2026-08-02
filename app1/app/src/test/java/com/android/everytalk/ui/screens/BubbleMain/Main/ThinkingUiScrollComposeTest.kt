@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -11,25 +12,39 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.click
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.test.swipe
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.core.app.ApplicationProvider
+import com.android.everytalk.data.DataClass.ExecutionStep
+import com.android.everytalk.data.DataClass.ExecutionStepType
+import com.android.everytalk.data.DataClass.WebSearchResult
+import com.android.everytalk.ui.components.math.MathJaxSvgRenderer
 import com.android.everytalk.ui.screens.ImageGeneration.ImageGenerationLoadingView
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.koin.core.context.startKoin
+import org.koin.core.context.stopKoin
+import org.koin.dsl.module
 import org.robolectric.annotation.Config
 
 @RunWith(AndroidJUnit4::class)
@@ -37,6 +52,23 @@ import org.robolectric.annotation.Config
 class ThinkingUiScrollComposeTest {
     @get:Rule
     val composeRule = createComposeRule()
+
+    private lateinit var mathRenderer: MathJaxSvgRenderer
+
+    @Before
+    fun setUp() {
+        stopKoin()
+        mathRenderer = MathJaxSvgRenderer(ApplicationProvider.getApplicationContext())
+        startKoin {
+            modules(module { single { mathRenderer } })
+        }
+    }
+
+    @After
+    fun tearDown() {
+        stopKoin()
+        mathRenderer.close()
+    }
 
     @Test
     fun `图像生成空列表加载态也使用执行抽屉`() {
@@ -49,15 +81,15 @@ class ThinkingUiScrollComposeTest {
 
         composeRule.mainClock.advanceTimeBy(1_000L)
         composeRule.waitForIdle()
-        composeRule.onNodeWithContentDescription("正在执行").fetchSemanticsNode("")
-        assertTrue(composeRule.onAllNodesWithText("等待首个响应").fetchSemanticsNodes().isEmpty())
+        composeRule.onNodeWithContentDescription("等待首个响应").fetchSemanticsNode("")
+        assertTrue(composeRule.onAllNodesWithText("等待首个响应").fetchSemanticsNodes().isNotEmpty())
 
-        composeRule.onNodeWithContentDescription("正在执行").performClick()
+        composeRule.onNodeWithTag("reasoning-inline-status").performClick()
         composeRule.mainClock.advanceTimeBy(1_000L)
         composeRule.waitForIdle()
 
         composeRule.onNodeWithContentDescription("执行过程加载中").fetchSemanticsNode("")
-        composeRule.onNodeWithText("等待首个响应").fetchSemanticsNode("")
+        assertTrue(composeRule.onAllNodesWithText("等待首个响应").fetchSemanticsNodes().isNotEmpty())
     }
 
     @Test
@@ -87,7 +119,8 @@ class ThinkingUiScrollComposeTest {
         composeRule.mainClock.advanceTimeBy(1_000L)
         composeRule.waitForIdle()
 
-        composeRule.onNodeWithContentDescription("正在执行").fetchSemanticsNode("")
+        composeRule.onNodeWithContentDescription("第二行推理").fetchSemanticsNode("")
+        composeRule.onNodeWithText("第二行推理").fetchSemanticsNode("")
         assertTrue(composeRule.onAllNodesWithText(reasoning).fetchSemanticsNodes().isEmpty())
 
         val rootHeight = composeRule
@@ -126,14 +159,22 @@ class ThinkingUiScrollComposeTest {
                 .fetchSemanticsNodes()
                 .isEmpty()
         )
-        assertTrue(composeRule.onAllNodesWithText("调用工具 · search_docs").fetchSemanticsNodes().isEmpty())
+        assertTrue(
+            composeRule.onAllNodesWithText("调用工具 · search_docs")
+                .fetchSemanticsNodes()
+                .isNotEmpty()
+        )
 
-        composeRule.onNodeWithContentDescription("正在执行").performClick()
+        composeRule.onNodeWithTag("reasoning-inline-status").performClick()
         composeRule.mainClock.advanceTimeBy(1_000L)
         composeRule.waitForIdle()
 
         composeRule.onNodeWithContentDescription("执行过程加载中").fetchSemanticsNode("")
-        composeRule.onNodeWithText("调用工具 · search_docs").fetchSemanticsNode("")
+        assertTrue(
+            composeRule.onAllNodesWithText("调用工具 · search_docs")
+                .fetchSemanticsNodes()
+                .isNotEmpty()
+        )
         composeRule.mainClock.advanceTimeBy(2_100L)
         composeRule.waitForIdle()
         listOf("0s", "1s", "2s", "3s").forEach { elapsedText ->
@@ -144,10 +185,264 @@ class ThinkingUiScrollComposeTest {
             .fetchSemanticsNode("")
             .boundsInRoot
         val statusBounds = composeRule
-            .onNodeWithTag("reasoning-sheet-activity-status")
+            .onNodeWithTag("reasoning-execution-live-step")
             .fetchSemanticsNode("")
             .boundsInRoot
         assertTrue("工具状态超出抽屉", statusBounds.left >= sheetBounds.left && statusBounds.right <= sheetBounds.right)
+    }
+
+    @Test
+    fun `外部显示最新过程且抽屉使用工具和网站胶囊时间线`() {
+        composeRule.mainClock.autoAdvance = false
+        val query = "EveryTalk Android 执行过程抽屉垂直时间线与工具胶囊布局验证长查询"
+        var pixelsPerDp = 1f
+        composeRule.setContent {
+            pixelsPerDp = LocalDensity.current.density
+            MaterialTheme {
+                ReasoningToggleAndContent(
+                    currentMessageId = "timeline-pills",
+                    displayedReasoningText = "正在核对搜索结果",
+                    activityStatusText = "搜索网页 · $query",
+                    executionSteps = listOf(
+                        ExecutionStep(
+                            id = "search-1",
+                            type = ExecutionStepType.Search,
+                            title = "搜索网页",
+                            labels = listOf(query),
+                        )
+                    ),
+                    webSearchResults = listOf(
+                        WebSearchResult(1, "EveryTalk", "https://github.com/example/everytalk", ""),
+                        WebSearchResult(2, "文档", "https://developer.android.com/compose", ""),
+                    ),
+                    isReasoningStreaming = true,
+                    isReasoningComplete = false,
+                    messageIsError = false,
+                    mainContentHasStarted = false,
+                    reasoningTextColor = Color.Black,
+                    reasoningToggleDotColor = Color.Black,
+                    onVisibilityChanged = {},
+                )
+            }
+        }
+
+        composeRule.mainClock.advanceTimeBy(1_000L)
+        composeRule.waitForIdle()
+        val inlineWidth = composeRule
+            .onNodeWithTag("reasoning-inline-status-text", useUnmergedTree = true)
+            .fetchSemanticsNode("")
+            .boundsInRoot
+            .width
+        assertTrue("外部过程文本没有限制最大宽度", inlineWidth <= 280f * pixelsPerDp + 1f)
+        composeRule.onNodeWithContentDescription("搜索网页 · $query").fetchSemanticsNode("")
+
+        composeRule.onNodeWithTag("reasoning-inline-status").performClick()
+        composeRule.mainClock.advanceTimeBy(1_000L)
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("reasoning-execution-step-0").fetchSemanticsNode("")
+        assertEquals(
+            1,
+            composeRule.onAllNodesWithTag("reasoning-timeline-icon-active")
+                .fetchSemanticsNodes().size,
+        )
+        assertTrue(
+            composeRule.onAllNodesWithTag("reasoning-timeline-icon-static")
+                .fetchSemanticsNodes().isNotEmpty(),
+        )
+        composeRule.onNodeWithTag("reasoning-execution-label-0").fetchSemanticsNode("")
+        composeRule.onNodeWithTag("reasoning-website-label-0").fetchSemanticsNode("")
+        composeRule.onNodeWithTag("reasoning-website-label-1").fetchSemanticsNode("")
+        composeRule.onNodeWithText("github.com").fetchSemanticsNode("")
+        composeRule.onNodeWithText("developer.android.com").fetchSemanticsNode("")
+    }
+
+    @Test
+    fun `外部过程优先显示真实工具状态和最新思考文本`() {
+        val steps = listOf(
+            ExecutionStep(
+                id = "tool-1",
+                type = ExecutionStepType.Tool,
+                title = "调用工具",
+                labels = listOf("search_docs"),
+            )
+        )
+        assertEquals(
+            "调用工具 · search_docs",
+            executionSummaryText("**分析资料**", "调用工具 · search_docs", steps),
+        )
+        assertEquals(
+            "核对第二项",
+            executionSummaryText("**分析资料**\n- 核对第二项", "正在接收思考", steps),
+        )
+    }
+
+    @Test
+    fun `网站胶囊与网页执行标签单击打开原始链接`() {
+        var openedUri: String? = null
+        val testUriHandler = object : UriHandler {
+            override fun openUri(uri: String) {
+                openedUri = uri
+            }
+        }
+        composeRule.setContent {
+            CompositionLocalProvider(LocalUriHandler provides testUriHandler) {
+                MaterialTheme {
+                    ThinkingExecutionTimeline(
+                        executionSteps = listOf(
+                            ExecutionStep(
+                                id = "web-1",
+                                type = ExecutionStepType.Web,
+                                title = "访问网页",
+                                labels = listOf("https://developer.android.com/compose"),
+                            )
+                        ),
+                        webSearchResults = listOf(
+                            WebSearchResult(
+                                index = 1,
+                                title = "EveryTalk",
+                                href = "https://github.com/example/everytalk",
+                                snippet = "",
+                            )
+                        ),
+                        activityStatusText = null,
+                        reasoningText = "",
+                        isReasoningActive = true,
+                        messageIsError = false,
+                    ) {}
+                }
+            }
+        }
+
+        composeRule.onNodeWithTag("reasoning-website-label-0")
+            .assertHasClickAction()
+            .performClick()
+        composeRule.runOnIdle {
+            assertEquals("https://github.com/example/everytalk", openedUri)
+        }
+        composeRule.onNodeWithTag("reasoning-execution-label-0")
+            .assertHasClickAction()
+            .performClick()
+        composeRule.runOnIdle {
+            assertEquals("https://developer.android.com/compose", openedUri)
+        }
+    }
+
+    @Test
+    fun `只有工具调用没有思考文本时仍可回看执行时间线`() {
+        composeRule.mainClock.autoAdvance = false
+        composeRule.setContent {
+            MaterialTheme {
+                ReasoningToggleAndContent(
+                    currentMessageId = "tool-only-review",
+                    displayedReasoningText = "",
+                    executionSteps = listOf(
+                        ExecutionStep(
+                            id = "tool-1",
+                            type = ExecutionStepType.Tool,
+                            title = "调用工具",
+                            labels = listOf("local_clock"),
+                            completed = true,
+                        )
+                    ),
+                    isReasoningStreaming = false,
+                    isReasoningComplete = true,
+                    messageIsError = false,
+                    mainContentHasStarted = true,
+                    reasoningTextColor = Color.Black,
+                    reasoningToggleDotColor = Color.Black,
+                    onVisibilityChanged = {},
+                )
+            }
+        }
+
+        composeRule.mainClock.advanceTimeBy(1_000L)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("reasoning-sheet-review-toggle").performClick()
+        composeRule.mainClock.advanceTimeBy(1_000L)
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("reasoning-execution-step-0").fetchSemanticsNode("")
+        composeRule.onNodeWithText("local_clock").fetchSemanticsNode("")
+        composeRule.onNodeWithTag("reasoning-execution-finish-step").fetchSemanticsNode("")
+        assertTrue(composeRule.onAllNodesWithText("暂无详细思考内容").fetchSemanticsNodes().isEmpty())
+    }
+
+    @Test
+    fun `抽屉渲染Markdown并分隔连续加粗段落`() {
+        composeRule.mainClock.autoAdvance = false
+        val reasoning =
+            "**Calculating reimbursement amounts in RMB****Verifying currency symbols and exchange context**"
+        var pixelsPerDp = 1f
+
+        composeRule.setContent {
+            pixelsPerDp = LocalDensity.current.density
+            MaterialTheme {
+                ReasoningToggleAndContent(
+                    currentMessageId = "markdown-reasoning-sheet",
+                    displayedReasoningText = reasoning,
+                    isReasoningStreaming = true,
+                    isReasoningComplete = false,
+                    messageIsError = false,
+                    mainContentHasStarted = false,
+                    reasoningTextColor = Color.Black,
+                    reasoningToggleDotColor = Color.Black,
+                    onVisibilityChanged = {},
+                )
+            }
+        }
+
+        composeRule.mainClock.advanceTimeBy(1_000L)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("reasoning-inline-status").performClick()
+        composeRule.waitForIdle()
+        composeRule.mainClock.advanceTimeBy(1_000L)
+        composeRule.waitForIdle()
+
+        assertTrue(composeRule.onAllNodesWithText(reasoning).fetchSemanticsNodes().isEmpty())
+        val firstSection = composeRule
+            .onAllNodesWithText("Calculating reimbursement amounts in RMB", substring = true)
+            .fetchSemanticsNodes()
+            .last()
+        val secondSection = composeRule
+            .onAllNodesWithText("Verifying currency symbols and exchange context", substring = true)
+            .fetchSemanticsNodes()
+            .last()
+        assertTrue("连续加粗段落没有换行", secondSection.boundsInRoot.top > firstSection.boundsInRoot.top)
+        val statusBottom = composeRule
+            .onNodeWithTag("reasoning-active-step-title")
+            .fetchSemanticsNode("")
+            .boundsInRoot
+            .bottom
+        val markdownTop = composeRule
+            .onNodeWithTag("reasoning-sheet-markdown")
+            .fetchSemanticsNode("")
+            .boundsInRoot
+            .top
+        assertTrue(
+            "状态与正文间距异常：${markdownTop - statusBottom}",
+            markdownTop - statusBottom in 0f..20f * pixelsPerDp,
+        )
+    }
+
+    @Test
+    fun `连续加粗推理片段转换为Markdown段落`() {
+        assertEquals(
+            "**第一步**\n\n**第二步**\n\n**第三步**",
+            normalizeReasoningMarkdown("**第一步****第二步****第三步**"),
+        )
+        assertEquals(
+            "```text\n**第一步****第二步**\n```",
+            normalizeReasoningMarkdown("```text\n**第一步****第二步**\n```"),
+        )
+        assertEquals(
+            "第一行  \n第二行",
+            normalizeReasoningMarkdown("第一行\n第二行"),
+        )
+        assertEquals(
+            "第一段\n\n第二段",
+            normalizeReasoningMarkdown("第一段\n\n第二段"),
+        )
     }
 
     @Test
@@ -175,17 +470,26 @@ class ThinkingUiScrollComposeTest {
 
         composeRule.mainClock.advanceTimeBy(1_000L)
         composeRule.waitForIdle()
-        composeRule.onNodeWithContentDescription("正在执行").performClick()
+        composeRule.onNodeWithTag("reasoning-inline-status").performClick()
         composeRule.waitForIdle()
         composeRule.mainClock.advanceTimeBy(1_000L)
         composeRule.waitForIdle()
-        composeRule.onNodeWithText("第一段思考").fetchSemanticsNode("")
+        assertTrue(composeRule.onAllNodesWithText("第一段思考").fetchSemanticsNodes().isNotEmpty())
 
         composeRule.runOnIdle { appendReasoning() }
         composeRule.mainClock.advanceTimeByFrame()
         composeRule.waitForIdle()
 
-        composeRule.onNodeWithText("第一段思考\n第二段思考").fetchSemanticsNode("")
+        assertTrue(
+            composeRule.onAllNodesWithText("第一段思考", substring = true)
+                .fetchSemanticsNodes()
+                .isNotEmpty()
+        )
+        assertTrue(
+            composeRule.onAllNodesWithText("第二段思考", substring = true)
+                .fetchSemanticsNodes()
+                .isNotEmpty()
+        )
     }
 
     @Test
@@ -217,7 +521,7 @@ class ThinkingUiScrollComposeTest {
 
         composeRule.mainClock.advanceTimeBy(1_000L)
         composeRule.waitForIdle()
-        composeRule.onNodeWithContentDescription("正在执行").performClick()
+        composeRule.onNodeWithTag("reasoning-inline-status").performClick()
         composeRule.waitForIdle()
         composeRule.mainClock.advanceTimeBy(1_000L)
         composeRule.waitForIdle()
@@ -294,20 +598,38 @@ class ThinkingUiScrollComposeTest {
 
         composeRule.mainClock.advanceTimeBy(1_000L)
         composeRule.waitForIdle()
-        composeRule.onNodeWithContentDescription("正在执行").performClick()
+        composeRule.onNodeWithTag("reasoning-inline-status").performClick()
         composeRule.waitForIdle()
         composeRule.mainClock.advanceTimeBy(1_000L)
         composeRule.waitForIdle()
         val initialMaxValue = scrollState.maxValue
-        assertTrue(initialMaxValue > 0)
+        val initialMarkdownBounds = composeRule
+            .onNodeWithTag("reasoning-sheet-markdown")
+            .fetchSemanticsNode("")
+            .boundsInRoot
+        val initialViewportHeight = composeRule
+            .onNodeWithTag("reasoning-sheet-scroll")
+            .fetchSemanticsNode("")
+            .boundsInRoot
+            .height
+        assertTrue(
+            "长内容不可滚动：max=$initialMaxValue, markdown=${initialMarkdownBounds.size}, " +
+                "viewport=$initialViewportHeight",
+            initialMaxValue > 0,
+        )
         assertEquals(0, scrollState.value)
 
         composeRule.runOnIdle { appendReasoning() }
-        composeRule.mainClock.advanceTimeByFrame()
-        composeRule.waitForIdle()
+        repeat(4) {
+            composeRule.mainClock.advanceTimeByFrame()
+            composeRule.waitForIdle()
+        }
 
         composeRule.runOnIdle {
-            assertTrue(scrollState.maxValue > initialMaxValue)
+            assertTrue(
+                "新增内容后滚动范围没有增长：before=$initialMaxValue, after=${scrollState.maxValue}",
+                scrollState.maxValue > initialMaxValue,
+            )
             assertEquals(0, scrollState.value)
         }
     }
@@ -381,6 +703,61 @@ class ThinkingUiScrollComposeTest {
     }
 
     @Test
+    fun `执行中打开已有长内容时默认展开抽屉`() {
+        composeRule.mainClock.autoAdvance = false
+
+        composeRule.setContent {
+            MaterialTheme {
+                ReasoningToggleAndContent(
+                    currentMessageId = "active-long-sheet",
+                    displayedReasoningText = (1..80).joinToString("\n") { "执行中推理第${it}行" },
+                    isReasoningStreaming = true,
+                    isReasoningComplete = false,
+                    messageIsError = false,
+                    mainContentHasStarted = false,
+                    reasoningTextColor = Color.Black,
+                    reasoningToggleDotColor = Color.Black,
+                    onVisibilityChanged = {},
+                )
+            }
+        }
+
+        composeRule.mainClock.advanceTimeBy(1_000L)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("reasoning-inline-status").performClick()
+        var openingSurfaceReady = false
+        var openingProbeAttempts = 0
+        while (!openingSurfaceReady && openingProbeAttempts < 10) {
+            composeRule.mainClock.advanceTimeBy(50L)
+            composeRule.waitForIdle()
+            openingSurfaceReady = composeRule.onAllNodesWithTag("reasoning-sheet-content")
+                .fetchSemanticsNodes().isNotEmpty()
+            openingProbeAttempts++
+        }
+        assertTrue("长执行抽屉没有开始打开", openingSurfaceReady)
+        composeRule.onNodeWithTag("reasoning-sheet-content").performTouchInput {
+            click(center)
+        }
+        var passedThroughPartialHeight = false
+        repeat(30) {
+            composeRule.mainClock.advanceTimeBy(100L)
+            composeRule.waitForIdle()
+            passedThroughPartialHeight = passedThroughPartialHeight ||
+                composeRule.onAllNodesWithTag(
+                    "reasoning-sheet-state-PartiallyExpanded-overflow-true",
+                ).fetchSemanticsNodes().isNotEmpty() ||
+                composeRule.onAllNodesWithTag(
+                    "reasoning-sheet-state-PartiallyExpanded-overflow-false",
+                ).fetchSemanticsNodes().isNotEmpty()
+        }
+
+        composeRule.onNodeWithTag(
+            "reasoning-sheet-state-Expanded-overflow-true",
+        ).fetchSemanticsNode("")
+        assertTrue("长执行抽屉曾先停在默认高度", !passedThroughPartialHeight)
+    }
+
+    @Test
     fun `圆点打开短内容时保持默认高度且可下拉关闭`() {
         composeRule.mainClock.autoAdvance = false
         var windowHeightPx = 1f
@@ -416,7 +793,15 @@ class ThinkingUiScrollComposeTest {
             .fetchSemanticsNode("")
             .boundsInRoot
             .top
-        assertTrue("短内容错误触发展开", defaultTop > windowHeightPx * 0.35f)
+        val timelineHeight = composeRule
+            .onNodeWithTag("reasoning-execution-timeline")
+            .fetchSemanticsNode("")
+            .boundsInRoot
+            .height
+        assertTrue(
+            "短内容错误触发展开：top=$defaultTop, window=$windowHeightPx, timeline=$timelineHeight",
+            defaultTop > windowHeightPx * 0.35f,
+        )
 
         composeRule.onNodeWithTag("reasoning-sheet-scroll").performTouchInput {
             val start = center.copy(y = top + 40f)
@@ -432,7 +817,7 @@ class ThinkingUiScrollComposeTest {
     }
 
     @Test
-    fun `抽屉内容由短变长时不程序化跳动到末尾`() {
+    fun `抽屉内容由短变长并溢出默认高度时自动展开`() {
         composeRule.mainClock.autoAdvance = false
         lateinit var scrollState: ScrollState
         lateinit var appendLongReasoning: () -> Unit
@@ -464,7 +849,7 @@ class ThinkingUiScrollComposeTest {
 
         composeRule.mainClock.advanceTimeBy(1_000L)
         composeRule.waitForIdle()
-        composeRule.onNodeWithContentDescription("正在执行").performClick()
+        composeRule.onNodeWithTag("reasoning-inline-status").performClick()
         composeRule.waitForIdle()
         composeRule.mainClock.advanceTimeBy(1_000L)
         composeRule.waitForIdle()
@@ -477,37 +862,27 @@ class ThinkingUiScrollComposeTest {
             .boundsInRoot
 
         composeRule.runOnIdle { appendLongReasoning() }
-        repeat(4) {
-            composeRule.mainClock.advanceTimeByFrame()
+        repeat(3) {
+            composeRule.mainClock.advanceTimeBy(1_000L)
             composeRule.waitForIdle()
         }
 
         composeRule.runOnIdle {
-            assertTrue(scrollState.maxValue > 0)
+            assertTrue(
+                "增长后的 Markdown 仍不可滚动：max=${scrollState.maxValue}",
+                scrollState.maxValue > 0,
+            )
             assertEquals(0, scrollState.value)
         }
-        val grownSheetBounds = composeRule
-            .onNodeWithTag("reasoning-sheet-content")
-            .fetchSemanticsNode("")
-            .boundsInRoot
-        assertEquals(initialSheetBounds.top, grownSheetBounds.top, 1f)
-        assertEquals(initialSheetBounds.height, grownSheetBounds.height, 1f)
-        composeRule
-            .onNodeWithTag("reasoning-sheet-drag-handle-enabled", useUnmergedTree = true)
-            .performTouchInput {
-            val start = center
-            swipe(start, start.copy(y = start.y - 600f), durationMillis = 500L)
-        }
-        composeRule.mainClock.advanceTimeBy(1_000L)
-        composeRule.waitForIdle()
-        val manuallyExpandedTop = composeRule
+        val automaticallyExpandedTop = composeRule
             .onNodeWithTag("reasoning-sheet-content")
             .fetchSemanticsNode("")
             .boundsInRoot
             .top
         assertTrue(
-            "内容溢出后手动上拉未展开抽屉：before=${grownSheetBounds.top}, after=$manuallyExpandedTop",
-            manuallyExpandedTop < grownSheetBounds.top,
+            "内容溢出后未自动展开抽屉：before=${initialSheetBounds.top}, " +
+                "after=$automaticallyExpandedTop",
+            automaticallyExpandedTop < initialSheetBounds.top,
         )
         composeRule.onNodeWithTag(
             "reasoning-sheet-drag-handle-enabled",
@@ -524,12 +899,26 @@ class ThinkingUiScrollComposeTest {
             .fetchSemanticsNode("")
             .boundsInRoot
             .top
-        assertEquals(manuallyExpandedTop, topAfterContentScroll, 1f)
+        assertEquals(automaticallyExpandedTop, topAfterContentScroll, 1f)
         assertTrue("加高抽屉展开后正文未接管滚动", scrollState.value > 0)
         composeRule.onNodeWithTag(
-            "reasoning-sheet-drag-handle-disabled",
+            "reasoning-sheet-drag-handle-enabled",
             useUnmergedTree = true,
         ).fetchSemanticsNode("")
+
+        composeRule.onNodeWithTag("reasoning-sheet-scroll").performTouchInput {
+            val start = center
+            swipe(start, start.copy(y = start.y + 80f), durationMillis = 300L)
+        }
+        composeRule.mainClock.advanceTimeBy(500L)
+        composeRule.waitForIdle()
+        val topWhileContentNotAtBoundary = composeRule
+            .onNodeWithTag("reasoning-sheet-content")
+            .fetchSemanticsNode("")
+            .boundsInRoot
+            .top
+        assertEquals(automaticallyExpandedTop, topWhileContentNotAtBoundary, 1f)
+        assertTrue("正文未到边界时被抽屉抢走下拉手势", scrollState.value > 0)
 
         composeRule.runOnIdle {
             scrollState.dispatchRawDelta(-scrollState.value.toFloat())
@@ -552,6 +941,6 @@ class ThinkingUiScrollComposeTest {
             .fetchSemanticsNode("")
             .boundsInRoot
             .top
-        assertTrue("正文位于顶部时再次下拉未收起抽屉", collapsedTop > manuallyExpandedTop)
+        assertTrue("正文位于顶部时再次下拉未收起抽屉", collapsedTop > automaticallyExpandedTop)
     }
 }

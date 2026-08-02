@@ -34,7 +34,7 @@ import com.android.everytalk.data.database.entities.VoiceBackendConfigEntity
         ExpandedGroupEntity::class,
         McpServerConfigEntity::class
     ],
-    version = 10,
+    version = 11,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -68,6 +68,7 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_7_8,
                     MIGRATION_8_9,
                     MIGRATION_9_10,
+                    MIGRATION_10_11,
                 )
                 .build()
                 INSTANCE = instance
@@ -185,6 +186,14 @@ abstract class AppDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE messages ADD COLUMN tokenUsage TEXT")
                 db.execSQL("ALTER TABLE messages ADD COLUMN contextUsageSnapshot TEXT")
+            }
+        }
+
+        val MIGRATION_10_11 = object : Migration(10, 11) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE messages ADD COLUMN executionSteps TEXT NOT NULL DEFAULT '[]'"
+                )
             }
         }
     }

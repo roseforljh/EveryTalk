@@ -1,6 +1,8 @@
 package com.android.everytalk.statecontroller
 
 import com.android.everytalk.data.DataClass.Message
+import com.android.everytalk.data.DataClass.ExecutionStep
+import com.android.everytalk.data.DataClass.ExecutionStepType
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.network.AppStreamEvent
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
@@ -17,6 +19,8 @@ import java.io.IOException
 import java.security.MessageDigest
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 
 private const val MAX_REMOTE_IMAGE_SOURCE_CHARS = 16 * 1024
 
@@ -32,6 +36,74 @@ private fun buildToolCallStatus(toolName: String): String {
     val prefix = if (compactName.contains("mcp", ignoreCase = true)) "调用MCP" else "调用工具"
     return if (compactName.isBlank()) prefix else "$prefix · $compactName"
 }
+
+private fun compactExecutionLabel(value: String, maxChars: Int = 180): String {
+    val normalized = value.trim()
+    if (normalized.length <= maxChars) return normalized
+    return normalized.take(maxChars - 3).trimEnd() + "..."
+}
+
+private fun AppStreamEvent.ToolCall.argumentText(vararg keys: String): String =
+    keys.firstNotNullOfOrNull { key ->
+        (argumentsObj[key] as? JsonPrimitive)
+            ?.contentOrNull
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+    }.orEmpty()
+
+internal fun executionStepForToolCall(event: AppStreamEvent.ToolCall): ExecutionStep {
+    val toolName = event.name.trim()
+    val query = event.argumentText("query", "q", "search_query", "searchQuery")
+    val url = event.argumentText("url", "href", "link")
+    val normalizedName = toolName.lowercase(Locale.ROOT)
+    val type = when {
+        query.isNotBlank() || normalizedName.contains("search") || normalizedName.contains("query") ->
+            ExecutionStepType.Search
+        url.isNotBlank() || normalizedName.contains("fetch") || normalizedName.contains("crawl") ->
+            ExecutionStepType.Web
+        else -> ExecutionStepType.Tool
+    }
+    val labels = buildList {
+        when (type) {
+            ExecutionStepType.Search -> add(query.ifBlank { toolName })
+            ExecutionStepType.Web -> add(url.ifBlank { toolName })
+            ExecutionStepType.Tool -> add(toolName)
+        }
+    }
+        .filter { it.isNotBlank() }
+        .map(::compactExecutionLabel)
+        .distinct()
+    return ExecutionStep(
+        id = event.id.ifBlank { "${event.name}:${event.argumentsObj.hashCode()}" },
+        type = type,
+        title = when (type) {
+            ExecutionStepType.Search -> "搜索网页"
+            ExecutionStepType.Web -> "读取网页"
+            ExecutionStepType.Tool -> "调用工具"
+        },
+        labels = labels,
+    )
+}
+
+internal fun mergeExecutionStep(
+    existing: List<ExecutionStep>,
+    incoming: ExecutionStep,
+): List<ExecutionStep> {
+    val index = existing.indexOfFirst { it.id == incoming.id }
+    if (index < 0) return existing + incoming
+    return existing.toMutableList().apply {
+        this[index] = incoming.copy(completed = this[index].completed)
+    }
+}
+
+private fun List<ExecutionStep>.completeLastPendingStep(): List<ExecutionStep> {
+    val index = indexOfLast { !it.completed }
+    if (index < 0) return this
+    return toMutableList().apply { this[index] = this[index].copy(completed = true) }
+}
+
+private fun List<ExecutionStep>.completeAllSteps(): List<ExecutionStep> =
+    if (none { !it.completed }) this else map { it.copy(completed = true) }
 
 internal sealed interface PreparedGeneratedImage {
     data class Ready(val source: String) : PreparedGeneratedImage
@@ -392,12 +464,14 @@ internal class ApiHandlerStreamProcessor(
                     updatedMessage = if (currentMessage.contentStarted || currentMessage.text.isNotBlank()) {
                         updatedMessage.copy(
                             currentWebSearchStage = null,
-                            executionStatus = null
+                            executionStatus = null,
+                            executionSteps = updatedMessage.executionSteps.completeAllSteps(),
                         )
                     } else if (appEvent.status.isNullOrBlank()) {
                         updatedMessage.copy(
                             currentWebSearchStage = null,
-                            executionStatus = null
+                            executionStatus = null,
+                            executionSteps = updatedMessage.executionSteps.completeLastPendingStep(),
                         )
                     } else {
                         updatedMessage.copy(executionStatus = appEvent.status)
@@ -501,14 +575,30 @@ internal class ApiHandlerStreamProcessor(
                     logger.debug("Received ToolCall event: ${appEvent.name}")
                     val toolStatus = appEvent.status?.takeIf { it.isNotBlank() }
                         ?: buildToolCallStatus(appEvent.name)
-                    if (!toolStatus.isNullOrBlank() && !currentMessage.contentStarted && currentMessage.text.isBlank()) {
-                        stateHolder.updateMessageStatus(
-                            aiMessageId,
-                            toolStatus,
-                            isImageGeneration
+                    val latestMessage = latestMessageForUpdate()
+                    val executionSteps = mergeExecutionStep(
+                        latestMessage.executionSteps,
+                        executionStepForToolCall(appEvent),
+                    )
+                    updatedMessage = if (
+                        toolStatus.isNotBlank() &&
+                        !latestMessage.contentStarted &&
+                        latestMessage.text.isBlank()
+                    ) {
+                        latestMessage.copy(
+                            currentWebSearchStage = toolStatus,
+                            executionSteps = executionSteps,
                         )
+                    } else {
+                        latestMessage.copy(executionSteps = executionSteps)
                     }
                 }
+            }
+
+            if (updatedMessage.contentStarted && updatedMessage.executionSteps.any { !it.completed }) {
+                updatedMessage = updatedMessage.copy(
+                    executionSteps = updatedMessage.executionSteps.completeAllSteps(),
+                )
             }
     
             // 若处于"暂停流式显示"状态，则不更新UI，仅由恢复时一次性刷新

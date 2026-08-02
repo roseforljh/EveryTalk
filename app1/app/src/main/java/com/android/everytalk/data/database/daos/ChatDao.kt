@@ -42,6 +42,7 @@ interface ChatDao {
                isPlaceholderName, webSearchResults AS webSearchResultsJson,
                currentWebSearchStage, imageUrls AS imageUrlsJson, attachments AS attachmentsJson,
                outputType, parts AS partsJson, executionStatus,
+               executionSteps AS executionStepsJson,
                enabledToolIds AS enabledToolIdsJson, modelName, providerName,
                tokenUsage AS tokenUsageJson,
                contextUsageSnapshot AS contextUsageSnapshotJson

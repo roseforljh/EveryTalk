@@ -6,6 +6,7 @@ import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.ContextUsageSnapshot
+import com.android.everytalk.data.DataClass.ExecutionStep
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.data.database.Converters
@@ -54,6 +55,7 @@ data class MessageEntity(
     val outputType: String,
     val parts: List<MarkdownPart>,
     val executionStatus: String?,
+    val executionSteps: List<ExecutionStep>,
     val enabledToolIds: List<String>,
     val modelName: String? = null,
     val providerName: String? = null,
@@ -82,6 +84,7 @@ data class RawMessageRow(
     val outputType: String,
     val partsJson: String,
     val executionStatus: String?,
+    val executionStepsJson: String,
     val enabledToolIdsJson: String,
     val modelName: String?,
     val providerName: String?,
@@ -106,6 +109,7 @@ fun RawMessageRow.toMessage(converters: Converters): Message = Message(
     outputType = outputType,
     parts = converters.toMarkdownPartList(partsJson),
     executionStatus = executionStatus,
+    executionSteps = converters.toExecutionStepList(executionStepsJson),
     enabledToolIds = converters.toStringList(enabledToolIdsJson),
     modelName = modelName,
     providerName = providerName,
@@ -131,6 +135,7 @@ fun MessageEntity.toMessage(): Message {
         outputType = outputType,
         parts = parts,
         executionStatus = executionStatus,
+        executionSteps = executionSteps,
         enabledToolIds = enabledToolIds,
         modelName = modelName,
         providerName = providerName,
@@ -158,6 +163,7 @@ fun Message.toEntity(sessionId: String): MessageEntity {
         outputType = outputType,
         parts = parts,
         executionStatus = executionStatus,
+        executionSteps = executionSteps,
         enabledToolIds = enabledToolIds,
         modelName = modelName,
         providerName = providerName,

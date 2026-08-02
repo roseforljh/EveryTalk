@@ -32,6 +32,22 @@ object MessageToolIds {
     const val MCP = "mcp"
 }
 
+@Serializable
+enum class ExecutionStepType {
+    Search,
+    Web,
+    Tool,
+}
+
+@Serializable
+data class ExecutionStep(
+    val id: String,
+    val type: ExecutionStepType,
+    val title: String,
+    val labels: List<String> = emptyList(),
+    val completed: Boolean = false,
+)
+
 // 将Sender枚举值映射到API角色字符串
 fun Sender.toRole(): String = when(this) {
     Sender.User -> "user"
@@ -59,6 +75,7 @@ data class Message(
     @Serializable(with = MarkdownPartSerializer::class)
     val parts: List<MarkdownPart> = emptyList(),
     val executionStatus: String? = null,
+    val executionSteps: List<ExecutionStep> = emptyList(),
     val enabledToolIds: List<String> = emptyList(),
     // 新增：记录发送消息时使用的模型名称
     val modelName: String? = null,

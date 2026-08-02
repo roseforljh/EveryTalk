@@ -20,28 +20,21 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.BottomSheetDefaults
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.SheetState
-import androidx.compose.material3.SheetValue
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -52,10 +45,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
-import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -65,15 +56,22 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
+import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.data.DataClass.ExecutionStep
+import com.android.everytalk.data.DataClass.WebSearchResult
+import com.android.everytalk.ui.components.sheet.AppModalBottomSheet
+import com.android.everytalk.ui.components.sheet.AppModalBottomSheetMaximumHeightFraction
+import com.android.everytalk.ui.components.markdown.EveryTalkMarkdownFlavourDescriptor
+import com.android.everytalk.ui.components.streaming.PreparedMarkdownDocument
+import com.android.everytalk.ui.components.streaming.StreamBlockParser
+import com.android.everytalk.ui.components.streaming.UnifiedMarkdownRenderer
+import com.android.everytalk.ui.components.streaming.UnifiedMarkdownNodesRenderer
+import com.android.everytalk.ui.components.streaming.contentVersionForRendering
+import com.mikepenz.markdown.model.State
+import com.mikepenz.markdown.model.parseMarkdown
 import kotlinx.coroutines.delay
 
-private const val REASONING_SHEET_TALL_HEIGHT_FRACTION = 0.9f
-private const val REASONING_SHEET_PARTIAL_HEIGHT_FRACTION = 0.5f
-// Material 3 默认拖动条高 4dp，并带上下各 22dp 内边距。
-private val ReasoningSheetDragHandleSpace = 48.dp
-
-internal fun reasoningSheetTallHeightFraction(): Float = REASONING_SHEET_TALL_HEIGHT_FRACTION
+internal fun reasoningSheetTallHeightFraction(): Float = AppModalBottomSheetMaximumHeightFraction
 
 internal fun reasoningSheetText(
     displayedReasoningText: String,
@@ -86,12 +84,80 @@ internal fun reasoningSheetText(
     else -> "暂无详细思考内容"
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+internal fun normalizeReasoningMarkdown(markdown: String): String {
+    val lines = markdown.lineSequence().toList()
+    var activeFenceMarker: Char? = null
+    return buildString(markdown.length) {
+        lines.forEachIndexed { index, line ->
+            val fenceMarker = reasoningFenceMarker(line)
+            val normalizedLine: String
+            if (fenceMarker != null) {
+                if (activeFenceMarker == null) {
+                    activeFenceMarker = fenceMarker
+                } else if (activeFenceMarker == fenceMarker) {
+                    activeFenceMarker = null
+                }
+                normalizedLine = line
+            } else if (activeFenceMarker == null) {
+                normalizedLine = separateAdjacentStrongSections(line)
+            } else {
+                normalizedLine = line
+            }
+            append(normalizedLine)
+            if (index < lines.lastIndex) {
+                val nextLine = lines[index + 1]
+                if (
+                    activeFenceMarker == null &&
+                    fenceMarker == null &&
+                    normalizedLine.isNotBlank() &&
+                    nextLine.isNotBlank() &&
+                    !normalizedLine.endsWith("  ")
+                ) {
+                    append("  ")
+                }
+                append('\n')
+            }
+        }
+    }
+}
+
+private fun reasoningFenceMarker(line: String): Char? {
+    val trimmed = line.trimStart()
+    val marker = trimmed.firstOrNull()?.takeIf { it == '`' || it == '~' } ?: return null
+    var markerCount = 0
+    while (markerCount < trimmed.length && trimmed[markerCount] == marker) markerCount++
+    return marker.takeIf { markerCount >= 3 }
+}
+
+private fun separateAdjacentStrongSections(line: String): String {
+    val result = StringBuilder(line.length)
+    var index = 0
+    while (index < line.length) {
+        val isStrongBoundary = index > 0 &&
+            index + 4 < line.length &&
+            line.startsWith("****", index) &&
+            line[index - 1] != '*' &&
+            !line[index - 1].isWhitespace() &&
+            line[index + 4] != '*' &&
+            !line[index + 4].isWhitespace()
+        if (isStrongBoundary) {
+            result.append("**\n\n**")
+            index += 4
+        } else {
+            result.append(line[index])
+            index++
+        }
+    }
+    return result.toString()
+}
+
 @Composable
 internal fun ReasoningToggleAndContent(
     currentMessageId: String,
     displayedReasoningText: String,
     activityStatusText: String? = null,
+    executionSteps: List<ExecutionStep> = emptyList(),
+    webSearchResults: List<WebSearchResult> = emptyList(),
     isReasoningStreaming: Boolean,
     isReasoningComplete: Boolean,
     messageIsError: Boolean,
@@ -104,36 +170,26 @@ internal fun ReasoningToggleAndContent(
 ) {
     val focusManager = LocalFocusManager.current
     val view = LocalView.current
-    var manualExpansionEnabled by remember(currentMessageId) { mutableStateOf(false) }
-    var expandOnInitialOverflow by remember(currentMessageId) { mutableStateOf(false) }
-    var expandReasoningSheetRequested by remember(currentMessageId) { mutableStateOf(false) }
-    val reasoningSheetState = rememberModalBottomSheetState(
-        skipPartiallyExpanded = false,
-        confirmValueChange = { targetValue ->
-            targetValue != SheetValue.Expanded || manualExpansionEnabled
-        },
-    )
     var showReasoningSheet by remember(currentMessageId) { mutableStateOf(false) }
     var visibilityNotified by remember(currentMessageId) { mutableStateOf(false) }
 
     val showInlineThinkingStatus = !messageIsError &&
         !mainContentHasStarted &&
         (isReasoningStreaming || displayedReasoningText.isNotBlank() || activityStatusText != null)
-    val shouldShowReviewDotToggle = displayedReasoningText.isNotBlank() &&
+    val hasReviewableProcess = displayedReasoningText.isNotBlank() ||
+        executionSteps.isNotEmpty() ||
+        webSearchResults.isNotEmpty()
+    val shouldShowReviewDotToggle = hasReviewableProcess &&
         !messageIsError &&
         (isReasoningComplete || !isReasoningStreaming)
-    val openReasoningSheet: (Boolean) -> Unit = { shouldExpandOnInitialOverflow ->
+    val inlineStatusText = executionSummaryText(
+        reasoningText = displayedReasoningText,
+        activityStatusText = activityStatusText,
+        executionSteps = executionSteps,
+    )
+    val openReasoningSheet = {
         focusManager.clearFocus()
-        manualExpansionEnabled = false
-        expandOnInitialOverflow = shouldExpandOnInitialOverflow
-        expandReasoningSheetRequested = false
         showReasoningSheet = true
-    }
-    LaunchedEffect(showReasoningSheet, expandReasoningSheetRequested) {
-        if (showReasoningSheet && expandReasoningSheetRequested) {
-            reasoningSheetState.expand()
-            expandReasoningSheetRequested = false
-        }
     }
 
     Column(
@@ -152,8 +208,9 @@ internal fun ReasoningToggleAndContent(
             ),
         ) {
             ThinkingStatusRow(
+                text = inlineStatusText,
                 textColor = reasoningTextColor,
-                onClick = { openReasoningSheet(false) },
+                onClick = openReasoningSheet,
                 modifier = Modifier.onSizeChanged {
                     if (it.height > 0 && !visibilityNotified) {
                         view.post { onVisibilityChanged() }
@@ -193,7 +250,7 @@ internal fun ReasoningToggleAndContent(
                         .clickable(
                             indication = null,
                             interactionSource = remember { MutableInteractionSource() },
-                            onClick = { openReasoningSheet(true) },
+                            onClick = openReasoningSheet,
                         ),
                 ) {
                     val circleIconSize by animateDpAsState(
@@ -218,18 +275,11 @@ internal fun ReasoningToggleAndContent(
         ReasoningBottomSheet(
             displayedReasoningText = displayedReasoningText,
             activityStatusText = activityStatusText,
+            executionSteps = executionSteps,
+            webSearchResults = webSearchResults,
             isReasoningActive = !messageIsError && !mainContentHasStarted,
             messageIsError = messageIsError,
-            reasoningTextColor = reasoningTextColor,
             scrollState = streamingScrollState,
-            sheetState = reasoningSheetState,
-            manualExpansionEnabled = manualExpansionEnabled,
-            expandOnInitialOverflow = expandOnInitialOverflow,
-            onContentOverflow = { shouldExpand ->
-                manualExpansionEnabled = true
-                expandOnInitialOverflow = false
-                if (shouldExpand) expandReasoningSheetRequested = true
-            },
             onDismissRequest = { showReasoningSheet = false },
         )
     }
@@ -237,14 +287,16 @@ internal fun ReasoningToggleAndContent(
 
 @Composable
 private fun ThinkingStatusRow(
+    text: String,
     textColor: Color,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Row(
         modifier = modifier
+            .testTag("reasoning-inline-status")
             .semantics(mergeDescendants = true) {
-                contentDescription = "正在执行"
+                contentDescription = text
                 role = Role.Button
             }
             .clickable(
@@ -256,15 +308,18 @@ private fun ThinkingStatusRow(
         verticalAlignment = Alignment.CenterVertically,
     ) {
         ScanningHighlightText(
-            text = "正在执行",
+            text = text,
             textColor = textColor,
             useSmallStyle = false,
+            modifier = Modifier
+                .widthIn(max = 280.dp)
+                .testTag("reasoning-inline-status-text"),
         )
     }
 }
 
 @Composable
-private fun ScanningHighlightText(
+internal fun ScanningHighlightText(
     text: String,
     textColor: Color,
     modifier: Modifier = Modifier,
@@ -306,96 +361,67 @@ private fun ScanningHighlightText(
     )
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 private fun ReasoningBottomSheet(
     displayedReasoningText: String,
     activityStatusText: String?,
+    executionSteps: List<ExecutionStep>,
+    webSearchResults: List<WebSearchResult>,
     isReasoningActive: Boolean,
     messageIsError: Boolean,
-    reasoningTextColor: Color,
     scrollState: ScrollState,
-    sheetState: SheetState,
-    manualExpansionEnabled: Boolean,
-    expandOnInitialOverflow: Boolean,
-    onContentOverflow: (Boolean) -> Unit,
     onDismissRequest: () -> Unit,
 ) {
-    val density = LocalDensity.current
-    val windowHeightPx = LocalWindowInfo.current.containerSize.height
-    val tallSheetContentHeight = with(density) {
-        (windowHeightPx.toDp() * REASONING_SHEET_TALL_HEIGHT_FRACTION -
-            ReasoningSheetDragHandleSpace).coerceAtLeast(0.dp)
-    }
-    val contentTopPaddingPx = with(density) { 16.dp.roundToPx() }
-    val overflowTolerancePx = with(density) { 1.dp.roundToPx() }
-    var processContentHeightPx by remember { mutableIntStateOf(0) }
-    var processViewportHeightPx by remember { mutableIntStateOf(0) }
-    var initialOverflowEvaluated by remember { mutableStateOf(false) }
-    val sheetText = reasoningSheetText(
-        displayedReasoningText = displayedReasoningText,
-        isReasoningActive = isReasoningActive,
-        messageIsError = messageIsError,
-    )
-    val sheetGesturesEnabled =
-        sheetState.currentValue != SheetValue.Expanded || scrollState.value == 0
-    val partiallyExpandedHiddenHeightPx =
-        (windowHeightPx *
-            (REASONING_SHEET_TALL_HEIGHT_FRACTION - REASONING_SHEET_PARTIAL_HEIGHT_FRACTION))
-            .toInt()
-    val visibleProcessViewportHeightPx =
-        (processViewportHeightPx - partiallyExpandedHiddenHeightPx).coerceAtLeast(0)
-    LaunchedEffect(
-        sheetState.currentValue,
-        processContentHeightPx,
-        visibleProcessViewportHeightPx,
-        manualExpansionEnabled,
-        sheetState.isAnimationRunning,
+    val sheetText = if (
+        displayedReasoningText.isBlank() &&
+        !messageIsError &&
+        (executionSteps.isNotEmpty() || webSearchResults.isNotEmpty())
     ) {
-        val contentMeasurementReady = sheetText.isBlank() || processContentHeightPx > 0
-        if (
-            !sheetState.isAnimationRunning &&
-            sheetState.currentValue == SheetValue.PartiallyExpanded &&
-            visibleProcessViewportHeightPx > 0 &&
-            contentMeasurementReady
-        ) {
-            val contentOverflows = processContentHeightPx + contentTopPaddingPx >
-                visibleProcessViewportHeightPx + overflowTolerancePx
-            if (!initialOverflowEvaluated) {
-                initialOverflowEvaluated = true
-                if (contentOverflows) onContentOverflow(expandOnInitialOverflow)
-            } else if (!manualExpansionEnabled && contentOverflows) {
-                onContentOverflow(false)
-            }
+        ""
+    } else {
+        reasoningSheetText(
+            displayedReasoningText = displayedReasoningText,
+            isReasoningActive = isReasoningActive,
+            messageIsError = messageIsError,
+        )
+    }
+    val normalizedSheetMarkdown = remember(sheetText) {
+        normalizeReasoningMarkdown(sheetText)
+    }
+    val preparedSheetMessage = remember(normalizedSheetMarkdown) {
+        StreamBlockParser.prepareMessage(
+            content = normalizedSheetMarkdown,
+            messageId = "reasoning-sheet",
+            contentVersion = contentVersionForRendering(normalizedSheetMarkdown),
+        )
+    }
+    val preparedSheetDocument = remember(preparedSheetMessage) {
+        (parseMarkdown(
+            preparedSheetMessage.markdown,
+            flavour = EveryTalkMarkdownFlavourDescriptor,
+        ) as? State.Success)?.let { state ->
+            PreparedMarkdownDocument(
+                state = state,
+                nodes = state.node.children,
+            )
         }
     }
-
-    ModalBottomSheet(
+    AppModalBottomSheet(
         onDismissRequest = onDismissRequest,
         modifier = Modifier.testTag("reasoning-sheet-surface"),
-        sheetState = sheetState,
-        sheetGesturesEnabled = sheetGesturesEnabled,
-        containerColor = MaterialTheme.colorScheme.surface,
-        contentWindowInsets = { WindowInsets(0, 0, 0, 0) },
-        dragHandle = {
-            BottomSheetDefaults.DragHandle(
-                modifier = Modifier.testTag(
-                    if (sheetGesturesEnabled) {
-                        "reasoning-sheet-drag-handle-enabled"
-                    } else {
-                        "reasoning-sheet-drag-handle-disabled"
-                    },
-                ),
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+        scrollState = scrollState,
+        sheetContentModifier = Modifier.testTag("reasoning-sheet-content"),
+        scrollModifier = Modifier.testTag("reasoning-sheet-scroll"),
+        contentModifier = Modifier.padding(start = 20.dp, top = 8.dp, end = 20.dp),
+        stateModifier = { sheetValue, contentOverflows ->
+            Modifier.testTag(
+                "reasoning-sheet-state-${sheetValue.name}-overflow-$contentOverflows",
             )
         },
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(tallSheetContentHeight)
-                .testTag("reasoning-sheet-content"),
-        ) {
+        dragHandleModifier = Modifier.testTag("reasoning-sheet-drag-handle-enabled"),
+        bottomIndicatorModifier = Modifier.testTag("reasoning-sheet-bottom-indicator"),
+        header = {
             Text(
                 text = "执行过程",
                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
@@ -404,58 +430,42 @@ private fun ReasoningBottomSheet(
                 modifier = Modifier
                     .fillMaxWidth()
                     .testTag("reasoning-sheet-header")
-                    .padding(horizontal = 20.dp, vertical = 12.dp),
+                    .padding(horizontal = 20.dp, vertical = 10.dp),
             )
-            if (isReasoningActive) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .semantics { contentDescription = "执行过程加载中" }
-                        .testTag("reasoning-sheet-activity-status")
-                        .padding(horizontal = 20.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    ScanningHighlightText(
-                        text = activityStatusText ?: "正在执行",
-                        textColor = reasoningTextColor,
+        },
+    ) {
+        ThinkingExecutionTimeline(
+            executionSteps = executionSteps,
+            webSearchResults = webSearchResults,
+            activityStatusText = activityStatusText,
+            reasoningText = sheetText,
+            isReasoningActive = isReasoningActive,
+            messageIsError = messageIsError,
+            modifier = Modifier
+                .fillMaxWidth()
+                .semantics {
+                    if (isReasoningActive) contentDescription = "执行过程加载中"
+                },
+        ) {
+            if (sheetText.isNotBlank()) {
+                val markdownModifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("reasoning-sheet-markdown")
+                if (preparedSheetDocument != null) {
+                    UnifiedMarkdownNodesRenderer(
+                        preparedMessage = preparedSheetMessage,
+                        preparedMarkdownDocument = preparedSheetDocument,
+                        nodes = preparedSheetDocument.nodes,
+                        sender = Sender.AI,
+                        modifier = markdownModifier,
+                    )
+                } else {
+                    UnifiedMarkdownRenderer(
+                        preparedMessage = preparedSheetMessage,
+                        sender = Sender.AI,
+                        modifier = markdownModifier,
                     )
                 }
-            }
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-                    .testTag(
-                        "reasoning-sheet-state-${sheetState.currentValue.name}" +
-                            "-overflow-$manualExpansionEnabled",
-                    ),
-            ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .verticalScroll(scrollState)
-                        .onSizeChanged { processViewportHeightPx = it.height }
-                        .testTag("reasoning-sheet-scroll")
-                        .padding(start = 20.dp, top = 16.dp, end = 20.dp),
-                ) {
-                    if (sheetText.isNotBlank()) {
-                        Text(
-                            text = sheetText,
-                            color = reasoningTextColor,
-                            style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 22.sp),
-                            modifier = Modifier.onSizeChanged { processContentHeightPx = it.height },
-                        )
-                    }
-                }
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .padding(bottom = 8.dp)
-                        .size(width = 36.dp, height = 4.dp)
-                        .clip(CircleShape)
-                        .background(Color.White.copy(alpha = 0.88f))
-                        .testTag("reasoning-sheet-bottom-indicator"),
-                )
             }
         }
     }

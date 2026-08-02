@@ -4,6 +4,7 @@ import android.net.Uri
 import androidx.room.TypeConverter
 import com.android.everytalk.data.DataClass.ModelParameters
 import com.android.everytalk.data.DataClass.ContextUsageSnapshot
+import com.android.everytalk.data.DataClass.ExecutionStep
 import com.android.everytalk.data.DataClass.ModalityType
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.WebSearchResult
@@ -130,6 +131,20 @@ class Converters {
     @TypeConverter
     fun fromModelParameters(value: ModelParameters): String {
         return json.encodeToString(ModelParameters.serializer(), value)
+    }
+
+    @TypeConverter
+    fun fromExecutionStepList(value: List<ExecutionStep>): String =
+        json.encodeToString(ListSerializer(ExecutionStep.serializer()), value)
+
+    @TypeConverter
+    fun toExecutionStepList(value: String?): List<ExecutionStep> {
+        if (value.isNullOrEmpty()) return emptyList()
+        return try {
+            json.decodeFromString(ListSerializer(ExecutionStep.serializer()), value)
+        } catch (_: Exception) {
+            emptyList()
+        }
     }
 
     @TypeConverter

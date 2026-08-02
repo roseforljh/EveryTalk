@@ -2,6 +2,7 @@ package com.android.everytalk.statecontroller.facade
 
 import android.util.Log
 import com.android.everytalk.data.DataClass.Message
+import com.android.everytalk.data.DataClass.ExecutionStep
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.statecontroller.StreamingMessageStateManager
@@ -53,9 +54,11 @@ open class MessageItemsController(
         val blocksHash: String,
         val hasPendingMath: Boolean,
         val imageUrls: List<String>?,
+        val webSearchResults: List<WebSearchResult>?,
         val contentStarted: Boolean,
         val executionStatus: String?,
         val currentWebSearchStage: String?,
+        val executionSteps: List<ExecutionStep>,
         val items: List<ChatListItem>
     )
 
@@ -271,9 +274,11 @@ open class MessageItemsController(
                                 (blocksHashMatches || allowStreamingBlocksHashReuse) &&
                                 cached.hasPendingMath == parseResult.hasPendingMath &&
                                 cached.imageUrls == message.imageUrls &&
+                                cached.webSearchResults == message.webSearchResults &&
                                 cached.contentStarted == effectiveMessage.contentStarted &&
                                 cached.executionStatus == message.executionStatus &&
                                 cached.currentWebSearchStage == message.currentWebSearchStage &&
+                                cached.executionSteps == message.executionSteps &&
                                 activityStatusMatches &&
                                 (cached.items.isNotEmpty() || message.text.isBlank()) &&
                                 footerMatches &&
@@ -300,9 +305,11 @@ open class MessageItemsController(
                                     blocksHash = parseResult.blocksHash,
                                     hasPendingMath = parseResult.hasPendingMath,
                                     imageUrls = message.imageUrls,
+                                    webSearchResults = message.webSearchResults,
                                     contentStarted = effectiveMessage.contentStarted,
                                     executionStatus = message.executionStatus,
                                     currentWebSearchStage = message.currentWebSearchStage,
+                                    executionSteps = message.executionSteps,
                                     items = newItems
                                 )
                                 newItems
@@ -364,9 +371,11 @@ open class MessageItemsController(
                                 cached.blocksHash == parseResult.blocksHash &&
                                 cached.hasPendingMath == parseResult.hasPendingMath &&
                                 cached.imageUrls == message.imageUrls &&
+                                cached.webSearchResults == message.webSearchResults &&
                                 cached.contentStarted == effectiveMessage.contentStarted &&
                                 cached.executionStatus == message.executionStatus &&
                                 cached.currentWebSearchStage == message.currentWebSearchStage &&
+                                cached.executionSteps == message.executionSteps &&
                                 activityStatusMatches
 
                             if (cacheValid) {
@@ -388,9 +397,11 @@ open class MessageItemsController(
                                     blocksHash = parseResult.blocksHash,
                                     hasPendingMath = parseResult.hasPendingMath,
                                     imageUrls = message.imageUrls,
+                                    webSearchResults = message.webSearchResults,
                                     contentStarted = effectiveMessage.contentStarted,
                                     executionStatus = message.executionStatus,
                                     currentWebSearchStage = message.currentWebSearchStage,
+                                    executionSteps = message.executionSteps,
                                     items = newItems
                                 )
                                 newItems
