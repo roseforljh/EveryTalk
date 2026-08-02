@@ -32,6 +32,7 @@ class ModelCatalogParserTest {
         val model = catalog.single()
         assertEquals("gemini-example", model.modelId)
         assertEquals(1_048_576, model.contextWindowTokens)
+        assertEquals(1_048_576, model.maxInputTokens)
         assertEquals(65_536, model.maxOutputTokens)
         assertEquals(ModelCapabilitySource.LIVE_ENDPOINT, model.source)
         assertEquals(1234L, model.sourceUpdatedAt)
@@ -68,6 +69,96 @@ class ModelCatalogParserTest {
         assertEquals(setOf("text", "image"), model.inputModalities)
         assertEquals(setOf("text"), model.outputModalities)
         assertTrue(model.supportsReasoning == true)
+    }
+
+    @Test
+    fun `Codex单模型详情解析最大输入与推理等级`() {
+        val model = parseModelCatalog(
+            responseBody =
+                """
+                {
+                  "id": "gpt-detail",
+                  "context_window": 1050000,
+                  "max_input_tokens": 922000,
+                  "max_output_tokens": 128000,
+                  "reasoning_efforts": ["none", "medium", "high"]
+                }
+                """.trimIndent(),
+            protocol = ModelParameterProtocol.CODEX,
+            apiAddress = "https://api.openai.com/v1",
+        ).single()
+
+        assertEquals(1_050_000, model.contextWindowTokens)
+        assertEquals(922_000, model.maxInputTokens)
+        assertEquals(128_000, model.maxOutputTokens)
+        assertEquals(setOf("none", "medium", "high"), model.reasoningEfforts)
+        assertTrue(model.supportsReasoning == true)
+    }
+
+    @Test
+    fun `Gemini单模型详情解析思考等级和模态`() {
+        val model = parseModelCatalog(
+            responseBody =
+                """
+                {
+                  "name": "models/gemini-detail",
+                  "inputTokenLimit": 1000000,
+                  "outputTokenLimit": 65536,
+                  "thinking_levels": ["minimal", "low", "high"],
+                  "modalities": {"input":["text","image"],"output":["text"]}
+                }
+                """.trimIndent(),
+            protocol = ModelParameterProtocol.GEMINI,
+            apiAddress = "https://generativelanguage.googleapis.com",
+        ).single()
+
+        assertEquals(setOf("minimal", "low", "high"), model.reasoningEfforts)
+        assertEquals(setOf("text", "image"), model.inputModalities)
+        assertTrue(model.supportsReasoning == true)
+    }
+
+    @Test
+    fun `Anthropic单模型详情解析capabilities中的等级`() {
+        val model = parseModelCatalog(
+            responseBody =
+                """
+                {
+                  "id":"claude-detail",
+                  "max_input_tokens":200000,
+                  "max_tokens":64000,
+                  "capabilities":{
+                    "thinking":{"supported":true,"efforts":["low","medium","high"]}
+                  }
+                }
+                """.trimIndent(),
+            protocol = ModelParameterProtocol.ANTHROPIC,
+            apiAddress = "https://api.anthropic.com",
+        ).single()
+
+        assertEquals(200_000, model.maxInputTokens)
+        assertEquals(setOf("low", "medium", "high"), model.reasoningEfforts)
+        assertTrue(model.supportsReasoning == true)
+    }
+
+    @Test
+    fun `OpenAI兼容详情解析嵌套limit与reasoning options`() {
+        val model = parseModelCatalog(
+            responseBody =
+                """
+                {
+                  "id":"compatible-detail",
+                  "limit":{"context":200000,"output":32000},
+                  "reasoning":true,
+                  "reasoning_options":[{"type":"effort","values":["high","max"]}]
+                }
+                """.trimIndent(),
+            protocol = ModelParameterProtocol.OPENAI_COMPATIBLE,
+            apiAddress = "https://api.example/v1",
+        ).single()
+
+        assertEquals(200_000, model.contextWindowTokens)
+        assertEquals(32_000, model.maxOutputTokens)
+        assertEquals(setOf("high", "max"), model.reasoningEfforts)
     }
 
     @Test

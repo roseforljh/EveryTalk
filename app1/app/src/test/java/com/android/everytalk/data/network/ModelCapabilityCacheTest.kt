@@ -61,6 +61,52 @@ class ModelCapabilityCacheTest {
         }
     }
 
+    @Test
+    fun `详情与列表缓存按字段合并避免能力丢失`() {
+        val directory = Files.createTempDirectory("model-capability-cache-merge-test").toFile()
+        try {
+            val cache = ModelCapabilityCache(
+                cacheFile = directory.resolve("catalog.json"),
+                nowEpochMillis = { 2_000L },
+                ttlMillis = 10_000L,
+            )
+            cache.put(
+                listOf(
+                    ModelCapabilityCandidate(
+                        modelId = "model-a",
+                        protocol = ModelParameterProtocol.OPENAI_COMPATIBLE,
+                        endpointIdentity = "https://api.example/v1",
+                        contextWindowTokens = 200_000,
+                        reasoningEfforts = setOf("high", "max"),
+                        supportsReasoning = true,
+                        source = ModelCapabilitySource.LIVE_ENDPOINT,
+                    )
+                )
+            )
+            cache.put(
+                listOf(
+                    ModelCapabilityCandidate(
+                        modelId = "model-a",
+                        protocol = ModelParameterProtocol.OPENAI_COMPATIBLE,
+                        endpointIdentity = "https://api.example/v1",
+                        maxOutputTokens = 32_000,
+                        source = ModelCapabilitySource.LIVE_ENDPOINT,
+                    )
+                )
+            )
+
+            val cached = cache.get(
+                ModelParameterProtocol.OPENAI_COMPATIBLE,
+                "https://api.example/v1",
+            ).single()
+            assertEquals(200_000, cached.contextWindowTokens)
+            assertEquals(32_000, cached.maxOutputTokens)
+            assertEquals(setOf("high", "max"), cached.reasoningEfforts)
+        } finally {
+            directory.deleteRecursively()
+        }
+    }
+
     private fun candidate(modelId: String, endpoint: String, contextTokens: Int) =
         ModelCapabilityCandidate(
             modelId = modelId,

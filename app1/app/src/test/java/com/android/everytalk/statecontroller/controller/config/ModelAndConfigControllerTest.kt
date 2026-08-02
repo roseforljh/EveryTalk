@@ -112,6 +112,63 @@ class ModelAndConfigControllerTest {
     }
 
     @Test
+    fun `自动获取模型参数采用当前端点能力且不直接持久化`() = runTest(UnconfinedTestDispatcher()) {
+        mockkObject(ApiClient)
+        val capability = ModelCapabilityCandidate(
+            modelId = "model-a",
+            protocol = ModelParameterProtocol.GEMINI,
+            endpointIdentity = "https://api.example.com",
+            contextWindowTokens = 1_000_000,
+            maxOutputTokens = 64_000,
+            supportsReasoning = false,
+            source = ModelCapabilitySource.LIVE_ENDPOINT,
+        )
+        coEvery {
+            ApiClient.getModelCapabilities(
+                "https://api.example.com",
+                "secret",
+                "Gemini",
+                "model-a",
+                "Gemini",
+            )
+        } returns listOf(capability)
+        val configManager = mockk<ConfigManager>(relaxed = true)
+        val controller = controller(
+            scope = this,
+            stateHolder = ViewModelStateHolder(),
+            configManager = configManager,
+        )
+        val config = ApiConfig(
+            address = "https://api.example.com",
+            key = "secret",
+            model = "model-a",
+            provider = "Gemini",
+            name = "model-a",
+            channel = "Gemini",
+        )
+
+        val loaded = controller.loadModelParameters(config).getOrThrow()
+
+        assertEquals(64_000, loaded.maxTokens)
+        assertEquals(1_000_000, loaded.modelParameters.maxContextTokens)
+        assertEquals(false, loaded.modelParameters.resolvedCapability?.supportsReasoning)
+        assertEquals(
+            ModelCapabilitySource.LIVE_ENDPOINT,
+            loaded.modelParameters.resolvedCapability?.maxOutputSource,
+        )
+        verify(exactly = 0) { configManager.updateConfig(any(), any()) }
+        coVerify(exactly = 1) {
+            ApiClient.getModelCapabilities(
+                "https://api.example.com",
+                "secret",
+                "Gemini",
+                "model-a",
+                "Gemini",
+            )
+        }
+    }
+
+    @Test
     fun `新模型配置采用端点报告的 token 限制`() = runTest(UnconfinedTestDispatcher()) {
         val stateHolder = ViewModelStateHolder()
         val modelFetchManager = ModelFetchManager().apply {

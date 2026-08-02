@@ -9,6 +9,7 @@ import com.android.everytalk.data.DataClass.ModelTokenLimits
 import com.android.everytalk.data.DataClass.ResolvedModelCapability
 import com.android.everytalk.data.DataClass.resolveModelCapability
 import com.android.everytalk.data.DataClass.officialModelCapability
+import com.android.everytalk.data.DataClass.familyModelCapability
 import com.android.everytalk.data.DataClass.withUserTokenLimits
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -45,6 +46,38 @@ class ModelCapabilityResolverTest {
 
         assertEquals(111_000, resolved.contextWindowTokens)
         assertEquals(11_000, resolved.maxOutputTokens)
+    }
+
+    @Test
+    fun `用户覆盖值高于端点与社区来源`() {
+        val resolved = resolveModelCapability(
+            modelId = "example-model",
+            protocol = ModelParameterProtocol.OPENAI_COMPATIBLE,
+            apiAddress = "https://api.example/v1",
+            candidates = listOf(
+                ModelCapabilityCandidate(
+                    modelId = "example-model",
+                    protocol = ModelParameterProtocol.OPENAI_COMPATIBLE,
+                    endpointIdentity = "https://api.example/v1",
+                    contextWindowTokens = 100_000,
+                    maxOutputTokens = 8_000,
+                    source = ModelCapabilitySource.LIVE_ENDPOINT,
+                ),
+                ModelCapabilityCandidate(
+                    modelId = "example-model",
+                    protocol = ModelParameterProtocol.OPENAI_COMPATIBLE,
+                    endpointIdentity = "https://api.example/v1",
+                    contextWindowTokens = 80_000,
+                    maxOutputTokens = 4_000,
+                    source = ModelCapabilitySource.USER_OVERRIDE,
+                ),
+            ),
+        )
+
+        assertEquals(80_000, resolved.contextWindowTokens)
+        assertEquals(4_000, resolved.maxOutputTokens)
+        assertEquals(ModelCapabilitySource.USER_OVERRIDE, resolved.contextWindowSource)
+        assertEquals(ModelCapabilitySource.USER_OVERRIDE, resolved.maxOutputSource)
     }
 
     @Test
@@ -114,6 +147,42 @@ class ModelCapabilityResolverTest {
     }
 
     @Test
+    fun `每项能力从各自最高优先级来源独立合并`() {
+        val resolved = resolveModelCapability(
+            modelId = "mixed-model",
+            protocol = ModelParameterProtocol.OPENAI_COMPATIBLE,
+            apiAddress = "https://api.example/v1",
+            candidates = listOf(
+                ModelCapabilityCandidate(
+                    modelId = "mixed-model",
+                    protocol = ModelParameterProtocol.OPENAI_COMPATIBLE,
+                    endpointIdentity = "https://api.example/v1",
+                    contextWindowTokens = 256_000,
+                    source = ModelCapabilitySource.LIVE_ENDPOINT,
+                ),
+                ModelCapabilityCandidate(
+                    modelId = "mixed-model",
+                    protocol = ModelParameterProtocol.OPENAI_COMPATIBLE,
+                    maxInputTokens = 220_000,
+                    maxOutputTokens = 32_000,
+                    reasoningEfforts = setOf("high", "max"),
+                    supportsReasoning = true,
+                    source = ModelCapabilitySource.COMMUNITY_CATALOG,
+                ),
+            ),
+        )
+
+        assertEquals(256_000, resolved.contextWindowTokens)
+        assertEquals(220_000, resolved.maxInputTokens)
+        assertEquals(32_000, resolved.maxOutputTokens)
+        assertEquals(ModelCapabilitySource.LIVE_ENDPOINT, resolved.contextWindowSource)
+        assertEquals(ModelCapabilitySource.COMMUNITY_CATALOG, resolved.maxInputSource)
+        assertEquals(ModelCapabilitySource.COMMUNITY_CATALOG, resolved.maxOutputSource)
+        assertEquals(setOf("high", "max"), resolved.reasoningEfforts)
+        assertEquals(ModelCapabilitySource.COMMUNITY_CATALOG, resolved.reasoningSource)
+    }
+
+    @Test
     fun `用户只修改最大输出时保留上下文原始来源`() {
         val liveCapability = ResolvedModelCapability(
             modelId = "example-model",
@@ -158,6 +227,8 @@ class ModelCapabilityResolverTest {
         requireNotNull(capability)
         assertEquals(1_050_000, capability.contextWindowTokens)
         assertEquals(128_000, capability.maxOutputTokens)
+        assertEquals(922_000, capability.maxInputTokens)
+        assertEquals(setOf("none", "low", "medium", "high", "xhigh", "max"), capability.reasoningEfforts)
         assertEquals(setOf("text", "image"), capability.inputModalities)
         assertEquals(setOf("text"), capability.outputModalities)
         assertEquals(ModelCapabilitySource.OFFICIAL_CATALOG, capability.source)
@@ -176,5 +247,18 @@ class ModelCapabilityResolverTest {
         assertEquals(setOf("text", "image"), capability.inputModalities)
         assertEquals(setOf("text"), capability.outputModalities)
         assertEquals(ModelCapabilitySource.OFFICIAL_CATALOG, capability.source)
+    }
+
+    @Test
+    fun `模型家族兜底使用低优先级安全限制`() {
+        val capability = familyModelCapability(
+            modelId = "gemini-unknown-preview",
+            protocol = ModelParameterProtocol.GEMINI,
+        )
+
+        requireNotNull(capability)
+        assertEquals(32_768, capability.contextWindowTokens)
+        assertEquals(8_192, capability.maxOutputTokens)
+        assertEquals(ModelCapabilitySource.FAMILY_FALLBACK, capability.source)
     }
 }

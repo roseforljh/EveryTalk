@@ -1,9 +1,11 @@
 package com.android.everytalk.data.network.direct
 
 import android.app.Application
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
@@ -30,7 +32,9 @@ class PredictiveTTSProcessorTest {
             processor.submitTask(1, "后续音频")
             processor.markInputComplete()
 
-            val chunks = withTimeout(2_000) { processor.yieldAudioInOrder().toList() }
+            val chunks = withContext(Dispatchers.Default.limitedParallelism(1)) {
+                withTimeout(2_000) { processor.yieldAudioInOrder().toList() }
+            }
 
             assertEquals(1, chunks.size)
             assertArrayEquals(expected, chunks.single())
