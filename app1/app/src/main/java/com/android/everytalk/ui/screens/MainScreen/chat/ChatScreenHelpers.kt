@@ -275,4 +275,3 @@ internal fun calculateSourcesDialogTopAvoidance(
     }
     return controlsBottomBelowStatusBar + edgeGap
 }
-

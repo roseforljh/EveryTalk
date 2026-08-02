@@ -174,6 +174,7 @@ class MarkdownEngineOwnershipTest {
             "com/android/everytalk/ui/screens/MainScreen/chat/text/ui/ChatMessagesList.kt",
             "com/android/everytalk/ui/screens/ImageGeneration/ImageGenerationMessagesList.kt",
             "com/android/everytalk/ui/screens/BubbleMain/Main/BubbleContentTypes.kt",
+            "com/android/everytalk/ui/screens/BubbleMain/Main/ThinkingUI.kt",
         )
 
         entryPoints.forEach { path ->
@@ -264,8 +265,8 @@ class MarkdownEngineOwnershipTest {
         assertTrue(adapter.contains("inlineCode = bodyStyle.copy("))
         assertTrue(adapter.contains("fontSize = 13.sp"))
         assertTrue(adapter.contains("fontFamily = FontFamily.Monospace"))
-        assertTrue(adapter.contains("MARKDOWN_LINK_LIGHT_COLOR = Color(0xFF3D7DB5)"))
-        assertTrue(adapter.contains("MARKDOWN_LINK_DARK_COLOR = Color(0xFF8FC9FF)"))
+        assertTrue(adapter.contains("MARKDOWN_LINK_LIGHT_COLOR = Color(0xFF66B5FF)"))
+        assertTrue(adapter.contains("MARKDOWN_LINK_DARK_COLOR = Color(0xFF66B5FF)"))
         assertTrue(adapter.contains("val markdownLinkColor = if (MaterialTheme.colorScheme.background.luminance() < 0.5f)"))
         assertTrue(adapter.contains("color = markdownLinkColor"))
         assertTrue(adapter.contains("textDecoration = TextDecoration.None"))
