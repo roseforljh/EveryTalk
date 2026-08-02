@@ -320,6 +320,173 @@ class DirectClientLifecycleTest {
     }
 
     @Test
+    fun `Gemini工具图片嵌套在对应functionResponse中`() = runBlocking {
+        val firstResponse = buildString {
+            append("data: ")
+            append(
+                """{"candidates":[{"content":{"parts":[{"functionCall":{"name":"image-tool","args":{}}},{"functionCall":{"name":"tail-tool","args":{}}}]},"finishReason":"STOP"}]}"""
+            )
+            append("\n\ndata: [DONE]\n\n")
+        }
+        val finalResponse =
+            "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"完成\"}]},\"finishReason\":\"STOP\"}]}\n\ndata: [DONE]\n\n"
+        val requestCount = AtomicInteger()
+        var followUpPayload: String? = null
+        val client = HttpClient(MockEngine { request ->
+            val body = if (requestCount.incrementAndGet() == 1) {
+                firstResponse
+            } else {
+                followUpPayload = (request.body as TextContent).text
+                finalResponse
+            }
+            respond(
+                content = ByteReadChannel(body.toByteArray(Charsets.UTF_8)),
+                headers = Headers.build { append(HttpHeaders.ContentType, ContentType.Text.EventStream.toString()) },
+            )
+        }) {
+            expectSuccess = false
+            install(HttpTimeout)
+        }
+        GeminiDirectClient.setMcpToolExecutor { name, _, _ ->
+            if (name == "image-tool") {
+                JsonObject(
+                    mapOf(
+                        "content" to JsonPrimitive("网页正文"),
+                        "_images" to JsonArray(
+                            listOf(
+                                JsonObject(
+                                    mapOf(
+                                        "base64" to JsonPrimitive("data:image/png;base64,aGVsbG8="),
+                                        "mimeType" to JsonPrimitive("image/png"),
+                                    )
+                                )
+                            )
+                        ),
+                    )
+                )
+            } else {
+                JsonPrimitive("尾部工具结果")
+            }
+        }
+
+        try {
+            val events = GeminiDirectClient.streamChatDirect(client, request("Gemini", "Gemini")).toList()
+            val contents = Json.parseToJsonElement(checkNotNull(followUpPayload))
+                .jsonObject.getValue("contents").jsonArray.map { it.jsonObject }
+            val toolMessage = contents.last()
+            val parts = toolMessage.getValue("parts").jsonArray.map { it.jsonObject }
+
+            assertEquals("user", toolMessage.getValue("role").jsonPrimitive.content)
+            assertEquals(2, parts.size)
+            assertFalse(parts.any { it.containsKey("inlineData") })
+            val imageResponse = parts[0].getValue("functionResponse").jsonObject
+            assertEquals("image-tool", imageResponse.getValue("name").jsonPrimitive.content)
+            assertFalse(imageResponse.getValue("response").toString().contains("_images"))
+            val imageData = imageResponse.getValue("parts").jsonArray.single()
+                .jsonObject.getValue("inlineData").jsonObject
+            assertEquals("image/png", imageData.getValue("mimeType").jsonPrimitive.content)
+            assertEquals("aGVsbG8=", imageData.getValue("data").jsonPrimitive.content)
+            assertEquals(
+                "tail-tool",
+                parts[1].getValue("functionResponse").jsonObject.getValue("name").jsonPrimitive.content,
+            )
+            assertFalse(events.any { it is AppStreamEvent.Error })
+            assertEquals(2, requestCount.get())
+        } finally {
+            GeminiDirectClient.setMcpToolExecutor(null)
+            client.close()
+        }
+    }
+
+    @Test
+    fun `Anthropic工具图片嵌套在对应toolResult中`() = runBlocking {
+        val firstResponse = buildString {
+            appendResponsesEvent(
+                """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool-image","name":"image-tool","input":{}}}"""
+            )
+            appendResponsesEvent(
+                """{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tool-tail","name":"tail-tool","input":{}}}"""
+            )
+            appendResponsesEvent("""{"type":"message_delta","delta":{"stop_reason":"tool_use"}}""")
+            appendResponsesEvent("""{"type":"message_stop"}""")
+        }
+        val finalResponse = buildString {
+            appendResponsesEvent(
+                """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"""
+            )
+            appendResponsesEvent(
+                """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"完成"}}"""
+            )
+            appendResponsesEvent("""{"type":"message_delta","delta":{"stop_reason":"end_turn"}}""")
+            appendResponsesEvent("""{"type":"message_stop"}""")
+        }
+        val requestCount = AtomicInteger()
+        var followUpPayload: String? = null
+        val client = HttpClient(MockEngine { request ->
+            val body = if (requestCount.incrementAndGet() == 1) {
+                firstResponse
+            } else {
+                followUpPayload = (request.body as TextContent).text
+                finalResponse
+            }
+            respond(
+                content = ByteReadChannel(body.toByteArray(Charsets.UTF_8)),
+                headers = Headers.build { append(HttpHeaders.ContentType, ContentType.Text.EventStream.toString()) },
+            )
+        }) {
+            expectSuccess = false
+            install(HttpTimeout)
+        }
+        AnthropicDirectClient.setMcpToolExecutor { name, _, _ ->
+            if (name == "image-tool") {
+                JsonObject(
+                    mapOf(
+                        "content" to JsonPrimitive("网页正文"),
+                        "_images" to JsonArray(
+                            listOf(
+                                JsonObject(
+                                    mapOf(
+                                        "base64" to JsonPrimitive("data:image/png;base64,aGVsbG8="),
+                                        "mimeType" to JsonPrimitive("image/png"),
+                                    )
+                                )
+                            )
+                        ),
+                    )
+                )
+            } else {
+                JsonPrimitive("尾部工具结果")
+            }
+        }
+
+        try {
+            val events = AnthropicDirectClient.streamChatDirect(client, request("Anthropic", "Anthropic")).toList()
+            val messages = Json.parseToJsonElement(checkNotNull(followUpPayload))
+                .jsonObject.getValue("messages").jsonArray.map { it.jsonObject }
+            val toolMessage = messages.last()
+            val toolResults = toolMessage.getValue("content").jsonArray.map { it.jsonObject }
+
+            assertEquals("user", toolMessage.getValue("role").jsonPrimitive.content)
+            assertEquals(2, toolResults.size)
+            val imageResult = toolResults[0]
+            assertEquals("tool_result", imageResult.getValue("type").jsonPrimitive.content)
+            assertEquals("tool-image", imageResult.getValue("tool_use_id").jsonPrimitive.content)
+            val content = imageResult.getValue("content").jsonArray.map { it.jsonObject }
+            assertEquals(listOf("text", "image"), content.map { it.getValue("type").jsonPrimitive.content })
+            assertFalse(content[0].getValue("text").jsonPrimitive.content.contains("_images"))
+            val source = content[1].getValue("source").jsonObject
+            assertEquals("image/png", source.getValue("media_type").jsonPrimitive.content)
+            assertEquals("aGVsbG8=", source.getValue("data").jsonPrimitive.content)
+            assertEquals("tool-tail", toolResults[1].getValue("tool_use_id").jsonPrimitive.content)
+            assertFalse(events.any { it is AppStreamEvent.Error })
+            assertEquals(2, requestCount.get())
+        } finally {
+            AnthropicDirectClient.setMcpToolExecutor(null)
+            client.close()
+        }
+    }
+
+    @Test
     fun `long responses stream preserves accumulated text`() = runBlocking {
         val deltas = List(4_000) { index -> "片段${index % 10}" }
         val expected = deltas.joinToString("")

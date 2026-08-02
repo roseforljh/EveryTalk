@@ -164,6 +164,12 @@ object GeminiDirectClient {
                                 }
                             }
                         } else result
+                        val imageParts = images.orEmpty().mapNotNull { imgElement ->
+                            val imgObj = imgElement as? JsonObject ?: return@mapNotNull null
+                            val data = imgObj["base64"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+                            val mimeType = imgObj["mimeType"]?.jsonPrimitive?.contentOrNull ?: "image/jpeg"
+                            mimeType to stripDataUriPrefix(data)
+                        }
 
                         toolResponses.add(buildJsonObject {
                             put("functionResponse", buildJsonObject {
@@ -171,19 +177,20 @@ object GeminiDirectClient {
                                 put("response", buildJsonObject {
                                     put("result", textResult)
                                 })
-                            })
-                        })
-                        images?.forEach { imgElement ->
-                            val imgObj = imgElement as? JsonObject ?: return@forEach
-                            val b64 = imgObj["base64"]?.jsonPrimitive?.contentOrNull ?: return@forEach
-                            val mime = imgObj["mimeType"]?.jsonPrimitive?.contentOrNull ?: "image/jpeg"
-                            toolResponses.add(buildJsonObject {
-                                putJsonObject("inlineData") {
-                                    put("mimeType", mime)
-                                    put("data", b64)
+                                if (imageParts.isNotEmpty()) {
+                                    putJsonArray("parts") {
+                                        imageParts.forEach { (mimeType, data) ->
+                                            addJsonObject {
+                                                putJsonObject("inlineData") {
+                                                    put("mimeType", mimeType)
+                                                    put("data", data)
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             })
-                        }
+                        })
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
@@ -496,6 +503,13 @@ object GeminiDirectClient {
             value.forEach { add(convertToJsonElement(it)) }
         }
         else -> JsonPrimitive(value.toString())
+    }
+
+    private fun stripDataUriPrefix(value: String): String {
+        if (!value.startsWith("data:", ignoreCase = true)) return value
+        val marker = ";base64,"
+        val markerIndex = value.indexOf(marker, ignoreCase = true)
+        return if (markerIndex >= 0) value.substring(markerIndex + marker.length) else value
     }
     
     // Gemini 完全不支持、需要直接移除的字段
