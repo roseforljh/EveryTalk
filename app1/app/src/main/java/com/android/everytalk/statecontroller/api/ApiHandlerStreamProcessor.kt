@@ -1,6 +1,7 @@
 package com.android.everytalk.statecontroller
 
 import com.android.everytalk.data.DataClass.Message
+import com.android.everytalk.data.DataClass.ContextCompressionState
 import com.android.everytalk.data.DataClass.ExecutionStep
 import com.android.everytalk.data.DataClass.ExecutionStepType
 import com.android.everytalk.data.DataClass.Sender
@@ -23,6 +24,72 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 
 private const val MAX_REMOTE_IMAGE_SOURCE_CHARS = 16 * 1024
+
+private fun nativeContextWindowId(
+    messageId: String,
+    compactionItemId: String?,
+    inputJson: String,
+): String {
+    val source = listOfNotNull(compactionItemId, messageId, inputJson.length.toString()).joinToString(":")
+    val fingerprint = MessageDigest.getInstance("SHA-256")
+        .digest(source.toByteArray(Charsets.UTF_8))
+        .take(8)
+        .joinToString("") { byte -> "%02x".format(byte) }
+    return "native-$fingerprint"
+}
+
+internal fun mergeNativeContextCompaction(
+    message: Message,
+    event: AppStreamEvent.NativeContextCompaction,
+): Message {
+    val previousState = message.contextCompressionState
+    val nextState = if (event.reset) {
+        previousState?.copy(
+            openAiResponsesInputJson = null,
+            openAiResponsesThroughMessageId = null,
+            openAiResponsesEstimatedTokens = 0L,
+        )
+    } else {
+        val nextWindowId = nativeContextWindowId(
+            messageId = message.id,
+            compactionItemId = event.compactionItemId,
+            inputJson = event.inputJson,
+        )
+        if (previousState != null && previousState.configId == event.configId) {
+            previousState.copy(
+                provider = event.provider,
+                channel = event.channel,
+                model = event.model,
+                windowNumber = previousState.windowNumber + 1L,
+                windowId = nextWindowId,
+                previousWindowId = previousState.windowId,
+                estimatedTokensAfter = event.estimatedTokens,
+                openAiResponsesInputJson = event.inputJson,
+                openAiResponsesThroughMessageId = message.id,
+                openAiResponsesEstimatedTokens = event.estimatedTokens,
+            )
+        } else {
+            ContextCompressionState(
+                configId = event.configId,
+                provider = event.provider,
+                channel = event.channel,
+                model = event.model,
+                windowNumber = 1L,
+                windowId = nextWindowId,
+                estimatedTokensAfter = event.estimatedTokens,
+                openAiResponsesInputJson = event.inputJson,
+                openAiResponsesThroughMessageId = message.id,
+                openAiResponsesEstimatedTokens = event.estimatedTokens,
+            )
+        }
+    }
+    return message.copy(
+        contextCompressionState = nextState,
+        contextUsageSnapshot = message.contextUsageSnapshot?.withActiveContextOverride(
+            if (event.reset) null else event.estimatedTokens,
+        ),
+    )
+}
 
 private fun compactStreamToolName(name: String, maxChars: Int = 24): String {
     val normalized = name.replace(Regex("\\s+"), " ").trim()
@@ -437,6 +504,22 @@ internal class ApiHandlerStreamProcessor(
                         }
                     }
                 }
+                is AppStreamEvent.NativeContextCompaction -> {
+                    val latestMessage = latestMessageForUpdate()
+                    updatedMessage = mergeNativeContextCompaction(latestMessage, appEvent)
+                    if (isImageGeneration) {
+                        stateHolder.isImageConversationDirty.value = true
+                    } else {
+                        stateHolder.isTextConversationDirty.value = true
+                    }
+                    messageList[messageIndex] = updatedMessage
+                    viewModelScope.launch(Dispatchers.IO) {
+                        historyManager.saveCurrentChatToHistoryIfNeeded(
+                            forceSave = true,
+                            isImageGeneration = isImageGeneration,
+                        )
+                    }
+                }
                 is AppStreamEvent.OutputType -> {
                     updatedMessage = updatedMessage.copy(outputType = appEvent.type)
                 }
@@ -602,7 +685,11 @@ internal class ApiHandlerStreamProcessor(
             }
     
             // 若处于"暂停流式显示"状态，则不更新UI，仅由恢复时一次性刷新
-            if ((!stateHolder._isStreamingPaused.value || appEvent is AppStreamEvent.Usage) &&
+            if ((
+                    !stateHolder._isStreamingPaused.value ||
+                        appEvent is AppStreamEvent.Usage ||
+                        appEvent is AppStreamEvent.NativeContextCompaction
+                    ) &&
                 updatedMessage != currentMessage
             ) {
                 messageList[messageIndex] = updatedMessage

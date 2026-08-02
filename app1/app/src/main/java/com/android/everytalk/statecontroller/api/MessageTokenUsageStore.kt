@@ -12,12 +12,12 @@ internal class MessageTokenUsageStore {
     private val accumulators = ConcurrentHashMap<String, TokenUsageAccumulator>()
 
     fun apply(message: Message, event: AppStreamEvent.Usage): Message {
-        val usage = accumulators
+        val update = accumulators
             .computeIfAbsent(message.id) { TokenUsageAccumulator() }
-            .update(event.usage)
+            .updateDetailed(event.usage)
         return message.copy(
-            tokenUsage = usage,
-            contextUsageSnapshot = message.contextUsageSnapshot?.withFinalUsage(usage),
+            tokenUsage = update.cumulative,
+            contextUsageSnapshot = message.contextUsageSnapshot?.withFinalUsage(update.activeRequest),
         )
     }
 

@@ -14,6 +14,8 @@ internal fun trimMessagesToContextWindow(
     limits: ModelTokenLimits,
     tools: List<Map<String, Any>>? = null,
     mediaTokenEstimator: (ApiContentPart) -> Long = { 4_096L },
+    inputTokenCalibration: Long = 0L,
+    additionalContextTokens: Long = 0L,
 ): List<AbstractApiMessage> {
     if (messages.isEmpty()) return messages
 
@@ -39,7 +41,8 @@ internal fun trimMessagesToContextWindow(
         messages = emptyList(),
         tools = tools,
         mediaTokenEstimator = mediaTokenEstimator,
-    ).totalInputTokens + selectedIndexes.sumOf {
+        additionalContextTokens = additionalContextTokens,
+    ).totalInputTokens + inputTokenCalibration.coerceAtLeast(0L) + selectedIndexes.sumOf {
         RequestTokenEstimator.estimateMessageTokens(messages[it], mediaTokenEstimator)
     }
     for (turn in conversationTurns.dropLast(1).asReversed()) {

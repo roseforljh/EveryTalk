@@ -36,6 +36,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
@@ -258,6 +259,9 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
 ) {
 
     internal val fileManager: FileManager by lazy { FileManager(application) }
+    internal val autoContextCompressionMutex = Mutex()
+    internal val autoContextCompressionStates =
+        mutableMapOf<AutoContextCompressionKey, com.android.everytalk.data.DataClass.ContextCompressionState>()
 
     internal fun logUiMessages(stage: String, messages: List<UiMessage>) {
         Log.d("MessageSender", "$stage.size=${messages.size}")

@@ -17,6 +17,9 @@ import com.android.everytalk.data.DataClass.ApiContentPart
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.ContextUsageSnapshot
+import com.android.everytalk.data.DataClass.ContextCompressionState
+import com.android.everytalk.data.DataClass.MAX_AUTO_CONTEXT_COMPRESSION_THRESHOLD_PERCENT
+import com.android.everytalk.data.DataClass.RequestContextManagement
 import com.android.everytalk.data.DataClass.ModelParameterProtocol
 import com.android.everytalk.data.DataClass.MessageToolIds
 import com.android.everytalk.data.DataClass.PartsApiMessage
@@ -33,6 +36,8 @@ import com.android.everytalk.data.network.WebSearchSupport
 import com.android.everytalk.data.network.ExternalWebSearchProvider
 import com.android.everytalk.data.network.PromptCapabilityCatalog
 import com.android.everytalk.data.network.PromptCachePolicy
+import com.android.everytalk.data.network.buildDirectMultimodalRequest
+import com.android.everytalk.data.network.isOfficialOpenAIResponsesAddress
 import com.android.everytalk.statecontroller.mcp.dispatch.McpToolCandidate
 import com.android.everytalk.statecontroller.mcp.dispatch.QueryIntent
 import com.android.everytalk.statecontroller.mcp.dispatch.classifyMcpIntent
@@ -42,6 +47,8 @@ import com.android.everytalk.ui.screens.viewmodel.HistoryManager
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -278,6 +285,15 @@ internal fun MessageSender.sendMessageInternal(
             }
 
             withContext(Dispatchers.IO) {
+                val cancelledActiveTextRequestBeforeSnapshot = !isImageGeneration &&
+                    currentConfig.modelParameters.autoContextCompressionEnabled
+                if (cancelledActiveTextRequestBeforeSnapshot) {
+                    apiHandler.cancelCurrentApiJob(
+                        reason = "发送新消息，准备自动压缩",
+                        isNewMessageSend = true,
+                        isImageGeneration = false,
+                    )
+                }
                 val messagesInChatUiSnapshot = if (isImageGeneration) stateHolder.imageGenerationMessages.toList() else stateHolder.messages.toList()
                 logUiMessages("rawMessages", messagesInChatUiSnapshot)
                 val historyEndIndex = messagesInChatUiSnapshot.indexOfFirst { it.id == newUserMessageForUi.id }
@@ -316,7 +332,17 @@ internal fun MessageSender.sendMessageInternal(
                 val historyApiMessages = historyUiMessages.map { it.toApiMessage(uriToBase64Encoder, application) }.toMutableList()
                 logApiMessages("historyApiMessages", historyApiMessages)
 
-                val currentUserApiMessage = newUserMessageForUi.toApiMessage(uriToBase64Encoder, application)
+                val currentUserApiMessage = if (isImageGeneration) {
+                    newUserMessageForUi.toApiMessage(uriToBase64Encoder, application)
+                } else {
+                    // 当前附件在上下文统计前统一注入，避免图片和音频重复。
+                    SimpleTextApiMessage(
+                        id = newUserMessageForUi.id,
+                        role = newUserMessageForUi.role,
+                        content = newUserMessageForUi.text,
+                        name = newUserMessageForUi.name,
+                    )
+                }
                 Log.d(
                     "MessageSender",
                     "currentUserApiMessage: role=${currentUserApiMessage.role} summary=${describeApiMessage(currentUserApiMessage)}"
@@ -486,28 +512,182 @@ internal fun MessageSender.sendMessageInternal(
                     maxOutputTokens = currentConfig.maxTokens,
                     maxContextTokens = currentConfig.modelParameters.maxContextTokens,
                 )
-                val finalApiMessages = trimMessagesToContextWindow(
-                    messages = apiMessagesForBackend,
-                    limits = tokenLimits,
-                    tools = requestTools,
-                )
+                val restoredCompressionState = historyUiMessages.asReversed()
+                    .mapNotNull(UiMessage::contextCompressionState)
+                    .firstOrNull { it.matchesConfig(currentConfig) }
+                val calibrationSnapshot = historyUiMessages.asReversed().firstOrNull { message ->
+                    message.sender == UiSender.AI &&
+                        message.modelName.equals(currentConfig.model, ignoreCase = true) &&
+                        message.providerName.equals(currentConfig.provider, ignoreCase = true) &&
+                        message.contextUsageSnapshot?.configId == currentConfig.id &&
+                        message.contextUsageSnapshot.measuredInputTokens != null
+                }?.contextUsageSnapshot
+                val inputTokenCalibration = calibrationSnapshot?.let { snapshot ->
+                    checkNotNull(snapshot.measuredInputTokens)
+                        .minus(snapshot.uncalibratedEstimatedInputTokens)
+                        .coerceIn(
+                            -tokenLimits.maxContextTokens.toLong(),
+                            tokenLimits.maxContextTokens.toLong(),
+                        )
+                } ?: 0L
+                val nativeResponsesState = restoredCompressionState?.takeIf {
+                    currentConfig.modelParameters.autoContextCompressionEnabled &&
+                    currentConfig.channel.contains("codex", ignoreCase = true) &&
+                        isOfficialOpenAIResponsesAddress(currentConfig.address) &&
+                        it.matchesNativeResponsesConfig(currentConfig) &&
+                        !it.openAiResponsesInputJson.isNullOrBlank() &&
+                        !it.openAiResponsesThroughMessageId.isNullOrBlank() &&
+                        historyUiMessages.any { message ->
+                            message.id == it.openAiResponsesThroughMessageId
+                        } &&
+                        runCatching {
+                            Json.parseToJsonElement(checkNotNull(it.openAiResponsesInputJson)) is JsonArray
+                        }.getOrDefault(false)
+                }
+                val additionalContextTokens = nativeResponsesState?.openAiResponsesEstimatedTokens
+                    ?.coerceAtLeast(0L)
+                    ?: 0L
+                var preCreatedAiMessageId: String? = null
+                suspend fun showCompressionStatus() {
+                    if (preCreatedAiMessageId == null) {
+                        preCreatedAiMessageId = apiHandler.prepareStreamingAiMessage(
+                            modelName = currentConfig.model,
+                            providerName = currentConfig.provider,
+                            isImageGeneration = false,
+                            afterUserMessageId = newUserMessageForUi.id,
+                            executionStatus = CONTEXT_COMPRESSION_RUNNING_STATUS,
+                            preparationJob = currentCoroutineContext()[Job],
+                        )
+                    } else {
+                        apiHandler.updatePreparedStreamingStatus(
+                            messageId = checkNotNull(preCreatedAiMessageId),
+                            status = CONTEXT_COMPRESSION_RUNNING_STATUS,
+                        )
+                    }
+                }
+
+                val finalCompressionApplication = try {
+                    val messagesWithCurrentAttachments = if (isImageGeneration || attachmentsForApiClient.isEmpty()) {
+                        apiMessagesForBackend
+                    } else {
+                        buildDirectMultimodalRequest(
+                            request = ChatRequest(
+                                messages = apiMessagesForBackend,
+                                provider = providerForRequestBackend,
+                                channel = currentConfig.channel,
+                                apiAddress = currentConfig.address,
+                                apiKey = currentConfig.key,
+                                model = currentConfig.model,
+                            ),
+                            attachments = attachmentsForApiClient,
+                            context = application,
+                            extractDocumentsForContextControl = currentConfig.modelParameters.autoContextCompressionEnabled,
+                        ).messages
+                    }
+                    val messagesForContextControl = nativeResponsesState?.let { state ->
+                        val throughIndex = messagesWithCurrentAttachments.indexOfFirst {
+                            it.id == state.openAiResponsesThroughMessageId
+                        }
+                        if (throughIndex < 0) {
+                            messagesWithCurrentAttachments
+                        } else {
+                            buildList {
+                                addAll(messagesWithCurrentAttachments.filter {
+                                    it.role.equals("system", ignoreCase = true)
+                                })
+                                addAll(messagesWithCurrentAttachments.drop(throughIndex + 1).filterNot {
+                                    it.role.equals("system", ignoreCase = true)
+                                })
+                            }
+                        }
+                    } ?: messagesWithCurrentAttachments
+                    val compressionApplication = if (isImageGeneration) {
+                        AutoContextCompressionApplication(messagesForContextControl)
+                    } else {
+                        applyAutoContextCompressionIfNeeded(
+                            conversationId = stateHolder._currentConversationId.value,
+                            config = currentConfig,
+                            messages = messagesForContextControl,
+                            tools = requestTools,
+                            limits = tokenLimits,
+                            customModelParameters = customModelParameters.ifEmpty { null },
+                            restoredState = restoredCompressionState,
+                            inputTokenCalibration = inputTokenCalibration,
+                            additionalContextTokens = additionalContextTokens,
+                            onCompressionStarted = ::showCompressionStatus,
+                        )
+                    }
+                    val messagesAfterAutoCompression = compressionApplication.messages
+                    val trimmedMessages = trimMessagesToContextWindow(
+                        messages = messagesAfterAutoCompression,
+                        limits = tokenLimits,
+                        tools = requestTools,
+                        inputTokenCalibration = inputTokenCalibration,
+                        additionalContextTokens = additionalContextTokens,
+                    )
+                    val inputBudget = tokenLimits.maxContextTokens.toLong() - tokenLimits.maxOutputTokens.toLong()
+                    val estimatedInput = calibratedInputTokens(
+                        RequestTokenEstimator.estimate(
+                            trimmedMessages,
+                            requestTools,
+                            additionalContextTokens = additionalContextTokens,
+                        ),
+                        inputTokenCalibration.coerceAtLeast(0L),
+                    )
+                    val fittedMessages = when {
+                        isImageGeneration || estimatedInput <= inputBudget -> trimmedMessages
+                        !currentConfig.modelParameters.autoContextCompressionEnabled -> {
+                            throw ContextCompressionException("当前请求超出模型上下文窗口，自动压缩未开启")
+                        }
+                        else -> compressOversizedLatestUserTurnWithModel(
+                            config = currentConfig,
+                            messages = trimmedMessages,
+                            tools = requestTools,
+                            limits = tokenLimits,
+                            customModelParameters = customModelParameters.ifEmpty { null },
+                            inputTokenCalibration = inputTokenCalibration,
+                            additionalContextTokens = additionalContextTokens,
+                            onCompressionStarted = ::showCompressionStatus,
+                        )
+                    }
+                    val verifiedInput = calibratedInputTokens(
+                        RequestTokenEstimator.estimate(
+                            fittedMessages,
+                            requestTools,
+                            additionalContextTokens = additionalContextTokens,
+                        ),
+                        inputTokenCalibration.coerceAtLeast(0L),
+                    )
+                    if (!isImageGeneration && verifiedInput > inputBudget) {
+                        throw ContextCompressionException("压缩后请求仍超出模型上下文窗口")
+                    }
+                    compressionApplication.copy(messages = fittedMessages)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    if (isImageGeneration) throw error
+                    val failureText = contextCompressionFailureText(error)
+                    if (preCreatedAiMessageId == null) showCompressionStatus()
+                    apiHandler.failPreparedStreamingAiMessage(
+                        messageId = checkNotNull(preCreatedAiMessageId),
+                        errorText = failureText,
+                    )
+                    Log.e("MessageSender", failureText, error)
+                    return@withContext
+                }
+                val finalApiMessages = finalCompressionApplication.messages
+                val activeCompressionState = finalCompressionApplication.state
                 val contextUsageSnapshot = RequestTokenEstimator.estimate(
                     messages = finalApiMessages,
                     tools = requestTools,
+                    additionalContextTokens = additionalContextTokens,
                 ).toContextUsageSnapshot(
                     messageId = "",
                     configId = currentConfig.id,
                     reservedOutputTokens = tokenLimits.maxOutputTokens.toLong(),
                     contextWindowTokens = tokenLimits.maxContextTokens.toLong(),
+                    inputCalibrationTokens = inputTokenCalibration,
                 )
-                if (finalApiMessages.size < apiMessagesForBackend.size) {
-                    Log.i(
-                        "MessageSender",
-                        "上下文窗口裁剪消息: ${apiMessagesForBackend.size} -> ${finalApiMessages.size}, " +
-                            "context=${tokenLimits.maxContextTokens}, output=${tokenLimits.maxOutputTokens}",
-                    )
-                }
-
                 logApiMessages("finalMessages", finalApiMessages)
 
                 if (finalApiMessages.isEmpty() || finalApiMessages.lastOrNull()?.role != "user") {
@@ -524,18 +704,28 @@ internal fun MessageSender.sendMessageInternal(
                     "config=${safeApiConfigSummary(currentConfig)}, supportsNativeWebSearch: $supportsNativeWebSearch, webSearchEnabled: $webSearchEnabledForRequest, shouldEnableGoogleSearch: $shouldEnableGoogleSearch, externalProvider=${webSearchRouting.externalProvider?.providerId}"
                 )
 
-                // 🎯 优化：在开始可能的外部联网搜索之前，预先创建 AI 占位消息。
-                // 这样用户在点击发送后能立即看到 UI 反馈（加载指示器），而不是等待搜索完成。
-                val preCreatedAiMessageId = if (!isImageGeneration) {
-                    apiHandler.cancelCurrentApiJob("发送新消息，预清理", isNewMessageSend = true, isImageGeneration = false)
-                    apiHandler.prepareStreamingAiMessage(
+                // 在自动压缩或外部联网搜索开始时复用同一个普通加载占位消息。
+                if (!isImageGeneration && preCreatedAiMessageId == null) {
+                    if (!cancelledActiveTextRequestBeforeSnapshot) {
+                        apiHandler.cancelCurrentApiJob("发送新消息，预清理", isNewMessageSend = true, isImageGeneration = false)
+                    }
+                    preCreatedAiMessageId = apiHandler.prepareStreamingAiMessage(
                         modelName = currentConfig.model,
                         providerName = currentConfig.provider,
                         isImageGeneration = false,
                         afterUserMessageId = newUserMessageForUi.id,
                         contextUsageSnapshot = contextUsageSnapshot,
+                        contextCompressionState = activeCompressionState,
                     )
-                } else null
+                }
+                if (!isImageGeneration && preCreatedAiMessageId != null) {
+                    apiHandler.updatePreparedStreamingStatus(
+                        messageId = checkNotNull(preCreatedAiMessageId),
+                        status = null,
+                        contextUsageSnapshot = contextUsageSnapshot,
+                        contextCompressionState = activeCompressionState,
+                    )
+                }
 
                 val chatRequestForApi = ChatRequest(
                     messages = finalApiMessages,
@@ -561,6 +751,18 @@ internal fun MessageSender.sendMessageInternal(
                     qwenEnableSearch = if (WebSearchSupport.shouldEnableQwenNativeSearch(currentConfig, webSearchRouting.useNativeWebSearch)) true else null,
                     customModelParameters = customModelParameters.ifEmpty { null },
                     tools = requestTools,
+                    contextManagement = RequestContextManagement(
+                        configId = currentConfig.id,
+                        maxContextTokens = tokenLimits.maxContextTokens,
+                        reservedOutputTokens = tokenLimits.maxOutputTokens,
+                        compactThresholdTokens = tokenLimits.maxContextTokens.toLong() *
+                            currentConfig.modelParameters.autoContextCompressionThresholdPercent
+                                .coerceAtMost(MAX_AUTO_CONTEXT_COMPRESSION_THRESHOLD_PERCENT) / 100L,
+                        autoCompressionEnabled = currentConfig.modelParameters.autoContextCompressionEnabled,
+                        inputTokenCalibration = inputTokenCalibration,
+                        estimatedInputTokens = contextUsageSnapshot.estimatedInputTokens,
+                        restoredState = activeCompressionState,
+                    ),
                     imageGenRequest = if (isImageGeneration) {
                         // 调试信息：检查发送的配置
                         Log.d("MessageSender", "Image generation config: ${safeApiConfigSummary(currentConfig)}")
@@ -641,7 +843,7 @@ internal fun MessageSender.sendMessageInternal(
 
                 apiHandler.streamChatResponse(
                     requestBody = chatRequestForApi,
-                    attachmentsToPassToApiClient = attachmentsForApiClient,
+                    attachmentsToPassToApiClient = if (isImageGeneration) attachmentsForApiClient else emptyList(),
                     applicationContextForApiClient = application,
                     userMessageTextForContext = textToActuallySend,
                     afterUserMessageId = newUserMessageForUi.id,
@@ -660,7 +862,7 @@ internal fun MessageSender.sendMessageInternal(
                         }
                     },
                     onNewAiMessageAdded = triggerScrollToBottom,
-                    audioBase64 = audioBase64,
+                    audioBase64 = if (isImageGeneration) audioBase64 else null,
                     mimeType = mimeType,
                     isImageGeneration = isImageGeneration,
                     preCreatedAiMessageId = preCreatedAiMessageId,

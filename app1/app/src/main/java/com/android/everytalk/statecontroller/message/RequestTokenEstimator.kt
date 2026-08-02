@@ -20,12 +20,13 @@ internal data class RequestTokenEstimate(
     val mediaTokens: Long,
     val toolSchemaTokens: Long,
     val protocolOverheadTokens: Long,
+    val additionalContextTokens: Long = 0L,
 ) {
     val totalInputTokens: Long = systemPromptTokens +
         conversationTextTokens +
         mediaTokens +
         toolSchemaTokens +
-        protocolOverheadTokens
+        protocolOverheadTokens + additionalContextTokens
 }
 
 internal object RequestTokenEstimator {
@@ -42,6 +43,7 @@ internal object RequestTokenEstimator {
         messages: List<AbstractApiMessage>,
         tools: List<Map<String, Any>>?,
         mediaTokenEstimator: (ApiContentPart) -> Long = { UNKNOWN_MEDIA_TOKENS },
+        additionalContextTokens: Long = 0L,
     ): RequestTokenEstimate {
         var systemPromptTokens = 0L
         var conversationTextTokens = 0L
@@ -86,6 +88,7 @@ internal object RequestTokenEstimator {
             mediaTokens = mediaTokens,
             toolSchemaTokens = toolSchemaTokens,
             protocolOverheadTokens = protocolOverheadTokens,
+            additionalContextTokens = additionalContextTokens.coerceAtLeast(0L),
         )
     }
 
@@ -111,6 +114,7 @@ internal fun RequestTokenEstimate.toContextUsageSnapshot(
     configId: String? = null,
     reservedOutputTokens: Long,
     contextWindowTokens: Long,
+    inputCalibrationTokens: Long = 0L,
 ): ContextUsageSnapshot = ContextUsageSnapshot(
     messageId = messageId,
     configId = configId,
@@ -121,7 +125,20 @@ internal fun RequestTokenEstimate.toContextUsageSnapshot(
     protocolOverheadTokens = protocolOverheadTokens,
     reservedOutputTokens = reservedOutputTokens,
     contextWindowTokens = contextWindowTokens,
+    inputCalibrationTokens = inputCalibrationTokens,
 )
+
+internal fun calibratedInputTokens(
+    estimate: RequestTokenEstimate,
+    inputCalibrationTokens: Long,
+): Long {
+    val base = estimate.totalInputTokens
+    return when {
+        inputCalibrationTokens > 0L && base > Long.MAX_VALUE - inputCalibrationTokens -> Long.MAX_VALUE
+        inputCalibrationTokens < 0L && base < -inputCalibrationTokens -> 0L
+        else -> (base + inputCalibrationTokens).coerceAtLeast(0L)
+    }
+}
 
 internal fun estimateConversationDraftContextUsage(
     messages: List<Message>,

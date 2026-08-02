@@ -5,6 +5,7 @@ import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.ContextUsageSnapshot
+import com.android.everytalk.data.DataClass.ContextCompressionState
 import com.android.everytalk.ui.components.MarkdownPart
 import com.android.everytalk.ui.components.toRecoveredMarkdown
 import com.android.everytalk.data.network.AppStreamEvent
@@ -143,6 +144,57 @@ internal fun addAiMessageAfterUserMessage(
     }
 }
 
+internal fun updateMessageContextUsageSnapshot(
+    messageList: MutableList<Message>,
+    messageId: String,
+    snapshot: ContextUsageSnapshot,
+): Boolean {
+    val index = messageList.indexOfFirst { it.id == messageId }
+    if (index < 0) return false
+    messageList[index] = messageList[index].copy(
+        contextUsageSnapshot = snapshot.copy(messageId = messageId),
+    )
+    return true
+}
+
+internal fun updateMessageContextCompressionState(
+    messageList: MutableList<Message>,
+    messageId: String,
+    state: ContextCompressionState,
+): Boolean {
+    val index = messageList.indexOfFirst { it.id == messageId }
+    if (index < 0) return false
+    messageList[index] = messageList[index].copy(contextCompressionState = state)
+    return true
+}
+
+internal fun updatePreparedMessageStatus(
+    messageList: MutableList<Message>,
+    messageId: String,
+    status: String?,
+): Boolean {
+    val index = messageList.indexOfFirst { it.id == messageId }
+    if (index < 0) return false
+    messageList[index] = messageList[index].copy(executionStatus = status)
+    return true
+}
+
+internal fun markPreparedMessageFailed(
+    messageList: MutableList<Message>,
+    messageId: String,
+    errorText: String,
+): Boolean {
+    val index = messageList.indexOfFirst { it.id == messageId }
+    if (index < 0) return false
+    messageList[index] = messageList[index].copy(
+        text = errorText,
+        contentStarted = false,
+        isError = true,
+        executionStatus = errorText,
+    )
+    return true
+}
+
 class ApiHandler(
     private val stateHolder: ViewModelStateHolder,
     private val viewModelScope: CoroutineScope,
@@ -208,16 +260,19 @@ class ApiHandler(
     }
 
     /**
-     * 预先创建 AI 占位消息并设置流式状态，用于在正式 API 请求开始前（如执行外部搜索时）提供即时 UI 反馈
+     * 预先创建 AI 占位消息并设置流式状态，用于在自动压缩、外部搜索等请求准备阶段提供即时 UI 反馈。
      * @return 预创建的 AI 消息 ID
      */
-    fun prepareStreamingAiMessage(
+    suspend fun prepareStreamingAiMessage(
         modelName: String,
         providerName: String,
         isImageGeneration: Boolean = false,
         onNewAiMessageAdded: () -> Unit = {},
         afterUserMessageId: String? = null,
         contextUsageSnapshot: ContextUsageSnapshot? = null,
+        contextCompressionState: ContextCompressionState? = null,
+        executionStatus: String? = null,
+        preparationJob: Job? = null,
     ): String {
         val aiMessageId = UUID.randomUUID().toString()
         logger.debug("Preparing streaming AI message: $aiMessageId, model=$modelName, isImageGeneration=$isImageGeneration")
@@ -231,10 +286,12 @@ class ApiHandler(
 
         // 设置流式状态
         if (isImageGeneration) {
+            if (preparationJob != null) stateHolder.imageApiJob = preparationJob
             stateHolder._currentImageStreamingAiMessageId.value = aiMessageId
             stateHolder._isImageApiCalling.value = true
             stateHolder.imageReasoningCompleteMap[aiMessageId] = false
         } else {
+            if (preparationJob != null) stateHolder.textApiJob = preparationJob
             stateHolder._currentTextStreamingAiMessageId.value = aiMessageId
             stateHolder._isTextApiCalling.value = true
             stateHolder.textReasoningCompleteMap[aiMessageId] = false
@@ -249,9 +306,11 @@ class ApiHandler(
             modelName = modelName,
             providerName = providerName,
             contextUsageSnapshot = contextUsageSnapshot?.copy(messageId = aiMessageId),
+            contextCompressionState = contextCompressionState,
+            executionStatus = executionStatus,
         )
 
-        viewModelScope.launch(Dispatchers.Main.immediate) {
+        withContext(Dispatchers.Main.immediate) {
             val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
             addAiMessageAfterUserMessage(messageList, newAiMessage, afterUserMessageId)
             onNewAiMessageAdded()
@@ -259,6 +318,76 @@ class ApiHandler(
         }
 
         return aiMessageId
+    }
+
+    suspend fun updatePreparedStreamingStatus(
+        messageId: String,
+        status: String?,
+        isImageGeneration: Boolean = false,
+        contextUsageSnapshot: ContextUsageSnapshot? = null,
+        contextCompressionState: ContextCompressionState? = null,
+    ) {
+        withContext(Dispatchers.Main.immediate) {
+            val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
+            if (!updatePreparedMessageStatus(messageList, messageId, status)) {
+                logger.warn("预创建消息不存在，无法更新执行状态: $messageId")
+            }
+            if (
+                contextUsageSnapshot != null &&
+                !updateMessageContextUsageSnapshot(messageList, messageId, contextUsageSnapshot)
+            ) {
+                logger.warn("预创建消息不存在，无法同步上下文快照: $messageId")
+            }
+            if (
+                contextCompressionState != null &&
+                !updateMessageContextCompressionState(messageList, messageId, contextCompressionState)
+            ) {
+                logger.warn("预创建消息不存在，无法同步压缩检查点: $messageId")
+            }
+        }
+    }
+
+    suspend fun failPreparedStreamingAiMessage(
+        messageId: String,
+        errorText: String,
+        isImageGeneration: Boolean = false,
+    ) {
+        withContext(Dispatchers.Main.immediate) {
+            val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
+            if (!markPreparedMessageFailed(messageList, messageId, errorText)) {
+                logger.warn("预创建消息不存在，无法写入压缩错误: $messageId")
+            }
+            if (isImageGeneration) {
+                stateHolder.imageReasoningCompleteMap[messageId] = true
+                stateHolder.imageApiJob = null
+                stateHolder._isImageApiCalling.value = false
+                if (stateHolder._currentImageStreamingAiMessageId.value == messageId) {
+                    stateHolder._currentImageStreamingAiMessageId.value = null
+                }
+            } else {
+                stateHolder.textReasoningCompleteMap[messageId] = true
+                stateHolder.textApiJob = null
+                stateHolder._isTextApiCalling.value = false
+                if (stateHolder._currentTextStreamingAiMessageId.value == messageId) {
+                    stateHolder._currentTextStreamingAiMessageId.value = null
+                }
+            }
+            stateHolder.clearStreamingBuffer(messageId)
+            resourceController.removeMessageResources(messageId)
+            PerformanceMonitor.onAbort(messageId, reason = errorText)
+        }
+        withContext(Dispatchers.IO) {
+            try {
+                historyManager.saveCurrentChatToHistoryIfNeeded(
+                    forceSave = true,
+                    isImageGeneration = isImageGeneration,
+                )
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                logger.warn("压缩失败消息持久化失败: ${error.message}")
+            }
+        }
     }
 
     fun cancelCurrentApiJob(reason: String, isNewMessageSend: Boolean = false, isImageGeneration: Boolean = false) {
@@ -457,6 +586,18 @@ class ApiHandler(
 
         val job = viewModelScope.launch {
             val thisJob = coroutineContext[Job]
+            if (preCreatedAiMessageId != null && contextUsageSnapshot != null) {
+                withContext(Dispatchers.Main.immediate) {
+                    val messageList = if (isImageGeneration) {
+                        stateHolder.imageGenerationMessages
+                    } else {
+                        stateHolder.messages
+                    }
+                    if (!updateMessageContextUsageSnapshot(messageList, aiMessageId, contextUsageSnapshot)) {
+                        logger.warn("预创建消息不存在，无法同步上下文快照: $aiMessageId")
+                    }
+                }
+            }
             var finalSyncDone = false
             suspend fun ensureFinalStreamingSync(source: String) {
                 if (finalSyncDone) return

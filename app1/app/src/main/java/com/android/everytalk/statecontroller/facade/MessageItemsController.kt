@@ -5,6 +5,7 @@ import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.ExecutionStep
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.WebSearchResult
+import com.android.everytalk.data.DataClass.hasReviewableExecutionProcess
 import com.android.everytalk.statecontroller.StreamingMessageStateManager
 import com.android.everytalk.statecontroller.ViewModelStateHolder
 import com.android.everytalk.statecontroller.freezeWhileStreamingPaused
@@ -534,6 +535,7 @@ open class MessageItemsController(
         val reasoningCompleteMap =
             if (isImageGeneration) stateHolder.imageReasoningCompleteMap else stateHolder.textReasoningCompleteMap
         val reasoningComplete = reasoningCompleteMap[message.id] ?: false
+        val hasReviewableProcess = message.hasReviewableExecutionProcess()
 
         return when (state) {
             is com.android.everytalk.ui.state.AiBubbleState.Connecting -> {
@@ -556,11 +558,8 @@ open class MessageItemsController(
             }
             is com.android.everytalk.ui.state.AiBubbleState.Streaming -> {
                 val items = mutableListOf<ChatListItem>()
-                // 即使 reasoningComplete 为 false，只要有 reasoning 内容且进入 Streaming 阶段（意味着 contentStarted=true），
-                // 我们也需要保留 AiMessageReasoning Item。
-                // 这样 ThinkingUI 才能留在组件树中，执行“思考框消失 -> 小白点出现”的过渡动画。
-                // 否则 Item 会被移除，导致动画状态丢失，直到 Complete 状态才重新出现。
-                if (state.hasReasoning && !message.reasoning.isNullOrBlank()) {
+                // 正文开始后继续保留所有可回看的执行记录，避免入口在流式转场时消失。
+                if (hasReviewableProcess) {
                     items.add(ChatListItem.AiMessageReasoning(message))
                 }
 
@@ -589,7 +588,7 @@ open class MessageItemsController(
             }
             is com.android.everytalk.ui.state.AiBubbleState.Complete -> {
                 val items = mutableListOf<ChatListItem>()
-                if (!message.reasoning.isNullOrBlank()) {
+                if (hasReviewableProcess) {
                     items.add(ChatListItem.AiMessageReasoning(message))
                 }
 
@@ -639,7 +638,17 @@ open class MessageItemsController(
                 items
             }
             is com.android.everytalk.ui.state.AiBubbleState.Error -> {
-                listOf(ChatListItem.ErrorMessage(message.id, message.text))
+                buildList {
+                    if (hasReviewableProcess) {
+                        add(
+                            ChatListItem.AiMessageReasoning(
+                                message = message,
+                                activityStatusText = message.executionStatus,
+                            )
+                        )
+                    }
+                    add(ChatListItem.ErrorMessage(message.id, message.text))
+                }
             }
             else -> emptyList()
         }
