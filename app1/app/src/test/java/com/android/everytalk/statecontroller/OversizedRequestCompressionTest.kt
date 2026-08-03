@@ -79,6 +79,46 @@ class OversizedRequestCompressionTest {
     }
 
     @Test
+    fun `压缩当前消息时保留附件清单并移除可重读内容页`() = runTest {
+        val attachmentManifest = """
+            [附件清单]
+            attachment_id: attachment-html
+            name: sample.html
+            read_with: read_attachment
+        """.trimIndent()
+        val attachmentPage = """
+            [附件内容页]
+            next_offset: 12000
+            ${"附件正文".repeat(8_000)}
+        """.trimIndent()
+        val messages = listOf(
+            PartsApiMessage(
+                id = "user-attachment",
+                role = "user",
+                parts = listOf(
+                    ApiContentPart.Text("请分析附件并指出问题。" + "补充要求".repeat(8_000)),
+                    ApiContentPart.Text(attachmentManifest),
+                    ApiContentPart.Text(attachmentPage),
+                ),
+            )
+        )
+
+        val compressed = compressOversizedLatestUserTurn(
+            messages = messages,
+            tools = null,
+            limits = ModelTokenLimits(maxOutputTokens = 256, maxContextTokens = 6_000),
+        ) { _, _ -> "分析附件并指出关键问题" }
+
+        val textParts = (compressed.single() as PartsApiMessage).parts
+            .filterIsInstance<ApiContentPart.Text>()
+            .map(ApiContentPart.Text::text)
+        assertTrue(textParts.any { it == attachmentManifest })
+        assertTrue(textParts.none { it.startsWith("[附件内容页]") })
+        assertTrue(textParts.any { it.contains("[当前用户输入已自动压缩]") })
+        assertTrue(textParts.any { it.contains("分析附件并指出关键问题") })
+    }
+
+    @Test
     fun `媒体和工具开销单独超限时返回明确原因`() = runTest {
         val messages = listOf(
             PartsApiMessage(

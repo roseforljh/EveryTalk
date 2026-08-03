@@ -6,22 +6,43 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 import java.io.ByteArrayInputStream
 
 class DocumentProcessorLimitsTest {
     @Test
-    fun `文档文本超过输出上限时显式报错`() = runBlocking {
-        try {
-            DocumentProcessor.extractPlainText(
-                ByteArrayInputStream("123456".toByteArray()),
-                maxInputBytes = 20,
-                maxOutputChars = 5,
-            )
-            fail("应抛出文本输出上限错误")
-        } catch (_: DocumentProcessor.OutputLimitExceededException) {
-        }
+    fun `超限HTML文本保留可分析的前缀`() = runBlocking {
+        val html = "<html><body>附件内容</body></html>"
+
+        val result = DocumentProcessor.extractPlainText(
+            ByteArrayInputStream(html.toByteArray()),
+            maxInputBytes = 100,
+            maxOutputChars = 16,
+        )
+
+        assertEquals(html.take(16), result)
+    }
+
+    @Test
+    fun `超限HTML文本可按游标连续读取且无内容丢失`() = runBlocking {
+        val html = "<html><body>第一页内容，第二页内容</body></html>"
+
+        val first = DocumentProcessor.extractPlainTextPage(
+            inputStream = ByteArrayInputStream(html.toByteArray()),
+            offsetChars = 0,
+            maxOutputChars = 18,
+        )
+        val second = DocumentProcessor.extractPlainTextPage(
+            inputStream = ByteArrayInputStream(html.toByteArray()),
+            offsetChars = checkNotNull(first.nextOffset),
+            maxOutputChars = 100,
+        )
+
+        assertTrue(first.truncated)
+        assertEquals(html, first.content + second.content)
+        assertEquals(null, second.nextOffset)
     }
 
 

@@ -115,4 +115,26 @@ class MessageBitmapApiConversionTest {
             assertTrue(apiMessage.parts.none { it is ApiContentPart.InlineData })
         }
     }
+
+    @Test
+    fun `历史消息保留通用附件读取句柄`() {
+        val attachment = SelectedMediaItem.GenericFile(
+            uri = Uri.parse("content://com.android.everytalk.provider/chat_attachments/history.html"),
+            id = "history-attachment",
+            displayName = "history.html",
+            mimeType = "text/html",
+            filePath = "/data/user/0/com.android.everytalk/files/chat_attachments/history.html",
+        )
+        val message = Message(
+            text = "继续分析附件",
+            sender = Sender.User,
+            attachments = listOf(attachment),
+        )
+
+        val apiMessage = message.toApiMessage(uriEncoder = { null }) as PartsApiMessage
+        val text = apiMessage.parts.filterIsInstance<ApiContentPart.Text>().joinToString("\n") { it.text }
+
+        assertTrue("attachment_id: ${attachment.id}" in text)
+        assertTrue("read_attachment" in text)
+    }
 }

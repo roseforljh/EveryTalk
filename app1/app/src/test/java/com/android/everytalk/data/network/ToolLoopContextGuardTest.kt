@@ -87,6 +87,42 @@ class ToolLoopContextGuardTest {
         assertTrue(truncated.startsWith("HEAD"))
         assertTrue(truncated.endsWith("TAIL"))
         assertTrue(truncated.contains("工具输出已截断"))
+        assertTrue(estimateToolLoopTextTokens(truncated) <= 100L)
+    }
+
+    @Test
+    fun `百万上下文配置错误时仍限制工具输出历史`() {
+        val oversizedManagement = RequestContextManagement(
+            configId = "opencrab-gpt-5-6-luna",
+            maxContextTokens = 1_050_000,
+            reservedOutputTokens = 128_000,
+            compactThresholdTokens = 945_000,
+            autoCompressionEnabled = false,
+        )
+        val logShapedUsage = TokenUsage(
+            totalTokens = 445_686,
+            isFinal = true,
+            source = TokenUsageSource.OPENAI_CHAT,
+            requestOrdinal = 4,
+        )
+        val largeHtmlPage = "<div class=\"item\">content</div>".repeat(3_200)
+        val history = MutableList(5) { index ->
+            JsonObject(
+                mapOf(
+                    "role" to JsonPrimitive("tool"),
+                    "tool_call_id" to JsonPrimitive("attachment-page-$index"),
+                    "content" to JsonPrimitive(largeHtmlPage),
+                )
+            )
+        }
+
+        assertTrue(compactOpenAIChatToolHistoryIfNeeded(history, oversizedManagement, logShapedUsage))
+        assertTrue(
+            history.dropLast(1).any {
+                it.getValue("content").jsonPrimitive.content == TRUNCATED_TOOL_OUTPUT_TEXT
+            }
+        )
+        assertTrue(history.sumOf(::estimateToolLoopJsonTokens) <= 64_000L)
     }
 
     private fun responseOutput(callId: String, output: String): JsonObject = JsonObject(

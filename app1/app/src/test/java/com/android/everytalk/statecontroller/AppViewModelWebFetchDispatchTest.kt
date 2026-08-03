@@ -85,6 +85,30 @@ class AppViewModelWebFetchDispatchTest {
     }
 
     @Test
+    fun `附件读取工具在应用内执行`() = runTest {
+        val arguments = buildJsonObject {
+            put("attachment_id", JsonPrimitive("attachment-1"))
+        }
+        val localResult = buildJsonObject {
+            put("content", JsonPrimitive("附件正文"))
+        }
+        var fallbackCalled = false
+
+        val result = executeSharedToolCall(
+            toolName = BUILT_IN_READ_ATTACHMENT_TOOL_NAME,
+            arguments = arguments,
+            localAttachmentExecutor = { localResult },
+            fallbackExecutor = { _, _ ->
+                fallbackCalled = true
+                JsonObject(emptyMap())
+            },
+        )
+
+        assertSame(localResult, result)
+        assertTrue(!fallbackCalled)
+    }
+
+    @Test
     fun `non webfetch tools keep MCP fallback unchanged`() = runTest {
         val arguments = buildJsonObject {
             put("query", JsonPrimitive("hello"))

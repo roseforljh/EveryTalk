@@ -1,5 +1,6 @@
 package com.android.everytalk.statecontroller
 
+import com.android.everytalk.data.network.MAX_ATTACHMENT_PAGE_CHARS
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -56,5 +57,16 @@ class MessageSenderMcpGuidanceTest {
         val function = tool["function"] as Map<*, *>
 
         assertEquals(BUILT_IN_CURRENT_TIME_TOOL_NAME, function["name"])
+    }
+
+    @Test
+    fun `附件读取工具声明安全页上限并禁止并行分页`() {
+        val function = builtInReadAttachmentToolDefinition()["function"] as Map<*, *>
+        val parameters = function["parameters"] as Map<*, *>
+        val properties = parameters["properties"] as Map<*, *>
+        val maxChars = properties["max_chars"] as Map<*, *>
+
+        assertEquals(MAX_ATTACHMENT_PAGE_CHARS, maxChars["maximum"])
+        assertTrue((function["description"] as String).contains("禁止并行"))
     }
 }
