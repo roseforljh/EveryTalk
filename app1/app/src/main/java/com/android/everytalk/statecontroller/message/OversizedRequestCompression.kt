@@ -11,6 +11,8 @@ import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.DataClass.toThinkingConfig
 import com.android.everytalk.data.network.ApiClient
 import com.android.everytalk.data.network.AppStreamEvent
+import com.android.everytalk.models.ATTACHMENT_CONTENT_PAGE_MARKER
+import com.android.everytalk.models.ATTACHMENT_MANIFEST_MARKER
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
@@ -364,7 +366,9 @@ internal suspend fun compressOversizedLatestUserTurn(
 private fun AbstractApiMessage.compressionSourceText(): String = when (this) {
     is SimpleTextApiMessage -> content
     is PartsApiMessage -> parts.mapIndexedNotNull { index, part ->
-        (part as? ApiContentPart.Text)?.let { "[文本段 ${index + 1}]\n${it.text}" }
+        (part as? ApiContentPart.Text)
+            ?.takeUnless { it.isAttachmentContext() }
+            ?.let { "[文本段 ${index + 1}]\n${it.text}" }
     }.joinToString("\n\n")
 }
 
@@ -375,8 +379,14 @@ private fun AbstractApiMessage.replaceCompressionText(text: String): AbstractApi
             var inserted = false
             parts.forEach { part ->
                 if (part is ApiContentPart.Text) {
-                    if (!inserted && text.isNotEmpty()) add(ApiContentPart.Text(text))
-                    inserted = true
+                    when {
+                        part.text.startsWith(ATTACHMENT_MANIFEST_MARKER) -> add(part)
+                        part.text.startsWith(ATTACHMENT_CONTENT_PAGE_MARKER) -> Unit
+                        !inserted -> {
+                            if (text.isNotEmpty()) add(ApiContentPart.Text(text))
+                            inserted = true
+                        }
+                    }
                 } else {
                     add(part)
                 }
@@ -385,6 +395,10 @@ private fun AbstractApiMessage.replaceCompressionText(text: String): AbstractApi
         },
     )
 }
+
+private fun ApiContentPart.Text.isAttachmentContext(): Boolean =
+    text.startsWith(ATTACHMENT_MANIFEST_MARKER) ||
+        text.startsWith(ATTACHMENT_CONTENT_PAGE_MARKER)
 
 internal suspend fun MessageSender.requestContextCompressionCompletion(
     config: ApiConfig,

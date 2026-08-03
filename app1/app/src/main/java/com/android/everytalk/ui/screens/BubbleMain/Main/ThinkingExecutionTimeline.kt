@@ -107,6 +107,36 @@ private fun isGenericExecutionStatus(text: String): Boolean = text in setOf(
     "已收到思考，等待正文",
 )
 
+internal data class ExecutionTimelineEntry(
+    val step: ExecutionStep,
+    val invocationCount: Int = 1,
+)
+
+internal fun executionTimelineEntries(steps: List<ExecutionStep>): List<ExecutionTimelineEntry> =
+    buildList {
+        steps.forEach { step ->
+            val previous = lastOrNull()
+            val previousToolName = previous?.step?.labels?.singleOrNull()?.trim().orEmpty()
+            val toolName = step.labels.singleOrNull()?.trim().orEmpty()
+            val continuesSameTool = step.type == ExecutionStepType.Tool &&
+                previous?.step?.type == ExecutionStepType.Tool &&
+                toolName.isNotEmpty() &&
+                toolName == previousToolName
+            if (continuesSameTool) {
+                this[lastIndex] = ExecutionTimelineEntry(
+                    step = step,
+                    invocationCount = if (previous.invocationCount == Int.MAX_VALUE) {
+                        Int.MAX_VALUE
+                    } else {
+                        previous.invocationCount + 1
+                    },
+                )
+            } else {
+                add(ExecutionTimelineEntry(step))
+            }
+        }
+    }
+
 @Composable
 internal fun ThinkingExecutionTimeline(
     executionSteps: List<ExecutionStep>,
@@ -119,12 +149,13 @@ internal fun ThinkingExecutionTimeline(
     reasoningContent: @Composable () -> Unit,
 ) {
     val hasReasoning = reasoningText.isNotBlank()
-    val pendingStepIndex = executionSteps.indexOfLast { !it.completed }
+    val timelineEntries = executionTimelineEntries(executionSteps)
+    val pendingStepIndex = timelineEntries.indexOfLast { !it.step.completed }
     val reasoningIsActive = isReasoningActive && hasReasoning &&
         (pendingStepIndex < 0 || isGenericExecutionStatus(activityStatusText.orEmpty()))
     val showStandaloneActivity = isReasoningActive && !reasoningIsActive && pendingStepIndex < 0
-    val sourceStepIndex = executionSteps.indexOfLast { it.type == ExecutionStepType.Search }
-    val nodeCount = executionSteps.size +
+    val sourceStepIndex = timelineEntries.indexOfLast { it.step.type == ExecutionStepType.Search }
+    val nodeCount = timelineEntries.size +
         (if (showStandaloneActivity) 1 else 0) +
         (if (hasReasoning) 1 else 0) +
         (if (webSearchResults.isNotEmpty() && sourceStepIndex < 0) 1 else 0) +
@@ -136,7 +167,8 @@ internal fun ThinkingExecutionTimeline(
             .fillMaxWidth()
             .testTag("reasoning-execution-timeline"),
     ) {
-        executionSteps.forEachIndexed { stepIndex, step ->
+        timelineEntries.forEachIndexed { stepIndex, entry ->
+            val step = entry.step
             val isActive = isReasoningActive && stepIndex == pendingStepIndex
             TimelineNode(
                 icon = stepIcon(step.type),
@@ -148,7 +180,7 @@ internal fun ThinkingExecutionTimeline(
                 last = nodeIndex == nodeCount - 1,
                 modifier = Modifier.testTag("reasoning-execution-step-$stepIndex"),
             ) {
-                ExecutionLabels(step)
+                ExecutionLabels(step, entry.invocationCount)
                 if (stepIndex == sourceStepIndex && webSearchResults.isNotEmpty()) {
                     WebsiteLabels(webSearchResults)
                 }
@@ -373,7 +405,10 @@ private fun stepIconTint(type: ExecutionStepType): Color = when (type) {
 }
 
 @Composable
-private fun ExecutionLabels(step: ExecutionStep) {
+private fun ExecutionLabels(
+    step: ExecutionStep,
+    invocationCount: Int,
+) {
     if (step.labels.isEmpty()) return
     val uriHandler = LocalUriHandler.current
     FlowRow(
@@ -392,6 +427,11 @@ private fun ExecutionLabels(step: ExecutionStep) {
                 iconTint = stepIconTint(step.type),
                 onClick = if (step.type == ExecutionStepType.Web) {
                     webLinkClick(uriHandler, label)
+                } else {
+                    null
+                },
+                trailingText = if (step.type == ExecutionStepType.Tool && invocationCount > 1) {
+                    "x $invocationCount"
                 } else {
                     null
                 },
@@ -430,6 +470,7 @@ private fun CapsuleLabel(
     icon: ImageVector? = null,
     iconTint: Color? = null,
     onClick: (() -> Unit)? = null,
+    trailingText: String? = null,
 ) {
     CapsuleSurface(
         modifier = modifier,
@@ -454,7 +495,20 @@ private fun CapsuleLabel(
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
+                modifier = if (trailingText == null) {
+                    Modifier
+                } else {
+                    Modifier.weight(1f, fill = false)
+                },
             )
+            trailingText?.let { trailing ->
+                Text(
+                    text = trailing,
+                    style = MaterialTheme.typography.labelSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                )
+            }
         }
     }
 }

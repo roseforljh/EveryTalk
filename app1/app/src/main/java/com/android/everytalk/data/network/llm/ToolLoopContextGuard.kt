@@ -12,17 +12,24 @@ internal const val TOOL_CONTEXT_COMPRESSION_STATUS = "正在压缩上下文"
 internal const val TRUNCATED_TOOL_OUTPUT_TEXT = "工具输出已为上下文窗口缩减，关键结论请参考后续回答"
 
 private const val MIN_RETAINED_TOOL_OUTPUT_TOKENS = 64L
+// ponytail: 固定硬预算防止兼容服务上报错误上下文规格；以后接入统一 tokenizer 时可替换估算器。
+private const val MAX_RETAINED_TOOL_OUTPUT_TOKENS = 64_000L
 
 internal fun estimateToolLoopJsonTokens(element: JsonElement): Long =
     estimateToolLoopTextTokens(element.toString())
 
 internal fun estimateToolLoopTextTokens(text: String): Long {
-    var ascii = 0L
+    var compactAscii = 0L
+    var structuralAscii = 0L
     var nonAscii = 0L
     text.forEach { character ->
-        if (character.code <= 0x7f) ascii++ else nonAscii++
+        when {
+            character.code > 0x7f -> nonAscii++
+            character.isLetterOrDigit() || character.isWhitespace() -> compactAscii++
+            else -> structuralAscii++
+        }
     }
-    return (ascii + 3L) / 4L + nonAscii
+    return compactAscii.ceilDiv(4L) + structuralAscii.ceilDiv(2L) + nonAscii
 }
 
 internal fun compactOpenAIChatToolHistoryIfNeeded(
@@ -97,11 +104,17 @@ private fun <T : JsonElement> compactHistory(
     isToolOutput: (T) -> Boolean,
     replaceOutput: (T, String) -> T,
 ): Boolean {
-    if (management?.autoCompressionEnabled != true) return false
     val candidates = history.indices.filter { isToolOutput(history[it]) }
     if (candidates.isEmpty()) return false
 
-    var changed = false
+    var changed = compactToolOutputsToBudget(
+        history = history,
+        candidates = candidates,
+        maxTokens = MAX_RETAINED_TOOL_OUTPUT_TOKENS,
+        replaceOutput = replaceOutput,
+    )
+    if (management?.autoCompressionEnabled != true) return changed
+
     val newestIndex = candidates.last()
     val measured = usage?.totalTokens
         ?: usage?.inputTokens?.let { input -> input + (usage.outputTokens ?: 0L) }
@@ -143,18 +156,69 @@ private fun <T : JsonElement> compactHistory(
     return changed
 }
 
+private fun <T : JsonElement> compactToolOutputsToBudget(
+    history: MutableList<T>,
+    candidates: List<Int>,
+    maxTokens: Long,
+    replaceOutput: (T, String) -> T,
+): Boolean {
+    var retainedTokens = candidates.sumOf { estimateToolLoopJsonTokens(history[it]) }
+    if (retainedTokens <= maxTokens) return false
+
+    var changed = false
+    for (index in candidates.dropLast(1)) {
+        val current = history[index]
+        val replacement = replaceOutput(current, TRUNCATED_TOOL_OUTPUT_TEXT)
+        if (replacement != current) {
+            retainedTokens = (
+                retainedTokens - estimateToolLoopJsonTokens(current) + estimateToolLoopJsonTokens(replacement)
+                ).coerceAtLeast(0L)
+            history[index] = replacement
+            changed = true
+        }
+        if (retainedTokens <= maxTokens) return changed
+    }
+
+    val newestIndex = candidates.last()
+    val newest = history[newestIndex]
+    val newestTokens = estimateToolLoopJsonTokens(newest)
+    val otherTokens = (retainedTokens - newestTokens).coerceAtLeast(0L)
+    val newestBudget = (maxTokens - otherTokens).coerceAtLeast(MIN_RETAINED_TOOL_OUTPUT_TOKENS)
+    val replacement = replaceOutput(
+        newest,
+        truncateToolOutput(newest.toString(), newestBudget),
+    )
+    if (replacement != newest) {
+        history[newestIndex] = replacement
+        changed = true
+    }
+    return changed
+}
+
 internal fun truncateToolOutput(text: String, maxTokens: Long): String {
     if (estimateToolLoopTextTokens(text) <= maxTokens) return text
     val marker = "\n…工具输出已截断…\n"
-    val targetChars = (maxTokens.coerceAtLeast(1L) * 3L)
-        .coerceAtMost(Int.MAX_VALUE.toLong())
-        .toInt()
-    if (targetChars <= marker.length + 2) return TRUNCATED_TOOL_OUTPUT_TEXT
-    val bodyChars = targetChars - marker.length
-    val headChars = bodyChars / 2
-    val tailChars = bodyChars - headChars
-    return text.take(headChars) + marker + text.takeLast(tailChars)
+    if (estimateToolLoopTextTokens(marker) > maxTokens) return TRUNCATED_TOOL_OUTPUT_TEXT
+
+    var low = 0
+    var high = text.length
+    var best = marker
+    while (low <= high) {
+        val bodyChars = low + (high - low) / 2
+        val headChars = bodyChars / 2
+        val candidate = text.take(headChars) + marker + text.takeLast(bodyChars - headChars)
+        if (estimateToolLoopTextTokens(candidate) <= maxTokens) {
+            best = candidate
+            low = bodyChars + 1
+        } else {
+            high = bodyChars - 1
+        }
+    }
+    return best
 }
+
+private fun Long.ceilDiv(divisor: Long): Long =
+    if (this == 0L) 0L else (this + divisor - 1L) / divisor
 
 private fun replaceGeminiFunctionResponses(
     item: JsonObject,
