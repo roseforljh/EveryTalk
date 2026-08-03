@@ -37,6 +37,7 @@ import com.android.everytalk.data.network.ExternalWebSearchProvider
 import com.android.everytalk.data.network.PromptCapabilityCatalog
 import com.android.everytalk.data.network.PromptCachePolicy
 import com.android.everytalk.data.network.AnthropicDirectClient
+import com.android.everytalk.data.network.MAX_ATTACHMENT_PAGE_CHARS
 import com.android.everytalk.data.network.buildDirectMultimodalRequest
 import com.android.everytalk.data.network.isOfficialAnthropicMessagesAddress
 import com.android.everytalk.data.network.isOfficialOpenAIResponsesAddress
@@ -520,7 +521,15 @@ internal fun MessageSender.sendMessageInternal(
                     if (effectiveToolsWithCurrentTime.size != effectiveTools.size) {
                         Log.d("MessageSender", "注入内建当前时间工具")
                     }
-                    effectiveToolsWithCurrentTime.ifEmpty { null }
+                    val hasGenericAttachments = attachmentsForApiClient.any {
+                        it is SelectedMediaItem.GenericFile
+                    } || historyUiMessages.any { message ->
+                        message.attachments.any { it is SelectedMediaItem.GenericFile }
+                    }
+                    appendBuiltInReadAttachmentTool(
+                        tools = effectiveToolsWithCurrentTime,
+                        enabled = hasGenericAttachments,
+                    ).ifEmpty { null }
                 })
 
                 val tokenLimits = resolvedModelTokenLimits(
@@ -599,6 +608,27 @@ internal fun MessageSender.sendMessageInternal(
                 }
 
                 val finalCompressionApplication = try {
+                    val genericAttachmentCount = attachmentsForApiClient.count {
+                        it is SelectedMediaItem.GenericFile
+                    }
+                    val attachmentCharBudget = if (genericAttachmentCount == 0) {
+                        MAX_ATTACHMENT_PAGE_CHARS
+                    } else {
+                        val attachmentInputBudget = tokenLimits.maxContextTokens.toLong() -
+                            tokenLimits.maxOutputTokens.toLong()
+                        val usedBeforeAttachments = calibratedInputTokens(
+                            RequestTokenEstimator.estimate(
+                                apiMessagesForBackend,
+                                requestTools,
+                                additionalContextTokens = additionalContextTokens,
+                            ),
+                            inputTokenCalibration.coerceAtLeast(0L),
+                        )
+                        ((attachmentInputBudget - usedBeforeAttachments - 256L * genericAttachmentCount)
+                            .coerceAtLeast(1L) / genericAttachmentCount)
+                            .coerceAtMost(MAX_ATTACHMENT_PAGE_CHARS.toLong())
+                            .toInt()
+                    }
                     val messagesWithCurrentAttachments = if (isImageGeneration || attachmentsForApiClient.isEmpty()) {
                         apiMessagesForBackend
                     } else {
@@ -613,7 +643,7 @@ internal fun MessageSender.sendMessageInternal(
                             ),
                             attachments = attachmentsForApiClient,
                             context = application,
-                            extractDocumentsForContextControl = currentConfig.modelParameters.autoContextCompressionEnabled,
+                            maxDocumentCharsPerAttachment = attachmentCharBudget,
                         ).messages
                     }
                     val messagesForContextControl = nativeThroughMessageId?.let { throughMessageId ->

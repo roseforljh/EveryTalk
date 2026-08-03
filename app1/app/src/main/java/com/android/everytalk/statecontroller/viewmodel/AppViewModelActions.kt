@@ -82,6 +82,7 @@ import com.android.everytalk.data.mcp.McpServerConfig
 import com.android.everytalk.data.mcp.McpServerState
 import com.android.everytalk.data.mcp.McpStatus
 import com.android.everytalk.data.network.GeminiDirectClient
+import com.android.everytalk.data.network.AttachmentToolExecutor
 import com.android.everytalk.data.network.ExternalWebSearchProvider
 import com.android.everytalk.data.network.ExternalWebSearchProviderConfig
 import com.android.everytalk.data.network.ExternalWebSearchService
@@ -196,6 +197,19 @@ import java.util.TimeZone
             }
             mcpManager.callTool(webFetchTool.toolName, mcpArgs)
         }
+    }
+
+    internal fun AppViewModel.buildLocalAttachmentExecutor(): suspend (JsonObject) -> JsonElement = { arguments ->
+        val attachments = withContext(Dispatchers.Main.immediate) {
+            stateHolder.messages
+                .flatMap(Message::attachments)
+                .filterIsInstance<SelectedMediaItem.GenericFile>()
+        }
+        AttachmentToolExecutor.execute(
+            context = getApplication(),
+            attachments = attachments,
+            arguments = arguments,
+        )
     }
 
     internal fun AppViewModel.getStreamingContent(messageId: String): StateFlow<String> {

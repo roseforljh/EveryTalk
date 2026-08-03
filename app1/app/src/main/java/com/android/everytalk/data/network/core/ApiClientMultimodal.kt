@@ -8,6 +8,7 @@ import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.ImageGenerationResponse
 import com.android.everytalk.data.DataClass.GitHubRelease
 import com.android.everytalk.models.SelectedMediaItem
+import com.android.everytalk.models.toAttachmentContextParts
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.plugins.*
@@ -40,7 +41,7 @@ internal suspend fun buildDirectMultimodalRequest(
     request: ChatRequest,
     attachments: List<com.android.everytalk.models.SelectedMediaItem>,
     context: Context,
-    extractDocumentsForContextControl: Boolean = false,
+    maxDocumentCharsPerAttachment: Int = MAX_ATTACHMENT_PAGE_CHARS,
 ): ChatRequest {
     val inlineParts = mutableListOf<com.android.everytalk.data.DataClass.ApiContentPart.InlineData>()
     val documentTexts = mutableListOf<String>()
@@ -103,7 +104,7 @@ internal suspend fun buildDirectMultimodalRequest(
                     val isGemini = request.model.contains("gemini", ignoreCase = true)
                     val isPdf = mime == "application/pdf"
 
-                    if (isQwen && !extractDocumentsForContextControl) {
+                    if (isQwen) {
                         val fileName = item.displayName
                         // 读取文件字节并转为 Base64，以便 OpenAIDirectClient 上传
                         val bytes = readInlineAttachmentBytes(context, item.uri, fileName)
@@ -116,8 +117,9 @@ internal suspend fun buildDirectMultimodalRequest(
                                     mimeType = "file_upload_marker|$mime|$fileName" // 使用特殊 mimeType 标记，携带文件名
                                 )
                             )
+                            documentTexts.addAll(item.toAttachmentContextParts())
                         }
-                    } else if (isGemini && isPdf && !extractDocumentsForContextControl) {
+                    } else if (isGemini && isPdf) {
                         // Gemini 原生支持 PDF，直接通过 inlineData 传递
                         val bytes = readInlineAttachmentBytes(context, item.uri, item.displayName)
 
@@ -129,12 +131,26 @@ internal suspend fun buildDirectMultimodalRequest(
                                     mimeType = mime
                                 )
                             )
+                            documentTexts.addAll(item.toAttachmentContextParts())
                         }
                     } else {
-                        val text = DocumentProcessor.extractText(context, item.uri, mime)
-                        if (text.isNullOrBlank()) throw IOException("文件 ${item.displayName} 未提取到可用文本")
-                        val fileName = item.displayName
-                        documentTexts.add("--- Begin of document: $fileName ---\n$text\n--- End of document ---")
+                        val page = DocumentProcessor.extractTextPage(
+                            context = context,
+                            uri = item.uri,
+                            mimeType = mime,
+                            offsetChars = 0,
+                            maxOutputChars = maxDocumentCharsPerAttachment.coerceAtLeast(1),
+                        )
+                        if (page == null || page.content.isBlank()) {
+                            throw IOException("文件 ${item.displayName} 未提取到可用文本")
+                        }
+                        documentTexts.addAll(
+                            item.toAttachmentContextParts(
+                                content = page.content,
+                                nextOffset = page.nextOffset,
+                                contentComplete = !page.truncated,
+                            )
+                        )
                     }
                 }
             }
@@ -148,11 +164,18 @@ internal suspend fun buildDirectMultimodalRequest(
     if (lastUserIdx < 0) return request
 
     val lastMsg = msgs[lastUserIdx]
-    
-    // 构造文档文本部分
-    val documentContentParts = documentTexts.map { 
-        com.android.everytalk.data.DataClass.ApiContentPart.Text(it) 
+
+    val existingTextParts = when (lastMsg) {
+        is com.android.everytalk.data.DataClass.PartsApiMessage -> lastMsg.parts
+            .filterIsInstance<com.android.everytalk.data.DataClass.ApiContentPart.Text>()
+            .mapTo(mutableSetOf()) { it.text }
+        is com.android.everytalk.data.DataClass.SimpleTextApiMessage -> mutableSetOf(lastMsg.content)
     }
+
+    // 构造文档文本部分
+    val documentContentParts = documentTexts.distinct()
+        .filterNot(existingTextParts::contains)
+        .map { com.android.everytalk.data.DataClass.ApiContentPart.Text(it) }
 
     val newParts = when (lastMsg) {
         is com.android.everytalk.data.DataClass.PartsApiMessage -> {

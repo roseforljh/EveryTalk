@@ -541,6 +541,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 updateStatus = updateStatus,
                 mcpWebFetchFallback = buildMcpWebFetchFallback(),
                 localWebSearchExecutor = buildLocalWebSearchExecutor(),
+                localAttachmentExecutor = buildLocalAttachmentExecutor(),
                 fallbackExecutor = { fallbackToolName, fallbackArguments ->
                     mcpManager.callTool(fallbackToolName, fallbackArguments)
                 }
@@ -553,6 +554,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 updateStatus = updateStatus,
                 mcpWebFetchFallback = buildMcpWebFetchFallback(),
                 localWebSearchExecutor = buildLocalWebSearchExecutor(),
+                localAttachmentExecutor = buildLocalAttachmentExecutor(),
                 fallbackExecutor = { fallbackToolName, fallbackArguments ->
                     mcpManager.callTool(fallbackToolName, fallbackArguments)
                 }
@@ -565,6 +567,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 updateStatus = updateStatus,
                 mcpWebFetchFallback = buildMcpWebFetchFallback(),
                 localWebSearchExecutor = buildLocalWebSearchExecutor(),
+                localAttachmentExecutor = buildLocalAttachmentExecutor(),
                 fallbackExecutor = { fallbackToolName, fallbackArguments ->
                     mcpManager.callTool(fallbackToolName, fallbackArguments)
                 }
@@ -577,6 +580,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 updateStatus = updateStatus,
                 mcpWebFetchFallback = buildMcpWebFetchFallback(),
                 localWebSearchExecutor = buildLocalWebSearchExecutor(),
+                localAttachmentExecutor = buildLocalAttachmentExecutor(),
                 fallbackExecutor = { fallbackToolName, fallbackArguments ->
                     mcpManager.callTool(fallbackToolName, fallbackArguments)
                 }

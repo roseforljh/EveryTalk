@@ -56,18 +56,34 @@ object DocumentProcessor {
         context: Context,
         uri: Uri,
         mimeType: String?
-    ): String? {
+    ): String? = extractTextPage(
+        context = context,
+        uri = uri,
+        mimeType = mimeType,
+        offsetChars = 0,
+        maxOutputChars = MAX_OUTPUT_CHARS,
+    )?.content
+
+    internal suspend fun extractTextPage(
+        context: Context,
+        uri: Uri,
+        mimeType: String?,
+        offsetChars: Long = 0,
+        maxOutputChars: Int = MAX_OUTPUT_CHARS,
+    ): DocumentTextPage? {
+        require(offsetChars >= 0L) { "offsetChars 不能为负数" }
+        require(maxOutputChars > 0) { "maxOutputChars 必须大于 0" }
         val effectiveMime = mimeType?.lowercase() ?: "application/octet-stream"
-        
+
         Log.i(TAG, "尝试提取文档内容: $uri, mime=$effectiveMime")
 
         return withContext(Dispatchers.IO) {
             try {
                 when {
-                    isTextMime(effectiveMime) -> extractFromPlainText(context, uri)
-                    effectiveMime == "application/pdf" -> extractFromPdf(context, uri)
-                    effectiveMime.contains("wordprocessingml") -> extractFromDocx(context, uri)
-                    effectiveMime.contains("spreadsheetml") -> extractFromExcel(context, uri)
+                    isTextMime(effectiveMime) -> extractFromPlainTextPage(context, uri, offsetChars, maxOutputChars)
+                    effectiveMime == "application/pdf" -> extractFromPdfPage(context, uri, offsetChars, maxOutputChars)
+                    effectiveMime.contains("wordprocessingml") -> extractFromDocxPage(context, uri, offsetChars, maxOutputChars)
+                    effectiveMime.contains("spreadsheetml") -> extractFromExcelPage(context, uri, offsetChars, maxOutputChars)
                     else -> {
                         Log.w(TAG, "不支持的文档类型: $effectiveMime")
                         throw IOException("不支持的文档类型: $effectiveMime")
@@ -82,13 +98,18 @@ object DocumentProcessor {
         }
     }
 
-    private fun isTextMime(mime: String): Boolean {
+    internal fun isTextMime(mime: String): Boolean {
         return mime.startsWith("text/") || TEXT_MIME_TYPES.contains(mime)
     }
 
-    private suspend fun extractFromPlainText(context: Context, uri: Uri): String? {
+    private suspend fun extractFromPlainTextPage(
+        context: Context,
+        uri: Uri,
+        offsetChars: Long,
+        maxOutputChars: Int,
+    ): DocumentTextPage? {
         return context.contentResolver.openInputStream(uri)?.use { inputStream ->
-            extractPlainText(inputStream)
+            extractPlainTextPage(inputStream, offsetChars, MAX_INPUT_BYTES, maxOutputChars)
         }
     }
 
@@ -96,21 +117,35 @@ object DocumentProcessor {
         inputStream: InputStream,
         maxInputBytes: Long = MAX_INPUT_BYTES,
         maxOutputChars: Int = MAX_OUTPUT_CHARS,
-    ): String {
-        val result = StringBuilder(minOf(maxOutputChars, 8192))
+    ): String = extractPlainTextPage(
+        inputStream = inputStream,
+        offsetChars = 0,
+        maxInputBytes = maxInputBytes,
+        maxOutputChars = maxOutputChars,
+    ).content
+
+    internal suspend fun extractPlainTextPage(
+        inputStream: InputStream,
+        offsetChars: Long,
+        maxInputBytes: Long = MAX_INPUT_BYTES,
+        maxOutputChars: Int = MAX_OUTPUT_CHARS,
+    ): DocumentTextPage {
+        require(offsetChars >= 0L) { "offsetChars 不能为负数" }
+        require(maxOutputChars > 0) { "maxOutputChars 必须大于 0" }
+        val writer = PagedTextWriter(offsetChars, maxOutputChars)
         InputStreamReader(BoundedInputStream(inputStream, maxInputBytes), Charsets.UTF_8).use { reader ->
             val buffer = CharArray(4096)
-            while (true) {
-                currentCoroutineContext().ensureActive()
-                val read = reader.read(buffer)
-                if (read < 0) break
-                val remaining = maxOutputChars - result.length
-                if (remaining <= 0) throw OutputLimitExceededException(maxOutputChars)
-                result.append(buffer, 0, minOf(read, remaining))
-                if (read > remaining) throw OutputLimitExceededException(maxOutputChars)
+            try {
+                while (true) {
+                    currentCoroutineContext().ensureActive()
+                    val read = reader.read(buffer)
+                    if (read < 0) break
+                    writer.write(buffer, 0, read)
+                }
+            } catch (_: PageFilledException) {
             }
         }
-        return result.toString()
+        return writer.toPage()
     }
 
     private fun initPdfBox(context: Context) {
@@ -126,31 +161,60 @@ object DocumentProcessor {
         }
     }
 
-    private suspend fun extractFromPdf(context: Context, uri: Uri): String? {
+    private suspend fun extractFromPdfPage(
+        context: Context,
+        uri: Uri,
+        offsetChars: Long,
+        maxOutputChars: Int,
+    ): DocumentTextPage? {
         initPdfBox(context)
         return context.contentResolver.openInputStream(uri)?.use { inputStream ->
             PDDocument.load(BoundedInputStream(inputStream, MAX_INPUT_BYTES)).use { document ->
                 currentCoroutineContext().ensureActive()
-                val writer = LimitedStringWriter(MAX_OUTPUT_CHARS)
-                PDFTextStripper().apply { sortByPosition = true }.writeText(document, writer)
-                if (writer.outputLimitExceeded) throw OutputLimitExceededException(MAX_OUTPUT_CHARS)
+                val writer = PagedTextWriter(offsetChars, maxOutputChars)
+                try {
+                    PDFTextStripper().apply { sortByPosition = true }.writeText(document, writer)
+                } catch (_: PageFilledException) {
+                }
                 currentCoroutineContext().ensureActive()
-                writer.toString()
+                writer.toPage()
             }
         }
     }
 
-    private suspend fun extractFromDocx(context: Context, uri: Uri): String? {
-        // DOCX is a ZIP containing word/document.xml
-        return extractXmlTextFromZip(context, uri, "word/document.xml")
-    }
+    private suspend fun extractFromDocxPage(
+        context: Context,
+        uri: Uri,
+        offsetChars: Long,
+        maxOutputChars: Int,
+    ): DocumentTextPage? = extractXmlTextFromZipPage(
+        context,
+        uri,
+        "word/document.xml",
+        offsetChars,
+        maxOutputChars,
+    )
 
-    private suspend fun extractFromExcel(context: Context, uri: Uri): String? {
-        // XLSX is a ZIP. Text is usually in xl/sharedStrings.xml
-        return extractXmlTextFromZip(context, uri, "xl/sharedStrings.xml")
-    }
+    private suspend fun extractFromExcelPage(
+        context: Context,
+        uri: Uri,
+        offsetChars: Long,
+        maxOutputChars: Int,
+    ): DocumentTextPage? = extractXmlTextFromZipPage(
+        context,
+        uri,
+        "xl/sharedStrings.xml",
+        offsetChars,
+        maxOutputChars,
+    )
 
-    private suspend fun extractXmlTextFromZip(context: Context, uri: Uri, targetEntry: String): String? {
+    private suspend fun extractXmlTextFromZipPage(
+        context: Context,
+        uri: Uri,
+        targetEntry: String,
+        offsetChars: Long,
+        maxOutputChars: Int,
+    ): DocumentTextPage? {
         context.contentResolver.openInputStream(uri)?.use { inputStream ->
             ZipInputStream(BoundedInputStream(inputStream, MAX_INPUT_BYTES)).use { zip ->
                 var entry = zip.nextEntry
@@ -161,7 +225,11 @@ object DocumentProcessor {
                     if (entryCount > MAX_ZIP_ENTRIES) throw IOException("ZIP 条目数量超过上限")
                     if (entry.name == targetEntry) {
                         if (entry.size > MAX_ZIP_ENTRY_BYTES) throw IOException("ZIP 条目超过大小上限")
-                        return parseXmlText(BoundedInputStream(zip, MAX_ZIP_ENTRY_BYTES))
+                        return parseXmlTextPage(
+                            BoundedInputStream(zip, MAX_ZIP_ENTRY_BYTES),
+                            offsetChars,
+                            maxOutputChars,
+                        )
                     }
                     entry = zip.nextEntry
                 }
@@ -170,33 +238,43 @@ object DocumentProcessor {
         return null
     }
 
-    private suspend fun parseXmlText(inputStream: InputStream): String {
-        val sb = StringBuilder()
+    private suspend fun parseXmlTextPage(
+        inputStream: InputStream,
+        offsetChars: Long,
+        maxOutputChars: Int,
+    ): DocumentTextPage {
+        val writer = PagedTextWriter(offsetChars, maxOutputChars)
         val factory = XmlPullParserFactory.newInstance()
         factory.isNamespaceAware = true
         val xpp = factory.newPullParser()
         xpp.setInput(inputStream, "UTF-8")
 
-        var eventType = xpp.eventType
-        while (eventType != XmlPullParser.END_DOCUMENT && sb.length < MAX_OUTPUT_CHARS) {
-            currentCoroutineContext().ensureActive()
-            if (eventType == XmlPullParser.TEXT) {
-                val text = xpp.text
-                if (!text.isNullOrBlank()) {
-                    val remaining = MAX_OUTPUT_CHARS - sb.length
-                    sb.append(text, 0, minOf(text.length, remaining))
-                    if (sb.length < MAX_OUTPUT_CHARS) sb.append(' ')
+        try {
+            var eventType = xpp.eventType
+            while (eventType != XmlPullParser.END_DOCUMENT) {
+                currentCoroutineContext().ensureActive()
+                if (eventType == XmlPullParser.TEXT) {
+                    val text = xpp.text
+                    if (!text.isNullOrBlank()) {
+                        writer.write(text)
+                        writer.write(" ")
+                    }
                 }
+                eventType = xpp.next()
             }
-            eventType = xpp.next()
+        } catch (_: PageFilledException) {
         }
-        if (eventType != XmlPullParser.END_DOCUMENT) throw OutputLimitExceededException(MAX_OUTPUT_CHARS)
-        return sb.toString().trim()
+        return writer.toPage()
     }
 
     internal class DocumentExtractionException(message: String, cause: Throwable) : IOException(message, cause)
     internal class InputLimitExceededException(maxBytes: Long) : IOException("文档超过 ${maxBytes} 字节上限")
-    internal class OutputLimitExceededException(maxChars: Int) : IOException("文档文本超过 ${maxChars} 字符本地处理上限")
+
+    internal data class DocumentTextPage(
+        val content: String,
+        val nextOffset: Long?,
+        val truncated: Boolean,
+    )
 
     internal class BoundedInputStream(
         input: InputStream,
@@ -233,19 +311,37 @@ object DocumentProcessor {
         }
     }
 
-    private class LimitedStringWriter(private val maxChars: Int) : Writer() {
+    private class PageFilledException : IOException()
+
+    private class PagedTextWriter(
+        private val offsetChars: Long,
+        private val maxChars: Int,
+    ) : Writer() {
         private val content = StringBuilder(minOf(maxChars, 8192))
-        var outputLimitExceeded: Boolean = false
-            private set
+        private var position = 0L
+        private var truncated = false
 
         override fun write(buffer: CharArray, offset: Int, length: Int) {
-            val writable = minOf(length, maxChars - content.length)
-            if (writable > 0) content.append(buffer, offset, writable)
-            if (writable < length) outputLimitExceeded = true
+            for (index in offset until offset + length) {
+                val character = buffer[index]
+                if (position++ < offsetChars) continue
+                val completesSurrogate = content.lastOrNull()?.isHighSurrogate() == true && character.isLowSurrogate()
+                if (content.length < maxChars || completesSurrogate) {
+                    content.append(character)
+                } else {
+                    truncated = true
+                    throw PageFilledException()
+                }
+            }
         }
 
         override fun flush() = Unit
         override fun close() = Unit
-        override fun toString(): String = content.toString()
+
+        fun toPage(): DocumentTextPage = DocumentTextPage(
+            content = content.toString(),
+            nextOffset = if (truncated) offsetChars + content.length else null,
+            truncated = truncated,
+        )
     }
 }

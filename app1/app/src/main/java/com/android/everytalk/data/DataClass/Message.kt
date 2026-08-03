@@ -2,6 +2,7 @@ package com.android.everytalk.data.DataClass
 import android.content.Context
 import android.net.Uri
 import com.android.everytalk.models.SelectedMediaItem
+import com.android.everytalk.models.toAttachmentContextParts
 import com.android.everytalk.ui.components.MarkdownPart
 import kotlinx.serialization.Serializable
 import java.io.File
@@ -114,7 +115,7 @@ data class Message(
                         }
                     }
                     is SelectedMediaItem.GenericFile -> {
-                        // 处理通用文件，但这里不转换为InlineData，由ApiClient处理
+                        parts.addAll(mediaItem.toAttachmentContextParts().map { ApiContentPart.Text(it) })
                     }
                     is SelectedMediaItem.Audio -> {
                         // 音频数据已经是base64格式
@@ -154,7 +155,7 @@ data class Message(
                         }
                     }
                     is SelectedMediaItem.GenericFile -> {
-                        // 处理通用文件，但这里不转换为InlineData，由ApiClient处理
+                        parts.addAll(mediaItem.toAttachmentContextParts().map { ApiContentPart.Text(it) })
                     }
                     is SelectedMediaItem.Audio -> {
                         // 音频数据已经是base64格式

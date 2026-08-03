@@ -25,6 +25,7 @@ import com.android.everytalk.data.DataClass.ImageGenRequest
 import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.network.WebSearchSupport
 import com.android.everytalk.data.network.ExternalWebSearchProvider
+import com.android.everytalk.data.network.MAX_ATTACHMENT_PAGE_CHARS
 import com.android.everytalk.statecontroller.mcp.dispatch.McpToolCandidate
 import com.android.everytalk.statecontroller.mcp.dispatch.QueryIntent
 import com.android.everytalk.statecontroller.mcp.dispatch.classifyMcpIntent
@@ -55,6 +56,7 @@ import kotlinx.serialization.json.longOrNull
 internal const val BUILT_IN_WEBFETCH_TOOL_NAME = "webfetch"
 internal const val BUILT_IN_CURRENT_TIME_TOOL_NAME = "get_current_datetime"
 internal const val BUILT_IN_WEB_SEARCH_TOOL_NAME = "web_search"
+internal const val BUILT_IN_READ_ATTACHMENT_TOOL_NAME = "read_attachment"
 
 internal val MCP_SEARCH_TOOL_NAME_KEYWORDS = listOf(
     "search", "web", "exa", "news", "query", "browser", "crawl", "scrape", "fetch"
@@ -208,6 +210,46 @@ internal fun prepareMcpDispatch(
         intent = intent,
         tools = tools,
     )
+}
+
+internal fun builtInReadAttachmentToolDefinition(): Map<String, Any> = mapOf(
+    "type" to "function",
+    "function" to mapOf(
+        "name" to BUILT_IN_READ_ATTACHMENT_TOOL_NAME,
+        "description" to "读取当前会话中的文本附件。每次只读取一页，禁止并行读取多页；内容被截断时，使用返回的 next_offset 继续读取。",
+        "parameters" to mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "attachment_id" to mapOf(
+                    "type" to "string",
+                    "description" to "附件清单中的 attachment_id。",
+                ),
+                "offset" to mapOf(
+                    "type" to "integer",
+                    "description" to "从返回的 next_offset 继续读取，首次读取传 0。",
+                    "minimum" to 0,
+                ),
+                "max_chars" to mapOf(
+                    "type" to "integer",
+                    "description" to "本页最多返回字符数。",
+                    "minimum" to 1,
+                    "maximum" to MAX_ATTACHMENT_PAGE_CHARS,
+                ),
+            ),
+            "required" to listOf("attachment_id"),
+        ),
+    ),
+)
+
+internal fun appendBuiltInReadAttachmentTool(
+    tools: List<Map<String, Any>>,
+    enabled: Boolean,
+): List<Map<String, Any>> {
+    if (!enabled || tools.any {
+            extractToolName(it)?.equals(BUILT_IN_READ_ATTACHMENT_TOOL_NAME, ignoreCase = true) == true
+        }
+    ) return tools
+    return tools + builtInReadAttachmentToolDefinition()
 }
 
 internal fun addOrReplaceRegeneratedUserMessage(

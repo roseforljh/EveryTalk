@@ -155,6 +155,7 @@ internal suspend fun executeSharedToolCall(
     localWebFetchExecutor: suspend (JsonObject) -> JsonElement = { WebFetchToolExecutor.execute(it) },
     mcpWebFetchFallback: (suspend (JsonObject) -> JsonElement)? = null,
     localWebSearchExecutor: (suspend (String) -> JsonElement)? = null,
+    localAttachmentExecutor: (suspend (JsonObject) -> JsonElement)? = null,
     localCurrentTimeExecutor: suspend () -> JsonElement = {
         val now = Date()
         val calendar = Calendar.getInstance()
@@ -211,6 +212,14 @@ internal suspend fun executeSharedToolCall(
     if (toolName.equals(BUILT_IN_CURRENT_TIME_TOOL_NAME, ignoreCase = true)) {
         updateStatus("获取当前时间")
         val result = localCurrentTimeExecutor()
+        updateStatus(null)
+        return result
+    }
+    if (toolName.equals(BUILT_IN_READ_ATTACHMENT_TOOL_NAME, ignoreCase = true)) {
+        updateStatus("读取附件")
+        val result = localAttachmentExecutor?.invoke(arguments) ?: buildJsonObject {
+            put("error", JsonPrimitive("附件读取器不可用"))
+        }
         updateStatus(null)
         return result
     }
