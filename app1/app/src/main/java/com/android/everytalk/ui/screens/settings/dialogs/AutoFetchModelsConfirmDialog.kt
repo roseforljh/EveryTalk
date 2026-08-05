@@ -54,10 +54,7 @@ fun AutoFetchModelsConfirmDialog(
         },
         confirmButton = {
             Button(
-                onClick = {
-                    onConfirmAutoFetch()
-                    onDismiss()
-                },
+                onClick = onConfirmAutoFetch,
                 shape = RoundedCornerShape(24.dp),
                 colors = ButtonDefaults.buttonColors(
                     containerColor = contentColor,
@@ -69,10 +66,7 @@ fun AutoFetchModelsConfirmDialog(
         },
         dismissButton = {
             OutlinedButton(
-                onClick = {
-                    onManualInput()
-                    onDismiss()
-                },
+                onClick = onManualInput,
                 shape = RoundedCornerShape(24.dp),
                 colors = ButtonDefaults.outlinedButtonColors(
                     containerColor = Color.Transparent,
