@@ -53,6 +53,22 @@ class SystemPromptInjectorRenderSafetyTest {
     }
 
     @Test
+    fun `stable prompt should preserve list boundary and nesting contracts`() {
+        val zhPrompt = SystemPromptInjector.getSystemPrompt("zh-CN")
+        val enPrompt = SystemPromptInjector.getSystemPrompt("en")
+
+        assertTrue(zhPrompt.contains("每个列表项只使用一个行首标记"))
+        assertTrue(zhPrompt.contains("禁止在同一物理行继续写第二个列表标记"))
+        assertTrue(zhPrompt.contains("缩进到父项正文起始列"))
+        assertTrue(zhPrompt.contains("改用同级列表或普通段落"))
+
+        assertTrue(enPrompt.contains("one leading list marker per physical line"))
+        assertTrue(enPrompt.contains("never append another list marker later on the same line"))
+        assertTrue(enPrompt.contains("parent item's content column"))
+        assertTrue(enPrompt.contains("use sibling items or prose"))
+    }
+
+    @Test
     fun `stable prompt should stay independent from current question`() {
         val mathMessages = listOf(SimpleTextApiMessage(role = "user", content = "证明矩阵公式"))
         val codeMessages = listOf(SimpleTextApiMessage(role = "user", content = "修复 Kotlin 崩溃"))
