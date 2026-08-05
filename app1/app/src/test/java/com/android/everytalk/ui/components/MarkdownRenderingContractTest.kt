@@ -269,6 +269,66 @@ class MarkdownRenderingContractTest {
     }
 
     @Test
+    fun `正文冒号粘连有序列表时首项与后续项保持同一列表`() {
+        val source = """
+            比较适合：1. **企业自查**
+            排查自己公司的服务器、代码仓库中是否暴露了 AI 服务或密钥。
+
+            2. **授权的安全测试**
+               在获得明确授权的范围内，发现 AI API、代理服务、管理面板等暴露资产。
+
+            3. **泄露凭证治理**
+               对 GitHub 等公开来源中出现的疑似 API Key 进行识别、验证和归档。
+
+            4. **AI 资产管理**
+               统一记录不同 AI 服务的密钥状态、余额和历史扫描结果。
+        """.trimIndent()
+
+        val prepared = StreamBlockParser.prepareMessage(
+            content = source,
+            messageId = "embedded-ordered-list",
+            contentVersion = 52L,
+        )
+        val state = parseMarkdown(
+            prepared.markdown,
+            lookupLinks = false,
+            flavour = EveryTalkMarkdownFlavourDescriptor,
+        ) as State.Success
+        val orderedList = state.node.children.single {
+            it.type == MarkdownElementTypes.ORDERED_LIST
+        }
+
+        assertTrue(prepared.markdown.startsWith("比较适合：\n\n1. **企业自查**"))
+        assertEquals(
+            4,
+            orderedList.children.count { it.type == MarkdownElementTypes.LIST_ITEM },
+        )
+    }
+
+    @Test
+    fun `正文粘连列表支持全部首项标记且不误判普通编号`() {
+        listOf("-", "*", "+", "1.", "1)").forEachIndexed { index, marker ->
+            val source = "说明： $marker 项目"
+            val prepared = StreamBlockParser.prepareMessage(
+                content = source,
+                messageId = "embedded-list-marker-$index",
+                contentVersion = 53L + index,
+            )
+
+            assertEquals("说明：\n\n$marker 项目", prepared.markdown)
+        }
+
+        val prose = "发布年份：2026. 版本保持支持。"
+        val preparedProse = StreamBlockParser.prepareMessage(
+            content = prose,
+            messageId = "ordinary-numbered-prose",
+            contentVersion = 58L,
+        )
+
+        assertEquals(prose, preparedProse.markdown)
+    }
+
+    @Test
     fun `正文粘连表头时只修复表格边界并交给 GFM 表格解析`() {
         val source = """
             特征：| 财务指标 | 2024 财年 | 2025 财年 | 年同比变化 |

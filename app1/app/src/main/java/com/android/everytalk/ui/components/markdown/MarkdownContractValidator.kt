@@ -23,7 +23,7 @@ internal object MarkdownContractValidator {
             val line = lines[index]
             val protectedLine = fenceTracker.isFenceLine(line)
             val nextLine = lines.getOrNull(index + 1)
-            val listMarker = findEmbeddedUnorderedListMarker(line) ?: -1
+            val listMarker = findEmbeddedListMarker(line) ?: -1
             val firstPipe = findFirstTablePipe(line) ?: -1
             val prefix = if (firstPipe > 0) line.substring(0, firstPipe) else ""
             val tablePart = if (firstPipe >= 0) line.substring(firstPipe).trimStart() else ""
@@ -194,23 +194,40 @@ internal object MarkdownContractValidator {
         return backslashes % 2 == 1
     }
 
-    private fun findEmbeddedUnorderedListMarker(line: String): Int? {
-        var inInlineCode = false
-        for (index in 1 until line.length - 2) {
+    private fun findEmbeddedListMarker(line: String): Int? {
+        var index = 1
+        while (index < line.length) {
             if (line[index] == '`') {
-                inInlineCode = !inInlineCode
+                val runLength = countRun(line, index, '`')
+                index = findInlineCodeClose(line, index + runLength, runLength) ?: return null
                 continue
             }
-            if (!inInlineCode &&
-                (line[index - 1] == '：' || line[index - 1] == ':') &&
-                line[index] == '-' &&
-                line[index + 1].isWhitespace() &&
-                line.substring(index + 2).isNotBlank()
+
+            val markerEnd = markdownListMarkerEnd(line, index)
+            if (
+                markerEnd != null &&
+                hasColonBeforeMarker(line, index) &&
+                isSafeEmbeddedListStart(line, index) &&
+                line.substring(markerEnd).isNotBlank()
             ) {
                 return index
             }
+            index++
         }
         return null
+    }
+
+    private fun hasColonBeforeMarker(line: String, markerStart: Int): Boolean {
+        var cursor = markerStart - 1
+        while (cursor >= 0 && (line[cursor] == ' ' || line[cursor] == '\t')) cursor--
+        return cursor >= 0 && (line[cursor] == '：' || line[cursor] == ':')
+    }
+
+    private fun isSafeEmbeddedListStart(line: String, markerStart: Int): Boolean {
+        if (!line[markerStart].isDigit()) return true
+        // CommonMark 只允许从 1 开始的有序列表打断正文，同时避免把年份与版本号拆成列表。
+        val delimiter = line.getOrNull(markerStart + 1)
+        return line[markerStart] == '1' && (delimiter == '.' || delimiter == ')')
     }
 
     private fun isPotentialTableRow(line: String): Boolean {
