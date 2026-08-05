@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.24.0](https://github.com/roseforljh/EveryTalk/compare/v1.23.0...v1.24.0) (2026-08-05)
+
+
+### Features
+
+* 工具输出硬预算截断与时间线调用计数 ([9d72ed8](https://github.com/roseforljh/EveryTalk/commit/9d72ed850081906e3721a93aa992755b6d1adee1))
+* 附件读取工具与文档分页提取 ([2a8c720](https://github.com/roseforljh/EveryTalk/commit/2a8c720416ac3eed8a52117ac1ead258abec6241))
+
+
+### Bug Fixes
+
+* 粘连代码围栏边界恢复且不吞并后续内容 ([ec5795a](https://github.com/roseforljh/EveryTalk/commit/ec5795a9748f4d7078254da316cc91887e530b91))
+* 自动获取模型对话框按钮不再触发取消 ([9e51b7d](https://github.com/roseforljh/EveryTalk/commit/9e51b7d199872dae7517bceefc1a6786a412aea4))
+
 ## [1.23.0](https://github.com/roseforljh/EveryTalk/compare/v1.22.0...v1.23.0) (2026-08-02)
 
 
