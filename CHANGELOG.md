@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.24.1](https://github.com/roseforljh/EveryTalk/compare/v1.24.0...v1.24.1) (2026-08-05)
+
+
+### Bug Fixes
+
+* 优化 Markdown 列表输出规则 ([8c2e25d](https://github.com/roseforljh/EveryTalk/commit/8c2e25d4b70f299bb410bd8bfab96eebbf457e84))
+* 修复粘连有序列表解析 ([9f08300](https://github.com/roseforljh/EveryTalk/commit/9f0830076c5805f98ee5b345d2df5184e1c56efa))
+
 ## [1.24.0](https://github.com/roseforljh/EveryTalk/compare/v1.23.0...v1.24.0) (2026-08-05)
 
 
