@@ -20,6 +20,124 @@ import org.junit.Test
 class MarkdownRenderingContractTest {
 
     @Test
+    fun `正文后粘连的代码围栏恢复边界且不吞掉后续Markdown`() {
+        val source = """
+            可以理解成下面这条流水线：```text
+            FOFA / Shodan / GitHub
+                      ↓
+            发现暴露的 AI 服务和疑似 API Key
+            ```
+
+            它支持的技术栈包括：
+
+            - **后端**：Rust、Axum、Tokio、SQLx
+            - **前端**：React、Vite、TailwindCSS
+
+            ## 适合什么场景
+
+            企业自查。
+        """.trimIndent()
+
+        val prepared = StreamBlockParser.prepareMessage(
+            content = source,
+            messageId = "embedded-fence-boundary",
+            contentVersion = 48L,
+        )
+        val state = parseMarkdown(
+            prepared.markdown,
+            lookupLinks = false,
+            flavour = EveryTalkMarkdownFlavourDescriptor,
+        ) as State.Success
+        val codeFences = state.node.children.filter { it.type == MarkdownElementTypes.CODE_FENCE }
+        val codeFenceSource = codeFences.single().let { node ->
+            state.content.substring(node.startOffset, node.endOffset)
+        }
+
+        assertTrue(prepared.markdown.contains("流水线：\n```text"))
+        assertTrue(codeFenceSource.contains("FOFA / Shodan / GitHub"))
+        assertFalse(codeFenceSource.contains("它支持的技术栈包括"))
+        assertTrue(state.node.children.any { it.type == MarkdownElementTypes.UNORDERED_LIST })
+        assertTrue(state.node.children.any { it.type == MarkdownElementTypes.ATX_2 })
+    }
+
+    @Test
+    fun `字面围栏说明不会抢占后续合法代码块`() {
+        val source = """
+            文档中提到了字面标记：```text
+
+            下面才是真实代码块：
+
+            ```kotlin
+            val value = "原样"
+            ```
+        """.trimIndent()
+
+        val prepared = StreamBlockParser.prepareMessage(
+            content = source,
+            messageId = "literal-fence-before-valid-code",
+            contentVersion = 49L,
+        )
+
+        assertEquals(source, prepared.markdown)
+    }
+
+    @Test
+    fun `多组同行围栏按各自标记恢复且公式保持代码原文`() {
+        val source = """
+            第一段：```text
+            ${'$'}x+1${'$'}
+            ```
+
+            中间正文。
+
+            第二段：~~~json
+            {"enabled": true}
+            ~~~
+
+            - 后续列表
+        """.trimIndent()
+
+        val prepared = StreamBlockParser.prepareMessage(
+            content = source,
+            messageId = "multiple-embedded-fences",
+            contentVersion = 50L,
+        )
+        val state = parseMarkdown(
+            prepared.markdown,
+            lookupLinks = false,
+            flavour = EveryTalkMarkdownFlavourDescriptor,
+        ) as State.Success
+
+        assertTrue(prepared.formulas.isEmpty())
+        assertEquals(
+            2,
+            state.node.children.count { it.type == MarkdownElementTypes.CODE_FENCE },
+        )
+        assertTrue(state.node.children.any { it.type == MarkdownElementTypes.UNORDERED_LIST })
+    }
+
+    @Test
+    fun `容器中的字面同行围栏不做高风险跨容器恢复`() {
+        val source = """
+            - 列表中的字面标记：```text
+              内容
+              ```
+
+            > 引用中的字面标记：~~~text
+            > 内容
+            > ~~~
+        """.trimIndent()
+
+        val prepared = StreamBlockParser.prepareMessage(
+            content = source,
+            messageId = "container-literal-fences",
+            contentVersion = 51L,
+        )
+
+        assertEquals(source, prepared.markdown)
+    }
+
+    @Test
     fun `独占加粗小标题与紧邻正文被修复为两个段落`() {
         val source = """
             **1. 红卫兵运动**

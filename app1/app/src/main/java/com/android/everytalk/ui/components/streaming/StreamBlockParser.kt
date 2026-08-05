@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.components.streaming
 
+import com.android.everytalk.ui.components.markdown.MarkdownContractValidator
 import com.android.everytalk.ui.components.markdown.preprocessMarkdownExtensions
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
@@ -327,7 +328,8 @@ object StreamBlockParser {
         contentVersion: Long,
         includePendingMathRaw: Boolean = true,
     ): PreparedMessage {
-        val renderableContent = unwrapRenderableMarkdownFences(content)
+        val fenceRecoveredContent = MarkdownContractValidator.recoverMalformedFenceBoundaries(content)
+        val renderableContent = unwrapRenderableMarkdownFences(fenceRecoveredContent)
         val renderBlocks: List<StreamBlock>
         val renderHasPendingFormula: Boolean
         if (renderableContent == content) {

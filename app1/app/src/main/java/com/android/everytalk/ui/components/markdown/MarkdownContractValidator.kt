@@ -11,7 +11,8 @@ internal object MarkdownContractValidator {
     fun normalize(markdown: String): String {
         if (markdown.isBlank()) return markdown
 
-        val normalizedLineBreaks = markdown.replace("\r\n", "\n")
+        val fenceRecovered = recoverMalformedFenceBoundaries(markdown)
+        val normalizedLineBreaks = fenceRecovered.replace("\r\n", "\n")
         val lines = normalizedLineBreaks.split('\n')
         val fenceTracker = MarkdownFenceTracker()
         val output = ArrayList<String>(lines.size + 2)
@@ -57,7 +58,140 @@ internal object MarkdownContractValidator {
             index++
         }
 
-        return if (changed) output.joinToString("\n") else markdown
+        return if (changed) output.joinToString("\n") else fenceRecovered
+    }
+
+    /**
+     * 模型偶尔把起始围栏粘在引导正文末尾，后续独立围栏会被 GFM 反向识别成未闭合起点。
+     * 仅在简单语言标记能与后续孤立关闭围栏无歧义配对时拆行，遇到其他合法围栏立即放弃恢复。
+     */
+    fun recoverMalformedFenceBoundaries(markdown: String): String {
+        if (markdown.isEmpty() || (!markdown.contains("```") && !markdown.contains("~~~"))) {
+            return markdown
+        }
+
+        val lines = splitSourceLines(markdown)
+        val repairOffsets = IntArray(lines.size) { -1 }
+        val fences = MarkdownFenceTracker()
+        var index = 0
+
+        while (index < lines.size) {
+            val line = lines[index].text
+            if (fences.isFenceLine(line)) {
+                index++
+                continue
+            }
+
+            val opening = findEmbeddedFenceOpening(line)
+            if (opening == null) {
+                index++
+                continue
+            }
+
+            val closingIndex = findUnambiguousFenceClose(lines, index + 1, opening)
+            if (closingIndex < 0) {
+                index++
+                continue
+            }
+
+            repairOffsets[index] = opening.offset
+            index = closingIndex + 1
+        }
+
+        if (repairOffsets.all { it < 0 }) return markdown
+
+        return buildString(markdown.length + lines.size) {
+            lines.forEachIndexed { lineIndex, line ->
+                val repairOffset = repairOffsets[lineIndex]
+                if (repairOffset >= 0) {
+                    append(line.text, 0, repairOffset)
+                    append(line.ending)
+                    append(line.text, repairOffset, line.text.length)
+                } else {
+                    append(line.text)
+                }
+                append(line.ending)
+            }
+        }
+    }
+
+    private data class EmbeddedFenceOpening(
+        val offset: Int,
+        val marker: Char,
+        val length: Int,
+    )
+
+    private fun findEmbeddedFenceOpening(line: String): EmbeddedFenceOpening? {
+        val containerLine = parseMarkdownContainerLine(line, emptyList()) ?: return null
+        if (containerLine.contentStart == null || containerLine.containers.isNotEmpty()) return null
+
+        var cursor = 0
+        while (cursor < line.length) {
+            val marker = line[cursor]
+            if (marker != '`' && marker != '~') {
+                cursor++
+                continue
+            }
+
+            val length = countRun(line, cursor, marker)
+            val prefix = line.substring(0, cursor)
+            val info = line.substring(cursor + length).trim()
+            if (
+                length >= 3 &&
+                prefix.isNotBlank() &&
+                !isEscaped(line, cursor) &&
+                isSimpleFenceInfo(info, prefix)
+            ) {
+                return EmbeddedFenceOpening(offset = cursor, marker = marker, length = length)
+            }
+            cursor += length.coerceAtLeast(1)
+        }
+        return null
+    }
+
+    private fun isSimpleFenceInfo(info: String, prefix: String): Boolean {
+        if (info.isEmpty()) {
+            val prefixEnd = prefix.trimEnd().lastOrNull()
+            return prefixEnd == ':' || prefixEnd == '：'
+        }
+        return info.all { char ->
+            char in 'a'..'z' ||
+                char in 'A'..'Z' ||
+                char in '0'..'9' ||
+                char == '_' ||
+                char == '+' ||
+                char == '-' ||
+                char == '#' ||
+                char == '.'
+        }
+    }
+
+    private fun findUnambiguousFenceClose(
+        lines: List<SourceLine>,
+        startIndex: Int,
+        opening: EmbeddedFenceOpening,
+    ): Int {
+        val marker = FenceMarker(
+            marker = opening.marker,
+            length = opening.length,
+            containers = emptyList(),
+        )
+        for (index in startIndex until lines.size) {
+            val line = lines[index].text
+            if (isFenceClosingLine(line, marker)) return index
+            if (parseFenceOpeningLine(line, emptyList()).marker != null) return -1
+        }
+        return -1
+    }
+
+    private fun isEscaped(line: String, offset: Int): Boolean {
+        var backslashes = 0
+        var cursor = offset - 1
+        while (cursor >= 0 && line[cursor] == '\\') {
+            backslashes++
+            cursor--
+        }
+        return backslashes % 2 == 1
     }
 
     private fun findEmbeddedUnorderedListMarker(line: String): Int? {
