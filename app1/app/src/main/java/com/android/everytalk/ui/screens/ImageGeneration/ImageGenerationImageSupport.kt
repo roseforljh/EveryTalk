@@ -135,6 +135,7 @@ import com.android.everytalk.ui.topanchor.resolveTopAnchorResponseTargetId
 import com.android.everytalk.ui.topanchor.shouldAllowBottomScroll
 import com.android.everytalk.util.storage.CappedByteArrayOutputStream
 import com.android.everytalk.util.storage.readAtMost
+import com.android.everytalk.util.image.ImageHandlingLimits
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
@@ -144,9 +145,9 @@ import coil3.size.Size
 import kotlin.math.min
 
 internal const val MAX_PREVIEW_BITMAP_DIMENSION = 2048
-internal const val MAX_IMAGE_RAW_BYTES = 50L * 1024L * 1024L
-internal const val IMAGE_DOWNLOAD_TIMEOUT_MS = 30_000
-internal const val MAX_IMAGE_BASE64_DECODED_BYTES = 32L * 1024L * 1024L
+internal const val MAX_IMAGE_RAW_BYTES = ImageHandlingLimits.GENERATED_IMAGE_MAX_BYTES
+internal const val IMAGE_DOWNLOAD_TIMEOUT_MS = ImageHandlingLimits.REMOTE_DOWNLOAD_TIMEOUT_MILLIS
+internal const val MAX_IMAGE_BASE64_DECODED_BYTES = ImageHandlingLimits.GENERATED_IMAGE_MAX_BYTES
 internal const val MAX_IMAGE_BASE64_WHITESPACE_CHARS = 2L * 1024L * 1024L
 internal const val MAX_IMAGE_BASE64_ENCODED_CHARS =
     ((MAX_IMAGE_BASE64_DECODED_BYTES + 2L) / 3L) * 4L + MAX_IMAGE_BASE64_WHITESPACE_CHARS

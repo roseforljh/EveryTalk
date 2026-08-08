@@ -3,15 +3,14 @@ package com.android.everytalk.statecontroller
 import android.app.Application
 import android.content.ContentResolver
 import android.content.Context
-import android.graphics.Bitmap
 import android.net.Uri
 import android.provider.OpenableColumns
-import android.util.Base64
 import android.util.Log
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.core.content.FileProvider
 import com.android.everytalk.models.SelectedMediaItem
-import com.android.everytalk.util.storage.FileManager
+import com.android.everytalk.util.image.ImagePersistenceResult
+import com.android.everytalk.util.image.USER_IMAGE_PERSISTENCE_POLICY
 import com.android.everytalk.data.DataClass.AbstractApiMessage
 import com.android.everytalk.data.DataClass.ApiContentPart
 import com.android.everytalk.data.DataClass.ApiConfig
@@ -56,7 +55,6 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.FileOutputStream
 import java.util.UUID
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -203,37 +201,38 @@ internal fun MessageSender.sendMessageInternal(
                         }
                         val refImageUrl = lastAiWithImage?.imageUrls?.lastOrNull()
                         if (!refImageUrl.isNullOrBlank()) {
-                            // 下载并等比压缩该图片，作为位图附件加入
-                            val fm = FileManager(application)
                             val referenceHeaders = buildMap {
                                 currentConfig.key.takeIf { it.isNotBlank() }
                                     ?.let { put("Authorization", "Bearer $it") }
                                 currentConfig.address.takeIf { it.isNotBlank() }
                                     ?.let { put("Referer", it) }
                             }
-                            val refBitmap = fm.loadAndCompressBitmapFromUrl(
-                                urlStr = refImageUrl,
-                                isImageGeneration = true,
+                            val referenceResult = imagePersistenceService.persistGeneratedImage(
+                                source = refImageUrl,
+                                messageIdHint = "reference_${UUID.randomUUID().toString().take(8)}",
+                                index = 0,
+                                policy = USER_IMAGE_PERSISTENCE_POLICY,
+                                remoteHeaders = referenceHeaders,
                                 trustedOrigin = currentConfig.address,
-                                headers = referenceHeaders,
                             )
-                            if (refBitmap != null) {
-                                val referenceAttachment = withContext(Dispatchers.Default) {
-                                    try {
-                                        SelectedMediaItem.ImageFromBitmap.fromBitmap(
-                                            bitmap = refBitmap,
-                                            id = "ref_${UUID.randomUUID()}"
-                                        )
-                                    } finally {
-                                        if (!refBitmap.isRecycled) refBitmap.recycle()
-                                    }
-                                }
+                            if (referenceResult is ImagePersistenceResult.Success) {
+                                val referenceFile = File(referenceResult.filePath)
                                 allAttachments.add(
-                                    referenceAttachment
+                                    SelectedMediaItem.ImageFromUri(
+                                        uri = FileProvider.getUriForFile(
+                                            application,
+                                            "${application.packageName}.provider",
+                                            referenceFile,
+                                        ),
+                                        id = "ref_${UUID.randomUUID()}",
+                                        mimeType = referenceResult.mimeType,
+                                        filePath = referenceResult.filePath,
+                                    ),
                                 )
                                 Log.d("MessageSender", "已自动附带上一轮AI图片作为参考: $refImageUrl")
                             } else {
-                                Log.w("MessageSender", "未能下载上一轮AI图片，跳过自动引用")
+                                val reason = (referenceResult as ImagePersistenceResult.Failure).reason
+                                Log.w("MessageSender", "上一轮AI图片未能作为参考: ${reason::class.simpleName}")
                             }
                         }
                     } catch (e: CancellationException) {
@@ -244,7 +243,7 @@ internal fun MessageSender.sendMessageInternal(
                 }
             }
 
-            val attachmentResult = processAttachments(allAttachments, shouldUsePartsApiMessage, textToActuallySend, isImageGeneration)
+            val attachmentResult = processAttachments(allAttachments, shouldUsePartsApiMessage, textToActuallySend)
             if (!attachmentResult.success) {
                 return@launch
             }

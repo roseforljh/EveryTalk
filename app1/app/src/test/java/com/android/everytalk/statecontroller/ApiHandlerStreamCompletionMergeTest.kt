@@ -76,7 +76,7 @@ class ApiHandlerStreamCompletionMergeTest {
     }
 
     @Test
-    fun `完成事件合并保留已归档图片正文和元数据`() {
+    fun `完成事件合并保留已持久化图片正文和元数据`() {
         val localImage = "/data/user/0/com.android.everytalk/files/chat_attachments/image.png"
         val syncedMessage = Message(
             id = "msg-image",

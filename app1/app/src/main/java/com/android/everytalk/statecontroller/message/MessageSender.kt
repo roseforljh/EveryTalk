@@ -2,16 +2,17 @@ package com.android.everytalk.statecontroller
 
 import android.app.Application
 import android.content.ContentResolver
-import android.content.Context
-import android.graphics.Bitmap
 import android.net.Uri
 import android.provider.OpenableColumns
-import android.util.Base64
 import android.util.Log
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.core.content.FileProvider
 import com.android.everytalk.models.SelectedMediaItem
+import com.android.everytalk.util.image.ImagePersistenceResult
+import com.android.everytalk.util.image.ImagePersistenceFailure
+import com.android.everytalk.util.image.toUserImageMessage
 import com.android.everytalk.util.storage.FileManager
+import com.android.everytalk.util.storage.ImagePersistenceService
 import com.android.everytalk.data.DataClass.AbstractApiMessage
 import com.android.everytalk.data.DataClass.ApiContentPart
 import com.android.everytalk.data.DataClass.ApiConfig
@@ -40,8 +41,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.io.FileOutputStream
-import java.util.Locale
 import java.util.UUID
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -301,6 +300,7 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
 ) {
 
     internal val fileManager: FileManager by lazy { FileManager(application) }
+    internal val imagePersistenceService: ImagePersistenceService by lazy { ImagePersistenceService(application) }
     internal val autoContextCompressionMutex = Mutex()
     internal val autoContextCompressionStates =
         mutableMapOf<AutoContextCompressionKey, com.android.everytalk.data.DataClass.ContextCompressionState>()
@@ -379,95 +379,6 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
         currentUserMessage: AbstractApiMessage,
     ): MutableList<AbstractApiMessage> = ensureUserMessagePresent(messages, currentUserMessage)
 
-    /**
-     * 从Uri加载并压缩位图 - 新版本支持等比缩放
-     * @param context 上下文
-     * @param uri 图片Uri
-     * @param isImageGeneration 是否为图像生成模式
-     * @return 压缩后的位图，如果加载失败则返回null
-     */
-    internal suspend fun loadAndCompressBitmapFromUri(
-        context: Context, 
-        uri: Uri,
-        isImageGeneration: Boolean = false
-    ): Bitmap? {
-        return fileManager.loadAndCompressBitmapFromUri(uri = uri, isImageGeneration = isImageGeneration)
-    }
-
-    internal suspend fun copyUriToAppInternalStorage(
-        context: Context,
-        sourceUri: Uri,
-        messageIdHint: String,
-        attachmentIndex: Int,
-        originalFileName: String?
-    ): String? {
-        return fileManager.copyUriToAppInternalStorage(
-            sourceUri = sourceUri,
-            messageIdHint = messageIdHint,
-            attachmentIndex = attachmentIndex,
-            originalFileName = originalFileName
-        )
-    }
-
-    internal suspend fun saveBitmapToAppInternalStorage(
-        context: Context,
-        bitmapToSave: Bitmap,
-        messageIdHint: String,
-        attachmentIndex: Int,
-        originalFileNameHint: String? = null,
-        isImageGeneration: Boolean = false
-    ): String? {
-        return fileManager.saveBitmapToAppInternalStorage(
-            bitmapToSave = bitmapToSave,
-            messageIdHint = messageIdHint,
-            attachmentIndex = attachmentIndex,
-            originalFileNameHint = originalFileNameHint,
-            isImageGeneration = isImageGeneration
-        )
-    }
-
-    private fun persistBitmapData(
-        item: SelectedMediaItem.ImageFromBitmap,
-        messageIdHint: String,
-        attachmentIndex: Int,
-    ): String? {
-        item.filePath?.let(::File)?.takeIf { it.isFile && it.length() > 0L }?.let { return it.absolutePath }
-        if (item.bitmapData.isBlank()) return null
-        return try {
-            val encodedLength = item.bitmapData.count { !it.isWhitespace() }.toLong()
-            val estimatedBytes = ((encodedLength + 3L) / 4L) * 3L
-            if (estimatedBytes > FileManager.MAX_MESSAGE_IMAGE_BYTES) return null
-            val decodedBytes = Base64.decode(item.bitmapData, Base64.DEFAULT)
-            if (decodedBytes.isEmpty() || decodedBytes.size.toLong() > FileManager.MAX_MESSAGE_IMAGE_BYTES) return null
-            val extension = when (item.mimeType.substringBefore(';').lowercase(Locale.ROOT)) {
-                "image/png" -> "png"
-                "image/webp" -> "webp"
-                else -> "jpg"
-            }
-            val directory = File(application.filesDir, "chat_attachments").apply { mkdirs() }
-            val targetFile = File(
-                directory,
-                "camera_${messageIdHint}_${attachmentIndex.coerceAtLeast(0)}_${System.currentTimeMillis()}.$extension",
-            )
-            val temporaryFile = File(directory, ".${targetFile.name}.tmp")
-            try {
-                FileOutputStream(temporaryFile).use { output ->
-                    output.write(decodedBytes)
-                    output.fd.sync()
-                }
-                if (!temporaryFile.renameTo(targetFile)) return null
-                targetFile.takeIf { it.isFile && it.length() == decodedBytes.size.toLong() }?.absolutePath
-            } finally {
-                temporaryFile.delete()
-            }
-        } catch (error: CancellationException) {
-            throw error
-        } catch (error: Exception) {
-            Log.e("MessageSender", "保存相机图片失败", error)
-            null
-        }
-    }
-
     internal fun deleteTemporaryCameraUri(uri: Uri) {
         if (uri.authority != "${application.packageName}.provider") return
         if (uri.pathSegments.firstOrNull() != "chat_images_temp") return
@@ -479,7 +390,6 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
         attachments: List<SelectedMediaItem>,
         shouldUsePartsApiMessage: Boolean,
         textToActuallySend: String,
-        isImageGeneration: Boolean = false
     ): AttachmentProcessingResult = withContext(Dispatchers.IO) {
         if (attachments.isEmpty()) {
             return@withContext AttachmentProcessingResult(
@@ -501,6 +411,7 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
         val tempMessageIdForNaming = UUID.randomUUID().toString().take(8)
 
         for ((index, originalMediaItem) in attachments.withIndex()) {
+            var persistedImageMimeType: String? = null
             val itemUri = when (originalMediaItem) {
                 is SelectedMediaItem.ImageFromUri -> originalMediaItem.uri
                 is SelectedMediaItem.GenericFile -> originalMediaItem.uri
@@ -514,19 +425,106 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
             val persistentFilePath: String? = try {
                 when (originalMediaItem) {
                     is SelectedMediaItem.ImageFromUri -> {
-                        val bitmap = loadAndCompressBitmapFromUri(application, originalMediaItem.uri, isImageGeneration)
-                        if (bitmap != null) {
-                            saveBitmapToAppInternalStorage(application, bitmap, tempMessageIdForNaming, index, originalFileNameForHint, isImageGeneration)
-                        } else {
-                            showSnackbar("无法加载或压缩图片: $originalFileNameForHint")
-                            return@withContext AttachmentProcessingResult(success = false)
+                        val existingPath = originalMediaItem.filePath
+                            ?.let(::File)
+                            ?.takeIf { it.isFile && it.length() > 0L }
+                            ?.absolutePath
+                        val existingValidation = existingPath?.let {
+                            imagePersistenceService.validatePersistedUserImage(it)
+                        }
+                        val persistenceResult = when (existingValidation) {
+                            is ImagePersistenceResult.Success -> existingValidation
+                            is ImagePersistenceResult.Failure -> {
+                                if (existingValidation.reason != ImagePersistenceFailure.UnsupportedSource) {
+                                    existingValidation
+                                } else {
+                                    imagePersistenceService.persistUserImage(
+                                        sourceUri = originalMediaItem.uri,
+                                        fileName = originalFileNameForHint,
+                                        messageIdHint = tempMessageIdForNaming,
+                                        attachmentIndex = index,
+                                    )
+                                }
+                            }
+                            null -> imagePersistenceService.persistUserImage(
+                                sourceUri = originalMediaItem.uri,
+                                fileName = originalFileNameForHint,
+                                messageIdHint = tempMessageIdForNaming,
+                                attachmentIndex = index,
+                            )
+                        }
+                        when (val result = persistenceResult) {
+                            is ImagePersistenceResult.Success -> {
+                                persistedImageMimeType = result.mimeType
+                                result.filePath
+                            }
+                            is ImagePersistenceResult.Failure -> {
+                                withContext(Dispatchers.Main.immediate) {
+                                    showSnackbar(result.reason.toUserImageMessage(originalFileNameForHint))
+                                }
+                                return@withContext AttachmentProcessingResult(success = false)
+                            }
                         }
                     }
                     is SelectedMediaItem.ImageFromBitmap -> {
-                        persistBitmapData(originalMediaItem, tempMessageIdForNaming, index)
+                        originalMediaItem.filePath
+                            ?.let(::File)
+                            ?.takeIf { it.isFile && it.length() > 0L }
+                            ?.let { existingFile ->
+                                val existingValidation = imagePersistenceService.validatePersistedUserImage(
+                                    existingFile.absolutePath,
+                                )
+                                val persistenceResult = if (
+                                    existingValidation is ImagePersistenceResult.Failure &&
+                                    existingValidation.reason == ImagePersistenceFailure.UnsupportedSource
+                                ) {
+                                    imagePersistenceService.persistUserImage(
+                                        sourceUri = Uri.fromFile(existingFile),
+                                        fileName = originalFileNameForHint,
+                                        messageIdHint = tempMessageIdForNaming,
+                                        attachmentIndex = index,
+                                    )
+                                } else {
+                                    existingValidation
+                                }
+                                when (val result = persistenceResult) {
+                                    is ImagePersistenceResult.Success -> {
+                                        persistedImageMimeType = result.mimeType
+                                        result.filePath
+                                    }
+                                    is ImagePersistenceResult.Failure -> {
+                                        withContext(Dispatchers.Main.immediate) {
+                                            showSnackbar(result.reason.toUserImageMessage(originalFileNameForHint))
+                                        }
+                                        return@withContext AttachmentProcessingResult(success = false)
+                                    }
+                                }
+                            }
+                            ?: when (val result = imagePersistenceService.persistEncodedUserImage(
+                                base64Data = originalMediaItem.bitmapData,
+                                declaredMimeType = originalMediaItem.mimeType,
+                                messageIdHint = tempMessageIdForNaming,
+                                attachmentIndex = index,
+                            )) {
+                                is ImagePersistenceResult.Success -> {
+                                    persistedImageMimeType = result.mimeType
+                                    result.filePath
+                                }
+                                is ImagePersistenceResult.Failure -> {
+                                    withContext(Dispatchers.Main.immediate) {
+                                        showSnackbar(result.reason.toUserImageMessage(originalFileNameForHint))
+                                    }
+                                    return@withContext AttachmentProcessingResult(success = false)
+                                }
+                            }
                     }
                     is SelectedMediaItem.GenericFile -> {
-                        copyUriToAppInternalStorage(application, originalMediaItem.uri, tempMessageIdForNaming, index, originalMediaItem.displayName)
+                        fileManager.copyUriToAppInternalStorage(
+                            sourceUri = originalMediaItem.uri,
+                            messageIdHint = tempMessageIdForNaming,
+                            attachmentIndex = index,
+                            originalFileName = originalMediaItem.displayName,
+                        )
                     }
                     is SelectedMediaItem.Audio -> {
                         // 音频数据已为Base64，无需额外处理
@@ -555,6 +553,7 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
                     SelectedMediaItem.ImageFromUri(
                         uri = persistentFileProviderUri!!,
                         id = originalMediaItem.id,
+                        mimeType = persistedImageMimeType ?: originalMediaItem.mimeType,
                         filePath = persistentFilePath
                     )
                 }
@@ -564,7 +563,7 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
                     SelectedMediaItem.ImageFromUri(
                         uri = persistentFileProviderUri!!,
                         id = originalMediaItem.id,
-                        mimeType = originalMediaItem.mimeType,
+                        mimeType = persistedImageMimeType ?: originalMediaItem.mimeType,
                         filePath = persistentFilePath,
                     )
                 }
@@ -588,25 +587,19 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
 
             // 为处理后的图片（现在拥有一个持久化的 URI）创建 API 内容部分
             if (shouldUsePartsApiMessage && processedItemForUi is SelectedMediaItem.ImageFromUri) {
-                if (originalMediaItem is SelectedMediaItem.ImageFromBitmap) {
-                    val bitmapData = originalMediaItem.bitmapData.takeIf { it.isNotBlank() }
-                        ?: uriToBase64Encoder(processedItemForUi.uri)
-                    if (!bitmapData.isNullOrBlank()) {
-                        apiContentParts.add(
-                            ApiContentPart.InlineData(
-                                mimeType = originalMediaItem.mimeType,
-                                base64Data = bitmapData,
-                            )
-                        )
+                val base64Data = uriToBase64Encoder(processedItemForUi.uri)
+                if (base64Data == null) {
+                    withContext(Dispatchers.Main.immediate) {
+                        showSnackbar("无法读取图片“$originalFileNameForHint”，请重新选择。")
                     }
-                } else {
-                    val imageUri = processedItemForUi.uri
-                    val base64Data = uriToBase64Encoder(imageUri)
-                    val mimeType = application.contentResolver.getType(imageUri) ?: processedItemForUi.mimeType
-                    if (base64Data != null) {
-                        apiContentParts.add(ApiContentPart.InlineData(mimeType = mimeType, base64Data = base64Data))
-                    }
+                    return@withContext AttachmentProcessingResult(success = false)
                 }
+                apiContentParts.add(
+                    ApiContentPart.InlineData(
+                        mimeType = processedItemForUi.mimeType,
+                        base64Data = base64Data,
+                    ),
+                )
             }
         }
         AttachmentProcessingResult(true, processedAttachmentsForUi, imageUriStringsForUi, apiContentParts)

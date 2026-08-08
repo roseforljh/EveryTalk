@@ -19,6 +19,9 @@ import com.android.everytalk.util.ConversationNameHelper
 import com.android.everytalk.util.message.findMarkdownImageReferences
 import com.android.everytalk.util.message.replaceMarkdownImageSources
 import com.android.everytalk.util.storage.FileManager
+import com.android.everytalk.util.storage.ImagePersistenceService
+import com.android.everytalk.util.image.ImagePersistenceResult
+import com.android.everytalk.util.image.pathOrNull
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -27,7 +30,6 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import coil3.ImageLoader
@@ -189,9 +191,9 @@ internal suspend fun migrateConversationInlineImages(
             val sources = linkedSetOf<String>().apply {
                 findMarkdownImageReferences(message.text)
                     .map { it.source }
-                    .filterTo(this) { it.startsWith("data:image", ignoreCase = true) }
+                    .filterTo(this) { it.startsWith("data:", ignoreCase = true) }
                 message.imageUrls.orEmpty()
-                    .filterTo(this) { it.startsWith("data:image", ignoreCase = true) }
+                    .filterTo(this) { it.startsWith("data:", ignoreCase = true) }
                 addAll(partSources)
             }
             if (sources.isEmpty()) {
@@ -268,6 +270,7 @@ class DataPersistenceManager(
     // Room 数据源
     internal val roomDataSource by lazy { RoomDataSource(context) }
     internal val fileManager by lazy { FileManager(context) }
+    internal val imagePersistenceService by lazy { ImagePersistenceService(context) }
     internal val protectedTextSessionIds = linkedSetOf<String>()
     internal val protectedImageSessionIds = linkedSetOf<String>()
     @Volatile internal var protectLastOpenTextSession = false
@@ -309,23 +312,19 @@ class DataPersistenceManager(
         }
     }
 
-    suspend fun persistMessageImageSource(
+    internal suspend fun persistGeneratedImageSource(
         source: String,
         messageId: String,
         index: Int,
-    ): String? {
-        return if (source.startsWith("http://", ignoreCase = true) ||
-            source.startsWith("https://", ignoreCase = true)
-        ) {
-            withTimeoutOrNull(15_000L) {
-                fileManager.persistMessageImageSource(source, messageId, index)
-            }
-        } else {
-            fileManager.persistMessageImageSource(source, messageId, index)
-        }
-    }
+    ): ImagePersistenceResult = imagePersistenceService.persistGeneratedImage(source, messageId, index)
 
-    /** 将历史消息中的图片来源统一归档；失败时保留原记录，交由后续迁移重试。 */
+    internal suspend fun persistGeneratedImagePath(
+        source: String,
+        messageId: String,
+        index: Int,
+    ): String? = persistGeneratedImageSource(source, messageId, index).pathOrNull()
+
+    /** 将历史消息中的图片来源统一持久化；失败时保留原记录，交由后续迁移重试。 */
     internal suspend fun persistInlineAndRemoteImages(messages: List<Message>): List<Message> {
         if (messages.isEmpty()) return messages
         return messages.map { message ->
@@ -335,11 +334,11 @@ class DataPersistenceManager(
             val persistedUrls = originalUrls.mapIndexed { index, source ->
                 when {
                     source.startsWith("file://", ignoreCase = true) || source.startsWith("/") -> source
-                    source.startsWith("data:image", ignoreCase = true) ||
+                    source.startsWith("data:", ignoreCase = true) ||
                         source.startsWith("http://", ignoreCase = true) ||
                         source.startsWith("https://", ignoreCase = true) ||
                         source.startsWith("content://", ignoreCase = true) -> {
-                        persistMessageImageSource(source, message.id, index) ?: source
+                        persistGeneratedImageSource(source, message.id, index).pathOrNull() ?: source
                     }
                     else -> source
                 }
@@ -392,7 +391,7 @@ class DataPersistenceManager(
         return loadResult.sessions.map { loadedSession ->
             val migration = migrateConversationInlineImages(
                 messages = loadedSession.messages,
-                persistSource = ::persistMessageImageSource,
+                persistSource = ::persistGeneratedImagePath,
                 deletePersistedSource = ::deleteMigratedImageFile,
             )
             if (migration.failed) {
@@ -491,7 +490,7 @@ class DataPersistenceManager(
         withContext(Dispatchers.IO) {
             Log.d(TAG, "saveChatHistory: 保存 ${historyToSave.size} 条对话到 Room...")
             val finalHistory = if (isImageGeneration) {
-                // 将 data:image 与 http(s) 图片先落盘，替换为本地路径，避免远端URL过期
+                // 将内联与 http(s) 图片先持久化，替换为本地路径，避免远端 URL 过期。
                 historyToSave.map { conv -> persistInlineAndRemoteImages(conv) }
             } else {
                 historyToSave
@@ -661,7 +660,7 @@ class DataPersistenceManager(
             Log.d(TAG, "saveLastOpenChat: Saving ${processedMessages.size} messages for isImageGen=$isImageGeneration to Room")
             try {
                 val finalMessages = if (isImageGeneration) {
-                    // 对"最后打开的图像会话"统一进行 data:image 与 http(s) 落盘与替换
+                    // 对“最后打开的图像会话”统一进行内联与 http(s) 图片持久化。
                     persistInlineAndRemoteImages(processedMessages)
                 } else {
                     processedMessages

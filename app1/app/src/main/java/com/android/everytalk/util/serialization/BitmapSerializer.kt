@@ -10,6 +10,8 @@ import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
 import kotlinx.serialization.descriptors.SerialDescriptor
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
+import com.android.everytalk.util.image.ImageHandlingLimits
+import com.android.everytalk.util.image.decodedBase64SizeOrNull
 import com.android.everytalk.util.storage.CappedByteArrayOutputStream
 
 /**
@@ -19,7 +21,7 @@ import com.android.everytalk.util.storage.CappedByteArrayOutputStream
  * and parses Base64 strings back to Bitmap objects during deserialization.
  */
 object BitmapSerializer : KSerializer<Bitmap> {
-    private const val MAX_BITMAP_BYTES = 16L * 1024L * 1024L
+    private const val MAX_BITMAP_BYTES = ImageHandlingLimits.USER_UPLOAD_MAX_BYTES
 
     override val descriptor: SerialDescriptor = PrimitiveSerialDescriptor("android.graphics.Bitmap", PrimitiveKind.STRING)
 
@@ -40,9 +42,9 @@ object BitmapSerializer : KSerializer<Bitmap> {
     override fun deserialize(decoder: Decoder): Bitmap {
         try {
             val base64String = decoder.decodeString()
-            val encodedLength = base64String.count { !it.isWhitespace() }.toLong()
-            val estimatedBytes = ((encodedLength + 3L) / 4L) * 3L
-            if (estimatedBytes > MAX_BITMAP_BYTES) {
+            val decodedSize = decodedBase64SizeOrNull(base64String)
+                ?: throw SerializationException("Bitmap Base64 数据无效")
+            if (decodedSize > MAX_BITMAP_BYTES) {
                 throw SerializationException("Bitmap 数据超过 ${MAX_BITMAP_BYTES / (1024 * 1024)} MiB 上限")
             }
             val byteArray = Base64.decode(base64String, Base64.NO_WRAP)

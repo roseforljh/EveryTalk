@@ -173,7 +173,7 @@ internal suspend fun getFileDetailsFromUri(
     }
 }
 
-internal suspend fun checkFileSizeAndShowError(
+internal suspend fun checkAttachmentFileSizeAndShowError(
     context: Context,
     uri: Uri,
     fileName: String,
@@ -238,6 +238,8 @@ internal suspend fun checkFileSizeAndShowError(
                 return@withContext false
             }
             return@withContext true
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
             Log.e("FileSizeCheck", "Error checking file size for $fileName", e)
             withContext(Dispatchers.Main) {

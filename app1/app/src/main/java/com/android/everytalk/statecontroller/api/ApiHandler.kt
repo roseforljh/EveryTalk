@@ -21,6 +21,7 @@ import com.android.everytalk.util.PromptLeakGuard
 import com.android.everytalk.util.debug.PerformanceMonitor
 import com.android.everytalk.util.messageprocessor.MessageProcessor
 import com.android.everytalk.util.text.TextSanitizer
+import com.android.everytalk.util.image.toGeneratedImageMessage
 import io.ktor.client.statement.HttpResponse
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -631,16 +632,15 @@ class ApiHandler(
                         }
 
                         if (imageUrls.isNotEmpty()) {
-                            // 🔥 关键修复：同步归档图片，确保图片保存成功后再更新消息
-                            // 先在 IO 线程完成归档，再更新消息，避免异步导致的数据不一致
-                            logger.debug("[ImageGen] 🖼️ Starting synchronous image archival for ${imageUrls.size} images")
+                            // 同步完成本地持久化后再更新消息，避免 UI 与历史记录不一致。
+                            logger.debug("[ImageGen] 🖼️ Starting synchronous image persistence for ${imageUrls.size} images")
                             
-                            val archiveResult = withContext(Dispatchers.IO) {
-                                streamProcessor.archiveImageUrlsForMessage(aiMessageId, imageUrls)
+                            val persistenceResult = withContext(Dispatchers.IO) {
+                                streamProcessor.persistGeneratedImageUrlsForMessage(aiMessageId, imageUrls)
                             }
-                            val archivedUrls = archiveResult.urls
+                            val persistedUrls = persistenceResult.urls
                             
-                            // 使用归档后的本地路径（或回退到原始URL）更新消息
+                            // 只使用校验完成的本地路径更新消息。
                             withContext(Dispatchers.Main.immediate) {
                                 val messageList = stateHolder.imageGenerationMessages
                                 val index = messageList.indexOfFirst { it.id == aiMessageId }
@@ -652,16 +652,22 @@ class ApiHandler(
                                         "[ImageGen] Current message: id=${currentMessage.id}, hasImageUrls=${currentMessage.imageUrls?.isNotEmpty()}, textChars=${currentMessage.text.length}"
                                     )
                                     
-                                    val archiveFailureText = if (archiveResult.failedCount > 0) {
-                                        "\n\n> 图片生成成功，但本地保存失败。"
+                                    val persistenceFailureText = if (persistenceResult.failures.isNotEmpty()) {
+                                        val firstFailure = persistenceResult.failures.first().toGeneratedImageMessage()
+                                        val countText = if (persistenceResult.failures.size > 1) {
+                                            " 共 ${persistenceResult.failures.size} 张图片未能保存。"
+                                        } else {
+                                            ""
+                                        }
+                                        "\n\n> $firstFailure$countText"
                                     } else {
                                         ""
                                     }
                                     val updatedMessage = currentMessage.copy(
-                                        imageUrls = archivedUrls,
-                                        text = (responseText ?: currentMessage.text) + archiveFailureText,
+                                        imageUrls = persistedUrls,
+                                        text = (responseText ?: currentMessage.text) + persistenceFailureText,
                                         contentStarted = true,
-                                        isError = archivedUrls.isEmpty(),
+                                        isError = persistedUrls.isEmpty(),
                                         currentWebSearchStage = null,
                                         executionStatus = null
                                     )
@@ -670,7 +676,7 @@ class ApiHandler(
                                     messageList.removeAt(index)
                                     messageList.add(index, updatedMessage)
                                     
-                                    logger.debug("[ImageGen] 🖼️ Updated message with ${archivedUrls.size} archived image URLs at index $index")
+                                    logger.debug("[ImageGen] 🖼️ Updated message with ${persistedUrls.size} local image paths at index $index")
                                     logger.debug("[ImageGen] 🖼️ Message list size after update: ${messageList.size}")
                                     
                                     // 🔥 强制触发状态变化，确保Flow重新计算
@@ -683,11 +689,11 @@ class ApiHandler(
                                 }
                             }
 
-                            // 🔥 归档完成后立即强制保存历史，确保本地路径持久化
+                            // 图片本地持久化完成后立即保存历史，确保只记录稳定路径。
                             withContext(Dispatchers.IO) {
                                 try {
                                     historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = true)
-                                    logger.debug("[ImageGen] 🖼️ History saved with archived image paths")
+                                    logger.debug("[ImageGen] 🖼️ History saved with local image paths")
                                 } catch (e: Exception) {
                                     logger.warn("[ImageGen] 🖼️ Failed to save history: ${e.message}")
                                 }

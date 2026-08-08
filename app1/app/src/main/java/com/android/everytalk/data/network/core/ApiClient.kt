@@ -9,6 +9,7 @@ import com.android.everytalk.data.DataClass.ImageGenerationResponse
 import com.android.everytalk.data.DataClass.GitHubRelease
 import com.android.everytalk.data.DataClass.ModelCapabilityCandidate
 import com.android.everytalk.models.SelectedMediaItem
+import com.android.everytalk.util.image.ImageHandlingLimits
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.plugins.*
@@ -35,7 +36,7 @@ import kotlinx.serialization.modules.subclass
 import android.util.Base64
 import kotlinx.coroutines.CancellationException as CoroutineCancellationException
 
-private const val MAX_INLINE_ATTACHMENT_BYTES = 10L * 1024L * 1024L
+private const val MAX_INLINE_NON_IMAGE_BYTES = 10L * 1024L * 1024L
 
 private class AttachmentTooLargeException(message: String) : IllegalStateException(message)
 
@@ -64,20 +65,21 @@ private fun ContentResolver.getDeclaredLength(uri: Uri): Long? {
     }.getOrNull()
 }
 
-private fun throwInlineAttachmentTooLarge(displayName: String, size: Long): Nothing {
+private fun throwInlineAttachmentTooLarge(displayName: String, size: Long, maxBytes: Long): Nothing {
     throw AttachmentTooLargeException(
-        "附件 \"$displayName\" 过大 (${formatInlineAttachmentSize(size)})，直连内联发送最大支持10MB"
+        "附件“$displayName”大小为 ${formatInlineAttachmentSize(size)}，超过最大 ${formatInlineAttachmentSize(maxBytes)} 限制"
     )
 }
 
 internal suspend fun readInlineAttachmentBytes(
     context: Context,
     uri: Uri,
-    displayName: String
+    displayName: String,
+    maxBytes: Long = MAX_INLINE_NON_IMAGE_BYTES,
 ): ByteArray? = withContext(Dispatchers.IO) {
     context.contentResolver.getDeclaredLength(uri)?.let { declaredSize ->
-        if (declaredSize > MAX_INLINE_ATTACHMENT_BYTES) {
-            throwInlineAttachmentTooLarge(displayName, declaredSize)
+        if (declaredSize > maxBytes) {
+            throwInlineAttachmentTooLarge(displayName, declaredSize, maxBytes)
         }
     }
     context.contentResolver.openInputStream(uri)?.use { input ->
@@ -88,8 +90,8 @@ internal suspend fun readInlineAttachmentBytes(
             val read = input.read(buffer)
             if (read == -1) break
             total += read
-            if (total > MAX_INLINE_ATTACHMENT_BYTES) {
-                throwInlineAttachmentTooLarge(displayName, total)
+            if (total > maxBytes) {
+                throwInlineAttachmentTooLarge(displayName, total, maxBytes)
             }
             output.write(buffer, 0, read)
         }
@@ -97,9 +99,13 @@ internal suspend fun readInlineAttachmentBytes(
     }
 }
 
-internal fun ensureInlineAttachmentSize(displayName: String, rawSize: Long) {
-    if (rawSize > MAX_INLINE_ATTACHMENT_BYTES) {
-        throwInlineAttachmentTooLarge(displayName, rawSize)
+internal fun ensureInlineAttachmentSize(
+    displayName: String,
+    rawSize: Long,
+    maxBytes: Long = MAX_INLINE_NON_IMAGE_BYTES,
+) {
+    if (rawSize > maxBytes) {
+        throwInlineAttachmentTooLarge(displayName, rawSize, maxBytes)
     }
 }
 

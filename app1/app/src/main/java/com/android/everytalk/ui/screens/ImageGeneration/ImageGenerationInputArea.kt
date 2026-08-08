@@ -7,6 +7,7 @@ import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Log
+import com.android.everytalk.util.image.validateUserImageForSelection
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -96,6 +97,7 @@ import com.android.everytalk.ui.components.dialog.appDialogTextFieldDefaultBorde
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldColors
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -245,17 +247,23 @@ fun ImageGenerationInputArea(
                     uris.forEach { uri ->
                         val mimeType = context.contentResolver.getType(uri) ?: "image/*"
 
-                        val isFileSizeValid = checkFileSizeAndShowError(context, uri, onShowSnackbar)
+                        val isFileSizeValid = validateUserImageForSelection(
+                            context = context,
+                            uri = uri,
+                            onShowError = onShowSnackbar,
+                        )
                         if (isFileSizeValid) {
                             withContext(Dispatchers.Main) {
                                 onAddMediaItem(SelectedMediaItem.ImageFromUri(uri, UUID.randomUUID().toString(), mimeType))
                             }
                         }
                     }
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
-                    Log.e("PhotoPicker", "Error processing selected image", e)
+                    Log.e("PhotoPicker", "处理选择的图片时发生错误", e)
                     withContext(Dispatchers.Main) {
-                        onShowSnackbar("Error selecting image")
+                        onShowSnackbar("选择图片时发生错误")
                     }
                 }
             }
@@ -266,22 +274,34 @@ fun ImageGenerationInputArea(
         ActivityResultContracts.TakePicture()
     ) { success ->
         val currentUri = tempCameraImageUri
-        try {
-            if (success && currentUri != null) {
-                onAddMediaItem(SelectedMediaItem.ImageFromUri(currentUri, UUID.randomUUID().toString(), "image/jpeg"))
-            } else {
-                if (currentUri != null) {
+        tempCameraImageUri = null
+        if (success && currentUri != null) {
+            coroutineScope.launch {
+                try {
+                    if (validateUserImageForSelection(context, currentUri, onShowError = onShowSnackbar)) {
+                        withContext(Dispatchers.Main.immediate) {
+                            onAddMediaItem(
+                                SelectedMediaItem.ImageFromUri(
+                                    currentUri,
+                                    UUID.randomUUID().toString(),
+                                    "image/jpeg",
+                                ),
+                            )
+                        }
+                    } else {
+                        safeDeleteTempFile(context, currentUri)
+                    }
+                } catch (e: CancellationException) {
+                    safeDeleteTempFile(context, currentUri)
+                    throw e
+                } catch (e: Exception) {
+                    Log.e("CameraLauncher", "处理相机照片时发生错误", e)
+                    withContext(Dispatchers.Main.immediate) { onShowSnackbar("拍照时发生错误") }
                     safeDeleteTempFile(context, currentUri)
                 }
             }
-        } catch (e: Exception) {
-            Log.e("CameraLauncher", "Error processing camera photo", e)
-            onShowSnackbar("Error taking photo")
-            if (currentUri != null) {
-                safeDeleteTempFile(context, currentUri)
-            }
-        } finally {
-            tempCameraImageUri = null
+        } else if (currentUri != null) {
+            safeDeleteTempFile(context, currentUri)
         }
     }
 
@@ -294,11 +314,11 @@ fun ImageGenerationInputArea(
                 tempCameraImageUri = newUri
                 cameraLauncher.launch(newUri)
             } catch (e: Exception) {
-                Log.e("CameraPermission", "Error creating camera file URI", e)
-                onShowSnackbar("Error starting camera")
+                Log.e("CameraPermission", "创建相机文件 URI 时发生错误", e)
+                onShowSnackbar("启动相机时发生错误")
             }
         } else {
-            onShowSnackbar("Camera permission is required to take photos")
+            onShowSnackbar("需要相机权限才能拍照")
         }
     }
 

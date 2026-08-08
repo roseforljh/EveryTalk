@@ -9,7 +9,7 @@ import org.junit.Test
 class ApiHandlerGeneratedImageTest {
 
     @Test
-    fun `归档图片同时进入正文和图片元数据`() {
+    fun `本地持久化图片同时进入正文和图片元数据`() {
         val message = Message(
             id = "message-1",
             text = "生成完成。",

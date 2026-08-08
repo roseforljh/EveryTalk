@@ -1,5 +1,6 @@
 package com.android.everytalk.data.network
 
+import com.android.everytalk.util.image.ImageHandlingLimits
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -14,6 +15,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import java.io.ByteArrayOutputStream
 import java.io.IOException
 import java.io.InputStream
+import java.io.OutputStream
 import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.UnknownHostException
@@ -35,16 +37,54 @@ object SafeHttpDownloader {
         val finalUrl: String,
     )
 
+    data class DownloadMetadata(
+        val contentType: String,
+        val finalUrl: String,
+        val sizeBytes: Long,
+    )
+
     suspend fun download(
         url: String,
         maxBytes: Long,
         timeoutMillis: Int,
+        connectTimeoutMillis: Int = timeoutMillis,
         accept: String = "*/*",
         headers: Map<String, String> = emptyMap(),
         trustedOrigin: String? = null,
     ): DownloadedBody = withContext(Dispatchers.IO) {
         require(maxBytes in 1..Int.MAX_VALUE.toLong()) { "下载大小上限无效" }
-        require(timeoutMillis > 0) { "下载超时必须大于 0" }
+        val output = ByteArrayOutputStream(minOf(maxBytes, 8192L).toInt())
+        val metadata = downloadTo(
+            url = url,
+            output = output,
+            maxBytes = maxBytes,
+            connectTimeoutMillis = connectTimeoutMillis,
+            totalTimeoutMillis = timeoutMillis,
+            accept = accept,
+            headers = headers,
+            trustedOrigin = trustedOrigin,
+        )
+        DownloadedBody(
+            bytes = output.toByteArray(),
+            contentType = metadata.contentType,
+            finalUrl = metadata.finalUrl,
+        )
+    }
+
+    /** 将响应流直接写入目标输出流，避免远程图片在内存中形成完整副本。 */
+    suspend fun downloadTo(
+        url: String,
+        output: OutputStream,
+        maxBytes: Long,
+        connectTimeoutMillis: Int,
+        totalTimeoutMillis: Int,
+        accept: String = "*/*",
+        headers: Map<String, String> = emptyMap(),
+        trustedOrigin: String? = null,
+    ): DownloadMetadata = withContext(Dispatchers.IO) {
+        require(maxBytes in 1..Int.MAX_VALUE.toLong()) { "下载大小上限无效" }
+        require(connectTimeoutMillis > 0) { "连接超时必须大于 0" }
+        require(totalTimeoutMillis >= connectTimeoutMillis) { "总下载超时不得小于连接超时" }
         require(headers.size <= 16) { "请求头数量超过上限" }
         require(headers.all { (name, value) -> name.length <= 64 && value.length <= 8192 }) { "请求头过长" }
 
@@ -56,7 +96,9 @@ object SafeHttpDownloader {
             val addresses = resolveAddresses(currentUrl.host, allowPrivateAddresses)
             val pinnedClient = sharedClient.newBuilder()
                 .dns(PinnedDns(currentUrl.host, addresses))
-                .callTimeout(timeoutMillis.toLong(), TimeUnit.MILLISECONDS)
+                .connectTimeout(connectTimeoutMillis.toLong(), TimeUnit.MILLISECONDS)
+                .callTimeout(totalTimeoutMillis.toLong(), TimeUnit.MILLISECONDS)
+                .readTimeout(totalTimeoutMillis.toLong(), TimeUnit.MILLISECONDS)
                 .build()
             val requestBuilder = Request.Builder()
                 .url(currentUrl)
@@ -79,11 +121,14 @@ object SafeHttpDownloader {
 
                 val body = it.body
                 val declaredLength = body.contentLength()
-                if (declaredLength > maxBytes) throw ResponseTooLargeException(maxBytes)
-                return@withContext DownloadedBody(
-                    bytes = readAtMost(body.byteStream(), maxBytes),
+                if (declaredLength > maxBytes) {
+                    throw ResponseTooLargeException(maxBytes, declaredLength, actualSizeIsExact = true)
+                }
+                val sizeBytes = copyAtMost(body.byteStream(), output, maxBytes)
+                return@withContext DownloadMetadata(
                     contentType = body.contentType()?.toString().orEmpty().ifBlank { "application/octet-stream" },
                     finalUrl = currentUrl.toString(),
+                    sizeBytes = sizeBytes,
                 )
             }
         }
@@ -154,19 +199,29 @@ object SafeHttpDownloader {
 
     internal fun readAtMost(input: InputStream, maxBytes: Long): ByteArray {
         val output = ByteArrayOutputStream(minOf(maxBytes, 8192L).toInt())
+        copyAtMost(input, output, maxBytes)
+        return output.toByteArray()
+    }
+
+    private fun copyAtMost(input: InputStream, output: OutputStream, maxBytes: Long): Long {
         val buffer = ByteArray(8192)
         var total = 0L
         while (true) {
             val read = input.read(buffer)
             if (read < 0) break
             total += read
-            if (total > maxBytes) throw ResponseTooLargeException(maxBytes)
+            if (total > maxBytes) {
+                throw ResponseTooLargeException(maxBytes, total, actualSizeIsExact = false)
+            }
             output.write(buffer, 0, read)
         }
-        return output.toByteArray()
+        return total
     }
 
     private fun parseHttpUrl(url: String): HttpUrl {
+        if (url.toByteArray(Charsets.UTF_8).size > ImageHandlingLimits.MAX_REMOTE_URL_BYTES) {
+            throw IOException("URL 超过 ${ImageHandlingLimits.MAX_REMOTE_URL_BYTES} 字节上限")
+        }
         val parsed = url.toHttpUrlOrNull() ?: throw IOException("URL 无效")
         if (parsed.scheme !in setOf("http", "https") || parsed.username.isNotEmpty() || parsed.password.isNotEmpty()) {
             throw IOException("仅允许无凭据的 HTTP(S) URL")
@@ -225,5 +280,9 @@ object SafeHttpDownloader {
         })
     }
 
-    class ResponseTooLargeException(maxBytes: Long) : IOException("响应超过 ${maxBytes} 字节上限")
+    class ResponseTooLargeException(
+        maxBytes: Long,
+        val actualBytes: Long? = null,
+        val actualSizeIsExact: Boolean = false,
+    ) : IOException("响应超过 ${maxBytes} 字节上限")
 }

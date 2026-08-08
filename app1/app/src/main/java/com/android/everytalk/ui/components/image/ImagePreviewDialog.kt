@@ -41,6 +41,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import com.android.everytalk.util.storage.FileManager
+import com.android.everytalk.util.image.ImageHandlingLimits
 
 @Composable
 fun ImagePreviewDialog(
@@ -265,7 +266,7 @@ private suspend fun saveImageToGallery(context: android.content.Context, url: St
             val fileManager = FileManager(context)
             val loaded = fileManager.loadBytesFromFlexibleSource(
                 source = url,
-                maxBytes = FileManager.MAX_MESSAGE_IMAGE_BYTES,
+                maxBytes = ImageHandlingLimits.GENERATED_IMAGE_MAX_BYTES,
             )
             if (loaded == null) {
                 withContext(Dispatchers.Main) {

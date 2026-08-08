@@ -5,7 +5,6 @@ import kotlin.math.max
 import android.Manifest
 import android.content.Context
 import android.net.Uri
-import android.provider.OpenableColumns
 import android.util.Log
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -95,11 +94,9 @@ import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldDefaultBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldColors
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 import com.android.everytalk.config.PerformanceConfig
 import java.io.File
 import java.text.SimpleDateFormat
@@ -116,80 +113,6 @@ internal fun createImageFileUri(context: Context): Uri {
     }
     val imageFile = File.createTempFile(imageFileName, ".jpg", storageDir)
     return FileProvider.getUriForFile(context, "${context.packageName}.provider", imageFile)
-}
-
-internal suspend fun checkFileSizeAndShowError(
-    context: Context,
-    uri: Uri,
-    onShowSnackbar: (String) -> Unit
-): Boolean {
-    return withContext(Dispatchers.IO) {
-        try {
-            val maxFileSize = 50 * 1024 * 1024 // 50MB
-            var fileSize: Long? = null
-            context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
-                if (cursor.moveToFirst()) {
-                    val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
-                    if (sizeIndex != -1) {
-                        val sizeValue = cursor.getLong(sizeIndex)
-                        if (sizeValue > 0) {
-                            fileSize = sizeValue
-                        }
-                    }
-                }
-            }
-
-            if (fileSize == null) {
-                try {
-                    val statSize = context.contentResolver.openFileDescriptor(uri, "r")?.use { it.statSize } ?: -1L
-                    if (statSize > 0) {
-                        fileSize = statSize
-                    }
-                } catch (e: Exception) {
-                    Log.w("FileSizeCheck", "Failed to get file size from file descriptor", e)
-                }
-            }
-
-            if (fileSize == null) {
-                try {
-                    context.contentResolver.openInputStream(uri)?.use { inputStream ->
-                        val buffer = ByteArray(8192)
-                        var total = 0L
-                        while (true) {
-                            val read = inputStream.read(buffer)
-                            if (read == -1) break
-                            total += read
-                            if (total > maxFileSize) break
-                        }
-                        fileSize = total
-                    }
-                } catch (e: Exception) {
-                    Log.w("FileSizeCheck", "Failed to get file size by streaming", e)
-                }
-            }
-
-            val size = fileSize ?: 0L
-            if (size > maxFileSize) {
-                val fileSizeFormatted = when {
-                    size < 1024 -> "${size}B"
-                    size < 1024 * 1024 -> "${size / 1024}KB"
-                    size < 1024 * 1024 * 1024 -> "${size / (1024 * 1024)}MB"
-                    else -> "${size / (1024 * 1024 * 1024)}GB"
-                }
-                withContext(Dispatchers.Main) {
-                    onShowSnackbar("File is too large ($fileSizeFormatted), max size is 50MB")
-                }
-                return@withContext false
-            }
-            return@withContext true
-        } catch (e: Exception) {
-            Log.e("FileSizeCheck", "Error checking file size for $uri", e)
-            withContext(Dispatchers.Main) {
-                onShowSnackbar("Could not check file size, please select a smaller file")
-            }
-            return@withContext false
-        }
-    }
 }
 
 internal fun safeDeleteTempFile(context: Context, uri: Uri?) {

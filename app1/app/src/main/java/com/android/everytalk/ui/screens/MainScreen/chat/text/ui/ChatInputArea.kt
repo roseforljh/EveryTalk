@@ -5,6 +5,7 @@ import android.Manifest
 import android.content.Context
 import android.net.Uri
 import android.util.Log
+import com.android.everytalk.util.image.validateUserImageForSelection
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -144,8 +145,11 @@ fun ChatInputArea(
                         val (fileName, resolvedMimeType, _) = getFileDetailsFromUri(context, uri)
                         val mimeType = resolvedMimeType ?: "image/*"
 
-                        // 检查文件大小
-                        val isFileSizeValid = checkFileSizeAndShowError(context, uri, fileName, onShowSnackbar)
+                        val isFileSizeValid = if (mimeType.startsWith("video/")) {
+                            checkAttachmentFileSizeAndShowError(context, uri, fileName, onShowSnackbar)
+                        } else {
+                            validateUserImageForSelection(context, uri, fileName, onShowSnackbar)
+                        }
                         if (isFileSizeValid) {
                             withContext(Dispatchers.Main) {
                                 if (mimeType.startsWith("video/")) {
@@ -180,23 +184,35 @@ fun ChatInputArea(
         ActivityResultContracts.TakePicture()
     ) { success ->
         val currentUri = tempCameraImageUri
-        try {
-            if (success && currentUri != null) {
-                onAddMediaItem(SelectedMediaItem.ImageFromUri(currentUri, UUID.randomUUID().toString(), "image/jpeg"))
-            } else {
-                Log.w("CameraLauncher", "相机拍照失败或被取消")
-                if (currentUri != null) {
+        tempCameraImageUri = null
+        if (success && currentUri != null) {
+            coroutineScope.launch {
+                try {
+                    if (validateUserImageForSelection(context, currentUri, onShowError = onShowSnackbar)) {
+                        withContext(Dispatchers.Main.immediate) {
+                            onAddMediaItem(
+                                SelectedMediaItem.ImageFromUri(
+                                    currentUri,
+                                    UUID.randomUUID().toString(),
+                                    "image/jpeg",
+                                ),
+                            )
+                        }
+                    } else {
+                        safeDeleteTempFile(context, currentUri)
+                    }
+                } catch (e: CancellationException) {
+                    safeDeleteTempFile(context, currentUri)
+                    throw e
+                } catch (e: Exception) {
+                    Log.e("CameraLauncher", "处理相机照片时发生错误", e)
+                    withContext(Dispatchers.Main.immediate) { onShowSnackbar("拍照时发生错误") }
                     safeDeleteTempFile(context, currentUri)
                 }
             }
-        } catch (e: Exception) {
-            Log.e("CameraLauncher", "处理相机照片时发生错误", e)
-            onShowSnackbar("拍照时发生错误")
-            if (currentUri != null) {
-                safeDeleteTempFile(context, currentUri)
-            }
-        } finally {
-            tempCameraImageUri = null
+        } else {
+            Log.w("CameraLauncher", "相机拍照失败或被取消")
+            if (currentUri != null) safeDeleteTempFile(context, currentUri)
         }
     }
 
@@ -232,7 +248,12 @@ fun ChatInputArea(
                             )
                             
                             // 检查文件大小
-                            val isFileSizeValid = checkFileSizeAndShowError(context, uri, displayName, onShowSnackbar)
+                            val isFileSizeValid = checkAttachmentFileSizeAndShowError(
+                                context,
+                                uri,
+                                displayName,
+                                onShowSnackbar,
+                            )
                             if (isFileSizeValid) {
                                 withContext(Dispatchers.Main) {
                                     onAddMediaItem(

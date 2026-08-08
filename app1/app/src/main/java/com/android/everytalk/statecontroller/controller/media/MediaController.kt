@@ -9,6 +9,7 @@ import android.provider.MediaStore
 import android.util.Log
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.util.storage.FileManager
+import com.android.everytalk.util.image.ImageHandlingLimits
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
@@ -37,7 +38,11 @@ class MediaController(
         scope.launch {
             try {
                 // 原样字节读取（支持 data:image;base64 / http(s) / content:// / file:// / 绝对路径）
-                val loaded = fileManager.loadBytesFromFlexibleSource(url)
+                val loaded = fileManager.loadBytesFromFlexibleSource(
+                    source = url,
+                    maxBytes = ImageHandlingLimits.GENERATED_IMAGE_MAX_BYTES,
+                    networkTimeoutMillis = ImageHandlingLimits.REMOTE_DOWNLOAD_TIMEOUT_MILLIS,
+                )
                 if (loaded == null) {
                     showToast("无法获取原始图片数据")
                     return@launch

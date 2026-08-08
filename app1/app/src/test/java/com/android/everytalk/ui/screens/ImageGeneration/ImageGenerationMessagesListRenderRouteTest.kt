@@ -71,7 +71,11 @@ class ImageGenerationMessagesListRenderRouteTest {
         assertEquals(0, Regex("Base64\\.decode").findAll(source).count())
         assertTrue(gateIndex >= 0)
         assertTrue(decodeIndex > gateIndex)
-        assertTrue(source.contains("MAX_IMAGE_BASE64_DECODED_BYTES = 32L * 1024L * 1024L"))
+        assertTrue(
+            source.contains(
+                "MAX_IMAGE_BASE64_DECODED_BYTES = ImageHandlingLimits.GENERATED_IMAGE_MAX_BYTES",
+            ),
+        )
     }
 
     @Test

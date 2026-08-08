@@ -401,7 +401,7 @@ internal fun DataPersistenceManager.loadInitialDataInternal(
                         loadedOriginalTextChat = original
                         val migration = migrateConversationInlineImages(
                             messages = original,
-                            persistSource = ::persistMessageImageSource,
+                            persistSource = ::persistGeneratedImagePath,
                             deletePersistedSource = ::deleteMigratedImageFile,
                         )
                         if (migration.failed) {
@@ -440,7 +440,7 @@ internal fun DataPersistenceManager.loadInitialDataInternal(
                         loadedOriginalImageChat = original
                         val migration = migrateConversationInlineImages(
                             messages = original,
-                            persistSource = ::persistMessageImageSource,
+                            persistSource = ::persistGeneratedImagePath,
                             deletePersistedSource = ::deleteMigratedImageFile,
                         )
                         if (migration.failed) {

@@ -9,6 +9,8 @@ import com.android.everytalk.data.DataClass.ImageGenerationResponse
 import com.android.everytalk.data.DataClass.GitHubRelease
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.models.toAttachmentContextParts
+import com.android.everytalk.util.image.ImageHandlingLimits
+import com.android.everytalk.util.image.decodedBase64SizeOrNull
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.plugins.*
@@ -35,7 +37,6 @@ import kotlinx.serialization.modules.subclass
 import android.util.Base64
 import kotlinx.coroutines.CancellationException as CoroutineCancellationException
 
-private const val MAX_INLINE_ATTACHMENT_BYTES = 10L * 1024L * 1024L
 private const val MAX_MODELS_RESPONSE_BYTES = 4L * 1024L * 1024L
 internal suspend fun buildDirectMultimodalRequest(
     request: ChatRequest,
@@ -49,8 +50,13 @@ internal suspend fun buildDirectMultimodalRequest(
     attachments.forEach { item ->
         when (item) {
             is com.android.everytalk.models.SelectedMediaItem.ImageFromUri -> {
-                val mime = context.contentResolver.getType(item.uri) ?: "image/jpeg"
-                val bytes = readInlineAttachmentBytes(context, item.uri, "图片")
+                val mime = context.contentResolver.getType(item.uri) ?: item.mimeType
+                val bytes = readInlineAttachmentBytes(
+                    context,
+                    item.uri,
+                    "图片",
+                    maxBytes = ImageHandlingLimits.USER_UPLOAD_MAX_BYTES,
+                )
                 if (bytes != null && isImageMime(mime)) {
                     val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
                     inlineParts.add(
@@ -63,8 +69,13 @@ internal suspend fun buildDirectMultimodalRequest(
             }
             is com.android.everytalk.models.SelectedMediaItem.ImageFromBitmap -> {
                 if (item.bitmapData.isNotBlank() && isImageMime(item.mimeType)) {
-                    val encodedLength = item.bitmapData.count { !it.isWhitespace() }.toLong()
-                    ensureInlineAttachmentSize("图片", ((encodedLength + 3L) / 4L) * 3L)
+                    val decodedSize = decodedBase64SizeOrNull(item.bitmapData)
+                        ?: throw IOException("图片 Base64 数据无效")
+                    ensureInlineAttachmentSize(
+                        "图片",
+                        decodedSize,
+                        maxBytes = ImageHandlingLimits.USER_UPLOAD_MAX_BYTES,
+                    )
                     inlineParts.add(
                         com.android.everytalk.data.DataClass.ApiContentPart.InlineData(
                             base64Data = item.bitmapData,
@@ -87,7 +98,16 @@ internal suspend fun buildDirectMultimodalRequest(
             is com.android.everytalk.models.SelectedMediaItem.GenericFile -> {
                 val mime = item.mimeType
                 if (isImageMime(mime) || isAudioMime(mime) || isVideoMime(mime)) {
-                    val bytes = readInlineAttachmentBytes(context, item.uri, item.displayName)
+                    val bytes = readInlineAttachmentBytes(
+                        context,
+                        item.uri,
+                        item.displayName,
+                        maxBytes = if (isImageMime(mime)) {
+                            ImageHandlingLimits.USER_UPLOAD_MAX_BYTES
+                        } else {
+                            10L * 1024L * 1024L
+                        },
+                    )
                     if (bytes != null) {
                         val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
                         inlineParts.add(

@@ -7,6 +7,7 @@ import com.android.everytalk.data.DataClass.ImageGenerationResponse
 import com.android.everytalk.data.DataClass.ImageUrl
 import com.android.everytalk.data.DataClass.Timings
 import com.android.everytalk.ui.components.ImageGenCapabilities
+import com.android.everytalk.util.image.ImageHandlingLimits
 import io.ktor.client.*
 import io.ktor.client.plugins.timeout
 import io.ktor.client.request.*
@@ -23,8 +24,8 @@ import kotlin.random.Random
  */
 object ImageGenerationDirectClient {
     private const val TAG = "ImageGenDirectClient"
-    internal const val MAX_GENERATED_IMAGE_BYTES = 32L * 1024L * 1024L
-    private const val MAX_REFERENCE_IMAGE_BYTES = 16L * 1024L * 1024L
+    internal const val MAX_GENERATED_IMAGE_BYTES = ImageHandlingLimits.GENERATED_IMAGE_MAX_BYTES
+    private const val MAX_REFERENCE_IMAGE_BYTES = ImageHandlingLimits.USER_UPLOAD_MAX_BYTES
     private const val MAX_INLINE_IMAGE_JSON_BYTES = 64L * 1024L * 1024L
     private const val MAX_IMAGE_URL_JSON_BYTES = 2L * 1024L * 1024L
     

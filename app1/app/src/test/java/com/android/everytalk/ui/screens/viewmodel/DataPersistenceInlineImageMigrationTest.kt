@@ -90,7 +90,7 @@ class DataPersistenceInlineImageMigrationTest {
     }
 
     @Test
-    fun `旧图片来源按消息去重归档并替换正文元数据和 parts`() = runTest {
+    fun `旧图片来源按消息去重持久化并替换正文元数据和 parts`() = runTest {
         val source = "data:image/png;base64,QUJDRA=="
         val original = listOf(
             Message(

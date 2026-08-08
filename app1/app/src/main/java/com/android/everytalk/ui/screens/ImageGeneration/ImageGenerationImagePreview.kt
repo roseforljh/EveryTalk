@@ -1,4 +1,5 @@
 package com.android.everytalk.ui.screens.ImageGeneration
+import com.android.everytalk.util.image.ImageHandlingLimits
 import com.android.everytalk.statecontroller.*
 
 import android.annotation.SuppressLint
@@ -166,6 +167,7 @@ internal fun ImageGenerationImagePreview(
             url = url,
             maxBytes = MAX_IMAGE_RAW_BYTES,
             timeoutMillis = IMAGE_DOWNLOAD_TIMEOUT_MS,
+            connectTimeoutMillis = ImageHandlingLimits.REMOTE_CONNECT_TIMEOUT_MILLIS,
             accept = "image/*",
             headers = imageDownloadHeaders,
             trustedOrigin = refererHeader,

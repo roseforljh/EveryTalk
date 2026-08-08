@@ -107,7 +107,6 @@ import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 
-internal const val MAX_URI_BASE64_BYTES = 10L * 1024L * 1024L
 internal const val TOOL_STATUS_TARGET_MAX_CHARS = 24
 
 internal fun Throwable.rethrowIfCancellation() {

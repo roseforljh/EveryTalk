@@ -12,6 +12,7 @@ import androidx.lifecycle.viewModelScope
 import coil3.imageLoader
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.util.storage.FileManager
+import com.android.everytalk.util.image.ImageHandlingLimits
 import com.android.everytalk.data.DataClass.GitHubRelease
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
@@ -169,7 +170,7 @@ import java.util.TimeZone
         return try {
             val inputStream = getApplication<Application>().contentResolver.openInputStream(uri)
             inputStream?.use { stream ->
-                val bytes = readAtMost(stream, MAX_URI_BASE64_BYTES)
+                val bytes = readAtMost(stream, ImageHandlingLimits.USER_UPLOAD_MAX_BYTES)
                 android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
             }
         } catch (e: CancellationException) {

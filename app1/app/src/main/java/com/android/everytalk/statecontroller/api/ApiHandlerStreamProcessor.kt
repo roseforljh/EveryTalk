@@ -13,6 +13,9 @@ import com.android.everytalk.util.PromptLeakGuard
 import com.android.everytalk.util.debug.PerformanceMonitor
 import com.android.everytalk.util.messageprocessor.MessageProcessor
 import com.android.everytalk.util.text.TextSanitizer
+import com.android.everytalk.util.image.ImagePersistenceFailure
+import com.android.everytalk.util.image.ImagePersistenceResult
+import com.android.everytalk.util.image.toGeneratedImageMessage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -23,8 +26,6 @@ import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
-
-private const val MAX_REMOTE_IMAGE_SOURCE_CHARS = 16 * 1024
 
 private fun nativeContextWindowId(
     messageId: String,
@@ -194,13 +195,13 @@ private fun List<ExecutionStep>.completeAllSteps(): List<ExecutionStep> =
 
 internal sealed interface PreparedGeneratedImage {
     data class Ready(val source: String) : PreparedGeneratedImage
-    data object Failed : PreparedGeneratedImage
+    data class Failed(val reason: ImagePersistenceFailure) : PreparedGeneratedImage
     data object Duplicate : PreparedGeneratedImage
 }
 
-internal data class ArchivedImageUrlsResult(
+internal data class PersistedGeneratedImageUrlsResult(
     val urls: List<String>,
-    val failedCount: Int,
+    val failures: List<ImagePersistenceFailure>,
 )
 
 internal class ApiHandlerStreamProcessor(
@@ -225,7 +226,7 @@ internal class ApiHandlerStreamProcessor(
     
     private fun claimGeneratedImageIndex(messageId: String, source: String): Int? {
         val digest = MessageDigest.getInstance("SHA-256")
-        if (source.startsWith("data:image", ignoreCase = true)) {
+        if (source.startsWith("data:", ignoreCase = true)) {
             val commaIndex = source.indexOf(',')
             source.forEachIndexed { index, character ->
                 if (!character.isWhitespace()) {
@@ -256,25 +257,17 @@ internal class ApiHandlerStreamProcessor(
             claimGeneratedImageIndex(messageId, trimmedSource)
         }
             ?: return PreparedGeneratedImage.Duplicate
-        val isDataImage = trimmedSource.startsWith("data:image", ignoreCase = true)
-        val isRemote = trimmedSource.startsWith("http://", ignoreCase = true) ||
-            trimmedSource.startsWith("https://", ignoreCase = true)
-        if (isRemote && trimmedSource.length > MAX_REMOTE_IMAGE_SOURCE_CHARS) {
-            logger.warn("Rejected generated image source: scheme=remote, chars=${trimmedSource.length}, messageId=$messageId")
-            return PreparedGeneratedImage.Failed
+        val result = withContext(Dispatchers.IO) {
+            historyManager.persistGeneratedImageSource(trimmedSource, messageId, index)
         }
-        if (!isDataImage && !isRemote) {
-            logger.warn("Rejected generated image source: scheme=unsupported, chars=${trimmedSource.length}, messageId=$messageId")
-            return PreparedGeneratedImage.Failed
-        }
-    
-        val persisted = withContext(Dispatchers.IO) {
-            historyManager.persistMessageImageSource(trimmedSource, messageId, index)
-        }
-        return when {
-            !persisted.isNullOrBlank() -> PreparedGeneratedImage.Ready(persisted)
-            isRemote -> PreparedGeneratedImage.Ready(trimmedSource)
-            else -> PreparedGeneratedImage.Failed
+        return when (result) {
+            is ImagePersistenceResult.Success -> PreparedGeneratedImage.Ready(result.filePath)
+            is ImagePersistenceResult.Failure -> {
+                logger.warn(
+                    "Generated image persistence failed: reason=${result.reason::class.simpleName}, messageId=$messageId",
+                )
+                PreparedGeneratedImage.Failed(result.reason)
+            }
         }
     }
     internal suspend fun processStreamEvent(appEvent: AppStreamEvent, aiMessageId: String, isImageGeneration: Boolean = false) {
@@ -322,10 +315,10 @@ internal class ApiHandlerStreamProcessor(
                         stateHolder.syncStreamingSnapshotToList(aiMessageId, isImageGeneration)
                         updatedMessage = messageList[messageIndex]
                     }
-                    PreparedGeneratedImage.Failed -> {
+                    is PreparedGeneratedImage.Failed -> {
                         stateHolder.appendContentToMessage(
                             aiMessageId,
-                            "\n\n> 图片生成成功，但本地保存失败。\n\n",
+                            "\n\n> ${preparedImage.reason.toGeneratedImageMessage()}\n\n",
                             isImageGeneration,
                         )
                         stateHolder.syncStreamingSnapshotToList(aiMessageId, isImageGeneration)
@@ -735,33 +728,21 @@ internal class ApiHandlerStreamProcessor(
         errorHandler.updateMessageWithError(messageId, error, isImageGeneration, allowRetry)
     }
 
-    /** 将图像模式返回的来源统一归档，危险数据 URI 失败时不会回填原值。 */
-    internal suspend fun archiveImageUrlsForMessage(
+    /** 将图像模式返回的所有图片来源统一持久化。 */
+    internal suspend fun persistGeneratedImageUrlsForMessage(
         messageId: String,
         urls: List<String>
-    ): ArchivedImageUrlsResult {
-        if (urls.isEmpty()) return ArchivedImageUrlsResult(emptyList(), 0)
+    ): PersistedGeneratedImageUrlsResult {
+        if (urls.isEmpty()) return PersistedGeneratedImageUrlsResult(emptyList(), emptyList())
         val out = mutableListOf<String>()
-        var failedCount = 0
+        val failures = mutableListOf<ImagePersistenceFailure>()
         for ((idx, url) in urls.withIndex()) {
             val source = url.trim()
-            val lower = source.lowercase(Locale.ROOT)
-            val isDataImage = lower.startsWith("data:image")
-            val isRemote = lower.startsWith("http://") || lower.startsWith("https://")
-            if ((!isDataImage && !isRemote) || (isRemote && source.length > MAX_REMOTE_IMAGE_SOURCE_CHARS)) {
-                failedCount++
-                continue
-            }
-    
-            val saved = historyManager.persistMessageImageSource(source, messageId, idx)
-            if (!saved.isNullOrBlank()) {
-                out += saved
-            } else if (isRemote) {
-                out += source
-            } else {
-                failedCount++
+            when (val result = historyManager.persistGeneratedImageSource(source, messageId, idx)) {
+                is ImagePersistenceResult.Success -> out += result.filePath
+                is ImagePersistenceResult.Failure -> failures += result.reason
             }
         }
-        return ArchivedImageUrlsResult(out, failedCount)
+        return PersistedGeneratedImageUrlsResult(out, failures)
     }
 }

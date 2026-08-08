@@ -7,6 +7,7 @@ import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.network.extractThinkTagContent
 import com.android.everytalk.statecontroller.ViewModelStateHolder
 import com.android.everytalk.util.ConversationNameHelper
+import com.android.everytalk.util.image.ImagePersistenceResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -46,8 +47,12 @@ class HistoryManager(
 ) {
     private val TAG_HM = "HistoryManager"
 
-    suspend fun persistMessageImageSource(source: String, messageId: String, index: Int): String? {
-        return persistenceManager.persistMessageImageSource(source, messageId, index)
+    internal suspend fun persistGeneratedImageSource(
+        source: String,
+        messageId: String,
+        index: Int,
+    ): ImagePersistenceResult {
+        return persistenceManager.persistGeneratedImageSource(source, messageId, index)
     }
 
     // -------- 新增：持久化防抖与串行化 --------

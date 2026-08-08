@@ -9,6 +9,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.Contextual
 import com.android.everytalk.util.serialization.UriSerializer
 import com.android.everytalk.util.storage.CappedByteArrayOutputStream
+import com.android.everytalk.util.image.ImageHandlingLimits
+import com.android.everytalk.util.image.decodedBase64SizeOrNull
 import java.io.File
 
 interface IMediaItem {
@@ -69,7 +71,7 @@ sealed class SelectedMediaItem : IMediaItem {
     ) : SelectedMediaItem() {
         // 提供便捷方法来处理 Bitmap 和 Base64 的转换
         companion object {
-            private const val MAX_BITMAP_BYTES = 16L * 1024L * 1024L
+            private const val MAX_BITMAP_BYTES = ImageHandlingLimits.USER_UPLOAD_MAX_BYTES
 
             fun fromBitmap(bitmap: Bitmap, id: String, mimeType: String = "image/png", filePath: String? = null): ImageFromBitmap {
                 val baos = CappedByteArrayOutputStream(MAX_BITMAP_BYTES)
@@ -91,11 +93,10 @@ sealed class SelectedMediaItem : IMediaItem {
         val bitmap: Bitmap?
             get() {
                 return try {
-                val encodedLength = bitmapData.count { !it.isWhitespace() }.toLong()
-                val estimatedBytes = ((encodedLength + 3L) / 4L) * 3L
-                if (estimatedBytes > 16L * 1024L * 1024L) return null
+                val decodedSize = decodedBase64SizeOrNull(bitmapData) ?: return null
+                if (decodedSize > ImageHandlingLimits.USER_UPLOAD_MAX_BYTES) return null
                 val bytes = android.util.Base64.decode(bitmapData, android.util.Base64.NO_WRAP)
-                if (bytes.size > 16 * 1024 * 1024) return null
+                if (bytes.size.toLong() > ImageHandlingLimits.USER_UPLOAD_MAX_BYTES) return null
                 android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
             } catch (e: Exception) {
                 null
