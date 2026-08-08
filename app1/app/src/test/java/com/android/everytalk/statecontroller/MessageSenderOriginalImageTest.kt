@@ -3,23 +3,34 @@ package com.android.everytalk.statecontroller
 import android.app.Application
 import android.graphics.Bitmap
 import android.net.Uri
+import android.util.Base64
 import androidx.test.core.app.ApplicationProvider
 import androidx.core.content.FileProvider
+import com.android.everytalk.data.DataClass.ApiConfig
+import com.android.everytalk.data.DataClass.ApiContentPart
+import com.android.everytalk.data.DataClass.ChatRequest
+import com.android.everytalk.data.DataClass.PartsApiMessage
+import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.RandomAccessFile
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -29,8 +40,10 @@ import org.koin.core.context.stopKoin
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import io.mockk.every
+import io.mockk.coEvery
 import io.mockk.mockk
 import io.mockk.mockkStatic
+import io.mockk.slot
 import io.mockk.unmockkAll
 
 @RunWith(RobolectricTestRunner::class)
@@ -118,11 +131,100 @@ class MessageSenderOriginalImageTest {
         assertTrue(snackbarMessages.single().contains("too-large.png"))
     }
 
-    private fun createSender(): MessageSender = MessageSender(
+    @Test
+    fun `仅图片消息会保留在页面并发起包含原图的请求`() = runTest {
+        val originalBytes = createPngBytes()
+        val sourceFile = File(sourceDirectory, "image-only.png").apply { writeBytes(originalBytes) }
+        val stateHolder = ViewModelStateHolder().apply {
+            _selectedApiConfig.value = ApiConfig(
+                address = "https://example.com/v1",
+                key = "",
+                model = "test-model",
+                provider = "OpenAI",
+                id = "image-only-config",
+                name = "仅图片测试",
+            )
+        }
+        val apiHandler = mockk<ApiHandler>(relaxed = true)
+        val requestSlot = slot<ChatRequest>()
+        val requestStarted = CompletableDeferred<Unit>()
+        coEvery {
+            apiHandler.prepareStreamingAiMessage(
+                modelName = any(),
+                providerName = any(),
+                isImageGeneration = any(),
+                onNewAiMessageAdded = any(),
+                afterUserMessageId = any(),
+                contextUsageSnapshot = any(),
+                contextCompressionState = any(),
+                executionStatus = any(),
+                preparationJob = any(),
+            )
+        } returns "ai-image-only"
+        every {
+            apiHandler.streamChatResponse(
+                requestBody = capture(requestSlot),
+                attachmentsToPassToApiClient = any(),
+                applicationContextForApiClient = any(),
+                userMessageTextForContext = any(),
+                afterUserMessageId = any(),
+                onMessagesProcessed = any(),
+                onRequestFailed = any(),
+                onNewAiMessageAdded = any(),
+                audioBase64 = any(),
+                mimeType = any(),
+                isImageGeneration = any(),
+                preCreatedAiMessageId = any(),
+                contextUsageSnapshot = any(),
+            )
+        } answers {
+            requestStarted.complete(Unit)
+        }
+        val sender = createSender(
+            stateHolder = stateHolder,
+            apiHandler = apiHandler,
+            scope = this,
+        )
+
+        sender.sendMessage(
+            messageText = "",
+            attachments = listOf(
+                SelectedMediaItem.ImageFromUri(
+                    uri = Uri.fromFile(sourceFile),
+                    id = "image-only",
+                    mimeType = "image/png",
+                ),
+            ),
+        )
+        withContext(Dispatchers.IO) {
+            withTimeout(10_000L) { requestStarted.await() }
+        }
+        advanceUntilIdle()
+
+        val userMessages = stateHolder.messages.filter { it.sender == Sender.User }
+        assertEquals(
+            "messages=${stateHolder.messages.map { "${it.sender}:${it.text}" }}, snackbar=$snackbarMessages, requestCaptured=${requestSlot.isCaptured}",
+            1,
+            userMessages.size,
+        )
+        val userMessage = userMessages.single()
+        assertTrue(userMessage.text.isBlank())
+        assertEquals(1, userMessage.attachments.size)
+
+        val requestMessage = requestSlot.captured.messages.last() as PartsApiMessage
+        val imagePart = requestMessage.parts.filterIsInstance<ApiContentPart.InlineData>().single()
+        assertArrayEquals(originalBytes, Base64.decode(imagePart.base64Data, Base64.NO_WRAP))
+    }
+
+    private fun createSender(
+        stateHolder: ViewModelStateHolder = ViewModelStateHolder(),
+        apiHandler: ApiHandler = mockk(relaxed = true),
+        scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined),
+    ): MessageSender = MessageSender(
         application = application,
-        viewModelScope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined),
-        stateHolder = ViewModelStateHolder(),
-        apiHandler = mockk(relaxed = true),
+        viewModelScope = scope,
+        stateHolder = stateHolder,
+        apiHandler = apiHandler,
         historyManager = mockk<HistoryManager>(relaxed = true),
         showSnackbar = snackbarMessages::add,
         triggerScrollToBottom = {},

@@ -347,9 +347,10 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
 
     private fun ensureUserMessagePresent(
         messages: MutableList<AbstractApiMessage>,
-        currentUserMessage: AbstractApiMessage
+        currentUserMessage: AbstractApiMessage,
+        currentUserHasAttachments: Boolean,
     ): MutableList<AbstractApiMessage> {
-        val hasUserContent = when (currentUserMessage) {
+        val hasUserContent = currentUserHasAttachments || when (currentUserMessage) {
             is SimpleTextApiMessage -> currentUserMessage.content.trim().isNotBlank()
             is PartsApiMessage -> currentUserMessage.parts.any { part ->
                 when (part) {
@@ -377,7 +378,12 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
     internal fun ensureUserMessagePresentForRequest(
         messages: MutableList<AbstractApiMessage>,
         currentUserMessage: AbstractApiMessage,
-    ): MutableList<AbstractApiMessage> = ensureUserMessagePresent(messages, currentUserMessage)
+        currentUserHasAttachments: Boolean = false,
+    ): MutableList<AbstractApiMessage> = ensureUserMessagePresent(
+        messages = messages,
+        currentUserMessage = currentUserMessage,
+        currentUserHasAttachments = currentUserHasAttachments,
+    )
 
     internal fun deleteTemporaryCameraUri(uri: Uri) {
         if (uri.authority != "${application.packageName}.provider") return

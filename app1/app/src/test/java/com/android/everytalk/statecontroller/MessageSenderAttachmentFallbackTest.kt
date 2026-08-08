@@ -4,7 +4,6 @@ import android.app.Application
 import com.android.everytalk.data.DataClass.AbstractApiMessage
 import com.android.everytalk.data.DataClass.ApiContentPart
 import com.android.everytalk.data.DataClass.PartsApiMessage
-import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
 import io.mockk.every
 import io.mockk.mockk
@@ -50,20 +49,6 @@ class MessageSenderAttachmentFallbackTest {
         uriToBase64Encoder = { null },
     )
 
-    @Suppress("UNCHECKED_CAST")
-    private fun ensureUserMessagePresent(
-        messages: MutableList<AbstractApiMessage>,
-        currentUserMessage: AbstractApiMessage,
-    ): MutableList<AbstractApiMessage> {
-        val method = MessageSender::class.java.getDeclaredMethod(
-            "ensureUserMessagePresent",
-            MutableList::class.java,
-            AbstractApiMessage::class.java,
-        )
-        method.isAccessible = true
-        return method.invoke(sender, messages, currentUserMessage) as MutableList<AbstractApiMessage>
-    }
-
     @Test
     fun `attachment only user message is injected when history is empty`() {
         val currentUserMessage = PartsApiMessage(
@@ -77,7 +62,22 @@ class MessageSenderAttachmentFallbackTest {
         )
         val historyMessages = mutableListOf<AbstractApiMessage>()
 
-        val result = ensureUserMessagePresent(historyMessages, currentUserMessage)
+        val result = sender.ensureUserMessagePresentForRequest(historyMessages, currentUserMessage)
+
+        assertEquals(1, result.size)
+        assertSame(currentUserMessage, result.single())
+    }
+
+    @Test
+    fun `外部图片附件会保留空 parts 用户消息`() {
+        val currentUserMessage = PartsApiMessage(role = "user", parts = emptyList())
+        val historyMessages = mutableListOf<AbstractApiMessage>()
+
+        val result = sender.ensureUserMessagePresentForRequest(
+            messages = historyMessages,
+            currentUserMessage = currentUserMessage,
+            currentUserHasAttachments = true,
+        )
 
         assertEquals(1, result.size)
         assertSame(currentUserMessage, result.single())

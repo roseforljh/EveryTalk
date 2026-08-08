@@ -363,7 +363,11 @@ internal fun MessageSender.sendMessageInternal(
                     "currentUserApiMessage: role=${currentUserApiMessage.role} summary=${describeApiMessage(currentUserApiMessage)}"
                 )
 
-                val apiMessagesForBackend = ensureUserMessagePresentForRequest(historyApiMessages, currentUserApiMessage)
+                val apiMessagesForBackend = ensureUserMessagePresentForRequest(
+                    messages = historyApiMessages,
+                    currentUserMessage = currentUserApiMessage,
+                    currentUserHasAttachments = attachmentsForApiClient.isNotEmpty(),
+                )
 
                 val dispatchCandidates = if (isMcpEnabledForRequest) {
                     getMcpDispatchCandidates()
