@@ -1,6 +1,7 @@
 package com.android.everytalk.ui.components
 import com.android.everytalk.statecontroller.*
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.drawWithContent
@@ -9,6 +10,26 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+
+fun Modifier.floatingEdgeGradient(
+    backgroundColor: Color,
+    fromTop: Boolean,
+): Modifier {
+    val colorStops = if (fromTop) {
+        arrayOf(
+            0f to backgroundColor.copy(alpha = 0.94f),
+            0.6f to backgroundColor.copy(alpha = 0.72f),
+            1f to Color.Transparent,
+        )
+    } else {
+        arrayOf(
+            0f to Color.Transparent,
+            0.4f to backgroundColor.copy(alpha = 0.72f),
+            1f to backgroundColor.copy(alpha = 0.94f),
+        )
+    }
+    return background(Brush.verticalGradient(colorStops = colorStops))
+}
 
 fun Modifier.scrollFadeEdge(
     listState: LazyListState,

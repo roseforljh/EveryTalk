@@ -38,7 +38,6 @@ import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.Brush
 import androidx.navigation.NavController
 import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.ApiConfig
@@ -51,6 +50,7 @@ import com.android.everytalk.data.network.ExternalWebSearchProvider
 import com.android.everytalk.ui.screens.settings.dialogs.AutoFetchModelsConfirmDialog
 import com.android.everytalk.ui.screens.settings.dialogs.ModelSelectionDialog
 import com.android.everytalk.util.storage.readAtMost
+import com.android.everytalk.ui.components.floatingEdgeGradient
 import java.util.UUID
 
 private const val MAX_SETTINGS_IMPORT_BYTES = 50L * 1024L * 1024L
@@ -277,10 +277,11 @@ fun SettingsScreen(
     var showMcpAddDialog by remember { mutableStateOf(false) }
 
     val topContentPadding = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + topButtonSize + 24.dp
+    val bottomContentPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 48.dp
 
     Scaffold(
         modifier = modifier.fillMaxSize(),
-        containerColor = MaterialTheme.colorScheme.background,
+        containerColor = Color.Transparent,
         contentWindowInsets = WindowInsets(0.dp)
     ) { contentPadding ->
         Box(
@@ -292,7 +293,7 @@ fun SettingsScreen(
             Column(modifier = Modifier.fillMaxSize()) {
                 if (isInImageMode) {
                     SettingsScreenContent(
-                        paddingValues = PaddingValues(top = topContentPadding),
+                        paddingValues = PaddingValues(top = topContentPadding, bottom = bottomContentPadding),
                         apiConfigsByApiKeyAndModality = apiConfigsByApiKeyAndModality,
                         isImageMode = isInImageMode,
                         onAddFullConfigClick = {
@@ -353,7 +354,7 @@ fun SettingsScreen(
                         when (tabIndex) {
                             0 -> {
                                 SettingsScreenContent(
-                                    paddingValues = PaddingValues(top = topContentPadding),
+                                    paddingValues = PaddingValues(top = topContentPadding, bottom = bottomContentPadding),
                                     apiConfigsByApiKeyAndModality = apiConfigsByApiKeyAndModality,
                                     isImageMode = isInImageMode,
                                     onAddFullConfigClick = {
@@ -395,7 +396,8 @@ fun SettingsScreen(
                                     configs = externalWebSearchConfigs,
                                     onSelectProvider = { viewModel.selectExternalWebSearchProvider(it) },
                                     onEditProvider = { editingExternalProvider = it },
-                                    topContentPadding = topContentPadding
+                                    topContentPadding = topContentPadding,
+                                    bottomContentPadding = bottomContentPadding,
                                 )
                             }
                             2 -> {
@@ -403,7 +405,7 @@ fun SettingsScreen(
                                     modifier = Modifier
                                         .fillMaxSize()
                                         .padding(horizontal = 20.dp)
-                                        .padding(bottom = 20.dp)
+                                        .padding(bottom = bottomContentPadding)
                                 ) {
                                     Spacer(Modifier.height(topContentPadding))
                                     McpServerListContent(
@@ -430,19 +432,19 @@ fun SettingsScreen(
                 }
             }
 
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(bottomContentPadding)
+                    .floatingEdgeGradient(MaterialTheme.colorScheme.background, fromTop = false),
+            )
+
             // 浮动顶栏：顶部阴影渐隐，内容仍可滚动到其后方
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .background(
-                        brush = Brush.verticalGradient(
-                            colorStops = arrayOf(
-                                0.0f to MaterialTheme.colorScheme.background,
-                                0.65f to MaterialTheme.colorScheme.background.copy(alpha = 0.72f),
-                                1.0f to Color.Transparent
-                            )
-                        )
-                    )
+                    .floatingEdgeGradient(MaterialTheme.colorScheme.background, fromTop = true)
                     .windowInsetsPadding(WindowInsets.statusBars)
                     .padding(12.dp)
             ) {

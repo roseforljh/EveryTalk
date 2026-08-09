@@ -212,6 +212,7 @@ internal fun SettingsScreenContent(
                 Spacer(Modifier.height(16.dp))
             }
         }
+        Spacer(Modifier.height(paddingValues.calculateBottomPadding()))
     }
 }
 
@@ -222,6 +223,7 @@ internal fun ExternalWebSearchSettingsContent(
     onSelectProvider: (ExternalWebSearchProvider) -> Unit,
     onEditProvider: (ExternalWebSearchProvider) -> Unit,
     topContentPadding: Dp = 0.dp,
+    bottomContentPadding: Dp = 0.dp,
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "breath")
     val breatheAlpha by infiniteTransition.animateFloat(
@@ -320,6 +322,7 @@ internal fun ExternalWebSearchSettingsContent(
                 }
             }
         }
+        Spacer(Modifier.height(bottomContentPadding))
     }
 }
 
