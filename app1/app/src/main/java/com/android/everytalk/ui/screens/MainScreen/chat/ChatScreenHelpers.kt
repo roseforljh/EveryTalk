@@ -246,7 +246,7 @@ internal fun HistoryConversationLoadingOverlay(
     ) {
         EveryTalkLoadingIndicator(
             size = 32.dp,
-            strokeWidth = 3.dp,
+            strokeWidth = 4.dp,
             contentDescription = stringResource(R.string.chat_loading_conversation),
         )
     }

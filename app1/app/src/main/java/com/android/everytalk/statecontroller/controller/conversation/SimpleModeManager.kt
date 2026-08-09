@@ -1,7 +1,9 @@
 package com.android.everytalk.statecontroller
 
 import android.util.Log
+import androidx.compose.runtime.snapshots.Snapshot
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.statecontroller.controller.conversation.prepareLoadedHistoryMessages
 import com.android.everytalk.ui.components.toRecoveredMarkdown
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
 import kotlinx.coroutines.CoroutineScope
@@ -290,8 +292,8 @@ class SimpleModeManager(
         val systemPrompt = conversationToLoad.firstOrNull { it.sender == Sender.System && !it.isPlaceholderName }?.text ?: ""
         Log.d(TAG, "🔥 Stable ID: $stableId, System Prompt chars=${systemPrompt.length}")
 
-        val processedMessages = withContext(Dispatchers.Default) {
-            conversationToLoad.map { msg ->
+        val (processedMessages, reasoningCompleteStates, animationPlayedStates) = withContext(Dispatchers.Default) {
+            val recoveredMessages = conversationToLoad.map { msg ->
                 // 修复：处理AI消息文本丢失问题
                 if (msg.sender == Sender.AI) {
                     android.util.Log.d("SimpleModeManager", "Processing AI message ${msg.id}: text length=${msg.text.length}, parts=${msg.parts.size}, contentStarted=${msg.contentStarted}")
@@ -327,6 +329,18 @@ class SimpleModeManager(
                 }
                 msg.copy(contentStarted = updatedContentStarted)
             }
+            val preparedMessages = prepareLoadedHistoryMessages(recoveredMessages, stableId)
+            val reasoningCompleteStates = preparedMessages.asSequence()
+                .filter { msg -> msg.sender == Sender.AI && !msg.reasoning.isNullOrBlank() }
+                .associate { msg -> msg.id to true }
+            val animationPlayedStates = preparedMessages.asSequence()
+                .filter { msg ->
+                    msg.contentStarted || msg.isError ||
+                        (msg.sender == Sender.AI && !msg.reasoning.isNullOrBlank())
+                }
+                .associate { msg -> msg.id to true }
+
+            Triple(preparedMessages, reasoningCompleteStates, animationPlayedStates)
         }
         Log.d(TAG, "🔥 Processed ${processedMessages.size} messages.")
 
@@ -339,10 +353,6 @@ class SimpleModeManager(
             stateHolder.textApiJob = null
             stateHolder._currentTextStreamingAiMessageId.value = null
             stateHolder.streamingMessageStateManager.clearAll()
-            stateHolder.textReasoningCompleteMap.clear()
-            stateHolder.textExpandedReasoningStates.clear()
-            stateHolder.textMessageAnimationStates.clear()
-            stateHolder.selectedMediaItems.clear()
             stateHolder.getApiHandler().clearTextChatResources()
             android.util.Log.d("ViewModelStateHolder", "Cleared all StreamingBuffers and streaming states for text chat")
 
@@ -351,7 +361,6 @@ class SimpleModeManager(
             Log.d(TAG, "🔥 Preserved image generation messages (${stateHolder.imageGenerationMessages.size} messages).")
             
             stateHolder.setCurrentConversationId(stableId)
-            stateHolder.systemPrompts[stableId] = systemPrompt
             Log.d(TAG, "🔥 Set current conversation ID and system prompt.")
 
             // 恢复会话使用的配置
@@ -366,16 +375,18 @@ class SimpleModeManager(
                 }
             }
 
-            stateHolder.messages.clear()
-            stateHolder.messages.addAll(processedMessages)
-            Log.d(TAG, "🔥 Loaded messages into state.")
-            
-            processedMessages.forEach { msg ->
-                val hasContentOrError = msg.contentStarted || msg.isError
-                val hasReasoning = !msg.reasoning.isNullOrBlank()
-                if (msg.sender == Sender.AI && hasReasoning) stateHolder.textReasoningCompleteMap[msg.id] = true
-                if (hasContentOrError || (msg.sender == Sender.AI && hasReasoning)) stateHolder.textMessageAnimationStates[msg.id] = true
+            Snapshot.withMutableSnapshot {
+                stateHolder.textReasoningCompleteMap.clear()
+                stateHolder.textExpandedReasoningStates.clear()
+                stateHolder.textMessageAnimationStates.clear()
+                stateHolder.selectedMediaItems.clear()
+                stateHolder.systemPrompts[stableId] = systemPrompt
+                stateHolder.messages.clear()
+                stateHolder.messages.addAll(processedMessages)
+                stateHolder.textReasoningCompleteMap.putAll(reasoningCompleteStates)
+                stateHolder.textMessageAnimationStates.putAll(animationPlayedStates)
             }
+            Log.d(TAG, "🔥 Loaded messages into state.")
             Log.d(TAG, "🔥 Set reasoning and animation states.")
             
             // 关键修复：在所有状态更新完成后设置索引，确保不会被清空

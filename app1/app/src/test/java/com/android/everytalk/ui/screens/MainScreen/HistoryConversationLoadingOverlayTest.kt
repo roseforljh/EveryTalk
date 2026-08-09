@@ -1,11 +1,14 @@
 package com.android.everytalk.ui.screens.MainScreen
 
 import android.app.Application
+import android.content.Context
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.android.everytalk.R
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -25,6 +28,7 @@ class HistoryConversationLoadingOverlayTest {
             }
         }
 
-        composeRule.onNodeWithContentDescription("正在加载会话").assertIsDisplayed()
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        composeRule.onNodeWithContentDescription(context.getString(R.string.chat_loading_conversation)).assertIsDisplayed()
     }
 }

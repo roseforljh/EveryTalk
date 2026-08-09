@@ -270,6 +270,8 @@ fun ChatScreen(
             .filterNotNull()
             .first()
 
+        // 先让加载圆圈完整提交一帧，再挂载消息列表，避免两次重工作落在同一帧。
+        withFrameNanos { }
         initialListIndex = chatListItemsState.value.lastIndex.coerceAtLeast(0)
         initialReadyToken = readyToken
     }

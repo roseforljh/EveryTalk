@@ -15,6 +15,66 @@ import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.network.extractThinkTagContent
 
+internal fun prepareLoadedHistoryMessages(messages: List<Message>, sessionId: String): List<Message> =
+    repairHistoryMessageParts(processLoadedMessages(messages), sessionId)
+
+private fun processLoadedMessages(messages: List<Message>): List<Message> {
+    return messages.map { message ->
+        if (message.sender == Sender.AI && message.text.isNotBlank()) {
+            val extraction = extractThinkTagContent(message.text)
+            if (extraction.changed) {
+                val mergedReasoning = listOfNotNull(message.reasoning, extraction.reasoning)
+                    .filter { it.isNotBlank() }
+                    .joinToString("\n\n")
+                    .ifBlank { null }
+                message.copy(
+                    text = extraction.content,
+                    reasoning = mergedReasoning,
+                    contentStarted = true,
+                    parts = emptyList(),
+                )
+            } else {
+                message.copy(contentStarted = true)
+            }
+        } else {
+            message
+        }
+    }
+}
+
+private fun repairHistoryMessageParts(messages: List<Message>, sessionId: String): List<Message> {
+    return messages.map { message ->
+        if (message.sender == Sender.AI &&
+            message.text.isNotBlank() &&
+            (message.parts.isEmpty() || !hasValidParts(message.parts))) {
+            Log.d("HistoryController", "Repairing message parts for messageId=${message.id}")
+            try {
+                val tempProcessor = com.android.everytalk.util.messageprocessor.MessageProcessor().apply {
+                    initialize(sessionId, message.id)
+                }
+                val repaired = tempProcessor.finalizeMessageProcessing(message)
+                Log.d("HistoryController", "Repaired parts: ${repaired.parts.size}")
+                repaired
+            } catch (e: Exception) {
+                Log.w("HistoryController", "Failed to repair parts for ${message.id}: ${e.message}")
+                message
+            }
+        } else {
+            message
+        }
+    }
+}
+
+private fun hasValidParts(parts: List<com.android.everytalk.ui.components.MarkdownPart>): Boolean {
+    return parts.any { part ->
+        when (part) {
+            is com.android.everytalk.ui.components.MarkdownPart.Text -> part.content.isNotBlank()
+            is com.android.everytalk.ui.components.MarkdownPart.CodeBlock -> part.content.isNotBlank()
+            else -> true
+        }
+    }
+}
+
 /**
  * HistoryController
  * 负责：
@@ -153,15 +213,6 @@ class HistoryController(
         stateHolder._lastSentUserMessageId.value = null
         try {
             simpleModeSwitcher.loadTextHistory(index)
-            val loadedMessages = stateHolder.messages.toList()
-            val sessionId = stateHolder._currentConversationId.value
-            val repaired = withContext(Dispatchers.Default) {
-                repairHistoryMessageParts(processLoadedMessages(loadedMessages), sessionId)
-            }
-            if (loadedMessages != repaired) {
-                stateHolder.messages.clear()
-                stateHolder.messages.addAll(repaired)
-            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -179,7 +230,7 @@ class HistoryController(
                 val loadedMessages = stateHolder.imageGenerationMessages.toList()
                 val sessionId = stateHolder._currentImageGenerationConversationId.value
                 val repaired = withContext(Dispatchers.Default) {
-                    repairHistoryMessageParts(processLoadedMessages(loadedMessages), sessionId)
+                    prepareLoadedHistoryMessages(loadedMessages, sessionId)
                 }
                 if (loadedMessages != repaired) {
                     stateHolder.imageGenerationMessages.clear()
@@ -255,63 +306,6 @@ class HistoryController(
                     if (shouldAutoScroll()) triggerScrollToBottom()
                 }
                 showSnackbar("图像记录已清空")
-            }
-        }
-    }
-
-    private fun processLoadedMessages(messages: List<Message>): List<Message> {
-        return messages.map { message ->
-            if (message.sender == Sender.AI && message.text.isNotBlank()) {
-                val extraction = extractThinkTagContent(message.text)
-                if (extraction.changed) {
-                    val mergedReasoning = listOfNotNull(message.reasoning, extraction.reasoning)
-                        .filter { it.isNotBlank() }
-                        .joinToString("\n\n")
-                        .ifBlank { null }
-                    message.copy(
-                        text = extraction.content,
-                        reasoning = mergedReasoning,
-                        contentStarted = true,
-                        parts = emptyList(),
-                    )
-                } else {
-                    message.copy(contentStarted = true)
-                }
-            } else {
-                message
-            }
-        }
-    }
-
-    private fun repairHistoryMessageParts(messages: List<Message>, sessionId: String): List<Message> {
-        return messages.map { message ->
-            if (message.sender == Sender.AI &&
-                message.text.isNotBlank() &&
-                (message.parts.isEmpty() || !hasValidParts(message.parts))) {
-                Log.d("HistoryController", "Repairing message parts for messageId=${message.id}")
-                try {
-                    val tempProcessor = com.android.everytalk.util.messageprocessor.MessageProcessor().apply {
-                        initialize(sessionId, message.id)
-                    }
-                    val repaired = tempProcessor.finalizeMessageProcessing(message)
-                    Log.d("HistoryController", "Repaired parts: ${repaired.parts.size}")
-                    repaired
-                } catch (e: Exception) {
-                    Log.w("HistoryController", "Failed to repair parts for ${message.id}: ${e.message}")
-                    message
-                }
-            } else {
-                message
-            }
-        }
-    }
-
-    private fun hasValidParts(parts: List<com.android.everytalk.ui.components.MarkdownPart>): Boolean {
-        return parts.any { part ->
-            when (part) {
-                is com.android.everytalk.ui.components.MarkdownPart.Text -> part.content.isNotBlank()
-                is com.android.everytalk.ui.components.MarkdownPart.CodeBlock -> part.content.isNotBlank()
-                else -> true
             }
         }
     }

@@ -83,6 +83,32 @@ class AppViewModelHistoryLoadTest {
         assertFalse(textLoadFunction.contains("scope.launch"))
     }
 
+    @Test
+    fun `text history is prepared once and committed in one snapshot`() {
+        val simpleModeSource = source(
+            "src/main/java/com/android/everytalk/statecontroller/controller/conversation/SimpleModeManager.kt",
+            "app/src/main/java/com/android/everytalk/statecontroller/controller/conversation/SimpleModeManager.kt",
+            "app1/app/src/main/java/com/android/everytalk/statecontroller/controller/conversation/SimpleModeManager.kt",
+        )
+        val historyControllerSource = source(
+            "src/main/java/com/android/everytalk/statecontroller/controller/conversation/HistoryController.kt",
+            "app/src/main/java/com/android/everytalk/statecontroller/controller/conversation/HistoryController.kt",
+            "app1/app/src/main/java/com/android/everytalk/statecontroller/controller/conversation/HistoryController.kt",
+        )
+        val simpleTextLoad = simpleModeSource
+            .substringAfter("suspend fun loadTextHistory(index: Int)")
+            .substringBefore("suspend fun loadImageHistory")
+        val controllerTextLoad = historyControllerSource
+            .substringAfter("suspend fun loadTextHistory(index: Int)")
+            .substringBefore("fun loadImageHistory")
+
+        assertTrue(simpleTextLoad.contains("Snapshot.withMutableSnapshot"))
+        assertTrue(simpleTextLoad.contains("val reasoningCompleteStates"))
+        assertTrue(simpleTextLoad.contains("val animationPlayedStates"))
+        assertFalse(controllerTextLoad.contains("stateHolder.messages.clear()"))
+        assertFalse(controllerTextLoad.contains("stateHolder.messages.addAll("))
+    }
+
     private fun source(vararg candidates: String): String {
         val sourceFile = candidates.asSequence().map(::File).firstOrNull(File::isFile)
         requireNotNull(sourceFile) { "找不到源码文件: ${candidates.joinToString()}" }
