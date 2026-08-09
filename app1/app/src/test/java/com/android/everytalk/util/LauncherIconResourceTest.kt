@@ -2,6 +2,7 @@ package com.android.everytalk.util
 
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.security.MessageDigest
 import java.util.zip.Inflater
 import kotlin.math.abs
 import org.junit.Assert.assertEquals
@@ -121,7 +122,7 @@ class LauncherIconResourceTest {
     }
 
     @Test
-    fun `android 12 splash hands off to provided penguin gif`() {
+    fun `android 12 splash hands off to provided v4 penguin animation`() {
         val resDir = findResDir()
         val v31Theme = resDir.resolve("values-v31/themes.xml")
         val systemPlaceholder = resDir.resolve("drawable/splash_placeholder.xml")
@@ -160,6 +161,11 @@ class LauncherIconResourceTest {
         assertTrue("Splash asset must be a valid GIF", String(gifBytes, 0, 6, Charsets.US_ASCII).startsWith("GIF8"))
         assertEquals("Splash GIF must keep the provided width", 1024, gifBytes.readGifUnsignedShort(6))
         assertEquals("Splash GIF must keep the provided height", 1024, gifBytes.readGifUnsignedShort(8))
+        assertEquals(
+            "Splash GIF must match the animation generated from pixel_penguin_splash_v4.svg",
+            "20d7bdbd74815ad5023872abea437bef26bdd3bb072f441ced278773071c3b02",
+            animatedSplash.sha256(),
+        )
 
         val mainDir = requireNotNull(resDir.parentFile)
         val splashSource = mainDir.resolve("java/com/android/everytalk/ui/components/splash/PixelPenguinSplash.kt")
@@ -407,4 +413,10 @@ class LauncherIconResourceTest {
 
     private fun ByteArray.readGifUnsignedShort(offset: Int): Int =
         (this[offset].toInt() and 0xFF) or ((this[offset + 1].toInt() and 0xFF) shl 8)
+
+    private fun File.sha256(): String = MessageDigest.getInstance("SHA-256")
+        .digest(readBytes())
+        .joinToString(separator = "") { byte ->
+            (byte.toInt() and 0xFF).toString(16).padStart(2, '0')
+        }
 }
