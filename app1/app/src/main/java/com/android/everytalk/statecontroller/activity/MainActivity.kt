@@ -32,6 +32,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
+import com.android.everytalk.util.locale.localizeUiMessage
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -40,7 +41,6 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 // Removed SharedPreferencesDataSource import
-import com.android.everytalk.data.network.ApiClient
 import com.android.everytalk.navigation.Screen
 import com.android.everytalk.ui.screens.MainScreen.AppDrawerContent
 import com.android.everytalk.ui.screens.MainScreen.ChatScreen
@@ -135,7 +135,6 @@ class MainActivity : AppCompatActivity() {
         handleIncomingShareIntent(intent)
         
         WindowCompat.setDecorFitsSystemWindows(window, false)
-        ApiClient.initialize(this)
         enableEdgeToEdge()
         
         // 强制设置导航栏完全透明
@@ -160,7 +159,7 @@ class MainActivity : AppCompatActivity() {
                     if (showAnimatedSplash) {
                         PixelPenguinSplash(
                             modifier = Modifier.zIndex(1f),
-                            onAnimationVisible = { mainContentStarted = true },
+                            onFinalFrameVisible = { mainContentStarted = true },
                             onFinished = {
                                 showAnimatedSplash = false
                                 mainContentStarted = true
@@ -184,8 +183,12 @@ class MainActivity : AppCompatActivity() {
 
                     LaunchedEffect(appViewModel.snackbarMessage, snackbarHostState) {
                         appViewModel.snackbarMessage.collectLatest { message ->
-                            if (message.isNotBlank() && snackbarHostState.currentSnackbarData?.visuals?.message != message) {
-                                snackbarHostState.showSnackbar(message)
+                            val localizedMessage = this@MainActivity.localizeUiMessage(message)
+                            if (
+                                localizedMessage.isNotBlank() &&
+                                snackbarHostState.currentSnackbarData?.visuals?.message != localizedMessage
+                            ) {
+                                snackbarHostState.showSnackbar(localizedMessage)
                             }
                         }
                     }
