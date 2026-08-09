@@ -34,14 +34,11 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.ui.draw.shadow
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.GraphicEq
@@ -128,81 +125,70 @@ internal fun FunctionPanelContent(
     onOpenSystemPrompt: () -> Unit = {}
 ) {
     val isDark = isSystemInDarkTheme()
-    val cardBg = if (isDark) Color(0xFF212121) else Color(0xFFFFFFFF)
-    val borderColor = if (isDark) Color.White.copy(alpha = 0.10f) else Color(0xFF0D0D0D).copy(alpha = 0.05f)
     val iconBg = if (isDark) Color(0xFF3B3B3B) else Color(0xFFE8E8E8)
     val textColor = if (isDark) Color.White else Color(0xFF0D0D0D)
     val iconTint = if (isDark) Color.White else Color(0xFF0D0D0D)
 
-    Surface(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(max = 370.dp)
-            .shadow(8.dp, RoundedCornerShape(28.dp))
-            .border(1.dp, borderColor, RoundedCornerShape(28.dp)),
-        shape = RoundedCornerShape(28.dp),
-        color = cardBg
+            .verticalScroll(rememberScrollState()),
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-        ) {
-            FunctionPanelRow(
-                iconRes = R.drawable.ic_image_gallery,
-                label = stringResource(R.string.chat_input_image),
-                iconBg = iconBg,
-                iconTint = iconTint,
-                textColor = textColor,
-                isChecked = false,
-                onClick = { onOpenGallery(); onDismiss() }
-            )
-            FunctionPanelRow(
-                iconRes = R.drawable.ic_camera,
-                label = stringResource(R.string.chat_input_camera),
-                iconBg = iconBg,
-                iconTint = iconTint,
-                textColor = textColor,
-                isChecked = false,
-                onClick = { onOpenCamera(); onDismiss() }
-            )
-            FunctionPanelRow(
-                iconRes = R.drawable.ic_paperclip,
-                label = stringResource(R.string.chat_input_attachment),
-                iconBg = iconBg,
-                iconTint = iconTint,
-                textColor = textColor,
-                isChecked = false,
-                onClick = { onOpenFilePicker(); onDismiss() }
-            )
-            FunctionPanelRow(
-                iconRes = R.drawable.ic_globe,
-                label = stringResource(R.string.chat_input_web_search),
-                iconBg = iconBg,
-                iconTint = if (isWebSearchEnabled && isWebSearchAvailable) Color(0xFF66B5FF) else iconTint,
-                textColor = textColor,
-                isChecked = isWebSearchEnabled && isWebSearchAvailable,
-                onClick = { onToggleWebSearch() }
-            )
-            FunctionPanelRow(
-                iconRes = R.drawable.ic_hammer,
-                label = "MCP",
-                iconBg = iconBg,
-                iconTint = if (isMcpEnabled) Color(0xFF66B5FF) else iconTint,
-                textColor = textColor,
-                isChecked = isMcpEnabled,
-                onClick = { onToggleMcp() }
-            )
-            FunctionPanelRow(
-                iconRes = R.drawable.ic_prompt,
-                label = stringResource(R.string.chat_input_prompt),
-                iconBg = iconBg,
-                iconTint = iconTint,
-                textColor = textColor,
-                isChecked = false,
-                onClick = { onOpenSystemPrompt(); onDismiss() }
-            )
-        }
+        FunctionPanelRow(
+            iconRes = R.drawable.ic_image_gallery,
+            label = stringResource(R.string.chat_input_image),
+            iconBg = iconBg,
+            iconTint = iconTint,
+            textColor = textColor,
+            isChecked = false,
+            onClick = { onOpenGallery(); onDismiss() }
+        )
+        FunctionPanelRow(
+            iconRes = R.drawable.ic_camera,
+            label = stringResource(R.string.chat_input_camera),
+            iconBg = iconBg,
+            iconTint = iconTint,
+            textColor = textColor,
+            isChecked = false,
+            onClick = { onOpenCamera(); onDismiss() }
+        )
+        FunctionPanelRow(
+            iconRes = R.drawable.ic_paperclip,
+            label = stringResource(R.string.chat_input_attachment),
+            iconBg = iconBg,
+            iconTint = iconTint,
+            textColor = textColor,
+            isChecked = false,
+            onClick = { onOpenFilePicker(); onDismiss() }
+        )
+        FunctionPanelRow(
+            iconRes = R.drawable.ic_globe,
+            label = stringResource(R.string.chat_input_web_search),
+            iconBg = iconBg,
+            iconTint = if (isWebSearchEnabled && isWebSearchAvailable) Color(0xFF66B5FF) else iconTint,
+            textColor = textColor,
+            isChecked = isWebSearchEnabled && isWebSearchAvailable,
+            onClick = { onToggleWebSearch() }
+        )
+        FunctionPanelRow(
+            iconRes = R.drawable.ic_hammer,
+            label = "MCP",
+            iconBg = iconBg,
+            iconTint = if (isMcpEnabled) Color(0xFF66B5FF) else iconTint,
+            textColor = textColor,
+            isChecked = isMcpEnabled,
+            onClick = { onToggleMcp() }
+        )
+        FunctionPanelRow(
+            iconRes = R.drawable.ic_prompt,
+            label = stringResource(R.string.chat_input_prompt),
+            iconBg = iconBg,
+            iconTint = iconTint,
+            textColor = textColor,
+            isChecked = false,
+            onClick = { onOpenSystemPrompt(); onDismiss() }
+        )
     }
 }
 

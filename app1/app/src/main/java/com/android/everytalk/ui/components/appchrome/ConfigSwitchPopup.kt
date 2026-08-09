@@ -1,10 +1,6 @@
 package com.android.everytalk.ui.components
 import com.android.everytalk.statecontroller.*
 
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.CubicBezierEasing
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
@@ -16,10 +12,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -32,12 +25,10 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.ApiConfig
+import com.android.everytalk.ui.components.popup.AppFloatingCard
 import com.android.everytalk.ui.screens.MainScreen.chat.models.sortModelConfigs
 import com.android.everytalk.ui.screens.settings.localizedChannelLabel
 import com.android.everytalk.ui.screens.settings.localizedProviderLabel
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 data class ConfigGroup(
     val provider: String,
@@ -72,35 +63,15 @@ fun ConfigSwitchPopup(
     onModelSelected: (ApiConfig) -> Unit,
     onDismiss: () -> Unit
 ) {
-    var showPopup by remember { mutableStateOf(false) }
-    val scaleAnim = remember { Animatable(0.8f) }
-    val alphaAnim = remember { Animatable(0f) }
-
     var selectedGroup by remember { mutableStateOf<ConfigGroup?>(null) }
 
-    val emphasizedDecelerate = CubicBezierEasing(0.0f, 0.0f, 0.2f, 1.0f)
-    val decelerateEasing = CubicBezierEasing(0.4f, 0.0f, 0.2f, 1.0f)
-
     LaunchedEffect(visible) {
-        if (visible) {
-            showPopup = true
-            scaleAnim.snapTo(0.8f)
-            alphaAnim.snapTo(0f)
-            coroutineScope {
-                launch { scaleAnim.animateTo(1f, tween(120, easing = emphasizedDecelerate)) }
-                launch { alphaAnim.animateTo(1f, tween(30, easing = decelerateEasing)) }
-            }
-        } else if (showPopup) {
-            showPopup = false
-            selectedGroup = null
-        }
+        if (!visible) selectedGroup = null
     }
 
-    if (!showPopup) return
+    if (!visible) return
 
     val isDark = isSystemInDarkTheme()
-    val cardBg = if (isDark) Color(0xFF212121) else Color(0xFFFFFFFF)
-    val popupBorderColor = if (isDark) Color.White.copy(alpha = 0.10f) else Color(0xFF0D0D0D).copy(alpha = 0.05f)
     val textColor = if (isDark) Color.White else Color(0xFF0D0D0D)
     val subtextColor = if (isDark) Color(0xFF888888) else Color(0xFF999999)
 
@@ -113,76 +84,66 @@ fun ConfigSwitchPopup(
             onDismissRequest = onDismiss,
             properties = PopupProperties(focusable = true)
         ) {
-        Surface(
-            modifier = Modifier
-                .width(IntrinsicSize.Max)
-                .widthIn(max = 280.dp)
-                .heightIn(max = 400.dp)
-                .graphicsLayer {
-                    this.scaleX = scaleAnim.value
-                    this.scaleY = scaleAnim.value
-                    this.alpha = alphaAnim.value
-                    this.transformOrigin = TransformOrigin(0.2f, 0f)
-                }
-                .shadow(8.dp, RoundedCornerShape(20.dp))
-                .border(1.dp, popupBorderColor, RoundedCornerShape(20.dp)),
-            shape = RoundedCornerShape(20.dp),
-            color = cardBg
-        ) {
-            Column(
+            AppFloatingCard(
                 modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-                    .padding(vertical = 8.dp)
+                    .width(IntrinsicSize.Max)
+                    .widthIn(max = 280.dp)
+                    .heightIn(max = 400.dp),
             ) {
-                Text(
-                    text = stringResource(R.string.chat_configuration_switch_title),
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = subtextColor,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                )
-                configGroups.forEach { group ->
-                    val isCurrentGroup = selectedApiConfig?.let {
-                        it.provider == group.provider &&
-                        it.address == group.address &&
-                        it.key == group.key
-                    } == true
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .clickable { selectedGroup = group }
-                            .padding(horizontal = 16.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        if (isCurrentGroup) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_check),
-                                contentDescription = null,
-                                tint = textColor,
-                                modifier = Modifier.size(16.dp)
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(vertical = 8.dp)
+                ) {
+                    Text(
+                        text = stringResource(R.string.chat_configuration_switch_title),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = subtextColor,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                    )
+                    configGroups.forEach { group ->
+                        val isCurrentGroup = selectedApiConfig?.let {
+                            it.provider == group.provider &&
+                                it.address == group.address &&
+                                it.key == group.key
+                        } == true
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .clickable { selectedGroup = group }
+                                .padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.Center
+                        ) {
+                            if (isCurrentGroup) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_check),
+                                    contentDescription = null,
+                                    tint = textColor,
+                                    modifier = Modifier.size(16.dp)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                            }
+                            Text(
+                                text = if (group.provider.isBlank()) {
+                                    localizedChannelLabel(group.channel)
+                                } else {
+                                    localizedProviderLabel(group.provider)
+                                },
+                                fontSize = 14.sp,
+                                fontWeight = if (isCurrentGroup) FontWeight.Medium else FontWeight.Normal,
+                                color = textColor,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
-                            Spacer(modifier = Modifier.width(6.dp))
                         }
-                        Text(
-                            text = if (group.provider.isBlank()) {
-                                localizedChannelLabel(group.channel)
-                            } else {
-                                localizedProviderLabel(group.provider)
-                            },
-                            fontSize = 14.sp,
-                            fontWeight = if (isCurrentGroup) FontWeight.Medium else FontWeight.Normal,
-                            color = textColor,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
                     }
                 }
             }
         }
-    }
     }
 
     if (selectedGroup != null) {
@@ -190,7 +151,6 @@ fun ConfigSwitchPopup(
             group = selectedGroup!!,
             selectedApiConfig = selectedApiConfig,
             onModelSelected = { config ->
-                showPopup = false
                 selectedGroup = null
                 onModelSelected(config)
                 onDismiss()
@@ -208,20 +168,8 @@ private fun ModelPickerDialog(
     onDismiss: () -> Unit
 ) {
     val isDark = isSystemInDarkTheme()
-    val cardBg = if (isDark) Color(0xFF212121) else Color(0xFFFFFFFF)
-    val popupBorderColor = if (isDark) Color.White.copy(alpha = 0.10f) else Color(0xFF0D0D0D).copy(alpha = 0.05f)
     val textColor = if (isDark) Color.White else Color(0xFF0D0D0D)
     val subtextColor = if (isDark) Color(0xFF888888) else Color(0xFF999999)
-
-    val scaleAnim = remember { Animatable(0.8f) }
-    val alphaAnim = remember { Animatable(0f) }
-    val emphasizedDecelerate = CubicBezierEasing(0.0f, 0.0f, 0.2f, 1.0f)
-    val decelerateEasing = CubicBezierEasing(0.4f, 0.0f, 0.2f, 1.0f)
-
-    LaunchedEffect(Unit) {
-        launch { scaleAnim.animateTo(1f, tween(120, easing = emphasizedDecelerate)) }
-        launch { alphaAnim.animateTo(1f, tween(30, easing = decelerateEasing)) }
-    }
 
     Popup(
         alignment = Alignment.TopStart,
@@ -229,21 +177,11 @@ private fun ModelPickerDialog(
         onDismissRequest = onDismiss,
         properties = PopupProperties(focusable = true)
     ) {
-        Surface(
+        AppFloatingCard(
             modifier = Modifier
                 .width(IntrinsicSize.Max)
                 .widthIn(max = 280.dp)
-                .heightIn(max = 400.dp)
-                .graphicsLayer {
-                    this.scaleX = scaleAnim.value
-                    this.scaleY = scaleAnim.value
-                    this.alpha = alphaAnim.value
-                    this.transformOrigin = TransformOrigin(0.2f, 0f)
-                }
-                .shadow(8.dp, RoundedCornerShape(20.dp))
-                .border(1.dp, popupBorderColor, RoundedCornerShape(20.dp)),
-            shape = RoundedCornerShape(20.dp),
-            color = cardBg
+                .heightIn(max = 400.dp),
         ) {
             Column(
                 modifier = Modifier

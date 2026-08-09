@@ -37,7 +37,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import kotlinx.coroutines.launch
 import androidx.compose.ui.graphics.Color
@@ -54,6 +53,7 @@ import com.android.everytalk.data.DataClass.ModalityType
 import com.android.everytalk.data.network.ExternalWebSearchProvider
 import com.android.everytalk.data.network.ExternalWebSearchProviderConfig
 import com.android.everytalk.statecontroller.controller.config.modelConfigGroupId
+import com.android.everytalk.ui.components.popup.AppFloatingCard
 import com.android.everytalk.ui.screens.MainScreen.chat.models.sortModelConfigs
 
 @SuppressLint("ConfigurationScreenWidthHeight")
@@ -689,23 +689,9 @@ private fun ModelListPopup(
     onDismiss: () -> Unit
 ) {
     val isDark = isSystemInDarkTheme()
-    val cardBg = if (isDark) Color(0xFF212121) else Color(0xFFFFFFFF)
-    val popupBorderColor = if (isDark) Color(0xFF414141) else Color(0xFFF3F3F3)
     val textColor = if (isDark) Color.White else Color(0xFF0D0D0D)
     val selectedColor = if (isDark) Color(0xFF6EB5FF) else Color(0xFF3B82F6)
     val sortedConfigs = remember(configs) { sortModelConfigs(configs) }
-
-    val scaleAnim = remember { androidx.compose.animation.core.Animatable(0.8f) }
-    val alphaAnim = remember { androidx.compose.animation.core.Animatable(0f) }
-    val emphasizedDecelerate = androidx.compose.animation.core.CubicBezierEasing(0.0f, 0.0f, 0.2f, 1.0f)
-    val decelerateEasing = androidx.compose.animation.core.CubicBezierEasing(0.4f, 0.0f, 0.2f, 1.0f)
-
-    LaunchedEffect(Unit) {
-        kotlinx.coroutines.coroutineScope {
-            launch { scaleAnim.animateTo(1f, androidx.compose.animation.core.tween(120, easing = emphasizedDecelerate)) }
-            launch { alphaAnim.animateTo(1f, androidx.compose.animation.core.tween(30, easing = decelerateEasing)) }
-        }
-    }
 
     androidx.compose.ui.window.Popup(
         alignment = Alignment.TopCenter,
@@ -713,23 +699,10 @@ private fun ModelListPopup(
         onDismissRequest = onDismiss,
         properties = androidx.compose.ui.window.PopupProperties(focusable = true)
     ) {
-        Surface(
+        AppFloatingCard(
             modifier = Modifier
                 .widthIn(min = 220.dp, max = 320.dp)
-                .heightIn(max = 400.dp)
-                .graphicsLayer {
-                    scaleX = scaleAnim.value
-                    scaleY = scaleAnim.value
-                    alpha = alphaAnim.value
-                    transformOrigin = TransformOrigin(0.5f, 0f)
-                }
-                .shadow(
-                    elevation = 8.dp,
-                    shape = RoundedCornerShape(20.dp)
-                )
-                .border(1.dp, popupBorderColor, RoundedCornerShape(20.dp)),
-            shape = RoundedCornerShape(20.dp),
-            color = cardBg
+                .heightIn(max = 400.dp),
         ) {
             if (configs.isEmpty()) {
                 Box(

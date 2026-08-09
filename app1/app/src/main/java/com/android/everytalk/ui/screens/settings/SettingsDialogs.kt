@@ -35,6 +35,10 @@ import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldDefaultBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldBorderColor
+import com.android.everytalk.ui.components.popup.AppFloatingCardElevation
+import com.android.everytalk.ui.components.popup.AppFloatingCardShape
+import com.android.everytalk.ui.components.popup.appFloatingCardBorderColor
+import com.android.everytalk.ui.components.popup.appFloatingCardContainerColor
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
@@ -317,13 +321,12 @@ internal fun CustomStyledDropdownMenu(
     if ((transitionState.currentState || transitionState.targetState) && anchorBounds != null) {
         val density = LocalDensity.current
         val menuWidth = with(density) { anchorBounds.width.toDp() }
-        val isDark = isSystemInDarkTheme()
-        val menuBg = if (isDark) Color(0xFF212121) else Color(0xFFFFFFFF)
-        val menuBorder = if (isDark) Color(0xFF414141) else Color(0xFFF3F3F3)
+        val menuBg = appFloatingCardContainerColor()
+        val menuBorder = appFloatingCardBorderColor()
 
         MaterialTheme(
             shapes = MaterialTheme.shapes.copy(
-                extraSmall = RoundedCornerShape(20.dp)
+                extraSmall = AppFloatingCardShape
             ),
             colorScheme = MaterialTheme.colorScheme.copy(
                 surface = menuBg
@@ -335,13 +338,17 @@ internal fun CustomStyledDropdownMenu(
                 modifier = modifier
                     .width(menuWidth)
                     .heightIn(max = 280.dp)
-                    .border(1.dp, menuBorder, RoundedCornerShape(20.dp)),
+                    .border(1.dp, menuBorder, AppFloatingCardShape),
                 offset = DpOffset(0.dp, yOffsetDp),
                 properties = PopupProperties(
                     focusable = true,
                     dismissOnClickOutside = true,
                     dismissOnBackPress = true
-                )
+                ),
+                shape = AppFloatingCardShape,
+                containerColor = menuBg,
+                tonalElevation = 0.dp,
+                shadowElevation = AppFloatingCardElevation,
             ) {
                 content()
             }

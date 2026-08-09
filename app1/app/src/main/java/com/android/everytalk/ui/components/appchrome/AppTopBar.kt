@@ -1,9 +1,6 @@
 package com.android.everytalk.ui.components
 import com.android.everytalk.statecontroller.*
 
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.CubicBezierEasing
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -24,7 +21,6 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
@@ -45,10 +41,8 @@ import com.android.everytalk.ui.components.dialog.appDialogBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.components.dialog.appDialogSubtextColor
+import com.android.everytalk.ui.components.popup.AppFloatingCard
 import com.android.everytalk.ui.screens.MainScreen.chat.models.sortModelConfigs
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 internal data class TopBarModelDisplayInfo(
@@ -395,36 +389,7 @@ private fun TopBarMoreMenu(
     onSettings: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    var showPopup by remember { mutableStateOf(false) }
-    val scaleAnim = remember { Animatable(0.8f) }
-    val alphaAnim = remember { Animatable(0f) }
-
-    val emphasizedDecelerate = CubicBezierEasing(0.0f, 0.0f, 0.2f, 1.0f)
-    val decelerateEasing = CubicBezierEasing(0.4f, 0.0f, 0.2f, 1.0f)
-
-    LaunchedEffect(expanded) {
-        if (expanded) {
-            showPopup = true
-            scaleAnim.snapTo(0.8f)
-            alphaAnim.snapTo(0f)
-            coroutineScope {
-                launch { scaleAnim.animateTo(1f, tween(120, easing = emphasizedDecelerate)) }
-                launch { alphaAnim.animateTo(1f, tween(30, easing = decelerateEasing)) }
-            }
-        } else if (showPopup) {
-            coroutineScope {
-                launch { alphaAnim.animateTo(0f, tween(75, easing = decelerateEasing)) }
-                launch { delay(74); scaleAnim.snapTo(0.8f) }
-            }
-            showPopup = false
-        }
-    }
-
-    if (!showPopup) return
-
-    val isDark = isSystemInDarkTheme()
-    val cardBg = if (isDark) Color(0xFF212121) else Color(0xFFFFFFFF)
-    val popupBorderColor = if (isDark) Color.White.copy(alpha = 0.10f) else Color(0xFF0D0D0D).copy(alpha = 0.05f)
+    if (!expanded) return
 
     Popup(
         alignment = Alignment.TopEnd,
@@ -432,20 +397,10 @@ private fun TopBarMoreMenu(
         onDismissRequest = onDismiss,
         properties = PopupProperties(focusable = true)
     ) {
-        Surface(
+        AppFloatingCard(
             modifier = Modifier
                 .wrapContentWidth()
-                .widthIn(min = 200.dp)
-                .graphicsLayer {
-                    this.scaleX = scaleAnim.value
-                    this.scaleY = scaleAnim.value
-                    this.alpha = alphaAnim.value
-                    this.transformOrigin = TransformOrigin(1f, 0f)
-                }
-                .shadow(8.dp, RoundedCornerShape(28.dp))
-                .border(1.dp, popupBorderColor, RoundedCornerShape(28.dp)),
-            shape = RoundedCornerShape(28.dp),
-            color = cardBg
+                .widthIn(min = 200.dp),
         ) {
             val textColor = MaterialTheme.colorScheme.onSurface
             val deleteColor = Color(0xFFEF5350)
@@ -511,8 +466,6 @@ private fun ModelSelectionDropdown(
     onDismiss: () -> Unit
 ) {
     val isDark = isSystemInDarkTheme()
-    val cardBg = if (isDark) Color(0xFF212121) else Color(0xFFFFFFFF)
-    val popupBorderColor = if (isDark) Color.White.copy(alpha = 0.10f) else Color(0xFF0D0D0D).copy(alpha = 0.05f)
     val textColor = if (isDark) Color.White else Color(0xFF0D0D0D)
     val sortedModels = remember(models) { sortModelConfigs(models) }
     val selectedIndex = remember(sortedModels, selectedApiConfig?.id) {
@@ -531,38 +484,18 @@ private fun ModelSelectionDropdown(
     val popupMaxHeight = ModelSelectionVerticalPadding * 2 +
         ModelSelectionItemHeight * sortedModels.size.coerceAtMost(MODEL_SELECTION_VISIBLE_ITEM_COUNT)
 
-    val scaleAnim = remember { Animatable(0.8f) }
-    val alphaAnim = remember { Animatable(0f) }
-    val emphasizedDecelerate = CubicBezierEasing(0.0f, 0.0f, 0.2f, 1.0f)
-    val decelerateEasing = CubicBezierEasing(0.4f, 0.0f, 0.2f, 1.0f)
-
-    LaunchedEffect(Unit) {
-        launch { scaleAnim.animateTo(1f, tween(120, easing = emphasizedDecelerate)) }
-        launch { alphaAnim.animateTo(1f, tween(30, easing = decelerateEasing)) }
-    }
-
     Popup(
         alignment = Alignment.TopStart,
         offset = androidx.compose.ui.unit.IntOffset(0, with(androidx.compose.ui.platform.LocalDensity.current) { 48.dp.toPx().toInt() }),
         onDismissRequest = onDismiss,
         properties = PopupProperties(focusable = true)
     ) {
-        Surface(
+        AppFloatingCard(
             modifier = Modifier
                 .testTag("model_selection_dropdown")
                 .width(IntrinsicSize.Max)
                 .widthIn(max = 280.dp)
-                .heightIn(max = popupMaxHeight)
-                .graphicsLayer {
-                    this.scaleX = scaleAnim.value
-                    this.scaleY = scaleAnim.value
-                    this.alpha = alphaAnim.value
-                    this.transformOrigin = TransformOrigin(0.2f, 0f)
-                }
-                .shadow(8.dp, RoundedCornerShape(20.dp))
-                .border(1.dp, popupBorderColor, RoundedCornerShape(20.dp)),
-            shape = RoundedCornerShape(20.dp),
-            color = cardBg
+                .heightIn(max = popupMaxHeight),
         ) {
             Column(
                 modifier = Modifier

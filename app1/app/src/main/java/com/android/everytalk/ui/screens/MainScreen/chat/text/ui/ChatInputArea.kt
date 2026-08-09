@@ -13,8 +13,6 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
@@ -57,7 +55,6 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
@@ -74,6 +71,7 @@ import com.android.everytalk.models.ImageSourceOption
 import com.android.everytalk.models.MoreOptionsType
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.components.modifier.diffuseShadow
+import com.android.everytalk.ui.components.popup.AppFloatingCard
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -514,61 +512,8 @@ fun ChatInputArea(
                 val verticalPadding = ((4f - 1f * sizeProgress).coerceAtLeast(0f)).dp
                 val inputMinHeight = ((48f - 4f * sizeProgress).coerceIn(44f, 48f)).dp
 
-                // 功能面板动画状态
-                var renderFunctionPanel by remember { mutableStateOf(false) }
-                val functionPanelAlpha = remember { Animatable(0f) }
-                val functionPanelScale = remember { Animatable(0.8f) }
-
-                // 图片选择面板动画状态
-                var renderImageSelectionPanel by remember { mutableStateOf(false) }
-                val imageAlpha = remember { Animatable(0f) }
-                val imageScale = remember { Animatable(0.8f) }
-
-                // 更多选项面板动画状态
-                var renderMoreOptionsPanel by remember { mutableStateOf(false) }
-                val moreAlpha = remember { Animatable(0f) }
-                val moreScale = remember { Animatable(0.8f) }
-
                 val functionPanelPositionProvider = remember(chatInputContentHeightPx, density) {
                     chatInputPopupPositionProvider(chatInputContentHeightPx, density)
-                }
-
-                LaunchedEffect(showFunctionPanel) {
-                    if (showFunctionPanel) {
-                        renderFunctionPanel = true
-                        functionPanelAlpha.snapTo(1f)
-                        launch { functionPanelScale.animateTo(1f, animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) }
-                    } else if (renderFunctionPanel) {
-                        launch { functionPanelAlpha.animateTo(0f, animationSpec = tween(durationMillis = 140)) }
-                        launch { functionPanelScale.animateTo(0.8f, animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing)) }
-                            .invokeOnCompletion { renderFunctionPanel = false }
-                    }
-                }
-
-                // 图片选择面板动画
-                LaunchedEffect(showImageSelectionPanel) {
-                    if (showImageSelectionPanel) {
-                        renderImageSelectionPanel = true
-                        launch { imageAlpha.animateTo(1f, animationSpec = tween(durationMillis = 150)) }
-                        launch { imageScale.animateTo(1f, animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) }
-                    } else if (renderImageSelectionPanel) {
-                        launch { imageAlpha.animateTo(0f, animationSpec = tween(durationMillis = 140)) }
-                        launch { imageScale.animateTo(0.9f, animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing)) }
-                            .invokeOnCompletion { renderImageSelectionPanel = false }
-                    }
-                }
-
-                // 更多选项面板动画
-                LaunchedEffect(showMoreOptionsPanel) {
-                    if (showMoreOptionsPanel) {
-                        renderMoreOptionsPanel = true
-                        launch { moreAlpha.animateTo(1f, animationSpec = tween(durationMillis = 150)) }
-                        launch { moreScale.animateTo(1f, animationSpec = tween(durationMillis = 200, easing = FastOutSlowInEasing)) }
-                    } else if (renderMoreOptionsPanel) {
-                        launch { moreAlpha.animateTo(0f, animationSpec = tween(durationMillis = 140)) }
-                        launch { moreScale.animateTo(0.9f, animationSpec = tween(durationMillis = 160, easing = FastOutSlowInEasing)) }
-                            .invokeOnCompletion { renderMoreOptionsPanel = false }
-                    }
                 }
 
                 val buttonBackgroundColor by animateColorAsState(
@@ -691,7 +636,7 @@ fun ChatInputArea(
                                 }
                             }
 
-                            if (renderFunctionPanel) {
+                            if (showFunctionPanel) {
                                 Popup(
                                     popupPositionProvider = functionPanelPositionProvider,
                                     onDismissRequest = {
@@ -700,18 +645,10 @@ fun ChatInputArea(
                                     },
                                     properties = PopupProperties(focusable = false, dismissOnBackPress = false, dismissOnClickOutside = true)
                                 ) {
-                                    Box(
+                                    AppFloatingCard(
                                         modifier = Modifier
                                             .widthIn(max = 320.dp)
-                                            .wrapContentHeight()
-                                            .graphicsLayer {
-                                                alpha = functionPanelAlpha.value
-                                            }
-                                            .graphicsLayer {
-                                                scaleX = functionPanelScale.value
-                                                scaleY = functionPanelScale.value
-                                                transformOrigin = TransformOrigin(0.5f, 1f)
-                                            }
+                                            .wrapContentHeight(),
                                     ) {
                                         FunctionPanelContent(
                                             isWebSearchEnabled = isWebSearchEnabled,
@@ -751,7 +688,7 @@ fun ChatInputArea(
                                 }
                             }
 
-                            if (renderImageSelectionPanel) {
+                            if (showImageSelectionPanel) {
                                 Popup(
                                     alignment = Alignment.BottomStart,
                                     offset = IntOffset(0, with(density) { (-56).dp.toPx().toInt() }),
@@ -761,12 +698,7 @@ fun ChatInputArea(
                                     },
                                     properties = PopupProperties(focusable = false, dismissOnBackPress = true, dismissOnClickOutside = true)
                                 ) {
-                                    Box(modifier = Modifier.graphicsLayer {
-                                        alpha = imageAlpha.value
-                                        scaleX = imageScale.value
-                                        scaleY = imageScale.value
-                                        transformOrigin = TransformOrigin(0f, 1f)
-                                    }) {
+                                    AppFloatingCard {
                                         OptimizedImageSelectionPanel { selectedOption ->
                                             if (showImageSelectionPanel) showImageSelectionPanel = false
                                             when (selectedOption) {
@@ -780,7 +712,7 @@ fun ChatInputArea(
                                 }
                             }
 
-                            if (renderMoreOptionsPanel) {
+                            if (showMoreOptionsPanel) {
                                 Popup(
                                     alignment = Alignment.BottomStart,
                                     offset = IntOffset(0, with(density) { (-56).dp.toPx().toInt() }),
@@ -790,12 +722,7 @@ fun ChatInputArea(
                                     },
                                     properties = PopupProperties(focusable = false, dismissOnBackPress = true, dismissOnClickOutside = true)
                                 ) {
-                                    Box(modifier = Modifier.graphicsLayer {
-                                        alpha = moreAlpha.value
-                                        scaleX = moreScale.value
-                                        scaleY = moreScale.value
-                                        transformOrigin = TransformOrigin(0f, 1f)
-                                    }) {
+                                    AppFloatingCard {
                                         OptimizedMoreOptionsPanel(isMcpEnabled = isMcpEnabled) { selectedOption ->
                                             when (selectedOption) {
                                                 MoreOptionsType.MCP -> {

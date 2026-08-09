@@ -54,7 +54,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -85,11 +84,11 @@ import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.components.ChatMarkdownTextStyle
 import com.android.everytalk.ui.components.ProportionalAsyncImage
 import com.android.everytalk.ui.components.ImagePreviewDialog
+import com.android.everytalk.ui.components.popup.AppFloatingCard
 import com.android.everytalk.ui.components.streaming.StreamBlockParser
 import com.android.everytalk.ui.components.streaming.UnifiedMarkdownRenderer
 import com.android.everytalk.ui.components.streaming.contentVersionForRendering
 
-private val CONTEXT_MENU_CORNER_RADIUS = 28.dp
 private val CONTEXT_MENU_ITEM_ICON_SIZE = 22.dp
 // Markdown 字形视觉重心偏下，用户气泡只移动内容绘制位置，不改变气泡尺寸。
 private val USER_BUBBLE_TEXT_OPTICAL_OFFSET = (-8).dp
@@ -752,18 +751,9 @@ fun MessageContextMenu(
         val finalX = rawX.coerceIn(0f, screenWidthPx - menuWidthPx)
         val finalY = rawY.coerceIn(0f, screenHeightPx - estimatedMenuHeightPx)
 
-        val cardBg = if (isDark) Color(0xFF212121) else Color(0xFFFFFFFF)
-        val borderColor = if (isDark) Color.White.copy(alpha = 0.10f) else Color(0xFF0D0D0D).copy(alpha = 0.05f)
         val iconBg = if (isDark) Color(0xFF3B3B3B) else Color(0xFFE8E8E8)
         val textColor = if (isDark) Color.White else Color(0xFF0D0D0D)
         val iconTint = if (isDark) Color.White else Color(0xFF0D0D0D)
-
-        val scaleAnim = remember { Animatable(0.8f) }
-        val alphaAnim = remember { Animatable(0f) }
-        LaunchedEffect(Unit) {
-            launch { scaleAnim.animateTo(1f, tween(120, easing = CubicBezierEasing(0.0f, 0.0f, 0.2f, 1.0f))) }
-            launch { alphaAnim.animateTo(1f, tween(30, easing = CubicBezierEasing(0.4f, 0.0f, 0.2f, 1.0f))) }
-        }
 
         Popup(
             alignment = Alignment.TopStart,
@@ -776,19 +766,8 @@ fun MessageContextMenu(
                 clippingEnabled = false
             )
         ) {
-            Surface(
-                modifier = Modifier
-                    .width(menuWidth)
-                    .graphicsLayer {
-                        this.scaleX = scaleAnim.value
-                        this.scaleY = scaleAnim.value
-                        this.alpha = alphaAnim.value
-                        this.transformOrigin = TransformOrigin(1f, 0f)
-                    }
-                    .shadow(8.dp, RoundedCornerShape(CONTEXT_MENU_CORNER_RADIUS))
-                    .border(1.dp, borderColor, RoundedCornerShape(CONTEXT_MENU_CORNER_RADIUS)),
-                shape = RoundedCornerShape(CONTEXT_MENU_CORNER_RADIUS),
-                color = cardBg
+            AppFloatingCard(
+                modifier = Modifier.width(menuWidth),
             ) {
                 Column(modifier = Modifier.padding(vertical = 8.dp)) {
                     ContextMenuRow(
@@ -849,18 +828,9 @@ fun ImageContextMenu(
        val finalX = rawX.coerceIn(0f, screenWidthPx - menuWidthPx)
        val finalY = rawY.coerceIn(0f, screenHeightPx - estimatedMenuHeightPx)
 
-       val cardBg = if (isDark) Color(0xFF212121) else Color(0xFFFFFFFF)
-       val borderColor = if (isDark) Color.White.copy(alpha = 0.10f) else Color(0xFF0D0D0D).copy(alpha = 0.05f)
        val iconBg = if (isDark) Color(0xFF3B3B3B) else Color(0xFFE8E8E8)
        val textColor = if (isDark) Color.White else Color(0xFF0D0D0D)
        val iconTint = if (isDark) Color.White else Color(0xFF0D0D0D)
-
-       val scaleAnim = remember { Animatable(0.8f) }
-       val alphaAnim = remember { Animatable(0f) }
-       LaunchedEffect(Unit) {
-           launch { scaleAnim.animateTo(1f, tween(120, easing = CubicBezierEasing(0.0f, 0.0f, 0.2f, 1.0f))) }
-           launch { alphaAnim.animateTo(1f, tween(30, easing = CubicBezierEasing(0.4f, 0.0f, 0.2f, 1.0f))) }
-       }
 
        Popup(
            alignment = Alignment.TopStart,
@@ -873,19 +843,8 @@ fun ImageContextMenu(
                clippingEnabled = false
            )
        ) {
-           Surface(
-               modifier = Modifier
-                   .width(menuWidth)
-                   .graphicsLayer {
-                       this.scaleX = scaleAnim.value
-                       this.scaleY = scaleAnim.value
-                       this.alpha = alphaAnim.value
-                       this.transformOrigin = TransformOrigin(0f, 0f)
-                   }
-                   .shadow(8.dp, RoundedCornerShape(CONTEXT_MENU_CORNER_RADIUS))
-                   .border(1.dp, borderColor, RoundedCornerShape(CONTEXT_MENU_CORNER_RADIUS)),
-               shape = RoundedCornerShape(CONTEXT_MENU_CORNER_RADIUS),
-               color = cardBg
+           AppFloatingCard(
+               modifier = Modifier.width(menuWidth),
            ) {
                Column(modifier = Modifier.padding(vertical = 8.dp)) {
                    ContextMenuRow(

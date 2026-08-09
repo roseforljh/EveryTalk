@@ -202,56 +202,52 @@ fun OptimizedImageSelectionPanel(
     onOptionSelected: (ImageSourceOption) -> Unit
 ) {
     var activeOption by remember { mutableStateOf<ImageSourceOption?>(null) }
-    val panelBackgroundColor = MaterialTheme.colorScheme.surfaceDim
+    val panelBackgroundColor = Color.Transparent
     val darkerBackgroundColor = MaterialTheme.colorScheme.surfaceVariant
 
-    Surface(
+    Column(
         modifier = modifier
             .width(150.dp)
             .wrapContentHeight(),
-        shape = RoundedCornerShape(20.dp),
-        color = panelBackgroundColor
     ) {
-        Column {
-            ImageSourceOption.values().forEach { option ->
-                val isSelected = activeOption == option
-                val animatedBackgroundColor by animateColorAsState(
-                    targetValue = if (isSelected) darkerBackgroundColor else panelBackgroundColor,
-                    animationSpec = tween(durationMillis = 150), // 减少动画时间
-                    label = "ImageOptionPanelItemBackground"
-                )
-                
-                // 记忆化点击回调
-                val onClickCallback = remember(option) {
-                    {
-                        activeOption = option
-                        onOptionSelected(option)
-                        Unit
-                    }
-                }
+        ImageSourceOption.values().forEach { option ->
+            val isSelected = activeOption == option
+            val animatedBackgroundColor by animateColorAsState(
+                targetValue = if (isSelected) darkerBackgroundColor else panelBackgroundColor,
+                animationSpec = tween(durationMillis = 150), // 减少动画时间
+                label = "ImageOptionPanelItemBackground"
+            )
 
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(onClick = onClickCallback)
-                        .background(animatedBackgroundColor)
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    // 为每个选项设置不同颜色
-                    val iconTint = when (option) {
-                        ImageSourceOption.ALBUM -> Color(0xff2cb334)  // 绿色
-                        ImageSourceOption.CAMERA -> Color(0xff2196F3) // 蓝色
-                    }
-                    Icon(
-                        imageVector = option.icon,
-                        contentDescription = stringResource(option.labelRes),
-                        tint = iconTint,
-                        modifier = Modifier.size(24.dp)
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Text(text = stringResource(option.labelRes), color = MaterialTheme.colorScheme.onSurface, fontSize = 16.sp)
+            // 记忆化点击回调
+            val onClickCallback = remember(option) {
+                {
+                    activeOption = option
+                    onOptionSelected(option)
+                    Unit
                 }
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onClickCallback)
+                    .background(animatedBackgroundColor)
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // 为每个选项设置不同颜色
+                val iconTint = when (option) {
+                    ImageSourceOption.ALBUM -> Color(0xff2cb334)  // 绿色
+                    ImageSourceOption.CAMERA -> Color(0xff2196F3) // 蓝色
+                }
+                Icon(
+                    imageVector = option.icon,
+                    contentDescription = stringResource(option.labelRes),
+                    tint = iconTint,
+                    modifier = Modifier.size(24.dp)
+                )
+                Spacer(Modifier.width(12.dp))
+                Text(text = stringResource(option.labelRes), color = MaterialTheme.colorScheme.onSurface, fontSize = 16.sp)
             }
         }
     }
@@ -267,80 +263,76 @@ fun OptimizedMoreOptionsPanel(
     onOptionSelected: (MoreOptionsType) -> Unit
 ) {
     var activeOption by remember { mutableStateOf<MoreOptionsType?>(null) }
-    val panelBackgroundColor = MaterialTheme.colorScheme.surfaceDim
+    val panelBackgroundColor = Color.Transparent
     val darkerBackgroundColor = MaterialTheme.colorScheme.surfaceVariant
 
-    Surface(
+    Column(
         modifier = modifier
             .width(150.dp)
             .wrapContentHeight(),
-        shape = RoundedCornerShape(20.dp),
-        color = panelBackgroundColor
     ) {
-        Column {
-            MoreOptionsType.values().forEach { option ->
-                val isSelected = activeOption == option
-                val shouldHighlightBackground = option != MoreOptionsType.MCP && isSelected
-                val animatedBackgroundColor by animateColorAsState(
-                    targetValue = if (shouldHighlightBackground) darkerBackgroundColor else panelBackgroundColor,
-                    animationSpec = tween(durationMillis = 150), // 减少动画时间
-                    label = "MoreOptionPanelItemBackground"
-                )
-                var isPressed by remember(option) { mutableStateOf(false) }
-                val scale by animateFloatAsState(
-                    targetValue = if (isPressed) 0.92f else 1f,
-                    animationSpec = spring(
-                        dampingRatio = Spring.DampingRatioMediumBouncy,
-                        stiffness = Spring.StiffnessLow
-                    ),
-                    label = "MoreOptionPanelItemScale"
-                )
-                
-                // 记忆化点击回调
-                val onClickCallback = remember(option) {
-                    {
-                        activeOption = option
-                        isPressed = true
-                        onOptionSelected(option)
-                        Unit
-                    }
-                }
+        MoreOptionsType.values().forEach { option ->
+            val isSelected = activeOption == option
+            val shouldHighlightBackground = option != MoreOptionsType.MCP && isSelected
+            val animatedBackgroundColor by animateColorAsState(
+                targetValue = if (shouldHighlightBackground) darkerBackgroundColor else panelBackgroundColor,
+                animationSpec = tween(durationMillis = 150), // 减少动画时间
+                label = "MoreOptionPanelItemBackground"
+            )
+            var isPressed by remember(option) { mutableStateOf(false) }
+            val scale by animateFloatAsState(
+                targetValue = if (isPressed) 0.92f else 1f,
+                animationSpec = spring(
+                    dampingRatio = Spring.DampingRatioMediumBouncy,
+                    stiffness = Spring.StiffnessLow
+                ),
+                label = "MoreOptionPanelItemScale"
+            )
 
-                Surface(
-                    onClick = onClickCallback,
-                    shape = RoundedCornerShape(12.dp),
-                    color = animatedBackgroundColor,
-                    modifier = Modifier.graphicsLayer {
-                        scaleX = scale
-                        scaleY = scale
-                    }
+            // 记忆化点击回调
+            val onClickCallback = remember(option) {
+                {
+                    activeOption = option
+                    isPressed = true
+                    onOptionSelected(option)
+                    Unit
+                }
+            }
+
+            Surface(
+                onClick = onClickCallback,
+                shape = RoundedCornerShape(12.dp),
+                color = animatedBackgroundColor,
+                modifier = Modifier.graphicsLayer {
+                    scaleX = scale
+                    scaleY = scale
+                }
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        val iconTint = when (option) {
-                            MoreOptionsType.ATTACHMENT -> Color(0xff607D8B)
-                            MoreOptionsType.MCP -> if (isMcpEnabled) Color(0xff9C27B0) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                        }
-                        Icon(
-                            imageVector = option.icon,
-                            contentDescription = stringResource(option.labelRes),
-                            tint = iconTint,
-                            modifier = Modifier.size(24.dp)
-                        )
-                        Spacer(Modifier.width(12.dp))
-                        Text(text = stringResource(option.labelRes), color = MaterialTheme.colorScheme.onSurface, fontSize = 16.sp)
+                    val iconTint = when (option) {
+                        MoreOptionsType.ATTACHMENT -> Color(0xff607D8B)
+                        MoreOptionsType.MCP -> if (isMcpEnabled) Color(0xff9C27B0) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                     }
+                    Icon(
+                        imageVector = option.icon,
+                        contentDescription = stringResource(option.labelRes),
+                        tint = iconTint,
+                        modifier = Modifier.size(24.dp)
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Text(text = stringResource(option.labelRes), color = MaterialTheme.colorScheme.onSurface, fontSize = 16.sp)
                 }
+            }
 
-                LaunchedEffect(isPressed) {
-                    if (isPressed) {
-                        kotlinx.coroutines.delay(150)
-                        isPressed = false
-                    }
+            LaunchedEffect(isPressed) {
+                if (isPressed) {
+                    kotlinx.coroutines.delay(150)
+                    isPressed = false
                 }
             }
         }

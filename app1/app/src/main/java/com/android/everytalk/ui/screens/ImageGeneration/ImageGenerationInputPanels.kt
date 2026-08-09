@@ -130,97 +130,86 @@ internal fun ImageFunctionPanelContent(
     onShowQualityDialog: () -> Unit = {}
 ) {
     val isDark = isSystemInDarkTheme()
-    val cardBg = if (isDark) Color(0xFF212121) else Color(0xFFFFFFFF)
-    val borderColor = if (isDark) Color.White.copy(alpha = 0.10f) else Color(0xFF0D0D0D).copy(alpha = 0.05f)
     val iconBg = if (isDark) Color(0xFF3B3B3B) else Color(0xFFE8E8E8)
     val textColor = if (isDark) Color.White else Color(0xFF0D0D0D)
     val iconTint = if (isDark) Color.White else Color(0xFF0D0D0D)
 
-    Surface(
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .heightIn(max = maxHeight)
-            .shadow(8.dp, RoundedCornerShape(28.dp))
-            .border(1.dp, borderColor, RoundedCornerShape(28.dp)),
-        shape = RoundedCornerShape(28.dp),
-        color = cardBg
+            .verticalScroll(rememberScrollState()),
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-        ) {
-            if (!isQwenEdit) {
-                ImageFunctionPanelRow(
-                    iconRes = R.drawable.ic_aspect_ratio,
-                    label = stringResource(R.string.image_ratio_label, selectedImageRatio.displayName),
-                    iconBg = iconBg,
-                    iconTint = Color(0xFF66B5FF),
-                    textColor = textColor,
-                    onClick = onShowRatioDialog
-                )
-            }
-            if (isGptImage) {
-                ImageFunctionPanelRow(
-                    iconRes = R.drawable.ic_settings_slider,
-                    label = stringResource(
-                        R.string.image_quality_label,
-                        stringResource(currentGptImageQuality.displayNameRes),
-                    ),
-                    iconBg = iconBg,
-                    iconTint = Color(0xFF9C27B0),
-                    textColor = textColor,
-                    onClick = onShowQualityDialog
-                )
-            }
-            if (supportsImageEditing) {
-                ImageFunctionPanelRow(
-                    iconRes = R.drawable.ic_image_gallery,
-                    label = stringResource(R.string.image_select_image),
-                    iconBg = iconBg,
-                    iconTint = Color(0xff2cb334),
-                    textColor = textColor,
-                    onClick = onOpenGallery
-                )
-                ImageFunctionPanelRow(
-                    iconRes = R.drawable.ic_camera,
-                    label = stringResource(R.string.image_take_photo),
-                    iconBg = iconBg,
-                    iconTint = Color(0xFF2196F3),
-                    textColor = textColor,
-                    onClick = onOpenCamera
-                )
-            }
-            if (detectedFamily == ImageGenCapabilities.ModelFamily.MODAL_Z_IMAGE && onChangeImageSteps != null) {
-                ImageFunctionPanelRow(
-                    iconRes = R.drawable.ic_tuning,
-                    label = stringResource(R.string.image_steps_label, currentImageSteps ?: 4),
-                    iconBg = iconBg,
-                    iconTint = Color(0xFF66B5FF),
-                    textColor = textColor,
-                    onClick = onShowStepsDialog
-                )
-            }
-            if (isQwenEdit && onChangeImageParams != null) {
-                ImageFunctionPanelRow(
-                    iconRes = R.drawable.ic_tuning,
-                    label = stringResource(R.string.image_adjust_parameters),
-                    iconBg = iconBg,
-                    iconTint = Color(0xFFFF9800),
-                    textColor = textColor,
-                    onClick = onShowParamsDialog
-                )
-            }
-            if (hasContent) {
-                ImageFunctionPanelRow(
-                    iconRes = R.drawable.ic_close,
-                    label = stringResource(R.string.image_clear_content),
-                    iconBg = iconBg,
-                    iconTint = iconTint,
-                    textColor = textColor,
-                    onClick = onClearContent
-                )
-            }
+        if (!isQwenEdit) {
+            ImageFunctionPanelRow(
+                iconRes = R.drawable.ic_aspect_ratio,
+                label = stringResource(R.string.image_ratio_label, selectedImageRatio.displayName),
+                iconBg = iconBg,
+                iconTint = Color(0xFF66B5FF),
+                textColor = textColor,
+                onClick = onShowRatioDialog
+            )
+        }
+        if (isGptImage) {
+            ImageFunctionPanelRow(
+                iconRes = R.drawable.ic_settings_slider,
+                label = stringResource(
+                    R.string.image_quality_label,
+                    stringResource(currentGptImageQuality.displayNameRes),
+                ),
+                iconBg = iconBg,
+                iconTint = Color(0xFF9C27B0),
+                textColor = textColor,
+                onClick = onShowQualityDialog
+            )
+        }
+        if (supportsImageEditing) {
+            ImageFunctionPanelRow(
+                iconRes = R.drawable.ic_image_gallery,
+                label = stringResource(R.string.image_select_image),
+                iconBg = iconBg,
+                iconTint = Color(0xff2cb334),
+                textColor = textColor,
+                onClick = onOpenGallery
+            )
+            ImageFunctionPanelRow(
+                iconRes = R.drawable.ic_camera,
+                label = stringResource(R.string.image_take_photo),
+                iconBg = iconBg,
+                iconTint = Color(0xFF2196F3),
+                textColor = textColor,
+                onClick = onOpenCamera
+            )
+        }
+        if (detectedFamily == ImageGenCapabilities.ModelFamily.MODAL_Z_IMAGE && onChangeImageSteps != null) {
+            ImageFunctionPanelRow(
+                iconRes = R.drawable.ic_tuning,
+                label = stringResource(R.string.image_steps_label, currentImageSteps ?: 4),
+                iconBg = iconBg,
+                iconTint = Color(0xFF66B5FF),
+                textColor = textColor,
+                onClick = onShowStepsDialog
+            )
+        }
+        if (isQwenEdit && onChangeImageParams != null) {
+            ImageFunctionPanelRow(
+                iconRes = R.drawable.ic_tuning,
+                label = stringResource(R.string.image_adjust_parameters),
+                iconBg = iconBg,
+                iconTint = Color(0xFFFF9800),
+                textColor = textColor,
+                onClick = onShowParamsDialog
+            )
+        }
+        if (hasContent) {
+            ImageFunctionPanelRow(
+                iconRes = R.drawable.ic_close,
+                label = stringResource(R.string.image_clear_content),
+                iconBg = iconBg,
+                iconTint = iconTint,
+                textColor = textColor,
+                onClick = onClearContent
+            )
         }
     }
 }

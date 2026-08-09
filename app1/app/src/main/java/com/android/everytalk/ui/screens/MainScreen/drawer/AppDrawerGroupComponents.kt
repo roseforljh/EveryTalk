@@ -55,6 +55,10 @@ import com.android.everytalk.ui.components.dialog.appDialogCancelColor
 import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldColors
+import com.android.everytalk.ui.components.popup.AppFloatingCardElevation
+import com.android.everytalk.ui.components.popup.AppFloatingCardShape
+import com.android.everytalk.ui.components.popup.appFloatingCardBorderColor
+import com.android.everytalk.ui.components.popup.appFloatingCardContainerColor
 
 @Composable
 fun CollapsibleGroupHeader(
@@ -127,7 +131,16 @@ fun CollapsibleGroupHeader(
                     
                     DropdownMenu(
                         expanded = showMenu,
-                        onDismissRequest = { showMenu = false }
+                        onDismissRequest = { showMenu = false },
+                        modifier = Modifier.border(
+                            1.dp,
+                            appFloatingCardBorderColor(),
+                            AppFloatingCardShape,
+                        ),
+                        shape = AppFloatingCardShape,
+                        containerColor = appFloatingCardContainerColor(),
+                        tonalElevation = 0.dp,
+                        shadowElevation = AppFloatingCardElevation,
                     ) {
                         if (onRename != null) {
                             DropdownMenuItem(

@@ -1,12 +1,7 @@
 package com.android.everytalk.ui.screens.MainScreen.chat.text.ui
 
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.CubicBezierEasing
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,28 +14,19 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
@@ -60,10 +46,8 @@ import com.android.everytalk.data.DataClass.ContextUsageDataSource
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.network.TokenUsageSource
+import com.android.everytalk.ui.components.popup.AppFloatingCard
 import java.util.Locale
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 private val ContextUsageGreen = Color(0xFF22C55E)
@@ -253,7 +237,6 @@ internal fun AiContextUsageButton(
             minWidth = 0.dp,
             modifier = Modifier.width(284.dp),
             offset = popupOffset,
-            transformOrigin = TransformOrigin(0.25f, 1f),
         ) {
             AiContextUsagePopupContent(summary)
         }
@@ -482,64 +465,17 @@ internal fun AiMessageFloatingPopupCard(
     modifier: Modifier = Modifier,
     minWidth: Dp = 200.dp,
     offset: IntOffset = IntOffset.Zero,
-    transformOrigin: TransformOrigin = TransformOrigin(0f, 1f),
     content: @Composable () -> Unit,
 ) {
-    var visible by remember { mutableStateOf(false) }
-    val scale = remember { Animatable(0.8f) }
-    val alpha = remember { Animatable(0f) }
-    val emphasizedDecelerate = CubicBezierEasing(0f, 0f, 0.2f, 1f)
-    val decelerate = CubicBezierEasing(0.4f, 0f, 0.2f, 1f)
-
-    LaunchedEffect(expanded) {
-        if (expanded) {
-            visible = true
-            scale.snapTo(0.8f)
-            alpha.snapTo(0f)
-            coroutineScope {
-                launch { scale.animateTo(1f, tween(120, easing = emphasizedDecelerate)) }
-                launch { alpha.animateTo(1f, tween(30, easing = decelerate)) }
-            }
-        } else if (visible) {
-            coroutineScope {
-                launch { alpha.animateTo(0f, tween(75, easing = decelerate)) }
-                launch {
-                    delay(74)
-                    scale.snapTo(0.8f)
-                }
-            }
-            visible = false
-        }
-    }
-
-    if (!visible) return
-    val isDark = isSystemInDarkTheme()
-    val cardBackground = if (isDark) Color(0xFF212121) else Color.White
-    val borderColor = if (isDark) {
-        Color.White.copy(alpha = 0.10f)
-    } else {
-        Color(0xFF0D0D0D).copy(alpha = 0.05f)
-    }
-
+    if (!expanded) return
     Popup(
         alignment = Alignment.BottomStart,
         offset = offset,
         onDismissRequest = onDismiss,
         properties = PopupProperties(focusable = true),
     ) {
-        Surface(
-            modifier = modifier
-                .widthIn(min = minWidth)
-                .graphicsLayer {
-                    scaleX = scale.value
-                    scaleY = scale.value
-                    this.alpha = alpha.value
-                    this.transformOrigin = transformOrigin
-                }
-                .shadow(8.dp, RoundedCornerShape(28.dp))
-                .border(1.dp, borderColor, RoundedCornerShape(28.dp)),
-            shape = RoundedCornerShape(28.dp),
-            color = cardBackground,
+        AppFloatingCard(
+            modifier = modifier.widthIn(min = minWidth),
             content = content,
         )
     }

@@ -52,6 +52,7 @@ import com.android.everytalk.ui.screens.settings.dialogs.AutoFetchModelsConfirmD
 import com.android.everytalk.ui.screens.settings.dialogs.ModelSelectionDialog
 import com.android.everytalk.util.storage.readAtMost
 import com.android.everytalk.ui.components.floatingEdgeGradient
+import com.android.everytalk.ui.components.popup.AppFloatingCard
 import java.util.UUID
 
 private const val MAX_SETTINGS_IMPORT_BYTES = 50L * 1024L * 1024L
@@ -891,42 +892,16 @@ private fun SettingsTabMenu(
     onDismiss: () -> Unit
 ) {
     val isDark = isSystemInDarkTheme()
-    val cardBg = if (isDark) Color(0xFF212121) else Color(0xFFFFFFFF)
-    val popupBorderColor = if (isDark) Color(0xFF414141) else Color(0xFFF3F3F3)
     val textColor = if (isDark) Color.White else Color(0xFF0D0D0D)
     val selectedColor = if (isDark) Color(0xFF6EB5FF) else Color(0xFF3B82F6)
     val subtextColor = if (isDark) Color.White.copy(alpha = 0.5f) else Color(0xFF0D0D0D).copy(alpha = 0.5f)
-
-    var showPopup by remember { mutableStateOf(false) }
-    val scaleAnim = remember { androidx.compose.animation.core.Animatable(0.8f) }
-    val alphaAnim = remember { androidx.compose.animation.core.Animatable(0f) }
-    val emphasizedDecelerate = androidx.compose.animation.core.CubicBezierEasing(0.0f, 0.0f, 0.2f, 1.0f)
-    val decelerateEasing = androidx.compose.animation.core.CubicBezierEasing(0.4f, 0.0f, 0.2f, 1.0f)
-
-    LaunchedEffect(expanded) {
-        if (expanded) {
-            showPopup = true
-            scaleAnim.snapTo(0.8f)
-            alphaAnim.snapTo(0f)
-            kotlinx.coroutines.coroutineScope {
-                launch { scaleAnim.animateTo(1f, androidx.compose.animation.core.tween(120, easing = emphasizedDecelerate)) }
-                launch { alphaAnim.animateTo(1f, androidx.compose.animation.core.tween(30, easing = decelerateEasing)) }
-            }
-        } else if (showPopup) {
-            kotlinx.coroutines.coroutineScope {
-                launch { alphaAnim.animateTo(0f, androidx.compose.animation.core.tween(75, easing = decelerateEasing)) }
-                launch { kotlinx.coroutines.delay(74); scaleAnim.snapTo(0.8f) }
-            }
-            showPopup = false
-        }
-    }
 
     val sortedTabs = remember(tabs) {
         tabs.mapIndexed { index, title -> index to title }
             .sortedBy { it.second.length }
     }
 
-    if (!showPopup) return
+    if (!expanded) return
 
     androidx.compose.ui.window.Popup(
         alignment = Alignment.TopEnd,
@@ -934,19 +909,8 @@ private fun SettingsTabMenu(
         onDismissRequest = onDismiss,
         properties = androidx.compose.ui.window.PopupProperties(focusable = true)
     ) {
-        Surface(
-            modifier = Modifier
-                .widthIn(min = 112.dp, max = 176.dp)
-                .graphicsLayer {
-                    this.scaleX = scaleAnim.value
-                    this.scaleY = scaleAnim.value
-                    this.alpha = alphaAnim.value
-                    this.transformOrigin = androidx.compose.ui.graphics.TransformOrigin(1f, 0f)
-                }
-                .shadow(8.dp, RoundedCornerShape(16.dp))
-                .border(1.dp, popupBorderColor, RoundedCornerShape(16.dp)),
-            shape = RoundedCornerShape(16.dp),
-            color = cardBg
+        AppFloatingCard(
+            modifier = Modifier.widthIn(min = 112.dp, max = 176.dp),
         ) {
             Column(
                 modifier = Modifier.padding(vertical = 6.dp)

@@ -95,6 +95,10 @@ import com.android.everytalk.ui.components.dialog.appDialogBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.components.dialog.appDialogSubtextColor
+import com.android.everytalk.ui.components.popup.AppFloatingCardElevation
+import com.android.everytalk.ui.components.popup.AppFloatingCardShape
+import com.android.everytalk.ui.components.popup.appFloatingCardBorderColor
+import com.android.everytalk.ui.components.popup.appFloatingCardContainerColor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
@@ -784,8 +788,6 @@ private fun ThinkingLevelDropdown(
         animationSpec = tween(durationMillis = 180),
         label = "思考程度展开箭头",
     )
-    val menuShape = RoundedCornerShape(16.dp)
-    val borderColor = appDialogBorderColor()
     val presetOptions = if (allowCustom) {
         thinkingLevelOptions(ModelParameterProtocol.OPENAI_COMPATIBLE)
     } else {
@@ -868,10 +870,12 @@ private fun ThinkingLevelDropdown(
             expanded = expanded,
             onDismissRequest = { expanded = false },
             modifier = Modifier
-                .border(1.dp, borderColor, menuShape)
+                .border(1.dp, appFloatingCardBorderColor(), AppFloatingCardShape)
                 .dropdownMenuViewport(maxHeight = 280.dp),
-            shape = menuShape,
-            containerColor = appDialogContainerColor(),
+            shape = AppFloatingCardShape,
+            containerColor = appFloatingCardContainerColor(),
+            tonalElevation = 0.dp,
+            shadowElevation = AppFloatingCardElevation,
         ) {
             if (allowCustom) {
                 val customLabel = stringResource(R.string.model_parameters_custom)

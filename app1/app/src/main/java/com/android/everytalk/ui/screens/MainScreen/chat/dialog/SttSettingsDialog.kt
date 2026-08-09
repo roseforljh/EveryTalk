@@ -26,6 +26,10 @@ import com.android.everytalk.ui.screens.MainScreen.chat.voice.logic.VoiceConfigM
 import com.android.everytalk.ui.screens.settings.DialogTextFieldColors
 import com.android.everytalk.ui.screens.settings.DialogShape
 import com.android.everytalk.ui.screens.settings.SettingsFieldLabel
+import com.android.everytalk.ui.components.popup.AppFloatingCardElevation
+import com.android.everytalk.ui.components.popup.AppFloatingCardShape
+import com.android.everytalk.ui.components.popup.appFloatingCardBorderColor
+import com.android.everytalk.ui.components.popup.appFloatingCardContainerColor
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -222,7 +226,16 @@ fun SttSettingsDialog(
                         )
                         ExposedDropdownMenu(
                             expanded = expanded,
-                            onDismissRequest = { expanded = false }
+                            onDismissRequest = { expanded = false },
+                            modifier = Modifier.border(
+                                1.dp,
+                                appFloatingCardBorderColor(),
+                                AppFloatingCardShape,
+                            ),
+                            shape = AppFloatingCardShape,
+                            containerColor = appFloatingCardContainerColor(),
+                            tonalElevation = 0.dp,
+                            shadowElevation = AppFloatingCardElevation,
                         ) {
                             platforms.forEach { platform ->
                                 DropdownMenuItem(
