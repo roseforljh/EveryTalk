@@ -175,6 +175,7 @@ android {
             buildConfigField("String", "ZHIPU_API_KEY", "\"${getConfigValue("ZHIPU_API_KEY")}\"")
             buildConfigField("String", "JINA_READER_BASE_URL", "\"${getConfigValue("JINA_READER_BASE_URL")}\"")
             buildConfigField("String", "JINA_SEARCH_BASE_URL", "\"${getConfigValue("JINA_SEARCH_BASE_URL")}\"")
+            buildConfigField("String", "AI_CONTENT_REPORT_URL", "\"${getConfigValue("AI_CONTENT_REPORT_URL")}\"")
         }
         debug {
             isProfileable = false // debug 构建也可以设为 profileable,方便测试
@@ -196,6 +197,7 @@ android {
             buildConfigField("String", "ZHIPU_API_KEY", "\"${getConfigValue("ZHIPU_API_KEY")}\"")
             buildConfigField("String", "JINA_READER_BASE_URL", "\"${getConfigValue("JINA_READER_BASE_URL")}\"")
             buildConfigField("String", "JINA_SEARCH_BASE_URL", "\"${getConfigValue("JINA_SEARCH_BASE_URL")}\"")
+            buildConfigField("String", "AI_CONTENT_REPORT_URL", "\"${getConfigValue("AI_CONTENT_REPORT_URL")}\"")
 
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
@@ -341,6 +343,7 @@ ksp {
 
         // ===== 图片加载 - Coil =====
         implementation(libs.coil.compose)
+        implementation(libs.coil.gif)
         implementation(libs.coil.network.okhttp)
         implementation(libs.coil.video)
         implementation(libs.coil.svg)
