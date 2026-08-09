@@ -40,10 +40,12 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.painterResource
@@ -58,6 +60,8 @@ import com.android.everytalk.ui.components.floatingEdgeGradient
 import com.android.everytalk.ui.screens.MainScreen.AboutDialog
 import com.android.everytalk.util.locale.AppLanguage
 import com.android.everytalk.util.locale.AppLanguageController
+import com.android.everytalk.util.theme.AppTheme
+import com.android.everytalk.util.theme.AppThemeController
 
 private const val PROJECT_URL = "https://github.com/roseforljh/KunTalkwithAi"
 
@@ -109,7 +113,10 @@ fun AppInfoScreen(
 ) {
     var showAboutDialog by rememberSaveable { mutableStateOf(false) }
     var showLanguageDialog by rememberSaveable { mutableStateOf(false) }
+    var showThemeDialog by rememberSaveable { mutableStateOf(false) }
+    val context = LocalContext.current
     val currentLanguage = AppLanguageController.currentLanguage()
+    var currentTheme by remember { mutableStateOf(AppThemeController.currentTheme(context)) }
     BackHandler(onBack = onBack)
 
     ImmersiveInfoPage(
@@ -150,6 +157,16 @@ fun AppInfoScreen(
                         color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
                     )
                     AppInfoEntry(
+                        iconRes = R.drawable.ic_theme,
+                        title = stringResource(R.string.app_info_theme_title),
+                        description = stringResource(currentTheme.labelRes),
+                        onClick = { showThemeDialog = true },
+                    )
+                    HorizontalDivider(
+                        modifier = Modifier.padding(start = 80.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
+                    )
+                    AppInfoEntry(
                         iconRes = R.drawable.gpt_privacy,
                         title = stringResource(R.string.app_info_privacy_title),
                         description = stringResource(R.string.app_info_privacy_description),
@@ -183,6 +200,17 @@ fun AppInfoScreen(
                 AppLanguageController.setLanguage(language)
             },
             onDismiss = { showLanguageDialog = false },
+        )
+    }
+    if (showThemeDialog) {
+        ThemeSelectionDialog(
+            selectedTheme = currentTheme,
+            onThemeSelected = { theme ->
+                currentTheme = theme
+                showThemeDialog = false
+                AppThemeController.setTheme(context, theme)
+            },
+            onDismiss = { showThemeDialog = false },
         )
     }
 }
@@ -362,36 +390,78 @@ private val AppLanguage.labelRes: Int
         AppLanguage.ENGLISH -> R.string.app_language_english
     }
 
+private val AppTheme.labelRes: Int
+    get() = when (this) {
+        AppTheme.SYSTEM -> R.string.app_theme_system
+        AppTheme.LIGHT -> R.string.app_theme_light
+        AppTheme.DARK -> R.string.app_theme_dark
+    }
+
 @Composable
 private fun LanguageSelectionDialog(
     selectedLanguage: AppLanguage,
     onLanguageSelected: (AppLanguage) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    OptionSelectionDialog(
+        titleRes = R.string.app_language_dialog_title,
+        options = AppLanguage.entries,
+        selectedOption = selectedLanguage,
+        labelRes = AppLanguage::labelRes,
+        onOptionSelected = onLanguageSelected,
+        onDismiss = onDismiss,
+    )
+}
+
+@Composable
+private fun ThemeSelectionDialog(
+    selectedTheme: AppTheme,
+    onThemeSelected: (AppTheme) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    OptionSelectionDialog(
+        titleRes = R.string.app_theme_dialog_title,
+        options = AppTheme.entries,
+        selectedOption = selectedTheme,
+        labelRes = AppTheme::labelRes,
+        onOptionSelected = onThemeSelected,
+        onDismiss = onDismiss,
+    )
+}
+
+@Composable
+private fun <T> OptionSelectionDialog(
+    @StringRes titleRes: Int,
+    options: List<T>,
+    selectedOption: T,
+    labelRes: (T) -> Int,
+    onOptionSelected: (T) -> Unit,
+    onDismiss: () -> Unit,
+) {
     AlertDialog(
         onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.app_language_dialog_title)) },
+        title = { Text(stringResource(titleRes)) },
         text = {
             Column {
-                AppLanguage.entries.forEach { language ->
+                options.forEach { option ->
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .selectable(
-                                selected = language == selectedLanguage,
+                                selected = option == selectedOption,
                                 role = Role.RadioButton,
-                                onClick = { onLanguageSelected(language) },
+                                onClick = { onOptionSelected(option) },
                             )
                             .padding(vertical = 10.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         RadioButton(
-                            selected = language == selectedLanguage,
+                            selected = option == selectedOption,
                             onClick = null,
                         )
                         Spacer(Modifier.width(12.dp))
                         Text(
-                            text = stringResource(language.labelRes),
+                            text = stringResource(labelRes(option)),
                             style = MaterialTheme.typography.bodyLarge,
                             color = MaterialTheme.colorScheme.onSurface,
                         )

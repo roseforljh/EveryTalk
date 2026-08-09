@@ -5,12 +5,17 @@
 
     <string name="app_info_title">App information</string>
     <string name="app_info_section_title">Information and support</string>
-    <string name="app_info_tagline">Language, privacy, version, and app information</string>
+    <string name="app_info_tagline">Language, appearance, privacy, and version details</string>
     <string name="app_info_language_title">Language</string>
     <string name="app_language_dialog_title">App language</string>
     <string name="app_language_system">System default</string>
     <string name="app_language_simplified_chinese">Simplified Chinese</string>
     <string name="app_language_english">English</string>
+    <string name="app_info_theme_title">Theme</string>
+    <string name="app_theme_dialog_title">Appearance</string>
+    <string name="app_theme_system">Follow system</string>
+    <string name="app_theme_light">Light mode</string>
+    <string name="app_theme_dark">Dark mode</string>
     <string name="app_info_privacy_title">Privacy policy</string>
     <string name="app_info_privacy_description">View how data is handled in the app</string>
     <string name="app_info_about_title">About EveryTalk</string>

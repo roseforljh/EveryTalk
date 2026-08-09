@@ -5,12 +5,17 @@
 
     <string name="app_info_title">应用信息</string>
     <string name="app_info_section_title">信息与支持</string>
-    <string name="app_info_tagline">语言、隐私、版本与应用信息</string>
+    <string name="app_info_tagline">语言、主题、隐私与版本信息</string>
     <string name="app_info_language_title">语言</string>
     <string name="app_language_dialog_title">应用语言</string>
     <string name="app_language_system">跟随系统</string>
     <string name="app_language_simplified_chinese">简体中文</string>
     <string name="app_language_english">English</string>
+    <string name="app_info_theme_title">主题</string>
+    <string name="app_theme_dialog_title">外观主题</string>
+    <string name="app_theme_system">跟随系统</string>
+    <string name="app_theme_light">浅色模式</string>
+    <string name="app_theme_dark">深色模式</string>
     <string name="app_info_privacy_title">隐私政策</string>
     <string name="app_info_privacy_description">在应用内查看数据处理说明</string>
     <string name="app_info_about_title">关于 EveryTalk</string>

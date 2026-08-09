@@ -5,6 +5,7 @@ import android.content.res.Configuration
 import com.android.everytalk.data.network.ApiClient
 import com.android.everytalk.di.allModules
 import com.android.everytalk.util.DynamicIconSwitcher
+import com.android.everytalk.util.theme.AppThemeController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -19,6 +20,8 @@ class EveryTalkApplication : Application() {
 
     override fun onCreate() {
         super.onCreate()
+
+        AppThemeController.applySavedTheme(this)
 
         startupScope.launch {
             ApiClient.initialize(this@EveryTalkApplication)
