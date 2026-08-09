@@ -54,6 +54,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.android.everytalk.R
+import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.ContextUsageDataSource
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
@@ -86,6 +87,7 @@ internal data class AiContextUsageSummary(
 internal fun aiContextUsageSummary(
     message: Message,
     conversationTotalTokens: Long,
+    liveContextWindowTokens: Long? = null,
 ): AiContextUsageSummary? {
     val usage = message.tokenUsage
     val snapshot = message.contextUsageSnapshot
@@ -99,15 +101,40 @@ internal fun aiContextUsageSummary(
     val isMeasured = snapshot?.dataSource == ContextUsageDataSource.MEASURED ||
         usage?.source?.let { it != TokenUsageSource.ESTIMATED } == true
 
+    val contextWindowTokens = liveContextWindowTokens
+        ?.takeIf { it > 0L }
+        ?: snapshot?.contextWindowTokens?.coerceAtLeast(0L)
+        ?: 0L
+
     return AiContextUsageSummary(
         inputTokens = input,
         outputTokens = output,
         turnTotalTokens = turnTotal,
-        contextWindowTokens = snapshot?.contextWindowTokens?.coerceAtLeast(0L) ?: 0L,
+        contextWindowTokens = contextWindowTokens,
         currentContextTokens = currentContext,
         conversationTotalTokens = conversationTotalTokens.coerceAtLeast(0L),
         isMeasured = isMeasured,
     )
+}
+
+internal fun resolveLiveContextWindowTokens(
+    message: Message,
+    configs: List<ApiConfig>,
+): Long {
+    val snapshot = message.contextUsageSnapshot
+    val configId = snapshot?.configId
+    val liveConfig = configId
+        ?.let { id -> configs.firstOrNull { it.id == id } }
+        ?: configs.firstOrNull { config ->
+            config.model == message.modelName && config.provider == message.providerName
+        }
+    return liveConfig
+        ?.modelParameters
+        ?.maxContextTokens
+        ?.toLong()
+        ?.takeIf { it > 0L }
+        ?: snapshot?.contextWindowTokens?.coerceAtLeast(0L)
+        ?: 0L
 }
 
 internal fun totalConversationTokenUsage(messages: Iterable<Message>): Long {
@@ -174,6 +201,7 @@ internal fun formatUsageTokens(tokens: Long): String =
 internal fun AiContextUsageButton(
     message: Message,
     conversationTotalTokens: Long,
+    liveContextWindowTokens: Long? = null,
     expanded: Boolean,
     onClick: () -> Unit,
     onDismiss: () -> Unit,
@@ -182,8 +210,13 @@ internal fun AiContextUsageButton(
         message.tokenUsage,
         message.contextUsageSnapshot,
         conversationTotalTokens,
+        liveContextWindowTokens,
     ) {
-        aiContextUsageSummary(message, conversationTotalTokens)
+        aiContextUsageSummary(
+            message = message,
+            conversationTotalTokens = conversationTotalTokens,
+            liveContextWindowTokens = liveContextWindowTokens,
+        )
     }
     val popupOffset = with(LocalDensity.current) {
         IntOffset(x = (-72).dp.roundToPx(), y = 0)

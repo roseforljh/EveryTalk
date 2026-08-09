@@ -17,8 +17,10 @@ import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.ContextUsageSnapshot
 import com.android.everytalk.data.DataClass.Message
+import com.android.everytalk.data.DataClass.ModelParameters
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.network.TokenUsage
 import com.android.everytalk.data.network.TokenUsageSource
@@ -91,6 +93,49 @@ class AiContextUsagePopupTest {
     }
 
     @Test
+    fun `模型参数更新后圆环使用同一配置的最新上下文上限`() {
+        val message = usageMessage(configId = "config-1")
+        val updatedConfig = ApiConfig(
+            address = "https://example.com",
+            key = "test-key",
+            model = "gpt-test",
+            provider = "OpenAI",
+            id = "config-1",
+            name = "测试模型",
+            modelParameters = ModelParameters(maxContextTokens = 2_000),
+        )
+
+        assertEquals(
+            2_000L,
+            resolveLiveContextWindowTokens(message, listOf(updatedConfig)),
+        )
+    }
+
+    @Test
+    fun `最新上下文上限变化时圆环实时重组`() {
+        val message = usageMessage(configId = "config-1")
+        lateinit var updateContextWindow: (Long) -> Unit
+        composeRule.setContent {
+            MaterialTheme {
+                var liveContextWindowTokens by remember { mutableStateOf(1_000L) }
+                updateContextWindow = { liveContextWindowTokens = it }
+                AiContextUsageButton(
+                    message = message,
+                    conversationTotalTokens = 420,
+                    liveContextWindowTokens = liveContextWindowTokens,
+                    expanded = false,
+                    onClick = {},
+                    onDismiss = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("查看上下文用量 12%").assertIsDisplayed()
+        composeRule.runOnIdle { updateContextWindow(2_000L) }
+        composeRule.onNodeWithContentDescription("查看上下文用量 6%").assertIsDisplayed()
+    }
+
+    @Test
     fun `点击圆环显示三项用量和上下箭头`() {
         val message = usageMessage()
         composeRule.setContent {
@@ -128,6 +173,7 @@ class AiContextUsagePopupTest {
         id: String = "ai-1",
         inputTokens: Long = 100,
         outputTokens: Long = 20,
+        configId: String? = null,
     ): Message {
         val usage = TokenUsage(
             inputTokens = inputTokens,
@@ -138,6 +184,7 @@ class AiContextUsagePopupTest {
         )
         val snapshot = ContextUsageSnapshot(
             messageId = id,
+            configId = configId,
             systemPromptTokens = 10,
             conversationTextTokens = 70,
             mediaTokens = 0,

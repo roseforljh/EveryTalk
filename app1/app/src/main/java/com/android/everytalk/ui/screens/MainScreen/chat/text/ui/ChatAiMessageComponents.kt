@@ -414,6 +414,16 @@ fun AiMessageFooterItem(
     var showContextUsage by remember(message.id) { mutableStateOf(false) }
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val availableModels by viewModel.apiConfigs.collectAsState()
+    val selectedModelId by viewModel.selectedApiConfig.collectAsState()
+    val liveContextWindowTokens = remember(
+        message.contextUsageSnapshot?.configId,
+        message.modelName,
+        message.providerName,
+        availableModels,
+    ) {
+        resolveLiveContextWindowTokens(message, availableModels)
+    }
 
     Column(
         modifier = Modifier
@@ -462,6 +472,7 @@ fun AiMessageFooterItem(
             AiContextUsageButton(
                 message = message,
                 conversationTotalTokens = conversationTotalTokens,
+                liveContextWindowTokens = liveContextWindowTokens,
                 expanded = showContextUsage,
                 onClick = {
                     showPopupMenu = false
@@ -493,8 +504,8 @@ fun AiMessageFooterItem(
                         viewModel.regenerateAiResponse(latestMessage, scrollToNewMessage = true)
                     },
                     modelName = message.modelName,
-                    availableModels = viewModel.apiConfigs.collectAsState().value,
-                    selectedModelId = viewModel.selectedApiConfig.collectAsState().value?.id,
+                    availableModels = availableModels,
+                    selectedModelId = selectedModelId?.id,
                     onChangeModelConfirm = { config ->
                         val latestMessage = viewModel.getMessageById(message.id) ?: message
                         scrollStateManager.lockAutoScroll()
