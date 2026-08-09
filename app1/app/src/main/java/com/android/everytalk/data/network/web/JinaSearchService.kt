@@ -77,7 +77,7 @@ object JinaSearchService {
 
                 ExternalWebSearchResponse(
                     provider = ExternalWebSearchProvider.TAVILY,
-                    results = parseMarkdownResults(truncatedContent),
+                    results = parseMarkdownResults(truncatedContent, trimmedQuery),
                 )
             }
 
@@ -90,7 +90,7 @@ object JinaSearchService {
         }
     }
 
-    private fun parseMarkdownResults(markdown: String): List<WebSearchResult> {
+    private fun parseMarkdownResults(markdown: String, fallbackTitle: String): List<WebSearchResult> {
         val results = mutableListOf<WebSearchResult>()
         val sections = markdown.split(Regex("(?=^#{1,2}\\s)", RegexOption.MULTILINE))
 
@@ -124,7 +124,7 @@ object JinaSearchService {
             results.add(
                 WebSearchResult(
                     index = 0,
-                    title = "搜索结果",
+                    title = fallbackTitle,
                     href = "",
                     snippet = markdown.take(1000),
                 )
