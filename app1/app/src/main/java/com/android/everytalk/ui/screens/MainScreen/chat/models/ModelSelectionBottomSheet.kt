@@ -78,12 +78,15 @@ import androidx.compose.ui.unit.Velocity
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.res.stringResource
+import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.ui.components.dialog.AppDialogShape
 import com.android.everytalk.ui.components.dialog.appDialogBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogCancelColor
 import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
+import com.android.everytalk.ui.screens.settings.localizedProviderLabel
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 
@@ -291,7 +294,7 @@ fun ModelSelectionBottomSheet(
                         ) {
                             Icon(
                                 imageVector = Icons.Default.Search,
-                                contentDescription = "Search",
+                                contentDescription = stringResource(R.string.chat_model_search),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                 modifier = Modifier.size(20.dp)
                             )
@@ -299,7 +302,7 @@ fun ModelSelectionBottomSheet(
                             Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
                                 if (searchText.isEmpty()) {
                                     Text(
-                                        "搜索模型...",
+                                        stringResource(R.string.chat_model_search_hint),
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         fontSize = 14.sp
                                     )
@@ -325,7 +328,7 @@ fun ModelSelectionBottomSheet(
                 ) {
                     Icon(
                         imageVector = Icons.Default.Loop,
-                        contentDescription = "切换平台",
+                        contentDescription = stringResource(R.string.chat_model_switch_platform),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(20.dp)
                     )
@@ -344,13 +347,13 @@ fun ModelSelectionBottomSheet(
             ) {
                 Icon(
                     imageVector = Icons.Filled.Lock,
-                    contentDescription = "密钥图标",
+                    contentDescription = stringResource(R.string.chat_model_key_icon),
                     tint = Color(0xff7bc047),
                     modifier = Modifier.size(24.dp)
                 )
                 Spacer(Modifier.size(8.dp))
                 Text(
-                    "当前密钥下的模型",
+                    stringResource(R.string.chat_model_current_key_models),
                     style = MaterialTheme.typography.titleMedium
                 )
             }
@@ -359,7 +362,7 @@ fun ModelSelectionBottomSheet(
             Box(modifier = Modifier.weight(1f)) {
                 if (filteredModels.isEmpty()) {
                     Text(
-                        "没有可用的模型配置。",
+                        stringResource(R.string.chat_model_no_available_configuration),
                         modifier = Modifier
                             .padding(16.dp)
                             .align(Alignment.Center),
@@ -406,7 +409,7 @@ fun ModelSelectionBottomSheet(
                                     if (modelConfig.id == selectedApiConfig?.id) {
                                         Icon(
                                             Icons.Filled.Done,
-                                            contentDescription = "当前选中",
+                                            contentDescription = stringResource(R.string.chat_model_currently_selected),
                                             tint = Color(0xff778899),
                                             modifier = Modifier.size(20.dp) // 较小的勾选图标
                                         )
@@ -487,7 +490,7 @@ fun PlatformSelectionDialog(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    text = "切换平台",
+                    text = stringResource(R.string.chat_model_switch_platform),
                     style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
                     color = contentColor,
                     modifier = Modifier.align(Alignment.Start)
@@ -500,20 +503,20 @@ fun PlatformSelectionDialog(
                 ) {
                     items(sortedPlatforms) { platform ->
                         ListItem(
-                            headlineContent = { Text(platform, color = contentColor) },
+                            headlineContent = { Text(localizedProviderLabel(platform), color = contentColor) },
                             modifier = Modifier.clickable { tempSelectedPlatform = platform },
                             colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                             trailingContent = {
                                 if (tempSelectedPlatform == platform) {
                                     Icon(
                                         imageVector = Icons.Filled.CheckCircle,
-                                        contentDescription = "Selected",
+                                        contentDescription = stringResource(R.string.state_selected),
                                         tint = MaterialTheme.colorScheme.primary
                                     )
                                 } else {
                                     Icon(
                                         imageVector = Icons.Filled.RadioButtonUnchecked,
-                                        contentDescription = "Unselected",
+                                        contentDescription = stringResource(R.string.state_unselected),
                                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
@@ -542,7 +545,7 @@ fun PlatformSelectionDialog(
                         border = BorderStroke(1.dp, cancelButtonColor)
                     ) {
                         Text(
-                            text = "取消",
+                            text = stringResource(R.string.action_cancel),
                             style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
                         )
                     }
@@ -563,7 +566,7 @@ fun PlatformSelectionDialog(
                         )
                     ) {
                         Text(
-                            text = "确定",
+                            text = stringResource(R.string.action_confirm),
                             style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold)
                         )
                     }

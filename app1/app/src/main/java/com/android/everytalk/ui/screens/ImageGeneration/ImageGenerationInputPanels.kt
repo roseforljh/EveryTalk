@@ -46,6 +46,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -152,7 +153,7 @@ internal fun ImageFunctionPanelContent(
             if (!isQwenEdit) {
                 ImageFunctionPanelRow(
                     iconRes = R.drawable.ic_aspect_ratio,
-                    label = "比例: ${selectedImageRatio.displayName}",
+                    label = stringResource(R.string.image_ratio_label, selectedImageRatio.displayName),
                     iconBg = iconBg,
                     iconTint = Color(0xFF66B5FF),
                     textColor = textColor,
@@ -162,7 +163,10 @@ internal fun ImageFunctionPanelContent(
             if (isGptImage) {
                 ImageFunctionPanelRow(
                     iconRes = R.drawable.ic_settings_slider,
-                    label = "质量: ${currentGptImageQuality.displayName}",
+                    label = stringResource(
+                        R.string.image_quality_label,
+                        stringResource(currentGptImageQuality.displayNameRes),
+                    ),
                     iconBg = iconBg,
                     iconTint = Color(0xFF9C27B0),
                     textColor = textColor,
@@ -172,7 +176,7 @@ internal fun ImageFunctionPanelContent(
             if (supportsImageEditing) {
                 ImageFunctionPanelRow(
                     iconRes = R.drawable.ic_image_gallery,
-                    label = "选择图片",
+                    label = stringResource(R.string.image_select_image),
                     iconBg = iconBg,
                     iconTint = Color(0xff2cb334),
                     textColor = textColor,
@@ -180,7 +184,7 @@ internal fun ImageFunctionPanelContent(
                 )
                 ImageFunctionPanelRow(
                     iconRes = R.drawable.ic_camera,
-                    label = "拍照",
+                    label = stringResource(R.string.image_take_photo),
                     iconBg = iconBg,
                     iconTint = Color(0xFF2196F3),
                     textColor = textColor,
@@ -190,7 +194,7 @@ internal fun ImageFunctionPanelContent(
             if (detectedFamily == ImageGenCapabilities.ModelFamily.MODAL_Z_IMAGE && onChangeImageSteps != null) {
                 ImageFunctionPanelRow(
                     iconRes = R.drawable.ic_tuning,
-                    label = "步数: ${currentImageSteps ?: 4}",
+                    label = stringResource(R.string.image_steps_label, currentImageSteps ?: 4),
                     iconBg = iconBg,
                     iconTint = Color(0xFF66B5FF),
                     textColor = textColor,
@@ -200,7 +204,7 @@ internal fun ImageFunctionPanelContent(
             if (isQwenEdit && onChangeImageParams != null) {
                 ImageFunctionPanelRow(
                     iconRes = R.drawable.ic_tuning,
-                    label = "参数调节",
+                    label = stringResource(R.string.image_adjust_parameters),
                     iconBg = iconBg,
                     iconTint = Color(0xFFFF9800),
                     textColor = textColor,
@@ -210,7 +214,7 @@ internal fun ImageFunctionPanelContent(
             if (hasContent) {
                 ImageFunctionPanelRow(
                     iconRes = R.drawable.ic_close,
-                    label = "清除内容",
+                    label = stringResource(R.string.image_clear_content),
                     iconBg = iconBg,
                     iconTint = iconTint,
                     textColor = textColor,

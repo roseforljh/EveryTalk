@@ -3,6 +3,7 @@ package com.android.everytalk.statecontroller.controller.media
 import android.app.Application
 import android.content.ClipboardManager
 import android.content.Context
+import com.android.everytalk.R
 import com.android.everytalk.statecontroller.viewmodel.ExportManager
 import com.android.everytalk.util.message.prepareTextForExternalTransfer
 import com.android.everytalk.util.message.prepareTextForExport
@@ -32,7 +33,10 @@ class ClipboardController(
             withContext(Dispatchers.Main.immediate) {
                 try {
                     val clipboard = application.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                    val clip = android.content.ClipData.newPlainText("Copied Text", safeText)
+                    val clip = android.content.ClipData.newPlainText(
+                        application.getString(R.string.action_copy),
+                        safeText,
+                    )
                     clipboard.setPrimaryClip(clip)
                     showSnackbar("已复制到剪贴板")
                 } catch (exception: CancellationException) {

@@ -255,8 +255,9 @@ internal fun formatWebPreviewConsoleMessage(
     message: String?,
     lineNumber: Int,
     sourceId: String?,
+    unknownError: String = "Unknown preview error",
 ): String {
-    val safeMessage = message?.ifBlank { "Unknown preview error" } ?: "Unknown preview error"
+    val safeMessage = message?.ifBlank { unknownError } ?: unknownError
     val safeSource = sourceId
         ?.substringAfterLast('/')
         ?.ifBlank { "inline.html" }

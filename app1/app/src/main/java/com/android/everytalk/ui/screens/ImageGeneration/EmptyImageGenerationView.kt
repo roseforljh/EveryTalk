@@ -26,6 +26,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.res.stringResource
+import com.android.everytalk.R
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
@@ -58,7 +60,7 @@ fun EmptyImageGenerationView() {
             val style = MaterialTheme.typography.displaySmall.copy(
                 fontWeight = FontWeight.ExtraBold,
             )
-            Text("开始创作吧", style = style)
+            Text(stringResource(R.string.image_start_creating), style = style)
             val animY = remember { List(3) { Animatable(0f) } }
             val coroutineScope = rememberCoroutineScope()
             val density = androidx.compose.ui.platform.LocalDensity.current

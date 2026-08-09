@@ -24,8 +24,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.network.VoiceChatSession
 import com.android.everytalk.statecontroller.AppViewModel
@@ -169,7 +171,7 @@ fun VoiceInputScreen(
                     ) {
                         Icon(
                             Icons.Default.RecordVoiceOver,
-                            contentDescription = "选择音色",
+                            contentDescription = stringResource(R.string.voice_select_voice),
                             tint = if (viewModel != null) contentColor else contentColor.copy(alpha = 0.3f)
                         )
                     }
@@ -182,7 +184,7 @@ fun VoiceInputScreen(
                     ) {
                         Icon(
                             Icons.Default.Build,
-                            contentDescription = "STT配置",
+                            contentDescription = stringResource(R.string.voice_stt_configuration),
                             tint = if (viewModel != null) contentColor else contentColor.copy(alpha = 0.3f)
                         )
                     }
@@ -192,7 +194,7 @@ fun VoiceInputScreen(
                     ) {
                         Icon(
                             Icons.Default.Face,
-                            contentDescription = "LLM配置",
+                            contentDescription = stringResource(R.string.voice_llm_configuration),
                             tint = if (viewModel != null) contentColor else contentColor.copy(alpha = 0.3f)
                         )
                     }
@@ -202,7 +204,7 @@ fun VoiceInputScreen(
                     ) {
                         Icon(
                             Icons.Default.Settings,
-                            contentDescription = "语音设置",
+                            contentDescription = stringResource(R.string.voice_tts_configuration),
                             tint = if (viewModel != null) contentColor else contentColor.copy(alpha = 0.3f)
                         )
                     }

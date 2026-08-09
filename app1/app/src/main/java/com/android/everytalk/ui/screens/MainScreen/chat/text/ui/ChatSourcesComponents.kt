@@ -52,6 +52,7 @@ import androidx.compose.ui.layout.layout
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.*
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
@@ -154,7 +155,11 @@ internal fun PageSourcesButton(
                 pageSources = pageSources
             )
             Text(
-                text = "${pageSources.size} 页面",
+                text = pluralStringResource(
+                    R.plurals.web_source_page_count,
+                    pageSources.size,
+                    pageSources.size,
+                ),
                 style = MaterialTheme.typography.titleSmall,
                 fontWeight = FontWeight.Bold,
             )
@@ -252,6 +257,7 @@ internal fun StaticAiMarkdownNodeItem(
     onImageClick: ((String) -> Unit)?,
 ) {
     val aiReplyMessageDescription = stringResource(id = R.string.ai_reply_message)
+    val codeCopiedMessage = stringResource(R.string.chat_code_copied)
     var previewCode by remember { mutableStateOf<String?>(null) }
     var previewLanguage by remember { mutableStateOf("text") }
 
@@ -308,7 +314,7 @@ internal fun StaticAiMarkdownNodeItem(
                         previewCode = code
                     },
                     onCodeCopied = {
-                        viewModel.showSnackbar("已复制代码")
+                        viewModel.showSnackbar(codeCopiedMessage)
                     },
                     onImageClick = onImageClick,
                     footnoteNavigationState = footnoteNavigationState,

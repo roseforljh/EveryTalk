@@ -19,7 +19,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -28,7 +28,14 @@ import com.android.everytalk.data.DataClass.VoiceBackendConfig
 import com.android.everytalk.statecontroller.AppViewModel
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.annotation.StringRes
+import com.android.everytalk.R
 import kotlinx.coroutines.launch
+
+private data class LocalizedVoiceOption(
+    val name: String,
+    @StringRes val descriptionRes: Int,
+)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -73,145 +80,136 @@ fun VoiceSelectionDialog(
     
     // Gemini 音色
     val geminiVoices = listOf(
-        "Zephyr" to "明亮",
-        "Puck" to "欢快",
-        "Charon" to "知性",
-        "Kore" to "坚定",
-        "Fenrir" to "兴奋",
-        "Leda" to "年轻",
-        "Orus" to "坚定",
-        "Aoede" to "轻快",
-        "Callirrhoe" to "随和",
-        "Autonoe" to "明亮",
-        "Enceladus" to "气息感",
-        "Iapetus" to "清晰",
-        "Umbriel" to "随和",
-        "Algieba" to "流畅",
-        "Despina" to "平滑",
-        "Erinome" to "清晰",
-        "Algenib" to "沙哑",
-        "Rasalgethi" to "知性",
-        "Laomedeia" to "欢快",
-        "Achernar" to "柔和",
-        "Alnilam" to "坚定",
-        "Schedar" to "平稳",
-        "Gacrux" to "成熟",
-        "Pulcherrima" to "前卫",
-        "Achird" to "友好",
-        "Zubenelgenubi" to "随意",
-        "Vindemiatrix" to "温柔",
-        "Sadachbia" to "活泼",
-        "Sadaltager" to "博学",
-        "Sulafat" to "温暖"
+        LocalizedVoiceOption("Zephyr", R.string.voice_tone_bright),
+        LocalizedVoiceOption("Puck", R.string.voice_tone_cheerful),
+        LocalizedVoiceOption("Charon", R.string.voice_tone_informative),
+        LocalizedVoiceOption("Kore", R.string.voice_tone_firm),
+        LocalizedVoiceOption("Fenrir", R.string.voice_tone_excited),
+        LocalizedVoiceOption("Leda", R.string.voice_tone_youthful),
+        LocalizedVoiceOption("Orus", R.string.voice_tone_firm),
+        LocalizedVoiceOption("Aoede", R.string.voice_tone_breezy),
+        LocalizedVoiceOption("Callirrhoe", R.string.voice_tone_easygoing),
+        LocalizedVoiceOption("Autonoe", R.string.voice_tone_bright),
+        LocalizedVoiceOption("Enceladus", R.string.voice_tone_breathy),
+        LocalizedVoiceOption("Iapetus", R.string.voice_tone_clear),
+        LocalizedVoiceOption("Umbriel", R.string.voice_tone_easygoing),
+        LocalizedVoiceOption("Algieba", R.string.voice_tone_fluid),
+        LocalizedVoiceOption("Despina", R.string.voice_tone_smooth),
+        LocalizedVoiceOption("Erinome", R.string.voice_tone_clear),
+        LocalizedVoiceOption("Algenib", R.string.voice_tone_raspy),
+        LocalizedVoiceOption("Rasalgethi", R.string.voice_tone_informative),
+        LocalizedVoiceOption("Laomedeia", R.string.voice_tone_cheerful),
+        LocalizedVoiceOption("Achernar", R.string.voice_tone_soft),
+        LocalizedVoiceOption("Alnilam", R.string.voice_tone_firm),
+        LocalizedVoiceOption("Schedar", R.string.voice_tone_steady),
+        LocalizedVoiceOption("Gacrux", R.string.voice_tone_mature),
+        LocalizedVoiceOption("Pulcherrima", R.string.voice_tone_forward),
+        LocalizedVoiceOption("Achird", R.string.voice_tone_friendly),
+        LocalizedVoiceOption("Zubenelgenubi", R.string.voice_tone_casual),
+        LocalizedVoiceOption("Vindemiatrix", R.string.voice_tone_gentle),
+        LocalizedVoiceOption("Sadachbia", R.string.voice_tone_lively),
+        LocalizedVoiceOption("Sadaltager", R.string.voice_tone_knowledgeable),
+        LocalizedVoiceOption("Sulafat", R.string.voice_tone_warm),
     )
 
     // Minimax 音色
     val minimaxVoices = listOf(
-        // ⭐ 强烈推荐 - 最像真人
-        "Chinese (Mandarin)_Warm_Bestie" to "⭐ 温暖闺蜜 - 亲切暖风、生活化",
-        "Chinese (Mandarin)_Gentle_Senior" to "⭐ 温柔学姐 - 自然柔和",
-        "Chinese (Mandarin)_Sweet_Lady" to "⭐ 甜美女声 - 自然甜、真人感强",
-        
-        // 🎙️ 沉稳自然（专业主播风格）
-        "Chinese (Mandarin)_Mature_Woman" to "傲娇御姐 - 稳定、有存在感",
-        "female-yujie" to "御姐音色 - 稳定自然、略带磁性",
-        
-        // 🎧 亲和真实（朋友聊天风格）
-        "Chinese (Mandarin)_Warm_Girl" to "温暖少女 - 亲和自然",
-        "Chinese (Mandarin)_Crisp_Girl" to "清脆少女 - 清新自然",
-        "qiaopi_mengmei" to "俏皮萌妹 - 活泼可爱",
-        
-        // 🎙️ 男声推荐
-        "Chinese (Mandarin)_Gentleman" to "温润男声 - 自然成熟",
-        "Chinese (Mandarin)_Lyrical_Voice" to "抒情男声 - 情感丰富",
-        "male-qn-jingying" to "精英青年 - 自然稳定",
-        
-        // 其他音色
-        "male-qn-qingse" to "青涩男声",
-        "female-shaonv" to "少女音"
+        LocalizedVoiceOption("Chinese (Mandarin)_Warm_Bestie", R.string.voice_desc_minimax_warm_bestie),
+        LocalizedVoiceOption("Chinese (Mandarin)_Gentle_Senior", R.string.voice_desc_minimax_gentle_senior),
+        LocalizedVoiceOption("Chinese (Mandarin)_Sweet_Lady", R.string.voice_desc_minimax_sweet_lady),
+        LocalizedVoiceOption("Chinese (Mandarin)_Mature_Woman", R.string.voice_desc_minimax_mature_woman),
+        LocalizedVoiceOption("female-yujie", R.string.voice_desc_minimax_female_yujie),
+        LocalizedVoiceOption("Chinese (Mandarin)_Warm_Girl", R.string.voice_desc_minimax_warm_girl),
+        LocalizedVoiceOption("Chinese (Mandarin)_Crisp_Girl", R.string.voice_desc_minimax_crisp_girl),
+        LocalizedVoiceOption("qiaopi_mengmei", R.string.voice_desc_minimax_playful_girl),
+        LocalizedVoiceOption("Chinese (Mandarin)_Gentleman", R.string.voice_desc_minimax_gentleman),
+        LocalizedVoiceOption("Chinese (Mandarin)_Lyrical_Voice", R.string.voice_desc_minimax_lyrical_voice),
+        LocalizedVoiceOption("male-qn-jingying", R.string.voice_desc_minimax_elite_youth),
+        LocalizedVoiceOption("male-qn-qingse", R.string.voice_desc_minimax_young_man),
+        LocalizedVoiceOption("female-shaonv", R.string.voice_desc_minimax_young_woman),
     )
 
     // OpenAI 音色
     val openaiVoices = listOf(
-        "alloy" to "中性",
-        "echo" to "沉稳",
-        "fable" to "英式",
-        "onyx" to "深沉",
-        "nova" to "活力",
-        "shimmer" to "清澈"
+        LocalizedVoiceOption("alloy", R.string.voice_tone_neutral),
+        LocalizedVoiceOption("echo", R.string.voice_tone_calm),
+        LocalizedVoiceOption("fable", R.string.voice_tone_british),
+        LocalizedVoiceOption("onyx", R.string.voice_tone_deep),
+        LocalizedVoiceOption("nova", R.string.voice_tone_energetic),
+        LocalizedVoiceOption("shimmer", R.string.voice_tone_clear),
     )
 
     // SiliconFlow 音色
     val siliconFlowVoices = listOf(
-        "alex" to "Alex (男声)",
-        "anna" to "Anna (女声)",
-        "bella" to "Bella (女声)",
-        "benjamin" to "Benjamin (男声)",
-        "charles" to "Charles (男声)",
-        "claire" to "Claire (女声)",
-        "david" to "David (男声)",
-        "diana" to "Diana (女声)"
+        LocalizedVoiceOption("alex", R.string.voice_tone_male),
+        LocalizedVoiceOption("anna", R.string.voice_tone_female),
+        LocalizedVoiceOption("bella", R.string.voice_tone_female),
+        LocalizedVoiceOption("benjamin", R.string.voice_tone_male),
+        LocalizedVoiceOption("charles", R.string.voice_tone_male),
+        LocalizedVoiceOption("claire", R.string.voice_tone_female),
+        LocalizedVoiceOption("david", R.string.voice_tone_male),
+        LocalizedVoiceOption("diana", R.string.voice_tone_female),
     )
 
     // 阿里云音色 - 国内（普通话标准音色）
     val aliyunVoicesDomestic = listOf(
-        "Cherry" to "芊悦 - 阳光积极、亲切自然小姐姐",
-        "Serena" to "苏瑶 - 温柔小姐姐",
-        "Ethan" to "晨煦 - 阳光、温暖、活力、朝气",
-        "Chelsie" to "千雪 - 二次元虚拟女友",
-        "Momo" to "茉兔 - 撒娇搞怪，逗你开心",
-        "Vivian" to "十三 - 拽拽的、可爱的小暴躁",
-        "Moon" to "月白 - 率性帅气",
-        "Maia" to "四月 - 知性与温柔的碰撞",
-        "Kai" to "凯 - 耳朵的一场SPA",
-        "Nofish" to "不吃鱼 - 不会翘舌音的设计师",
-        "Bella" to "萌宝 - 喝酒不打醉拳的小萝莉",
-        "Eldric Sage" to "沧明子 - 沉稳睿智的老者",
-        "Mia" to "乖小妹 - 温顺如春水，乖巧如初雪",
-        "Mochi" to "沙小弥 - 聪明伶俐的小大人",
-        "Bellona" to "燕铮莺 - 声音洪亮，吐字清晰",
-        "Vincent" to "田叔 - 独特的沙哑烟嗓",
-        "Bunny" to "萌小姬 - 萌属性爆棚的小萝莉",
-        "Neil" to "阿闻 - 专业的新闻主持人",
-        "Elias" to "墨讲师 - 知识讲解专家",
-        "Arthur" to "徐大爷 - 质朴嗓音讲奇闻异事",
-        "Nini" to "邻家妹妹 - 糯米糍一样又软又黏",
-        "Ebona" to "诡婆婆 - 幽暗恐惧风格",
-        "Seren" to "小婉 - 温和舒缓助眠",
-        "Pip" to "顽屁小孩 - 调皮捣蛋充满童真",
-        "Stella" to "少女阿月 - 甜到发腻的迷糊少女",
-        "Ryan" to "甜茶 - 节奏拉满，戏感炸裂",
-        "Andre" to "安德雷 - 声音磁性，自然舒服",
-        "Jennifer" to "詹妮弗 - 品牌级、电影质感般美语女声"
+        LocalizedVoiceOption("Cherry", R.string.voice_desc_aliyun_cherry),
+        LocalizedVoiceOption("Serena", R.string.voice_desc_aliyun_serena),
+        LocalizedVoiceOption("Ethan", R.string.voice_desc_aliyun_ethan),
+        LocalizedVoiceOption("Chelsie", R.string.voice_desc_aliyun_chelsie),
+        LocalizedVoiceOption("Momo", R.string.voice_desc_aliyun_momo),
+        LocalizedVoiceOption("Vivian", R.string.voice_desc_aliyun_vivian),
+        LocalizedVoiceOption("Moon", R.string.voice_desc_aliyun_moon),
+        LocalizedVoiceOption("Maia", R.string.voice_desc_aliyun_maia),
+        LocalizedVoiceOption("Kai", R.string.voice_desc_aliyun_kai),
+        LocalizedVoiceOption("Nofish", R.string.voice_desc_aliyun_nofish),
+        LocalizedVoiceOption("Bella", R.string.voice_desc_aliyun_bella),
+        LocalizedVoiceOption("Eldric Sage", R.string.voice_desc_aliyun_eldric_sage),
+        LocalizedVoiceOption("Mia", R.string.voice_desc_aliyun_mia),
+        LocalizedVoiceOption("Mochi", R.string.voice_desc_aliyun_mochi),
+        LocalizedVoiceOption("Bellona", R.string.voice_desc_aliyun_bellona),
+        LocalizedVoiceOption("Vincent", R.string.voice_desc_aliyun_vincent),
+        LocalizedVoiceOption("Bunny", R.string.voice_desc_aliyun_bunny),
+        LocalizedVoiceOption("Neil", R.string.voice_desc_aliyun_neil),
+        LocalizedVoiceOption("Elias", R.string.voice_desc_aliyun_elias),
+        LocalizedVoiceOption("Arthur", R.string.voice_desc_aliyun_arthur),
+        LocalizedVoiceOption("Nini", R.string.voice_desc_aliyun_nini),
+        LocalizedVoiceOption("Ebona", R.string.voice_desc_aliyun_ebona),
+        LocalizedVoiceOption("Seren", R.string.voice_desc_aliyun_seren),
+        LocalizedVoiceOption("Pip", R.string.voice_desc_aliyun_pip),
+        LocalizedVoiceOption("Stella", R.string.voice_desc_aliyun_stella),
+        LocalizedVoiceOption("Ryan", R.string.voice_desc_aliyun_ryan),
+        LocalizedVoiceOption("Andre", R.string.voice_desc_aliyun_andre),
+        LocalizedVoiceOption("Jennifer", R.string.voice_desc_aliyun_jennifer),
     )
 
     // 阿里云音色 - 国外（各国特色口音）
     val aliyunVoicesForeign = listOf(
-        "Aiden" to "艾登 - 精通厨艺的美语大男孩",
-        "Katerina" to "卡捷琳娜 - 御姐音色，韵律回味十足",
-        "Bodega" to "博德加 - 热情的西班牙大叔",
-        "Sonrisa" to "索尼莎 - 热情开朗的拉美大姐",
-        "Alek" to "阿列克 - 战斗民族的冷暖交织",
-        "Dolce" to "多尔切 - 慵懒的意大利大叔",
-        "Sohee" to "素熙 - 温柔开朗的韩国欧尼",
-        "Ono Anna" to "小野杏 - 鬼灵精怪的日本青梅竹马",
-        "Lenn" to "莱恩 - 理性叛逆的德国青年",
-        "Emilien" to "埃米尔安 - 浪漫的法国大哥哥",
-        "Radio Gol" to "拉迪奥·戈尔 - 足球诗人（葡萄牙语风格）"
+        LocalizedVoiceOption("Aiden", R.string.voice_desc_aliyun_aiden),
+        LocalizedVoiceOption("Katerina", R.string.voice_desc_aliyun_katerina),
+        LocalizedVoiceOption("Bodega", R.string.voice_desc_aliyun_bodega),
+        LocalizedVoiceOption("Sonrisa", R.string.voice_desc_aliyun_sonrisa),
+        LocalizedVoiceOption("Alek", R.string.voice_desc_aliyun_alek),
+        LocalizedVoiceOption("Dolce", R.string.voice_desc_aliyun_dolce),
+        LocalizedVoiceOption("Sohee", R.string.voice_desc_aliyun_sohee),
+        LocalizedVoiceOption("Ono Anna", R.string.voice_desc_aliyun_ono_anna),
+        LocalizedVoiceOption("Lenn", R.string.voice_desc_aliyun_lenn),
+        LocalizedVoiceOption("Emilien", R.string.voice_desc_aliyun_emilien),
+        LocalizedVoiceOption("Radio Gol", R.string.voice_desc_aliyun_radio_gol),
     )
 
     // 阿里云音色 - 乡音（中国各地方言口音）
     val aliyunVoicesDialect = listOf(
-        "Jada" to "上海-阿珍 - 风风火火的沪上阿姐",
-        "Dylan" to "北京-晓东 - 北京胡同里长大的少年",
-        "Li" to "南京-老李 - 耐心的瑜伽老师（南京话）",
-        "Marcus" to "陕西-秦川 - 面宽话短，老陕的味道",
-        "Roy" to "闽南-阿杰 - 诙谐直爽的台湾哥仔",
-        "Peter" to "天津-李彼得 - 天津相声，专业捧哏",
-        "Sunny" to "四川-晴儿 - 甜到你心里的川妹子",
-        "Eric" to "四川-程川 - 跳脱市井的四川男子",
-        "Rocky" to "粤语-阿强 - 幽默风趣，在线陪聊",
-        "Kiki" to "粤语-阿清 - 甜美的港妹闺蜜"
+        LocalizedVoiceOption("Jada", R.string.voice_desc_aliyun_jada),
+        LocalizedVoiceOption("Dylan", R.string.voice_desc_aliyun_dylan),
+        LocalizedVoiceOption("Li", R.string.voice_desc_aliyun_li),
+        LocalizedVoiceOption("Marcus", R.string.voice_desc_aliyun_marcus),
+        LocalizedVoiceOption("Roy", R.string.voice_desc_aliyun_roy),
+        LocalizedVoiceOption("Peter", R.string.voice_desc_aliyun_peter),
+        LocalizedVoiceOption("Sunny", R.string.voice_desc_aliyun_sunny),
+        LocalizedVoiceOption("Eric", R.string.voice_desc_aliyun_eric),
+        LocalizedVoiceOption("Rocky", R.string.voice_desc_aliyun_rocky),
+        LocalizedVoiceOption("Kiki", R.string.voice_desc_aliyun_kiki),
     )
 
     // 根据平台和分类获取音色列表
@@ -271,7 +269,7 @@ fun VoiceSelectionDialog(
                     ),
                     verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(voices) { (voiceName, description) ->
+                    items(voices, key = { it.name }) { (voiceName, descriptionRes) ->
                         val isSelected = voiceName == selectedVoice
                         
                         Card(
@@ -307,7 +305,7 @@ fun VoiceSelectionDialog(
                                         color = if (isSelected) contentColor else subtextColor
                                     )
                                     Text(
-                                        text = description,
+                                        text = stringResource(descriptionRes),
                                         style = MaterialTheme.typography.bodySmall,
                                         color = subtextColor.copy(alpha = 0.7f)
                                     )
@@ -316,7 +314,7 @@ fun VoiceSelectionDialog(
                                 if (isSelected) {
                                     Icon(
                                         imageVector = androidx.compose.material.icons.Icons.Default.Check,
-                                        contentDescription = "已选择",
+                                        contentDescription = stringResource(R.string.voice_selected),
                                         tint = if (isDark) Color.White else Color.Black,
                                         modifier = Modifier.size(24.dp)
                                     )
@@ -348,7 +346,7 @@ fun VoiceSelectionDialog(
                     ) {
                         // 标题
                         Text(
-                            text = "选择音色",
+                            text = stringResource(R.string.voice_select_voice),
                             style = MaterialTheme.typography.headlineSmall.copy(
                                 fontWeight = FontWeight.Bold
                             ),
@@ -357,14 +355,18 @@ fun VoiceSelectionDialog(
 
                         // 当前选择提示
                         Text(
-                            text = "当前: $selectedVoice",
+                            text = stringResource(R.string.voice_current_selection, selectedVoice),
                             style = MaterialTheme.typography.bodyMedium,
                             color = subtextColor
                         )
 
                         // 阿里云音色分类选项卡（圆角样式）
                         if (ttsPlatform == "Aliyun") {
-                            val categories = listOf("🇨🇳 国内", "🌍 国外", "🏠 乡音")
+                            val categories = listOf(
+                                stringResource(R.string.voice_category_domestic),
+                                stringResource(R.string.voice_category_foreign),
+                                stringResource(R.string.voice_category_dialect),
+                            )
                             Card(
                                 shape = RoundedCornerShape(16.dp),
                                 colors = CardDefaults.cardColors(
@@ -475,7 +477,7 @@ fun VoiceSelectionDialog(
                         )
                     ) {
                         Text(
-                            text = "确定",
+                            text = stringResource(R.string.action_confirm),
                             style = MaterialTheme.typography.labelLarge.copy(
                                 fontWeight = FontWeight.SemiBold
                             )

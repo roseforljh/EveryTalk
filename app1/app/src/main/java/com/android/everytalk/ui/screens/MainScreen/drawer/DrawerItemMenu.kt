@@ -18,6 +18,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -105,13 +106,13 @@ internal fun ConversationItemMenu(
             ) {
                 DrawerMenuItem(
                     iconRes = R.drawable.ic_pin,
-                    text = if (isPinned) "取消置顶" else "置顶",
+                    text = stringResource(if (isPinned) R.string.action_unpin else R.string.action_pin),
                     tint = textColor,
                     onClick = { onTogglePinClick(); onDismissRequest() }
                 )
                 DrawerMenuItem(
                     iconRes = R.drawable.ic_pencil,
-                    text = "重命名",
+                    text = stringResource(R.string.action_rename),
                     tint = if (isRenameEnabled) textColor else disabledColor,
                     onClick = {
                         if (isRenameEnabled) { onRenameClick(); onDismissRequest() }
@@ -119,19 +120,19 @@ internal fun ConversationItemMenu(
                 )
                 DrawerMenuItem(
                     iconRes = R.drawable.ic_folder,
-                    text = "移动到",
+                    text = stringResource(R.string.drawer_move_to),
                     tint = textColor,
                     onClick = { onMoveToGroupClick(); onDismissRequest() }
                 )
                 DrawerMenuItem(
                     iconRes = R.drawable.ic_share,
-                    text = "分享",
+                    text = stringResource(R.string.action_share),
                     tint = textColor,
                     onClick = { onShareClick(); onDismissRequest() }
                 )
                 DrawerMenuItem(
                     iconRes = R.drawable.ic_trash,
-                    text = "删除",
+                    text = stringResource(R.string.action_delete),
                     tint = deleteColor,
                     onClick = { onDeleteClick(); onDismissRequest() }
                 )

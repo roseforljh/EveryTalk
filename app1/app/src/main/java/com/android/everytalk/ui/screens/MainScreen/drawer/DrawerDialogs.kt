@@ -4,6 +4,7 @@ import com.android.everytalk.statecontroller.*
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -58,9 +59,13 @@ internal fun DeleteConfirmationDialog(
             onDismissRequest = onDismiss,
             title = {
                 Text(
-                    if (selectedItemCount > 1) "确定删除所有所选项？"
-                    else if (selectedItemCount == 1) "确定删除所选项？"
-                    else "确定删除此项？"
+                    stringResource(
+                        when {
+                            selectedItemCount > 1 -> R.string.drawer_delete_selected_multiple
+                            selectedItemCount == 1 -> R.string.drawer_delete_selected_single
+                            else -> R.string.drawer_delete_this_item
+                        }
+                    )
                 )
             },
             // text = { Text("此操作无法撤销。") }, // 可选
@@ -82,7 +87,7 @@ internal fun DeleteConfirmationDialog(
                         border = BorderStroke(1.dp, cancelButtonColor)
                     ) {
                         Text(
-                            text = "取消",
+                            text = stringResource(R.string.action_cancel),
                             style = MaterialTheme.typography.labelLarge.copy(
                                 fontWeight = FontWeight.SemiBold
                             )
@@ -106,7 +111,7 @@ internal fun DeleteConfirmationDialog(
                         )
                     ) {
                         Text(
-                            text = "确定",
+                            text = stringResource(R.string.action_confirm),
                             style = MaterialTheme.typography.labelLarge.copy(
                                 fontWeight = FontWeight.SemiBold
                             )
@@ -145,8 +150,8 @@ internal fun ClearAllConfirmationDialog(
             modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
             shape = AppDialogShape,
             onDismissRequest = onDismiss,
-            title = { Text("确定清空所有聊天记录？") },
-            text = { Text("此操作无法撤销，所有聊天记录将被永久删除。") },
+            title = { Text(stringResource(R.string.drawer_clear_chats_title)) },
+            text = { Text(stringResource(R.string.drawer_clear_chats_description)) },
             confirmButton = {
                 Row(
                     modifier = Modifier.fillMaxWidth(),
@@ -165,7 +170,7 @@ internal fun ClearAllConfirmationDialog(
                         border = BorderStroke(1.dp, cancelButtonColor)
                     ) {
                         Text(
-                            text = "取消",
+                            text = stringResource(R.string.action_cancel),
                             style = MaterialTheme.typography.labelLarge.copy(
                                 fontWeight = FontWeight.SemiBold
                             )
@@ -189,7 +194,7 @@ internal fun ClearAllConfirmationDialog(
                         )
                     ) {
                         Text(
-                            text = "确定清空",
+                            text = stringResource(R.string.drawer_confirm_clear),
                             style = MaterialTheme.typography.labelLarge.copy(
                                 fontWeight = FontWeight.SemiBold
                             )
@@ -221,8 +226,8 @@ internal fun ClearImageHistoryConfirmationDialog(
            modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
            shape = AppDialogShape,
            onDismissRequest = onDismiss,
-           title = { Text("确定清空所有图像生成历史？") },
-           text = { Text("此操作无法撤销，所有图像生成历史将被永久删除。") },
+           title = { Text(stringResource(R.string.drawer_clear_image_history_title)) },
+           text = { Text(stringResource(R.string.drawer_clear_image_history_description)) },
            confirmButton = {
                Row(
                    modifier = Modifier.fillMaxWidth(),
@@ -241,7 +246,7 @@ internal fun ClearImageHistoryConfirmationDialog(
                        border = BorderStroke(1.dp, cancelButtonColor)
                    ) {
                        Text(
-                           text = "取消",
+                           text = stringResource(R.string.action_cancel),
                            style = MaterialTheme.typography.labelLarge.copy(
                                fontWeight = FontWeight.SemiBold
                            )
@@ -265,7 +270,7 @@ internal fun ClearImageHistoryConfirmationDialog(
                        )
                    ) {
                        Text(
-                           text = "确定清空",
+                           text = stringResource(R.string.drawer_confirm_clear),
                            style = MaterialTheme.typography.labelLarge.copy(
                                fontWeight = FontWeight.SemiBold
                            )
@@ -297,12 +302,12 @@ internal fun CreateGroupDialog(
         containerColor = dialogBg,
         titleContentColor = contentColor,
         textContentColor = contentColor,
-        title = { Text("创建新分组", style = MaterialTheme.typography.titleLarge) },
+        title = { Text(stringResource(R.string.drawer_create_group_title), style = MaterialTheme.typography.titleLarge) },
         text = {
             OutlinedTextField(
                 value = groupName,
                 onValueChange = { groupName = it },
-                label = { Text("分组名称") },
+                label = { Text(stringResource(R.string.drawer_group_name_label)) },
                 singleLine = true,
                 shape = AppDialogTextFieldShape,
                 modifier = Modifier.fillMaxWidth(),
@@ -327,7 +332,7 @@ internal fun CreateGroupDialog(
                     disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                 )
             ) {
-                Text("创建", fontWeight = FontWeight.Bold)
+                Text(stringResource(R.string.action_create), fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
@@ -341,7 +346,7 @@ internal fun CreateGroupDialog(
                 ),
                 border = BorderStroke(1.dp, cancelButtonColor)
             ) {
-                Text("取消", fontWeight = FontWeight.Medium)
+                Text(stringResource(R.string.action_cancel), fontWeight = FontWeight.Medium)
             }
         }
     )
@@ -364,25 +369,25 @@ internal fun MoveToGroupDialog(
         containerColor = dialogBg,
         titleContentColor = contentColor,
         textContentColor = contentColor,
-        title = { Text("移动到分组", style = MaterialTheme.typography.titleLarge) },
+        title = { Text(stringResource(R.string.drawer_move_to_group_title), style = MaterialTheme.typography.titleLarge) },
         text = {
             if (groups.isEmpty() && !isCurrentlyGrouped) {
                 Box(
                     modifier = Modifier.fillMaxWidth().padding(vertical = 24.dp),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("目前暂无分组", style = MaterialTheme.typography.bodyLarge)
+                    Text(stringResource(R.string.drawer_no_groups_available), style = MaterialTheme.typography.bodyLarge)
                 }
             } else {
                 LazyColumn(modifier = Modifier.fillMaxWidth()) {
                     if (isCurrentlyGrouped) {
                         item {
                             ListItem(
-                                headlineContent = { Text("移出分组") },
+                                headlineContent = { Text(stringResource(R.string.drawer_remove_from_group)) },
                                 leadingContent = {
                                     Icon(
                                         painter = painterResource(R.drawable.ic_remove_circle),
-                                        contentDescription = "移出分组"
+                                        contentDescription = stringResource(R.string.drawer_remove_from_group)
                                     )
                                 },
                                 modifier = Modifier.clickable {
@@ -398,7 +403,7 @@ internal fun MoveToGroupDialog(
                             leadingContent = {
                                 Icon(
                                     painter = painterResource(R.drawable.ic_folder),
-                                    contentDescription = "分组"
+                                    contentDescription = stringResource(R.string.drawer_group_content_description)
                                 )
                             },
                             modifier = Modifier.clickable {
@@ -421,7 +426,7 @@ internal fun MoveToGroupDialog(
                 ),
                 border = BorderStroke(1.dp, cancelButtonColor)
             ) {
-                Text("取消", fontWeight = FontWeight.Medium)
+                Text(stringResource(R.string.action_cancel), fontWeight = FontWeight.Medium)
             }
         },
         confirmButton = { }

@@ -39,6 +39,33 @@ class ConversationPreviewControllerTest {
         assertFalse(source.contains("historyController.getConversationPreviewText"))
     }
 
+    @Test
+    fun `默认标题和旧版自动标题随当前语言重新生成`() {
+        var language = "English"
+        val localizedController = ConversationPreviewController(stateHolder) { index, isImageGeneration ->
+            "$language ${if (isImageGeneration) "image " else ""}${index + 1}"
+        }
+        stateHolder._historicalConversations.value = listOf(emptyList())
+
+        assertEquals("English 1", localizedController.getConversationPreviewText("empty", 0))
+        language = "中文"
+        assertEquals("中文 1", localizedController.getConversationPreviewText("empty", 0))
+
+        stateHolder._historicalConversations.value = listOf(
+            listOf(
+                Message(
+                    id = "legacy-title",
+                    text = "对话 7",
+                    sender = Sender.System,
+                    isPlaceholderName = true,
+                ),
+            ),
+        )
+        assertEquals("中文 7", localizedController.getConversationPreviewText("legacy", 0))
+        assertEquals(6, legacyDefaultConversationIndex("Conversation 7", isImageGeneration = false))
+        assertEquals(2, legacyDefaultConversationIndex("图像生成对话 3", isImageGeneration = true))
+    }
+
     private fun appViewModelSource(): String {
         val candidates = listOf(
             File("src/main/java/com/android/everytalk/statecontroller/viewmodel/AppViewModel.kt"),

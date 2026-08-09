@@ -20,7 +20,7 @@ internal suspend fun validateUserImageForSelection(
     val failure = (result as ImageSizeCheckResult.Rejected).reason
     val resolvedName = fileName?.takeIf(String::isNotBlank) ?: resolveImageDisplayName(context, uri)
     withContext(Dispatchers.Main.immediate) {
-        onShowError(failure.toUserImageMessage(resolvedName))
+        onShowError(failure.toUserImageMessage(context, resolvedName))
     }
     return false
 }

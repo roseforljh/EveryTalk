@@ -466,7 +466,7 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
                             }
                             is ImagePersistenceResult.Failure -> {
                                 withContext(Dispatchers.Main.immediate) {
-                                    showSnackbar(result.reason.toUserImageMessage(originalFileNameForHint))
+                                    showSnackbar(result.reason.toUserImageMessage(application, originalFileNameForHint))
                                 }
                                 return@withContext AttachmentProcessingResult(success = false)
                             }
@@ -500,7 +500,7 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
                                     }
                                     is ImagePersistenceResult.Failure -> {
                                         withContext(Dispatchers.Main.immediate) {
-                                            showSnackbar(result.reason.toUserImageMessage(originalFileNameForHint))
+                                            showSnackbar(result.reason.toUserImageMessage(application, originalFileNameForHint))
                                         }
                                         return@withContext AttachmentProcessingResult(success = false)
                                     }
@@ -518,7 +518,7 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
                                 }
                                 is ImagePersistenceResult.Failure -> {
                                     withContext(Dispatchers.Main.immediate) {
-                                        showSnackbar(result.reason.toUserImageMessage(originalFileNameForHint))
+                                        showSnackbar(result.reason.toUserImageMessage(application, originalFileNameForHint))
                                     }
                                     return@withContext AttachmentProcessingResult(success = false)
                                 }

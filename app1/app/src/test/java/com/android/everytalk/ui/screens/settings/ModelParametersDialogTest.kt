@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.screens.settings
 
+import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.CustomModelParameter
 import com.android.everytalk.data.DataClass.CustomParameterType
 import com.android.everytalk.data.DataClass.ModelParameterProtocol
@@ -13,13 +14,13 @@ import org.junit.Test
 class ModelParametersDialogTest {
     @Test
     fun `模型能力来源显示为可区分的用户文本`() {
-        assertEquals("用户设置", modelCapabilitySourceLabel(ModelCapabilitySource.USER_OVERRIDE))
-        assertEquals("端点报告", modelCapabilitySourceLabel(ModelCapabilitySource.LIVE_ENDPOINT))
-        assertEquals("官方目录", modelCapabilitySourceLabel(ModelCapabilitySource.OFFICIAL_CATALOG))
-        assertEquals("本地缓存", modelCapabilitySourceLabel(ModelCapabilitySource.LOCAL_CACHE))
-        assertEquals("社区回退", modelCapabilitySourceLabel(ModelCapabilitySource.COMMUNITY_CATALOG))
-        assertEquals("家族估算", modelCapabilitySourceLabel(ModelCapabilitySource.FAMILY_FALLBACK))
-        assertEquals("估算", modelCapabilitySourceLabel(ModelCapabilitySource.CONSERVATIVE_DEFAULT))
+        assertEquals(R.string.model_capability_source_user_override, modelCapabilitySourceLabelRes(ModelCapabilitySource.USER_OVERRIDE))
+        assertEquals(R.string.model_capability_source_live_endpoint, modelCapabilitySourceLabelRes(ModelCapabilitySource.LIVE_ENDPOINT))
+        assertEquals(R.string.model_capability_source_official_catalog, modelCapabilitySourceLabelRes(ModelCapabilitySource.OFFICIAL_CATALOG))
+        assertEquals(R.string.model_capability_source_local_cache, modelCapabilitySourceLabelRes(ModelCapabilitySource.LOCAL_CACHE))
+        assertEquals(R.string.model_capability_source_community_catalog, modelCapabilitySourceLabelRes(ModelCapabilitySource.COMMUNITY_CATALOG))
+        assertEquals(R.string.model_capability_source_family_fallback, modelCapabilitySourceLabelRes(ModelCapabilitySource.FAMILY_FALLBACK))
+        assertEquals(R.string.model_capability_source_conservative_default, modelCapabilitySourceLabelRes(ModelCapabilitySource.CONSERVATIVE_DEFAULT))
     }
 
     @Test

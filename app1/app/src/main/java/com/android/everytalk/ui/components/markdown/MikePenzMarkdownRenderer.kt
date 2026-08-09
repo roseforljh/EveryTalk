@@ -1,6 +1,7 @@
 package com.android.everytalk.ui.components.markdown
 import com.android.everytalk.statecontroller.*
 
+import com.android.everytalk.R
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -57,6 +58,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
@@ -891,7 +893,7 @@ fun MikePenzMarkdownRenderer(
                                     EveryTalkLoadingIndicator(
                                         size = 14.dp,
                                         strokeWidth = 1.5.dp,
-                                        contentDescription = "Markdown 渲染中",
+                                        contentDescription = stringResource(R.string.markdown_rendering),
                                     )
                                 }
                             }
@@ -930,7 +932,7 @@ fun MikePenzMarkdownRenderer(
                         EveryTalkLoadingIndicator(
                             size = 14.dp,
                             strokeWidth = 1.5.dp,
-                            contentDescription = "数学公式输入中",
+                            contentDescription = stringResource(R.string.math_inputting),
                         )
                     }
                 }

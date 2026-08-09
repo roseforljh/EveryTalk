@@ -3,6 +3,7 @@ import com.android.everytalk.statecontroller.*
 
 import android.content.ClipData
 import android.widget.Toast
+import com.android.everytalk.R
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -27,6 +28,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.ClipEntry
 import androidx.compose.ui.platform.LocalClipboard
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -65,6 +67,9 @@ fun CodeBlock(
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     val ctx = LocalContext.current
+    val previewDescription = stringResource(R.string.code_preview)
+    val codeCopiedText = stringResource(R.string.chat_code_copied)
+    val copyCodeDescription = stringResource(R.string.code_copy)
     
     // 🎯 手势冲突解决：检测水平滚动状态
     var isScrolling by remember { mutableStateOf(false) }
@@ -170,7 +175,7 @@ fun CodeBlock(
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            val langText = language?.takeIf { it.isNotBlank() } ?: "code"
+            val langText = language?.takeIf { it.isNotBlank() } ?: stringResource(R.string.code_label)
             Text(
                 text = langText.lowercase(),
                 style = MaterialTheme.typography.labelSmall.copy(
@@ -191,7 +196,7 @@ fun CodeBlock(
                     ) {
                         Icon(
                             imageVector = Icons.Outlined.Visibility,
-                            contentDescription = "预览",
+                            contentDescription = previewDescription,
                             tint = topBarColor,
                             modifier = Modifier.size(16.dp)
                         )
@@ -202,14 +207,14 @@ fun CodeBlock(
                     onClick = {
                         scope.launch {
                             clipboard.setClipEntry(ClipEntry(ClipData.newPlainText("code", code)))
-                            Toast.makeText(ctx, "代码已复制", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(ctx, codeCopiedText, Toast.LENGTH_SHORT).show()
                         }
                     },
                     modifier = Modifier.size(32.dp)
                 ) {
                     Icon(
                         imageVector = Icons.Outlined.ContentCopy,
-                        contentDescription = "复制代码",
+                        contentDescription = copyCodeDescription,
                         tint = topBarColor,
                         modifier = Modifier.size(16.dp)
                     )

@@ -2,6 +2,7 @@ package com.android.everytalk.ui.screens.MainScreen.chat.voice.logic
 import com.android.everytalk.statecontroller.*
 
 import android.content.Context
+import com.android.everytalk.R
 import com.android.everytalk.statecontroller.ViewModelStateHolder
 
 /**
@@ -86,33 +87,33 @@ class VoiceConfigManager(
     fun validateConfig(config: VoiceConfig): String {
         // STT校验
         if (config.sttModel.isEmpty()) {
-            return "请配置 STT 模型名称"
+            return context.getString(R.string.voice_validation_stt_model)
         }
         // Google和Aliyun不需要强制校验API URL
         if (config.sttPlatform != "Google" && config.sttPlatform != "Aliyun" && config.sttApiUrl.isEmpty()) {
-            return "请配置 STT API 地址"
+            return context.getString(R.string.voice_validation_stt_url)
         }
         
         // Chat校验
         if (config.chatModel.isEmpty()) {
-            return "请配置 Chat 模型名称"
+            return context.getString(R.string.voice_validation_chat_model)
         }
         if (config.chatPlatform != "Google" && config.chatApiUrl.isEmpty()) {
-            return "请配置 Chat API 地址"
+            return context.getString(R.string.voice_validation_chat_url)
         }
         
         // TTS校验
         if (config.ttsModel.isEmpty()) {
-            return "请配置 TTS 模型名称"
+            return context.getString(R.string.voice_validation_tts_model)
         }
         if (config.ttsPlatform == "Minimax" && config.ttsApiUrl.isEmpty()) {
-            return "请配置 Minimax API 地址"
+            return context.getString(R.string.voice_validation_minimax_url)
         }
         if (config.ttsPlatform == "SiliconFlow" && config.ttsApiKey.isEmpty()) {
-            return "请配置 SiliconFlow API Key"
+            return context.getString(R.string.voice_validation_siliconflow_key)
         }
         if (config.ttsPlatform == "Aliyun" && config.ttsApiKey.isEmpty()) {
-            return "请配置阿里云 API Key"
+            return context.getString(R.string.voice_validation_aliyun_key)
         }
         
         // 已废弃后端模式，语音功能始终使用直连 API

@@ -48,7 +48,7 @@ import org.koin.dsl.module
 import org.robolectric.annotation.Config
 
 @RunWith(AndroidJUnit4::class)
-@Config(sdk = [34], application = Application::class)
+@Config(sdk = [34], application = Application::class, qualifiers = "zh-rCN")
 class ThinkingUiScrollComposeTest {
     @get:Rule
     val composeRule = createComposeRule()

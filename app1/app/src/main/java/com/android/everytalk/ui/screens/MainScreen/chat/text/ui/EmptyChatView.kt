@@ -42,6 +42,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -98,7 +99,7 @@ fun EmptyChatView(
                     fontWeight = FontWeight.Bold,
                     fontSize = 24.sp,
                 )
-                Text("EveryTalk", style = style)
+                Text(stringResource(R.string.app_name), style = style)
 
                 val dotStyle = style.copy(fontSize = 18.sp)
                 val animY = remember { List(3) { Animatable(0f) } }
@@ -132,7 +133,7 @@ fun EmptyChatView(
                     }
                 }
 
-                Text(",一直都在", style = style)
+                Text(stringResource(R.string.home_slogan_suffix), style = style)
 
                 animY.forEach {
                     Text(
@@ -157,13 +158,13 @@ fun EmptyChatView(
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     PillCard(
-                        title = "创建图片",
+                        title = stringResource(R.string.home_create_image),
                         iconRes = R.drawable.gpt_images,
                         iconTint = Color(0xFF4CAF50),
                         onClick = { if (!isImeVisible) onNavigateToImageGen() }
                     )
                     PillCard(
-                        title = "语音对话",
+                        title = stringResource(R.string.home_voice_chat),
                         iconRes = R.drawable.gpt_voice,
                         iconTint = Color(0xFF2196F3),
                         onClick = { if (!isImeVisible) onNavigateToVoice() }
@@ -174,13 +175,13 @@ fun EmptyChatView(
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     PillCard(
-                        title = "配置修改",
+                        title = stringResource(R.string.home_edit_configuration),
                         iconRes = R.drawable.gpt_settings,
                         iconTint = Color(0xFFFF9800),
                         onClick = { if (!isImeVisible) onNavigateToSettings() }
                     )
                     PillCard(
-                        title = "会话风格",
+                        title = stringResource(R.string.home_conversation_style),
                         iconRes = R.drawable.gpt_tuning,
                         iconTint = Color(0xFFAB47BC),
                         onClick = { if (!isImeVisible) onShowSystemPrompt() }

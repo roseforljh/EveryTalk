@@ -16,7 +16,9 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.ContextUsageSnapshot
 import com.android.everytalk.data.DataClass.Message
@@ -33,7 +35,7 @@ import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 
 @RunWith(AndroidJUnit4::class)
-@Config(sdk = [34], application = Application::class)
+@Config(sdk = [34], application = Application::class, qualifiers = "zh-rCN")
 class AiContextUsagePopupTest {
     @get:Rule
     val composeRule = createComposeRule()
@@ -166,6 +168,7 @@ class AiContextUsagePopupTest {
 
     @Test
     fun `点击圆环显示三项用量和上下箭头`() {
+        val context = ApplicationProvider.getApplicationContext<Application>()
         val message = usageMessage()
         composeRule.setContent {
             MaterialTheme {
@@ -190,8 +193,18 @@ class AiContextUsagePopupTest {
         composeRule.onNodeWithText("本轮会话消耗").assertIsDisplayed()
         composeRule.onNodeWithText("100").assertIsDisplayed()
         composeRule.onNodeWithText("20").assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("输入 tokens").assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("输出 tokens").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription(
+            context.getString(
+                R.string.context_usage_tokens_description,
+                context.getString(R.string.context_usage_input),
+            ),
+        ).assertIsDisplayed()
+        composeRule.onNodeWithContentDescription(
+            context.getString(
+                R.string.context_usage_tokens_description,
+                context.getString(R.string.context_usage_output),
+            ),
+        ).assertIsDisplayed()
         composeRule.onNodeWithText("目前总消耗").assertIsDisplayed()
         composeRule.onNodeWithText("420").assertIsDisplayed()
         composeRule.onNodeWithText("总上下文").assertIsDisplayed()

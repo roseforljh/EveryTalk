@@ -10,11 +10,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.edit
+import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.VoiceBackendConfig
 import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.ui.screens.settings.DialogTextFieldColors
@@ -148,7 +150,7 @@ fun LlmSettingsDialog(
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 Text(
-                    text = "LLM 设置 (对话模型)",
+                    text = stringResource(R.string.voice_llm_settings_title),
                     style = MaterialTheme.typography.headlineSmall.copy(
                         fontWeight = FontWeight.Bold
                     ),
@@ -159,7 +161,7 @@ fun LlmSettingsDialog(
                 Column(
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    SettingsFieldLabel("平台")
+                    SettingsFieldLabel(stringResource(R.string.voice_platform_label))
                     ExposedDropdownMenuBox(
                         expanded = expanded,
                         onExpandedChange = { expanded = it }
@@ -209,12 +211,12 @@ fun LlmSettingsDialog(
                 Column(
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    SettingsFieldLabel("API Key")
+                    SettingsFieldLabel(stringResource(R.string.voice_api_key_label))
                     OutlinedTextField(
                         value = apiKey,
                         onValueChange = { apiKey = it },
                         modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("请输入 API Key") },
+                        placeholder = { Text(stringResource(R.string.voice_api_key_hint)) },
                         colors = DialogTextFieldColors,
                         shape = DialogShape,
                         singleLine = true
@@ -225,19 +227,19 @@ fun LlmSettingsDialog(
                 Column(
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    SettingsFieldLabel("API 地址")
+                    SettingsFieldLabel(stringResource(R.string.voice_api_url_label))
                     OutlinedTextField(
                         value = apiUrl,
                         onValueChange = { apiUrl = it },
                         modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("例如 https://api.openai.com/v1") },
+                        placeholder = { Text(stringResource(R.string.voice_api_url_openai_example)) },
                         supportingText = {
                             if (apiUrl.isNotEmpty() && !apiUrl.startsWith("http")) {
-                                Text("请填写完整的 http(s) 地址", color = MaterialTheme.colorScheme.error)
+                                Text(stringResource(R.string.voice_api_url_invalid), color = MaterialTheme.colorScheme.error)
                             } else if (selectedPlatform == "OpenAI" && apiUrl.isBlank()) {
-                                Text("OpenAI 平台必须填写 API 地址", color = MaterialTheme.colorScheme.error)
+                                Text(stringResource(R.string.voice_api_url_openai_required), color = MaterialTheme.colorScheme.error)
                             } else if (selectedPlatform == "OpenAI") {
-                                Text("将使用你配置的 OpenAI API 地址", color = subtextColor)
+                                Text(stringResource(R.string.voice_api_url_openai_custom), color = subtextColor)
                             } else {
                                 // 智能提示最终使用的完整URL
                                 val finalUrl = if (selectedPlatform == "OpenAI" && apiUrl.isNotBlank()) {
@@ -251,9 +253,9 @@ fun LlmSettingsDialog(
                                 }
                                 
                                 if (finalUrl != null) {
-                                    Text("最终请求地址: $finalUrl", color = MaterialTheme.colorScheme.primary)
+                                    Text(stringResource(R.string.voice_final_request_url, finalUrl), color = MaterialTheme.colorScheme.primary)
                                 } else {
-                                    Text("留空则使用默认地址", color = subtextColor)
+                                    Text(stringResource(R.string.voice_api_url_use_default), color = subtextColor)
                                 }
                             }
                         },
@@ -265,7 +267,7 @@ fun LlmSettingsDialog(
 
                 // 模型名称 (动态列表)
                 com.android.everytalk.ui.screens.MainScreen.chat.models.DynamicModelSelector(
-                    label = "模型名称",
+                    label = stringResource(R.string.voice_model_name_label),
                     currentModel = model,
                     onModelChange = { model = it },
                     modelList = allModels,
@@ -302,7 +304,7 @@ fun LlmSettingsDialog(
                         ),
                         border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
                     ) {
-                        Text("取消", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold))
+                        Text(stringResource(R.string.action_cancel), style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold))
                     }
                     
                     Button(
@@ -359,7 +361,7 @@ fun LlmSettingsDialog(
                             contentColor = dialogBg
                         )
                     ) {
-                        Text("确定", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold))
+                        Text(stringResource(R.string.action_confirm), style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold))
                     }
                 }
             }

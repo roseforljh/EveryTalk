@@ -32,7 +32,9 @@ class HistoryController(
     private val showSnackbar: (String) -> Unit,
     private val shouldAutoScroll: () -> Boolean,
     private val triggerScrollToBottom: () -> Unit,
-    private val simpleModeSwitcher: SimpleModeSwitcher
+    private val simpleModeSwitcher: SimpleModeSwitcher,
+    private val defaultNameFactory: (Int, Boolean) -> String =
+        com.android.everytalk.util.ConversationNameHelper::getDefaultConversationName,
 ) {
     interface SimpleModeSwitcher {
         fun switchToTextMode(forceNew: Boolean = false, skipSavingTextChat: Boolean = false)
@@ -315,6 +317,6 @@ class HistoryController(
     }
 
     private fun getDefaultConversationName(index: Int, isImageGeneration: Boolean): String {
-        return com.android.everytalk.util.ConversationNameHelper.getDefaultConversationName(index, isImageGeneration)
+        return defaultNameFactory(index, isImageGeneration)
     }
 }

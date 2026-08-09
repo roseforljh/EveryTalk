@@ -164,6 +164,7 @@ fun WebPreviewContent(
     }
 
     val (htmlContent, previewBuildError) = remember(
+        context,
         previewContent,
         previewBackgroundColor,
         previewTextColor,
@@ -196,12 +197,17 @@ fun WebPreviewContent(
             document to null
         } catch (e: Exception) {
             android.util.Log.e("WebPreview", "加载预览模板失败", e)
-            val errorMessage = e.message?.ifBlank { "Unknown preview error" } ?: "Unknown preview error"
+            val errorDetail = e.message?.takeIf(String::isNotBlank)
+                ?: context.getString(R.string.web_preview_error_unknown)
+            val errorMessage = context.getString(
+                R.string.web_preview_error_loading_template,
+                errorDetail,
+            )
             buildWebPreviewDocument(
-                content = "<html><body>Error loading template: ${escapeHtml(errorMessage)}</body></html>",
+                content = "<html><body>${escapeHtml(errorMessage)}</body></html>",
                 template = null,
                 completionToken = previewLoadToken,
-            ) to "Template: $errorMessage"
+            ) to context.getString(R.string.web_preview_error_template, errorDetail)
         }
     }
 
@@ -249,7 +255,7 @@ fun WebPreviewContent(
                     "window.__everytalkPreviewError && window.__everytalkPreviewError('Render timed out');",
                     null,
                 )
-                previewLoadSession.error = "Preview: Render timed out"
+                previewLoadSession.error = context.getString(R.string.web_preview_error_timeout)
                 previewLoadSession.completionReported = true
                 latestOnLoadStateChanged(WebPreviewLoadState.ERROR)
             }
@@ -319,7 +325,9 @@ fun WebPreviewContent(
                                     expectedToken = loadSession.token,
                                 )
                             ) return
-                            loadSession.error = "Web: ${error?.description ?: "Unknown preview error"}"
+                            val detail = error?.description?.toString()?.takeIf(String::isNotBlank)
+                                ?: context.getString(R.string.web_preview_error_unknown)
+                            loadSession.error = context.getString(R.string.web_preview_error_web, detail)
                             loadSession.completionReported = true
                             latestOnLoadStateChanged(WebPreviewLoadState.ERROR)
                         }
@@ -342,7 +350,16 @@ fun WebPreviewContent(
                                     }
                                 }
                                 is WebPreviewCompletionSignal.Error -> {
-                                    loadSession.error = "Preview: ${completionSignal.message}"
+                                    loadSession.error = if (completionSignal.message == "Render timed out") {
+                                        context.getString(R.string.web_preview_error_timeout)
+                                    } else {
+                                        context.getString(
+                                            R.string.web_preview_error_render,
+                                            completionSignal.message.ifBlank {
+                                                context.getString(R.string.web_preview_error_unknown)
+                                            },
+                                        )
+                                    }
                                     loadSession.completionReported = true
                                     latestOnLoadStateChanged(WebPreviewLoadState.ERROR)
                                 }
@@ -361,6 +378,7 @@ fun WebPreviewContent(
                                     message = consoleMessage.message(),
                                     lineNumber = consoleMessage.lineNumber(),
                                     sourceId = consoleMessage.sourceId(),
+                                    unknownError = context.getString(R.string.web_preview_error_unknown),
                                 )
                                 loadSession.completionReported = true
                                 latestOnLoadStateChanged(WebPreviewLoadState.ERROR)

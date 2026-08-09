@@ -9,6 +9,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.android.everytalk.R
 import com.android.everytalk.ui.components.math.MathJaxSvgRenderer
 import org.junit.After
 import org.junit.Before
@@ -43,6 +44,8 @@ class ContextCompressionStatusComposeTest {
 
     @Test
     fun `压缩期间在原执行抽屉显示扫描高光文字`() {
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        val localizedStatus = context.getString(R.string.thinking_context_compressing)
         composeRule.mainClock.autoAdvance = false
         composeRule.setContent {
             MaterialTheme {
@@ -63,7 +66,7 @@ class ContextCompressionStatusComposeTest {
 
         composeRule.mainClock.advanceTimeBy(500L)
         composeRule.waitForIdle()
-        composeRule.onNodeWithText("正在压缩上下文").performClick()
+        composeRule.onNodeWithText(localizedStatus).performClick()
         composeRule.mainClock.advanceTimeBy(500L)
         composeRule.waitForIdle()
 
@@ -74,6 +77,11 @@ class ContextCompressionStatusComposeTest {
     @Test
     fun `压缩失败后圆点可回看具体原因`() {
         val failure = "上下文压缩失败：API 返回 429"
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        val localizedFailure = context.getString(
+            R.string.thinking_context_compression_failed,
+            "API 返回 429",
+        )
         composeRule.mainClock.autoAdvance = false
         composeRule.setContent {
             MaterialTheme {
@@ -99,6 +107,6 @@ class ContextCompressionStatusComposeTest {
         composeRule.waitForIdle()
 
         composeRule.onNodeWithTag("reasoning-execution-finish-step").fetchSemanticsNode("")
-        composeRule.onNodeWithText(failure).fetchSemanticsNode("")
+        composeRule.onNodeWithText(localizedFailure).fetchSemanticsNode("")
     }
 }

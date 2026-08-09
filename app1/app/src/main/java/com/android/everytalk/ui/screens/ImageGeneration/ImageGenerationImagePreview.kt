@@ -162,6 +162,14 @@ internal fun ImageGenerationImagePreview(
     onImageIndexChanged: (Int) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val loadFailedMessage = stringResource(R.string.image_load_failed)
+    val savedMessage = stringResource(R.string.image_saved)
+    val saveFailedMessage = stringResource(R.string.image_save_failed)
+    val shareFailedMessage = stringResource(R.string.image_share_failed)
+    val selectedMessage = stringResource(R.string.image_selected)
+    val selectFailedMessage = stringResource(R.string.image_select_failed)
+    val editedMessage = stringResource(R.string.image_edited)
+    val shareChooserTitle = stringResource(R.string.image_share_chooser)
     suspend fun downloadImageBytes(url: String): Pair<ByteArray, String>? {
         val downloaded = SafeHttpDownloader.download(
             url = url,
@@ -525,7 +533,7 @@ internal fun ImageGenerationImagePreview(
                                 "ImagePreview",
                                 "saveToAlbum failed: modelType=${imagePreviewModel?.javaClass?.simpleName} chars=${imagePreviewModel.toString().length}",
                             )
-                            viewModel.showSnackbar("加载失败")
+                            viewModel.showSnackbar(loadFailedMessage)
                             return@launch
                         }
                         val (bytes, mime) = pair
@@ -566,11 +574,11 @@ internal fun ImageGenerationImagePreview(
                                 throw error
                             }
                         }
-                        viewModel.showSnackbar("已保存")
+                        viewModel.showSnackbar(savedMessage)
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
-                        viewModel.showSnackbar("保存失败")
+                        viewModel.showSnackbar(saveFailedMessage)
                     }
                 }
             }
@@ -579,7 +587,7 @@ internal fun ImageGenerationImagePreview(
             suspend fun ensureCacheFileUri(): Uri? {
                 val pair = loadBytesAndMime(imagePreviewModel!!)
                 if (pair == null) {
-                    viewModel.showSnackbar("加载失败")
+                    viewModel.showSnackbar(loadFailedMessage)
                     return null
                 }
                 val (bytes, mime) = pair
@@ -608,7 +616,7 @@ internal fun ImageGenerationImagePreview(
                         withContext(Dispatchers.Main.immediate) {
                             val loadedBitmap = bitmap
                             if (loadedBitmap == null) {
-                                viewModel.showSnackbar("加载失败")
+                                viewModel.showSnackbar(loadFailedMessage)
                                 return@withContext
                             }
                             if (!isImagePreviewVisible || imagePreviewModel != requestedModel) {
@@ -634,7 +642,7 @@ internal fun ImageGenerationImagePreview(
                     try {
                         val pair = loadBytesAndMime(imagePreviewModel!!)
                         if (pair == null) {
-                            viewModel.showSnackbar("加载失败")
+                            viewModel.showSnackbar(loadFailedMessage)
                             return@launch
                         }
                         val (bytes, mime) = pair
@@ -656,11 +664,11 @@ internal fun ImageGenerationImagePreview(
                             // 提高兼容性：通过 ClipData 传递并显式授权
                             clipData = android.content.ClipData.newUri(context.contentResolver, "image", uri)
                         }
-                        context.startActivity(android.content.Intent.createChooser(intent, "分享图片"))
+                        context.startActivity(android.content.Intent.createChooser(intent, shareChooserTitle))
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
-                        viewModel.showSnackbar("分享失败")
+                        viewModel.showSnackbar(shareFailedMessage)
                     }
                 }
             }
@@ -677,11 +685,11 @@ internal fun ImageGenerationImagePreview(
                                 filePath = null
                             )
                         )
-                        viewModel.showSnackbar("已选择")
+                        viewModel.showSnackbar(selectedMessage)
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
-                        viewModel.showSnackbar("选择失败")
+                        viewModel.showSnackbar(selectFailedMessage)
                     }
                 }
             }
@@ -691,7 +699,7 @@ internal fun ImageGenerationImagePreview(
                 scope.launch {
                     val uri = ensureCacheFileUri()
                     if (uri == null) {
-                        viewModel.showSnackbar("加载失败")
+                        viewModel.showSnackbar(loadFailedMessage)
                         return@launch
                     }
                     viewModel.addMediaItem(
@@ -701,7 +709,7 @@ internal fun ImageGenerationImagePreview(
                             filePath = null
                         )
                     )
-                    viewModel.showSnackbar("已选择")
+                    viewModel.showSnackbar(selectedMessage)
                     // 关闭预览对话框，返回图像模式页面
                     onDismiss()
                 }
@@ -758,7 +766,7 @@ internal fun ImageGenerationImagePreview(
                                 ) {
                                     Icon(
                                         painter = painterResource(R.drawable.ic_gpt_close_lg),
-                                        contentDescription = "关闭预览",
+                                        contentDescription = stringResource(R.string.image_preview_close),
                                         tint = Color.White,
                                         modifier = Modifier.size(20.dp)
                                     )
@@ -837,7 +845,7 @@ internal fun ImageGenerationImagePreview(
                                         indication = null,
                                         interactionSource = remember { MutableInteractionSource() },
                                         role = Role.Button,
-                                        onClickLabel = "切换图片缩放",
+                                        onClickLabel = stringResource(R.string.image_toggle_scale),
                                         onClick = toggleZoom,
                                         onDoubleClick = toggleZoom,
                                     ),
@@ -845,7 +853,11 @@ internal fun ImageGenerationImagePreview(
                             ) {
                                 AsyncImage(
                                     model = currentUrl,
-                                    contentDescription = "预览图片 ${page + 1}/${imagePreviewModels.size}",
+                                    contentDescription = stringResource(
+                                        R.string.image_preview_item,
+                                        page + 1,
+                                        imagePreviewModels.size,
+                                    ),
                                     modifier = Modifier
                                         .fillMaxSize()
                                         .padding(horizontal = 12.dp, vertical = 72.dp)
@@ -873,22 +885,22 @@ internal fun ImageGenerationImagePreview(
                         ) {
                             BottomActionButton(
                                 icon = painterResource(R.drawable.ic_gpt_edit),
-                                contentDescription = "编辑图片",
+                                contentDescription = stringResource(R.string.image_edit),
                                 onClick = { editCurrentImage() }
                             )
                             BottomActionButton(
                                 icon = painterResource(R.drawable.ic_gpt_select_image_area),
-                                contentDescription = "选择图片",
+                                contentDescription = stringResource(R.string.image_select_image),
                                 onClick = { openBrushEditor() }
                             )
                             BottomActionButton(
                                 icon = painterResource(R.drawable.ic_gpt_download),
-                                contentDescription = "保存图片",
+                                contentDescription = stringResource(R.string.image_save),
                                 onClick = { saveToAlbum() }
                             )
                             BottomActionButton(
                                 icon = painterResource(R.drawable.ic_gpt_share),
-                                contentDescription = "分享图片",
+                                contentDescription = stringResource(R.string.image_share),
                                 onClick = { shareImage() }
                             )
                         }
@@ -927,13 +939,13 @@ internal fun ImageGenerationImagePreview(
                                             filePath = path
                                         )
                                     )
-                                    viewModel.showSnackbar("已编辑")
+                                    viewModel.showSnackbar(editedMessage)
                                     closeBrushEditor()
                                     onDismiss()
                                 } catch (e: CancellationException) {
                                     throw e
                                 } catch (e: Exception) {
-                                    viewModel.showSnackbar("保存失败")
+                                    viewModel.showSnackbar(saveFailedMessage)
                                 } finally {
                                     if (!edited.isRecycled) edited.recycle()
                                 }

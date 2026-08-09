@@ -2,6 +2,7 @@ package com.android.everytalk.statecontroller.controller.config
 
 import android.util.Base64
 import android.util.Log
+import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.DEFAULT_MAX_OUTPUT_TOKENS
 import com.android.everytalk.data.DataClass.Message
@@ -15,6 +16,7 @@ import com.android.everytalk.statecontroller.viewmodel.ExportManager
 import com.android.everytalk.statecontroller.viewmodel.ProviderManager
 import com.android.everytalk.ui.screens.viewmodel.DataPersistenceManager
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
+import com.android.everytalk.util.locale.localizeUiMessage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -106,13 +108,15 @@ internal fun SettingsController.parseImportedSettingsInternal(
             val settings = json.decodeFromString<ExportedSettings>(jsonContent)
             when {
                 settings.version < 2 -> {
-                    result.warnings.add("检测到v1格式，已自动兼容")
+                    result.warnings.add(context.getString(R.string.settings_import_format_v1_compatible))
                 }
                 settings.version == 2 -> {
-                    result.warnings.add("检测到v2格式（无密钥混淆），已自动兼容")
+                    result.warnings.add(context.getString(R.string.settings_import_format_v2_compatible))
                 }
                 settings.version > EXPORT_VERSION -> {
-                    result.warnings.add("检测到较新版本格式 (v${settings.version})，部分新功能可能不支持")
+                    result.warnings.add(
+                        context.getString(R.string.settings_import_format_newer, settings.version)
+                    )
                 }
             }
             // 迁移旧版本数据：为缺失字段设置默认值
@@ -124,13 +128,13 @@ internal fun SettingsController.parseImportedSettingsInternal(
         // 尝试旧格式兼容 (v1: List<ApiConfig>)
         try {
             val oldList = json.decodeFromString<List<ApiConfig>>(jsonContent)
-            result.warnings.add("检测到旧版本格式(v1)，已自动转换")
+            result.warnings.add(context.getString(R.string.settings_import_legacy_v1_converted))
             return ExportedSettings(version = 1, apiConfigs = oldList)
         } catch (e: Exception) {
             Log.d(TAG, "Failed to parse as legacy format", e)
         }
         
-        throw IllegalStateException("无法解析导入文件。请确保文件是有效的JSON格式，且来自本应用的导出。")
+        throw IllegalStateException(context.getString(R.string.settings_import_invalid_file))
     }
     
     /**
@@ -176,7 +180,9 @@ internal suspend fun SettingsController.importApiConfigsInternal(settings: Expor
                 is ValidationSuccess -> deobfuscatedConfig
                 is ValidationFailure -> {
                     validationResult.errors.forEach { error ->
-                        result.errors.add("配置 '${config.name}': $error")
+                        result.errors.add(
+                            context.getString(R.string.settings_import_config_error, config.name, error)
+                        )
                     }
                     Log.w(TAG, "配置验证失败: ${safeApiConfigSummary(config)}, 错误数量=${validationResult.errors.size}")
                     null
@@ -187,7 +193,7 @@ internal suspend fun SettingsController.importApiConfigsInternal(settings: Expor
         Log.i(TAG, "验证通过的配置数: ${validConfigs.size}")
 
         if (validConfigs.isEmpty() && settings.apiConfigs.isNotEmpty()) {
-            result.warnings.add("所有API配置验证失败，未导入任何配置")
+            result.warnings.add(context.getString(R.string.settings_import_all_api_invalid))
             Log.w(TAG, "所有API配置验证失败")
             return
         }
@@ -308,7 +314,13 @@ internal suspend fun SettingsController.importVoiceConfigsInternal(settings: Exp
                 is ValidationSuccess -> deobfuscatedConfig
                 is ValidationFailure -> {
                     validationResult.errors.forEach { error ->
-                        result.errors.add("语音配置 '${config.name}': $error")
+                        result.errors.add(
+                            context.getString(
+                                R.string.settings_import_voice_config_error,
+                                config.name,
+                                error,
+                            )
+                        )
                     }
                     null
                 }
@@ -384,7 +396,14 @@ internal suspend fun SettingsController.importChatHistoryInternal(settings: Expo
             }
             
             if (newConversations.size < importedConversations.size) {
-                result.warnings.add("跳过了 ${importedConversations.size - newConversations.size} 个重复的会话")
+                val skippedCount = importedConversations.size - newConversations.size
+                result.warnings.add(
+                    context.resources.getQuantityString(
+                        R.plurals.settings_import_duplicate_chats_skipped,
+                        skippedCount,
+                        skippedCount,
+                    )
+                )
             }
             
             currentHistory.addAll(newConversations)
@@ -415,7 +434,14 @@ internal suspend fun SettingsController.importImageHistoryInternal(settings: Exp
             }
             
             if (newConversations.size < importedConversations.size) {
-                result.warnings.add("跳过了 ${importedConversations.size - newConversations.size} 个重复的图像会话")
+                val skippedCount = importedConversations.size - newConversations.size
+                result.warnings.add(
+                    context.resources.getQuantityString(
+                        R.plurals.settings_import_duplicate_image_chats_skipped,
+                        skippedCount,
+                        skippedCount,
+                    )
+                )
             }
             
             currentHistory.addAll(newConversations)
@@ -438,7 +464,13 @@ internal fun SettingsController.importConversationInternal(
                 val sender = try {
                     Sender.valueOf(msg.sender)
                 } catch (e: Exception) {
-                    result.warnings.add("会话 ${exported.id}: 未知的发送者类型 '${msg.sender}'，默认为 User")
+                    result.warnings.add(
+                        context.getString(
+                            R.string.settings_import_unknown_sender,
+                            exported.id,
+                            msg.sender,
+                        )
+                    )
                     Sender.User
                 }
                 
@@ -453,7 +485,13 @@ internal fun SettingsController.importConversationInternal(
                 )
             }
         } catch (e: Exception) {
-            result.errors.add("会话 ${exported.id} 导入失败: ${e.message}")
+            result.errors.add(
+                context.getString(
+                    R.string.settings_import_conversation_failed,
+                    exported.id,
+                    e.message ?: context.getString(R.string.unknown_error),
+                )
+            )
             null
         }
     }
@@ -474,7 +512,13 @@ internal suspend fun SettingsController.importPinnedIdsInternal(settings: Export
             val validIds = settings.pinnedTextIds.filter { it in existingTextConvIds }
             val invalidCount = settings.pinnedTextIds.size - validIds.size
             if (invalidCount > 0) {
-                result.warnings.add("跳过了 $invalidCount 个无效的文本置顶ID")
+                result.warnings.add(
+                    context.resources.getQuantityString(
+                        R.plurals.settings_import_invalid_text_pins_skipped,
+                        invalidCount,
+                        invalidCount,
+                    )
+                )
             }
             currentPinned.addAll(validIds)
             stateHolder.pinnedTextConversationIds.value = currentPinned
@@ -487,7 +531,13 @@ internal suspend fun SettingsController.importPinnedIdsInternal(settings: Export
             val validIds = settings.pinnedImageIds.filter { it in existingImageConvIds }
             val invalidCount = settings.pinnedImageIds.size - validIds.size
             if (invalidCount > 0) {
-                result.warnings.add("跳过了 $invalidCount 个无效的图像置顶ID")
+                result.warnings.add(
+                    context.resources.getQuantityString(
+                        R.plurals.settings_import_invalid_image_pins_skipped,
+                        invalidCount,
+                        invalidCount,
+                    )
+                )
             }
             currentPinned.addAll(validIds)
             stateHolder.pinnedImageConversationIds.value = currentPinned
@@ -516,7 +566,13 @@ internal suspend fun SettingsController.importConversationGroupsInternal(setting
                 currentGroups[groupName] = existingIds
             }
             if (invalidIdCount > 0) {
-                result.warnings.add("分组中跳过了 $invalidIdCount 个无效的会话ID")
+                result.warnings.add(
+                    context.resources.getQuantityString(
+                        R.plurals.settings_import_invalid_group_ids_skipped,
+                        invalidIdCount,
+                        invalidIdCount,
+                    )
+                )
             }
             stateHolder.conversationGroups.value = currentGroups
             persistenceManager.saveConversationGroups(currentGroups)
@@ -533,48 +589,60 @@ internal fun SettingsController.validateApiConfigInternal(config: ApiConfig): Va
         
         // 验证ID
         if (config.id.isBlank()) {
-            errors.add("配置ID不能为空")
+            errors.add(context.getString(R.string.settings_import_validation_config_id))
         }
         
         // 验证提供商
         if (config.provider.isBlank()) {
-            errors.add("提供商名称不能为空")
+            errors.add(context.getString(R.string.settings_import_validation_provider_name))
         }
         
         // 验证提供商名称长度和字符
         if (config.provider.length > 100) {
-            errors.add("提供商名称过长 (最多100个字符)")
+            errors.add(context.getString(R.string.settings_import_validation_provider_name_length))
         }
         
         // 验证URL格式
         if (config.address.isNotBlank() && !isValidUrlInternal(config.address)) {
-            errors.add("API地址格式无效")
+            errors.add(context.getString(R.string.settings_import_validation_api_url))
         }
         
         // 验证API密钥长度 - 仅验证最大长度，不再验证最小长度
         if (config.key.isNotBlank() && config.key.length > MAX_API_KEY_LENGTH) {
-            errors.add("API密钥长度过长 (最多${MAX_API_KEY_LENGTH}个字符)")
+            errors.add(
+                context.getString(
+                    R.string.settings_import_validation_api_key_length,
+                    MAX_API_KEY_LENGTH,
+                )
+            )
         }
         
         // 验证模型名称
         if (config.model.isBlank()) {
-            errors.add("模型名称不能为空")
+            errors.add(context.getString(R.string.settings_import_validation_model_name))
         }
         
         // 验证模型名称长度和格式
         if (config.model.length > 200) {
-            errors.add("模型名称过长 (最多200个字符)")
+            errors.add(context.getString(R.string.settings_import_validation_model_name_length))
         }
         
         // 验证温度范围 - 扩展范围以支持更多模型
         if (config.temperature < 0f || config.temperature > 3f) {
-            errors.add("温度值超出范围 (0-3): ${config.temperature}")
+            errors.add(
+                context.getString(
+                    R.string.settings_import_validation_temperature,
+                    config.temperature.toString(),
+                )
+            )
         }
         
         // 验证topP范围
         config.topP?.let { topP ->
             if (topP < 0f || topP > 1f) {
-                errors.add("topP值超出范围 (0-1): $topP")
+                errors.add(
+                    context.getString(R.string.settings_import_validation_top_p, topP.toString())
+                )
             }
         }
         
@@ -584,19 +652,24 @@ internal fun SettingsController.validateApiConfigInternal(config: ApiConfig): Va
                 maxOutputTokens = config.maxTokens ?: DEFAULT_MAX_OUTPUT_TOKENS,
                 maxContextTokens = config.modelParameters.maxContextTokens,
             )
-        }.exceptionOrNull()?.message?.let { errors.add(it) }
+        }.exceptionOrNull()?.message?.let { errors.add(context.localizeUiMessage(it)) }
         
         // 验证guidanceScale（图像生成）
         config.guidanceScale?.let { scale ->
             if (scale < 0f || scale > 50f) {
-                errors.add("guidanceScale超出范围 (0-50): $scale")
+                errors.add(
+                    context.getString(
+                        R.string.settings_import_validation_guidance,
+                        scale.toString(),
+                    )
+                )
             }
         }
         
         // 验证numInferenceSteps（图像生成）
         config.numInferenceSteps?.let { steps ->
             if (steps < 1 || steps > 1000) {
-                errors.add("numInferenceSteps超出范围 (1-1000): $steps")
+                errors.add(context.getString(R.string.settings_import_validation_steps, steps))
             }
         }
         
@@ -614,30 +687,30 @@ internal fun SettingsController.validateVoiceConfigInternal(config: VoiceBackend
         val errors = mutableListOf<String>()
         
         if (config.id.isBlank()) {
-            errors.add("语音配置ID不能为空")
+            errors.add(context.getString(R.string.settings_import_validation_voice_id))
         }
         
         // 验证配置名称
         if (config.name.isBlank()) {
-            errors.add("语音配置名称不能为空")
+            errors.add(context.getString(R.string.settings_import_validation_voice_name))
         }
         if (config.name.length > 100) {
-            errors.add("语音配置名称过长 (最多100个字符)")
+            errors.add(context.getString(R.string.settings_import_validation_voice_name_length))
         }
         
         // 验证STT配置
         if (config.sttApiUrl.isNotBlank() && !isValidUrlInternal(config.sttApiUrl)) {
-            errors.add("STT API地址格式无效")
+            errors.add(context.getString(R.string.settings_import_validation_stt_url))
         }
         
         // 验证Chat配置
         if (config.chatApiUrl.isNotBlank() && !isValidUrlInternal(config.chatApiUrl)) {
-            errors.add("Chat API地址格式无效")
+            errors.add(context.getString(R.string.settings_import_validation_chat_url))
         }
         
         // 验证TTS配置
         if (config.ttsApiUrl.isNotBlank() && !isValidUrlInternal(config.ttsApiUrl)) {
-            errors.add("TTS API地址格式无效")
+            errors.add(context.getString(R.string.settings_import_validation_tts_url))
         }
         
         return if (errors.isEmpty()) {
@@ -688,23 +761,81 @@ internal fun SettingsController.isValidUrlInternal(url: String): Boolean {
 internal fun SettingsController.buildImportResultMessageInternal(result: ImportResult): String {
     val sections = mutableListOf<String>()
     val successItems = buildList {
-        if (result.configsImported > 0) add("${result.configsImported}个API配置")
-        if (result.voiceConfigsImported > 0) add("${result.voiceConfigsImported}个语音配置")
-        if (result.chatHistoryImported > 0) add("${result.chatHistoryImported}个聊天会话")
-        if (result.imageHistoryImported > 0) add("${result.imageHistoryImported}个图像会话")
+        if (result.configsImported > 0) add(
+            context.resources.getQuantityString(
+                R.plurals.settings_import_api_config_count,
+                result.configsImported,
+                result.configsImported,
+            )
+        )
+        if (result.voiceConfigsImported > 0) add(
+            context.resources.getQuantityString(
+                R.plurals.settings_import_voice_config_count,
+                result.voiceConfigsImported,
+                result.voiceConfigsImported,
+            )
+        )
+        if (result.chatHistoryImported > 0) add(
+            context.resources.getQuantityString(
+                R.plurals.settings_import_chat_count,
+                result.chatHistoryImported,
+                result.chatHistoryImported,
+            )
+        )
+        if (result.imageHistoryImported > 0) add(
+            context.resources.getQuantityString(
+                R.plurals.settings_import_image_chat_count,
+                result.imageHistoryImported,
+                result.imageHistoryImported,
+            )
+        )
     }
     if (successItems.isNotEmpty()) {
-        sections += "成功导入: ${successItems.joinToString(", ")}"
+        sections += context.getString(
+            R.string.settings_import_success,
+            successItems.joinToString(", "),
+        )
     }
     if (result.warnings.isNotEmpty()) {
-        val details = result.warnings.take(3).joinToString("\n  - ")
-        val suffix = if (result.warnings.size > 3) "\n  - ...还有${result.warnings.size - 3}个警告" else ""
-        sections += "⚠️ ${result.warnings.size}个警告\n  - $details$suffix"
+        val details = result.warnings.take(3)
+            .joinToString("\n  - ") { context.localizeUiMessage(it) }
+        val remaining = result.warnings.size - 3
+        val suffix = if (remaining > 0) {
+            "\n  - " + context.resources.getQuantityString(
+                R.plurals.settings_import_more_warnings,
+                remaining,
+                remaining,
+            )
+        } else {
+            ""
+        }
+        val header = context.resources.getQuantityString(
+            R.plurals.settings_import_warning_count,
+            result.warnings.size,
+            result.warnings.size,
+        )
+        sections += "$header\n  - $details$suffix"
     }
     if (result.errors.isNotEmpty()) {
-        val details = result.errors.take(3).joinToString("\n  - ")
-        val suffix = if (result.errors.size > 3) "\n  - ...还有${result.errors.size - 3}个错误" else ""
-        sections += "❌ ${result.errors.size}个错误\n  - $details$suffix"
+        val details = result.errors.take(3)
+            .joinToString("\n  - ") { context.localizeUiMessage(it) }
+        val remaining = result.errors.size - 3
+        val suffix = if (remaining > 0) {
+            "\n  - " + context.resources.getQuantityString(
+                R.plurals.settings_import_more_errors,
+                remaining,
+                remaining,
+            )
+        } else {
+            ""
+        }
+        val header = context.resources.getQuantityString(
+            R.plurals.settings_import_error_count,
+            result.errors.size,
+            result.errors.size,
+        )
+        sections += "$header\n  - $details$suffix"
     }
-    return sections.joinToString("\n").ifEmpty { "导入完成，未发现有效数据" }
+    return sections.joinToString("\n")
+        .ifEmpty { context.getString(R.string.settings_import_no_valid_data) }
 }

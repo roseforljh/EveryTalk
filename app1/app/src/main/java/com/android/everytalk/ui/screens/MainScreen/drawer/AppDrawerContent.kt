@@ -9,6 +9,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -276,7 +277,7 @@ fun AppDrawerContent(
                 horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                 Text(
-                    text = "分组",
+                    text = stringResource(R.string.drawer_groups),
                     style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -302,7 +303,7 @@ fun AppDrawerContent(
                 ) {
                     Icon(
                         painter = painterResource(R.drawable.ic_plus),
-                        "创建分组",
+                        stringResource(R.string.drawer_create_group),
                         modifier = Modifier.size(16.dp),
                         tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = addGroupButtonAlpha)
                     )
@@ -320,7 +321,7 @@ fun AppDrawerContent(
                                 contentAlignment = Alignment.Center,
                             ) {
                                 Text(
-                                    "暂无分组",
+                                    stringResource(R.string.drawer_no_groups),
                                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                                     style = MaterialTheme.typography.bodySmall,
                                     fontWeight = FontWeight.Bold,
@@ -377,7 +378,7 @@ fun AppDrawerContent(
                                         contentAlignment = Alignment.Center,
                                     ) {
                                         Text(
-                                            "暂无分组",
+                                            stringResource(R.string.drawer_no_groups),
                                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                                             style = MaterialTheme.typography.bodySmall,
                                             fontWeight = FontWeight.Bold,
@@ -398,7 +399,7 @@ fun AppDrawerContent(
                         horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
                         Text(
-                            text = "会话",
+                            text = stringResource(R.string.drawer_conversations),
                             style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -420,7 +421,7 @@ fun AppDrawerContent(
                                     .padding(vertical = 20.dp),
                                 contentAlignment = Alignment.Center,
                             ) {
-                                Text("暂无聊天记录", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                Text(stringResource(R.string.drawer_no_chat_history), color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                         }
                     }
@@ -429,7 +430,7 @@ fun AppDrawerContent(
                         if (processedItems.pinned.isNotEmpty()) {
                             item(key = "pinned_header") {
                                 CollapsibleGroupHeader(
-                                    groupName = "已置顶",
+                                    groupName = stringResource(R.string.drawer_pinned_group),
                                     isExpanded = expandedGroups.contains("pinned"),
                                     onToggleExpand = { onToggleGroup("pinned") },
                                     isPinnedGroup = true,
@@ -543,11 +544,11 @@ fun AppDrawerContent(
                 AlertDialog(
                     modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
                     onDismissRequest = { renamingIndex = null },
-                    title = { Text("重命名会话") },
+                    title = { Text(stringResource(R.string.drawer_rename_conversation_title)) },
                     text = {
                         Column {
                             Text(
-                                text = "会话名称",
+                                text = stringResource(R.string.drawer_conversation_name_label),
                                 style = MaterialTheme.typography.labelLarge,
                                 fontWeight = FontWeight.SemiBold,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -558,7 +559,7 @@ fun AppDrawerContent(
                                 onValueChange = { newName = it },
                                 singleLine = true,
                                 modifier = Modifier.fillMaxWidth(),
-                                placeholder = { Text("请输入会话名称") },
+                                placeholder = { Text(stringResource(R.string.drawer_conversation_name_hint)) },
                                 shape = RoundedCornerShape(12.dp),
                                 colors = appDialogTextFieldColors()
                             )
@@ -580,7 +581,7 @@ fun AppDrawerContent(
                             )
                         ) {
                             Text(
-                                "确定",
+                                stringResource(R.string.action_confirm),
                                 style = MaterialTheme.typography.labelLarge.copy(
                                     fontWeight = FontWeight.SemiBold
                                 )
@@ -601,7 +602,7 @@ fun AppDrawerContent(
                             border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
                         ) {
                             Text(
-                                "取消",
+                                stringResource(R.string.action_cancel),
                                 style = MaterialTheme.typography.labelLarge.copy(
                                     fontWeight = FontWeight.SemiBold
                                 )

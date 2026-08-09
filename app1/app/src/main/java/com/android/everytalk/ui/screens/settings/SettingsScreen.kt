@@ -17,6 +17,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.style.TextOverflow
@@ -54,13 +55,15 @@ import com.android.everytalk.ui.components.floatingEdgeGradient
 import java.util.UUID
 
 private const val MAX_SETTINGS_IMPORT_BYTES = 50L * 1024L * 1024L
-private const val SETTINGS_IMPORT_TOO_LARGE_MESSAGE = "导入文件过大（最大支持50MB）"
 
-private fun readSettingsImportText(inputStream: java.io.InputStream): String {
+private fun readSettingsImportText(
+    inputStream: java.io.InputStream,
+    tooLargeMessage: String,
+): String {
     return try {
         readAtMost(inputStream, MAX_SETTINGS_IMPORT_BYTES).toString(Charsets.UTF_8)
     } catch (e: IllegalArgumentException) {
-        throw IllegalStateException(SETTINGS_IMPORT_TOO_LARGE_MESSAGE, e)
+        throw IllegalStateException(tooLargeMessage, e)
     }
 }
 
@@ -168,6 +171,10 @@ fun SettingsScreen(
     var providerToDelete by remember { mutableStateOf<String?>(null) }
     var showImportExportDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
+    val importTooLargeMessage = stringResource(R.string.settings_import_too_large)
+    val exportContentExpiredMessage = stringResource(R.string.settings_export_content_expired)
+    val exportSuccessMessage = stringResource(R.string.settings_export_success)
+    val importUnreadableMessage = stringResource(R.string.settings_import_unreadable)
 
     val exportSettingsLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.CreateDocument("application/json"),
@@ -178,7 +185,7 @@ fun SettingsScreen(
             } else {
                 val jsonContent = exportData?.second
                 if (jsonContent == null) {
-                    viewModel.showToast("导出失败: 待导出内容已失效")
+                    viewModel.showToast(exportContentExpiredMessage)
                 } else {
                     scope.launch {
                     try {
@@ -192,10 +199,15 @@ fun SettingsScreen(
                                 }
                             }
                         }
-                        viewModel.showToast("配置已导出")
+                        viewModel.showToast(exportSuccessMessage)
                     } catch (e: Exception) {
                         Log.e("SettingsScreen", "导出失败", e)
-                        viewModel.showToast("导出失败: ${e.message}")
+                        viewModel.showToast(
+                            context.getString(
+                                R.string.settings_export_failed_detail,
+                                e.message ?: context.getString(R.string.unknown_error),
+                            )
+                        )
                     }
                 }
             }
@@ -213,20 +225,25 @@ fun SettingsScreen(
                         context.contentResolver.openAssetFileDescriptor(it, "r")?.use { descriptor ->
                             val declaredLength = descriptor.length
                             if (declaredLength > MAX_SETTINGS_IMPORT_BYTES) {
-                                throw IllegalStateException(SETTINGS_IMPORT_TOO_LARGE_MESSAGE)
+                                throw IllegalStateException(importTooLargeMessage)
                             }
                         }
                         context.contentResolver.openInputStream(it)?.use { inputStream ->
-                            readSettingsImportText(inputStream)
+                            readSettingsImportText(inputStream, importTooLargeMessage)
                         }
                     }
                     if (jsonContent == null) {
-                        viewModel.showToast("导入失败: 无法读取文件")
+                        viewModel.showToast(importUnreadableMessage)
                     } else {
                         viewModel.importSettings(jsonContent)
                     }
                 } catch (e: Exception) {
-                    viewModel.showToast("导入失败: ${e.message}")
+                    viewModel.showToast(
+                        context.getString(
+                            R.string.settings_import_failed_detail,
+                            e.message ?: context.getString(R.string.unknown_error),
+                        )
+                    )
                 }
                 }
             }
@@ -271,7 +288,11 @@ fun SettingsScreen(
     val topButtonSize = iconButtonSize + 2.dp
 
     // Tab 状态：0=平台配置, 1=联网搜索, 2=MCP
-    val tabs = listOf("平台配置", "联网搜索", "MCP")
+    val tabs = listOf(
+        stringResource(R.string.settings_tab_platforms),
+        stringResource(R.string.settings_tab_web_search),
+        stringResource(R.string.settings_tab_mcp),
+    )
     var currentTabIndex by remember { mutableIntStateOf(0) }
     var showTabMenu by remember { mutableStateOf(false) }
     var showMcpAddDialog by remember { mutableStateOf(false) }
@@ -467,7 +488,7 @@ fun SettingsScreen(
                     ) {
                         Icon(
                             painter = painterResource(R.drawable.ic_arrow_back),
-                            contentDescription = "返回",
+                            contentDescription = stringResource(R.string.navigation_back),
                             tint = contentColor,
                             modifier = Modifier.size(20.dp)
                         )
@@ -513,7 +534,7 @@ fun SettingsScreen(
                                     ) {
                                         Icon(
                                             painter = painterResource(R.drawable.ic_plus),
-                                            contentDescription = "添加",
+                                            contentDescription = stringResource(R.string.action_add),
                                             tint = contentColor,
                                             modifier = Modifier.size(20.dp)
                                         )
@@ -528,7 +549,7 @@ fun SettingsScreen(
                                 ) {
                                     Icon(
                                         painter = painterResource(R.drawable.ic_dots_horizontal),
-                                        contentDescription = "更多",
+                                        contentDescription = stringResource(R.string.action_more),
                                         tint = contentColor,
                                         modifier = Modifier.size(20.dp)
                                     )
@@ -573,7 +594,7 @@ fun SettingsScreen(
                                 ) {
                                     Icon(
                                         painter = painterResource(R.drawable.ic_plus),
-                                        contentDescription = "添加",
+                                        contentDescription = stringResource(R.string.action_add),
                                         tint = contentColor,
                                         modifier = Modifier.size(20.dp)
                                     )
@@ -587,7 +608,7 @@ fun SettingsScreen(
                                 ) {
                                     Icon(
                                         painter = painterResource(R.drawable.ic_dots_horizontal),
-                                        contentDescription = "更多",
+                                        contentDescription = stringResource(R.string.action_more),
                                         tint = contentColor,
                                         modifier = Modifier.size(20.dp)
                                     )
@@ -821,8 +842,11 @@ fun SettingsScreen(
                 showConfirmDeleteProviderDialog = false
                 providerToDelete = null
             },
-            title = "删除平台",
-            text = "您确定要删除模型平台 “$providerToDelete” 吗？\n\n这将同时删除所有使用此平台的配置。此操作不可撤销。"
+            title = stringResource(R.string.settings_delete_platform_title),
+            text = stringResource(
+                R.string.settings_delete_platform_description,
+                localizedProviderLabel(providerToDelete.orEmpty()),
+            ),
         )
     }
     if (showImportExportDialog) {
@@ -969,7 +993,7 @@ private fun SettingsTabMenu(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "导入/导出",
+                        text = stringResource(R.string.settings_import_export),
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Medium,
                         color = textColor,

@@ -36,6 +36,7 @@ import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.zIndex
 import java.lang.Float.max
 import java.lang.Float.min
@@ -121,6 +122,10 @@ fun CodeBlockCard(
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     val isDarkTheme = isSystemInDarkTheme()
+    val codeLabel = stringResource(R.string.code_label)
+    val copyDescription = stringResource(R.string.action_copy)
+    val previewDescription = stringResource(R.string.code_preview)
+    val openFullScreenPreviewDescription = stringResource(R.string.code_open_fullscreen_preview)
     val bg = MaterialTheme.chatColors.codeBlockBackground
     // 夜间模式使用白色边框，白天模式使用 outline 颜色
     val outline = if (isDarkTheme) {
@@ -196,7 +201,7 @@ fun CodeBlockCard(
     )
     
     // 规范化语言标签
-    val displayLanguage = language?.trim()?.ifBlank { "CODE" }?.uppercase() ?: "CODE"
+    val displayLanguage = language?.trim()?.ifBlank { codeLabel }?.uppercase() ?: codeLabel.uppercase()
     
     // 判断是否支持预览
     val canPreview = onPreviewRequested != null && isPreviewSupported(language)
@@ -328,7 +333,7 @@ fun CodeBlockCard(
                     ) {
                         Icon(
                             painter = painterResource(R.drawable.ic_gpt_copy),
-                            contentDescription = "复制",
+                            contentDescription = copyDescription,
                             tint = headerContentColor,
                             modifier = Modifier.size(24.dp)
                         )
@@ -382,7 +387,7 @@ fun CodeBlockCard(
                                     ) {
                                         Icon(
                                             painter = painterResource(R.drawable.ic_gpt_terminal),
-                                            contentDescription = "代码",
+                                            contentDescription = codeLabel,
                                             tint = headerContentColor,
                                             modifier = Modifier.size(24.dp)
                                         )
@@ -404,7 +409,7 @@ fun CodeBlockCard(
                                     ) {
                                         Icon(
                                             painter = painterResource(R.drawable.ic_gpt_play),
-                                            contentDescription = "预览",
+                                            contentDescription = previewDescription,
                                             tint = headerContentColor,
                                             modifier = Modifier.size(24.dp)
                                         )
@@ -489,11 +494,11 @@ fun CodeBlockCard(
                                         .fillMaxSize()
                                         .background(Color.Transparent)
                                         .semantics {
-                                            contentDescription = "打开全屏网页预览"
+                                            contentDescription = openFullScreenPreviewDescription
                                         }
                                         .clickable(
                                             role = Role.Button,
-                                            onClickLabel = "打开全屏网页预览",
+                                            onClickLabel = openFullScreenPreviewDescription,
                                             onClick = { showFullScreenPreview = true },
                                         )
                                 )

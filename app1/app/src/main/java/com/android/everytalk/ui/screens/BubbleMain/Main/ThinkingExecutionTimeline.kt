@@ -41,18 +41,25 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.ExecutionStep
 import com.android.everytalk.data.DataClass.ExecutionStepType
 import com.android.everytalk.data.DataClass.WebSearchResult
+import com.android.everytalk.statecontroller.CONTEXT_COMPRESSION_FAILURE_PREFIX
+import com.android.everytalk.statecontroller.CONTEXT_COMPRESSION_RUNNING_STATUS
 import com.android.everytalk.util.web.linkFaviconUrl
 import com.android.everytalk.util.web.linkHost
+import com.android.everytalk.util.locale.localizeUiMessage
 
 private const val MAX_VISIBLE_SOURCE_PILLS = 5
 private val TimelineSearchBlue = Color(0xFF2563EB)
@@ -60,6 +67,55 @@ private val TimelineWebGreen = Color(0xFF00A86B)
 private val TimelineToolOrange = Color(0xFFF06A00)
 private val TimelineReasoningPurple = Color(0xFF7C3AED)
 private val TimelineErrorRed = Color(0xFFE5484D)
+
+@Composable
+internal fun localizedExecutionStatusText(status: String?): String? {
+    val text = status?.trim()?.takeIf(String::isNotEmpty) ?: return null
+    val context = LocalContext.current
+    return when {
+        text == "等待首个响应" -> stringResource(R.string.thinking_waiting_first_response)
+        text == "正在接收思考" -> stringResource(R.string.thinking_receiving)
+        text == "已收到思考，等待正文" -> stringResource(R.string.thinking_received_waiting_content)
+        text == "搜索网页" -> stringResource(R.string.thinking_searching_web)
+        text.startsWith("搜索网页 · ") -> stringResource(
+            R.string.thinking_searching_web_named,
+            text.removePrefix("搜索网页 · "),
+        )
+        text == "读取网页" -> stringResource(R.string.thinking_reading_web)
+        text.startsWith("读取网页 · ") -> stringResource(
+            R.string.thinking_reading_web_named,
+            text.removePrefix("读取网页 · "),
+        )
+        text == "MCP读取网页" -> stringResource(R.string.thinking_reading_web_with_mcp)
+        text.startsWith("MCP读取网页 · ") -> stringResource(
+            R.string.thinking_reading_web_with_mcp_named,
+            text.removePrefix("MCP读取网页 · "),
+        )
+        text == "选择回答能力" -> stringResource(R.string.thinking_selecting_capability)
+        text == "获取当前时间" -> stringResource(R.string.thinking_getting_current_time)
+        text == "读取附件" -> stringResource(R.string.thinking_reading_attachment)
+        text == "调用工具" -> stringResource(R.string.thinking_calling_tool)
+        text.startsWith("调用工具 · ") -> stringResource(
+            R.string.thinking_calling_tool_named,
+            text.removePrefix("调用工具 · "),
+        )
+        text == "调用MCP" -> stringResource(R.string.thinking_calling_mcp)
+        text.startsWith("调用MCP · ") -> stringResource(
+            R.string.thinking_calling_mcp_named,
+            text.removePrefix("调用MCP · "),
+        )
+        text.startsWith("工具结果 · ") -> stringResource(
+            R.string.thinking_tool_result,
+            text.removePrefix("工具结果 · "),
+        )
+        text == CONTEXT_COMPRESSION_RUNNING_STATUS -> stringResource(R.string.thinking_context_compressing)
+        text.startsWith(CONTEXT_COMPRESSION_FAILURE_PREFIX) -> stringResource(
+            R.string.thinking_context_compression_failed,
+            context.localizeUiMessage(text.removePrefix(CONTEXT_COMPRESSION_FAILURE_PREFIX)),
+        )
+        else -> text
+    }
+}
 
 private fun webLinkClick(uriHandler: UriHandler, href: String): (() -> Unit)? {
     val target = href.trim().takeIf { linkHost(it).isNotBlank() } ?: return null
@@ -148,6 +204,7 @@ internal fun ThinkingExecutionTimeline(
     modifier: Modifier = Modifier,
     reasoningContent: @Composable () -> Unit,
 ) {
+    val localizedActivityStatusText = localizedExecutionStatusText(activityStatusText)
     val hasReasoning = reasoningText.isNotBlank()
     val timelineEntries = executionTimelineEntries(executionSteps)
     val pendingStepIndex = timelineEntries.indexOfLast { !it.step.completed }
@@ -173,7 +230,7 @@ internal fun ThinkingExecutionTimeline(
             TimelineNode(
                 icon = stepIcon(step.type),
                 iconTint = stepIconTint(step.type),
-                title = step.title,
+                title = localizedExecutionStatusText(step.title) ?: step.title,
                 active = isActive,
                 completed = step.completed,
                 first = nodeIndex == 0,
@@ -192,7 +249,8 @@ internal fun ThinkingExecutionTimeline(
             TimelineNode(
                 icon = Icons.Outlined.AutoAwesome,
                 iconTint = TimelineReasoningPurple,
-                title = activityStatusText?.takeIf { it.isNotBlank() } ?: "等待首个响应",
+                title = localizedActivityStatusText
+                    ?: stringResource(R.string.thinking_waiting_first_response),
                 active = true,
                 completed = false,
                 first = nodeIndex == 0,
@@ -206,7 +264,7 @@ internal fun ThinkingExecutionTimeline(
             TimelineNode(
                 icon = Icons.Filled.Public,
                 iconTint = TimelineWebGreen,
-                title = "查阅网站",
+                title = stringResource(R.string.thinking_browsed_websites),
                 active = false,
                 completed = true,
                 first = nodeIndex == 0,
@@ -222,7 +280,7 @@ internal fun ThinkingExecutionTimeline(
             TimelineNode(
                 icon = Icons.Outlined.AutoAwesome,
                 iconTint = TimelineReasoningPurple,
-                title = "思考过程",
+                title = stringResource(R.string.thinking_process),
                 active = reasoningIsActive,
                 completed = !reasoningIsActive,
                 first = nodeIndex == 0,
@@ -243,11 +301,11 @@ internal fun ThinkingExecutionTimeline(
                     TimelineWebGreen
                 },
                 title = if (messageIsError) {
-                    activityStatusText
-                        ?.takeIf { it.startsWith("上下文压缩失败：") }
-                        ?: "执行失败"
+                    localizedActivityStatusText
+                        ?.takeIf { activityStatusText?.startsWith(CONTEXT_COMPRESSION_FAILURE_PREFIX) == true }
+                        ?: stringResource(R.string.thinking_execution_failed)
                 } else {
-                    "完成"
+                    stringResource(R.string.thinking_complete)
                 },
                 active = false,
                 completed = !messageIsError,
@@ -458,7 +516,14 @@ private fun WebsiteLabels(results: List<WebSearchResult>) {
             )
         }
         if (sources.size > MAX_VISIBLE_SOURCE_PILLS) {
-            CapsuleLabel(text = "其余 ${sources.size - MAX_VISIBLE_SOURCE_PILLS} 个")
+            val remainingCount = sources.size - MAX_VISIBLE_SOURCE_PILLS
+            CapsuleLabel(
+                text = pluralStringResource(
+                    R.plurals.thinking_remaining_sources,
+                    remainingCount,
+                    remainingCount,
+                ),
+            )
         }
     }
 }

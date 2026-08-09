@@ -44,6 +44,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -224,15 +225,21 @@ internal fun AiContextUsageButton(
     val popupOffset = with(LocalDensity.current) {
         IntOffset(x = (-72).dp.roundToPx(), y = 0)
     }
+    val usageContentDescription = if (summary != null) {
+        stringResource(
+            R.string.context_usage_view_percent,
+            (summary.fraction * 100).roundToInt(),
+        )
+    } else {
+        stringResource(R.string.context_usage_view)
+    }
     Box {
         IconButton(
             onClick = onClick,
             modifier = Modifier
                 .size(36.dp)
                 .semantics {
-                    contentDescription = summary?.let {
-                        "查看上下文用量 ${(it.fraction * 100).roundToInt()}%"
-                    } ?: "查看上下文用量"
+                    contentDescription = usageContentDescription
                 },
         ) {
             ContextUsageRing(
@@ -288,17 +295,21 @@ private fun AiContextUsagePopupContent(summary: AiContextUsageSummary?) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = "上下文用量",
+                text = stringResource(R.string.context_usage_title),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
             )
             summary?.let {
-                UsageSourceBadge(if (it.isMeasured) "实测" else "估算")
+                UsageSourceBadge(
+                    stringResource(
+                        if (it.isMeasured) R.string.context_usage_measured else R.string.context_usage_estimated,
+                    )
+                )
             }
         }
         if (summary == null) {
             Text(
-                text = "当前消息暂无用量数据",
+                text = stringResource(R.string.context_usage_unavailable),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.62f),
                 modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
@@ -308,7 +319,7 @@ private fun AiContextUsagePopupContent(summary: AiContextUsageSummary?) {
 
         Spacer(Modifier.height(16.dp))
         Text(
-            text = "本轮会话消耗",
+            text = stringResource(R.string.context_usage_turn),
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.62f),
         )
@@ -319,14 +330,14 @@ private fun AiContextUsagePopupContent(summary: AiContextUsageSummary?) {
         ) {
             DirectionalUsage(
                 iconRes = R.drawable.ic_arrow_up,
-                label = "输入",
+                label = stringResource(R.string.context_usage_input),
                 tokens = summary.inputTokens,
                 color = InputUsageColor,
                 modifier = Modifier.weight(1f),
             )
             DirectionalUsage(
                 iconRes = R.drawable.ic_gpt_arrow_down,
-                label = "输出",
+                label = stringResource(R.string.context_usage_output),
                 tokens = summary.outputTokens,
                 color = OutputUsageColor,
                 modifier = Modifier.weight(1f),
@@ -341,17 +352,17 @@ private fun AiContextUsagePopupContent(summary: AiContextUsageSummary?) {
             horizontalArrangement = Arrangement.spacedBy(20.dp),
         ) {
             UsageTotal(
-                label = "目前总消耗",
+                label = stringResource(R.string.context_usage_conversation_total),
                 value = formatUsageTokens(summary.conversationTotalTokens),
                 color = contextUsageColor(summary.fraction),
                 modifier = Modifier.weight(1f),
             )
             UsageTotal(
-                label = "总上下文",
+                label = stringResource(R.string.context_usage_window_total),
                 value = if (summary.contextWindowTokens > 0L) {
                     formatUsageTokens(summary.contextWindowTokens)
                 } else {
-                    "未知"
+                    stringResource(R.string.context_usage_unknown)
                 },
                 color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.weight(1f),
@@ -400,7 +411,7 @@ private fun DirectionalUsage(
         ) {
             Icon(
                 painter = painterResource(iconRes),
-                contentDescription = "$label tokens",
+                contentDescription = stringResource(R.string.context_usage_tokens_description, label),
                 tint = color,
                 modifier = Modifier.size(15.dp),
             )

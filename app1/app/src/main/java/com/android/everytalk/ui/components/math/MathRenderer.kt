@@ -1,6 +1,7 @@
 package com.android.everytalk.ui.components.math
 import com.android.everytalk.statecontroller.*
 
+import com.android.everytalk.R
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
@@ -26,6 +27,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
@@ -208,7 +210,7 @@ internal fun MathInline(
             EveryTalkLoadingIndicator(
                 size = 10.dp,
                 strokeWidth = 1.dp,
-                contentDescription = "数学公式转换中：${formula.latex}",
+                contentDescription = stringResource(R.string.math_converting, formula.latex),
             )
         }
 
@@ -237,7 +239,7 @@ internal fun MathBlock(
             EveryTalkLoadingIndicator(
                 size = 18.dp,
                 strokeWidth = 1.5.dp,
-                contentDescription = "数学公式转换中：${formula.latex}",
+                contentDescription = stringResource(R.string.math_converting, formula.latex),
             )
         }
 
@@ -287,6 +289,7 @@ private fun MathSvgImage(
     modifier: Modifier,
 ) {
     val context = LocalContext.current
+    val formulaDescription = stringResource(R.string.math_formula, formula.latex)
     val svg = requireNotNull(state.result.svg)
     val request = remember(svg, state.cacheKey) {
         ImageRequest.Builder(context)
@@ -309,9 +312,9 @@ private fun MathSvgImage(
     } else {
         AsyncImage(
             model = request,
-            contentDescription = "数学公式：${formula.latex}",
+            contentDescription = formulaDescription,
             modifier = modifier.semantics {
-                contentDescription = "数学公式：${formula.latex}"
+                contentDescription = formulaDescription
             },
             contentScale = ContentScale.FillBounds,
             onError = { decodeFailed = true },
@@ -324,6 +327,7 @@ private fun InlineMathError(
     formula: FormulaRequest,
     modifier: Modifier,
 ) {
+    val errorDescription = stringResource(R.string.math_render_failed, formula.latex)
     Box(
         modifier = modifier
             .fillMaxSize()
@@ -331,11 +335,11 @@ private fun InlineMathError(
                 color = MaterialTheme.colorScheme.errorContainer,
                 shape = RoundedCornerShape(3.dp),
             )
-            .semantics { contentDescription = "公式渲染失败：${formula.latex}" },
+            .semantics { contentDescription = errorDescription },
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = "公式错误",
+            text = stringResource(R.string.math_error),
             color = MaterialTheme.colorScheme.onErrorContainer,
             style = MaterialTheme.typography.labelSmall,
             maxLines = 1,
@@ -350,10 +354,15 @@ private fun BlockMathError(
     modifier: Modifier,
 ) {
     val detail = when (kind) {
-        MathFormulaErrorKind.SYNTAX -> "公式语法无效"
-        MathFormulaErrorKind.TIMEOUT -> "公式转换超时"
-        MathFormulaErrorKind.ENGINE -> "公式转换引擎异常"
+        MathFormulaErrorKind.SYNTAX -> stringResource(R.string.math_error_syntax)
+        MathFormulaErrorKind.TIMEOUT -> stringResource(R.string.math_error_timeout)
+        MathFormulaErrorKind.ENGINE -> stringResource(R.string.math_error_engine)
     }
+    val errorDescription = stringResource(
+        R.string.math_render_failed_detail_description,
+        detail,
+        formula.latex,
+    )
     Box(
         modifier = modifier
             .fillMaxWidth()
@@ -362,12 +371,12 @@ private fun BlockMathError(
                 shape = RoundedCornerShape(8.dp),
             )
             .semantics {
-                contentDescription = "公式渲染失败：$detail；${formula.latex}"
+                contentDescription = errorDescription
             },
         contentAlignment = Alignment.Center,
     ) {
         Text(
-            text = "公式渲染失败\n$detail",
+            text = stringResource(R.string.math_render_failed_detail, detail),
             color = MaterialTheme.colorScheme.onErrorContainer,
             style = MaterialTheme.typography.bodySmall,
             textAlign = TextAlign.Center,

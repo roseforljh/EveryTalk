@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.clickable
 import androidx.compose.material3.*
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -49,6 +50,7 @@ import androidx.compose.foundation.layout.padding
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController) {
+    val previewComingSoonMessage = stringResource(R.string.image_preview_coming_soon)
     val selectedApiConfig by viewModel.selectedImageGenApiConfig.collectAsState()
     val coroutineScope = rememberCoroutineScope()
     val text by viewModel.text.collectAsState()
@@ -469,7 +471,7 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
 
             AppTopBar(
                 selectedConfigName = selectedApiConfig?.name?.takeIf { it.isNotBlank() }
-                    ?: selectedApiConfig?.model ?: "选择配置",
+                    ?: selectedApiConfig?.model ?: stringResource(R.string.image_select_configuration),
                 onMenuClick = { coroutineScope.launch { viewModel.drawerState.open() } },
                 onSettingsClick = {
                     navController.navigate(Screen.IMAGE_GENERATION_SETTINGS_SCREEN)
@@ -521,11 +523,13 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
             Column(modifier = Modifier.padding(bottom = 32.dp)) {
                 // 查看图片
                 ListItem(
-                    headlineContent = { Text("查看图片", color = MaterialTheme.colorScheme.onSurface) },
+                    headlineContent = {
+                        Text(stringResource(R.string.image_view), color = MaterialTheme.colorScheme.onSurface)
+                    },
                     leadingContent = {
                         Icon(
                             painter = painterResource(R.drawable.ic_image_gallery),
-                            contentDescription = "查看图片",
+                            contentDescription = stringResource(R.string.image_view),
                             tint = MaterialTheme.colorScheme.onSurface
                         )
                     },
@@ -533,7 +537,7 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                         .fillMaxWidth()
                         .clickable {
                             // 这里可扩展为内置预览对话框；先保持简单提示
-                            viewModel.showSnackbar("即将支持图片预览")
+                            viewModel.showSnackbar(previewComingSoonMessage)
                             coroutineScope.launch {
                                 imageMessageOptionsSheetState.hide()
                             }.invokeOnCompletion {
@@ -550,11 +554,13 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                 )
                 // 下载图片
                 ListItem(
-                    headlineContent = { Text("下载图片", color = MaterialTheme.colorScheme.onSurface) },
+                    headlineContent = {
+                        Text(stringResource(R.string.image_download), color = MaterialTheme.colorScheme.onSurface)
+                    },
                     leadingContent = {
                         Icon(
                             painter = painterResource(R.drawable.ic_download),
-                            contentDescription = "下载图片",
+                            contentDescription = stringResource(R.string.image_download),
                             tint = MaterialTheme.colorScheme.onSurface
                         )
                     },

@@ -56,6 +56,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
+import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.ExecutionStep
 import com.android.everytalk.data.DataClass.WebSearchResult
@@ -78,11 +80,13 @@ internal fun reasoningSheetText(
     displayedReasoningText: String,
     isReasoningActive: Boolean,
     messageIsError: Boolean,
+    errorText: String,
+    emptyText: String,
 ): String = when {
     displayedReasoningText.isNotBlank() -> displayedReasoningText
-    messageIsError -> "思考过程中发生错误"
+    messageIsError -> errorText
     isReasoningActive -> ""
-    else -> "暂无详细思考内容"
+    else -> emptyText
 }
 
 internal fun normalizeReasoningMarkdown(markdown: String): String {
@@ -185,11 +189,11 @@ internal fun ReasoningToggleAndContent(
     )
     val shouldShowReviewDotToggle = hasReviewableProcess &&
         (isReasoningComplete || !isReasoningStreaming)
-    val inlineStatusText = executionSummaryText(
+    val inlineStatusText = localizedExecutionStatusText(executionSummaryText(
         reasoningText = displayedReasoningText,
         activityStatusText = activityStatusText,
         executionSteps = executionSteps,
-    )
+    )).orEmpty()
     val openReasoningSheet = {
         focusManager.clearFocus()
         showReasoningSheet = true
@@ -376,6 +380,7 @@ private fun ReasoningBottomSheet(
     scrollState: ScrollState,
     onDismissRequest: () -> Unit,
 ) {
+    val executionLoadingDescription = stringResource(R.string.thinking_execution_loading)
     val sheetText = if (
         displayedReasoningText.isBlank() &&
         !messageIsError &&
@@ -387,6 +392,8 @@ private fun ReasoningBottomSheet(
             displayedReasoningText = displayedReasoningText,
             isReasoningActive = isReasoningActive,
             messageIsError = messageIsError,
+            errorText = stringResource(R.string.reasoning_error),
+            emptyText = stringResource(R.string.reasoning_empty),
         )
     }
     val normalizedSheetMarkdown = remember(sheetText) {
@@ -426,7 +433,7 @@ private fun ReasoningBottomSheet(
         bottomIndicatorModifier = Modifier.testTag("reasoning-sheet-bottom-indicator"),
         header = {
             Text(
-                text = "执行过程",
+                text = stringResource(R.string.thinking_execution),
                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
                 color = MaterialTheme.colorScheme.onSurface,
                 textAlign = TextAlign.Center,
@@ -447,7 +454,9 @@ private fun ReasoningBottomSheet(
             modifier = Modifier
                 .fillMaxWidth()
                 .semantics {
-                    if (isReasoningActive) contentDescription = "执行过程加载中"
+                    if (isReasoningActive) {
+                        contentDescription = executionLoadingDescription
+                    }
                 },
         ) {
             if (sheetText.isNotBlank()) {

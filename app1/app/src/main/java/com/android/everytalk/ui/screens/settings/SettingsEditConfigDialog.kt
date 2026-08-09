@@ -31,6 +31,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldDefaultBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldBorderColor
@@ -182,7 +183,7 @@ internal fun EditConfigDialog(
                         .padding(24.dp)
                 ) {
                 Text(
-                    "编辑配置",
+                    stringResource(R.string.settings_edit_configuration_title),
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
                     color = contentColor
@@ -192,7 +193,7 @@ internal fun EditConfigDialog(
                 Column(
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    SettingsFieldLabel("模型平台")
+                    SettingsFieldLabel(stringResource(R.string.settings_model_platform_label))
                     OutlinedTextField(
                         value = provider,
                         onValueChange = { provider = it },
@@ -205,14 +206,14 @@ internal fun EditConfigDialog(
                         colors = DialogTextFieldColors
                     )
 
-                    SettingsFieldLabel("渠道")
+                    SettingsFieldLabel(stringResource(R.string.settings_channel_label))
                     ExposedDropdownMenuBox(
                         expanded = channelMenuExpanded,
                         onExpandedChange = { channelMenuExpanded = !channelMenuExpanded },
                         modifier = Modifier.padding(bottom = 12.dp)
                     ) {
                         OutlinedTextField(
-                            value = selectedChannel,
+                            value = localizedChannelLabel(selectedChannel),
                             onValueChange = {},
                             readOnly = true,
                             modifier = Modifier
@@ -237,7 +238,7 @@ internal fun EditConfigDialog(
                         ) {
                             channelTypes.forEach { channel ->
                                 DropdownMenuItem(
-                                    text = { Text(channel) },
+                                    text = { Text(localizedChannelLabel(channel)) },
                                     onClick = {
                                         selectedChannel = channel
                                         channelMenuExpanded = false
@@ -247,7 +248,7 @@ internal fun EditConfigDialog(
                         }
                     }
 
-                    SettingsFieldLabel("API接口地址")
+                    SettingsFieldLabel(stringResource(R.string.settings_api_endpoint_label))
                     OutlinedTextField(
                         value = apiAddress,
                         onValueChange = { apiAddress = it },
@@ -270,7 +271,7 @@ internal fun EditConfigDialog(
                         }
                         if (fullUrlPreview.isNotEmpty()) {
                             Text(
-                                text = "预览: $fullUrlPreview",
+                                text = stringResource(R.string.settings_endpoint_preview, fullUrlPreview),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = subtextColor,
                                 modifier = Modifier.padding(start = 12.dp, bottom = 12.dp)
@@ -278,7 +279,7 @@ internal fun EditConfigDialog(
                         }
                     }
 
-                    SettingsFieldLabel("API密钥")
+                    SettingsFieldLabel(stringResource(R.string.settings_api_key_label))
                     OutlinedTextField(
                         value = apiKey,
                         onValueChange = { apiKey = it },
@@ -291,7 +292,9 @@ internal fun EditConfigDialog(
                             IconButton(onClick = { apiKeyVisible = !apiKeyVisible }) {
                                 Icon(
                                     painter = painterResource(if (apiKeyVisible) R.drawable.ic_eye else R.drawable.ic_eye_off),
-                                    contentDescription = if (apiKeyVisible) "隐藏密钥" else "显示密钥",
+                                    contentDescription = stringResource(
+                                        if (apiKeyVisible) R.string.settings_hide_key else R.string.settings_show_key,
+                                    ),
                                     modifier = Modifier.size(20.dp),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
@@ -327,7 +330,7 @@ internal fun EditConfigDialog(
                         border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
                     ) {
                         Text(
-                            text = "取消",
+                            text = stringResource(R.string.action_cancel),
                             style = MaterialTheme.typography.labelLarge.copy(
                                 fontWeight = FontWeight.SemiBold
                             )
@@ -360,7 +363,7 @@ internal fun EditConfigDialog(
                         )
                     ) {
                         Text(
-                            text = "保存",
+                            text = stringResource(R.string.action_save),
                             style = MaterialTheme.typography.labelLarge.copy(
                                 fontWeight = FontWeight.SemiBold
                             )

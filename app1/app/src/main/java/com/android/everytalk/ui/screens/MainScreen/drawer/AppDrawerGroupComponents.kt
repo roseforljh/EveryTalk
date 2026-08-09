@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -92,7 +93,9 @@ fun CollapsibleGroupHeader(
         ) {
             Icon(
                 painter = painterResource(R.drawable.ic_arrow_end),
-                contentDescription = if (isExpanded) "收起" else "展开",
+                contentDescription = stringResource(
+                    if (isExpanded) R.string.action_collapse else R.string.action_expand
+                ),
                 tint = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier
                     .size(20.dp)
@@ -117,7 +120,7 @@ fun CollapsibleGroupHeader(
                     ) {
                         Icon(
                             painter = painterResource(R.drawable.ic_dots_vertical),
-                            "更多选项",
+                            stringResource(R.string.drawer_more_options),
                             modifier = Modifier.size(20.dp)
                         )
                     }
@@ -128,25 +131,31 @@ fun CollapsibleGroupHeader(
                     ) {
                         if (onRename != null) {
                             DropdownMenuItem(
-                                text = { Text("重命名") },
+                                text = { Text(stringResource(R.string.action_rename)) },
                                 onClick = {
                                     showMenu = false
                                     showRenameDialog = true
                                 },
                                 leadingIcon = {
-                                    Icon(painter = painterResource(R.drawable.ic_pencil), "重命名")
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_pencil),
+                                        contentDescription = stringResource(R.string.action_rename),
+                                    )
                                 }
                             )
                         }
                         if (onDelete != null) {
                             DropdownMenuItem(
-                                text = { Text("删除") },
+                                text = { Text(stringResource(R.string.action_delete)) },
                                 onClick = {
                                     showMenu = false
                                     onDelete()
                                 },
                                 leadingIcon = {
-                                    Icon(painter = painterResource(R.drawable.ic_trash), "删除")
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_trash),
+                                        contentDescription = stringResource(R.string.action_delete),
+                                    )
                                 }
                             )
                         }
@@ -167,12 +176,12 @@ fun CollapsibleGroupHeader(
             containerColor = dialogBg,
             titleContentColor = contentColor,
             textContentColor = contentColor,
-            title = { Text("重命名分组") },
+            title = { Text(stringResource(R.string.drawer_rename_group_title)) },
             text = {
                 OutlinedTextField(
                     value = newName,
                     onValueChange = { newName = it },
-                    label = { Text("新名称") },
+                    label = { Text(stringResource(R.string.drawer_new_name_label)) },
                     shape = AppDialogTextFieldShape,
                     colors = appDialogTextFieldColors()
                 )
@@ -191,7 +200,7 @@ fun CollapsibleGroupHeader(
                         contentColor = dialogBg
                     )
                 ) {
-                    Text("重命名")
+                    Text(stringResource(R.string.action_rename))
                 }
             },
             dismissButton = {
@@ -204,7 +213,7 @@ fun CollapsibleGroupHeader(
                     ),
                     border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
                 ) {
-                    Text("取消")
+                    Text(stringResource(R.string.action_cancel))
                 }
             }
         )

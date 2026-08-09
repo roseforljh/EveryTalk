@@ -71,6 +71,7 @@ import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.statecontroller.freezeWhileStreamingPaused
 import com.android.everytalk.ui.screens.BubbleMain.Main.AttachmentsContent
 import com.android.everytalk.ui.screens.BubbleMain.Main.ReasoningToggleAndContent
+import com.android.everytalk.ui.screens.BubbleMain.Main.localizedExecutionStatusText
 import com.android.everytalk.ui.screens.BubbleMain.Main.UserOrErrorMessageContent
 import com.android.everytalk.ui.screens.BubbleMain.Main.resolveUserBubbleMaxHeightDp
 import com.android.everytalk.ui.screens.BubbleMain.Main.MessageContextMenu
@@ -107,6 +108,7 @@ import com.android.everytalk.ui.topanchor.appendTopAnchorReserve
 import com.android.everytalk.ui.topanchor.mapChatItemsToTopAnchorItems
 import com.android.everytalk.ui.topanchor.resolveActiveTopAnchorTurn
 import com.android.everytalk.ui.topanchor.resolveTopAnchorResponseTargetId
+import com.android.everytalk.util.locale.localizeUiMessage
 import com.android.everytalk.util.message.prepareTextForExternalTransfer
 import com.android.everytalk.util.web.linkFaviconInitial
 import com.android.everytalk.util.web.linkFaviconUrl
@@ -138,7 +140,9 @@ internal suspend fun shareMessageText(
                 type = "text/plain"
                 putExtra(Intent.EXTRA_TEXT, safeText)
             }
-            context.startActivity(Intent.createChooser(shareIntent, "分享"))
+            context.startActivity(
+                Intent.createChooser(shareIntent, context.getString(R.string.action_share))
+            )
         } catch (exception: CancellationException) {
             throw exception
         } catch (_: RuntimeException) {
@@ -281,6 +285,7 @@ fun ChatMessagesList(
     additionalBottomPadding: Dp = 0.dp
 ) {
     // 防止 AnimatedItems 等状态在重组时被重复触发
+    val context = LocalContext.current
 
     var isContextMenuVisible by remember { mutableStateOf(false) }
     var contextMenuMessage by remember { mutableStateOf<Message?>(null) }
@@ -795,7 +800,7 @@ fun ChatMessagesList(
                             if (message != null) {
                                 UserOrErrorMessageContent(
                                     message = message,
-                                    displayedText = item.text,
+                                    displayedText = context.localizeUiMessage(item.text),
                                     showLoadingDots = false,
                                     bubbleColor = MaterialTheme.chatColors.aiBubble,
                                     contentColor = MaterialTheme.chatColors.errorContent,
@@ -822,7 +827,9 @@ fun ChatMessagesList(
                                 verticalAlignment = Alignment.Bottom,
                                 horizontalArrangement = Arrangement.Start
                             ) {
-                                val displayText = resolveLoadingStageDisplayText(item.text)
+                                val displayText = resolveLoadingStageDisplayText(
+                                    localizedExecutionStatusText(item.text),
+                                )
                                 LoadingStageIndicator(text = displayText)
                             }
                         }
@@ -839,7 +846,7 @@ fun ChatMessagesList(
                                 horizontalArrangement = Arrangement.Start
                             ) {
                                 Text(
-                                    text = item.text,
+                                    text = localizedExecutionStatusText(item.text).orEmpty(),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurface,
                                     maxLines = 1,

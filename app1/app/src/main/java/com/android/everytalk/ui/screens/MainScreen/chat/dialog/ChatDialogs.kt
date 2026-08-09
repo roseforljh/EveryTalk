@@ -40,9 +40,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import com.android.everytalk.R
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
@@ -145,12 +147,12 @@ fun EditMessageDialog(
         containerColor = dialogBg,
         titleContentColor = contentColor,
         textContentColor = contentColor,
-        title = { Text("编辑消息", color = MaterialTheme.colorScheme.onSurface) },
+        title = { Text(stringResource(R.string.chat_edit_message_title), color = MaterialTheme.colorScheme.onSurface) },
         text = {
             SelectionContainer {
                 Column {
                     Text(
-                        text = "消息内容",
+                        text = stringResource(R.string.chat_message_content_label),
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -164,7 +166,7 @@ fun EditMessageDialog(
                             localText = newText
                         },
                         modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("请输入消息内容") },
+                        placeholder = { Text(stringResource(R.string.chat_message_content_hint)) },
                         colors = OutlinedTextFieldDefaults.colors(
                             focusedTextColor = MaterialTheme.colorScheme.onSurface,
                             unfocusedTextColor = MaterialTheme.colorScheme.onSurface,
@@ -205,7 +207,7 @@ fun EditMessageDialog(
                     border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
                 ) {
                     Text(
-                        "取消",
+                        stringResource(R.string.action_cancel),
                         style = MaterialTheme.typography.labelLarge.copy(
                             fontWeight = FontWeight.SemiBold
                         )
@@ -231,7 +233,7 @@ fun EditMessageDialog(
                     )
                 ) {
                     Text(
-                        "确定",
+                        stringResource(R.string.action_confirm),
                         style = MaterialTheme.typography.labelLarge.copy(
                             fontWeight = FontWeight.SemiBold
                         )

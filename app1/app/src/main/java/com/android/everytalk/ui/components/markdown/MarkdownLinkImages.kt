@@ -1,6 +1,7 @@
 package com.android.everytalk.ui.components.markdown
 import com.android.everytalk.statecontroller.*
 
+import com.android.everytalk.R
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -56,6 +57,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
@@ -399,6 +401,7 @@ internal fun MarkdownLinkLogo(
     }
     val painter = rememberAsyncImagePainter(model = imageRequest)
     val painterState = painter.state.collectAsState().value
+    val logoDescription = stringResource(R.string.link_logo, request.host)
     Box(
         modifier = Modifier
             .then(modifier)
@@ -407,7 +410,7 @@ internal fun MarkdownLinkLogo(
             .clip(RoundedCornerShape(4.dp))
             .background(MaterialTheme.colorScheme.surfaceVariant)
             .semantics(mergeDescendants = true) {
-                contentDescription = "链接 Logo：${request.host}"
+                contentDescription = logoDescription
             },
         contentAlignment = Alignment.Center,
     ) {
@@ -417,7 +420,7 @@ internal fun MarkdownLinkLogo(
                 EveryTalkLoadingIndicator(
                     size = 10.dp,
                     strokeWidth = 1.dp,
-                    contentDescription = "链接 Logo 加载中",
+                    contentDescription = stringResource(R.string.link_logo_loading),
                 )
             }
             is AsyncImagePainter.State.Error -> {
@@ -430,7 +433,7 @@ internal fun MarkdownLinkLogo(
             is AsyncImagePainter.State.Success -> {
                 Image(
                     painter = painter,
-                    contentDescription = "链接来源：${request.host}",
+                    contentDescription = stringResource(R.string.link_source, request.host),
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop,
                 )
@@ -526,7 +529,7 @@ internal fun MarkdownImageFailure(modifier: Modifier = Modifier) {
             contentAlignment = androidx.compose.ui.Alignment.Center,
         ) {
             Text(
-                text = "图片加载失败",
+                text = stringResource(R.string.image_load_failed),
                 style = MaterialTheme.typography.labelMedium,
                 maxLines = 1,
             )
@@ -543,7 +546,7 @@ internal fun MarkdownImageLoading(modifier: Modifier = Modifier) {
         EveryTalkLoadingIndicator(
             size = MARKDOWN_IMAGE_LOADING_INDICATOR_SIDE_DP.dp,
             strokeWidth = 2.dp,
-            contentDescription = "图片加载中",
+            contentDescription = stringResource(R.string.image_loading),
         )
     }
 }
@@ -581,6 +584,7 @@ internal fun MarkdownInlineImageWithFailure(
     }
 }
 
+@Composable
 internal fun Modifier.markdownImageClick(
     source: String,
     onImageClick: ((String) -> Unit)?,
@@ -588,7 +592,7 @@ internal fun Modifier.markdownImageClick(
     this
 } else {
     clickable(
-        onClickLabel = "预览图片",
+        onClickLabel = stringResource(R.string.image_preview),
         onClick = { onImageClick(source) },
     )
 }

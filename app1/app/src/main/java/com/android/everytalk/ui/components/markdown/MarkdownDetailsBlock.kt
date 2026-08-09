@@ -26,6 +26,8 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
+import com.android.everytalk.R
 import com.android.everytalk.ui.components.streaming.DetailsRequest
 
 @Composable
@@ -38,6 +40,10 @@ internal fun MarkdownDetailsBlock(
 ) {
     var expanded by rememberSaveable(request.id, request.contentVersion) { mutableStateOf(false) }
     val summaryStyle = MaterialTheme.typography.bodyLarge.copy(fontWeight = FontWeight.Medium)
+    val expandedStateDescription = stringResource(R.string.state_expanded)
+    val collapsedStateDescription = stringResource(R.string.state_collapsed)
+    val expandAction = stringResource(R.string.action_expand)
+    val collapseAction = stringResource(R.string.action_collapse)
 
     Surface(
         modifier = modifier.fillMaxWidth(),
@@ -50,11 +56,11 @@ internal fun MarkdownDetailsBlock(
                 modifier = Modifier
                     .fillMaxWidth()
                     .semantics {
-                        stateDescription = if (expanded) "已展开" else "已收起"
+                        stateDescription = if (expanded) expandedStateDescription else collapsedStateDescription
                     }
                     .clickable(
                         role = Role.Button,
-                        onClickLabel = if (expanded) "收起" else "展开",
+                        onClickLabel = if (expanded) collapseAction else expandAction,
                     ) { expanded = !expanded }
                     .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,

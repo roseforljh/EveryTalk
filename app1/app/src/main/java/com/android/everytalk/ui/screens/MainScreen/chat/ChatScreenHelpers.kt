@@ -33,6 +33,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
@@ -49,6 +50,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.border
 import androidx.compose.ui.draw.shadow
 import androidx.navigation.NavController
+import com.android.everytalk.R
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
@@ -245,7 +247,7 @@ internal fun HistoryConversationLoadingOverlay(
         EveryTalkLoadingIndicator(
             size = 32.dp,
             strokeWidth = 3.dp,
-            contentDescription = "正在加载会话",
+            contentDescription = stringResource(R.string.chat_loading_conversation),
         )
     }
 }

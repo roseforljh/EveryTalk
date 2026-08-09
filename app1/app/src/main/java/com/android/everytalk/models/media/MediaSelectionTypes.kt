@@ -5,6 +5,8 @@ import android.net.Uri
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.annotation.StringRes
+import com.android.everytalk.R
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.Contextual
 import com.android.everytalk.util.serialization.UriSerializer
@@ -18,9 +20,9 @@ interface IMediaItem {
     val mimeType: String
 }
 
-enum class ImageSourceOption(val label: String, val icon: ImageVector) {
-    ALBUM("相册", Icons.Outlined.PhotoLibrary),
-    CAMERA("相机", Icons.Outlined.PhotoCamera)
+enum class ImageSourceOption(@StringRes val labelRes: Int, val icon: ImageVector) {
+    ALBUM(R.string.chat_input_album, Icons.Outlined.PhotoLibrary),
+    CAMERA(R.string.chat_input_camera, Icons.Outlined.PhotoCamera)
 }
 
 object AttachmentMimeTypes {
@@ -45,9 +47,9 @@ object AttachmentMimeTypes {
     )
 }
 
-enum class MoreOptionsType(val label: String, val icon: ImageVector, val mimeTypes: Array<String>) {
-    ATTACHMENT("附件", Icons.Outlined.AttachFile, AttachmentMimeTypes.TYPES),
-    MCP("MCP", Icons.Outlined.Extension, arrayOf())
+enum class MoreOptionsType(@StringRes val labelRes: Int, val icon: ImageVector, val mimeTypes: Array<String>) {
+    ATTACHMENT(R.string.chat_input_attachment, Icons.Outlined.AttachFile, AttachmentMimeTypes.TYPES),
+    MCP(R.string.chat_input_mcp, Icons.Outlined.Extension, arrayOf())
 }
 
 @Serializable

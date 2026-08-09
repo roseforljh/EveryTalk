@@ -1,5 +1,6 @@
 package com.android.everytalk.statecontroller
 
+import android.content.Context
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.ContextCompressionState
 import com.android.everytalk.data.DataClass.ExecutionStep
@@ -209,6 +210,7 @@ internal data class PersistedGeneratedImageUrlsResult(
 )
 
 internal class ApiHandlerStreamProcessor(
+    private val context: Context,
     private val stateHolder: ViewModelStateHolder,
     private val viewModelScope: CoroutineScope,
     private val historyManager: HistoryManager,
@@ -322,7 +324,7 @@ internal class ApiHandlerStreamProcessor(
                     is PreparedGeneratedImage.Failed -> {
                         stateHolder.appendContentToMessage(
                             aiMessageId,
-                            "\n\n> ${preparedImage.reason.toGeneratedImageMessage()}\n\n",
+                            "\n\n> ${preparedImage.reason.toGeneratedImageMessage(context)}\n\n",
                             isImageGeneration,
                         )
                         stateHolder.syncStreamingSnapshotToList(aiMessageId, isImageGeneration)

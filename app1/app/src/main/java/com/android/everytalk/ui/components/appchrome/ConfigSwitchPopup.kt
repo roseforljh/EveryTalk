@@ -22,6 +22,7 @@ import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
@@ -32,6 +33,8 @@ import androidx.compose.ui.window.PopupProperties
 import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.ui.screens.MainScreen.chat.models.sortModelConfigs
+import com.android.everytalk.ui.screens.settings.localizedChannelLabel
+import com.android.everytalk.ui.screens.settings.localizedProviderLabel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -133,7 +136,7 @@ fun ConfigSwitchPopup(
                     .padding(vertical = 8.dp)
             ) {
                 Text(
-                    text = "切换配置",
+                    text = stringResource(R.string.chat_configuration_switch_title),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
                     color = subtextColor,
@@ -164,7 +167,11 @@ fun ConfigSwitchPopup(
                             Spacer(modifier = Modifier.width(6.dp))
                         }
                         Text(
-                            text = group.displayName,
+                            text = if (group.provider.isBlank()) {
+                                localizedChannelLabel(group.channel)
+                            } else {
+                                localizedProviderLabel(group.provider)
+                            },
                             fontSize = 14.sp,
                             fontWeight = if (isCurrentGroup) FontWeight.Medium else FontWeight.Normal,
                             color = textColor,
@@ -246,7 +253,11 @@ private fun ModelPickerDialog(
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 Text(
-                    text = group.displayName,
+                    text = if (group.provider.isBlank()) {
+                        localizedChannelLabel(group.channel)
+                    } else {
+                        localizedProviderLabel(group.provider)
+                    },
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Medium,
                     color = subtextColor,

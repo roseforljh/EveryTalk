@@ -2,6 +2,7 @@ package com.android.everytalk.statecontroller.controller.config
 
 import android.util.Base64
 import android.util.Log
+import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
@@ -55,8 +56,6 @@ class SettingsController(
         private const val MAX_IMPORT_FILE_SIZE = 50 * 1024 * 1024 // 50MB
         private const val OBFUSCATION_PREFIX = "EZT_OBF_V1:" // 混淆标记前缀
         
-        // 密钥混淆警告消息
-        const val EXPORT_SECURITY_WARNING = "⚠️ 导出文件包含敏感API密钥，请妥善保管，切勿分享给他人！"
     }
 
     internal fun safeUrlSummary(url: String): String {
@@ -326,7 +325,7 @@ class SettingsController(
                 
                 // 显示安全警告
                 withContext(Dispatchers.Main) {
-                    showSnackbar(EXPORT_SECURITY_WARNING)
+                    showSnackbar("⚠️ ${context.getString(R.string.settings_export_sensitive_warning)}")
                 }
                     
             } catch (e: Exception) {
@@ -392,7 +391,7 @@ class SettingsController(
             try {
                 // 0. 文件大小检查
                 if (jsonContent.length > MAX_IMPORT_FILE_SIZE) {
-                    throw IllegalStateException("导入文件过大（最大支持50MB）")
+                    throw IllegalStateException(context.getString(R.string.settings_import_file_too_large))
                 }
                 
                 // 1. 解析配置
@@ -424,7 +423,7 @@ class SettingsController(
                     result.chatHistoryImported + result.imageHistoryImported) {
                     // 错误过多，回滚所有更改
                     rollbackState(backupState)
-                    result.warnings.add("由于错误过多，已回滚所有更改")
+                    result.warnings.add(context.getString(R.string.settings_import_rolled_back))
                 }
                 
                 // 显示详细结果
@@ -446,9 +445,13 @@ class SettingsController(
                 rollbackState(backupState)
                 
                 val errorMessage = when (e) {
-                    is SerializationException -> "JSON格式错误，请检查文件是否损坏"
-                    is IllegalStateException -> e.message ?: "解析失败"
-                    else -> "导入失败: ${e.message ?: "未知错误"}"
+                    is SerializationException -> context.getString(R.string.settings_import_json_invalid)
+                    is IllegalStateException -> e.message
+                        ?: context.getString(R.string.settings_import_parse_failed)
+                    else -> context.getString(
+                        R.string.settings_import_failed,
+                        e.message ?: context.getString(R.string.unknown_error),
+                    )
                 }
                 withContext(Dispatchers.Main) {
                     showSnackbar(errorMessage)

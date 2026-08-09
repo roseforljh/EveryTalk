@@ -1,7 +1,8 @@
 package com.android.everytalk.data.network
 
+import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.ApiConfig
-import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.webSearchToggleLabel
+import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.webSearchToggleLabelRes
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -43,12 +44,18 @@ class WebSearchSupportTest {
 
     @Test
     fun `unsupported model shows unavailable search label`() {
-        assertEquals("搜索不可用", webSearchToggleLabel(isSupported = false, isEnabled = false))
+        assertEquals(
+            R.string.chat_input_search_unavailable,
+            webSearchToggleLabelRes(isSupported = false, isEnabled = false),
+        )
     }
 
     @Test
     fun `supported and disabled toggle shows online search label`() {
-        assertEquals("联网搜索", webSearchToggleLabel(isSupported = true, isEnabled = false))
+        assertEquals(
+            R.string.chat_input_web_search,
+            webSearchToggleLabelRes(isSupported = true, isEnabled = false),
+        )
     }
 
     @Test

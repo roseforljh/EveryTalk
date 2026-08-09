@@ -3,6 +3,7 @@ package com.android.everytalk.util.locale
 import java.io.File
 import javax.xml.parsers.DocumentBuilderFactory
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.w3c.dom.Element
@@ -43,17 +44,48 @@ class AppLanguageConfigurationTest {
             .toSet()
         assertEquals(setOf("en", "zh-CN"), languageTags)
 
-        val defaultStrings = stringNames(mainFile("res/values/strings.xml"))
-        val chineseStrings = stringNames(mainFile("res/values-zh/strings.xml"))
-        assertEquals(defaultStrings, chineseStrings)
-        assertTrue(defaultStrings.contains("app_language_system"))
+        val defaultResources = localizedResourceNames(mainFile("res/values/strings.xml"))
+        val chineseResources = localizedResourceNames(mainFile("res/values-zh/strings.xml"))
+        assertEquals(defaultResources, chineseResources)
+        assertTrue(defaultResources.contains("string:app_language_system"))
+        assertFalse(
+            containsHan(parseXml(mainFile("res/values/strings.xml")).documentElement.textContent),
+        )
     }
 
-    private fun stringNames(file: File): Set<String> {
+    @Test
+    fun `语音功能资源完整且英文包不混入中文`() {
+        val defaultVoiceStrings = stringValues(mainFile("res/values/strings.xml"))
+            .filterKeys { it.startsWith("voice_") }
+        val chineseVoiceStrings = stringValues(mainFile("res/values-zh/strings.xml"))
+            .filterKeys { it.startsWith("voice_") }
+
+        assertEquals(defaultVoiceStrings.keys, chineseVoiceStrings.keys)
+        assertTrue(defaultVoiceStrings.size >= 160)
+        assertTrue(defaultVoiceStrings.values.all(String::isNotBlank))
+        assertTrue(chineseVoiceStrings.values.all(String::isNotBlank))
+        assertFalse(defaultVoiceStrings.values.any(::containsHan))
+        assertTrue(defaultVoiceStrings.getValue("voice_mode_prompt").contains("standard English"))
+        assertTrue(chineseVoiceStrings.getValue("voice_mode_prompt").contains("标准中文"))
+    }
+
+    private fun localizedResourceNames(file: File): Set<String> {
+        val document = parseXml(file)
+        return listOf("string", "plurals").flatMap { tag ->
+            val nodes = document.getElementsByTagName(tag)
+            (0 until nodes.length).map { "$tag:${(nodes.item(it) as Element).getAttribute("name")}" }
+        }.toSet()
+    }
+
+    private fun stringValues(file: File): Map<String, String> {
         val strings = parseXml(file).getElementsByTagName("string")
         return (0 until strings.length)
-            .map { (strings.item(it) as Element).getAttribute("name") }
-            .toSet()
+            .map { strings.item(it) as Element }
+            .associate { it.getAttribute("name") to it.textContent.trim() }
+    }
+
+    private fun containsHan(value: String): Boolean = value.codePoints().anyMatch {
+        Character.UnicodeScript.of(it) == Character.UnicodeScript.HAN
     }
 
     private fun parseXml(file: File) = DocumentBuilderFactory.newInstance().apply {

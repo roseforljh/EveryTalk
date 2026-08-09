@@ -62,6 +62,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
@@ -77,6 +79,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.android.everytalk.data.DataClass.Message
+import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.components.ChatMarkdownTextStyle
@@ -352,7 +355,9 @@ internal fun UserOrErrorMessageContent(
                     ) {
                         Icon(
                             imageVector = if (isExpanded) Icons.Filled.ExpandLess else Icons.Filled.ExpandMore,
-                            contentDescription = if (isExpanded) "收起" else "展开",
+                            contentDescription = stringResource(
+                                if (isExpanded) R.string.action_collapse else R.string.action_expand,
+                            ),
                             tint = contentColor.copy(alpha = 0.7f),
                             modifier = Modifier.size(20.dp)
                         )
@@ -386,6 +391,7 @@ fun AttachmentsContent(
     val currentOnImageClick by rememberUpdatedState(onImageClick)
     val currentOnLongPress by rememberUpdatedState(onLongPress)
     var previewUrlInternal by remember(message.id) { mutableStateOf<String?>(null) }
+    val fallbackAttachmentName = stringResource(R.string.attachment_generic_fallback)
 
     // 附件区域也跟随相同的最大宽度限制
     val screenDp = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.width.toDp() }
@@ -424,7 +430,7 @@ fun AttachmentsContent(
                     val currentImageModel by rememberUpdatedState(imageModel)
                     coil3.compose.AsyncImage(
                         model = imageModel,
-                        contentDescription = "AI generated image",
+                        contentDescription = stringResource(R.string.attachment_generated_image),
                         contentScale = androidx.compose.ui.layout.ContentScale.FillWidth,
                         onSuccess = { onImageLoaded() },
                         modifier = Modifier
@@ -490,7 +496,7 @@ fun AttachmentsContent(
                         val currentImageModel by rememberUpdatedState(imageModel)
                         coil3.compose.AsyncImage(
                             model = imageModel,
-                            contentDescription = "Image attachment",
+                            contentDescription = stringResource(R.string.attachment_image),
                             contentScale = androidx.compose.ui.layout.ContentScale.Fit,
                             onSuccess = { state ->
                                 val intrinsicSize = state.painter.intrinsicSize
@@ -533,7 +539,11 @@ fun AttachmentsContent(
                             .padding(horizontal = 6.dp, vertical = 2.dp)
                     ) {
                         Text(
-                            text = "${imageAttachments.size} 张",
+                            text = pluralStringResource(
+                                R.plurals.attachment_image_count,
+                                imageAttachments.size,
+                                imageAttachments.size,
+                            ),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -599,14 +609,14 @@ fun AttachmentsContent(
                     ) {
                         Icon(
                             imageVector = getIconForMimeType(attachment.mimeType),
-                            contentDescription = "Attachment",
+                            contentDescription = stringResource(R.string.attachment_generic),
                             modifier = Modifier.size(24.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             text = attachment.displayName.ifBlank {
-                                attachment.uri.pathSegments.lastOrNull().orEmpty().ifBlank { "Attached File" }
+                                attachment.uri.pathSegments.lastOrNull().orEmpty().ifBlank { fallbackAttachmentName }
                             },
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -635,13 +645,13 @@ fun AttachmentsContent(
                     ) {
                         Icon(
                             imageVector = Icons.Outlined.Audiotrack,
-                            contentDescription = "Audio Attachment",
+                            contentDescription = stringResource(R.string.attachment_audio_description),
                             modifier = Modifier.size(24.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Audio attachment",
+                            text = stringResource(R.string.attachment_audio_description),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -783,7 +793,7 @@ fun MessageContextMenu(
                 Column(modifier = Modifier.padding(vertical = 8.dp)) {
                     ContextMenuRow(
                         icon = Icons.Filled.ContentCopy,
-                        label = "复制",
+                        label = stringResource(R.string.action_copy),
                         iconBg = iconBg,
                         iconTint = iconTint,
                         textColor = textColor,
@@ -791,7 +801,7 @@ fun MessageContextMenu(
                     )
                     ContextMenuRow(
                         icon = Icons.Filled.Edit,
-                        label = "编辑",
+                        label = stringResource(R.string.chat_action_edit),
                         iconBg = iconBg,
                         iconTint = iconTint,
                         textColor = textColor,
@@ -799,7 +809,7 @@ fun MessageContextMenu(
                     )
                     ContextMenuRow(
                         icon = Icons.Filled.Refresh,
-                        label = "重新回答",
+                        label = stringResource(R.string.chat_action_regenerate),
                         iconBg = iconBg,
                         iconTint = iconTint,
                         textColor = textColor,
@@ -880,7 +890,7 @@ fun ImageContextMenu(
                Column(modifier = Modifier.padding(vertical = 8.dp)) {
                    ContextMenuRow(
                        icon = Icons.Outlined.Image,
-                       label = "查看图片",
+                       label = stringResource(R.string.image_view),
                        iconBg = iconBg,
                        iconTint = iconTint,
                        textColor = textColor,
@@ -889,7 +899,7 @@ fun ImageContextMenu(
                    if (onEdit != null) {
                        ContextMenuRow(
                            icon = Icons.Filled.Edit,
-                           label = imageContextMenuEditLabel(),
+                           label = stringResource(imageContextMenuEditLabelRes()),
                            iconBg = iconBg,
                            iconTint = iconTint,
                            textColor = textColor,
@@ -898,7 +908,7 @@ fun ImageContextMenu(
                    }
                    ContextMenuRow(
                        icon = Icons.Outlined.Download,
-                       label = "下载图片",
+                       label = stringResource(R.string.image_download),
                        iconBg = iconBg,
                        iconTint = iconTint,
                        textColor = textColor,
@@ -913,7 +923,7 @@ fun ImageContextMenu(
 internal fun imageContextMenuItemCount(showEditAction: Boolean): Int =
     if (showEditAction) 3 else 2
 
-internal fun imageContextMenuEditLabel(): String = "编辑图像"
+internal fun imageContextMenuEditLabelRes(): Int = R.string.image_edit
 
 @Composable
 private fun ContextMenuRow(

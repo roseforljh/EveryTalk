@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.components.safety
 
+import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -40,6 +41,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R
 import com.android.everytalk.data.safety.AiContentReportCategory
 import com.android.everytalk.data.safety.AiContentReportRepository
@@ -52,6 +54,28 @@ import com.android.everytalk.ui.components.dialog.appDialogSubtextColor
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldColors
 
 private val ReportReasonShape = RoundedCornerShape(16.dp)
+
+@StringRes
+private fun AiContentReportCategory.titleRes(): Int = when (this) {
+    AiContentReportCategory.CHILD_SAFETY -> R.string.report_category_child_safety
+    AiContentReportCategory.SEXUAL_CONTENT -> R.string.report_category_sexual_content
+    AiContentReportCategory.VIOLENCE_SELF_HARM -> R.string.report_category_violence_self_harm
+    AiContentReportCategory.HATE_HARASSMENT -> R.string.report_category_hate_harassment
+    AiContentReportCategory.DECEPTION_IMPERSONATION -> R.string.report_category_deception_impersonation
+    AiContentReportCategory.MALICIOUS_CODE -> R.string.report_category_malicious_code
+    AiContentReportCategory.OTHER -> R.string.report_category_other
+}
+
+@StringRes
+private fun AiContentReportCategory.descriptionRes(): Int = when (this) {
+    AiContentReportCategory.CHILD_SAFETY -> R.string.report_category_child_safety_description
+    AiContentReportCategory.SEXUAL_CONTENT -> R.string.report_category_sexual_content_description
+    AiContentReportCategory.VIOLENCE_SELF_HARM -> R.string.report_category_violence_self_harm_description
+    AiContentReportCategory.HATE_HARASSMENT -> R.string.report_category_hate_harassment_description
+    AiContentReportCategory.DECEPTION_IMPERSONATION -> R.string.report_category_deception_impersonation_description
+    AiContentReportCategory.MALICIOUS_CODE -> R.string.report_category_malicious_code_description
+    AiContentReportCategory.OTHER -> R.string.report_category_other_description
+}
 
 @Composable
 fun AiContentReportMenuItem(
@@ -81,7 +105,7 @@ fun AiContentReportMenuItem(
         }
         Spacer(Modifier.width(8.dp))
         Text(
-            text = "举报 AI 内容",
+            text = stringResource(R.string.report_ai_content),
             color = actionColor,
             fontSize = 16.sp,
             fontWeight = FontWeight.Normal,
@@ -122,7 +146,7 @@ fun AiContentReportDialog(
                     modifier = Modifier.size(24.dp),
                 )
                 Text(
-                    text = "举报 AI 内容",
+                    text = stringResource(R.string.report_ai_content),
                     color = textColor,
                     fontWeight = FontWeight.Bold,
                 )
@@ -136,7 +160,7 @@ fun AiContentReportDialog(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text(
-                    text = "选择原因类别，并按需补充具体原因。举报包含相关回复摘要、模型和服务商名称，不会发送 API 密钥或整段对话。",
+                    text = stringResource(R.string.report_ai_content_description),
                     color = subtextColor,
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(bottom = 6.dp),
@@ -172,13 +196,13 @@ fun AiContentReportDialog(
                         Spacer(Modifier.width(8.dp))
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = category.displayName,
+                                text = stringResource(category.titleRes()),
                                 color = textColor,
                                 style = MaterialTheme.typography.bodyLarge,
                                 fontWeight = FontWeight.Medium,
                             )
                             Text(
-                                text = category.description,
+                                text = stringResource(category.descriptionRes()),
                                 color = subtextColor,
                                 style = MaterialTheme.typography.bodySmall,
                             )
@@ -193,8 +217,8 @@ fun AiContentReportDialog(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 6.dp),
-                    label = { Text("具体原因（可选）") },
-                    placeholder = { Text("请补充说明这条内容存在的问题") },
+                    label = { Text(stringResource(R.string.report_details_label)) },
+                    placeholder = { Text(stringResource(R.string.report_details_hint)) },
                     supportingText = {
                         Text(
                             text = "${details.length}/${AiContentReportRepository.MAX_DETAILS_CHARS}",
@@ -219,12 +243,12 @@ fun AiContentReportDialog(
                     selectedCategory?.let { category -> onSubmit(category, details.trim()) }
                 },
             ) {
-                Text("提交举报", fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.report_submit), fontWeight = FontWeight.SemiBold)
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("取消", color = textColor)
+                Text(stringResource(R.string.action_cancel), color = textColor)
             }
         },
     )

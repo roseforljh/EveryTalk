@@ -152,7 +152,7 @@ fun ImageGenerationLoadingView() {
         com.android.everytalk.ui.screens.BubbleMain.Main.ReasoningToggleAndContent(
             currentMessageId = "image-generation-loading",
             displayedReasoningText = "",
-            activityStatusText = "等待首个响应",
+            activityStatusText = stringResource(R.string.image_waiting_first_response),
             isReasoningStreaming = true,
             isReasoningComplete = false,
             messageIsError = false,

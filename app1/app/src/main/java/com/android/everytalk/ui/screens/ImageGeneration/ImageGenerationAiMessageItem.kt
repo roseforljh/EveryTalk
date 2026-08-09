@@ -310,7 +310,7 @@ internal fun AiMessageItem(
                                 ) {
                                     Icon(
                                         painter = painterResource(R.drawable.ic_dots_horizontal),
-                                        contentDescription = "更多",
+                                        contentDescription = stringResource(R.string.action_more),
                                         tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                                         modifier = Modifier.size(18.dp),
                                     )

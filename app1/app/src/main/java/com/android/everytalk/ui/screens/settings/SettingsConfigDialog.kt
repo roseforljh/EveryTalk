@@ -31,6 +31,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldDefaultBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldBorderColor
@@ -202,7 +203,7 @@ internal fun AddNewFullConfigDialog(
                         .padding(24.dp)
                 ) {
                 Text(
-                    "添加配置",
+                    stringResource(R.string.settings_add_configuration_title),
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
                     color = contentColor
@@ -211,7 +212,7 @@ internal fun AddNewFullConfigDialog(
                 Column(
                     modifier = Modifier.padding(vertical = 8.dp)
                 ) {
-                    SettingsFieldLabel("模型平台")
+                    SettingsFieldLabel(stringResource(R.string.settings_model_platform_label))
                     ExposedDropdownMenuBox(
                         expanded = providerMenuExpanded && providersToShow.isNotEmpty(),
                         onExpandedChange = {
@@ -222,10 +223,10 @@ internal fun AddNewFullConfigDialog(
                         modifier = Modifier.padding(bottom = 12.dp)
                     ) {
                         OutlinedTextField(
-                            value = if (provider.trim().lowercase() in listOf("默认","default","default_text")) "" else provider,
+                            value = if (provider.trim().lowercase() in listOf("默认","default","default_text")) "" else localizedProviderLabel(provider),
                             onValueChange = {},
                             readOnly = true,
-                            placeholder = { Text("请选择平台") },
+                            placeholder = { Text(stringResource(R.string.settings_select_platform_hint)) },
                             modifier = Modifier
                                 .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable, enabled = true)
                                 .fillMaxWidth()
@@ -240,7 +241,10 @@ internal fun AddNewFullConfigDialog(
                                     }
                                     onShowAddCustomProviderDialog()
                                 }) {
-                                    Icon(painter = painterResource(R.drawable.ic_plus), contentDescription = "添加自定义平台")
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_plus),
+                                        contentDescription = stringResource(R.string.settings_add_custom_platform),
+                                    )
                                 }
                             },
                             shape = DialogShape,
@@ -263,7 +267,7 @@ internal fun AddNewFullConfigDialog(
                                                 modifier = Modifier.fillMaxWidth()
                                             ) {
                                                 Text(
-                                                    text = providerItem,
+                                                    text = localizedProviderLabel(providerItem),
                                                     color = MaterialTheme.colorScheme.onSurface,
                                                     modifier = Modifier.weight(1f)
                                                 )
@@ -278,7 +282,10 @@ internal fun AddNewFullConfigDialog(
                                                     ) {
                                                         Icon(
                                                             painter = painterResource(R.drawable.ic_close),
-                                                            contentDescription = "删除 $providerItem",
+                                                            contentDescription = stringResource(
+                                                                R.string.settings_delete_platform_item,
+                                                                localizedProviderLabel(providerItem),
+                                                            ),
                                                             tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                                                         )
                                                     }
@@ -306,7 +313,7 @@ internal fun AddNewFullConfigDialog(
 
                     // 当选择"默认"时隐藏渠道/地址/密钥等输入
                     if (!isDefaultSel) {
-                        SettingsFieldLabel("渠道")
+                        SettingsFieldLabel(stringResource(R.string.settings_channel_label))
                         ExposedDropdownMenuBox(
                             expanded = channelMenuExpanded,
                             onExpandedChange = {
@@ -319,7 +326,7 @@ internal fun AddNewFullConfigDialog(
                             modifier = Modifier.padding(bottom = 12.dp)
                         ) {
                             OutlinedTextField(
-                                value = selectedChannel,
+                                value = localizedChannelLabel(selectedChannel),
                                 onValueChange = {},
                                 readOnly = true,
                                 enabled = !isChannelLocked,
@@ -346,7 +353,7 @@ internal fun AddNewFullConfigDialog(
                                 ) {
                                     channels.forEach { channel ->
                                         DropdownMenuItem(
-                                            text = { Text(channel) },
+                                            text = { Text(localizedChannelLabel(channel)) },
                                             onClick = {
                                                 selectedChannel = channel
                                                 channelMenuExpanded = false
@@ -357,7 +364,7 @@ internal fun AddNewFullConfigDialog(
                             }
                         }
 
-                        SettingsFieldLabel("API接口地址")
+                        SettingsFieldLabel(stringResource(R.string.settings_api_endpoint_label))
                         OutlinedTextField(
                             value = apiAddress,
                             onValueChange = onApiAddressChange,
@@ -381,7 +388,7 @@ internal fun AddNewFullConfigDialog(
                             }
                             if (fullUrlPreview.isNotEmpty()) {
                                 Text(
-                                    text = "预览: $fullUrlPreview",
+                                    text = stringResource(R.string.settings_endpoint_preview, fullUrlPreview),
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.primary,
                                     modifier = Modifier.padding(start = 12.dp, bottom = 12.dp)
@@ -389,7 +396,7 @@ internal fun AddNewFullConfigDialog(
                             }
                         }
 
-                        SettingsFieldLabel("API密钥")
+                        SettingsFieldLabel(stringResource(R.string.settings_api_key_label))
                         OutlinedTextField(
                             value = apiKey,
                             onValueChange = onApiKeyChange,
@@ -402,7 +409,9 @@ internal fun AddNewFullConfigDialog(
                                 IconButton(onClick = { apiKeyVisible = !apiKeyVisible }) {
                                     Icon(
                                         painter = painterResource(if (apiKeyVisible) R.drawable.ic_eye else R.drawable.ic_eye_off),
-                                        contentDescription = if (apiKeyVisible) "隐藏密钥" else "显示密钥",
+                                        contentDescription = stringResource(
+                                            if (apiKeyVisible) R.string.settings_hide_key else R.string.settings_show_key,
+                                        ),
                                         modifier = Modifier.size(20.dp),
                                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
@@ -441,7 +450,7 @@ internal fun AddNewFullConfigDialog(
                         border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
                     ) {
                         Text(
-                            text = "取消",
+                            text = stringResource(R.string.action_cancel),
                             style = MaterialTheme.typography.labelLarge.copy(
                                 fontWeight = FontWeight.SemiBold
                             )
@@ -477,7 +486,7 @@ internal fun AddNewFullConfigDialog(
                         )
                     ) {
                         Text(
-                            text = "添加",
+                            text = stringResource(R.string.action_add),
                             style = MaterialTheme.typography.labelLarge.copy(
                                 fontWeight = FontWeight.SemiBold
                             )

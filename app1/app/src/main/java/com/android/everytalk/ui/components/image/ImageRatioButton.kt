@@ -15,6 +15,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.res.stringResource
+import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.ImageRatio
 import com.android.everytalk.ui.components.ImageGenCapabilities.ModelFamily
 import com.android.everytalk.ui.components.ImageGenCapabilities.QualityTier
@@ -46,7 +48,7 @@ fun ImageRatioButton(
             // 比例图标
             Icon(
                 imageVector = Icons.Default.AspectRatio,
-                contentDescription = "选择比例",
+                contentDescription = stringResource(R.string.image_select_ratio_content_description),
                 modifier = Modifier.size(16.dp),
                 tint = Color(0xFF00BCD4) // 青绿色
             )

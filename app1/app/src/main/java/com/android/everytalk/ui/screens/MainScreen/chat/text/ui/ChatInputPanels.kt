@@ -53,6 +53,7 @@ import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -149,7 +150,7 @@ internal fun FunctionPanelContent(
         ) {
             FunctionPanelRow(
                 iconRes = R.drawable.ic_image_gallery,
-                label = "图片",
+                label = stringResource(R.string.chat_input_image),
                 iconBg = iconBg,
                 iconTint = iconTint,
                 textColor = textColor,
@@ -158,7 +159,7 @@ internal fun FunctionPanelContent(
             )
             FunctionPanelRow(
                 iconRes = R.drawable.ic_camera,
-                label = "相机",
+                label = stringResource(R.string.chat_input_camera),
                 iconBg = iconBg,
                 iconTint = iconTint,
                 textColor = textColor,
@@ -167,7 +168,7 @@ internal fun FunctionPanelContent(
             )
             FunctionPanelRow(
                 iconRes = R.drawable.ic_paperclip,
-                label = "附件",
+                label = stringResource(R.string.chat_input_attachment),
                 iconBg = iconBg,
                 iconTint = iconTint,
                 textColor = textColor,
@@ -176,7 +177,7 @@ internal fun FunctionPanelContent(
             )
             FunctionPanelRow(
                 iconRes = R.drawable.ic_globe,
-                label = "联网搜索",
+                label = stringResource(R.string.chat_input_web_search),
                 iconBg = iconBg,
                 iconTint = if (isWebSearchEnabled && isWebSearchAvailable) Color(0xFF66B5FF) else iconTint,
                 textColor = textColor,
@@ -194,7 +195,7 @@ internal fun FunctionPanelContent(
             )
             FunctionPanelRow(
                 iconRes = R.drawable.ic_prompt,
-                label = "提示词",
+                label = stringResource(R.string.chat_input_prompt),
                 iconBg = iconBg,
                 iconTint = iconTint,
                 textColor = textColor,

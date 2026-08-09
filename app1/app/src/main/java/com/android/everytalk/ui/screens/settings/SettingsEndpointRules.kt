@@ -61,8 +61,8 @@ object SettingsEndpointRules {
         return "$noHash/v1/chat/completions"
     }
 
-    fun maskApiKey(secret: String): String = when {
-        secret.isBlank() -> "未配置"
+    fun maskApiKey(secret: String, notConfiguredLabel: String): String = when {
+        secret.isBlank() -> notConfiguredLabel
         secret.length <= 8 -> "****"
         else -> secret.take(4) + "****" + secret.takeLast(4)
     }

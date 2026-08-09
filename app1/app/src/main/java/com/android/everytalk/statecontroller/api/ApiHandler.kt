@@ -1,6 +1,7 @@
 package com.android.everytalk.statecontroller
 
 import android.content.Context
+import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.ChatRequest
@@ -22,6 +23,7 @@ import com.android.everytalk.util.debug.PerformanceMonitor
 import com.android.everytalk.util.messageprocessor.MessageProcessor
 import com.android.everytalk.util.text.TextSanitizer
 import com.android.everytalk.util.image.toGeneratedImageMessage
+import com.android.everytalk.util.locale.localizeUiMessage
 import io.ktor.client.statement.HttpResponse
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -197,12 +199,14 @@ internal fun markPreparedMessageFailed(
 }
 
 class ApiHandler(
+    context: Context,
     private val stateHolder: ViewModelStateHolder,
     private val viewModelScope: CoroutineScope,
     private val historyManager: HistoryManager,
     private val onAiMessageFullTextChanged: (messageId: String, currentFullText: String) -> Unit,
     private val triggerScrollToBottom: () -> Unit,
 ) {
+    private val context = context.applicationContext
     private val logger = AppLogger.forComponent("ApiHandler")
     private val jsonParserForError = Json { ignoreUnknownKeys = true }
     // 为每个会话创建独立的MessageProcessor实例，确保会话隔离
@@ -220,6 +224,7 @@ class ApiHandler(
 
     private val errorHandler by lazy {
         ApiHandlerErrorController(
+            context = context,
             stateHolder = stateHolder,
             historyManager = historyManager,
             messageProcessorMap = messageProcessorMap,
@@ -230,6 +235,7 @@ class ApiHandler(
 
     private val streamProcessor by lazy {
         ApiHandlerStreamProcessor(
+            context = context,
             stateHolder = stateHolder,
             viewModelScope = viewModelScope,
             historyManager = historyManager,
@@ -355,7 +361,8 @@ class ApiHandler(
     ) {
         withContext(Dispatchers.Main.immediate) {
             val messageList = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
-            if (!markPreparedMessageFailed(messageList, messageId, errorText)) {
+            val localizedErrorText = context.localizeUiMessage(errorText)
+            if (!markPreparedMessageFailed(messageList, messageId, localizedErrorText)) {
                 logger.warn("预创建消息不存在，无法写入压缩错误: $messageId")
             }
             if (isImageGeneration) {
@@ -653,9 +660,13 @@ class ApiHandler(
                                     )
                                     
                                     val persistenceFailureText = if (persistenceResult.failures.isNotEmpty()) {
-                                        val firstFailure = persistenceResult.failures.first().toGeneratedImageMessage()
+                                        val firstFailure = persistenceResult.failures.first().toGeneratedImageMessage(context)
                                         val countText = if (persistenceResult.failures.size > 1) {
-                                            " 共 ${persistenceResult.failures.size} 张图片未能保存。"
+                                            context.resources.getQuantityString(
+                                                R.plurals.generated_images_not_saved_count,
+                                                persistenceResult.failures.size,
+                                                persistenceResult.failures.size,
+                                            )
                                         } else {
                                             ""
                                         }

@@ -10,7 +10,9 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTextReplacement
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.CustomModelParameter
 import com.android.everytalk.data.DataClass.ModelCapabilityCandidate
@@ -28,13 +30,14 @@ import org.junit.runner.RunWith
 import org.robolectric.annotation.Config
 
 @RunWith(AndroidJUnit4::class)
-@Config(sdk = [34], application = Application::class)
+@Config(sdk = [34], application = Application::class, qualifiers = "zh-rCN")
 class ModelParametersDialogComposeTest {
     @get:Rule
     val composeRule = createComposeRule()
 
     @Test
     fun `当前参数在菜单右侧显示勾选图标`() {
+        val context = ApplicationProvider.getApplicationContext<Application>()
         val config = ApiConfig(
             address = "https://example.com",
             key = "test-key",
@@ -57,12 +60,19 @@ class ModelParametersDialogComposeTest {
         composeRule.onNodeWithContentDescription("思考程度下拉框").performClick()
 
         composeRule
-            .onNodeWithContentDescription("已选择 medium", useUnmergedTree = true)
+            .onNodeWithContentDescription(
+                context.getString(
+                    R.string.model_parameters_selected_option,
+                    context.getString(R.string.model_parameters_reasoning_medium),
+                ),
+                useUnmergedTree = true,
+            )
             .assertIsDisplayed()
     }
 
     @Test
     fun `OpenAI兼容菜单的自定义入口点击后可直接输入并保存`() {
+        val context = ApplicationProvider.getApplicationContext<Application>()
         val config = openAICompatibleConfig()
         var confirmedConfig: ApiConfig? = null
 
@@ -78,7 +88,10 @@ class ModelParametersDialogComposeTest {
 
         composeRule.onNodeWithContentDescription("思考程度下拉框").performClick()
         val customTop = composeRule.onNodeWithText("自定义").fetchSemanticsNode().boundsInRoot.top
-        val firstPresetTop = composeRule.onNodeWithText("none").fetchSemanticsNode().boundsInRoot.top
+        val firstPresetTop = composeRule
+            .onNodeWithText(context.getString(R.string.model_parameters_reasoning_none))
+            .fetchSemanticsNode()
+            .boundsInRoot.top
         assertTrue(customTop < firstPresetTop)
         composeRule.onNodeWithText("自定义").assertIsDisplayed().performClick()
         composeRule.onNodeWithContentDescription("思考程度下拉框").performTextInput("ultra")
@@ -130,6 +143,7 @@ class ModelParametersDialogComposeTest {
     fun `最大输出和上下文窗口可编辑并保存`() {
         val config = openAICompatibleConfig()
         var confirmedConfig: ApiConfig? = null
+        val context = ApplicationProvider.getApplicationContext<Application>()
 
         composeRule.setContent {
             MaterialTheme {
@@ -141,9 +155,13 @@ class ModelParametersDialogComposeTest {
             }
         }
 
-        composeRule.onNodeWithContentDescription("最大输出 tokens")
+        composeRule.onNodeWithContentDescription(
+            context.getString(R.string.model_parameters_max_output_content_description),
+        )
             .performTextReplacement("8192")
-        composeRule.onNodeWithContentDescription("上下文窗口 tokens")
+        composeRule.onNodeWithContentDescription(
+            context.getString(R.string.model_parameters_context_window_content_description),
+        )
             .performTextReplacement("200000")
         composeRule.onNodeWithText("保存").performClick()
 

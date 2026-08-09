@@ -3,6 +3,7 @@ import com.android.everytalk.statecontroller.*
 
 import kotlin.math.max
 import android.Manifest
+import androidx.annotation.StringRes
 import android.content.Context
 import android.net.Uri
 import android.util.Log
@@ -45,6 +46,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -104,6 +106,15 @@ import java.util.Date
 import java.util.Locale
 import java.util.UUID
 
+@get:StringRes
+internal val ImageGenCapabilities.GptImageQuality.displayNameRes: Int
+    get() = when (this) {
+        ImageGenCapabilities.GptImageQuality.AUTO -> R.string.image_quality_auto
+        ImageGenCapabilities.GptImageQuality.LOW -> R.string.image_quality_low
+        ImageGenCapabilities.GptImageQuality.MEDIUM -> R.string.image_quality_medium
+        ImageGenCapabilities.GptImageQuality.HIGH -> R.string.image_quality_high
+    }
+
 internal fun createImageFileUri(context: Context): Uri {
     val timeStamp: String = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.getDefault()).format(Date())
     val imageFileName = "JPEG_${timeStamp}_"
@@ -160,7 +171,7 @@ fun SelectedItemPreview(
         when (mediaItem) {
             is SelectedMediaItem.ImageFromUri -> AsyncImage(
                 model = mediaItem.uri,
-                contentDescription = "Selected image from gallery",
+                contentDescription = stringResource(R.string.attachment_selected_gallery_image),
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
             )
@@ -168,7 +179,7 @@ fun SelectedItemPreview(
                 val imageModel = remember(mediaItem) { mediaItem.model }
                 AsyncImage(
                     model = imageModel,
-                    contentDescription = "Selected image from camera",
+                    contentDescription = stringResource(R.string.attachment_selected_camera_image),
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop,
                 )
@@ -190,7 +201,7 @@ fun SelectedItemPreview(
         ) {
             Icon(
                 painter = painterResource(R.drawable.ic_close_bold),
-                contentDescription = "Remove item",
+                contentDescription = stringResource(R.string.attachment_remove),
                 tint = Color.White,
                 modifier = Modifier.size(12.dp)
             )

@@ -30,6 +30,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -74,7 +75,8 @@ internal fun modelSelectionInitialFirstVisibleIndex(
 
 internal fun resolveTopBarModelDisplayInfo(
     selectedConfigName: String,
-    isDark: Boolean
+    isDark: Boolean,
+    otherLabel: String,
 ): TopBarModelDisplayInfo {
     val lower = selectedConfigName.lowercase()
     return when {
@@ -92,7 +94,7 @@ internal fun resolveTopBarModelDisplayInfo(
         lower.contains("kimi") -> TopBarModelDisplayInfo("Kimi", Color(0xFF06B6D4))
         lower.contains("minimax") -> TopBarModelDisplayInfo("MiniMax", Color(0xFFEF4444))
         lower.contains("glm") -> TopBarModelDisplayInfo("GLM", Color(0xFF8B5CF6))
-        else -> TopBarModelDisplayInfo("Other", Color(0xFF9E9E9E))
+        else -> TopBarModelDisplayInfo(otherLabel, Color(0xFF9E9E9E))
     }
 }
 
@@ -131,13 +133,14 @@ fun AppTopBar(
     iconSize: Dp = 24.dp
 ) {
     val isDark = isSystemInDarkTheme()
+    val otherModelLabel = stringResource(R.string.top_bar_model_other)
     val buttonBg = if (isDark) Color(0xFF303030) else Color.White
     val contentColor = if (isDark) Color.White else Color(0xFF0D0D0D)
     val topButtonSize = iconButtonSize + 2.dp
 
     // 模型名称提取与彩虹色映射
-    val modelDisplayInfo = remember(selectedConfigName, isDark) {
-        resolveTopBarModelDisplayInfo(selectedConfigName, isDark)
+    val modelDisplayInfo = remember(selectedConfigName, isDark, otherModelLabel) {
+        resolveTopBarModelDisplayInfo(selectedConfigName, isDark, otherModelLabel)
     }
 
     Box(
@@ -175,7 +178,7 @@ fun AppTopBar(
                 ) {
                     Icon(
                         painter = painterResource(R.drawable.ic_menu),
-                        contentDescription = "菜单",
+                        contentDescription = stringResource(R.string.navigation_menu),
                         tint = contentColor,
                         modifier = Modifier.size(20.dp)
                     )
@@ -193,8 +196,8 @@ fun AppTopBar(
                             .clip(RoundedCornerShape(percent = 50))
                             .background(buttonBg)
                             .combinedClickable(
-                                onClickLabel = "选择模型",
-                                onLongClickLabel = "切换配置",
+                                onClickLabel = stringResource(R.string.model_select),
+                                onLongClickLabel = stringResource(R.string.configuration_switch),
                                 onClick = onTitleClick,
                                 onLongClick = {
                                     if (allApiConfigs.isNotEmpty()) {
@@ -281,7 +284,7 @@ fun AppTopBar(
                         ) {
                             Icon(
                                 painter = painterResource(R.drawable.ic_compose),
-                                contentDescription = "新对话",
+                                contentDescription = stringResource(R.string.chat_new),
                                 tint = contentColor,
                                 modifier = Modifier.size(20.dp)
                             )
@@ -295,7 +298,7 @@ fun AppTopBar(
                         ) {
                             Icon(
                                 painter = painterResource(R.drawable.ic_dots_vertical),
-                                contentDescription = "更多",
+                                contentDescription = stringResource(R.string.action_more),
                                 tint = contentColor,
                                 modifier = Modifier.size(20.dp)
                             )
@@ -331,7 +334,7 @@ fun AppTopBar(
                 ) {
                     Icon(
                         painter = painterResource(R.drawable.ic_settings),
-                        contentDescription = "设置",
+                        contentDescription = stringResource(R.string.settings_title),
                         tint = contentColor,
                         modifier = Modifier.size(20.dp)
                     )
@@ -357,7 +360,7 @@ private fun DeleteChatDialog(
         containerColor = cardBg,
         title = {
             Text(
-                text = "删除聊天",
+                text = stringResource(R.string.chat_delete_title),
                 color = textColor,
                 fontWeight = FontWeight.Bold,
                 fontSize = 20.sp
@@ -365,19 +368,19 @@ private fun DeleteChatDialog(
         },
         text = {
             Text(
-                text = "此操作无法撤销。请前往设置，删除在此次聊天中为你保存的任何记忆。",
+                text = stringResource(R.string.chat_delete_description),
                 color = subtextColor,
                 fontSize = 14.sp
             )
         },
         confirmButton = {
             TextButton(onClick = onConfirm) {
-                Text("删除", color = Color(0xFFEF5350), fontWeight = FontWeight.Bold)
+                Text(stringResource(R.string.action_delete), color = Color(0xFFEF5350), fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("取消", color = textColor)
+                Text(stringResource(R.string.action_cancel), color = textColor)
             }
         }
     )
@@ -452,10 +455,10 @@ private fun TopBarMoreMenu(
                     .width(IntrinsicSize.Max)
                     .padding(vertical = 12.dp)
             ) {
-                TopBarMenuItem(iconRes = R.drawable.ic_share, text = "分享", tint = textColor, onClick = onShare)
-                TopBarMenuItem(iconRes = R.drawable.ic_pin, text = "置顶", tint = textColor, onClick = onPin)
-                TopBarMenuItem(iconRes = R.drawable.ic_settings, text = "设置", tint = textColor, onClick = onSettings)
-                TopBarMenuItem(iconRes = R.drawable.ic_trash, text = "删除", tint = deleteColor, onClick = onDelete)
+                TopBarMenuItem(iconRes = R.drawable.ic_share, text = stringResource(R.string.action_share), tint = textColor, onClick = onShare)
+                TopBarMenuItem(iconRes = R.drawable.ic_pin, text = stringResource(R.string.action_pin), tint = textColor, onClick = onPin)
+                TopBarMenuItem(iconRes = R.drawable.ic_settings, text = stringResource(R.string.settings_title), tint = textColor, onClick = onSettings)
+                TopBarMenuItem(iconRes = R.drawable.ic_trash, text = stringResource(R.string.action_delete), tint = deleteColor, onClick = onDelete)
             }
         }
     }
@@ -572,8 +575,8 @@ private fun ModelSelectionDropdown(
                     val isSelected = modelConfig.id == selectedApiConfig?.id
                     val modelInteractionModifier = if (onModelLongClick != null) {
                         Modifier.combinedClickable(
-                            onClickLabel = "选择模型",
-                            onLongClickLabel = "打开模型参数",
+                            onClickLabel = stringResource(R.string.model_select),
+                            onLongClickLabel = stringResource(R.string.model_parameters_open),
                             onClick = { onModelSelected(modelConfig) },
                             onLongClick = { onModelLongClick(modelConfig) },
                         )

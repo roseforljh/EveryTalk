@@ -35,6 +35,7 @@ import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.layout.positionInWindow
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.LinkAnnotation
@@ -42,6 +43,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withLink
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -49,6 +51,7 @@ import androidx.compose.foundation.border
 import androidx.compose.ui.draw.shadow
 import androidx.navigation.NavController
 import androidx.navigation.NavGraph.Companion.findStartDestination
+import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.navigation.Screen
 import com.android.everytalk.statecontroller.AppViewModel
@@ -88,6 +91,7 @@ fun ChatScreen(
     navController: NavController,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     val messages: List<Message> = viewModel.messages
     val text by viewModel.text.collectAsState()
     val isConversationSearchActive by viewModel.isConversationSearchActive.collectAsState()
@@ -652,7 +656,7 @@ fun ChatScreen(
                     if (canUseWebSearch) {
                         viewModel.toggleWebSearchMode(!isWebSearchEnabled)
                     } else {
-                        viewModel.showSnackbar("当前模型无原生联网，请先在设置中配置外部搜索商")
+                        viewModel.showSnackbar(context.getString(R.string.chat_native_search_unavailable))
                     }
                 },
                 isCodeExecutionEnabled = isCodeExecutionEnabled,
@@ -701,7 +705,7 @@ fun ChatScreen(
             // 浮动顶栏 - 覆盖在内容上方
             AppTopBar(
                 selectedConfigName = selectedApiConfig?.name?.takeIf { it.isNotBlank() }
-                    ?: selectedApiConfig?.model ?: "选择配置",
+                    ?: selectedApiConfig?.model ?: stringResource(R.string.chat_select_configuration),
                 onMenuClick = { coroutineScope.launch { viewModel.drawerState.open() } },
                 onSettingsClick = {
                     navController.navigate(Screen.SETTINGS_SCREEN) {
@@ -717,7 +721,7 @@ fun ChatScreen(
                         if (filteredModelsForBottomSheet.isNotEmpty()) {
                             showModelSelectionBottomSheet = true
                         } else {
-                            viewModel.showSnackbar("当前无可用模型配置")
+                            viewModel.showSnackbar(context.getString(R.string.chat_no_available_model_configuration))
                         }
                     }
                 },

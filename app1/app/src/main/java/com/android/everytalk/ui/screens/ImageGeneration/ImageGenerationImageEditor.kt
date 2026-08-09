@@ -290,7 +290,7 @@ internal fun BrushEditorOverlay(
 
                     // 顶部标题
                     Text(
-                        text = "选择要编辑的区域",
+                        text = stringResource(R.string.image_editor_select_area),
                         color = Color.White,
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier
@@ -321,7 +321,7 @@ internal fun BrushEditorOverlay(
                                     .clickable { onCancel() }
                             ) {
                                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                    Text("取消", style = MaterialTheme.typography.labelLarge)
+                                    Text(stringResource(R.string.action_cancel), style = MaterialTheme.typography.labelLarge)
                                 }
                             }
                         }
@@ -343,7 +343,7 @@ internal fun BrushEditorOverlay(
                                 ) {
                                     Icon(
                                         painter = painterResource(R.drawable.ic_arrow_back),
-                                        contentDescription = "撤销",
+                                        contentDescription = stringResource(R.string.action_undo),
                                         tint = if (strokes.isNotEmpty()) Color.White else Color.White.copy(alpha = 0.4f)
                                     )
                                 }
@@ -358,7 +358,7 @@ internal fun BrushEditorOverlay(
                                 ) {
                                     Icon(
                                         painter = painterResource(R.drawable.ic_arrow_end),
-                                        contentDescription = "重做",
+                                        contentDescription = stringResource(R.string.action_redo),
                                         tint = if (undoneStrokes.isNotEmpty()) Color.White else Color.White.copy(alpha = 0.4f)
                                     )
                                 }
@@ -424,7 +424,7 @@ internal fun BrushEditorOverlay(
                                     }
                             ) {
                                 Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                    Text("下一步", style = MaterialTheme.typography.labelLarge)
+                                    Text(stringResource(R.string.action_next), style = MaterialTheme.typography.labelLarge)
                                 }
                             }
                         }

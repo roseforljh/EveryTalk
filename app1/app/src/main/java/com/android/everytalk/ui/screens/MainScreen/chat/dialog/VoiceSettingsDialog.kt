@@ -10,11 +10,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.edit
+import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.VoiceBackendConfig
 import com.android.everytalk.statecontroller.AppViewModel
@@ -109,7 +111,7 @@ fun VoiceSettingsDialog(
             // 创建新配置（为该平台创建独立记录）
             VoiceBackendConfig(
                 id = java.util.UUID.randomUUID().toString(),
-                name = "${platform} TTS 配置",
+                name = context.getString(R.string.voice_tts_config_name, platform),
                 provider = platform,
                 ttsPlatform = platform,
                 ttsApiKey = apiKey.trim(),
@@ -191,7 +193,7 @@ fun VoiceSettingsDialog(
             ) {
                 // 标题
                 Text(
-                    text = "TTS 设置 (语音合成)",
+                    text = stringResource(R.string.voice_tts_settings_title),
                     style = MaterialTheme.typography.headlineSmall.copy(
                         fontWeight = FontWeight.Bold
                     ),
@@ -202,7 +204,7 @@ fun VoiceSettingsDialog(
                 Column(
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    SettingsFieldLabel("TTS 平台")
+                    SettingsFieldLabel(stringResource(R.string.voice_tts_platform_label))
                     ExposedDropdownMenuBox(
                         expanded = expanded,
                         onExpandedChange = { expanded = it }
@@ -245,12 +247,12 @@ fun VoiceSettingsDialog(
                 Column(
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    SettingsFieldLabel("TTS API Key")
+                    SettingsFieldLabel(stringResource(R.string.voice_tts_api_key_label))
                     OutlinedTextField(
                         value = apiKey,
                         onValueChange = { apiKey = it },
                         modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("请输入 API Key") },
+                        placeholder = { Text(stringResource(R.string.voice_api_key_hint)) },
                         colors = DialogTextFieldColors,
                         shape = DialogShape,
                         singleLine = true
@@ -261,29 +263,29 @@ fun VoiceSettingsDialog(
                 Column(
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    SettingsFieldLabel("TTS API 地址")
+                    SettingsFieldLabel(stringResource(R.string.voice_tts_api_url_label))
                     OutlinedTextField(
-                        value = if (selectedPlatform == "Gemini") "自动使用默认地址" else baseUrl,
+                        value = if (selectedPlatform == "Gemini") stringResource(R.string.voice_tts_default_url_automatic) else baseUrl,
                         onValueChange = { if (selectedPlatform != "Gemini") baseUrl = it },
                         enabled = selectedPlatform != "Gemini",
                         modifier = Modifier.fillMaxWidth(),
                         placeholder = {
                             Text(
-                                if (selectedPlatform == "Aliyun") "例如 https://dashscope.aliyuncs.com/api/v1"
-                                else "例如 https://api.minimaxi.com/v1/t2a_v2"
+                                if (selectedPlatform == "Aliyun") stringResource(R.string.voice_api_url_aliyun_example)
+                                else stringResource(R.string.voice_api_url_minimax_example)
                             )
                         },
                         supportingText = {
                             if (selectedPlatform == "Gemini") {
-                                Text("自动使用 https://generativelanguage.googleapis.com", color = subtextColor)
+                                Text(stringResource(R.string.voice_gemini_default_url), color = subtextColor)
                             } else if (selectedPlatform == "Aliyun") {
-                                Text("默认: https://dashscope.aliyuncs.com/api/v1", color = subtextColor)
+                                Text(stringResource(R.string.voice_aliyun_tts_default_url), color = subtextColor)
                             } else if (baseUrl.isNotEmpty() && !baseUrl.startsWith("http")) {
-                                Text("请填写完整的 http(s) 地址", color = MaterialTheme.colorScheme.error)
+                                Text(stringResource(R.string.voice_api_url_invalid), color = MaterialTheme.colorScheme.error)
                             } else if (selectedPlatform == "Minimax" && baseUrl.isBlank()) {
-                                Text("Minimax 平台必须填写 API 地址", color = MaterialTheme.colorScheme.error)
+                                Text(stringResource(R.string.voice_minimax_api_url_required), color = MaterialTheme.colorScheme.error)
                             } else if (selectedPlatform == "SiliconFlow") {
-                                Text("默认: https://api.siliconflow.cn/v1/audio/speech", color = subtextColor)
+                                Text(stringResource(R.string.voice_siliconflow_tts_default_url), color = subtextColor)
                             } else {
                                 // 智能提示最终使用的完整URL
                                 val finalUrl = if (selectedPlatform == "OpenAI" && baseUrl.isNotBlank()) {
@@ -297,9 +299,9 @@ fun VoiceSettingsDialog(
                                 }
                                 
                                 if (finalUrl != null) {
-                                    Text("最终请求地址: $finalUrl", color = MaterialTheme.colorScheme.primary)
+                                    Text(stringResource(R.string.voice_final_request_url, finalUrl), color = MaterialTheme.colorScheme.primary)
                                 } else {
-                                    Text("大模型厂商的 API 地址", color = subtextColor)
+                                    Text(stringResource(R.string.voice_provider_api_url_description), color = subtextColor)
                                 }
                             }
                         },
@@ -311,7 +313,7 @@ fun VoiceSettingsDialog(
 
                 // 语音模型名称输入框 (动态列表)
                 DynamicModelSelector(
-                    label = "TTS 模型名称",
+                    label = stringResource(R.string.voice_tts_model_name_label),
                     currentModel = chatModel,
                     onModelChange = { chatModel = it },
                     modelList = allModels,
@@ -352,7 +354,7 @@ fun VoiceSettingsDialog(
                         border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
                     ) {
                         Text(
-                            text = "取消",
+                            text = stringResource(R.string.action_cancel),
                             style = MaterialTheme.typography.labelLarge.copy(
                                 fontWeight = FontWeight.SemiBold
                             )
@@ -413,7 +415,7 @@ fun VoiceSettingsDialog(
                         )
                     ) {
                         Text(
-                            text = "确定",
+                            text = stringResource(R.string.action_confirm),
                             style = MaterialTheme.typography.labelLarge.copy(
                                 fontWeight = FontWeight.SemiBold
                             )

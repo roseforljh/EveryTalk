@@ -25,7 +25,9 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
 import androidx.navigation.NavController
+import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.ModalityType
 import com.android.everytalk.statecontroller.AppViewModel
@@ -44,6 +46,7 @@ import com.android.everytalk.ui.screens.settings.DialogTextFieldColors
 import com.android.everytalk.ui.screens.settings.DialogShape
 import com.android.everytalk.ui.screens.settings.SettingsDefaults
 import com.android.everytalk.ui.screens.settings.SettingsFieldLabel
+import com.android.everytalk.ui.screens.settings.localizedProviderLabel
 import com.android.everytalk.ui.screens.settings.dialogs.AutoFetchModelsConfirmDialog
 import com.android.everytalk.ui.screens.settings.dialogs.ModelSelectionDialog
 
@@ -65,6 +68,7 @@ fun ImageGenerationSettingsScreen(
     val fetchedModels by viewModel.fetchedModels.collectAsState()
     val isRefreshingModels by viewModel.isRefreshingModels.collectAsState()
     val showAutoFetchConfirm by viewModel.showAutoFetchConfirmDialog.collectAsState()
+    val siliconFlowDefaultConfigName = stringResource(R.string.image_siliconflow_default_config)
     val showModelSelection by viewModel.showModelSelectionDialog.collectAsState()
 
     // 固定为图像模式的配置分组
@@ -213,7 +217,7 @@ fun ImageGenerationSettingsScreen(
                     ) {
                         Icon(
                             Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "返回",
+                            contentDescription = stringResource(R.string.navigation_back),
                             tint = contentColor,
                             modifier = Modifier.size(20.dp)
                         )
@@ -238,7 +242,7 @@ fun ImageGenerationSettingsScreen(
                     ) {
                         Icon(
                             Icons.Filled.Add,
-                            contentDescription = "添加",
+                            contentDescription = stringResource(R.string.action_add),
                             tint = contentColor,
                             modifier = Modifier.size(20.dp)
                         )
@@ -298,7 +302,7 @@ fun ImageGenerationSettingsScreen(
                        .ifBlank { "https://api.siliconflow.cn/v1/images/generations" }
                    val config = ApiConfig(
                        id = java.util.UUID.randomUUID().toString(),
-                       name = "SiliconFlow (默认)",
+                       name = siliconFlowDefaultConfigName,
                        provider = providerTrim,
                        address = defaultAddr,
                        key = "",
@@ -471,8 +475,11 @@ fun ImageGenerationSettingsScreen(
                 showConfirmDeleteProviderDialog = false
                 providerToDelete = null
             },
-            title = "删除平台",
-            text = "您确定要删除模型平台 \"${providerToDelete}\" 吗？\n\n这将同时删除所有使用此平台的配置。此操作不可撤销。"
+            title = stringResource(R.string.settings_delete_platform_title),
+            text = stringResource(
+                R.string.settings_delete_platform_description,
+                localizedProviderLabel(providerToDelete.orEmpty()),
+            ),
         )
     }
 }
@@ -499,7 +506,7 @@ private fun AddImageModelToKeyDialog(
         textContentColor = contentColor,
         title = {
             Text(
-                text = "添加图像模型",
+                text = stringResource(R.string.image_add_model_title),
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
                 color = contentColor
@@ -510,11 +517,11 @@ private fun AddImageModelToKeyDialog(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                SettingsFieldLabel("模型名称")
+                SettingsFieldLabel(stringResource(R.string.settings_model_name_label))
                 OutlinedTextField(
                     value = modelName,
                     onValueChange = { modelName = it },
-                    placeholder = { Text("例如: Kwai-Kolors/Kolors") },
+                    placeholder = { Text(stringResource(R.string.image_model_name_hint)) },
                     modifier = Modifier.fillMaxWidth(),
                     singleLine = true,
                     shape = DialogShape,
@@ -541,7 +548,7 @@ private fun AddImageModelToKeyDialog(
                     border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
                 ) {
                     Text(
-                        text = "取消",
+                        text = stringResource(R.string.action_cancel),
                         style = MaterialTheme.typography.labelLarge.copy(
                             fontWeight = FontWeight.SemiBold
                         )
@@ -568,7 +575,7 @@ private fun AddImageModelToKeyDialog(
                     )
                 ) {
                     Text(
-                        text = "确认",
+                        text = stringResource(R.string.action_confirm),
                         style = MaterialTheme.typography.labelLarge.copy(
                             fontWeight = FontWeight.SemiBold
                         )

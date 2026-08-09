@@ -3,6 +3,7 @@ import com.android.everytalk.statecontroller.*
 
 import android.util.Log
 import android.view.WindowManager
+import androidx.annotation.StringRes
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.animation.core.animateFloatAsState
@@ -31,6 +32,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldDefaultBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldBorderColor
@@ -68,6 +70,42 @@ import androidx.compose.ui.window.DialogWindowProvider
 import androidx.compose.ui.window.PopupProperties
 import com.android.everytalk.data.DataClass.ModalityType
 import com.android.everytalk.data.network.ExternalWebSearchProvider
+
+@get:StringRes
+internal val ModalityType.displayNameRes: Int
+    get() = when (this) {
+        ModalityType.TEXT -> R.string.modality_text
+        ModalityType.IMAGE -> R.string.modality_image
+        ModalityType.AUDIO -> R.string.modality_audio
+        ModalityType.VIDEO -> R.string.modality_video
+        ModalityType.MULTIMODAL -> R.string.modality_multimodal
+    }
+
+@get:StringRes
+internal val ExternalWebSearchProvider.descriptionRes: Int
+    get() = when (this) {
+        ExternalWebSearchProvider.TAVILY -> R.string.web_provider_tavily_description
+        ExternalWebSearchProvider.EXA -> R.string.web_provider_exa_description
+        ExternalWebSearchProvider.BOCHA -> R.string.web_provider_bocha_description
+        ExternalWebSearchProvider.SERPAPI -> R.string.web_provider_serpapi_description
+    }
+
+@Composable
+internal fun localizedProviderLabel(provider: String): String = when (provider.trim().lowercase()) {
+    "默认", "default", "default_text" -> stringResource(R.string.settings_provider_default)
+    "google", "gemini", "谷歌" -> stringResource(R.string.settings_provider_google)
+    "硅基流动", "siliconflow" -> stringResource(R.string.settings_provider_siliconflow)
+    "阿里云百炼" -> stringResource(R.string.settings_provider_aliyun_bailian)
+    "火山引擎" -> stringResource(R.string.settings_provider_volcengine)
+    "深度求索", "deepseek" -> stringResource(R.string.settings_provider_deepseek)
+    else -> provider
+}
+
+@Composable
+internal fun localizedChannelLabel(channel: String): String = when (channel.trim().lowercase()) {
+    "openai兼容", "openai compatible" -> stringResource(R.string.settings_openai_compatible)
+    else -> channel
+}
 
 val DialogTextFieldColors
     @Composable get() = run {

@@ -29,6 +29,7 @@ import com.android.everytalk.ui.screens.viewmodel.HistoryManager
 import android.graphics.Bitmap
 import android.net.Uri
 import android.widget.Toast
+import com.android.everytalk.R
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Dispatchers
@@ -149,7 +150,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     internal val messagesMutex = Mutex()
     internal val historyMutex = Mutex()
     internal val stateHolder = ViewModelStateHolder()
-    internal val conversationPreviewController = ConversationPreviewController(stateHolder)
+    private fun localizedDefaultConversationName(index: Int, isImageGeneration: Boolean): String =
+        getApplication<Application>().getString(
+            if (isImageGeneration) {
+                R.string.conversation_default_image_name
+            } else {
+                R.string.conversation_default_name
+            },
+            index + 1,
+        )
+
+    internal val conversationPreviewController = ConversationPreviewController(
+        stateHolder = stateHolder,
+        defaultNameFactory = ::localizedDefaultConversationName,
+    )
 
     val gestureManager = com.android.everytalk.ui.components.GestureConflictManager()
 
@@ -206,6 +220,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     internal val apiHandler: ApiHandler by lazy {
         ApiHandler(
+                getApplication<Application>(),
                 stateHolder,
                 viewModelScope,
                 historyManager,
@@ -446,7 +461,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
        showSnackbar = ::showSnackbar,
        shouldAutoScroll = { stateHolder.shouldAutoScroll() },
        triggerScrollToBottom = { triggerScrollToBottom() },
-       simpleModeSwitcher = simpleModeBridge
+       simpleModeSwitcher = simpleModeBridge,
+       defaultNameFactory = ::localizedDefaultConversationName,
    )
    internal var textHistoryLoadJob: Job? = null
 

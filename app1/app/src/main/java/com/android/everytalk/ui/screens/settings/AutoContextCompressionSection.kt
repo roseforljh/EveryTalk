@@ -44,6 +44,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.android.everytalk.data.DataClass.MAX_AUTO_CONTEXT_COMPRESSION_THRESHOLD_PERCENT
@@ -61,6 +62,9 @@ internal fun AutoContextCompressionSection(
     onEnabledChange: (Boolean) -> Unit,
     onThresholdChange: (Int) -> Unit,
 ) {
+    val switchContentDescription = stringResource(
+        com.android.everytalk.R.string.auto_compression_switch,
+    )
     val safeThreshold = thresholdPercent.coerceIn(
         MIN_AUTO_CONTEXT_COMPRESSION_THRESHOLD_PERCENT,
         MAX_AUTO_CONTEXT_COMPRESSION_THRESHOLD_PERCENT,
@@ -77,13 +81,13 @@ internal fun AutoContextCompressionSection(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "自动压缩",
+                    text = stringResource(com.android.everytalk.R.string.auto_compression_title),
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    text = "接近上限时总结较早内容，保留最近完整轮次",
+                    text = stringResource(com.android.everytalk.R.string.auto_compression_description),
                     style = MaterialTheme.typography.bodySmall,
                     color = appDialogSubtextColor(),
                 )
@@ -93,7 +97,7 @@ internal fun AutoContextCompressionSection(
                 onCheckedChange = onEnabledChange,
                 modifier = Modifier
                     .scale(0.78f)
-                    .semantics { contentDescription = "自动压缩开关" },
+                    .semantics { contentDescription = switchContentDescription },
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = MaterialTheme.colorScheme.surface,
                     checkedTrackColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.72f),
@@ -120,12 +124,12 @@ internal fun AutoContextCompressionSection(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "触发阈值",
+                            text = stringResource(com.android.everytalk.R.string.auto_compression_threshold_title),
                             style = MaterialTheme.typography.labelLarge,
                             fontWeight = FontWeight.Medium,
                         )
                         Text(
-                            text = "上下文占用达到该比例时压缩",
+                            text = stringResource(com.android.everytalk.R.string.auto_compression_threshold_description),
                             style = MaterialTheme.typography.bodySmall,
                             color = appDialogSubtextColor(),
                         )
@@ -154,6 +158,9 @@ private fun FluidThresholdSlider(
     value: Int,
     onValueChange: (Int) -> Unit,
 ) {
+    val thresholdContentDescription = stringResource(
+        com.android.everytalk.R.string.auto_compression_threshold_content_description,
+    )
     val minValue = MIN_AUTO_CONTEXT_COMPRESSION_THRESHOLD_PERCENT
     val maxValue = MAX_AUTO_CONTEXT_COMPRESSION_THRESHOLD_PERCENT
     val fraction = (value - minValue).toFloat() / (maxValue - minValue)
@@ -182,7 +189,7 @@ private fun FluidThresholdSlider(
         steps = (maxValue - minValue) / COMPRESSION_THRESHOLD_STEP - 1,
         modifier = Modifier
             .fillMaxWidth()
-            .semantics { contentDescription = "自动压缩触发阈值" },
+            .semantics { contentDescription = thresholdContentDescription },
         colors = SliderDefaults.colors(
             thumbColor = Color.Transparent,
             activeTrackColor = Color.Transparent,

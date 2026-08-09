@@ -46,6 +46,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -148,11 +149,11 @@ internal fun ImageGenerationInputDialogs(
                 containerColor = appDialogContainerColor(),
                 titleContentColor = appDialogContentColor(),
                 textContentColor = appDialogContentColor(),
-                title = { Text("调整推理步数") },
+                title = { Text(stringResource(R.string.image_adjust_inference_steps)) },
                 text = {
                     Column {
                         Text(
-                            text = "步数越高生成越慢，但细节可能更丰富 (1-20)\n推荐步数为 4",
+                            text = stringResource(R.string.image_inference_steps_description),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.padding(bottom = 16.dp)
@@ -222,7 +223,7 @@ internal fun ImageGenerationInputDialogs(
                         },
                         colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.primary)
                     ) {
-                        Text("确定")
+                        Text(stringResource(R.string.action_confirm))
                     }
                 },
                 dismissButton = {
@@ -230,7 +231,7 @@ internal fun ImageGenerationInputDialogs(
                         onClick = { onShowStepsDialogChange(false) },
                         colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.onSurfaceVariant)
                     ) {
-                        Text("取消")
+                        Text(stringResource(R.string.action_cancel))
                     }
                 }
             )
@@ -247,12 +248,12 @@ internal fun ImageGenerationInputDialogs(
             containerColor = appDialogContainerColor(),
             titleContentColor = appDialogContentColor(),
             textContentColor = appDialogContentColor(),
-            title = { Text("调整生成参数") },
+            title = { Text(stringResource(R.string.image_adjust_generation_parameters)) },
             text = {
                 Column {
                     // 推理步数
                     Text(
-                        text = "推理步数 (Steps)",
+                        text = stringResource(R.string.image_inference_steps_label),
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.padding(bottom = 4.dp)
@@ -267,11 +268,11 @@ internal fun ImageGenerationInputDialogs(
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                         shape = AppDialogTextFieldShape,
-                        placeholder = { Text("推荐值: 30") },
+                        placeholder = { Text(stringResource(R.string.image_steps_recommended_hint)) },
                         colors = appDialogTextFieldColors()
                     )
                     Text(
-                        text = "推荐值: 30 (范围 1-50)",
+                        text = stringResource(R.string.image_steps_recommended_range),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 4.dp, bottom = 16.dp)
@@ -279,7 +280,7 @@ internal fun ImageGenerationInputDialogs(
 
                     // 引导系数
                     Text(
-                        text = "引导系数 (Guidance)",
+                        text = stringResource(R.string.image_guidance_label),
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier.padding(bottom = 4.dp)
@@ -294,11 +295,11 @@ internal fun ImageGenerationInputDialogs(
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = true,
                         shape = AppDialogTextFieldShape,
-                        placeholder = { Text("推荐值: 7.5") },
+                        placeholder = { Text(stringResource(R.string.image_guidance_recommended_hint)) },
                         colors = appDialogTextFieldColors()
                     )
                     Text(
-                        text = "推荐值: 7.5 (范围 1.0-10.0)",
+                        text = stringResource(R.string.image_guidance_recommended_range),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(top = 4.dp)
@@ -313,10 +314,12 @@ internal fun ImageGenerationInputDialogs(
                         onChangeImageParams(finalSteps, finalGuidance)
                         onShowParamsDialogChange(false)
                     }
-                ) { Text("确定") }
+                ) { Text(stringResource(R.string.action_confirm)) }
             },
             dismissButton = {
-                TextButton(onClick = { onShowParamsDialogChange(false) }) { Text("取消") }
+                TextButton(onClick = { onShowParamsDialogChange(false) }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
             }
         )
     }
@@ -329,11 +332,11 @@ internal fun ImageGenerationInputDialogs(
             containerColor = appDialogContainerColor(),
             titleContentColor = appDialogContentColor(),
             textContentColor = appDialogContentColor(),
-            title = { Text("选择图像质量") },
+            title = { Text(stringResource(R.string.image_select_quality)) },
             text = {
                 Column {
                     Text(
-                        text = "质量越高生成越慢，费用越高",
+                        text = stringResource(R.string.image_quality_description),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.padding(bottom = 12.dp)
@@ -355,7 +358,7 @@ internal fun ImageGenerationInputDialogs(
                                 verticalAlignment = Alignment.CenterVertically
                             ) {
                                 Text(
-                                    text = quality.displayName,
+                                    text = stringResource(quality.displayNameRes),
                                     style = MaterialTheme.typography.bodyLarge,
                                     color = if (isSelected) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
                                 )
@@ -366,7 +369,9 @@ internal fun ImageGenerationInputDialogs(
             },
             confirmButton = {},
             dismissButton = {
-                TextButton(onClick = { onShowGptQualityDialogChange(false) }) { Text("取消") }
+                TextButton(onClick = { onShowGptQualityDialogChange(false) }) {
+                    Text(stringResource(R.string.action_cancel))
+                }
             }
         )
     }

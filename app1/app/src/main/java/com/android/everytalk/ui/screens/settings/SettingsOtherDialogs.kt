@@ -31,6 +31,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldDefaultBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldBorderColor
@@ -117,7 +118,7 @@ internal fun ConfirmDeleteDialog(
                     ),
                     border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
                 ) {
-                    Text("取消", fontWeight = FontWeight.SemiBold)
+                    Text(stringResource(R.string.action_cancel), fontWeight = FontWeight.SemiBold)
                 }
                 Button(
                     onClick = {
@@ -130,7 +131,7 @@ internal fun ConfirmDeleteDialog(
                         contentColor = Color.White
                     )
                 ) {
-                    Text("删除", fontWeight = FontWeight.SemiBold)
+                    Text(stringResource(R.string.action_delete), fontWeight = FontWeight.SemiBold)
                 }
             }
         },
@@ -165,7 +166,7 @@ internal fun ImportExportDialog(
         textContentColor = contentColor,
         title = {
             Text(
-                "导入 / 导出",
+                stringResource(R.string.settings_import_export_title),
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold,
                 color = contentColor
@@ -210,13 +211,17 @@ internal fun ImportExportDialog(
                         Spacer(Modifier.width(12.dp))
                         Column {
                             Text(
-                                "包含聊天历史",
+                                stringResource(R.string.settings_include_chat_history),
                                 fontSize = 15.sp,
                                 fontWeight = FontWeight.SemiBold,
                                 color = contentColor
                             )
                             Text(
-                                "文本: $chatHistoryCount 个会话, 图像: $imageHistoryCount 个会话",
+                                stringResource(
+                                    R.string.settings_history_summary,
+                                    chatHistoryCount,
+                                    imageHistoryCount,
+                                ),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = subtextColor
                             )
@@ -225,7 +230,7 @@ internal fun ImportExportDialog(
                 }
 
                 Text(
-                    "导出文件包含API密钥等敏感信息，请妥善保管",
+                    stringResource(R.string.settings_export_sensitive_warning),
                     style = MaterialTheme.typography.bodySmall,
                     color = subtextColor
                 )
@@ -245,7 +250,7 @@ internal fun ImportExportDialog(
                     ),
                     border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
                 ) {
-                    Text("导入", fontWeight = FontWeight.SemiBold)
+                    Text(stringResource(R.string.action_import), fontWeight = FontWeight.SemiBold)
                 }
                 Button(
                     onClick = { onExport(includeHistory) },
@@ -258,7 +263,7 @@ internal fun ImportExportDialog(
                         disabledContentColor = subtextColor
                     )
                 ) {
-                    Text("导出", fontWeight = FontWeight.SemiBold)
+                    Text(stringResource(R.string.action_export), fontWeight = FontWeight.SemiBold)
                 }
             }
         }
@@ -287,7 +292,7 @@ internal fun AddModelDialog(
         textContentColor = contentColor,
         title = {
             Text(
-                "添加新模型",
+                stringResource(R.string.settings_add_model_title),
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold,
                 color = contentColor
@@ -298,11 +303,11 @@ internal fun AddModelDialog(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                SettingsFieldLabel("模型名称")
+                SettingsFieldLabel(stringResource(R.string.settings_model_name_label))
                 OutlinedTextField(
                     value = modelName,
                     onValueChange = { modelName = it },
-                    placeholder = { Text("例如: gpt-4-turbo") },
+                    placeholder = { Text(stringResource(R.string.settings_model_name_example)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
@@ -325,7 +330,7 @@ internal fun AddModelDialog(
                     ),
                     border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
                 ) {
-                    Text("取消", fontWeight = FontWeight.SemiBold)
+                    Text(stringResource(R.string.action_cancel), fontWeight = FontWeight.SemiBold)
                 }
                 Button(
                     onClick = { onConfirm(modelName) },
@@ -338,7 +343,7 @@ internal fun AddModelDialog(
                         disabledContentColor = contentColor.copy(alpha = 0.4f)
                     )
                 ) {
-                    Text("添加", fontWeight = FontWeight.SemiBold)
+                    Text(stringResource(R.string.action_add), fontWeight = FontWeight.SemiBold)
                 }
             }
         },

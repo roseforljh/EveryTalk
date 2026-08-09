@@ -42,6 +42,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import kotlinx.coroutines.launch
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -79,7 +81,7 @@ private fun ImageDefaultPinnedCard(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "默认配置",
+                        text = stringResource(R.string.settings_default_configuration),
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface,
@@ -88,7 +90,7 @@ private fun ImageDefaultPinnedCard(
                     )
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        text = "一键启用平台默认配置。密钥与地址由后端安全注入。",
+                        text = stringResource(R.string.settings_default_configuration_description),
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -107,7 +109,7 @@ private fun ImageDefaultPinnedCard(
             )
 
             Text(
-                text = "将自动添加以下图像模型:",
+                text = stringResource(R.string.settings_default_image_models),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurface
             )
@@ -125,7 +127,7 @@ private fun ImageDefaultPinnedCard(
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.fillMaxWidth().height(48.dp)
             ) {
-                Text("启用默认配置", fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.settings_enable_default_configuration), fontWeight = FontWeight.SemiBold)
             }
         }
     }
@@ -168,14 +170,14 @@ internal fun SettingsScreenContent(
                 )
                 Spacer(modifier = Modifier.height(16.dp))
                 Text(
-                    "暂无API配置",
+                    stringResource(R.string.settings_no_api_configuration),
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Spacer(modifier = Modifier.height(8.dp))
                 Text(
-                    "点击上方按钮添加您的第一个配置",
+                    stringResource(R.string.settings_add_first_configuration),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -292,7 +294,7 @@ internal fun ExternalWebSearchSettingsContent(
                         }
 
                         Text(
-                            text = provider.description,
+                            text = stringResource(provider.descriptionRes),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
                             maxLines = 2,
@@ -314,7 +316,7 @@ internal fun ExternalWebSearchSettingsContent(
                     ) {
                         Icon(
                             painter = if (isSelected) painterResource(R.drawable.ic_check_circle) else painterResource(R.drawable.ic_circle_empty),
-                            contentDescription = "选择 ${provider.displayName}",
+                            contentDescription = stringResource(R.string.settings_select_provider, provider.displayName),
                             tint = if (isSelected) provider.accentColor else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
                             modifier = Modifier.size(24.dp)
                         )
@@ -357,10 +359,17 @@ private fun ApiKeyItemGroup(
             }
         }
     }
-    val providerName =
-        configsInGroup.firstOrNull()?.provider?.ifBlank { null } ?: "综合平台"
-    val connectionSummary = "地址: ${configsInGroup.firstOrNull()?.address.orEmpty().trim()}"
-    val secretSummary = "Key: ${SettingsEndpointRules.maskApiKey(apiKey)}"
+    val providerName = configsInGroup.firstOrNull()?.provider?.ifBlank { null }
+    val providerDisplayName = providerName?.let { localizedProviderLabel(it) }
+        ?: stringResource(R.string.settings_integrated_platform)
+    val connectionSummary = stringResource(
+        R.string.settings_address_summary,
+        configsInGroup.firstOrNull()?.address.orEmpty().trim(),
+    )
+    val secretSummary = stringResource(
+        R.string.settings_key_summary,
+        SettingsEndpointRules.maskApiKey(apiKey, stringResource(R.string.settings_not_configured)),
+    )
     val firstCfg = configsInGroup.firstOrNull()
     val isPinnedGroup = firstCfg != null && SettingsEndpointRules.isPinnedSettingsGroup(firstCfg.provider)
     val canExpandModels = firstCfg != null && SettingsEndpointRules.canExpandSettingsModels(firstCfg.provider)
@@ -400,7 +409,7 @@ private fun ApiKeyItemGroup(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = providerName,
+                        text = providerDisplayName,
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.Bold,
                         color = MaterialTheme.colorScheme.onSurface,
@@ -440,7 +449,7 @@ private fun ApiKeyItemGroup(
                     ) {
                         Icon(
                             painter = painterResource(R.drawable.ic_remove_circle),
-                            contentDescription = "删除配置组",
+                            contentDescription = stringResource(R.string.settings_delete_configuration_group),
                             tint = Color(0xFFEF5350).copy(alpha = 0.8f),
                             modifier = Modifier.size(22.dp)
                         )
@@ -473,14 +482,18 @@ private fun ApiKeyItemGroup(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "模型列表",
+                            text = stringResource(R.string.settings_model_list),
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                         Spacer(modifier = Modifier.height(2.dp))
                         Text(
-                            text = "${configsInGroup.size} 个模型",
+                            text = pluralStringResource(
+                                R.plurals.settings_model_count,
+                                configsInGroup.size,
+                                configsInGroup.size,
+                            ),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -511,7 +524,7 @@ private fun ApiKeyItemGroup(
                             ) {
                                 Icon(
                                     painter = painterResource(R.drawable.ic_refresh),
-                                    contentDescription = "刷新模型列表",
+                                    contentDescription = stringResource(R.string.settings_refresh_model_list),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier
                                         .size(20.dp)
@@ -526,7 +539,7 @@ private fun ApiKeyItemGroup(
                             ) {
                                 Icon(
                                     painter = painterResource(R.drawable.ic_plus),
-                                    contentDescription = "为此Key和类型添加模型",
+                                    contentDescription = stringResource(R.string.settings_add_model_to_key),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant,
                                     modifier = Modifier.size(20.dp)
                                 )
@@ -557,8 +570,13 @@ private fun ApiKeyItemGroup(
                 onDeleteGroup()
                 showConfirmDeleteGroupDialog = false
             },
-            title = "删除整个配置组?",
-            text = "您确定要删除 \"$providerName\" 的所有 ${modalityType.displayName} 模型配置吗?\n\n此操作会删除 ${configsInGroup.size} 个模型,且不可撤销。"
+            title = stringResource(R.string.settings_delete_group_title),
+            text = stringResource(
+                R.string.settings_delete_group_description,
+                providerDisplayName,
+                stringResource(modalityType.displayNameRes),
+                configsInGroup.size,
+            ),
         )
     }
 }
@@ -598,7 +616,7 @@ private fun ModelItem(
         // 选择指示器
         Icon(
             painter = if (isSelected) painterResource(R.drawable.ic_check_circle) else painterResource(R.drawable.ic_circle_empty),
-            contentDescription = "选择模型",
+            contentDescription = stringResource(R.string.model_select),
             tint = if (isSelected)
                 MaterialTheme.colorScheme.primary
             else
@@ -637,7 +655,7 @@ private fun ModelItem(
         ) {
             Icon(
                 painter = painterResource(R.drawable.ic_close),
-                contentDescription = "删除模型",
+                contentDescription = stringResource(R.string.settings_delete_model_title),
                 tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                 modifier = Modifier.size(18.dp)
             )
@@ -651,8 +669,11 @@ private fun ModelItem(
                 onDelete()
                 showConfirmDeleteDialog = false
             },
-            title = "删除模型",
-            text = "您确定要删除模型 \"${config.name.ifEmpty { config.model }}\" 吗?此操作不可撤销。"
+            title = stringResource(R.string.settings_delete_model_title),
+            text = stringResource(
+                R.string.settings_delete_model_description,
+                config.name.ifEmpty { config.model },
+            ),
         )
     }
 }
@@ -718,7 +739,7 @@ private fun ModelListPopup(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "暂无模型",
+                        text = stringResource(R.string.settings_no_models),
                         fontSize = 16.sp,
                         color = textColor.copy(alpha = 0.6f)
                     )
@@ -773,7 +794,7 @@ private fun ModelListPopup(
                             ) {
                                 Icon(
                                     painter = painterResource(R.drawable.ic_trash),
-                                    contentDescription = "删除",
+                                    contentDescription = stringResource(R.string.action_delete),
                                     tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                                     modifier = Modifier.size(16.dp)
                                 )

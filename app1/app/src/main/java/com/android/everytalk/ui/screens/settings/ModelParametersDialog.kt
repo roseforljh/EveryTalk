@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.screens.settings
 
+import androidx.annotation.StringRes
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.LinearEasing
@@ -55,8 +56,10 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -100,25 +103,38 @@ private val anthropicThinkingLevels = listOf("none", "low", "medium", "high", "m
 private val geminiThinkingLevels = listOf("none", "minimal", "low", "medium", "high")
 private val openAICompatibleThinkingLevels = listOf("none", "low", "medium", "high", "xhigh", "max")
 
+@Composable
+private fun localizedThinkingLevel(option: String): String = when (option.trim().lowercase()) {
+    "none" -> stringResource(R.string.model_parameters_reasoning_none)
+    "minimal" -> stringResource(R.string.model_parameters_reasoning_minimal)
+    "low" -> stringResource(R.string.model_parameters_reasoning_low)
+    "medium" -> stringResource(R.string.model_parameters_reasoning_medium)
+    "high" -> stringResource(R.string.model_parameters_reasoning_high)
+    "xhigh" -> stringResource(R.string.model_parameters_reasoning_xhigh)
+    "max" -> stringResource(R.string.model_parameters_reasoning_max)
+    else -> option
+}
+
 internal fun parseModelTokenLimits(
     maxOutputTokens: String,
     maxContextTokens: String,
 ): ModelTokenLimits {
     val output = maxOutputTokens.trim().toIntOrNull()
-        ?: throw IllegalArgumentException("最大输出需填写正整数")
+        ?: throw IllegalArgumentException()
     val context = maxContextTokens.trim().toIntOrNull()
-        ?: throw IllegalArgumentException("上下文窗口需填写正整数")
+        ?: throw IllegalArgumentException()
     return validateModelTokenLimits(output, context)
 }
 
-internal fun modelCapabilitySourceLabel(source: ModelCapabilitySource): String = when (source) {
-    ModelCapabilitySource.USER_OVERRIDE -> "用户设置"
-    ModelCapabilitySource.LIVE_ENDPOINT -> "端点报告"
-    ModelCapabilitySource.OFFICIAL_CATALOG -> "官方目录"
-    ModelCapabilitySource.LOCAL_CACHE -> "本地缓存"
-    ModelCapabilitySource.COMMUNITY_CATALOG -> "社区回退"
-    ModelCapabilitySource.FAMILY_FALLBACK -> "家族估算"
-    ModelCapabilitySource.CONSERVATIVE_DEFAULT -> "估算"
+@StringRes
+internal fun modelCapabilitySourceLabelRes(source: ModelCapabilitySource): Int = when (source) {
+    ModelCapabilitySource.USER_OVERRIDE -> R.string.model_capability_source_user_override
+    ModelCapabilitySource.LIVE_ENDPOINT -> R.string.model_capability_source_live_endpoint
+    ModelCapabilitySource.OFFICIAL_CATALOG -> R.string.model_capability_source_official_catalog
+    ModelCapabilitySource.LOCAL_CACHE -> R.string.model_capability_source_local_cache
+    ModelCapabilitySource.COMMUNITY_CATALOG -> R.string.model_capability_source_community_catalog
+    ModelCapabilitySource.FAMILY_FALLBACK -> R.string.model_capability_source_family_fallback
+    ModelCapabilitySource.CONSERVATIVE_DEFAULT -> R.string.model_capability_source_conservative_default
 }
 
 internal fun thinkingLevelOptions(protocol: ModelParameterProtocol): List<String> = when (protocol) {
@@ -232,11 +248,9 @@ internal fun applyThinkingLevelSelection(
     modelEfforts: Set<String> = emptySet(),
 ): ModelParameters {
     val normalizedValue = normalizeThinkingLevel(protocol, selectedValue, modelEfforts)
-    require(normalizedValue.isNotEmpty()) { "思考程度参数不能为空" }
+    require(normalizedValue.isNotEmpty())
     if (protocol != ModelParameterProtocol.OPENAI_COMPATIBLE) {
-        require(normalizedValue in effectiveThinkingLevelOptions(protocol, modelEfforts)) {
-            "当前渠道不支持参数：$normalizedValue"
-        }
+        require(normalizedValue in effectiveThinkingLevelOptions(protocol, modelEfforts))
     }
     if (
         parameters.reasoningMode == ReasoningMode.BUDGET &&
@@ -322,6 +336,11 @@ internal fun ModelParametersDialog(
     onConfirm: (ApiConfig) -> Unit,
     onAutoLoad: (suspend (ApiConfig) -> Result<ApiConfig>)? = null,
 ) {
+    val context = LocalContext.current
+    val unknownErrorLabel = stringResource(R.string.unknown_error)
+    val invalidParametersLabel = stringResource(R.string.model_parameters_invalid)
+    val autoFetchLabel = stringResource(R.string.model_parameters_auto_fetch)
+    val autoFetchingLabel = stringResource(R.string.model_parameters_auto_fetching)
     val protocol = remember(config.channel) { modelParameterProtocol(config.channel) }
     val coroutineScope = rememberCoroutineScope()
     var workingConfig by remember(config) { mutableStateOf(config) }
@@ -428,13 +447,19 @@ internal fun ModelParametersDialog(
                         maxContextTokens = loadedConfig.modelParameters.maxContextTokens.toString()
                     },
                     onFailure = { error ->
-                        errorText = "自动获取失败：${error.message ?: "未知错误"}"
+                        errorText = context.getString(
+                            R.string.model_parameters_auto_fetch_failed,
+                            error.message ?: unknownErrorLabel,
+                        )
                     },
                 )
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                errorText = "自动获取失败：${error.message ?: "未知错误"}"
+                errorText = context.getString(
+                    R.string.model_parameters_auto_fetch_failed,
+                    error.message ?: unknownErrorLabel,
+                )
             } finally {
                 isAutoLoading = false
             }
@@ -460,11 +485,11 @@ internal fun ModelParametersDialog(
                 updated.openAICompatibleRequestParameters()
             }
             updated to limits
-        } catch (error: IllegalArgumentException) {
-            errorText = error.message ?: "模型参数无效"
+        } catch (_: IllegalArgumentException) {
+            errorText = invalidParametersLabel
             return
         } catch (_: Exception) {
-            errorText = "模型参数无效"
+            errorText = invalidParametersLabel
             return
         }
         onConfirm(
@@ -487,7 +512,7 @@ internal fun ModelParametersDialog(
             ) {
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = "模型参数",
+                        text = stringResource(R.string.model_parameters_title),
                         style = MaterialTheme.typography.titleLarge,
                         fontWeight = FontWeight.SemiBold,
                     )
@@ -506,11 +531,7 @@ internal fun ModelParametersDialog(
                     modifier = Modifier
                         .size(40.dp)
                         .semantics {
-                            contentDescription = if (isAutoLoading) {
-                                "正在自动获取模型参数"
-                            } else {
-                                "自动获取模型参数"
-                            }
+                            contentDescription = if (isAutoLoading) autoFetchingLabel else autoFetchLabel
                         },
                 ) {
                     Icon(
@@ -531,10 +552,13 @@ internal fun ModelParametersDialog(
                     .verticalScroll(rememberScrollState())
             ) {
                 ModelParameterRow(
-                    label = "思考程度",
+                    label = stringResource(R.string.model_parameters_reasoning_effort),
                     supportingText = reasoningSource?.let {
-                        "模型推理强度 · ${modelCapabilitySourceLabel(it)}"
-                    } ?: "模型推理强度",
+                        stringResource(
+                            R.string.model_parameters_reasoning_strength_source,
+                            stringResource(modelCapabilitySourceLabelRes(it)),
+                        )
+                    } ?: stringResource(R.string.model_parameters_reasoning_strength),
                 ) {
                     ThinkingLevelDropdown(
                         options = menuOptions,
@@ -561,12 +585,17 @@ internal fun ModelParametersDialog(
                 }
                 HorizontalDivider(color = borderColor.copy(alpha = 0.55f))
                 ModelParameterRow(
-                    label = "最大输出",
-                    supportingText = "单次生成上限 · ${modelCapabilitySourceLabel(maxOutputSource)}",
+                    label = stringResource(R.string.model_parameters_max_output),
+                    supportingText = stringResource(
+                        R.string.model_parameters_max_output_description,
+                        stringResource(modelCapabilitySourceLabelRes(maxOutputSource)),
+                    ),
                 ) {
                     TokenValueField(
                         value = maxOutputTokens,
-                        contentDescription = "最大输出 tokens",
+                        contentDescription = stringResource(
+                            R.string.model_parameters_max_output_content_description,
+                        ),
                         onValueChange = {
                             maxOutputTokens = it
                             errorText = null
@@ -575,12 +604,17 @@ internal fun ModelParametersDialog(
                 }
                 HorizontalDivider(color = borderColor.copy(alpha = 0.55f))
                 ModelParameterRow(
-                    label = "上下文窗口",
-                    supportingText = "输入与输出总上限 · ${modelCapabilitySourceLabel(contextWindowSource)}",
+                    label = stringResource(R.string.model_parameters_context_window),
+                    supportingText = stringResource(
+                        R.string.model_parameters_context_window_description,
+                        stringResource(modelCapabilitySourceLabelRes(contextWindowSource)),
+                    ),
                 ) {
                     TokenValueField(
                         value = maxContextTokens,
-                        contentDescription = "上下文窗口 tokens",
+                        contentDescription = stringResource(
+                            R.string.model_parameters_context_window_content_description,
+                        ),
                         onValueChange = {
                             maxContextTokens = it
                             errorText = null
@@ -627,7 +661,7 @@ internal fun ModelParametersDialog(
                         contentColor = contentColor,
                     ),
                 ) {
-                    Text("取消", fontWeight = FontWeight.SemiBold)
+                    Text(stringResource(R.string.action_cancel), fontWeight = FontWeight.SemiBold)
                 }
                 Button(
                     onClick = ::save,
@@ -640,7 +674,7 @@ internal fun ModelParametersDialog(
                         contentColor = dialogBackground,
                     ),
                 ) {
-                    Text("保存", fontWeight = FontWeight.SemiBold)
+                    Text(stringResource(R.string.action_save), fontWeight = FontWeight.SemiBold)
                 }
             }
         },
@@ -710,7 +744,7 @@ private fun TokenValueField(
                 Box(modifier = Modifier.weight(1f)) { innerTextField() }
                 Spacer(Modifier.width(6.dp))
                 Text(
-                    text = "tokens",
+                    text = stringResource(R.string.model_parameters_token_unit),
                     style = MaterialTheme.typography.labelSmall,
                     color = appDialogSubtextColor(),
                 )
@@ -737,6 +771,11 @@ private fun ThinkingLevelDropdown(
 ) {
     var expanded by remember { mutableStateOf(false) }
     var isEditingCustom by remember { mutableStateOf(false) }
+    val enterValueLabel = stringResource(R.string.model_parameters_enter_value)
+    val collapseLabel = stringResource(R.string.model_parameters_collapse_reasoning)
+    val expandLabel = stringResource(R.string.model_parameters_expand_reasoning)
+    val dropdownLabel = stringResource(R.string.model_parameters_reasoning_dropdown)
+    val displayedValue = if (isEditingCustom) value else localizedThinkingLevel(value)
     val focusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
@@ -775,7 +814,7 @@ private fun ThinkingLevelDropdown(
         modifier = Modifier.widthIn(min = 116.dp, max = 132.dp),
     ) {
         BasicTextField(
-            value = value,
+            value = displayedValue,
             onValueChange = if (isEditingCustom) onValueChange else { _ -> },
             readOnly = !isEditingCustom,
             singleLine = true,
@@ -791,7 +830,7 @@ private fun ThinkingLevelDropdown(
                     Box(modifier = Modifier.weight(1f)) {
                         if (value.isEmpty()) {
                             Text(
-                                text = "输入参数",
+                                text = enterValueLabel,
                                 style = MaterialTheme.typography.labelLarge,
                                 color = appDialogSubtextColor(),
                             )
@@ -800,7 +839,7 @@ private fun ThinkingLevelDropdown(
                     }
                     Icon(
                         painter = painterResource(R.drawable.ic_gpt_chevron_right),
-                        contentDescription = if (expanded) "收起思考程度" else "展开思考程度",
+                        contentDescription = if (expanded) collapseLabel else expandLabel,
                         modifier = Modifier
                             .size(18.dp)
                             .rotate(arrowRotation),
@@ -823,7 +862,7 @@ private fun ThinkingLevelDropdown(
                     RoundedCornerShape(12.dp),
                 )
                 .padding(horizontal = 12.dp)
-                .semantics { contentDescription = "思考程度下拉框" },
+                .semantics { contentDescription = dropdownLabel },
         )
         ExposedDropdownMenu(
             expanded = expanded,
@@ -835,8 +874,10 @@ private fun ThinkingLevelDropdown(
             containerColor = appDialogContainerColor(),
         ) {
             if (allowCustom) {
+                val customLabel = stringResource(R.string.model_parameters_custom)
                 ThinkingLevelOptionRow(
-                    option = "自定义",
+                    option = customLabel,
+                    displayOption = customLabel,
                     isSelected = false,
                     isCustom = false,
                     onSelect = {
@@ -852,6 +893,7 @@ private fun ThinkingLevelDropdown(
                 val isCustomOption = allowCustom && option !in presetOptions
                 ThinkingLevelOptionRow(
                     option = option,
+                    displayOption = localizedThinkingLevel(option),
                     isSelected = isSelected,
                     isCustom = isCustomOption,
                     onSelect = {
@@ -878,11 +920,14 @@ private fun ThinkingLevelDropdown(
 @Composable
 private fun ThinkingLevelOptionRow(
     option: String,
+    displayOption: String,
     isSelected: Boolean,
     isCustom: Boolean,
     onSelect: () -> Unit,
     onDelete: () -> Unit,
 ) {
+    val selectedDescription = stringResource(R.string.model_parameters_selected_option, displayOption)
+    val deleteDescription = stringResource(R.string.model_parameters_delete_custom, displayOption)
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -898,7 +943,7 @@ private fun ThinkingLevelOptionRow(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                text = option,
+                text = displayOption,
                 modifier = Modifier.weight(1f),
                 fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
                 maxLines = 1,
@@ -907,7 +952,7 @@ private fun ThinkingLevelOptionRow(
             if (isSelected) {
                 Icon(
                     painter = painterResource(R.drawable.ic_check),
-                    contentDescription = "已选择 $option",
+                    contentDescription = selectedDescription,
                     modifier = Modifier.size(18.dp),
                 )
             }
@@ -917,7 +962,7 @@ private fun ThinkingLevelOptionRow(
                 onClick = onDelete,
                 modifier = Modifier
                     .size(40.dp)
-                    .semantics { contentDescription = "删除自定义参数 $option" },
+                    .semantics { contentDescription = deleteDescription },
             ) {
                 Icon(
                     painter = painterResource(R.drawable.ic_close),

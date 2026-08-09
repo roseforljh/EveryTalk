@@ -1,10 +1,22 @@
 package com.android.everytalk.util.image
 
+import android.app.Application
+import android.content.Context
+import android.content.res.Configuration
+import androidx.test.core.app.ApplicationProvider
+import java.util.Locale
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
+@RunWith(RobolectricTestRunner::class)
+@Config(sdk = [34], application = Application::class)
 class ImageHandlingPolicyTest {
+    private val chineseContext: Context by lazy { localizedContext(Locale.SIMPLIFIED_CHINESE) }
+    private val englishContext: Context by lazy { localizedContext(Locale.ENGLISH) }
 
     @Test
     fun `图片处理限制在所有链路共享同一组值`() {
@@ -27,7 +39,11 @@ class ImageHandlingPolicyTest {
 
         assertEquals(
             "图片“示例.png”大小为 18.4 MiB，超过最大 16 MiB 限制，请选择更小的图片。",
-            failure.toUserImageMessage("示例.png"),
+            failure.toUserImageMessage(chineseContext, "示例.png"),
+        )
+        assertEquals(
+            "Image “example.png” is 18.4 MiB, which exceeds the 16 MiB limit. Select a smaller image.",
+            failure.toUserImageMessage(englishContext, "example.png"),
         )
     }
 
@@ -41,7 +57,7 @@ class ImageHandlingPolicyTest {
 
         assertEquals(
             "所选图片大小已超过最大 16 MiB 限制，请选择更小的图片。",
-            failure.toUserImageMessage(null),
+            failure.toUserImageMessage(chineseContext, null),
         )
     }
 
@@ -52,5 +68,11 @@ class ImageHandlingPolicyTest {
         assertEquals(3L, decodedBase64SizeOrNull("TWFu"))
         assertNull(decodedBase64SizeOrNull("T中Fu"))
         assertNull(decodedBase64SizeOrNull("T=Fu"))
+    }
+
+    private fun localizedContext(locale: Locale): Context {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val configuration = Configuration(context.resources.configuration).apply { setLocale(locale) }
+        return context.createConfigurationContext(configuration)
     }
 }

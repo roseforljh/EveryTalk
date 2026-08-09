@@ -12,11 +12,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.edit
+import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.VoiceBackendConfig
 import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.ui.screens.MainScreen.chat.models.DynamicModelSelector
@@ -110,7 +112,7 @@ fun SttSettingsDialog(
             // 创建新配置（为该平台创建独立记录）
             VoiceBackendConfig(
                 id = java.util.UUID.randomUUID().toString(),
-                name = "${platform} STT 配置",
+                name = context.getString(R.string.voice_stt_config_name, platform),
                 provider = platform,
                 sttPlatform = platform,
                 sttApiKey = apiKey.trim(),
@@ -191,7 +193,7 @@ fun SttSettingsDialog(
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 Text(
-                    text = "STT 设置 (语音识别)",
+                    text = stringResource(R.string.voice_stt_settings_title),
                     style = MaterialTheme.typography.headlineSmall.copy(
                         fontWeight = FontWeight.Bold
                     ),
@@ -202,7 +204,7 @@ fun SttSettingsDialog(
                 Column(
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    SettingsFieldLabel("平台")
+                    SettingsFieldLabel(stringResource(R.string.voice_platform_label))
                     ExposedDropdownMenuBox(
                         expanded = expanded,
                         onExpandedChange = { expanded = it }
@@ -245,12 +247,12 @@ fun SttSettingsDialog(
                 Column(
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    SettingsFieldLabel("API Key")
+                    SettingsFieldLabel(stringResource(R.string.voice_api_key_label))
                     OutlinedTextField(
                         value = apiKey,
                         onValueChange = { apiKey = it },
                         modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("请输入 API Key") },
+                        placeholder = { Text(stringResource(R.string.voice_api_key_hint)) },
                         colors = DialogTextFieldColors,
                         shape = DialogShape,
                         singleLine = true
@@ -261,23 +263,23 @@ fun SttSettingsDialog(
                 Column(
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    SettingsFieldLabel("API 地址")
+                    SettingsFieldLabel(stringResource(R.string.voice_api_url_label))
                     OutlinedTextField(
                         value = apiUrl,
                         onValueChange = { apiUrl = it },
                         modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("例如 https://api.openai.com/v1") },
+                        placeholder = { Text(stringResource(R.string.voice_api_url_openai_example)) },
                         supportingText = {
                             if (apiUrl.isNotEmpty() && !apiUrl.startsWith("http")) {
-                                Text("请填写完整的 http(s) 地址", color = MaterialTheme.colorScheme.error)
+                                Text(stringResource(R.string.voice_api_url_invalid), color = MaterialTheme.colorScheme.error)
                             } else if (selectedPlatform == "OpenAI" && apiUrl.isBlank()) {
-                                Text("OpenAI 平台必须填写 API 地址", color = MaterialTheme.colorScheme.error)
+                                Text(stringResource(R.string.voice_api_url_openai_required), color = MaterialTheme.colorScheme.error)
                             } else if (selectedPlatform == "OpenAI") {
-                                Text("将使用你配置的 OpenAI API 地址", color = subtextColor)
+                                Text(stringResource(R.string.voice_api_url_openai_custom), color = subtextColor)
                             } else if (selectedPlatform == "SiliconFlow") {
-                                Text("默认: https://api.siliconflow.cn/v1/audio/transcriptions", color = subtextColor)
+                                Text(stringResource(R.string.voice_siliconflow_stt_default_url), color = subtextColor)
                             } else if (selectedPlatform == "Aliyun") {
-                                Text("阿里云使用SDK自动连接，此地址仅为占位符", color = subtextColor)
+                                Text(stringResource(R.string.voice_aliyun_stt_url_note), color = subtextColor)
                             } else {
                                 // 智能提示最终使用的完整URL
                                 val finalUrl = if (selectedPlatform == "OpenAI" && apiUrl.isNotBlank()) {
@@ -291,9 +293,9 @@ fun SttSettingsDialog(
                                 }
                                 
                                 if (finalUrl != null) {
-                                    Text("最终请求地址: $finalUrl", color = MaterialTheme.colorScheme.primary)
+                                    Text(stringResource(R.string.voice_final_request_url, finalUrl), color = MaterialTheme.colorScheme.primary)
                                 } else {
-                                    Text("留空则使用默认地址", color = subtextColor)
+                                    Text(stringResource(R.string.voice_api_url_use_default), color = subtextColor)
                                 }
                             }
                         },
@@ -305,7 +307,7 @@ fun SttSettingsDialog(
 
                 // 模型名称 (动态列表)
                 DynamicModelSelector(
-                    label = "模型名称",
+                    label = stringResource(R.string.voice_model_name_label),
                     currentModel = model,
                     onModelChange = { model = it },
                     modelList = allModels,
@@ -346,7 +348,7 @@ fun SttSettingsDialog(
                         ) {
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    text = "实时流式识别",
+                                    text = stringResource(R.string.voice_realtime_recognition_title),
                                     style = MaterialTheme.typography.titleMedium.copy(
                                         fontWeight = FontWeight.SemiBold
                                     ),
@@ -354,7 +356,7 @@ fun SttSettingsDialog(
                                 )
                                 Spacer(modifier = Modifier.height(4.dp))
                                 Text(
-                                    text = "边说边识别，实时显示文字（直连阿里云）",
+                                    text = stringResource(R.string.voice_realtime_recognition_description),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = subtextColor
                                 )
@@ -390,7 +392,7 @@ fun SttSettingsDialog(
                         ),
                         border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
                     ) {
-                        Text("取消", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold))
+                        Text(stringResource(R.string.action_cancel), style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold))
                     }
                     
                     Button(
@@ -436,7 +438,7 @@ fun SttSettingsDialog(
                             contentColor = dialogBg
                         )
                     ) {
-                        Text("确定", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold))
+                        Text(stringResource(R.string.action_confirm), style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold))
                     }
                 }
             }

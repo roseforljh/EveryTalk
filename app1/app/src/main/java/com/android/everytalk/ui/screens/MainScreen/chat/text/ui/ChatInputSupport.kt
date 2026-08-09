@@ -169,7 +169,7 @@ internal suspend fun getFileDetailsFromUri(
                 mimeType = android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(fileExtension)
             }
         }
-        Triple(displayName ?: "Unknown File", mimeType, uri.toString())
+        Triple(displayName ?: context.getString(R.string.chat_attachment_unknown_file), mimeType, uri.toString())
     }
 }
 
@@ -233,7 +233,13 @@ internal suspend fun checkAttachmentFileSizeAndShowError(
                     else -> "${size / (1024 * 1024 * 1024)}GB"
                 }
                 withContext(Dispatchers.Main) {
-                    onShowSnackbar("文件 \"$fileName\" 过大 ($fileSizeFormatted)，最大支持50MB")
+                    onShowSnackbar(
+                        context.getString(
+                            R.string.chat_attachment_too_large,
+                            fileName,
+                            fileSizeFormatted,
+                        )
+                    )
                 }
                 return@withContext false
             }
@@ -243,7 +249,7 @@ internal suspend fun checkAttachmentFileSizeAndShowError(
         } catch (e: Exception) {
             Log.e("FileSizeCheck", "Error checking file size for $fileName", e)
             withContext(Dispatchers.Main) {
-                onShowSnackbar("无法检查文件大小，请选择较小的文件")
+                onShowSnackbar(context.getString(R.string.chat_attachment_size_check_failed))
             }
             return@withContext false
         }

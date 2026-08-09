@@ -26,6 +26,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
+import com.android.everytalk.R
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.android.everytalk.data.DataClass.ImageRatio
@@ -160,7 +162,7 @@ fun ImageRatioSelectionDialog(
             ) {
                 // 标题
                 Text(
-                    text = "选择图像比例",
+                    text = stringResource(R.string.image_select_ratio),
                     style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
                     color = appDialogContentColor()
                 )
@@ -235,7 +237,7 @@ fun ImageRatioSelectionDialog(
                     modifier = Modifier.align(Alignment.End)
                 ) {
                     Text(
-                        "取消",
+                        stringResource(R.string.action_cancel),
                         style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Medium)
                     )
                 }
@@ -366,7 +368,7 @@ private fun ImageRatioItem(
                         tint = if (isSelected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     Text(
-                        text = "AUTO",
+                        text = stringResource(R.string.image_ratio_auto),
                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
                         color = textColor
                     )

@@ -35,6 +35,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.zIndex
 import com.android.everytalk.R
+import androidx.compose.ui.res.stringResource
 import coil3.compose.AsyncImage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -129,7 +130,7 @@ fun ImagePreviewDialog(
                         ) {
                             Icon(
                                 painter = painterResource(R.drawable.ic_gpt_close_lg),
-                                contentDescription = "关闭预览",
+                                contentDescription = stringResource(R.string.image_preview_close),
                                 tint = Color.White,
                                 modifier = Modifier.size(20.dp)
                             )
@@ -207,7 +208,7 @@ fun ImagePreviewDialog(
                                 indication = null,
                                 interactionSource = remember { MutableInteractionSource() },
                                 role = Role.Button,
-                                onClickLabel = "切换图片缩放",
+                                onClickLabel = stringResource(R.string.image_toggle_scale),
                                 onClick = toggleZoom,
                                 onDoubleClick = toggleZoom,
                             ),
@@ -215,7 +216,11 @@ fun ImagePreviewDialog(
                     ) {
                         AsyncImage(
                             model = currentUrl,
-                            contentDescription = "预览图片 ${page + 1}/${urls.size}",
+                            contentDescription = stringResource(
+                                R.string.image_preview_item,
+                                page + 1,
+                                urls.size,
+                            ),
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .graphicsLayer {
@@ -249,7 +254,7 @@ fun ImagePreviewDialog(
                     ) {
                         Icon(
                             painter = painterResource(R.drawable.ic_gpt_download),
-                            contentDescription = "下载图片",
+                            contentDescription = stringResource(R.string.image_download),
                             tint = Color.White,
                             modifier = Modifier.size(22.dp)
                         )
@@ -270,7 +275,7 @@ private suspend fun saveImageToGallery(context: android.content.Context, url: St
             )
             if (loaded == null) {
                 withContext(Dispatchers.Main) {
-                    Toast.makeText(context, "图片保存失败", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, context.getString(R.string.image_save_failed), Toast.LENGTH_SHORT).show()
                 }
                 return@withContext
             }
@@ -282,9 +287,9 @@ private suspend fun saveImageToGallery(context: android.content.Context, url: St
             )
             withContext(Dispatchers.Main) {
                 if (savedUri != null) {
-                    Toast.makeText(context, "图片已保存到相册", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, context.getString(R.string.image_saved), Toast.LENGTH_SHORT).show()
                 } else {
-                    Toast.makeText(context, "图片保存失败", Toast.LENGTH_SHORT).show()
+                    Toast.makeText(context, context.getString(R.string.image_save_failed), Toast.LENGTH_SHORT).show()
                 }
             }
         } catch (e: CancellationException) {
@@ -292,7 +297,7 @@ private suspend fun saveImageToGallery(context: android.content.Context, url: St
         } catch (e: Exception) {
             android.util.Log.e("ImagePreview", "保存图片失败", e)
             withContext(Dispatchers.Main) {
-                Toast.makeText(context, "图片保存失败: ${e.message}", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, context.getString(R.string.image_save_failed), Toast.LENGTH_SHORT).show()
             }
         }
     }

@@ -1,10 +1,13 @@
 package com.android.everytalk.statecontroller
 
+import android.content.Context
+import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.network.NetworkUtils
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
 import com.android.everytalk.util.AppLogger
 import com.android.everytalk.util.debug.PerformanceMonitor
+import com.android.everytalk.util.locale.localizeUiMessage
 import com.android.everytalk.util.messageprocessor.MessageProcessor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -12,12 +15,14 @@ import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 
 internal class ApiHandlerErrorController(
+    context: Context,
     private val stateHolder: ViewModelStateHolder,
     private val historyManager: HistoryManager,
     private val messageProcessorMap: ConcurrentHashMap<String, MessageProcessor>,
     private val retryCountMap: ConcurrentHashMap<String, Int>,
     private val logger: AppLogger.ComponentLogger,
 ) {
+    private val context = context.applicationContext
     private val maxRetryAttempts = 3
     private val errorVisualPrefix = "⚠️ "
 
@@ -71,14 +76,24 @@ internal class ApiHandlerErrorController(
                     val errorPrefix = if (existingContent.isNotBlank()) "\n\n" else ""
                     val errorTextContent = errorVisualPrefix + when (error) {
                         is IOException -> {
-                            val message = NetworkUtils.sanitizeMessage(error.message ?: "IO 错误")
-                            if (message.contains("服务器错误") || message.contains("HTTP 错误")) {
-                                message
+                            val rawMessage = NetworkUtils.sanitizeMessage(
+                                error.message ?: context.getString(R.string.ai_error_io),
+                            )
+                            val localizedMessage = context.localizeUiMessage(rawMessage)
+                            if (localizedMessage != rawMessage) {
+                                localizedMessage
                             } else {
-                                "网络通讯故障: $message"
+                                context.getString(R.string.ai_error_network, localizedMessage)
                             }
                         }
-                        else -> "处理时发生错误: ${NetworkUtils.sanitizeMessage(error.message ?: "未知应用错误")}"
+                        else -> {
+                            val message = context.localizeUiMessage(
+                                NetworkUtils.sanitizeMessage(
+                                    error.message ?: context.getString(R.string.ai_error_unknown_app),
+                                ),
+                            )
+                            context.getString(R.string.ai_error_processing, message)
+                        }
                     }
                     val errorMsg = msg.copy(
                         text = existingContent + errorPrefix + errorTextContent,

@@ -29,17 +29,25 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
+import com.android.everytalk.R
 import com.android.everytalk.models.ImageSourceOption
 import com.android.everytalk.models.MoreOptionsType
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.theme.SeaBlue
 
-internal fun webSearchToggleLabel(isSupported: Boolean, isEnabled: Boolean): String {
-    return if (!isSupported) "搜索不可用" else if (isEnabled) "关闭搜索" else "联网搜索"
+internal fun webSearchToggleLabelRes(isSupported: Boolean, isEnabled: Boolean): Int {
+    return if (!isSupported) {
+        R.string.chat_input_search_unavailable
+    } else if (isEnabled) {
+        R.string.chat_input_disable_search
+    } else {
+        R.string.chat_input_web_search
+    }
 }
 
 /**
@@ -51,8 +59,9 @@ fun OptimizedSelectedItemPreview(
     onRemoveClicked: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val audioLabel = stringResource(R.string.attachment_audio)
     // 记忆化图标和文本，避免重复计算
-    val (icon, text) = remember(mediaItem) {
+    val (icon, text) = remember(mediaItem, audioLabel) {
         when (mediaItem) {
             is SelectedMediaItem.GenericFile -> {
                 val iconRes = when (mediaItem.mimeType) {
@@ -70,7 +79,7 @@ fun OptimizedSelectedItemPreview(
                 }
                 iconRes to mediaItem.displayName
             }
-            is SelectedMediaItem.Audio -> Icons.Outlined.Audiotrack to "Audio"
+            is SelectedMediaItem.Audio -> Icons.Outlined.Audiotrack to audioLabel
             else -> null to ""
         }
     }
@@ -85,7 +94,7 @@ fun OptimizedSelectedItemPreview(
         when (mediaItem) {
             is SelectedMediaItem.ImageFromUri -> AsyncImage(
                 model = mediaItem.uri,
-                contentDescription = "Selected image from gallery",
+                contentDescription = stringResource(R.string.attachment_selected_gallery_image),
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.Crop,
             )
@@ -93,7 +102,7 @@ fun OptimizedSelectedItemPreview(
                 val imageModel = remember(mediaItem) { mediaItem.model }
                 AsyncImage(
                     model = imageModel,
-                    contentDescription = "Selected image from camera",
+                    contentDescription = stringResource(R.string.attachment_selected_camera_image),
                     modifier = Modifier.fillMaxSize(),
                     contentScale = ContentScale.Crop,
                 )
@@ -176,7 +185,7 @@ fun OptimizedSelectedItemPreview(
         ) {
             Icon(
                 painter = androidx.compose.ui.res.painterResource(com.android.everytalk.R.drawable.ic_close_bold),
-                contentDescription = "Remove item",
+                contentDescription = stringResource(R.string.attachment_remove),
                 tint = Color.White,
                 modifier = Modifier.size(12.dp)
             )
@@ -236,12 +245,12 @@ fun OptimizedImageSelectionPanel(
                     }
                     Icon(
                         imageVector = option.icon,
-                        contentDescription = option.label,
+                        contentDescription = stringResource(option.labelRes),
                         tint = iconTint,
                         modifier = Modifier.size(24.dp)
                     )
                     Spacer(Modifier.width(12.dp))
-                    Text(text = option.label, color = MaterialTheme.colorScheme.onSurface, fontSize = 16.sp)
+                    Text(text = stringResource(option.labelRes), color = MaterialTheme.colorScheme.onSurface, fontSize = 16.sp)
                 }
             }
         }
@@ -318,12 +327,12 @@ fun OptimizedMoreOptionsPanel(
                         }
                         Icon(
                             imageVector = option.icon,
-                            contentDescription = option.label,
+                            contentDescription = stringResource(option.labelRes),
                             tint = iconTint,
                             modifier = Modifier.size(24.dp)
                         )
                         Spacer(Modifier.width(12.dp))
-                        Text(text = option.label, color = MaterialTheme.colorScheme.onSurface, fontSize = 16.sp)
+                        Text(text = stringResource(option.labelRes), color = MaterialTheme.colorScheme.onSurface, fontSize = 16.sp)
                     }
                 }
 

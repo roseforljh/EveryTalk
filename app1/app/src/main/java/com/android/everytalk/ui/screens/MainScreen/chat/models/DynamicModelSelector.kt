@@ -13,10 +13,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
+import com.android.everytalk.R
 import com.android.everytalk.ui.screens.settings.DialogTextFieldColors
 import com.android.everytalk.ui.screens.settings.DialogShape
 import com.android.everytalk.ui.screens.settings.SettingsFieldLabel
@@ -70,7 +72,7 @@ fun DynamicModelSelector(
                     verticalArrangement = Arrangement.spacedBy(16.dp)
                 ) {
                     Text(
-                        text = "添加模型",
+                        text = stringResource(R.string.voice_model_add),
                         style = MaterialTheme.typography.headlineSmall.copy(
                             fontWeight = FontWeight.Bold
                         ),
@@ -80,11 +82,11 @@ fun DynamicModelSelector(
                     Column(
                         modifier = Modifier.fillMaxWidth()
                     ) {
-                        SettingsFieldLabel("模型名称")
+                        SettingsFieldLabel(stringResource(R.string.voice_model_name_label))
                         OutlinedTextField(
                             value = newModelName,
                             onValueChange = { newModelName = it },
-                            placeholder = { Text("请输入模型名称") },
+                            placeholder = { Text(stringResource(R.string.voice_model_name_hint)) },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
                             colors = DialogTextFieldColors,
@@ -106,7 +108,7 @@ fun DynamicModelSelector(
                             ),
                             border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
                         ) {
-                            Text("取消", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold))
+                            Text(stringResource(R.string.action_cancel), style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold))
                         }
                         
                         Button(
@@ -124,7 +126,7 @@ fun DynamicModelSelector(
                                 contentColor = dialogBg
                             )
                         ) {
-                            Text("确定", style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold))
+                            Text(stringResource(R.string.action_confirm), style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.SemiBold))
                         }
                     }
                 }
@@ -160,7 +162,7 @@ fun DynamicModelSelector(
                         modifier = Modifier
                             .weight(1f)
                             .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable, enabled = true),
-                        placeholder = { Text("选择模型") },
+                        placeholder = { Text(stringResource(R.string.voice_model_select_hint)) },
                         trailingIcon = {
                             ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
                         },
@@ -177,7 +179,7 @@ fun DynamicModelSelector(
                     ) {
                         Icon(
                             imageVector = androidx.compose.material.icons.Icons.Default.Add,
-                            contentDescription = "添加模型",
+                            contentDescription = stringResource(R.string.voice_model_add),
                             tint = if (isDark) Color.White else Color.Black
                         )
                     }
@@ -185,7 +187,7 @@ fun DynamicModelSelector(
                 
                 if (currentModel.isBlank()) {
                     Text(
-                        text = "必填项：请输入模型名称",
+                        text = stringResource(R.string.voice_model_required),
                         color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall,
                         modifier = Modifier.padding(start = 16.dp, top = 4.dp)
@@ -215,7 +217,7 @@ fun DynamicModelSelector(
                                     ) {
                                         Icon(
                                             imageVector = androidx.compose.material.icons.Icons.Default.Close,
-                                            contentDescription = "删除",
+                                            contentDescription = stringResource(R.string.action_delete),
                                             tint = MaterialTheme.colorScheme.error,
                                             modifier = Modifier.size(16.dp)
                                         )

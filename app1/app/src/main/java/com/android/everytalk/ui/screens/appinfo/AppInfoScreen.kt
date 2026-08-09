@@ -4,6 +4,7 @@ import androidx.activity.compose.BackHandler
 import androidx.annotation.DrawableRes
 import androidx.annotation.StringRes
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -44,6 +45,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.res.colorResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -275,19 +277,18 @@ private fun AppIdentityHeader() {
         Surface(
             modifier = Modifier.size(76.dp),
             shape = RoundedCornerShape(24.dp),
-            color = MaterialTheme.colorScheme.primaryContainer,
-            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            color = colorResource(R.color.ic_launcher_background),
         ) {
             Box(contentAlignment = Alignment.Center) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_robot_head),
+                Image(
+                    painter = painterResource(R.drawable.pixel_penguin_logo),
                     contentDescription = null,
-                    modifier = Modifier.size(38.dp),
+                    modifier = Modifier.fillMaxSize(),
                 )
             }
         }
         Text(
-            text = "EveryTalk",
+            text = stringResource(R.string.app_name),
             style = MaterialTheme.typography.headlineSmall,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.onBackground,

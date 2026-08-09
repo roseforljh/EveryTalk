@@ -17,13 +17,15 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
+import com.android.everytalk.R
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
-import com.android.everytalk.R
 import com.android.everytalk.ui.screens.settings.DialogTextFieldColors
 import com.android.everytalk.ui.screens.settings.DialogShape
 import androidx.compose.foundation.background
@@ -86,13 +88,17 @@ fun ModelSelectionDialog(
                 ) {
                     Column {
                         Text(
-                            "选择模型",
+                            stringResource(R.string.settings_select_models_title),
                             fontSize = 20.sp,
                             fontWeight = FontWeight.Bold,
                             color = contentColor
                         )
                         Text(
-                            "${models.size} 个可用",
+                            pluralStringResource(
+                                R.plurals.settings_available_model_count,
+                                models.size,
+                                models.size,
+                            ),
                             style = MaterialTheme.typography.labelMedium,
                             color = subtextColor
                         )
@@ -104,7 +110,13 @@ fun ModelSelectionDialog(
                         }
                     ) {
                         Text(
-                            if (selectedModels.size == models.size) "取消全选" else "全选",
+                            stringResource(
+                                if (selectedModels.size == models.size) {
+                                    R.string.action_clear_selection
+                                } else {
+                                    R.string.action_select_all
+                                }
+                            ),
                             color = contentColor,
                             fontWeight = FontWeight.Medium
                         )
@@ -117,7 +129,12 @@ fun ModelSelectionDialog(
                 OutlinedTextField(
                     value = searchText,
                     onValueChange = { searchText = it },
-                    placeholder = { Text("搜索...", style = MaterialTheme.typography.bodySmall) },
+                    placeholder = {
+                        Text(
+                            stringResource(R.string.settings_search_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    },
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(48.dp),
@@ -141,7 +158,13 @@ fun ModelSelectionDialog(
                             contentAlignment = Alignment.Center
                         ) {
                             Text(
-                                if (searchText.isBlank()) "没有可用的模型" else "没有匹配的模型",
+                                stringResource(
+                                    if (searchText.isBlank()) {
+                                        R.string.settings_no_available_models
+                                    } else {
+                                        R.string.settings_no_matching_models
+                                    }
+                                ),
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = subtextColor
                             )
@@ -221,7 +244,11 @@ fun ModelSelectionDialog(
                     onClick = onManualInput,
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Text("手动输入模型", color = contentColor, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        stringResource(R.string.settings_enter_model_manually),
+                        color = contentColor,
+                        fontWeight = FontWeight.SemiBold,
+                    )
                 }
                 Spacer(modifier = Modifier.height(4.dp))
                 Row(
@@ -238,7 +265,7 @@ fun ModelSelectionDialog(
                         ),
                         border = BorderStroke(1.dp, borderColor)
                     ) {
-                        Text("取消", fontWeight = FontWeight.SemiBold)
+                        Text(stringResource(R.string.action_cancel), fontWeight = FontWeight.SemiBold)
                     }
                     Button(
                         onClick = {
@@ -259,7 +286,11 @@ fun ModelSelectionDialog(
                         )
                     ) {
                         Text(
-                            if (selectedModels.isEmpty()) "全部添加" else "添加 (${selectedModels.size})",
+                            if (selectedModels.isEmpty()) {
+                                stringResource(R.string.settings_add_all_models)
+                            } else {
+                                stringResource(R.string.settings_add_selected_models, selectedModels.size)
+                            },
                             fontWeight = FontWeight.SemiBold
                         )
                     }

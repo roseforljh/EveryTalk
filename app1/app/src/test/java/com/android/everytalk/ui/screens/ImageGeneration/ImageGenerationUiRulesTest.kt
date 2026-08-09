@@ -1,7 +1,8 @@
 package com.android.everytalk.ui.screens.ImageGeneration
 
+import com.android.everytalk.R
 import com.android.everytalk.ui.screens.BubbleMain.Main.imageContextMenuItemCount
-import com.android.everytalk.ui.screens.BubbleMain.Main.imageContextMenuEditLabel
+import com.android.everytalk.ui.screens.BubbleMain.Main.imageContextMenuEditLabelRes
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -35,7 +36,7 @@ class ImageGenerationUiRulesTest {
     @Test
     fun `image context menu includes edit image action`() {
         assertEquals(3, imageContextMenuItemCount(showEditAction = true))
-        assertEquals("编辑图像", imageContextMenuEditLabel())
+        assertEquals(R.string.image_edit, imageContextMenuEditLabelRes())
     }
 
     @Test

@@ -44,6 +44,7 @@ import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withLink
+import androidx.annotation.StringRes
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -94,6 +95,7 @@ internal fun AboutDialog(
     val versionLabel = stringResource(R.string.about_version, versionName.orEmpty())
     val description = stringResource(R.string.about_description)
     val githubLabel = stringResource(R.string.about_github_label)
+    val appName = stringResource(R.string.app_name)
 
     val dialogBg = appDialogContainerColor()
     val contentColor = appDialogContentColor()
@@ -121,7 +123,7 @@ internal fun AboutDialog(
                         styles = TextLinkStyles(style = SpanStyle(color = Color(0xFF007eff)))
                     )
                 ) {
-                    append("EveryTalk")
+                    append(appName)
                 }
             }
 
@@ -172,14 +174,14 @@ internal fun AiMessageOptionsBottomSheet(
                 ListItem(
                     headlineContent = {
                         Text(
-                            text = option.title,
+                            text = stringResource(option.titleRes),
                             color = MaterialTheme.colorScheme.onSurface
                         )
                     },
                     leadingContent = {
                         Icon(
                             imageVector = option.icon,
-                            contentDescription = option.title,
+                            contentDescription = stringResource(option.titleRes),
                             tint = MaterialTheme.colorScheme.onSurface
                         )
                     },
@@ -195,8 +197,11 @@ internal fun AiMessageOptionsBottomSheet(
     }
 }
 
-internal enum class AiMessageOption(val title: String, val icon: androidx.compose.ui.graphics.vector.ImageVector) {
-    COPY_FULL_TEXT("复制全文", Icons.Filled.ContentCopy),
-    REGENERATE("重新回答", Icons.Filled.Refresh),
-    EXPORT_TEXT("导出文本", Icons.Filled.IosShare)
+internal enum class AiMessageOption(
+    @StringRes val titleRes: Int,
+    val icon: androidx.compose.ui.graphics.vector.ImageVector,
+) {
+    COPY_FULL_TEXT(R.string.chat_action_copy_full_text, Icons.Filled.ContentCopy),
+    REGENERATE(R.string.chat_action_regenerate, Icons.Filled.Refresh),
+    EXPORT_TEXT(R.string.chat_action_export_text, Icons.Filled.IosShare),
 }

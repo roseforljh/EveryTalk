@@ -84,6 +84,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
@@ -124,6 +125,12 @@ fun FullScreenCodeViewerDialog(
     val headerColor = if (isDarkTheme) Color.White else Color.Black
     val capsuleBgColor = if (isDarkTheme) Color(0xFF383838) else Color(0xFFE2E2E2)
     val capsuleSelectedBgColor = if (isDarkTheme) Color(0xFF505050) else Color.White
+    val closeDescription = stringResource(R.string.action_close)
+    val codeLabel = stringResource(R.string.code_label)
+    val previewLabel = stringResource(R.string.code_preview)
+    val shareDescription = stringResource(R.string.action_share)
+    val copyDescription = stringResource(R.string.action_copy)
+    val shareCodeChooser = stringResource(R.string.code_share_chooser)
 
     val canPreview = isPreviewSupported(language)
     val pagerState = rememberPagerState(
@@ -234,7 +241,7 @@ fun FullScreenCodeViewerDialog(
                         IconButton(onClick = { requestDismiss() }, modifier = Modifier.size(48.dp)) {
                             Icon(
                                 imageVector = Icons.Default.Close,
-                                contentDescription = "关闭",
+                                contentDescription = closeDescription,
                                 tint = headerColor
                             )
                         }
@@ -287,7 +294,7 @@ fun FullScreenCodeViewerDialog(
                                             contentAlignment = Alignment.Center
                                         ) {
                                             Text(
-                                                text = "代码",
+                                                text = codeLabel,
                                                 color = headerColor,
                                                 style = MaterialTheme.typography.labelLarge
                                             )
@@ -307,7 +314,7 @@ fun FullScreenCodeViewerDialog(
                                             contentAlignment = Alignment.Center
                                         ) {
                                             Text(
-                                                text = "预览",
+                                                text = previewLabel,
                                                 color = headerColor,
                                                 style = MaterialTheme.typography.labelLarge
                                             )
@@ -343,13 +350,13 @@ fun FullScreenCodeViewerDialog(
                                             type = "text/plain"
                                             putExtra(android.content.Intent.EXTRA_TEXT, code)
                                         }
-                                        context.startActivity(android.content.Intent.createChooser(shareIntent, "分享代码"))
+                                        context.startActivity(android.content.Intent.createChooser(shareIntent, shareCodeChooser))
                                     },
                                     modifier = Modifier.size(48.dp)
                                 ) {
                                     Icon(
                                         painter = painterResource(R.drawable.ic_gpt_share),
-                                        contentDescription = "分享",
+                                        contentDescription = shareDescription,
                                         tint = headerColor,
                                         modifier = Modifier.size(24.dp)
                                     )
@@ -365,7 +372,7 @@ fun FullScreenCodeViewerDialog(
                                 ) {
                                     Icon(
                                         painter = painterResource(R.drawable.ic_gpt_copy),
-                                        contentDescription = "复制",
+                                        contentDescription = copyDescription,
                                         tint = headerColor,
                                         modifier = Modifier.size(24.dp)
                                     )

@@ -30,6 +30,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
+import com.android.everytalk.R
 import com.android.everytalk.ui.screens.MainScreen.chat.text.state.ChatScrollStateManager
 
 private const val ScrollToBottomFadeInMillis = 360
@@ -122,7 +124,7 @@ fun ScrollToBottomButton(
             ) {
                 Icon(
                     imageVector = Icons.Filled.ArrowDownward,
-                    contentDescription = "Scroll to bottom",
+                    contentDescription = stringResource(R.string.chat_scroll_to_bottom),
                     tint = contentColor,
                     modifier = Modifier.size(20.dp)
                 )

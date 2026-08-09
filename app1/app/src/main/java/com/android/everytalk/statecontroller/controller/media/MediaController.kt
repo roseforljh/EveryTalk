@@ -16,6 +16,7 @@ import kotlinx.coroutines.launch
 import android.widget.Toast
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import com.android.everytalk.util.locale.localizeUiMessage
 
 /**
  * MediaController
@@ -30,7 +31,11 @@ class MediaController(
 
     private suspend fun showToast(message: String) {
         withContext(Dispatchers.Main) {
-            Toast.makeText(application, message, Toast.LENGTH_SHORT).show()
+            Toast.makeText(
+                application,
+                application.localizeUiMessage(message),
+                Toast.LENGTH_SHORT,
+            ).show()
         }
     }
 

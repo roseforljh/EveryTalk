@@ -48,11 +48,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.android.everytalk.config.PerformanceConfig
+import com.android.everytalk.R
 import com.android.everytalk.ui.components.dialog.AppDialogButtonShape
 import com.android.everytalk.ui.components.dialog.AppDialogShape
 import com.android.everytalk.ui.components.dialog.AppDialogTextFieldShape
@@ -158,12 +160,12 @@ fun SystemPromptDialog(
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
-                            text = "系统提示",
+                            text = stringResource(R.string.system_prompt_title),
                             style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.Bold),
                             color = contentColor,
                         )
                         Text(
-                            text = "设定 AI 的行为准则和回复风格",
+                            text = stringResource(R.string.system_prompt_description),
                             style = MaterialTheme.typography.bodySmall,
                             color = subtextColor,
                         )
@@ -180,7 +182,7 @@ fun SystemPromptDialog(
                         ) {
                             Icon(
                                 imageVector = Icons.Outlined.Delete,
-                                contentDescription = "清空",
+                                contentDescription = stringResource(R.string.action_clear),
                                 tint = subtextColor,
                             )
                         }
@@ -199,7 +201,7 @@ fun SystemPromptDialog(
                         .heightIn(min = 120.dp),
                     placeholder = {
                         Text(
-                            text = "例如：你是一个乐于助人的编程专家，请用简洁的代码回答我的问题...",
+                            text = stringResource(R.string.system_prompt_hint),
                             style = MaterialTheme.typography.bodyMedium,
                             color = subtextColor.copy(alpha = 0.6f),
                         )
@@ -230,7 +232,7 @@ fun SystemPromptDialog(
                         border = BorderStroke(1.dp, cancelButtonColor),
                     ) {
                         Text(
-                            text = "取消",
+                            text = stringResource(R.string.action_cancel),
                             style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
                         )
                     }
@@ -288,12 +290,12 @@ fun SystemPromptDialog(
                             )
                             Spacer(Modifier.size(8.dp))
                             Text(
-                                text = "暂停",
+                                text = stringResource(R.string.action_pause),
                                 style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
                             )
                         } else {
                             Text(
-                                text = "确定",
+                                text = stringResource(R.string.action_confirm),
                                 style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Bold),
                             )
                         }

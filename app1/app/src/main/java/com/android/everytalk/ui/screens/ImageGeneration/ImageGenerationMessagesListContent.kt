@@ -135,6 +135,7 @@ import com.android.everytalk.ui.topanchor.mapChatItemsToTopAnchorItems
 import com.android.everytalk.ui.topanchor.resolveActiveTopAnchorTurn
 import com.android.everytalk.ui.topanchor.resolveTopAnchorResponseTargetId
 import com.android.everytalk.ui.topanchor.shouldAllowBottomScroll
+import com.android.everytalk.util.locale.localizeUiMessage
 import com.android.everytalk.util.storage.CappedByteArrayOutputStream
 import com.android.everytalk.util.storage.readAtMost
 import kotlinx.coroutines.launch
@@ -159,6 +160,8 @@ fun ImageGenerationMessagesList(
     additionalBottomPadding: Dp = 0.dp,
     scrollSessionKey: String = ""
 ) {
+    val imageLoadFailedMessage = stringResource(R.string.image_load_failed)
+    val imageSelectedMessage = stringResource(R.string.image_selected)
     val haptic = LocalHapticFeedback.current
     val animatedItems = remember(scrollSessionKey) { mutableStateMapOf<String, Boolean>() }
     val density = LocalDensity.current
@@ -633,7 +636,7 @@ fun ImageGenerationMessagesList(
                             if (message != null) {
                                 UserOrErrorMessageContent(
                                     message = message,
-                                    displayedText = item.text,
+                                    displayedText = context.localizeUiMessage(item.text),
                                     showLoadingDots = false,
                                     bubbleColor = MaterialTheme.chatColors.aiBubble,
                                     contentColor = MaterialTheme.chatColors.errorContent,
@@ -718,7 +721,7 @@ fun ImageGenerationMessagesList(
                         scope.launch {
                             val uri = cacheImageModelForEditing(firstUrl)
                             if (uri == null) {
-                                viewModel.showSnackbar("加载失败")
+                                viewModel.showSnackbar(imageLoadFailedMessage)
                                 return@launch
                             }
                             viewModel.addMediaItem(
@@ -728,7 +731,7 @@ fun ImageGenerationMessagesList(
                                     filePath = null
                                 )
                             )
-                            viewModel.showSnackbar("已选择")
+                            viewModel.showSnackbar(imageSelectedMessage)
                         }
                     }
                     isImageMenuVisible = false

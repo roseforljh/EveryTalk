@@ -31,6 +31,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldDefaultBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldBorderColor
@@ -89,7 +90,7 @@ internal fun EditExternalWebSearchProviderDialog(
         containerColor = dialogBg,
         title = {
             Text(
-                text = "编辑 ${provider.displayName}",
+                text = stringResource(R.string.web_provider_edit_title, provider.displayName),
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
                 color = contentColor
@@ -114,7 +115,7 @@ internal fun EditExternalWebSearchProviderDialog(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         Text(
-                            text = provider.description,
+                            text = stringResource(provider.descriptionRes),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurface
                         )
@@ -138,7 +139,7 @@ internal fun EditExternalWebSearchProviderDialog(
                 OutlinedTextField(
                     value = apiKey,
                     onValueChange = { apiKey = it },
-                    label = { Text("API Key") },
+                    label = { Text(stringResource(R.string.settings_api_key_label)) },
                     placeholder = { Text(provider.apiKeyPlaceholder) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
@@ -153,7 +154,9 @@ internal fun EditExternalWebSearchProviderDialog(
                         IconButton(onClick = { apiKeyVisible = !apiKeyVisible }) {
                             Icon(
                                 painter = painterResource(R.drawable.ic_eye),
-                                contentDescription = if (apiKeyVisible) "隐藏" else "显示",
+                                contentDescription = stringResource(
+                                    if (apiKeyVisible) R.string.action_hide else R.string.action_show,
+                                ),
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
@@ -178,7 +181,7 @@ internal fun EditExternalWebSearchProviderDialog(
                     ),
                     border = BorderStroke(1.dp, borderColor)
                 ) {
-                    Text("取消", fontWeight = FontWeight.SemiBold)
+                    Text(stringResource(R.string.action_cancel), fontWeight = FontWeight.SemiBold)
                 }
                 Button(
                     onClick = {
@@ -194,7 +197,7 @@ internal fun EditExternalWebSearchProviderDialog(
                         contentColor = dialogBg
                     )
                 ) {
-                    Text("保存", fontWeight = FontWeight.SemiBold)
+                    Text(stringResource(R.string.action_save), fontWeight = FontWeight.SemiBold)
                 }
             }
         },
@@ -238,7 +241,7 @@ internal fun AddProviderDialog(
         textContentColor = contentColor,
         title = {
             Text(
-                "添加新模型平台",
+                stringResource(R.string.settings_add_model_platform_title),
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold,
                 color = contentColor
@@ -249,11 +252,11 @@ internal fun AddProviderDialog(
                 modifier = Modifier.fillMaxWidth(),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                SettingsFieldLabel("平台名称")
+                SettingsFieldLabel(stringResource(R.string.settings_platform_name_label))
                 OutlinedTextField(
                     value = newProviderName,
                     onValueChange = onNewProviderNameChange,
-                    placeholder = { Text("例如: OpenRouter, Anthropic...") },
+                    placeholder = { Text(stringResource(R.string.settings_platform_name_example)) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     keyboardOptions = KeyboardOptions.Default.copy(imeAction = ImeAction.Done),
@@ -276,7 +279,7 @@ internal fun AddProviderDialog(
                     ),
                     border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
                 ) {
-                    Text("取消", fontWeight = FontWeight.SemiBold)
+                    Text(stringResource(R.string.action_cancel), fontWeight = FontWeight.SemiBold)
                 }
                 Button(
                     onClick = onConfirm,
@@ -289,7 +292,7 @@ internal fun AddProviderDialog(
                         disabledContentColor = contentColor.copy(alpha = 0.4f)
                     )
                 ) {
-                    Text("添加", fontWeight = FontWeight.SemiBold)
+                    Text(stringResource(R.string.action_add), fontWeight = FontWeight.SemiBold)
                 }
             }
         },

@@ -13,6 +13,7 @@ import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -199,7 +200,7 @@ internal fun DrawerConversationListItem(
                 if (isPinned) {
                     Icon(
                         painter = painterResource(R.drawable.ic_pin),
-                        contentDescription = "已置顶",
+                        contentDescription = stringResource(R.string.drawer_pinned_content_description),
                         tint = MaterialTheme.colorScheme.primary,
                         modifier = Modifier
                             .size(20.dp)

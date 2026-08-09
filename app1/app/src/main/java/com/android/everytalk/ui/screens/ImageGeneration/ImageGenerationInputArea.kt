@@ -47,6 +47,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -263,7 +264,7 @@ fun ImageGenerationInputArea(
                 } catch (e: Exception) {
                     Log.e("PhotoPicker", "处理选择的图片时发生错误", e)
                     withContext(Dispatchers.Main) {
-                        onShowSnackbar("选择图片时发生错误")
+                        onShowSnackbar(context.getString(R.string.image_input_select_error))
                     }
                 }
             }
@@ -296,7 +297,9 @@ fun ImageGenerationInputArea(
                     throw e
                 } catch (e: Exception) {
                     Log.e("CameraLauncher", "处理相机照片时发生错误", e)
-                    withContext(Dispatchers.Main.immediate) { onShowSnackbar("拍照时发生错误") }
+                    withContext(Dispatchers.Main.immediate) {
+                        onShowSnackbar(context.getString(R.string.image_input_camera_error))
+                    }
                     safeDeleteTempFile(context, currentUri)
                 }
             }
@@ -315,10 +318,10 @@ fun ImageGenerationInputArea(
                 cameraLauncher.launch(newUri)
             } catch (e: Exception) {
                 Log.e("CameraPermission", "创建相机文件 URI 时发生错误", e)
-                onShowSnackbar("启动相机时发生错误")
+                onShowSnackbar(context.getString(R.string.image_input_camera_start_error))
             }
         } else {
-            onShowSnackbar("需要相机权限才能拍照")
+            onShowSnackbar(context.getString(R.string.image_input_camera_permission))
         }
     }
 
@@ -358,13 +361,13 @@ fun ImageGenerationInputArea(
                             keyboardController?.hide()
                         }
                     } else if (selectedApiConfig == null) {
-                        onShowSnackbar("Please select an API configuration first")
+                        onShowSnackbar(context.getString(R.string.chat_input_select_api_configuration))
                     } else {
-                        onShowSnackbar("Please enter a message or select an item")
+                        onShowSnackbar(context.getString(R.string.image_input_enter_content))
                     }
                 } catch (e: Exception) {
                     Log.e("SendMessage", "Error sending message", e)
-                    onShowSnackbar("Failed to send message")
+                    onShowSnackbar(context.getString(R.string.chat_input_send_failed))
                 }
                 Unit
             }
@@ -607,7 +610,7 @@ fun ImageGenerationInputArea(
                                     ) {
                                         Icon(
                                             painter = painterResource(R.drawable.ic_plus),
-                                            contentDescription = "功能面板",
+                                            contentDescription = stringResource(R.string.image_function_panel),
                                             tint = if (isDarkTheme) Color.White else Color(0xFF0D0D0D),
                                             modifier = Modifier.size(24.dp)
                                         )
@@ -750,7 +753,7 @@ fun ImageGenerationInputArea(
                                         Box(modifier = Modifier.weight(1f)) {
                                             if (localText.isEmpty()) {
                                                 Text(
-                                                    "输入消息...",
+                                                    stringResource(R.string.image_input_hint),
                                                     style = MaterialTheme.typography.bodyLarge,
                                                     color = if (isDarkTheme) Color(0xFFAFAFAF) else Color(0xFF8F8F8F)
                                                 )
@@ -794,9 +797,9 @@ fun ImageGenerationInputArea(
                                                         else -> painterResource(R.drawable.ic_voice_bold)
                                                     },
                                                     contentDescription = when (state) {
-                                                        2 -> "停止"
-                                                        1 -> "发送"
-                                                        else -> "语音输入"
+                                                        2 -> stringResource(R.string.chat_input_stop)
+                                                        1 -> stringResource(R.string.chat_input_send)
+                                                        else -> stringResource(R.string.chat_input_voice)
                                                     },
                                                     modifier = Modifier.size(20.dp)
                                                 )

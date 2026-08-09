@@ -53,7 +53,7 @@ internal fun DrawerHeader(
             )
             Spacer(Modifier.width(4.dp))
             Text(
-                text = "EveryTalk",
+                text = stringResource(R.string.app_name),
                 style = MaterialTheme.typography.headlineSmall,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.onSurface,
@@ -98,19 +98,23 @@ internal fun DrawerPrimaryActions(
         Spacer(Modifier.height(8.dp))
         DrawerActionButton(
             iconRes = R.drawable.ic_plus,
-            label = if (isImageGenerationMode) "新建图像生成" else "新建会话",
+            label = stringResource(
+                if (isImageGenerationMode) R.string.drawer_new_image_generation else R.string.drawer_new_conversation
+            ),
             onClick = if (isImageGenerationMode) onImageGenerationClick else onNewChatClick,
         )
         Spacer(Modifier.height(5.dp))
         DrawerActionButton(
             iconRes = R.drawable.ic_trash,
-            label = "清空记录",
+            label = stringResource(R.string.drawer_clear_history),
             onClick = onClearClick,
         )
         Spacer(Modifier.height(5.dp))
         DrawerActionButton(
             iconRes = if (isImageGenerationMode) R.drawable.ic_writing else R.drawable.ic_image_gallery,
-            label = if (isImageGenerationMode) "文本生成" else "图像生成",
+            label = stringResource(
+                if (isImageGenerationMode) R.string.drawer_text_generation else R.string.drawer_image_generation
+            ),
             onClick = if (isImageGenerationMode) onNewChatClick else onImageGenerationClick,
         )
     }

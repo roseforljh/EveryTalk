@@ -33,8 +33,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.android.everytalk.R
 import com.android.everytalk.ui.components.EveryTalkTimedLoadingStatus
 import com.android.everytalk.data.network.VoiceChatSession
 import kotlinx.coroutines.delay
@@ -112,7 +114,9 @@ fun VoiceBottomControls(
         ) {
             Icon(
                 imageVector = Icons.Default.Mic,
-                contentDescription = if (isRecording) "停止录音" else "开始录音",
+                contentDescription = stringResource(
+                    if (isRecording) R.string.voice_stop_recording else R.string.voice_start_recording
+                ),
                 modifier = Modifier.size(28.dp),
                 tint = if (isRecording) Color(0xFFFF8A8A) else Color.White
             )
@@ -148,9 +152,9 @@ fun VoiceBottomControls(
                     else -> Icons.Default.Close
                 },
                 contentDescription = when {
-                    isRecording -> "取消本次语音"
-                    isPlaying -> "中断AI回答"
-                    else -> "关闭"
+                    isRecording -> stringResource(R.string.voice_cancel_recording)
+                    isPlaying -> stringResource(R.string.voice_stop_ai_response)
+                    else -> stringResource(R.string.action_close)
                 },
                 modifier = Modifier.size(28.dp),
                 tint = Color.White
@@ -193,12 +197,12 @@ fun VoiceContentDisplay(
         if (isProcessing) {
             Spacer(modifier = Modifier.height(32.dp))
             EveryTalkTimedLoadingStatus(
-                text = "正在处理",
+                text = stringResource(R.string.voice_processing),
                 size = 32.dp,
                 strokeWidth = 3.dp,
                 textStyle = MaterialTheme.typography.bodyMedium,
                 textColor = contentColor,
-                contentDescription = "语音处理中",
+                contentDescription = stringResource(R.string.voice_processing_content_description),
             )
         }
         
@@ -257,7 +261,7 @@ private fun TtsQuotaWarningCard() {
                 modifier = Modifier.size(20.dp)
             )
             Text(
-                text = "TTS配额已用完，仅显示文字",
+                text = stringResource(R.string.voice_tts_quota_warning),
                 color = Color.White,
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = FontWeight.Medium
@@ -291,7 +295,7 @@ private fun ConversationTextCard(
         if (userText.isNotEmpty()) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
-                    text = "你说：",
+                    text = stringResource(R.string.voice_user_said),
                     color = contentColor.copy(alpha = 0.6f),
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold
@@ -313,7 +317,7 @@ private fun ConversationTextCard(
             }
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
-                    text = "AI 回复：",
+                    text = stringResource(R.string.voice_ai_replied),
                     color = contentColor.copy(alpha = 0.6f),
                     style = MaterialTheme.typography.labelSmall,
                     fontWeight = FontWeight.Bold
@@ -343,22 +347,22 @@ fun WebSocketStatusIndicator(
     val (icon, text, color) = when (state) {
         VoiceChatSession.WebSocketState.DISCONNECTED -> Triple(
             Icons.Default.CloudOff,
-            "未连接",
+            stringResource(R.string.voice_connection_disconnected),
             contentColor.copy(alpha = 0.5f)
         )
         VoiceChatSession.WebSocketState.CONNECTING -> Triple(
             Icons.Default.CloudSync,
-            "正在连接",
+            stringResource(R.string.voice_connection_connecting),
             Color(0xFFFF9800) // 橙色
         )
         VoiceChatSession.WebSocketState.CONNECTED -> Triple(
             Icons.Default.Cloud,
-            "已连接",
+            stringResource(R.string.voice_connection_connected),
             Color(0xFF4CAF50) // 绿色
         )
         VoiceChatSession.WebSocketState.ERROR -> Triple(
             Icons.Default.Warning,
-            "连接错误",
+            stringResource(R.string.voice_connection_error),
             Color(0xFFF44336) // 红色
         )
     }

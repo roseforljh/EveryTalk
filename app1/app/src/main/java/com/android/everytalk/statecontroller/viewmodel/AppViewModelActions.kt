@@ -29,6 +29,7 @@ import com.android.everytalk.ui.screens.viewmodel.HistoryManager
 import android.graphics.Bitmap
 import android.net.Uri
 import android.widget.Toast
+import com.android.everytalk.util.locale.localizeUiMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Dispatchers
@@ -386,7 +387,8 @@ import java.util.TimeZone
 
     internal fun AppViewModel.showToast(message: String) {
         viewModelScope.launch(Dispatchers.Main) {
-            Toast.makeText(getApplication(), message, Toast.LENGTH_SHORT).show()
+            val context = getApplication<Application>()
+            Toast.makeText(context, context.localizeUiMessage(message), Toast.LENGTH_SHORT).show()
         }
     }
 

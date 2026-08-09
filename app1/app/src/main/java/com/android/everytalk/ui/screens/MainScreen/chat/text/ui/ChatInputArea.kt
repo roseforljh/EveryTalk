@@ -44,6 +44,7 @@ import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -171,7 +172,7 @@ fun ChatInputArea(
                 } catch (e: Exception) {
                     Log.e("PhotoPicker", "处理选择的图片时发生错误", e)
                     withContext(Dispatchers.Main) {
-                        onShowSnackbar("选择图片时发生错误")
+                        onShowSnackbar(context.getString(R.string.chat_input_image_selection_error))
                     }
                 }
             }
@@ -206,7 +207,9 @@ fun ChatInputArea(
                     throw e
                 } catch (e: Exception) {
                     Log.e("CameraLauncher", "处理相机照片时发生错误", e)
-                    withContext(Dispatchers.Main.immediate) { onShowSnackbar("拍照时发生错误") }
+                    withContext(Dispatchers.Main.immediate) {
+                        onShowSnackbar(context.getString(R.string.chat_input_camera_capture_error))
+                    }
                     safeDeleteTempFile(context, currentUri)
                 }
             }
@@ -226,11 +229,11 @@ fun ChatInputArea(
                 cameraLauncher.launch(newUri)
             } catch (e: Exception) {
                 Log.e("CameraPermission", "创建相机文件 URI 时发生错误", e)
-                onShowSnackbar("启动相机时发生错误")
+                onShowSnackbar(context.getString(R.string.chat_input_camera_start_error))
             }
         } else {
             Log.w("CameraPermission", "相机权限被拒绝")
-            onShowSnackbar("需要相机权限才能拍照")
+            onShowSnackbar(context.getString(R.string.chat_input_camera_permission_required))
         }
     }
 
@@ -273,7 +276,7 @@ fun ChatInputArea(
                     } catch (e: Exception) {
                         Log.e("OpenDocument", "处理选择的文件时发生错误", e)
                         withContext(Dispatchers.Main) {
-                            onShowSnackbar("处理文件时发生错误")
+                            onShowSnackbar(context.getString(R.string.chat_input_file_processing_error))
                         }
                     }
                 }
@@ -383,11 +386,11 @@ fun ChatInputArea(
                         }
                     } else {
                         Log.w("SendMessage", "请先选择 API 配置")
-                        onShowSnackbar("请先选择 API 配置")
+                        onShowSnackbar(context.getString(R.string.chat_input_select_api_configuration))
                     }
                 } catch (e: Exception) {
                     Log.e("SendMessage", "发送消息时发生错误", e)
-                    onShowSnackbar("发送消息失败")
+                    onShowSnackbar(context.getString(R.string.chat_input_send_failed))
                 }
                 Unit
             }
@@ -674,7 +677,13 @@ fun ChatInputArea(
                                     ) {
                                         Icon(
                                             painter = painterResource(R.drawable.ic_plus),
-                                            contentDescription = if (showFunctionPanel) "收起功能面板" else "展开功能面板",
+                                            contentDescription = stringResource(
+                                                if (showFunctionPanel) {
+                                                    R.string.chat_input_collapse_functions
+                                                } else {
+                                                    R.string.chat_input_expand_functions
+                                                }
+                                            ),
                                             tint = if (isDarkTheme) Color.White else Color(0xFF0D0D0D),
                                             modifier = Modifier.size(24.dp)
                                         )
@@ -878,14 +887,14 @@ fun ChatInputArea(
                                                     )
                                                     Spacer(Modifier.width(4.dp))
                                                     Text(
-                                                        "搜索",
+                                                        stringResource(R.string.chat_input_search_tag),
                                                         fontSize = 15.sp,
                                                         color = Color(0xFF66B5FF)
                                                     )
                                                     Spacer(Modifier.width(4.dp))
                                                     Icon(
                                                         painter = painterResource(R.drawable.ic_close),
-                                                        contentDescription = "关闭联网搜索",
+                                                        contentDescription = stringResource(R.string.chat_input_close_web_search),
                                                         tint = Color(0xFF66B5FF),
                                                         modifier = Modifier.size(14.dp)
                                                     )
@@ -917,7 +926,7 @@ fun ChatInputArea(
                                                     Spacer(Modifier.width(4.dp))
                                                     Icon(
                                                         painter = painterResource(R.drawable.ic_close),
-                                                        contentDescription = "关闭MCP",
+                                                        contentDescription = stringResource(R.string.chat_input_close_mcp),
                                                         tint = Color(0xFFFF6B00),
                                                         modifier = Modifier.size(14.dp)
                                                     )
@@ -934,7 +943,13 @@ fun ChatInputArea(
                                     Box(modifier = Modifier.weight(1f)) {
                                         if (localText.isEmpty()) {
                                             Text(
-                                                if (isWebSearchEnabled && effectiveWebSearchAvailable) "搜索网页" else "回复 EveryTalk",
+                                                stringResource(
+                                                    if (isWebSearchEnabled && effectiveWebSearchAvailable) {
+                                                        R.string.chat_input_search_web_hint
+                                                    } else {
+                                                        R.string.chat_input_reply_hint
+                                                    }
+                                                ),
                                                 style = MaterialTheme.typography.bodyLarge,
                                                 color = if (isDarkTheme) Color(0xFFAFAFAF) else Color(0xFF8F8F8F)
                                             )
@@ -978,9 +993,9 @@ fun ChatInputArea(
                                                     else -> painterResource(R.drawable.ic_voice_bold)
                                                 },
                                                 contentDescription = when (state) {
-                                                    2 -> "停止"
-                                                    1 -> "发送"
-                                                    else -> "语音输入"
+                                                    2 -> stringResource(R.string.chat_input_stop)
+                                                    1 -> stringResource(R.string.chat_input_send)
+                                                    else -> stringResource(R.string.chat_input_voice)
                                                 },
                                                 modifier = Modifier.size(20.dp)
                                             )

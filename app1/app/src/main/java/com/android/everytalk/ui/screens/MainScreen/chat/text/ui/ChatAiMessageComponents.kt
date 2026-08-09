@@ -130,6 +130,7 @@ fun AiMessageItem(
 ) {
     val shape = RectangleShape
     val aiReplyMessageDescription = stringResource(id = R.string.ai_reply_message)
+    val codeCopiedMessage = stringResource(R.string.chat_code_copied)
 
     var previewCode by remember { mutableStateOf<String?>(null) }
     var previewLanguage by remember { mutableStateOf("text") }
@@ -393,7 +394,7 @@ fun AiMessageItem(
                             previewCode = code
                         },
                         onCodeCopied = {
-                            viewModel.showSnackbar("已复制代码")
+                            viewModel.showSnackbar(codeCopiedMessage)
                         },
                         onImageClick = onImageClick,
                     )
@@ -417,6 +418,7 @@ fun AiMessageFooterItem(
     var showReportDialog by remember(message.id) { mutableStateOf(false) }
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val shareFailedMessage = stringResource(R.string.chat_share_failed)
     val availableModels by viewModel.apiConfigs.collectAsState()
     val selectedModel by viewModel.selectedApiConfig.collectAsState()
     val liveContextWindowTokens = remember(
@@ -452,7 +454,7 @@ fun AiMessageFooterItem(
             ) {
                 Icon(
                     painter = painterResource(R.drawable.ic_copy),
-                    contentDescription = "复制",
+                    contentDescription = stringResource(R.string.action_copy),
                     modifier = Modifier.size(18.dp),
                     tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )
@@ -464,7 +466,7 @@ fun AiMessageFooterItem(
                         shareMessageText(
                             context = context,
                             text = latestMessage.text,
-                            onFailure = { viewModel.showSnackbar("分享失败") },
+                            onFailure = { viewModel.showSnackbar(shareFailedMessage) },
                         )
                     }
                 },
@@ -472,7 +474,7 @@ fun AiMessageFooterItem(
             ) {
                 Icon(
                     painter = painterResource(R.drawable.ic_share),
-                    contentDescription = "分享",
+                    contentDescription = stringResource(R.string.action_share),
                     modifier = Modifier.size(18.dp),
                     tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )
@@ -498,7 +500,7 @@ fun AiMessageFooterItem(
                 ) {
                     Icon(
                         painter = painterResource(R.drawable.ic_dots_horizontal),
-                        contentDescription = "更多",
+                        contentDescription = stringResource(R.string.action_more),
                         modifier = Modifier.size(18.dp),
                         tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                     )
@@ -587,21 +589,21 @@ private fun AiMessagePopupMenu(
             ) {
                 PopupMenuItem(
                     painter = painterResource(R.drawable.ic_regenerate),
-                    text = "重新回答",
+                    text = stringResource(R.string.chat_action_regenerate),
                     textColor = textColor,
                     iconTint = iconTint,
                     onClick = { onRegenerate(); onDismiss() }
                 )
                 PopupMenuItem(
                     painter = painterResource(R.drawable.ic_robot_head),
-                    text = modelName ?: "切换模型",
+                    text = modelName ?: stringResource(R.string.chat_switch_model),
                     textColor = textColor,
                     iconTint = iconTint,
                     onClick = { showModelPicker = true }
                 )
                 PopupMenuItem(
                     painter = painterResource(R.drawable.ic_export),
-                    text = "导出文本",
+                    text = stringResource(R.string.chat_action_export_text),
                     textColor = textColor,
                     iconTint = iconTint,
                     onClick = { onExport(); onDismiss() }
@@ -650,7 +652,7 @@ private fun ModelPickerPopupContent(
     ) {
         if (availableModels.isEmpty()) {
             Text(
-                text = "当前无可用模型",
+                text = stringResource(R.string.chat_no_available_models),
                 color = textColor.copy(alpha = 0.7f),
                 fontSize = 16.sp,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
@@ -717,7 +719,7 @@ private fun ConfirmModelRegenerateDialog(
         containerColor = cardBg,
         title = {
             Text(
-                text = "切换模型重新回答",
+                text = stringResource(R.string.chat_regenerate_with_model_title),
                 color = textColor,
                 fontWeight = FontWeight.Bold,
                 fontSize = 20.sp
@@ -725,19 +727,19 @@ private fun ConfirmModelRegenerateDialog(
         },
         text = {
             Text(
-                text = "将使用“$modelName”重新回答这个问题。",
+                text = stringResource(R.string.chat_regenerate_with_model_description, modelName),
                 color = subtextColor,
                 fontSize = 14.sp
             )
         },
         confirmButton = {
             TextButton(onClick = onConfirm) {
-                Text("确定", color = Color(0xFF66B5FF), fontWeight = FontWeight.Bold)
+                Text(stringResource(R.string.action_confirm), color = Color(0xFF66B5FF), fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
             TextButton(onClick = onBack) {
-                Text("返回", color = textColor)
+                Text(stringResource(R.string.navigation_back), color = textColor)
             }
         }
     )

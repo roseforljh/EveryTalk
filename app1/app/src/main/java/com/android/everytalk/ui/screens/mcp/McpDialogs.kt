@@ -41,6 +41,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
+import com.android.everytalk.R
 import com.android.everytalk.data.mcp.*
 import com.android.everytalk.ui.components.EveryTalkTimedLoadingStatus
 import com.android.everytalk.ui.components.dialog.AppDialogShape
@@ -69,8 +72,10 @@ fun McpServerListContent(
             AlertDialog(
                 onDismissRequest = { serverToDeleteId = null },
                 modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
-                title = { Text("移除服务器") },
-                text = { Text("确定要移除 '${server.config.name}' 吗？此操作无法撤销。") },
+                title = { Text(stringResource(R.string.mcp_remove_server_title)) },
+                text = {
+                    Text(stringResource(R.string.mcp_remove_server_description, server.config.name))
+                },
                 confirmButton = {
                     Button(
                         onClick = {
@@ -81,12 +86,12 @@ fun McpServerListContent(
                             containerColor = MaterialTheme.colorScheme.error
                         )
                     ) {
-                        Text("移除")
+                        Text(stringResource(R.string.action_remove))
                     }
                 },
                 dismissButton = {
                     TextButton(onClick = { serverToDeleteId = null }) {
-                        Text("取消")
+                        Text(stringResource(R.string.action_cancel))
                     }
                 },
                 containerColor = appDialogContainerColor(),
@@ -127,13 +132,13 @@ fun McpServerListContent(
                     }
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
-                            "暂无连接",
+                            stringResource(R.string.mcp_no_connections),
                             style = MaterialTheme.typography.titleMedium,
                             fontWeight = FontWeight.SemiBold
                         )
                         Spacer(modifier = Modifier.height(4.dp))
                         Text(
-                            "添加 MCP 服务器以扩展能力",
+                            stringResource(R.string.mcp_no_connections_description),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -220,7 +225,7 @@ fun McpServerListDialog(
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text("完成")
+                Text(stringResource(R.string.action_done))
             }
         }
     )
@@ -339,12 +344,12 @@ private fun McpServerItem(
                     
                     if (status is McpStatus.Connecting) {
                         EveryTalkTimedLoadingStatus(
-                            text = "正在连接",
+                            text = stringResource(R.string.mcp_connecting),
                             size = 12.dp,
                             strokeWidth = 1.5.dp,
                             textStyle = MaterialTheme.typography.labelMedium,
                             textColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            contentDescription = "MCP 正在连接",
+                            contentDescription = stringResource(R.string.mcp_connecting_content_description),
                         )
                     } else {
                         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -364,10 +369,14 @@ private fun McpServerItem(
                             Spacer(modifier = Modifier.width(6.dp))
                             Text(
                                 text = when (status) {
-                                    is McpStatus.Connected -> "${serverState.tools.size} 个可用工具"
-                                    is McpStatus.Connecting -> "正在连接"
-                                    is McpStatus.Error -> "连接失败"
-                                    is McpStatus.Idle -> "已暂停"
+                                    is McpStatus.Connected -> pluralStringResource(
+                                        R.plurals.mcp_available_tool_count,
+                                        serverState.tools.size,
+                                        serverState.tools.size,
+                                    )
+                                    is McpStatus.Connecting -> stringResource(R.string.mcp_connecting)
+                                    is McpStatus.Error -> stringResource(R.string.mcp_connection_failed)
+                                    is McpStatus.Idle -> stringResource(R.string.mcp_paused)
                                 },
                                 style = MaterialTheme.typography.labelMedium,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -409,7 +418,13 @@ private fun McpServerItem(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = if (status is McpStatus.Error) "检查配置或网络" else "点击开关以启用",
+                        text = stringResource(
+                            if (status is McpStatus.Error) {
+                                R.string.mcp_check_configuration
+                            } else {
+                                R.string.mcp_enable_hint
+                            }
+                        ),
                         style = MaterialTheme.typography.bodySmall,
                         color = if (status is McpStatus.Error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                     )
@@ -420,7 +435,7 @@ private fun McpServerItem(
                     ) {
                         Icon(
                             Icons.Outlined.Delete,
-                            contentDescription = "删除",
+                            contentDescription = stringResource(R.string.action_delete),
                             modifier = Modifier.size(18.dp),
                             tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
@@ -452,7 +467,7 @@ private fun McpServerToolsDialog(
         title = {
             Column {
                 Text(
-                    text = "可用工具",
+                    text = stringResource(R.string.mcp_available_tools),
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
                     color = dlgContent
@@ -473,7 +488,7 @@ private fun McpServerToolsDialog(
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = "暂无可用工具",
+                        text = stringResource(R.string.mcp_no_available_tools),
                         style = MaterialTheme.typography.bodyMedium,
                         color = dlgSubtext
                     )
@@ -553,7 +568,7 @@ private fun McpServerToolsDialog(
                     contentColor = dlgBg
                 )
             ) {
-                Text("关闭", fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.action_close), fontWeight = FontWeight.SemiBold)
             }
         }
     )
@@ -564,7 +579,6 @@ private fun McpServerToolsDialog(
  */
 enum class McpServerPreset(
     val displayName: String,
-    val description: String,
     val urlTemplate: String,
     val transportType: McpTransportType,
     val requiresApiKey: Boolean = true,
@@ -573,15 +587,13 @@ enum class McpServerPreset(
     val headerName: String = ""
 ) {
     CUSTOM(
-        displayName = "自定义",
-        description = "手动配置",
+        displayName = "",
         urlTemplate = "",
         transportType = McpTransportType.SSE,
         requiresApiKey = false
     ),
     EXA_SEARCH(
         displayName = "Exa",
-        description = "AI 搜索引擎",
         urlTemplate = "https://mcp.exa.ai/mcp?exaApiKey={API_KEY}&tools=web_search_exa,get_code_context_exa",
         transportType = McpTransportType.HTTP,
         requiresApiKey = true,
@@ -589,7 +601,6 @@ enum class McpServerPreset(
     ),
     FIRECRAWL(
         displayName = "Firecrawl",
-        description = "网页抓取/解析",
         urlTemplate = "https://mcp.firecrawl.dev/{API_KEY}/v2/mcp",
         transportType = McpTransportType.HTTP,
         requiresApiKey = true,
@@ -597,7 +608,6 @@ enum class McpServerPreset(
     ),
     CONTEXT7(
         displayName = "Context7",
-        description = "官方文档检索",
         urlTemplate = "https://mcp.context7.com/mcp",
         transportType = McpTransportType.HTTP,
         requiresApiKey = true,
@@ -680,7 +690,9 @@ fun AddMcpServerDialog(
         ),
         title = {
             Text(
-                text = if (existingConfig == null) "新建连接" else "编辑连接",
+                text = stringResource(
+                    if (existingConfig == null) R.string.mcp_new_connection else R.string.mcp_edit_connection,
+                ),
                 fontSize = 20.sp,
                 fontWeight = FontWeight.Bold,
                 color = mcpContentColor
@@ -695,7 +707,7 @@ fun AddMcpServerDialog(
             ) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        text = "选择类型",
+                        text = stringResource(R.string.mcp_select_type),
                         style = MaterialTheme.typography.labelLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -760,7 +772,11 @@ fun AddMcpServerDialog(
                                             )
                                             Spacer(modifier = Modifier.width(5.dp))
                                             Text(
-                                                text = preset.displayName,
+                                                text = if (preset == McpServerPreset.CUSTOM) {
+                                                    stringResource(R.string.mcp_preset_custom)
+                                                } else {
+                                                    preset.displayName
+                                                },
                                                 fontSize = 14.sp,
                                                 fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
                                                 color = mcpContentColor,
@@ -782,8 +798,8 @@ fun AddMcpServerDialog(
                     OutlinedTextField(
                         value = name,
                         onValueChange = { name = it },
-                        label = { Text("名称") },
-                        placeholder = { Text("给服务器起个名字") },
+                        label = { Text(stringResource(R.string.mcp_name_label)) },
+                        placeholder = { Text(stringResource(R.string.mcp_name_hint)) },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth(),
                         shape = textFieldShape,
@@ -797,7 +813,7 @@ fun AddMcpServerDialog(
                         OutlinedTextField(
                             value = url,
                             onValueChange = { url = it },
-                            label = { Text("服务器 URL") },
+                            label = { Text(stringResource(R.string.mcp_server_url_label)) },
                             placeholder = { Text("https://...") },
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
@@ -812,13 +828,13 @@ fun AddMcpServerDialog(
                             supportingText = if (url.isNotBlank() &&
                                 !url.startsWith("http://") &&
                                 !url.startsWith("https://")) {
-                                { Text("必须以 http:// 或 https:// 开头") }
+                                { Text(stringResource(R.string.mcp_url_invalid)) }
                             } else null
                         )
 
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(
-                                text = "传输协议",
+                                text = stringResource(R.string.mcp_transport_protocol),
                                 style = MaterialTheme.typography.labelLarge,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -879,7 +895,7 @@ fun AddMcpServerDialog(
                             value = apiKey,
                             onValueChange = { apiKey = it },
                             label = { Text(selectedPreset.apiKeyPlaceholder) },
-                            placeholder = { Text("粘贴 API Key") },
+                            placeholder = { Text(stringResource(R.string.mcp_api_key_hint)) },
                             visualTransformation = if (apiKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
                             singleLine = true,
                             modifier = Modifier.fillMaxWidth(),
@@ -892,7 +908,9 @@ fun AddMcpServerDialog(
                                 IconButton(onClick = { apiKeyVisible = !apiKeyVisible }) {
                                     Icon(
                                         imageVector = if (apiKeyVisible) Icons.Outlined.VisibilityOff else Icons.Outlined.Visibility,
-                                        contentDescription = if (apiKeyVisible) "隐藏 API Key" else "显示 API Key",
+                                        contentDescription = stringResource(
+                                            if (apiKeyVisible) R.string.mcp_hide_api_key else R.string.mcp_show_api_key,
+                                        ),
                                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
@@ -945,7 +963,9 @@ fun AddMcpServerDialog(
                 )
             ) {
                 Text(
-                    if (existingConfig == null) "添加" else "保存",
+                    stringResource(
+                        if (existingConfig == null) R.string.action_add else R.string.action_save,
+                    ),
                     fontWeight = FontWeight.SemiBold
                 )
             }
@@ -960,7 +980,7 @@ fun AddMcpServerDialog(
                 ),
                 border = BorderStroke(1.dp, mcpBorderColor)
             ) {
-                Text("取消", fontWeight = FontWeight.SemiBold)
+                Text(stringResource(R.string.action_cancel), fontWeight = FontWeight.SemiBold)
             }
         }
     )

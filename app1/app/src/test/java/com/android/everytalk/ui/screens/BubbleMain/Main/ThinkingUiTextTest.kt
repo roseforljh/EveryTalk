@@ -15,6 +15,8 @@ class ThinkingUiTextTest {
                 displayedReasoningText = "",
                 isReasoningActive = true,
                 messageIsError = false,
+                errorText = "思考过程中发生错误",
+                emptyText = "暂无详细思考内容",
             )
         )
     }
@@ -27,6 +29,8 @@ class ThinkingUiTextTest {
                 displayedReasoningText = "分析中",
                 isReasoningActive = true,
                 messageIsError = false,
+                errorText = "思考过程中发生错误",
+                emptyText = "暂无详细思考内容",
             )
         )
     }
@@ -39,6 +43,8 @@ class ThinkingUiTextTest {
                 displayedReasoningText = "",
                 isReasoningActive = false,
                 messageIsError = false,
+                errorText = "思考过程中发生错误",
+                emptyText = "暂无详细思考内容",
             )
         )
     }

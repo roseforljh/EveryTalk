@@ -1,5 +1,7 @@
 package com.android.everytalk.util.image
 
+import android.content.Context
+import com.android.everytalk.R
 import java.util.Locale
 
 /** 图片输入、生成结果和远程下载共用的安全边界。 */
@@ -114,49 +116,79 @@ internal fun decodedBase64SizeOrNull(
     return if (padding > 0) characters / 4L * 3L - padding else characters * 3L / 4L
 }
 
-internal fun ImagePersistenceFailure.toUserImageMessage(fileName: String?): String {
-    val imageLabel = fileName?.takeIf(String::isNotBlank)?.let { "图片“$it”" } ?: "所选图片"
+internal fun ImagePersistenceFailure.toUserImageMessage(
+    context: Context,
+    fileName: String?,
+): String {
+    val imageLabel = fileName?.takeIf(String::isNotBlank)?.let {
+        context.getString(R.string.image_input_label_named, it)
+    } ?: context.getString(R.string.image_input_label_selected)
     return when (this) {
         is ImagePersistenceFailure.TooLarge -> {
             val limit = formatBinarySize(limitBytes, keepFraction = false)
             if (actualBytes != null && actualSizeIsExact) {
-                "${imageLabel}大小为 ${formatBinarySize(actualBytes, keepFraction = true)}，超过最大 $limit 限制，请选择更小的图片。"
+                context.getString(
+                    R.string.image_input_too_large_exact,
+                    imageLabel,
+                    formatBinarySize(actualBytes, keepFraction = true),
+                    limit,
+                )
             } else {
-                "${imageLabel}大小已超过最大 $limit 限制，请选择更小的图片。"
+                context.getString(R.string.image_input_too_large, imageLabel, limit)
             }
         }
 
         is ImagePersistenceFailure.TooManyPixels ->
-            "${imageLabel}像素数为 ${formatPixelCount(actualPixels)}，超过最大 ${formatPixelCount(limitPixels)} 限制，请选择尺寸更小的图片。"
+            context.getString(
+                R.string.image_input_too_many_pixels,
+                imageLabel,
+                formatPixelCount(actualPixels),
+                formatPixelCount(limitPixels),
+            )
 
-        is ImagePersistenceFailure.UrlTooLong -> "远程图片地址超过最大 ${formatBinarySize(limitBytes.toLong(), false)} 限制。"
-        ImagePersistenceFailure.EmptyImage -> "$imageLabel 内容为空，请重新选择。"
-        ImagePersistenceFailure.InvalidImage -> "$imageLabel 不是可识别的有效图片，请重新选择。"
-        ImagePersistenceFailure.UnsupportedSource -> "$imageLabel 来源不受支持，请重新选择。"
-        ImagePersistenceFailure.ReadFailed -> "无法读取$imageLabel，请重新选择。"
-        ImagePersistenceFailure.DownloadTimedOut -> "下载${imageLabel}超时，请稍后重试。"
-        ImagePersistenceFailure.DownloadFailed -> "下载${imageLabel}失败，请稍后重试。"
-        ImagePersistenceFailure.StorageFailed -> "保存${imageLabel}失败，请重试。"
+        is ImagePersistenceFailure.UrlTooLong -> context.getString(
+            R.string.image_input_url_too_long,
+            formatBinarySize(limitBytes.toLong(), false),
+        )
+        ImagePersistenceFailure.EmptyImage ->
+            context.getString(R.string.image_input_empty, imageLabel)
+        ImagePersistenceFailure.InvalidImage ->
+            context.getString(R.string.image_input_invalid, imageLabel)
+        ImagePersistenceFailure.UnsupportedSource ->
+            context.getString(R.string.image_input_unsupported, imageLabel)
+        ImagePersistenceFailure.ReadFailed ->
+            context.getString(R.string.image_input_read_failed, imageLabel)
+        ImagePersistenceFailure.DownloadTimedOut ->
+            context.getString(R.string.image_input_download_timeout, imageLabel)
+        ImagePersistenceFailure.DownloadFailed ->
+            context.getString(R.string.image_input_download_failed, imageLabel)
+        ImagePersistenceFailure.StorageFailed ->
+            context.getString(R.string.image_input_storage_failed, imageLabel)
     }
 }
 
-internal fun ImagePersistenceFailure.toGeneratedImageMessage(): String = when (this) {
+internal fun ImagePersistenceFailure.toGeneratedImageMessage(context: Context): String = when (this) {
     is ImagePersistenceFailure.TooLarge ->
-        "图片已生成，但结果超过最大 ${formatBinarySize(limitBytes, false)} 限制，未能保存。"
+        context.getString(R.string.generated_image_too_large, formatBinarySize(limitBytes, false))
 
     is ImagePersistenceFailure.TooManyPixels ->
-        "图片已生成，但像素数超过最大 ${formatPixelCount(limitPixels)} 限制，未能保存。"
+        context.getString(R.string.generated_image_too_many_pixels, formatPixelCount(limitPixels))
 
     is ImagePersistenceFailure.UrlTooLong ->
-        "图片已生成，但远程地址超过最大 ${formatBinarySize(limitBytes.toLong(), false)} 限制，未能下载。"
+        context.getString(
+            R.string.generated_image_url_too_long,
+            formatBinarySize(limitBytes.toLong(), false),
+        )
 
-    ImagePersistenceFailure.DownloadTimedOut -> "图片已生成，但远程下载超过 60 秒，未能保存。"
-    ImagePersistenceFailure.DownloadFailed -> "图片已生成，但远程下载失败，未能保存。"
-    ImagePersistenceFailure.EmptyImage -> "图片生成接口返回了空图片。"
-    ImagePersistenceFailure.InvalidImage -> "图片生成接口返回了无法识别的图片数据。"
-    ImagePersistenceFailure.UnsupportedSource -> "图片生成接口返回了不受支持的图片来源。"
-    ImagePersistenceFailure.ReadFailed -> "图片已生成，但读取图片数据失败。"
-    ImagePersistenceFailure.StorageFailed -> "图片已生成，但写入本地存储失败。"
+    ImagePersistenceFailure.DownloadTimedOut ->
+        context.getString(R.string.generated_image_download_timeout)
+    ImagePersistenceFailure.DownloadFailed ->
+        context.getString(R.string.generated_image_download_failed)
+    ImagePersistenceFailure.EmptyImage -> context.getString(R.string.generated_image_empty)
+    ImagePersistenceFailure.InvalidImage -> context.getString(R.string.generated_image_invalid)
+    ImagePersistenceFailure.UnsupportedSource -> context.getString(R.string.generated_image_unsupported)
+    ImagePersistenceFailure.ReadFailed -> context.getString(R.string.generated_image_read_failed)
+    ImagePersistenceFailure.StorageFailed -> context.getString(R.string.generated_image_storage_failed)
 }
 
 private fun formatBinarySize(bytes: Long, keepFraction: Boolean): String {
