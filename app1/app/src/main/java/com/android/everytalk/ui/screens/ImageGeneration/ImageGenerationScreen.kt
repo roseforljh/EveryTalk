@@ -7,10 +7,8 @@ import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.border
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.clickable
 import androidx.compose.material3.*
 import androidx.compose.ui.res.painterResource
@@ -19,18 +17,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.text.LinkAnnotation
-import androidx.compose.ui.text.SpanStyle
-import androidx.compose.ui.text.TextLinkStyles
-import androidx.compose.ui.text.buildAnnotatedString
-import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavController
 import com.android.everytalk.navigation.Screen
@@ -39,11 +30,7 @@ import com.android.everytalk.statecontroller.ConversationScrollState
 import com.android.everytalk.ui.components.AppTopBar
 import com.android.everytalk.statecontroller.SimpleModeManager
 import com.android.everytalk.data.DataClass.Message
-import com.android.everytalk.ui.components.dialog.AppDialogShape
-import com.android.everytalk.ui.components.dialog.appDialogBorderColor
-import com.android.everytalk.ui.components.dialog.appDialogCancelColor
-import com.android.everytalk.ui.components.dialog.appDialogContainerColor
-import com.android.everytalk.ui.components.dialog.appDialogContentColor
+import com.android.everytalk.ui.screens.MainScreen.AboutDialog
 import com.android.everytalk.ui.screens.MainScreen.buildHistoryLoadingBubblePlaceholders
 import com.android.everytalk.ui.screens.MainScreen.shouldHideHistoryLoadingSkeleton
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
@@ -56,7 +43,6 @@ import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import com.android.everytalk.ui.components.ScrollToBottomButton
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 
@@ -351,7 +337,6 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
 
     if (showAboutDialog) {
         AboutDialog(
-            viewModel = viewModel,
             onDismiss = { viewModel.dismissAboutDialog() }
         )
     }
@@ -600,101 +585,4 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
             }
         }
     }
-}
-
-@Composable
-private fun AboutDialog(
-    viewModel: AppViewModel,
-    onDismiss: () -> Unit
-) {
-    val context = LocalContext.current
-    val packageInfo = remember { context.packageManager.getPackageInfo(context.packageName, 0) }
-    val versionName = packageInfo.versionName
-
-    val dialogBg = appDialogContainerColor()
-    val contentColor = appDialogContentColor()
-    val cancelButtonColor = appDialogCancelColor()
-    val confirmButtonColor = contentColor
-    val confirmButtonTextColor = dialogBg
-
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
-        shape = AppDialogShape,
-        containerColor = dialogBg,
-        titleContentColor = contentColor,
-        textContentColor = contentColor,
-        title = { Text("关于 EveryTalk") },
-        text = {
-            val annotatedString = buildAnnotatedString {
-                append("版本: $versionName\n\n一个开源的、可高度定制的 AI 聊天客户端。\n\nGitHub: ")
-                withLink(
-                    LinkAnnotation.Url(
-                        url = "https://github.com/roseforljh/KunTalkwithAi",
-                        styles = TextLinkStyles(style = SpanStyle(color = Color(0xFF007eff)))
-                    )
-                ) {
-                    append("EveryTalk")
-                }
-            }
-
-            Text(
-                text = annotatedString,
-                style = MaterialTheme.typography.bodyMedium.copy(color = contentColor)
-            )
-        },
-        confirmButton = {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = androidx.compose.foundation.layout.Arrangement.spacedBy(12.dp)
-            ) {
-                // 关闭按钮：统一红色描边取消样式
-                OutlinedButton(
-                    onClick = onDismiss,
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp),
-                    shape = RoundedCornerShape(24.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = dialogBg,
-                        contentColor = cancelButtonColor
-                    ),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
-                ) {
-                    Text(
-                        text = "关闭",
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    )
-                }
-
-                // 检查更新按钮：统一确认样式
-                Button(
-                    onClick = {
-                        viewModel.checkForUpdates()
-                        onDismiss()
-                    },
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp),
-                    shape = RoundedCornerShape(24.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = confirmButtonColor,
-                        contentColor = confirmButtonTextColor,
-                        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                        disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                    )
-                ) {
-                    Text(
-                        text = "检查更新",
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    )
-                }
-            }
-        },
-        dismissButton = {}
-    )
 }

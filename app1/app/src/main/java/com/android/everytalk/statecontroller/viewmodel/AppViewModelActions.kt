@@ -12,7 +12,6 @@ import androidx.lifecycle.viewModelScope
 import coil3.imageLoader
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.util.storage.FileManager
-import com.android.everytalk.data.DataClass.GitHubRelease
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.WebSearchResult
@@ -56,7 +55,6 @@ import com.android.everytalk.statecontroller.viewmodel.DialogManager
 import com.android.everytalk.statecontroller.viewmodel.DrawerManager
 import com.android.everytalk.statecontroller.viewmodel.ProviderManager
 import com.android.everytalk.statecontroller.viewmodel.ExportManager
-import com.android.everytalk.statecontroller.viewmodel.UpdateManager
 import com.android.everytalk.statecontroller.facade.MessageItemsController
 import com.android.everytalk.statecontroller.mcp.dispatch.McpToolCategory
 import com.android.everytalk.statecontroller.controller.systemprompt.SystemPromptController
@@ -230,27 +228,6 @@ import java.util.TimeZone
 
     internal fun AppViewModel.dismissAboutDialog() {
         dialogManager.dismissAboutDialog()
-    }
-
-    internal fun AppViewModel.checkForUpdates() {
-        // 需求变更：当用户手动点击检查更新时，
-        // 如果已有自动弹出的更新对话在显示，先关闭它，再以“手动检查”的对话替换显示。
-        if (updateManager.isUpdateDialogActive()) {
-            updateManager.clearUpdateInfo() // 关闭前一个（丑的）对话
-        }
-        updateManager.checkForUpdates() // 重新以手动检查流程弹出（保留你想要的后者样式）
-    }
-
-    internal fun AppViewModel.checkForUpdatesSilently() {
-        // 启动静默检查前先确认无对话激活，避免与手动检查叠加
-        if (updateManager.isUpdateDialogActive()) {
-            return
-        }
-        updateManager.checkForUpdatesSilently()
-    }
-
-    internal fun AppViewModel.clearUpdateInfo() {
-        updateManager.clearUpdateInfo()
     }
 
     internal fun AppViewModel.getCurrentMode(): SimpleModeManager.ModeType {

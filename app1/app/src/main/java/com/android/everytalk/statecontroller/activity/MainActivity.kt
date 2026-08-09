@@ -44,6 +44,8 @@ import com.android.everytalk.navigation.Screen
 import com.android.everytalk.ui.screens.MainScreen.AppDrawerContent
 import com.android.everytalk.ui.screens.MainScreen.ChatScreen
 import com.android.everytalk.ui.screens.ImageGeneration.ImageGenerationScreen
+import com.android.everytalk.ui.screens.appinfo.AppInfoScreen
+import com.android.everytalk.ui.screens.appinfo.PrivacyPolicyScreen
 import com.android.everytalk.ui.screens.settings.SettingsScreen
 import com.android.everytalk.ui.theme.App1Theme
 import com.android.everytalk.util.message.MAX_EXTERNAL_TRANSFER_BYTES
@@ -156,11 +158,6 @@ class MainActivity : ComponentActivity() {
                             application
                         )
                     )
-
-                    // 应用启动：静默检查更新，UI 侧监听 latestReleaseInfo/updateInfo 后弹出统一更新对话卡
-                    LaunchedEffect(Unit) {
-                        appViewModel.checkForUpdatesSilently()
-                    }
 
                     val isSearchActiveInDrawer by appViewModel.isSearchActiveInDrawer.collectAsState()
                     val searchQueryInDrawer by appViewModel.searchQueryInDrawer.collectAsState()
@@ -374,7 +371,14 @@ class MainActivity : ComponentActivity() {
                                             isImageGenerationMode
                                         )
                                     },
-                                    onAboutClick = { appViewModel.showAboutDialog() },
+                                    onAppInfoClick = {
+                                        navController.navigate(Screen.APP_INFO_SCREEN) {
+                                            launchSingleTop = true
+                                        }
+                                        coroutineScope.launch {
+                                            appViewModel.drawerState.close()
+                                        }
+                                    },
                                     onImageGenerationClick = {
                                         // 从文本模式切换到图像模式，显示 Toast
                                         appViewModel.simpleModeManager.setIntendedMode(SimpleModeManager.ModeType.IMAGE, showToast = !isImageGenerationMode)
@@ -518,14 +522,81 @@ class MainActivity : ComponentActivity() {
                                             animationSpec = tween(300, easing = FastOutSlowInEasing)
                                         )
                                     }
+                                 ) {
+                                     SettingsScreen(
+                                         viewModel = appViewModel,
+                                         navController = navController
+                                     )
+                                 }
+                                composable(
+                                    route = Screen.APP_INFO_SCREEN,
+                                    enterTransition = {
+                                        androidx.compose.animation.slideInHorizontally(
+                                            initialOffsetX = { fullWidth -> fullWidth },
+                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
+                                        )
+                                    },
+                                    exitTransition = {
+                                        androidx.compose.animation.slideOutHorizontally(
+                                            targetOffsetX = { fullWidth -> -fullWidth / 4 },
+                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
+                                        )
+                                    },
+                                    popEnterTransition = {
+                                        androidx.compose.animation.slideInHorizontally(
+                                            initialOffsetX = { fullWidth -> -fullWidth / 4 },
+                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
+                                        )
+                                    },
+                                    popExitTransition = {
+                                        androidx.compose.animation.slideOutHorizontally(
+                                            targetOffsetX = { fullWidth -> fullWidth },
+                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
+                                        )
+                                    },
                                 ) {
-                                    SettingsScreen(
-                                        viewModel = appViewModel,
-                                        navController = navController
+                                    AppInfoScreen(
+                                        onBack = { navController.popBackStack() },
+                                        onOpenPrivacyPolicy = {
+                                            navController.navigate(Screen.PRIVACY_POLICY_SCREEN) {
+                                                launchSingleTop = true
+                                            }
+                                        },
                                     )
                                 }
                                 composable(
-                                    route = Screen.IMAGE_GENERATION_SETTINGS_SCREEN,
+                                    route = Screen.PRIVACY_POLICY_SCREEN,
+                                    enterTransition = {
+                                        androidx.compose.animation.slideInHorizontally(
+                                            initialOffsetX = { fullWidth -> fullWidth },
+                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
+                                        )
+                                    },
+                                    exitTransition = {
+                                        androidx.compose.animation.slideOutHorizontally(
+                                            targetOffsetX = { fullWidth -> -fullWidth / 4 },
+                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
+                                        )
+                                    },
+                                    popEnterTransition = {
+                                        androidx.compose.animation.slideInHorizontally(
+                                            initialOffsetX = { fullWidth -> -fullWidth / 4 },
+                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
+                                        )
+                                    },
+                                    popExitTransition = {
+                                        androidx.compose.animation.slideOutHorizontally(
+                                            targetOffsetX = { fullWidth -> fullWidth },
+                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
+                                        )
+                                    },
+                                ) {
+                                    PrivacyPolicyScreen(
+                                        onBack = { navController.popBackStack() },
+                                    )
+                                }
+                                 composable(
+                                     route = Screen.IMAGE_GENERATION_SETTINGS_SCREEN,
                                     enterTransition = {
                                         androidx.compose.animation.slideInHorizontally(
                                             initialOffsetX = { fullWidth -> fullWidth },

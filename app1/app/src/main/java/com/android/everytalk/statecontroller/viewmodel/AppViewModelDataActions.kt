@@ -13,7 +13,6 @@ import coil3.imageLoader
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.util.storage.FileManager
 import com.android.everytalk.util.image.ImageHandlingLimits
-import com.android.everytalk.data.DataClass.GitHubRelease
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.WebSearchResult
@@ -58,7 +57,6 @@ import com.android.everytalk.statecontroller.viewmodel.DialogManager
 import com.android.everytalk.statecontroller.viewmodel.DrawerManager
 import com.android.everytalk.statecontroller.viewmodel.ProviderManager
 import com.android.everytalk.statecontroller.viewmodel.ExportManager
-import com.android.everytalk.statecontroller.viewmodel.UpdateManager
 import com.android.everytalk.statecontroller.facade.MessageItemsController
 import com.android.everytalk.statecontroller.mcp.dispatch.McpToolCategory
 import com.android.everytalk.statecontroller.controller.systemprompt.SystemPromptController

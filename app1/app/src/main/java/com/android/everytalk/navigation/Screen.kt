@@ -3,6 +3,8 @@ object Screen {
     const val HOME_SCREEN = "home_screen"
     const val CHAT_SCREEN = "chat_screen"
     const val SETTINGS_SCREEN = "settings_screen"
+    const val APP_INFO_SCREEN = "app_info_screen"
+    const val PRIVACY_POLICY_SCREEN = "privacy_policy_screen"
     const val IMAGE_GENERATION_SCREEN = "image_generation_screen"
     const val IMAGE_GENERATION_SETTINGS_SCREEN = "image_generation_settings_screen"
     const val VOICE_INPUT_SCREEN = "voice_input_screen"

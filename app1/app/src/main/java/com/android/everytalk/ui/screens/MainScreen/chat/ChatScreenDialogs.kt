@@ -84,7 +84,6 @@ import kotlinx.coroutines.delay
 
 @Composable
 internal fun AboutDialog(
-    viewModel: AppViewModel,
     onDismiss: () -> Unit
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -94,8 +93,6 @@ internal fun AboutDialog(
     val dialogBg = appDialogContainerColor()
     val contentColor = appDialogContentColor()
     val cancelButtonColor = appDialogCancelColor()
-    val confirmButtonColor = contentColor
-    val confirmButtonTextColor = dialogBg
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -124,55 +121,24 @@ internal fun AboutDialog(
             )
         },
         confirmButton = {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            OutlinedButton(
+                onClick = onDismiss,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp),
+                shape = RoundedCornerShape(24.dp),
+                colors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = dialogBg,
+                    contentColor = cancelButtonColor
+                ),
+                border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
             ) {
-                // 关闭按钮：统一取消样式（红色描边）
-                OutlinedButton(
-                    onClick = onDismiss,
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp),
-                    shape = RoundedCornerShape(24.dp),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        containerColor = dialogBg,
-                        contentColor = cancelButtonColor
-                    ),
-                    border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
-                ) {
-                    Text(
-                        text = "关闭",
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontWeight = FontWeight.SemiBold
-                        )
+                Text(
+                    text = "关闭",
+                    style = MaterialTheme.typography.labelLarge.copy(
+                        fontWeight = FontWeight.SemiBold
                     )
-                }
-
-                // 检查更新按钮：统一确认样式
-                Button(
-                    onClick = {
-                        viewModel.checkForUpdates()
-                        onDismiss()
-                    },
-                    modifier = Modifier
-                        .weight(1f)
-                        .height(48.dp),
-                    shape = RoundedCornerShape(24.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = confirmButtonColor,
-                        contentColor = confirmButtonTextColor,
-                        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
-                        disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
-                    )
-                ) {
-                    Text(
-                        text = "检查更新",
-                        style = MaterialTheme.typography.labelLarge.copy(
-                            fontWeight = FontWeight.SemiBold
-                        )
-                    )
-                }
+                )
             }
         },
         dismissButton = {}

@@ -12,7 +12,6 @@ import androidx.lifecycle.viewModelScope
 import coil3.imageLoader
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.util.storage.FileManager
-import com.android.everytalk.data.DataClass.GitHubRelease
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.WebSearchResult
@@ -57,7 +56,6 @@ import com.android.everytalk.statecontroller.viewmodel.DialogManager
 import com.android.everytalk.statecontroller.viewmodel.DrawerManager
 import com.android.everytalk.statecontroller.viewmodel.ProviderManager
 import com.android.everytalk.statecontroller.viewmodel.ExportManager
-import com.android.everytalk.statecontroller.viewmodel.UpdateManager
 import com.android.everytalk.statecontroller.facade.MessageItemsController
 import com.android.everytalk.statecontroller.mcp.dispatch.McpToolCategory
 import com.android.everytalk.statecontroller.controller.systemprompt.SystemPromptController
@@ -382,13 +380,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), false)
     // SystemPrompt moved to SystemPromptController
 
-   internal val updateManager = UpdateManager(
-       application = getApplication(),
-       scope = viewModelScope,
-       showSnackbar = ::showSnackbar
-   )
-   val latestReleaseInfo: StateFlow<GitHubRelease?> = updateManager.latestReleaseInfo
-   val updateInfo: StateFlow<com.android.everytalk.data.DataClass.VersionUpdateInfo?> = updateManager.updateInfo
    // 控制器：系统提示
    internal val systemPromptController = SystemPromptController(stateHolder, dialogManager, historyManager, viewModelScope)
    // 委托到 MessageItemsController，减少 AppViewModel 体积

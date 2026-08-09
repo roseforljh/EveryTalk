@@ -6,7 +6,6 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.ImageGenerationResponse
-import com.android.everytalk.data.DataClass.GitHubRelease
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.models.toAttachmentContextParts
 import com.android.everytalk.util.image.ImageHandlingLimits

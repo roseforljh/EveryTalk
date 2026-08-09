@@ -37,7 +37,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
@@ -124,8 +123,6 @@ fun ChatScreen(
     val isMcpEnabled by viewModel.stateHolder._isMcpEnabledForNextRequest.collectAsState()
     val isLoadingHistoryData by viewModel.isLoadingHistoryData.collectAsState()
     val conversationId by viewModel.currentConversationId.collectAsState()
-    val latestReleaseInfo by viewModel.latestReleaseInfo.collectAsState()
-    val updateInfo by viewModel.updateInfo.collectAsState()
     val systemPrompt by viewModel.systemPrompt.collectAsState()
     val isSystemPromptEngaged by viewModel.isSystemPromptEngaged.collectAsState()
     val isSystemPromptExpanded by remember(conversationId) {
@@ -856,7 +853,6 @@ fun ChatScreen(
 
     if (showAboutDialog) {
         AboutDialog(
-            viewModel = viewModel,
             onDismiss = { viewModel.dismissAboutDialog() }
         )
     }
@@ -874,21 +870,6 @@ fun ChatScreen(
         )
     }
 
-    if (latestReleaseInfo != null) {
-        val uriHandler = LocalUriHandler.current
-        com.android.everytalk.ui.screens.settings.dialogs.UpdateDialog(
-            showDialog = true,
-            latestVersion = latestReleaseInfo!!.tagName,
-            changelog = latestReleaseInfo!!.body,
-            force = (updateInfo?.isForceUpdate == true),
-            onDismiss = { viewModel.clearUpdateInfo() },
-            onUpdateNow = {
-                uriHandler.openUri(latestReleaseInfo!!.htmlUrl)
-                viewModel.clearUpdateInfo()
-            },
-            onRemindLater = { viewModel.clearUpdateInfo() }
-        )
-    }
    val showSystemPromptDialog by viewModel.showSystemPromptDialog.collectAsState()
 
    if (showSystemPromptDialog) {

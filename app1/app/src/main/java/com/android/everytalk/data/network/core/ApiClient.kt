@@ -6,7 +6,6 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.ImageGenerationResponse
-import com.android.everytalk.data.DataClass.GitHubRelease
 import com.android.everytalk.data.DataClass.ModelCapabilityCandidate
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.util.image.ImageHandlingLimits
@@ -110,8 +109,6 @@ internal fun ensureInlineAttachmentSize(
 }
 
 object ApiClient {
-    private const val GITHUB_API_BASE_URL = "https://api.github.com/"
-    
     /**
      * Parse backend stream event JSON format and convert to AppStreamEvent
      * 委托到 StreamEventParser 处理，保持向后兼容
@@ -475,71 +472,6 @@ object ApiClient {
         }
     }
 
-
-    private fun getUpdateUrls(): List<String> {
-        return listOf(
-            GITHUB_API_BASE_URL + "repos/roseforljh/EveryTalk/releases/latest"
-        )
-    }
-
-    suspend fun getLatestRelease(): GitHubRelease {
-        if (!isInitialized) {
-            throw IllegalStateException("ApiClient not initialized. Call initialize() first.")
-        }
-
-        val urls = getUpdateUrls()
-        var lastException: Exception? = null
-        val maxRetries = 2  // VPN环境下增加重试次数
-
-        for (url in urls) {
-            repeat(maxRetries + 1) { attempt ->
-                try {
-                    android.util.Log.d("ApiClient", "尝试获取更新信息 - URL: $url, 尝试次数: ${attempt + 1}")
-                    
-                    val response = client.get {
-                        url(url)
-                        // OkHttp 默认重定向可能将 POST 301 转为 GET，这里是 GET 请求所以没问题
-                        header(HttpHeaders.Accept, "application/vnd.github.v3+json")
-                        header(HttpHeaders.CacheControl, "no-cache")
-                        header(HttpHeaders.Pragma, "no-cache")
-                        header(HttpHeaders.UserAgent, "EveryTalk-Android-App")
-                        
-                        // VPN环境下的特殊超时配置
-                        timeout {
-                            requestTimeoutMillis = 60_000
-                            connectTimeoutMillis = 30_000
-                            socketTimeoutMillis = 60_000
-                        }
-                    }.body<GitHubRelease>()
-                    
-                    android.util.Log.d("ApiClient", "成功获取更新信息从: $url")
-                    return response
-                    
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    lastException = e
-                    val isLastAttempt = attempt == maxRetries
-                    val isLastUrl = url == urls.last()
-                    
-                    android.util.Log.w("ApiClient",
-                        "获取更新失败 - URL: $url, 尝试: ${attempt + 1}/$maxRetries, 错误: ${e.message}", e)
-                    
-                    if (!isLastAttempt && !isLastUrl) {
-                        // 在VPN环境下，在重试前增加延迟
-                        kotlinx.coroutines.delay(1000L * (attempt + 1))
-                        android.util.Log.d("ApiClient", "等待 ${1000L * (attempt + 1)}ms 后重试...")
-                    }
-                    
-                    if (isLastAttempt) {
-                        return@repeat  // 这个URL的所有重试都失败了，尝试下一个URL
-                    }
-                }
-            }
-        }
-
-        throw IOException("从所有可用源检查更新失败。可能的原因：网络连接问题、VPN干扰、或服务器不可达。", lastException)
-    }
 
     suspend fun getModels(apiUrl: String, apiKey: String, channel: String? = null): List<String> =
         getModelCatalog(apiUrl, apiKey, channel).map(ModelCapabilityCandidate::modelId)
