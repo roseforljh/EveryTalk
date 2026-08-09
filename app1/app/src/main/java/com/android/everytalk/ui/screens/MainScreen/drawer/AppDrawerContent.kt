@@ -33,6 +33,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.LocalFocusManager
@@ -53,6 +54,7 @@ import com.android.everytalk.ui.components.dialog.appDialogCancelColor
 import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldColors
+import com.android.everytalk.ui.components.floatingEdgeGradient
 @OptIn(
     ExperimentalMaterial3Api::class,
     ExperimentalComposeUiApi::class,
@@ -78,7 +80,7 @@ fun AppDrawerContent(
    onDismissClearImageHistoryDialog: () -> Unit,
     getPreviewForIndex: (Int) -> String,
     getFullTextForIndex: (Int) -> String,
-    onAboutClick: () -> Unit,
+    onAppInfoClick: () -> Unit,
     onImageGenerationClick: () -> Unit,
     isImageGenerationMode: Boolean,
     expandedItemIndex: Int?, // 新增：展开项状态
@@ -254,6 +256,11 @@ fun AppDrawerContent(
     BackHandler(enabled = expandedItemIndex != null) {
         onExpandItem(null)
     }
+    val drawerBackground = MaterialTheme.colorScheme.background
+    val statusBarInset = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+    val navigationBarInset = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+    val topChromeHeight = statusBarInset + 76.dp
+    val bottomChromeHeight = navigationBarInset + 92.dp
     ModalDrawerSheet(
         modifier = modifier
             .fillMaxHeight()
@@ -264,12 +271,15 @@ fun AppDrawerContent(
                 spotColor = Color.Black.copy(alpha = 0.50f),
                 ambientColor = Color.Black.copy(alpha = 0.40f),
             ),
-        drawerContainerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
+        // Sheet 自身覆盖系统栏 Insets，避免内部内容背景之外露出后层页面。
+        drawerContainerColor = drawerBackground,
         drawerTonalElevation = 0.dp,
+        windowInsets = WindowInsets(0.dp),
     ) {
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
+                .background(drawerBackground)
                 .animateContentSize(animationSpec = tween(durationMillis = CONTENT_CHANGE_ANIMATION_DURATION_MS))
         ) {
             val textFieldInteractionSource = remember { MutableInteractionSource() }
@@ -279,277 +289,50 @@ fun AppDrawerContent(
                     onSearchActiveChange(true)
                 }
             }
-            // --- 搜索框区域 ---
-            Row(
+            DrawerSearchBar(
+                value = currentSearchQuery,
+                isSearchActive = isSearchActive,
+                onValueChange = onSearchQueryChange,
+                onSearchActiveChange = onSearchActiveChange,
+                focusRequester = focusRequester,
+                focusManager = focusManager,
+                interactionSource = textFieldInteractionSource,
                 modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .windowInsetsPadding(WindowInsets.statusBars)
+                    .zIndex(2f),
+            )
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
                     .fillMaxWidth()
-                    .padding(horizontal = 15.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically
+                    .height(topChromeHeight)
+                    .floatingEdgeGradient(drawerBackground, fromTop = true)
+                    .zIndex(1f),
+            )
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .zIndex(0f),
+                contentPadding = PaddingValues(top = topChromeHeight, bottom = bottomChromeHeight),
             ) {
-                OutlinedTextField(
-                    value = currentSearchQuery,
-                    onValueChange = { newQuery ->
-                        onSearchQueryChange(newQuery)
-                        if (newQuery.isNotBlank() && !isSearchActive) {
-                            onSearchActiveChange(true)
-                        }
-                    },
-                    modifier = Modifier
-                        .weight(1f)
-                        .heightIn(min = 48.dp)
-                        .focusRequester(focusRequester)
-                        .shadow(
-                            elevation = 8.dp,
-                            shape = RoundedCornerShape(50.dp),
-                            spotColor = Color.Black.copy(alpha = 0.25f),
-                            ambientColor = Color.Black.copy(alpha = 0.20f)
-                        )
-                        .border(
-                            width = 1.dp,
-                            color = MaterialTheme.colorScheme.outline.copy(alpha = 0.25f),
-                            shape = RoundedCornerShape(50.dp)
-                        ),
-                    placeholder = { Text("搜索历史记录") },
-                    leadingIcon = {
-                        Crossfade(
-                            targetState = isSearchActive,
-                            animationSpec = tween(EXPAND_ANIMATION_DURATION_MS),
-                            label = "SearchIconCrossfade"
-                        ) { active ->
-                            if (active) {
-                                IconButton(
-                                    onClick = { onSearchActiveChange(false) },
-                                    modifier = Modifier.size(24.dp)
-                                ) {
-                                    Icon(
-                                        painter = painterResource(R.drawable.ic_arrow_back),
-                                        "返回",
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-                            } else {
-                                IconButton(
-                                    onClick = { onSearchActiveChange(true) },
-                                    modifier = Modifier.size(24.dp)
-                                ) {
-                                    Icon(
-                                        painter = painterResource(R.drawable.ic_search),
-                                        "搜索图标",
-                                        modifier = Modifier.size(20.dp)
-                                    )
-                                }
-                            }
-                        }
-                    },
-                    trailingIcon = {
-                        if (currentSearchQuery.isNotEmpty()) {
-                            IconButton(onClick = { onSearchQueryChange("") }) {
-                                Icon(painter = painterResource(R.drawable.ic_close), "清除搜索")
-                            }
-                        }
-                    },
-                    shape = RoundedCornerShape(50.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = Color.Transparent,
-                        unfocusedBorderColor = Color.Transparent,
-                        focusedContainerColor = MaterialTheme.colorScheme.surface,
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surface,
-                        cursorColor = MaterialTheme.colorScheme.primary,
-                        focusedPlaceholderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.70f),
-                        unfocusedPlaceholderColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.70f),
-                        focusedTextColor = MaterialTheme.colorScheme.onSurface,
-                        unfocusedTextColor = MaterialTheme.colorScheme.onSurface
-                    ),
-                    singleLine = true,
-                    interactionSource = textFieldInteractionSource,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() })
-                )
-            }
-            // --- “新建会话” 和 “清空记录” 按钮 ---
-            Column {
-                Spacer(Modifier.height(8.dp))
-                Button(
-                    onClick = {
-                        if (isImageGenerationMode) {
-                            onImageGenerationClick()
-                        } else {
-                            onNewChatClick()
-                        }
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp)
-                        .height(48.dp),
-                    shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
-                        contentColor = MaterialTheme.colorScheme.onSurface
-                    ),
-                    elevation = ButtonDefaults.buttonElevation(
-                        defaultElevation = 0.dp,
-                        pressedElevation = 0.dp
-                    ),
-                    contentPadding = PaddingValues(0.dp)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Start
-                    ) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_plus),
-                            "新建会话图标",
-                            tint = MaterialTheme.colorScheme.onSurface
-                        )
-                        Spacer(Modifier.width(20.dp))
-                        Text(
-                            if (isImageGenerationMode) "新建图像生成" else "新建会话",
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            fontSize = MaterialTheme.typography.bodyLarge.fontSize
-                        )
-                    }
-                }
-                Spacer(Modifier.height(5.dp))
-                Button(
-                    onClick = {
-                       if (isImageGenerationMode) {
-                           onShowClearImageHistoryDialog()
-                       } else {
-                           showClearAllConfirm = true
-                       }
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp)
-                        .height(48.dp),
-                    shape = RoundedCornerShape(8.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
-                        contentColor = MaterialTheme.colorScheme.onSurface
-                    ),
-                    elevation = ButtonDefaults.buttonElevation(
-                        defaultElevation = 0.dp,
-                        pressedElevation = 0.dp
-                    ),
-                    contentPadding = PaddingValues(0.dp)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Start
-                    ) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_trash),
-                            "清空记录图标",
-                            tint = MaterialTheme.colorScheme.onSurface
-                        )
-                        Spacer(Modifier.width(20.dp))
-                        Text(
-                            "清空记录",
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            fontSize = MaterialTheme.typography.bodyLarge.fontSize
-                        )
-                    }
-                }
-                Spacer(Modifier.height(5.dp))
-                if (isImageGenerationMode) {
-                    Button(
-                        onClick = {
-                            onNewChatClick()
-                        },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp)
-                            .height(48.dp),
-                        shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
-                            contentColor = MaterialTheme.colorScheme.onSurface
-                        ),
-                        elevation = ButtonDefaults.buttonElevation(
-                            defaultElevation = 0.dp,
-                            pressedElevation = 0.dp
-                        ),
-                        contentPadding = PaddingValues(0.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(start = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Start
-                        ) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_writing),
-                                "文本生成图标",
-                                tint = MaterialTheme.colorScheme.onSurface
-                            )
-                            Spacer(Modifier.width(20.dp))
-                            Text(
-                                "文本生成",
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                fontSize = MaterialTheme.typography.bodyLarge.fontSize
-                            )
-                        }
-                    }
-                } else {
-                    Button(
-                        onClick = {
+                item(key = "drawer_primary_actions") {
+                    DrawerPrimaryActions(
+                        isImageGenerationMode = isImageGenerationMode,
+                        onNewChatClick = onNewChatClick,
+                        onClearClick = {
                             if (isImageGenerationMode) {
-                                // Already in image gen mode, so just start a new chat
-                                onNewChatClick()
+                                onShowClearImageHistoryDialog()
                             } else {
-                                onImageGenerationClick()
+                                showClearAllConfirm = true
                             }
                         },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp)
-                            .height(48.dp),
-                        shape = RoundedCornerShape(8.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
-                            contentColor = MaterialTheme.colorScheme.onSurface
-                        ),
-                        elevation = ButtonDefaults.buttonElevation(
-                            defaultElevation = 0.dp,
-                            pressedElevation = 0.dp
-                        ),
-                        contentPadding = PaddingValues(0.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(start = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Start
-                        ) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_image_gallery),
-                                "图像生成图标",
-                                tint = MaterialTheme.colorScheme.onSurface
-                            )
-                            Spacer(Modifier.width(20.dp))
-                            Text(
-                                "图像生成",
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                fontSize = MaterialTheme.typography.bodyLarge.fontSize
-                            )
-                        }
-                    }
+                        onImageGenerationClick = onImageGenerationClick,
+                    )
                 }
-            }
-            // --- "分组" 标题行 ---
-            Row(
+                // --- "分组" 标题行 ---
+                item(key = "drawer_group_section_header") {
+                    Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(start = 16.dp, end = 8.dp, top = 16.dp, bottom = 8.dp)
@@ -559,7 +342,7 @@ fun AppDrawerContent(
                     }, // 使整行可点击以切换按钮可见性和展开状态
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
-            ) {
+                    ) {
                 Text(
                     text = "分组",
                     style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
@@ -592,63 +375,62 @@ fun AppDrawerContent(
                         tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = addGroupButtonAlpha)
                     )
                 }
-            }
-            // --- 分组列表显示区域 ---
-            AnimatedVisibility(
-                visible = isGroupSectionExpanded,
-                enter = expandVertically(animationSpec = tween(durationMillis = 200)),
-                exit = shrinkVertically(animationSpec = tween(durationMillis = 200))
-            ) {
-                if (conversationGroups.isNotEmpty()) {
-                    LazyColumn(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .animateContentSize()
-                            .heightIn(max = 200.dp), // 限制分组区域的最大高度
-                        contentPadding = PaddingValues(vertical = 4.dp)
-                    ) {
+                    }
+                }
+                // 分组与会话共享当前 LazyColumn，避免嵌套滚动区域。
+                if (isGroupSectionExpanded) {
+                    if (conversationGroups.isEmpty()) {
+                        item(key = "groups_empty") {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 12.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    "暂无分组",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    fontWeight = FontWeight.Bold,
+                                )
+                            }
+                        }
+                    } else {
                         conversationGroups.keys.forEach { groupName ->
-                            stickyHeader(key = "group_header_$groupName") {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .background(MaterialTheme.colorScheme.surfaceContainerLowest)
-                                        .then(if (deletingGroups.contains(groupName)) Modifier else Modifier.animateItem(placementSpec = tween(300)))
+                            item(key = "group_header_$groupName") {
+                                androidx.compose.animation.AnimatedVisibility(
+                                    visible = !deletingGroups.contains(groupName),
+                                    exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
+                                    modifier = if (deletingGroups.contains(groupName)) Modifier else Modifier.animateItem(placementSpec = tween(300)),
                                 ) {
-                                    androidx.compose.animation.AnimatedVisibility(
-                                        visible = !deletingGroups.contains(groupName),
-                                        exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300))
-                                    ) {
-                                        CollapsibleGroupHeader(
-                                            groupName = groupName,
-                                            isExpanded = expandedGroups.contains(groupName),
-                                            onToggleExpand = { onToggleGroup(groupName) },
-                                            onRename = { newName -> onRenameGroup(groupName, newName) },
-                                            onDelete = {
-                                                deletingGroups.add(groupName)
-                                                scope.launch {
-                                                    delay(300)
-                                                    onDeleteGroup(groupName)
-                                                    deletingGroups.remove(groupName)
-                                                }
-                                            },
-                                            modifier = Modifier
-                                        )
-                                    }
+                                    CollapsibleGroupHeader(
+                                        groupName = groupName,
+                                        isExpanded = expandedGroups.contains(groupName),
+                                        onToggleExpand = { onToggleGroup(groupName) },
+                                        onRename = { newName -> onRenameGroup(groupName, newName) },
+                                        onDelete = {
+                                            deletingGroups.add(groupName)
+                                            scope.launch {
+                                                delay(300)
+                                                onDeleteGroup(groupName)
+                                                deletingGroups.remove(groupName)
+                                            }
+                                        },
+                                    )
                                 }
                             }
                             val isExpanded = expandedGroups.contains(groupName) && !deletingGroups.contains(groupName)
-                            val groupItems = processedItems.custom[groupName] ?: emptyList()
+                            val groupItems = processedItems.custom[groupName].orEmpty()
                             if (isExpanded && groupItems.isNotEmpty()) {
                                 items(
                                     items = groupItems,
-                                    key = { itemData -> "custom_${itemData.stableId}_${isImageGenerationMode}" }
+                                    key = { itemData -> "custom_${itemData.stableId}_${isImageGenerationMode}" },
                                 ) { itemData ->
                                     androidx.compose.animation.AnimatedVisibility(
                                         visible = !deletingItems.contains(itemData.stableId),
                                         exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
                                         enter = expandVertically(animationSpec = tween(300)) + fadeIn(animationSpec = tween(300)),
-                                        modifier = if (deletingItems.contains(itemData.stableId)) Modifier else Modifier.animateItem(placementSpec = tween(300))
+                                        modifier = if (deletingItems.contains(itemData.stableId)) Modifier else Modifier.animateItem(placementSpec = tween(300)),
                                     ) {
                                         ConversationItem(itemData)
                                     }
@@ -660,171 +442,133 @@ fun AppDrawerContent(
                                             .fillMaxWidth()
                                             .padding(vertical = 12.dp)
                                             .animateItem(placementSpec = tween(300)),
-                                        contentAlignment = Alignment.Center
+                                        contentAlignment = Alignment.Center,
                                     ) {
                                         Text(
                                             "暂无分组",
                                             color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                                             style = MaterialTheme.typography.bodySmall,
-                                            fontWeight = FontWeight.Bold
+                                            fontWeight = FontWeight.Bold,
                                         )
                                     }
                                 }
                             }
                         }
                     }
-                } else {
-                    // 如果没有分组，显示提示文本
-                    Box(
+                }
+                // --- "会话" 标题行 ---
+                item(key = "drawer_conversation_section_header") {
+                    Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(vertical = 12.dp),
-                        contentAlignment = Alignment.Center
+                            .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
                         Text(
-                            "暂无分组",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                            style = MaterialTheme.typography.bodySmall,
-                            fontWeight = FontWeight.Bold
+                            text = "会话",
+                            style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
-            }
-            // --- "会话" 标题行 ---
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Text(
-                    text = "会话",
-                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-            }
-            // --- 会话列表显示区域 ---
-            Box(modifier = Modifier.weight(1f)) {
+                // --- 会话列表显示区域 ---
                 when {
                     isLoadingHistoryData -> {
-                        HistorySkeletonLoading()
+                        item(key = "history_loading") {
+                            HistorySkeletonLoading()
+                        }
                     }
                     historicalConversations.isEmpty() && !isLoadingHistoryData -> {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(vertical = 20.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text("暂无聊天记录", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        item(key = "history_empty") {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 160.dp)
+                                    .padding(vertical = 20.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text("暂无聊天记录", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
                     }
                     isSearchActive && currentSearchQuery.isNotBlank() && processedItems.pinned.isEmpty() && processedItems.custom.isEmpty() && processedItems.ungrouped.isEmpty() -> {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(vertical = 20.dp),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Text("无匹配结果", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        item(key = "history_search_empty") {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .heightIn(min = 160.dp)
+                                    .padding(vertical = 20.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text("无匹配结果", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
                     }
                     else -> {
-                        LazyColumn(
-                            modifier = Modifier.fillMaxSize(),
-                            contentPadding = PaddingValues(vertical = 4.dp)
-                        ) {
-                            // "已置顶" 分组
-                            if (processedItems.pinned.isNotEmpty()) {
-                                item(key = "pinned_header") {
-                                    CollapsibleGroupHeader(
-                                        groupName = "已置顶",
-                                        isExpanded = expandedGroups.contains("pinned"),
-                                        onToggleExpand = { onToggleGroup("pinned") },
-                                        isPinnedGroup = true,
-                                        modifier = Modifier.animateItem(placementSpec = tween(300))
-                                    )
-                                }
-                                if (expandedGroups.contains("pinned")) {
-                                    items(
-                                        items = processedItems.pinned,
-                                        key = { itemData -> "pinned_${itemData.stableId}_${isImageGenerationMode}" }
-                                    ) { itemData ->
-                                        androidx.compose.animation.AnimatedVisibility(
-                                            visible = !deletingItems.contains(itemData.stableId),
-                                            exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
-                                            enter = expandVertically(animationSpec = tween(300)) + fadeIn(animationSpec = tween(300)),
-                                            modifier = if (deletingItems.contains(itemData.stableId)) Modifier else Modifier.animateItem(placementSpec = tween(300))
-                                        ) {
-                                            ConversationItem(itemData)
-                                        }
-                                    }
-                                }
+                        // "已置顶" 分组
+                        if (processedItems.pinned.isNotEmpty()) {
+                            item(key = "pinned_header") {
+                                CollapsibleGroupHeader(
+                                    groupName = "已置顶",
+                                    isExpanded = expandedGroups.contains("pinned"),
+                                    onToggleExpand = { onToggleGroup("pinned") },
+                                    isPinnedGroup = true,
+                                    modifier = Modifier.animateItem(placementSpec = tween(300)),
+                                )
                             }
-                            // "对话" (未分组和未置顶) - 始终显示,不需要展开/收起
-                            if (processedItems.ungrouped.isNotEmpty()) {
+                            if (expandedGroups.contains("pinned")) {
                                 items(
-                                    items = processedItems.ungrouped,
-                                    key = { item -> "ungrouped_${item.stableId}_${isImageGenerationMode}" }
+                                    items = processedItems.pinned,
+                                    key = { itemData -> "pinned_${itemData.stableId}_${isImageGenerationMode}" },
                                 ) { itemData ->
                                     androidx.compose.animation.AnimatedVisibility(
                                         visible = !deletingItems.contains(itemData.stableId),
                                         exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
                                         enter = expandVertically(animationSpec = tween(300)) + fadeIn(animationSpec = tween(300)),
-                                        modifier = if (deletingItems.contains(itemData.stableId)) Modifier else Modifier.animateItem(placementSpec = tween(300))
+                                        modifier = if (deletingItems.contains(itemData.stableId)) Modifier else Modifier.animateItem(placementSpec = tween(300)),
                                     ) {
-                                        ConversationItem(
-                                            itemData = itemData,
-                                            modifier = Modifier
-                                        )
+                                        ConversationItem(itemData)
                                     }
                                 }
+                            }
+                        }
+                        // 未分组会话始终显示。
+                        items(
+                            items = processedItems.ungrouped,
+                            key = { item -> "ungrouped_${item.stableId}_${isImageGenerationMode}" },
+                        ) { itemData ->
+                            androidx.compose.animation.AnimatedVisibility(
+                                visible = !deletingItems.contains(itemData.stableId),
+                                exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
+                                enter = expandVertically(animationSpec = tween(300)) + fadeIn(animationSpec = tween(300)),
+                                modifier = if (deletingItems.contains(itemData.stableId)) Modifier else Modifier.animateItem(placementSpec = tween(300)),
+                            ) {
+                                ConversationItem(
+                                    itemData = itemData,
+                                    modifier = Modifier,
+                                )
                             }
                         }
                     }
                 }
             }
-            Spacer(Modifier.height(16.dp)) // Add some space before the button
-            Button(
-                onClick = { onAboutClick() },
+            Box(
                 modifier = Modifier
+                    .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp)
-                    .height(40.dp), // Slightly shorter height
-                shape = RoundedCornerShape(8.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainerLowest,
-                    contentColor = MaterialTheme.colorScheme.onSurface
-                ),
-                elevation = ButtonDefaults.buttonElevation(
-                    defaultElevation = 0.dp,
-                    pressedElevation = 0.dp
-                ),
-                contentPadding = PaddingValues(0.dp)
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(start = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.Start
-                ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_info),
-                        "关于图标",
-                        tint = MaterialTheme.colorScheme.onSurface
-                    )
-                    Spacer(Modifier.width(20.dp))
-                    Text(
-                        "关于",
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        fontSize = MaterialTheme.typography.bodyLarge.fontSize
-                    )
-                }
-            }
-            Spacer(Modifier.height(16.dp))
+                    .height(bottomChromeHeight)
+                    .floatingEdgeGradient(drawerBackground, fromTop = false)
+                    .zIndex(1f),
+            )
+            DrawerAppInfoButton(
+                onClick = onAppInfoClick,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .windowInsetsPadding(WindowInsets.navigationBars)
+                    .padding(end = 16.dp, bottom = 16.dp)
+                    .zIndex(2f),
+            )
              // --- 对话框 ---
              DeleteConfirmationDialog(
                  showDialog = showDeleteConfirm,

@@ -8,15 +8,19 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.hasScrollToIndexAction
 import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import org.junit.After
+import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -42,6 +46,7 @@ class AppDrawerContentScrollTest {
             listOf(Message(id = "message_$index", text = "Message $index", sender = Sender.User))
         }
         var drawerSessionKey by mutableIntStateOf(0)
+        var appInfoClickCount = 0
 
         composeRule.setContent {
             MaterialTheme {
@@ -65,7 +70,7 @@ class AppDrawerContentScrollTest {
                         onDismissClearImageHistoryDialog = {},
                         getPreviewForIndex = { index -> "Conversation $index" },
                         getFullTextForIndex = { index -> "Conversation $index" },
-                        onAboutClick = {},
+                        onAppInfoClick = { appInfoClickCount++ },
                         onImageGenerationClick = {},
                         isLoadingHistoryData = false,
                         isImageGenerationMode = false,
@@ -86,8 +91,15 @@ class AppDrawerContentScrollTest {
             }
         }
 
-        composeRule.onNode(hasScrollToIndexAction()).performScrollToIndex(30)
+        composeRule.onNodeWithText("搜索历史记录").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("应用信息").assertIsDisplayed().performClick()
+        composeRule.runOnIdle { assertEquals(1, appInfoClickCount) }
+
+        composeRule.onNode(hasScrollToIndexAction()).performScrollToIndex(33)
         composeRule.onNodeWithText("Conversation 30").assertIsDisplayed()
+        composeRule.onNodeWithText("新建会话").assertIsNotDisplayed()
+        composeRule.onNodeWithText("搜索历史记录").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("应用信息").assertIsDisplayed()
 
         composeRule.runOnUiThread { drawerSessionKey++ }
         composeRule.waitForIdle()
