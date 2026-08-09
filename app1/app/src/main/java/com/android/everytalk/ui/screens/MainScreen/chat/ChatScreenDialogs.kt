@@ -38,6 +38,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
@@ -50,6 +51,7 @@ import androidx.compose.foundation.border
 import androidx.compose.ui.draw.shadow
 import androidx.navigation.NavController
 import androidx.navigation.NavGraph.Companion.findStartDestination
+import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.navigation.Screen
@@ -89,6 +91,9 @@ internal fun AboutDialog(
     val context = androidx.compose.ui.platform.LocalContext.current
     val packageInfo = remember { context.packageManager.getPackageInfo(context.packageName, 0) }
     val versionName = packageInfo.versionName
+    val versionLabel = stringResource(R.string.about_version, versionName.orEmpty())
+    val description = stringResource(R.string.about_description)
+    val githubLabel = stringResource(R.string.about_github_label)
 
     val dialogBg = appDialogContainerColor()
     val contentColor = appDialogContentColor()
@@ -101,10 +106,15 @@ internal fun AboutDialog(
         containerColor = dialogBg,
         titleContentColor = contentColor,
         textContentColor = contentColor,
-        title = { Text("关于 EveryTalk") },
+        title = { Text(stringResource(R.string.about_title)) },
         text = {
             val annotatedString = buildAnnotatedString {
-                append("版本: $versionName\n\n一个开源的、可高度定制的 AI 聊天客户端。\n\nGitHub: ")
+                append(versionLabel)
+                append("\n\n")
+                append(description)
+                append("\n\n")
+                append(githubLabel)
+                append(" ")
                 withLink(
                     LinkAnnotation.Url(
                         url = "https://github.com/roseforljh/KunTalkwithAi",
@@ -134,7 +144,7 @@ internal fun AboutDialog(
                 border = androidx.compose.foundation.BorderStroke(1.dp, cancelButtonColor)
             ) {
                 Text(
-                    text = "关闭",
+                    text = stringResource(R.string.action_close),
                     style = MaterialTheme.typography.labelLarge.copy(
                         fontWeight = FontWeight.SemiBold
                     )

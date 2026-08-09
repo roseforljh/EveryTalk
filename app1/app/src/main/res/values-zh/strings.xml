@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">EveryTalk</string>
+    <string name="ai_reply_message">AI回复消息</string>
+
+    <string name="app_info_title">应用信息</string>
+    <string name="app_info_section_title">信息与支持</string>
+    <string name="app_info_tagline">语言、隐私、版本与应用信息</string>
+    <string name="app_info_language_title">语言</string>
+    <string name="app_language_dialog_title">应用语言</string>
+    <string name="app_language_system">跟随系统</string>
+    <string name="app_language_simplified_chinese">简体中文</string>
+    <string name="app_language_english">English</string>
+    <string name="app_info_privacy_title">隐私政策</string>
+    <string name="app_info_privacy_description">在应用内查看数据处理说明</string>
+    <string name="app_info_about_title">关于 EveryTalk</string>
+    <string name="app_info_version">版本 %1$s</string>
+    <string name="drawer_app_info_content_description">应用信息</string>
+    <string name="drawer_conversation_search_content_description">搜索会话</string>
+    <string name="conversation_search_empty">没有找到相关会话</string>
+    <string name="conversation_search_expand">展开匹配内容</string>
+    <string name="conversation_search_collapse">收起匹配内容</string>
+    <string name="conversation_search_input_hint">搜索会话和会话内容</string>
+    <string name="conversation_search_truncated">匹配较多，仅显示前 %1$d 个文本段</string>
+    <string name="conversation_search_source_title">会话标题</string>
+    <string name="conversation_search_source_user">你</string>
+    <string name="conversation_search_source_ai">AI</string>
+    <string name="conversation_search_source_system">系统</string>
+    <string name="conversation_search_source_tool">工具</string>
+    <plurals name="conversation_search_match_count">
+        <item quantity="other">%1$d 处命中</item>
+    </plurals>
+    <string name="navigation_back">返回</string>
+    <string name="action_close">关闭</string>
+
+    <string name="about_title">关于 EveryTalk</string>
+    <string name="about_version">版本：%1$s</string>
+    <string name="about_description">一个开源的、可高度定制的 AI 聊天客户端。</string>
+    <string name="about_github_label">GitHub：</string>
+
+    <string name="privacy_policy_title">隐私政策</string>
+    <string name="privacy_policy_heading">EveryTalk 隐私政策</string>
+    <string name="privacy_effective_date">生效日期：%1$s</string>
+    <string name="privacy_effective_date_value">2026年8月9日</string>
+    <string name="privacy_intro">EveryTalk 是一款 AI 客户端。本政策说明应用在你使用聊天、图像、语音、联网搜索和 MCP 功能时如何处理信息。</string>
+    <string name="privacy_section_1_title">1. 本地保存的信息</string>
+    <string name="privacy_section_1_body">聊天记录、模型服务配置、API 密钥、分组、置顶状态及其他应用设置会保存在你的设备本地。EveryTalk 已关闭 Android 系统备份，不会通过系统备份迁移这些数据。</string>
+    <string name="privacy_section_2_title">2. 网络请求与第三方服务</string>
+    <string name="privacy_section_2_body">当你主动使用聊天、图像生成、语音识别、联网搜索或 MCP 功能时，应用会把完成该次请求所必需的文本、系统提示词、附件、图像、音频或搜索词发送给你选择或应用配置的服务。相关服务将依据各自的隐私政策处理数据。请勿向不受信任的服务提交敏感信息。</string>
+    <string name="privacy_section_3_title">3. 权限用途</string>
+    <string name="privacy_section_3_body">网络权限用于连接模型及相关服务；麦克风权限仅用于你主动启动的语音输入；相机权限仅用于你主动拍摄并添加图片；蓝牙连接权限用于兼容已配对的音频设备。拒绝可选权限不会影响与该权限无关的功能。</string>
+    <string name="privacy_section_4_title">4. 信息共享</string>
+    <string name="privacy_section_4_body">EveryTalk 不接入广告 SDK，也不出售个人信息。为执行你主动发起的功能，必要数据会传输给对应的 AI、语音识别、搜索或 MCP 服务，这类传输属于完成请求所需的处理。</string>
+    <string name="privacy_section_5_title">5. 保存期限与删除</string>
+    <string name="privacy_section_5_body">本地数据会保留到你在应用内清除记录、删除相应配置或卸载应用。你主动导出或保存到系统存储中的文件由 Android 文件管理机制管理，不会随聊天记录一同删除。</string>
+    <string name="privacy_section_6_title">6. 数据安全</string>
+    <string name="privacy_section_6_body">应用禁止明文网络流量，并将数据库和配置保存在应用私有目录。网络服务的安全性同时取决于你所选择的服务商、接口地址和设备本身的安全状态。请妥善保管 API 密钥。</string>
+    <string name="privacy_section_7_title">7. AI 内容安全与举报</string>
+    <string name="privacy_section_7_body">应用会对高风险生成请求执行本地拦截，并向支持的模型服务传递安全约束。你主动举报 AI 内容时，应用会记录举报类别、补充说明、相关回复摘要、模型与服务商名称及应用版本，不会附带 API 密钥或整段会话。网络失败时举报会暂存在应用私有目录并重试；成功提交后会清除本地举报正文与说明，仅保留去重回执。</string>
+    <string name="privacy_section_8_title">8. 政策更新与联系</string>
+    <string name="privacy_section_8_body">本政策可能随功能或合规要求更新，更新后的版本会在本页面展示。对本政策有疑问时，可通过 EveryTalk 开源项目页面联系维护者。</string>
+    <string name="privacy_project_link">EveryTalk 开源项目与联系方式</string>
+</resources>

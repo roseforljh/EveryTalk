@@ -2,6 +2,7 @@ package com.android.everytalk.ui.screens.appinfo
 
 import androidx.activity.compose.BackHandler
 import androidx.annotation.DrawableRes
+import androidx.annotation.StringRes
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -24,13 +25,17 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -40,6 +45,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -48,47 +54,48 @@ import com.android.everytalk.BuildConfig
 import com.android.everytalk.R
 import com.android.everytalk.ui.components.floatingEdgeGradient
 import com.android.everytalk.ui.screens.MainScreen.AboutDialog
+import com.android.everytalk.util.locale.AppLanguage
+import com.android.everytalk.util.locale.AppLanguageController
 
 private const val PROJECT_URL = "https://github.com/roseforljh/KunTalkwithAi"
-private const val PRIVACY_EFFECTIVE_DATE = "2026年8月9日"
 
 private data class PrivacySection(
-    val title: String,
-    val body: String,
+    @StringRes val titleRes: Int,
+    @StringRes val bodyRes: Int,
 )
 
 private val privacySections = listOf(
     PrivacySection(
-        title = "1. 本地保存的信息",
-        body = "聊天记录、模型服务配置、API 密钥、分组、置顶状态及其他应用设置会保存在你的设备本地。EveryTalk 已关闭 Android 系统备份，不会通过系统备份迁移这些数据。",
+        titleRes = R.string.privacy_section_1_title,
+        bodyRes = R.string.privacy_section_1_body,
     ),
     PrivacySection(
-        title = "2. 网络请求与第三方服务",
-        body = "当你主动使用聊天、图像生成、语音识别、联网搜索或 MCP 功能时，应用会把完成该次请求所必需的文本、系统提示词、附件、图像、音频或搜索词发送给你选择或应用配置的服务。相关服务将依据各自的隐私政策处理数据。请勿向不受信任的服务提交敏感信息。",
+        titleRes = R.string.privacy_section_2_title,
+        bodyRes = R.string.privacy_section_2_body,
     ),
     PrivacySection(
-        title = "3. 权限用途",
-        body = "网络权限用于连接模型及相关服务；麦克风权限仅用于你主动启动的语音输入；相机权限仅用于你主动拍摄并添加图片；蓝牙连接权限用于兼容已配对的音频设备。拒绝可选权限不会影响与该权限无关的功能。",
+        titleRes = R.string.privacy_section_3_title,
+        bodyRes = R.string.privacy_section_3_body,
     ),
     PrivacySection(
-        title = "4. 信息共享",
-        body = "EveryTalk 不接入广告 SDK，也不出售个人信息。为执行你主动发起的功能，必要数据会传输给对应的 AI、语音识别、搜索或 MCP 服务，这类传输属于完成请求所需的处理。",
+        titleRes = R.string.privacy_section_4_title,
+        bodyRes = R.string.privacy_section_4_body,
     ),
     PrivacySection(
-        title = "5. 保存期限与删除",
-        body = "本地数据会保留到你在应用内清除记录、删除相应配置或卸载应用。你主动导出或保存到系统存储中的文件由 Android 文件管理机制管理，不会随聊天记录一同删除。",
+        titleRes = R.string.privacy_section_5_title,
+        bodyRes = R.string.privacy_section_5_body,
     ),
     PrivacySection(
-        title = "6. 数据安全",
-        body = "应用禁止明文网络流量，并将数据库和配置保存在应用私有目录。网络服务的安全性同时取决于你所选择的服务商、接口地址和设备本身的安全状态。请妥善保管 API 密钥。",
+        titleRes = R.string.privacy_section_6_title,
+        bodyRes = R.string.privacy_section_6_body,
     ),
     PrivacySection(
-        title = "7. AI 内容安全与举报",
-        body = "应用会对高风险生成请求执行本地拦截，并向支持的模型服务传递安全约束。你主动举报 AI 内容时，应用会记录举报类别、补充说明、相关回复摘要、模型与服务商名称及应用版本，不会附带 API 密钥或整段会话。网络失败时举报会暂存在应用私有目录并重试；成功提交后会清除本地举报正文与说明，仅保留去重回执。",
+        titleRes = R.string.privacy_section_7_title,
+        bodyRes = R.string.privacy_section_7_body,
     ),
     PrivacySection(
-        title = "8. 政策更新与联系",
-        body = "本政策可能随功能或合规要求更新，更新后的版本会在本页面展示。对本政策有疑问时，可通过 EveryTalk 开源项目页面联系维护者。",
+        titleRes = R.string.privacy_section_8_title,
+        bodyRes = R.string.privacy_section_8_body,
     ),
 )
 
@@ -99,10 +106,12 @@ fun AppInfoScreen(
     modifier: Modifier = Modifier,
 ) {
     var showAboutDialog by rememberSaveable { mutableStateOf(false) }
+    var showLanguageDialog by rememberSaveable { mutableStateOf(false) }
+    val currentLanguage = AppLanguageController.currentLanguage()
     BackHandler(onBack = onBack)
 
     ImmersiveInfoPage(
-        title = "应用信息",
+        title = stringResource(R.string.app_info_title),
         onBack = onBack,
         modifier = modifier,
     ) {
@@ -111,7 +120,7 @@ fun AppInfoScreen(
         }
         item(key = "app_info_section_title") {
             Text(
-                text = "信息与支持",
+                text = stringResource(R.string.app_info_section_title),
                 style = MaterialTheme.typography.labelLarge,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -129,9 +138,19 @@ fun AppInfoScreen(
             ) {
                 Column {
                     AppInfoEntry(
+                        iconRes = R.drawable.ic_globe,
+                        title = stringResource(R.string.app_info_language_title),
+                        description = stringResource(currentLanguage.labelRes),
+                        onClick = { showLanguageDialog = true },
+                    )
+                    HorizontalDivider(
+                        modifier = Modifier.padding(start = 80.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
+                    )
+                    AppInfoEntry(
                         iconRes = R.drawable.gpt_privacy,
-                        title = "隐私政策",
-                        description = "在应用内查看数据处理说明",
+                        title = stringResource(R.string.app_info_privacy_title),
+                        description = stringResource(R.string.app_info_privacy_description),
                         onClick = onOpenPrivacyPolicy,
                     )
                     HorizontalDivider(
@@ -140,8 +159,8 @@ fun AppInfoScreen(
                     )
                     AppInfoEntry(
                         iconRes = R.drawable.ic_info,
-                        title = "关于 EveryTalk",
-                        description = "版本 ${BuildConfig.VERSION_NAME}",
+                        title = stringResource(R.string.app_info_about_title),
+                        description = stringResource(R.string.app_info_version, BuildConfig.VERSION_NAME),
                         onClick = { showAboutDialog = true },
                     )
                 }
@@ -152,6 +171,16 @@ fun AppInfoScreen(
     if (showAboutDialog) {
         AboutDialog(
             onDismiss = { showAboutDialog = false },
+        )
+    }
+    if (showLanguageDialog) {
+        LanguageSelectionDialog(
+            selectedLanguage = currentLanguage,
+            onLanguageSelected = { language ->
+                showLanguageDialog = false
+                AppLanguageController.setLanguage(language)
+            },
+            onDismiss = { showLanguageDialog = false },
         )
     }
 }
@@ -166,32 +195,35 @@ fun PrivacyPolicyScreen(
     BackHandler(onBack = onBack)
 
     ImmersiveInfoPage(
-        title = "隐私政策",
+        title = stringResource(R.string.privacy_policy_title),
         onBack = onBack,
         modifier = modifier,
     ) {
         item(key = "privacy_intro") {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text(
-                    text = "EveryTalk 隐私政策",
+                    text = stringResource(R.string.privacy_policy_heading),
                     style = MaterialTheme.typography.headlineSmall,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onBackground,
                 )
                 Text(
-                    text = "生效日期：$PRIVACY_EFFECTIVE_DATE",
+                    text = stringResource(
+                        R.string.privacy_effective_date,
+                        stringResource(R.string.privacy_effective_date_value),
+                    ),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
                 Text(
-                    text = "EveryTalk 是一款 AI 客户端。本政策说明应用在你使用聊天、图像、语音、联网搜索和 MCP 功能时如何处理信息。",
+                    text = stringResource(R.string.privacy_intro),
                     style = MaterialTheme.typography.bodyLarge,
                     color = MaterialTheme.colorScheme.onBackground,
                 )
             }
         }
         privacySections.forEach { section ->
-            item(key = section.title) {
+            item(key = section.titleRes) {
                 PrivacySectionCard(section)
             }
         }
@@ -215,7 +247,7 @@ fun PrivacyPolicyScreen(
                     )
                     Spacer(Modifier.width(14.dp))
                     Text(
-                        text = "EveryTalk 开源项目与联系方式",
+                        text = stringResource(R.string.privacy_project_link),
                         style = MaterialTheme.typography.titleSmall,
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.weight(1f),
@@ -261,7 +293,7 @@ private fun AppIdentityHeader() {
             color = MaterialTheme.colorScheme.onBackground,
         )
         Text(
-            text = "隐私、版本与应用信息",
+            text = stringResource(R.string.app_info_tagline),
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -322,6 +354,58 @@ private fun AppInfoEntry(
     }
 }
 
+private val AppLanguage.labelRes: Int
+    get() = when (this) {
+        AppLanguage.SYSTEM -> R.string.app_language_system
+        AppLanguage.SIMPLIFIED_CHINESE -> R.string.app_language_simplified_chinese
+        AppLanguage.ENGLISH -> R.string.app_language_english
+    }
+
+@Composable
+private fun LanguageSelectionDialog(
+    selectedLanguage: AppLanguage,
+    onLanguageSelected: (AppLanguage) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.app_language_dialog_title)) },
+        text = {
+            Column {
+                AppLanguage.entries.forEach { language ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .selectable(
+                                selected = language == selectedLanguage,
+                                role = Role.RadioButton,
+                                onClick = { onLanguageSelected(language) },
+                            )
+                            .padding(vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(
+                            selected = language == selectedLanguage,
+                            onClick = null,
+                        )
+                        Spacer(Modifier.width(12.dp))
+                        Text(
+                            text = stringResource(language.labelRes),
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.action_close))
+            }
+        },
+    )
+}
+
 @Composable
 private fun PrivacySectionCard(section: PrivacySection) {
     Surface(
@@ -337,13 +421,13 @@ private fun PrivacySectionCard(section: PrivacySection) {
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             Text(
-                text = section.title,
+                text = stringResource(section.titleRes),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface,
             )
             Text(
-                text = section.body,
+                text = stringResource(section.bodyRes),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -414,7 +498,7 @@ private fun ImmersiveInfoPage(
                 Box(contentAlignment = Alignment.Center) {
                     Icon(
                         painter = painterResource(R.drawable.ic_arrow_back),
-                        contentDescription = "返回",
+                        contentDescription = stringResource(R.string.navigation_back),
                         modifier = Modifier.size(20.dp),
                     )
                 }
