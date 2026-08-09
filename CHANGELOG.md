@@ -1,5 +1,36 @@
 # Changelog
 
+## [1.25.0](https://github.com/roseforljh/EveryTalk/compare/v1.24.0...v1.25.0) (2026-08-09)
+
+
+### Features
+
+* AI 内容安全拦截与举报系统 ([7a0dd51](https://github.com/roseforljh/EveryTalk/commit/7a0dd515fd7c5d23e47a1422fe7b1550bbb35057))
+* Markdown 列表标记改层级几何图形并统一标题字重 ([e5c9337](https://github.com/roseforljh/EveryTalk/commit/e5c933714069372521021ce6d3ffab0166a1dfe9))
+* 上下文用量圆环使用实时上下文窗口上限 ([eabb8c3](https://github.com/roseforljh/EveryTalk/commit/eabb8c3b7eac27df3acf17a967ef37b850c98811))
+* 上下文用量圆环跟随当前会话模型 ([f04ec06](https://github.com/roseforljh/EveryTalk/commit/f04ec06c8724d0062f1d8f9ed6747c0eda246c68))
+* 举报入口菜单化并优化举报对话框 ([3c8e70b](https://github.com/roseforljh/EveryTalk/commit/3c8e70bbcad161165925ca777690b7ab1991a3a0))
+* 会话搜索改为独立页面并精简抽屉 ([0189c00](https://github.com/roseforljh/EveryTalk/commit/0189c00ccc988fb2c79d3788e1ae0ce00d86dd8e))
+* 像素企鹅品牌启动屏与桌面图标 ([e9ae3d1](https://github.com/roseforljh/EveryTalk/commit/e9ae3d1ee5c0d65bfb2c578d4965697a760f3863))
+* 全量界面文案迁移到字符串资源并新增 UiMessageLocalizer ([d219649](https://github.com/roseforljh/EveryTalk/commit/d219649a6cb34cec3a9c18464224f8a7d7c3ffc1))
+* 原生搜索引用提取网页来源事件 ([864fbdd](https://github.com/roseforljh/EveryTalk/commit/864fbdd37242e2ba6fefee19caeb5dd76fe49a6a))
+* 启动屏首帧衔接与系统启动动画 ([7227097](https://github.com/roseforljh/EveryTalk/commit/7227097508521d7ee2e258dc6e3588d7bb873702))
+* 应用内语言切换与中文本地化 ([755cf50](https://github.com/roseforljh/EveryTalk/commit/755cf50b15450b7fa100aedce4185a806655e1fb))
+* 新增应用信息与隐私政策页面，移除应用内版本更新检查 ([940f424](https://github.com/roseforljh/EveryTalk/commit/940f4240e3a9f7213f8c0cdf4ebc916ef961a333))
+* 设置页底部边缘渐隐浮层 ([4a63265](https://github.com/roseforljh/EveryTalk/commit/4a63265ef4e30ba75e11669b82265fc462caf09c))
+
+
+### Bug Fixes
+
+* Jina 搜索无结果时以查询词作为来源标题 ([f51b6e0](https://github.com/roseforljh/EveryTalk/commit/f51b6e0782aef28618a7f7c91fe281dc1c0a024e))
+* 优化 Markdown 列表输出规则 ([8c2e25d](https://github.com/roseforljh/EveryTalk/commit/8c2e25d4b70f299bb410bd8bfab96eebbf457e84))
+* 修复仅图片消息无法发送 ([275ea12](https://github.com/roseforljh/EveryTalk/commit/275ea12701c8ab406c87312487dba88991c9f222))
+* 修复粘连有序列表解析 ([9f08300](https://github.com/roseforljh/EveryTalk/commit/9f0830076c5805f98ee5b345d2df5184e1c56efa))
+* 历史加载预处理收敛到单快照原子提交 ([a65ca20](https://github.com/roseforljh/EveryTalk/commit/a65ca20c12c620726124161202ebcc3d2eaa619f))
+* 流式文本过滤保留 Markdown 结构换行 ([159bd95](https://github.com/roseforljh/EveryTalk/commit/159bd95ec75c81d3ee1294cb5fcb22e554d3ef30))
+* 移除冗余的媒体读取权限声明 ([471fef8](https://github.com/roseforljh/EveryTalk/commit/471fef8c3ad58a00647ed5509290f675ca461ec8))
+* 统一图片处理并保留用户图片原始字节 ([1060216](https://github.com/roseforljh/EveryTalk/commit/10602163b32d307b759d6f8b411e0399fdde6e6d))
+
 ## [1.24.0](https://github.com/roseforljh/EveryTalk/compare/v1.23.0...v1.24.0) (2026-08-05)
 
 
