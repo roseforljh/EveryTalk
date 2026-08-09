@@ -127,6 +127,105 @@ class DirectClientLifecycleTest {
     }
 
     @Test
+    fun `OpenAI Chat原生引用发布网页来源事件`() = runBlocking {
+        val body = buildString {
+            append("data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\n")
+            append(
+                "data: {\"choices\":[],\"citations\":[" +
+                    "\"https://example.com/a\"," +
+                    "{\"url\":\"https://example.com/b\",\"title\":\"B\"}]}\n\n"
+            )
+            append(
+                "data: {\"choices\":[{\"delta\":{\"annotations\":[" +
+                    "{\"type\":\"url_citation\",\"url_citation\":{" +
+                    "\"url\":\"https://example.com/c\",\"title\":\"C\"}}]}}]}\n\n"
+            )
+            append(
+                "data: {\"choices\":[],\"search_info\":{\"search_results\":[" +
+                    "{\"url\":\"https://example.com/qwen\",\"title\":\"Qwen\"}]}}\n\n"
+            )
+            append("data: [DONE]\n\n")
+        }
+
+        withHttpClient(body = body) { client ->
+            val sources = OpenAIDirectClient.streamChatDirect(
+                client,
+                request("OpenAI", "Grok"),
+            ).toList()
+                .filterIsInstance<AppStreamEvent.WebSearchResults>()
+                .flatMap { it.results }
+
+            assertEquals(
+                listOf(
+                    "https://example.com/a",
+                    "https://example.com/b",
+                    "https://example.com/c",
+                    "https://example.com/qwen",
+                ),
+                sources.map { it.href },
+            )
+            assertEquals("B", sources[1].title)
+            assertEquals("C", sources[2].title)
+        }
+    }
+
+    @Test
+    fun `OpenAI Responses原生注解发布网页来源事件`() = runBlocking {
+        val body = buildString {
+            appendResponsesEvent("""{"type":"response.output_text.delta","delta":"answer"}""")
+            appendResponsesEvent(
+                """{"type":"response.output_text.annotation.added","annotation":{"type":"url_citation","url":"https://example.com/annotation","title":"Annotation"}}"""
+            )
+            appendResponsesEvent(
+                """{"type":"response.completed","response":{"output":[{"type":"message","content":[{"type":"output_text","annotations":[{"type":"url_citation","url_citation":{"url":"https://example.com/completed","title":"Completed"}}]}]}]}}"""
+            )
+            append("data: [DONE]\n\n")
+        }
+
+        withHttpClient(body = body) { client ->
+            val sources = OpenAIResponsesClient.streamChatResponses(
+                client,
+                request("OpenAI", "Grok"),
+            ).toList()
+                .filterIsInstance<AppStreamEvent.WebSearchResults>()
+                .flatMap { it.results }
+
+            assertEquals(
+                listOf(
+                    "https://example.com/annotation",
+                    "https://example.com/completed",
+                ),
+                sources.map { it.href },
+            )
+        }
+    }
+
+    @Test
+    fun `Gemini grounding元数据发布网页来源事件`() = runBlocking {
+        val body = buildString {
+            append("data: ")
+            append(
+                """{"candidates":[{"content":{"parts":[{"text":"answer"}]},"groundingMetadata":{"groundingChunks":[{"web":{"uri":"https://example.com/gemini","title":"Gemini"}}]}}]}"""
+            )
+            append("\n\ndata: [DONE]\n\n")
+        }
+
+        withHttpClient(body = body) { client ->
+            val sources = GeminiDirectClient.streamChatDirect(
+                client,
+                request("Gemini", "Gemini"),
+            ).toList()
+                .filterIsInstance<AppStreamEvent.WebSearchResults>()
+                .single()
+                .results
+
+            assertEquals(listOf("https://example.com/gemini"), sources.map { it.href })
+            assertEquals("Gemini", sources.single().title)
+            assertEquals(1, sources.single().index)
+        }
+    }
+
+    @Test
     fun `oversized sse event emits one error terminal without stop`() = runBlocking {
         val body = "data: ${"x".repeat((MAX_SSE_EVENT_BYTES + 1).toInt())}\n\n"
         withHttpClient(body = body) { client ->

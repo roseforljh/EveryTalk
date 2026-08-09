@@ -510,6 +510,11 @@ object OpenAIResponsesClient {
                             try {
                                 val event = Json.parseToJsonElement(chunk).jsonObject
                                 val type = event["type"]?.jsonPrimitive?.contentOrNull ?: ""
+                                NativeWebSearchResultExtractor.extract(event)
+                                    .takeIf { it.isNotEmpty() }
+                                    ?.let { sources ->
+                                        emitEvent(AppStreamEvent.WebSearchResults(sources))
+                                    }
 
                                 when (type) {
                                     "response.output_text.delta" -> {

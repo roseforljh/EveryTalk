@@ -787,6 +787,11 @@ object OpenAIDirectClient {
                             }
                             try {
                                 val jsonChunk = Json.parseToJsonElement(chunk).jsonObject
+                                NativeWebSearchResultExtractor.extract(jsonChunk)
+                                    .takeIf { it.isNotEmpty() }
+                                    ?.let { sources ->
+                                        emitEvent(AppStreamEvent.WebSearchResults(sources))
+                                    }
                                 (jsonChunk["usage"] as? JsonObject)?.let { usage ->
                                     parseOpenAIChatTokenUsage(usage)?.let { parsedUsage ->
                                         emitEvent(AppStreamEvent.Usage(parsedUsage))

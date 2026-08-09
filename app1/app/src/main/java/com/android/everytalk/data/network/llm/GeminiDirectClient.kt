@@ -5,6 +5,7 @@ import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.DataClass.PartsApiMessage
 import com.android.everytalk.data.network.NetworkUtils.configureSSERequest
+import com.android.everytalk.util.AiContentSafetyPolicy
 import io.ktor.client.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
@@ -413,6 +414,8 @@ object GeminiDirectClient {
                     }
                 }
             }
+
+            put("safetySettings", AiContentSafetyPolicy.geminiSafetySettings())
             
             // 添加工具（Web 搜索、代码执行、MCP 工具等）
             val mcpTools = PromptCachePolicy.normalizeTools(request.tools).orEmpty()
@@ -707,6 +710,11 @@ object GeminiDirectClient {
                             
                             try {
                                 val jsonChunk = Json.parseToJsonElement(chunk).jsonObject
+                                NativeWebSearchResultExtractor.extract(jsonChunk)
+                                    .takeIf { it.isNotEmpty() }
+                                    ?.let { sources ->
+                                        emitEvent(AppStreamEvent.WebSearchResults(sources))
+                                    }
                                 (jsonChunk["usageMetadata"] as? JsonObject)
                                     ?.let(::parseGeminiTokenUsage)
                                     ?.let { usage -> emitEvent(AppStreamEvent.Usage(usage)) }
@@ -812,59 +820,4 @@ object GeminiDirectClient {
         return ParseResult(hasToolCalls = hasToolCalls, fullText = completedText)
     }
 
-    /** 为 Gemini Grounding 结果补充引用标记。 */
-    private fun addCitations(text: String, metadata: JsonObject): String {
-        val supports = metadata["groundingSupports"]?.jsonArray ?: return text
-        val chunks = metadata["groundingChunks"]?.jsonArray ?: return text
-        
-        if (supports.isEmpty() || chunks.isEmpty()) return text
-        
-        val sb = StringBuilder(text)
-        
-        // 按照 endIndex 降序排序，以便从后往前插入，避免索引偏移
-        val sortedSupports = supports.mapNotNull { supportElement ->
-            try {
-                val support = supportElement.jsonObject
-                val segment = support["segment"]?.jsonObject
-                val endIndex = segment?.get("endIndex")?.jsonPrimitive?.intOrNull ?: return@mapNotNull null
-                val chunkIndices = support["groundingChunkIndices"]?.jsonArray?.mapNotNull {
-                    it.jsonPrimitive.intOrNull
-                } ?: emptyList()
-                
-                if (chunkIndices.isEmpty()) return@mapNotNull null
-                
-                Triple(endIndex, chunkIndices, support)
-            } catch (e: Exception) {
-                null
-            }
-        }.sortedByDescending { it.first }
-        
-        // 插入引用
-        for ((endIndex, chunkIndices, _) in sortedSupports) {
-            if (endIndex > sb.length) continue // 索引越界保护
-            
-            val citationLinks = chunkIndices.mapNotNull { idx ->
-                if (idx >= 0 && idx < chunks.size) {
-                    val chunk = chunks[idx].jsonObject
-                    val uri = chunk["web"]?.jsonObject?.get("uri")?.jsonPrimitive?.contentOrNull
-                    if (uri != null) {
-                        // 生成 Markdown 链接格式的引用: [n](url)
-                        // 或者仅生成数字: [n] - 取决于 UI 需求，这里使用 Markdown 链接以便点击
-                        "[${idx + 1}]($uri)" // 注意：这里使用 1-based 索引，符合用户习惯
-                    } else {
-                        null
-                    }
-                } else {
-                    null
-                }
-            }
-            
-            if (citationLinks.isNotEmpty()) {
-                val citationString = " " + citationLinks.joinToString(" ")
-                sb.insert(endIndex, citationString)
-            }
-        }
-        
-        return sb.toString()
-    }
 }
