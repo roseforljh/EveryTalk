@@ -32,6 +32,8 @@ class SystemPromptInjectorRenderSafetyTest {
         assertTrue(prompt.contains("everytalk_select_capabilities"))
         assertTrue(prompt.contains("markdown-table:"))
         assertTrue(prompt.contains("financial-caution:"))
+        assertTrue(prompt.contains("# AI 内容安全"))
+        assertTrue(prompt.contains("非自愿私密内容"))
     }
 
     @Test

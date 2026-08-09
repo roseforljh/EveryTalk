@@ -19,6 +19,7 @@ import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.DataClass.ThinkingConfig
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
+import com.android.everytalk.data.safety.AiContentReportRepository
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
 import com.android.everytalk.ui.components.math.MathJaxSvgRenderer
@@ -136,6 +137,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     }
     internal val mathJaxSvgRenderer: MathJaxSvgRenderer by lazy {
         org.koin.java.KoinJavaComponent.getKoin().get()
+    }
+    internal val aiContentReportRepository: AiContentReportRepository by lazy {
+        AiContentReportRepository(
+            context = application.applicationContext,
+            httpClient = org.koin.java.KoinJavaComponent.getKoin().get(),
+        )
     }
 
     internal val messagesMutex = Mutex()
@@ -577,6 +584,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 }
             )
          }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            aiContentReportRepository.retryPendingReports()
+        }
 
         viewModelScope.launch(Dispatchers.IO) {
             val initialToggleStates = persistenceManager.loadConversationFunctionToggleStates()

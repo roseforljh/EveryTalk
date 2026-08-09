@@ -47,6 +47,8 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -124,6 +126,7 @@ import com.android.everytalk.ui.components.streaming.buildStreamingRenderState
 import com.android.everytalk.ui.theme.ChatDimensions
 import com.android.everytalk.ui.theme.chatColors
 import com.android.everytalk.ui.components.scrollFadeEdge
+import com.android.everytalk.ui.components.safety.AiContentReportDialog
 import com.android.everytalk.ui.topanchor.BottomScrollReason
 import com.android.everytalk.ui.topanchor.RunTopAnchorReserveEngine
 import com.android.everytalk.ui.topanchor.TopAnchorConfig
@@ -211,6 +214,7 @@ internal fun AiMessageItem(
     }
     val currentMessage by rememberUpdatedState(message)
     val currentOnLongPress by rememberUpdatedState(onLongPress)
+    var showReportDialog by remember(message.id) { mutableStateOf(false) }
 
     Row(
         modifier = modifier
@@ -293,8 +297,41 @@ internal fun AiMessageItem(
                             onImageClick = { url -> onOpenPreview(url) }
                         )
                     }
+                    if (!shouldPreferStreamingContent) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.Start,
+                        ) {
+                            IconButton(
+                                onClick = { showReportDialog = true },
+                                modifier = Modifier.size(36.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Outlined.Flag,
+                                    contentDescription = "举报 AI 内容",
+                                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                        }
+                    }
                 }
             }
         }
+    }
+
+    if (showReportDialog) {
+        AiContentReportDialog(
+            onDismiss = { showReportDialog = false },
+            onSubmit = { category, details ->
+                viewModel.submitAiContentReport(
+                    message = message,
+                    category = category,
+                    details = details,
+                    isImageGeneration = true,
+                )
+                showReportDialog = false
+            },
+        )
     }
 }

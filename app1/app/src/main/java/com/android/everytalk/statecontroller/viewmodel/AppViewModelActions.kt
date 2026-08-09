@@ -18,6 +18,8 @@ import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.data.DataClass.ThinkingConfig
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
+import com.android.everytalk.data.safety.AiContentReportCategory
+import com.android.everytalk.data.safety.AiContentReportSubmissionResult
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
 import com.android.everytalk.ui.components.math.MathJaxSvgRenderer
@@ -433,6 +435,33 @@ import java.util.TimeZone
             systemPrompt = promptToUse,
             isImageGeneration = isImageGeneration
         )
+    }
+
+    internal fun AppViewModel.submitAiContentReport(
+        message: Message,
+        category: AiContentReportCategory,
+        details: String,
+        isImageGeneration: Boolean,
+    ) {
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                aiContentReportRepository.submit(
+                    message = message,
+                    category = category,
+                    details = details,
+                    isImageGeneration = isImageGeneration,
+                )
+            }
+            showSnackbar(
+                when (result) {
+                    AiContentReportSubmissionResult.Submitted -> "举报已提交，感谢反馈"
+                    AiContentReportSubmissionResult.QueuedForRetry -> "网络暂不可用，举报已保存并会自动重试"
+                    AiContentReportSubmissionResult.SavedLocally -> "已在应用内标记；举报接收服务尚未配置"
+                    AiContentReportSubmissionResult.AlreadyReported -> "这条 AI 内容已经举报过了"
+                    AiContentReportSubmissionResult.StorageFailure -> "举报保存失败，请稍后重试"
+                }
+            )
+        }
     }
 
     internal fun AppViewModel.addMediaItem(item: SelectedMediaItem) {

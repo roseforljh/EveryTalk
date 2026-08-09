@@ -7,6 +7,7 @@ import com.android.everytalk.data.DataClass.ImageGenerationResponse
 import com.android.everytalk.data.DataClass.ImageUrl
 import com.android.everytalk.data.DataClass.Timings
 import com.android.everytalk.ui.components.ImageGenCapabilities
+import com.android.everytalk.util.AiContentSafetyPolicy
 import com.android.everytalk.util.image.ImageHandlingLimits
 import io.ktor.client.*
 import io.ktor.client.plugins.timeout
@@ -581,6 +582,7 @@ object ImageGenerationDirectClient {
                     Log.w(TAG, "Gemini 不支持宽高比 '${request.aspectRatio}'，已忽略该参数（将使用默认 1:1）")
                 }
             }
+            put("safetySettings", AiContentSafetyPolicy.geminiSafetySettings())
         }.toString()
     }
 
@@ -694,6 +696,7 @@ object ImageGenerationDirectClient {
                     Log.w(TAG, "Gemini 不支持宽高比 '${request.aspectRatio}'，已忽略该参数（将使用默认 1:1）")
                 }
             }
+            put("safetySettings", AiContentSafetyPolicy.geminiSafetySettings())
         }.toString()
     }
     

@@ -46,6 +46,8 @@ import com.android.everytalk.statecontroller.mcp.dispatch.classifyMcpIntent
 import com.android.everytalk.statecontroller.mcp.dispatch.selectMcpCandidates
 import com.android.everytalk.statecontroller.mcp.dispatch.toToolDefinition
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
+import com.android.everytalk.util.AiContentSafetyDecision
+import com.android.everytalk.util.AiContentSafetyPolicy
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -114,6 +116,23 @@ internal fun MessageSender.sendMessageInternal(
         if (textToActuallySend.isBlank() && allAttachments.isEmpty()) {
             viewModelScope.launch { showSnackbar("请输入消息内容或选择项目") }
             return
+        }
+
+        when (
+            val safetyDecision = AiContentSafetyPolicy.evaluateUserInput(
+                text = textToActuallySend,
+                isImageGeneration = isImageGeneration,
+            )
+        ) {
+            AiContentSafetyDecision.Allowed -> Unit
+            is AiContentSafetyDecision.Blocked -> {
+                Log.w(
+                    "MessageSender",
+                    "AI 内容安全过滤已拦截请求：category=${safetyDecision.category}",
+                )
+                viewModelScope.launch { showSnackbar(safetyDecision.userMessage) }
+                return
+            }
         }
         
         // 🔥 关键调试：检查配置状态
