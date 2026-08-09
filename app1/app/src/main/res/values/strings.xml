@@ -60,7 +60,7 @@
     <string name="privacy_section_6_title">6. Data security</string>
     <string name="privacy_section_6_body">The app blocks cleartext network traffic and stores its database and configuration in the private app directory. Network security also depends on the provider, endpoint, and device you use. Keep your API keys secure.</string>
     <string name="privacy_section_7_title">7. AI content safety and reporting</string>
-    <string name="privacy_section_7_body">The app locally blocks high-risk generation requests and passes safety constraints to supported model services. When you report AI content, the app records the report category, additional details, a summary of the related reply, the model and provider names, and the app version. It does not include API keys or the full conversation. If the network request fails, the report is temporarily stored in the private app directory and retried. After successful submission, the local report text and details are removed, leaving only a deduplication receipt.</string>
+    <string name="privacy_section_7_body">The app locally blocks high-risk generation requests and passes safety constraints to supported model services. When you report AI content, the app records the report category, optional details, up to 4,000 characters from the relevant reply, image count, model and provider names, app version, identifiers, and timestamp. It does not include API keys or the full conversation. If the network request fails, the report is temporarily stored in the private app directory and retried. After successful submission, the local report text and details are removed, leaving only a deduplication receipt.</string>
     <string name="privacy_section_8_title">8. Policy updates and contact</string>
     <string name="privacy_section_8_body">This policy may be updated as features or compliance requirements change. The updated version will appear on this page. For questions about this policy, contact the maintainers through the EveryTalk open-source project page.</string>
     <string name="privacy_project_link">EveryTalk open-source project and contact</string>
@@ -385,7 +385,7 @@
     </plurals>
     <string name="chat_scroll_to_bottom">Scroll to bottom</string>
     <string name="report_ai_content">Report AI content</string>
-    <string name="report_ai_content_description">Select a reason category and optionally add details. The report includes a summary of the relevant response plus the model and provider names. It never sends API keys or the full conversation.</string>
+    <string name="report_ai_content_description">Select a reason category and optionally add details. The report includes up to 4,000 characters from the relevant response plus the model and provider names. It never sends API keys or the full conversation.</string>
     <string name="report_details_label">Additional details (optional)</string>
     <string name="report_details_hint">Describe the issue with this content</string>
     <string name="report_submit">Submit report</string>
