@@ -1,13 +1,19 @@
 package com.android.everytalk.ui.components
 import com.android.everytalk.statecontroller.*
 
+internal enum class MarkdownListMarkerShape {
+    FilledCircle,
+    HollowCircle,
+    Triangle,
+}
+
 internal object ChatMarkdownTextStyle {
     const val BODY_FONT_SIZE_SP = 16f
     const val BODY_LINE_HEIGHT_SP = 26f
 
     const val ASSISTANT_CONTENT_START_PADDING_DP = 16f
     const val ASSISTANT_CONTENT_TOP_PADDING_DP = 4f
-    const val ASSISTANT_CONTENT_END_PADDING_DP = 0f
+    const val ASSISTANT_CONTENT_END_PADDING_DP = 12f
     const val ASSISTANT_CONTENT_BOTTOM_PADDING_DP = 4f
 
     const val INLINE_CODE_RELATIVE_SIZE = 0.92f
@@ -18,18 +24,18 @@ internal object ChatMarkdownTextStyle {
     const val INLINE_CODE_BACKGROUND_RADIUS_DP = 3f
     const val INLINE_CODE_BACKGROUND_HORIZONTAL_PADDING_DP = 2f
 
-    const val LIST_MARKER_INDENT_DP = 8f
-    const val LIST_CONTENTS_INDENT_DP = 4f
-    const val LIST_BULLET_SIZE_DP = 5f
-    const val LIST_NESTED_BULLET_SIZE_DP = 4f
-    const val LIST_MARKER_WIDTH_DP = LIST_MARKER_INDENT_DP + LIST_BULLET_SIZE_DP + LIST_CONTENTS_INDENT_DP
-    const val LIST_BULLET_START_PADDING_DP = LIST_MARKER_INDENT_DP
-    const val LIST_BULLET_TOP_PADDING_DP = 9.5f
-    const val LIST_NESTED_INDENT_DP = 24f
-    const val LIST_ITEM_SPACING_DP = 8f
-    const val LIST_TOP_LEVEL_ITEM_SPACING_DP = LIST_ITEM_SPACING_DP
+    const val LIST_MARKER_WIDTH_DP = 24f
+    const val LIST_CIRCLE_DIAMETER_DP = 6f
+    const val LIST_HOLLOW_CIRCLE_STROKE_DP = 1f
+    const val LIST_TRIANGLE_WIDTH_DP = 7f
+    const val LIST_TRIANGLE_HEIGHT_DP = 7f
+    const val LIST_NESTED_INDENT_DP = 0f
+    const val LIST_EDGE_SPACING_DP = 8f
+    const val LIST_ITEM_TOP_SPACING_DP = 10f
+    const val LIST_ITEM_BOTTOM_SPACING_DP = 10f
     const val LIST_NESTED_TOP_SPACING_DP = 0f
     const val LIST_ITEM_LINE_HEIGHT_SP = BODY_LINE_HEIGHT_SP
+    const val LIST_MARKER_OPTICAL_HEIGHT_SP = 18f
 
     const val SPACING_PARAGRAPH_DP = 16f
     const val STANDALONE_STRONG_SECTION_EXTRA_TOP_SPACING_DP = 8f
@@ -81,9 +87,11 @@ internal object ChatMarkdownTextStyle {
         return headingFontSizeSp(level) / BODY_FONT_SIZE_SP
     }
 
-    fun listBulletSizeDp(level: Int): Float {
-        return if (level <= 0) LIST_BULLET_SIZE_DP else LIST_NESTED_BULLET_SIZE_DP
+    fun listMarkerShape(level: Int): MarkdownListMarkerShape {
+        return when (level.coerceAtLeast(0) % 3) {
+            0 -> MarkdownListMarkerShape.FilledCircle
+            1 -> MarkdownListMarkerShape.HollowCircle
+            else -> MarkdownListMarkerShape.Triangle
+        }
     }
-
-    fun listBulletFilled(level: Int): Boolean = level <= 0
 }

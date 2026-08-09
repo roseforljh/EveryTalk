@@ -1,6 +1,7 @@
 package com.android.everytalk.ui.components.markdown
 import com.android.everytalk.statecontroller.*
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
@@ -13,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -26,6 +28,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -50,6 +53,8 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.geometry.isUnspecified
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.layout.ContentScale
@@ -57,11 +62,14 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.UriHandler
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.Placeholder
 import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
@@ -77,9 +85,11 @@ import androidx.compose.ui.semantics.CollectionInfo
 import androidx.compose.ui.semantics.collectionInfo
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.platform.testTag
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.ui.components.ChatMarkdownTextStyle
 import com.android.everytalk.ui.components.EveryTalkLoadingIndicator
+import com.android.everytalk.ui.components.MarkdownListMarkerShape
 import com.android.everytalk.ui.components.content.CodeBlockCard
 import com.android.everytalk.ui.components.math.MathBlock
 import com.android.everytalk.ui.components.math.MathFormulaErrorKind
@@ -105,6 +115,7 @@ import coil3.compose.rememberAsyncImagePainter
 import coil3.request.ImageRequest
 import coil3.size.Size as CoilSize
 import com.mikepenz.markdown.coil3.Coil3ImageTransformerImpl
+import com.mikepenz.markdown.annotator.AnnotatorSettings
 import com.mikepenz.markdown.annotator.annotatorSettings
 import com.mikepenz.markdown.annotator.buildMarkdownAnnotatedString
 import com.mikepenz.markdown.compose.Markdown
@@ -114,23 +125,31 @@ import com.mikepenz.markdown.compose.LocalMarkdownAnnotator
 import com.mikepenz.markdown.compose.components.MarkdownComponentModel
 import com.mikepenz.markdown.compose.components.MarkdownComponents
 import com.mikepenz.markdown.compose.components.markdownComponents
+import com.mikepenz.markdown.compose.extendedspans.ExtendedSpanPainter
+import com.mikepenz.markdown.compose.extendedspans.ExtendedSpans
+import com.mikepenz.markdown.compose.extendedspans.SpanDrawInstructions
 import com.mikepenz.markdown.compose.elements.MarkdownCodeBlock
 import com.mikepenz.markdown.compose.elements.MarkdownCodeFence
 import com.mikepenz.markdown.compose.elements.MarkdownDivider
 import com.mikepenz.markdown.compose.elements.MarkdownHeader
+import com.mikepenz.markdown.compose.elements.MarkdownListItems
+import com.mikepenz.markdown.compose.elements.MarkdownOrderedList
 import com.mikepenz.markdown.compose.elements.MarkdownParagraph
 import com.mikepenz.markdown.compose.elements.MarkdownTableHeader
 import com.mikepenz.markdown.compose.elements.MarkdownTableRow
 import com.mikepenz.markdown.compose.elements.LocalTableRowIndex
+import com.mikepenz.markdown.compose.elements.listDepth
 import com.mikepenz.markdown.m3.markdownColor
 import com.mikepenz.markdown.m3.markdownTypography
 import com.mikepenz.markdown.model.ImageTransformer
 import com.mikepenz.markdown.model.ImageWidth
 import com.mikepenz.markdown.model.MarkdownAnnotator
+import com.mikepenz.markdown.model.MarkdownExtendedSpans
 import com.mikepenz.markdown.model.PlaceholderConfig
 import com.mikepenz.markdown.model.State
 import com.mikepenz.markdown.model.StreamingMarkdownState
 import com.mikepenz.markdown.model.markdownAnnotator
+import com.mikepenz.markdown.model.markdownExtendedSpans
 import com.mikepenz.markdown.model.markdownInlineContent
 import com.mikepenz.markdown.model.markdownPadding
 import com.mikepenz.markdown.model.parseMarkdown
@@ -206,6 +225,103 @@ fun MikePenzMarkdownNodesRenderer(
 
 internal val LocalMarkdownHorizontalRuleTopPadding = compositionLocalOf {
     ChatMarkdownTextStyle.HORIZONTAL_RULE_VERTICAL_PADDING_DP.dp
+}
+
+// ponytail: 固定标记栏同时承担每级缩进，列表解析、语义和递归仍交给 MikePenz。
+@Composable
+internal fun EveryTalkMarkdownOrderedList(model: MarkdownComponentModel) {
+    MarkdownOrderedList(
+        content = model.content,
+        node = model.node,
+        style = model.typography.ordered,
+        depth = model.listDepth,
+        markerModifier = {
+            Modifier
+                .requiredWidth(ChatMarkdownTextStyle.LIST_MARKER_WIDTH_DP.dp)
+                .wrapContentWidth(Alignment.End)
+        },
+        listModifier = { Modifier.weight(1f) },
+    )
+}
+
+@Composable
+internal fun EveryTalkMarkdownUnorderedList(model: MarkdownComponentModel) {
+    val markerColor = model.typography.bullet.color
+        .takeUnless { it == Color.Unspecified }
+        ?: LocalContentColor.current
+    MarkdownListItems(
+        content = model.content,
+        node = model.node,
+        depth = model.listDepth,
+        markerModifier = {
+            Modifier.requiredWidth(ChatMarkdownTextStyle.LIST_MARKER_WIDTH_DP.dp)
+        },
+        listModifier = { Modifier.weight(1f) },
+        bullet = { _, _, _ ->
+            EveryTalkMarkdownListMarker(
+                level = model.listDepth,
+                color = markerColor,
+            )
+        },
+    )
+}
+
+@Composable
+private fun EveryTalkMarkdownListMarker(
+    level: Int,
+    color: Color,
+) {
+    val markerHeight = with(LocalDensity.current) {
+        ChatMarkdownTextStyle.LIST_MARKER_OPTICAL_HEIGHT_SP.sp.toDp()
+    }
+    Canvas(
+        modifier = Modifier
+            .requiredSize(
+                width = ChatMarkdownTextStyle.LIST_MARKER_WIDTH_DP.dp,
+                height = markerHeight,
+            )
+            .testTag("markdown-list-marker-${level.coerceAtLeast(0)}"),
+    ) {
+        val center = Offset(size.width / 2f, size.height / 2f)
+        when (ChatMarkdownTextStyle.listMarkerShape(level)) {
+            MarkdownListMarkerShape.FilledCircle -> {
+                drawCircle(
+                    color = color,
+                    radius = ChatMarkdownTextStyle.LIST_CIRCLE_DIAMETER_DP.dp.toPx() / 2f,
+                    center = center,
+                )
+            }
+
+            MarkdownListMarkerShape.HollowCircle -> {
+                val strokeWidth = ChatMarkdownTextStyle.LIST_HOLLOW_CIRCLE_STROKE_DP.dp.toPx()
+                drawCircle(
+                    color = color,
+                    radius = (
+                        ChatMarkdownTextStyle.LIST_CIRCLE_DIAMETER_DP.dp.toPx() - strokeWidth
+                    ).coerceAtLeast(0f) / 2f,
+                    center = center,
+                    style = Stroke(width = strokeWidth),
+                )
+            }
+
+            MarkdownListMarkerShape.Triangle -> {
+                val triangleWidth = ChatMarkdownTextStyle.LIST_TRIANGLE_WIDTH_DP.dp.toPx()
+                val halfTriangleHeight =
+                    ChatMarkdownTextStyle.LIST_TRIANGLE_HEIGHT_DP.dp.toPx() / 2f
+                val left = center.x - triangleWidth / 3f
+                val right = center.x + triangleWidth * 2f / 3f
+                drawPath(
+                    path = Path().apply {
+                        moveTo(left, center.y - halfTriangleHeight)
+                        lineTo(right, center.y)
+                        lineTo(left, center.y + halfTriangleHeight)
+                        close()
+                    },
+                    color = color,
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -586,6 +702,72 @@ internal fun inlineFormulaAwareParagraphStyle(
 
 internal fun inlineFormulaAlternateText(formula: FormulaRequest): String =
     "${'$'}${formula.latex}${'$'}"
+
+private object RegularMarkdownStrongSpanPainter : ExtendedSpanPainter() {
+    private val noOpDrawInstructions = SpanDrawInstructions { }
+
+    override fun decorate(
+        span: SpanStyle,
+        start: Int,
+        end: Int,
+        text: AnnotatedString,
+        builder: AnnotatedString.Builder,
+    ): SpanStyle = if (span.fontWeight == FontWeight.Bold) {
+        span.copy(fontWeight = null)
+    } else {
+        span
+    }
+
+    override fun decorate(
+        linkAnnotation: LinkAnnotation,
+        start: Int,
+        end: Int,
+        text: AnnotatedString,
+        builder: AnnotatedString.Builder,
+    ): LinkAnnotation = linkAnnotation
+
+    override fun drawInstructionsFor(
+        layoutResult: TextLayoutResult,
+        color: Color?,
+    ): SpanDrawInstructions = noOpDrawInstructions
+}
+
+internal fun createRegularMarkdownStrongExtendedSpans(): ExtendedSpans =
+    ExtendedSpans(RegularMarkdownStrongSpanPainter)
+
+@Composable
+internal fun markdownExtendedSpansWithRegularStrongWeight(): MarkdownExtendedSpans =
+    markdownExtendedSpans {
+        remember { createRegularMarkdownStrongExtendedSpans() }
+    }
+
+private class RegularMarkdownStrongAnnotatorSettings(
+    private val delegate: AnnotatorSettings,
+) : AnnotatorSettings by delegate {
+    override val annotator: MarkdownAnnotator = markdownAnnotator(
+        config = delegate.annotator.config,
+    ) { content, child ->
+        if (child.type == MarkdownElementTypes.STRONG) {
+            buildMarkdownAnnotatedString(
+                content = content,
+                node = child,
+                annotatorSettings = this@RegularMarkdownStrongAnnotatorSettings,
+            )
+            true
+        } else {
+            delegate.annotator.annotate?.invoke(this, content, child) ?: false
+        }
+    }
+}
+
+internal fun AnnotatorSettings.withRegularMarkdownStrongWeight(): AnnotatorSettings =
+    RegularMarkdownStrongAnnotatorSettings(this)
+
+@Composable
+internal fun markdownAnnotatorSettingsWithRegularStrongWeight(
+    annotator: MarkdownAnnotator = LocalMarkdownAnnotator.current,
+): AnnotatorSettings = annotatorSettings(annotator = annotator)
+    .withRegularMarkdownStrongWeight()
 
 internal fun createPreparedMessageMarkdownAnnotator(
     preparedMessage: PreparedMessage,

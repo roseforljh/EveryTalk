@@ -105,7 +105,6 @@ import coil3.compose.rememberAsyncImagePainter
 import coil3.request.ImageRequest
 import coil3.size.Size as CoilSize
 import com.mikepenz.markdown.coil3.Coil3ImageTransformerImpl
-import com.mikepenz.markdown.annotator.annotatorSettings
 import com.mikepenz.markdown.annotator.buildMarkdownAnnotatedString
 import com.mikepenz.markdown.compose.Markdown
 import com.mikepenz.markdown.compose.MarkdownElement
@@ -289,32 +288,32 @@ fun MikePenzMarkdownRenderer(
         h1 = bodyStyle.copy(
             fontSize = ChatMarkdownTextStyle.headingFontSizeSp(1).sp,
             lineHeight = ChatMarkdownTextStyle.headingLineHeightSp(1).sp,
-            fontWeight = FontWeight.Medium,
+            fontWeight = FontWeight.Normal,
         ),
         h2 = bodyStyle.copy(
             fontSize = ChatMarkdownTextStyle.headingFontSizeSp(2).sp,
             lineHeight = ChatMarkdownTextStyle.headingLineHeightSp(2).sp,
-            fontWeight = FontWeight.Medium,
+            fontWeight = FontWeight.Normal,
         ),
         h3 = bodyStyle.copy(
             fontSize = ChatMarkdownTextStyle.headingFontSizeSp(3).sp,
             lineHeight = ChatMarkdownTextStyle.headingLineHeightSp(3).sp,
-            fontWeight = FontWeight.Medium,
+            fontWeight = FontWeight.Normal,
         ),
         h4 = bodyStyle.copy(
             fontSize = ChatMarkdownTextStyle.headingFontSizeSp(4).sp,
             lineHeight = ChatMarkdownTextStyle.headingLineHeightSp(4).sp,
-            fontWeight = FontWeight.Medium,
+            fontWeight = FontWeight.Normal,
         ),
         h5 = bodyStyle.copy(
             fontSize = ChatMarkdownTextStyle.headingFontSizeSp(5).sp,
             lineHeight = ChatMarkdownTextStyle.headingLineHeightSp(5).sp,
-            fontWeight = FontWeight.Medium,
+            fontWeight = FontWeight.Normal,
         ),
         h6 = bodyStyle.copy(
             fontSize = ChatMarkdownTextStyle.headingFontSizeSp(6).sp,
             lineHeight = ChatMarkdownTextStyle.headingLineHeightSp(6).sp,
-            fontWeight = FontWeight.Medium,
+            fontWeight = FontWeight.Normal,
         ),
         text = bodyStyle,
         quote = bodyStyle,
@@ -338,11 +337,12 @@ fun MikePenzMarkdownRenderer(
     )
     val padding = markdownPadding(
         block = ChatMarkdownTextStyle.SPACING_PARAGRAPH_DP.dp,
-        list = ChatMarkdownTextStyle.LIST_TOP_LEVEL_ITEM_SPACING_DP.dp,
-        listItemTop = 8.dp,
-        listItemBottom = 8.dp,
+        list = ChatMarkdownTextStyle.LIST_EDGE_SPACING_DP.dp,
+        listItemTop = ChatMarkdownTextStyle.LIST_ITEM_TOP_SPACING_DP.dp,
+        listItemBottom = ChatMarkdownTextStyle.LIST_ITEM_BOTTOM_SPACING_DP.dp,
         listIndent = ChatMarkdownTextStyle.LIST_NESTED_INDENT_DP.dp,
     )
+    val markdownExtendedSpans = markdownExtendedSpansWithRegularStrongWeight()
     val inheritedFootnoteNavigation = LocalFootnoteNavigation.current
     val footnoteNavigation = footnoteNavigationState
         ?: inheritedFootnoteNavigation
@@ -570,6 +570,12 @@ fun MikePenzMarkdownRenderer(
                         }
                     }
                 },
+                orderedList = { model ->
+                    EveryTalkMarkdownOrderedList(model)
+                },
+                unorderedList = { model ->
+                    EveryTalkMarkdownUnorderedList(model)
+                },
                 heading1 = { model ->
                     FootnoteMarkdownHeader(
                         model = model,
@@ -649,6 +655,8 @@ fun MikePenzMarkdownRenderer(
                                         style = style,
                                         maxLines = Int.MAX_VALUE,
                                         overflow = TextOverflow.Clip,
+                                        annotatorSettings =
+                                            markdownAnnotatorSettingsWithRegularStrongWeight(),
                                     )
                                 }
                             }
@@ -669,6 +677,8 @@ fun MikePenzMarkdownRenderer(
                                         style = style,
                                         maxLines = Int.MAX_VALUE,
                                         overflow = TextOverflow.Clip,
+                                        annotatorSettings =
+                                            markdownAnnotatorSettingsWithRegularStrongWeight(),
                                     )
                                 }
                             }
@@ -724,11 +734,12 @@ fun MikePenzMarkdownRenderer(
                                     activeMessage.copy(markdown = details.markdown)
                                 }
                                 val summaryStyle = currentBodyStyle.value.copy(
-                                    fontWeight = FontWeight.Medium,
+                                    fontWeight = FontWeight.Normal,
                                 )
-                                val summaryAnnotatorSettings = annotatorSettings(
-                                    annotator = currentAnnotator.value,
-                                )
+                                val summaryAnnotatorSettings =
+                                    markdownAnnotatorSettingsWithRegularStrongWeight(
+                                        annotator = currentAnnotator.value,
+                                    )
                                 val summary = remember(
                                     details.summary,
                                     summaryStyle,
@@ -830,6 +841,7 @@ fun MikePenzMarkdownRenderer(
                         modifier = Modifier.markdownWidth(sender),
                         imageTransformer = EveryTalkMarkdownImageTransformer,
                         annotator = annotator,
+                        extendedSpans = markdownExtendedSpans,
                         inlineContent = markdownInlineContent,
                         components = components,
                         success = { state, nodeComponents, nodeModifier ->
@@ -853,6 +865,7 @@ fun MikePenzMarkdownRenderer(
                         modifier = Modifier.markdownWidth(sender),
                         imageTransformer = EveryTalkMarkdownImageTransformer,
                         annotator = annotator,
+                        extendedSpans = markdownExtendedSpans,
                         inlineContent = markdownInlineContent,
                         components = components,
                         success = { state, nodeComponents, nodeModifier ->
@@ -891,6 +904,7 @@ fun MikePenzMarkdownRenderer(
                                 modifier = Modifier.markdownWidth(sender),
                                 imageTransformer = EveryTalkMarkdownImageTransformer,
                                 annotator = annotator,
+                                extendedSpans = markdownExtendedSpans,
                                 inlineContent = markdownInlineContent,
                                 components = components,
                                 success = { snapshot, nodeComponents, nodeModifier ->

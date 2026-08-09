@@ -3,11 +3,21 @@ package com.android.everytalk.ui.components.markdown
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.PlaceholderVerticalAlign
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withLink
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.sp
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.ui.components.ChatMarkdownTextStyle
+import com.android.everytalk.ui.components.MarkdownListMarkerShape
 import com.android.everytalk.ui.components.math.MathFormulaErrorKind
 import com.android.everytalk.ui.components.math.MathFormulaRenderState
 import com.android.everytalk.ui.components.math.MathJaxRenderRequest
@@ -22,8 +32,11 @@ import com.android.everytalk.ui.components.streaming.FormulaRequest
 import com.android.everytalk.ui.components.streaming.INLINE_FORMULA_SCHEME
 import com.android.everytalk.ui.components.streaming.PreparedMessage
 import com.android.everytalk.ui.components.streaming.StreamBlockParser
+import com.mikepenz.markdown.annotator.DefaultAnnotatorSettings
+import com.mikepenz.markdown.annotator.buildMarkdownAnnotatedString
 import com.mikepenz.markdown.model.State
 import com.mikepenz.markdown.model.ImageWidth
+import com.mikepenz.markdown.model.markdownAnnotator
 import com.mikepenz.markdown.model.parseMarkdown
 import org.intellij.markdown.MarkdownElementTypes
 import org.junit.Assert.assertEquals
@@ -34,6 +47,73 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MikePenzMarkdownRendererTest {
+
+    @Test
+    fun `无序列表按层级切换项目符号`() {
+        assertEquals(MarkdownListMarkerShape.FilledCircle, ChatMarkdownTextStyle.listMarkerShape(0))
+        assertEquals(MarkdownListMarkerShape.HollowCircle, ChatMarkdownTextStyle.listMarkerShape(1))
+        assertEquals(MarkdownListMarkerShape.Triangle, ChatMarkdownTextStyle.listMarkerShape(2))
+        assertEquals(MarkdownListMarkerShape.FilledCircle, ChatMarkdownTextStyle.listMarkerShape(3))
+    }
+
+    @Test
+    fun `列表标记栏承担层级缩进且几何标记使用明确尺寸`() {
+        assertEquals(24f, ChatMarkdownTextStyle.LIST_MARKER_WIDTH_DP, 0f)
+        assertEquals(6f, ChatMarkdownTextStyle.LIST_CIRCLE_DIAMETER_DP, 0f)
+        assertEquals(1f, ChatMarkdownTextStyle.LIST_HOLLOW_CIRCLE_STROKE_DP, 0f)
+        assertEquals(7f, ChatMarkdownTextStyle.LIST_TRIANGLE_WIDTH_DP, 0f)
+        assertEquals(7f, ChatMarkdownTextStyle.LIST_TRIANGLE_HEIGHT_DP, 0f)
+        assertEquals(18f, ChatMarkdownTextStyle.LIST_MARKER_OPTICAL_HEIGHT_SP, 0f)
+        assertEquals(0f, ChatMarkdownTextStyle.LIST_NESTED_INDENT_DP, 0f)
+    }
+
+    @Test
+    fun `Strong扩展Span改为普通字重并保留链接和标题字重`() {
+        val link = "https://example.com"
+        val source = buildAnnotatedString {
+            withStyle(SpanStyle(fontWeight = FontWeight.Medium)) {
+                append("标题 ")
+                withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append("重点") }
+            }
+            append(' ')
+            withLink(LinkAnnotation.Url(link)) { append("链接") }
+        }
+
+        val rendered = createRegularMarkdownStrongExtendedSpans().extend(source)
+        val weights = rendered.spanStyles.map { it.item.fontWeight }
+
+        assertEquals(source.text, rendered.text)
+        assertTrue(null in weights)
+        assertTrue(FontWeight.Medium in weights)
+        assertFalse(FontWeight.Bold in weights)
+        assertEquals(
+            link,
+            (rendered.getLinkAnnotations(0, rendered.length).single().item as LinkAnnotation.Url).url,
+        )
+    }
+
+    @Test
+    fun `Strong解析为普通字重并保留Markdown链接`() {
+        val link = "https://example.com"
+        val settings = DefaultAnnotatorSettings(
+            linkTextSpanStyle = TextLinkStyles(style = SpanStyle(color = Color.Blue)),
+            codeSpanStyle = SpanStyle(fontFamily = FontFamily.Monospace),
+            annotator = markdownAnnotator(),
+        ).withRegularMarkdownStrongWeight()
+
+        val rendered = "**重点 [链接]($link)**".buildMarkdownAnnotatedString(
+            style = TextStyle(fontWeight = FontWeight.Medium),
+            annotatorSettings = settings,
+        )
+
+        assertEquals("重点 链接", rendered.text)
+        assertFalse(rendered.spanStyles.any { it.item.fontWeight == FontWeight.Bold })
+        assertTrue(rendered.spanStyles.any { it.item.fontWeight == FontWeight.Medium })
+        assertEquals(
+            link,
+            (rendered.getLinkAnnotations(0, rendered.length).single().item as LinkAnnotation.Url).url,
+        )
+    }
 
     @Test
     fun `行内公式占位框在SVG上下保留安全区`() {
