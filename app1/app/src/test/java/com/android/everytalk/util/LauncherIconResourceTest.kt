@@ -127,31 +127,28 @@ class LauncherIconResourceTest {
         val resDir = findResDir()
         val v31Theme = resDir.resolve("values-v31/themes.xml")
         val animatedSplash = resDir.resolve("drawable-nodpi/pixel_penguin_splash.gif")
-        val systemAnimatedSplash = resDir.resolve("drawable/pixel_penguin_system_splash.xml")
+        val legacySystemAnimatedSplash = resDir.resolve("drawable/pixel_penguin_system_splash.xml")
         val lightColors = resDir.resolve("values/colors.xml")
         val darkColors = resDir.resolve("values-night/colors.xml")
 
         assertTrue("Missing Android 12 theme", v31Theme.isFile)
         assertTrue("Missing pixel penguin splash GIF", animatedSplash.isFile)
-        assertTrue("Missing animated Android 12 splash icon", systemAnimatedSplash.isFile)
+        assertFalse("Android 12 splash must not show a separate centered logo", legacySystemAnimatedSplash.exists())
         assertTrue("Missing light splash background color", lightColors.isFile)
         assertTrue("Missing dark splash background color", darkColors.isFile)
 
         val themeText = v31Theme.readText()
         assertTrue(
-            "Android 12 splash theme must animate the app logo during cold start",
+            "Android 12 splash theme must use a transparent system icon",
             themeText.contains("windowSplashScreenAnimatedIcon") &&
-                themeText.contains("@drawable/pixel_penguin_system_splash"),
+                themeText.contains("@android:color/transparent"),
         )
         assertTrue(
             "Android 12 splash theme must use the theme-specific background color",
             themeText.contains("windowSplashScreenBackground") &&
                 themeText.contains("@color/splash_screen_background"),
         )
-        assertTrue(
-            "Android 12 splash theme must expose the system icon animation duration",
-            themeText.contains("windowSplashScreenAnimationDuration") && themeText.contains(">650<"),
-        )
+        assertFalse("Transparent system splash must not keep an icon animation duration", themeText.contains("windowSplashScreenAnimationDuration"))
         assertFalse(
             "Android 12 splash theme must not keep the old video splash theme",
             themeText.contains("Theme.SplashVideo") ||
@@ -177,15 +174,6 @@ class LauncherIconResourceTest {
                 (0 until startFrameImage.width).any { x -> startFrameImage.getRGB(x, y) != 0xFFFFFFFF.toInt() }
             },
         )
-        val systemAnimatedSplashText = systemAnimatedSplash.readText()
-        assertTrue(
-            "System splash icon must animate both logo scale and opacity",
-            systemAnimatedSplashText.contains("android:name=\"penguin_group\"") &&
-                systemAnimatedSplashText.contains("android:name=\"penguin_path\"") &&
-                systemAnimatedSplashText.contains("android:propertyName=\"scaleX\"") &&
-                systemAnimatedSplashText.contains("android:propertyName=\"fillAlpha\""),
-        )
-
         val mainDir = requireNotNull(resDir.parentFile)
         val splashSource = mainDir.resolve("java/com/android/everytalk/ui/components/splash/PixelPenguinSplash.kt")
         val mainActivitySource = mainDir.resolve("java/com/android/everytalk/statecontroller/activity/MainActivity.kt")
@@ -194,26 +182,43 @@ class LauncherIconResourceTest {
         assertTrue("Missing EveryTalk application", applicationSource.isFile)
         val splashSourceText = splashSource.readText()
         assertTrue("GIF splash must play the provided resource", splashSourceText.contains("R.drawable.pixel_penguin_splash"))
-        assertTrue(
-            "GIF splash must show the complete app logo while decoding",
-            splashSourceText.contains("placeholder = painterResource(R.drawable.pixel_penguin_logo)"),
-        )
-        assertTrue("GIF splash handoff must crossfade instead of flashing", splashSourceText.contains(".crossfade(100)"))
+        assertFalse("GIF splash must not show a separate centered logo", splashSourceText.contains("pixel_penguin_logo"))
+        assertFalse("GIF splash must not install an image placeholder", splashSourceText.contains("placeholder ="))
+        assertFalse("GIF splash must expose its first frame without crossfade", splashSourceText.contains(".crossfade("))
         assertTrue("GIF splash must play exactly once", splashSourceText.contains(".repeatCount(0)"))
         assertTrue("GIF splash must close from the decoder end callback", splashSourceText.contains(".onAnimationEnd"))
-        assertFalse(
-            "GIF playback must not build the main UI while animation frames are moving",
-            splashSourceText.contains(".onAnimationStart") || splashSourceText.contains("MAIN_CONTENT_START_DELAY_MS"),
+        assertTrue(
+            "GIF request must be created only after the system splash exits",
+            splashSourceText.contains("startAnimation: Boolean") &&
+                splashSourceText.indexOf("if (!startAnimation)") in
+                0 until splashSourceText.indexOf("ImageRequest.Builder"),
         )
+        assertTrue("GIF start must release the transparent system splash", splashSourceText.contains(".onAnimationStart"))
+        assertFalse("GIF playback must not use a fixed main-content delay", splashSourceText.contains("MAIN_CONTENT_START_DELAY_MS"))
         assertTrue(
             "Main UI warm-up must start only after the final animation frame is visible",
             splashSourceText.indexOf("currentOnFinalFrameVisible.value()") in
                 0 until splashSourceText.indexOf("delay(FINISHED_FRAME_HOLD_MS)"),
         )
-        assertTrue("GIF splash must hold its finished frame for half a second", splashSourceText.contains("500L"))
+        assertTrue("GIF splash must hold its finished frame for 0.2 seconds", splashSourceText.contains("200L"))
+        assertTrue(
+            "GIF splash must fade out after the final-frame hold",
+            splashSourceText.contains("FADE_OUT_DURATION_MS = 200") &&
+                splashSourceText.indexOf("delay(FINISHED_FRAME_HOLD_MS)") in
+                0 until splashSourceText.indexOf("splashAlpha.animateTo") &&
+                splashSourceText.indexOf("splashAlpha.animateTo") in
+                0 until splashSourceText.indexOf("currentOnFinished.value()"),
+        )
         val mainActivityText = mainActivitySource.readText()
         val applicationText = applicationSource.readText()
         assertTrue("MainActivity must show the GIF splash directly", mainActivityText.contains("PixelPenguinSplash"))
+        assertTrue(
+            "Android 12 system splash must remain until GIF playback starts",
+            mainActivityText.contains("splashScreen.setOnExitAnimationListener") &&
+                mainActivityText.contains("pendingSystemSplashRemoval = {") &&
+                mainActivityText.contains("startAnimation = canStartAnimatedSplash.value") &&
+                mainActivityText.contains("onAnimationStarted = ::removeSystemSplash"),
+        )
         assertTrue(
             "Main content must start only after the splash becomes visible",
             mainActivityText.contains("onFinalFrameVisible = { mainContentStarted = true }") &&
