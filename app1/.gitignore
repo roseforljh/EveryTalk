@@ -12,6 +12,7 @@
 /captures
 .externalNativeBuild
 .cxx
+.kotlin
 local.properties
 # Github properties should be local
 github.properties
