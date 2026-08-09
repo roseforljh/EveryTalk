@@ -21,11 +21,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.ApiConfig
-import com.android.everytalk.ui.components.popup.AppFloatingCard
+import com.android.everytalk.ui.components.popup.AppFloatingCardPopup
 import com.android.everytalk.ui.screens.MainScreen.chat.models.sortModelConfigs
 import com.android.everytalk.ui.screens.settings.localizedChannelLabel
 import com.android.everytalk.ui.screens.settings.localizedProviderLabel
@@ -64,12 +63,15 @@ fun ConfigSwitchPopup(
     onDismiss: () -> Unit
 ) {
     var selectedGroup by remember { mutableStateOf<ConfigGroup?>(null) }
+    var displayedGroup by remember { mutableStateOf<ConfigGroup?>(null) }
+
+    LaunchedEffect(selectedGroup) {
+        selectedGroup?.let { displayedGroup = it }
+    }
 
     LaunchedEffect(visible) {
         if (!visible) selectedGroup = null
     }
-
-    if (!visible) return
 
     val isDark = isSystemInDarkTheme()
     val textColor = if (isDark) Color.White else Color(0xFF0D0D0D)
@@ -77,81 +79,77 @@ fun ConfigSwitchPopup(
 
     val configGroups = remember(allConfigs) { allConfigs.groupByConfig() }
 
-    if (selectedGroup == null) {
-        Popup(
-            alignment = Alignment.TopStart,
-            offset = IntOffset(0, with(LocalDensity.current) { 48.dp.toPx().toInt() }),
-            onDismissRequest = onDismiss,
-            properties = PopupProperties(focusable = true)
+    AppFloatingCardPopup(
+        visible = visible && selectedGroup == null,
+        alignment = Alignment.TopStart,
+        offset = IntOffset(0, with(LocalDensity.current) { 48.dp.toPx().toInt() }),
+        onDismissRequest = onDismiss,
+        properties = PopupProperties(focusable = true),
+        modifier = Modifier
+            .width(IntrinsicSize.Max)
+            .widthIn(max = 280.dp)
+            .heightIn(max = 400.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(vertical = 8.dp)
         ) {
-            AppFloatingCard(
-                modifier = Modifier
-                    .width(IntrinsicSize.Max)
-                    .widthIn(max = 280.dp)
-                    .heightIn(max = 400.dp),
-            ) {
-                Column(
+            Text(
+                text = stringResource(R.string.chat_configuration_switch_title),
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                color = subtextColor,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+            )
+            configGroups.forEach { group ->
+                val isCurrentGroup = selectedApiConfig?.let {
+                    it.provider == group.provider &&
+                        it.address == group.address &&
+                        it.key == group.key
+                } == true
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .verticalScroll(rememberScrollState())
-                        .padding(vertical = 8.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable { selectedGroup = group }
+                        .padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
                 ) {
-                    Text(
-                        text = stringResource(R.string.chat_configuration_switch_title),
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = subtextColor,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                    )
-                    configGroups.forEach { group ->
-                        val isCurrentGroup = selectedApiConfig?.let {
-                            it.provider == group.provider &&
-                                it.address == group.address &&
-                                it.key == group.key
-                        } == true
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .clickable { selectedGroup = group }
-                                .padding(horizontal = 16.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.Center
-                        ) {
-                            if (isCurrentGroup) {
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_check),
-                                    contentDescription = null,
-                                    tint = textColor,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                            }
-                            Text(
-                                text = if (group.provider.isBlank()) {
-                                    localizedChannelLabel(group.channel)
-                                } else {
-                                    localizedProviderLabel(group.provider)
-                                },
-                                fontSize = 14.sp,
-                                fontWeight = if (isCurrentGroup) FontWeight.Medium else FontWeight.Normal,
-                                color = textColor,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
+                    if (isCurrentGroup) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_check),
+                            contentDescription = null,
+                            tint = textColor,
+                            modifier = Modifier.size(16.dp)
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
                     }
+                    Text(
+                        text = if (group.provider.isBlank()) {
+                            localizedChannelLabel(group.channel)
+                        } else {
+                            localizedProviderLabel(group.provider)
+                        },
+                        fontSize = 14.sp,
+                        fontWeight = if (isCurrentGroup) FontWeight.Medium else FontWeight.Normal,
+                        color = textColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
         }
     }
 
-    if (selectedGroup != null) {
+    displayedGroup?.let { group ->
         ModelPickerDialog(
-            group = selectedGroup!!,
+            visible = visible && selectedGroup != null,
+            group = group,
             selectedApiConfig = selectedApiConfig,
             onModelSelected = { config ->
-                selectedGroup = null
                 onModelSelected(config)
                 onDismiss()
             },
@@ -162,6 +160,7 @@ fun ConfigSwitchPopup(
 
 @Composable
 private fun ModelPickerDialog(
+    visible: Boolean,
     group: ConfigGroup,
     selectedApiConfig: ApiConfig?,
     onModelSelected: (ApiConfig) -> Unit,
@@ -171,65 +170,63 @@ private fun ModelPickerDialog(
     val textColor = if (isDark) Color.White else Color(0xFF0D0D0D)
     val subtextColor = if (isDark) Color(0xFF888888) else Color(0xFF999999)
 
-    Popup(
+    AppFloatingCardPopup(
+        visible = visible,
         alignment = Alignment.TopStart,
         offset = IntOffset(0, with(LocalDensity.current) { 48.dp.toPx().toInt() }),
         onDismissRequest = onDismiss,
-        properties = PopupProperties(focusable = true)
+        properties = PopupProperties(focusable = true),
+        modifier = Modifier
+            .width(IntrinsicSize.Max)
+            .widthIn(max = 280.dp)
+            .heightIn(max = 400.dp),
     ) {
-        AppFloatingCard(
+        Column(
             modifier = Modifier
-                .width(IntrinsicSize.Max)
-                .widthIn(max = 280.dp)
-                .heightIn(max = 400.dp),
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState())
+                .padding(vertical = 8.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(rememberScrollState())
-                    .padding(vertical = 8.dp),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                Text(
-                    text = if (group.provider.isBlank()) {
-                        localizedChannelLabel(group.channel)
-                    } else {
-                        localizedProviderLabel(group.provider)
-                    },
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = subtextColor,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                )
-                sortModelConfigs(group.models).forEach { config ->
-                    val isSelected = config.id == selectedApiConfig?.id
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(12.dp))
-                            .clickable { onModelSelected(config) }
-                            .padding(horizontal = 14.dp, vertical = 10.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        if (isSelected) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_check),
-                                contentDescription = null,
-                                tint = textColor,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                        }
-                        Text(
-                            text = config.name.ifEmpty { config.model },
-                            fontSize = 14.sp,
-                            fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
-                            color = textColor,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+            Text(
+                text = if (group.provider.isBlank()) {
+                    localizedChannelLabel(group.channel)
+                } else {
+                    localizedProviderLabel(group.provider)
+                },
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                color = subtextColor,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+            )
+            sortModelConfigs(group.models).forEach { config ->
+                val isSelected = config.id == selectedApiConfig?.id
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(12.dp))
+                        .clickable { onModelSelected(config) }
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    if (isSelected) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_check),
+                            contentDescription = null,
+                            tint = textColor,
+                            modifier = Modifier.size(16.dp)
                         )
+                        Spacer(modifier = Modifier.width(6.dp))
                     }
+                    Text(
+                        text = config.name.ifEmpty { config.model },
+                        fontSize = 14.sp,
+                        fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
+                        color = textColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
         }

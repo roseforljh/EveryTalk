@@ -33,7 +33,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.android.everytalk.R
 import com.android.everytalk.ui.components.dialog.AppDialogShape
@@ -41,7 +40,7 @@ import com.android.everytalk.ui.components.dialog.appDialogBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.components.dialog.appDialogSubtextColor
-import com.android.everytalk.ui.components.popup.AppFloatingCard
+import com.android.everytalk.ui.components.popup.AppFloatingCardPopup
 import com.android.everytalk.ui.screens.MainScreen.chat.models.sortModelConfigs
 import kotlin.math.roundToInt
 
@@ -235,15 +234,14 @@ fun AppTopBar(
                         }
                     }
 
-                    if (showModelSelection) {
-                        ModelSelectionDropdown(
-                            models = modelList,
-                            selectedApiConfig = selectedApiConfig,
-                            onModelSelected = onModelSelected,
-                            onModelLongClick = onModelLongClick,
-                            onDismiss = onDismissModelSelection
-                        )
-                    }
+                    ModelSelectionDropdown(
+                        expanded = showModelSelection,
+                        models = modelList,
+                        selectedApiConfig = selectedApiConfig,
+                        onModelSelected = onModelSelected,
+                        onModelLongClick = onModelLongClick,
+                        onDismiss = onDismissModelSelection
+                    )
 
                     ConfigSwitchPopup(
                         visible = showConfigSwitch,
@@ -389,32 +387,28 @@ private fun TopBarMoreMenu(
     onSettings: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    if (!expanded) return
-
-    Popup(
+    AppFloatingCardPopup(
+        visible = expanded,
         alignment = Alignment.TopEnd,
         offset = androidx.compose.ui.unit.IntOffset(0, with(androidx.compose.ui.platform.LocalDensity.current) { 48.dp.toPx().toInt() }),
         onDismissRequest = onDismiss,
-        properties = PopupProperties(focusable = true)
+        properties = PopupProperties(focusable = true),
+        modifier = Modifier
+            .wrapContentWidth()
+            .widthIn(min = 200.dp),
     ) {
-        AppFloatingCard(
-            modifier = Modifier
-                .wrapContentWidth()
-                .widthIn(min = 200.dp),
-        ) {
-            val textColor = MaterialTheme.colorScheme.onSurface
-            val deleteColor = Color(0xFFEF5350)
+        val textColor = MaterialTheme.colorScheme.onSurface
+        val deleteColor = Color(0xFFEF5350)
 
-            Column(
-                modifier = Modifier
-                    .width(IntrinsicSize.Max)
-                    .padding(vertical = 12.dp)
-            ) {
-                TopBarMenuItem(iconRes = R.drawable.ic_share, text = stringResource(R.string.action_share), tint = textColor, onClick = onShare)
-                TopBarMenuItem(iconRes = R.drawable.ic_pin, text = stringResource(R.string.action_pin), tint = textColor, onClick = onPin)
-                TopBarMenuItem(iconRes = R.drawable.ic_settings, text = stringResource(R.string.settings_title), tint = textColor, onClick = onSettings)
-                TopBarMenuItem(iconRes = R.drawable.ic_trash, text = stringResource(R.string.action_delete), tint = deleteColor, onClick = onDelete)
-            }
+        Column(
+            modifier = Modifier
+                .width(IntrinsicSize.Max)
+                .padding(vertical = 12.dp)
+        ) {
+            TopBarMenuItem(iconRes = R.drawable.ic_share, text = stringResource(R.string.action_share), tint = textColor, onClick = onShare)
+            TopBarMenuItem(iconRes = R.drawable.ic_pin, text = stringResource(R.string.action_pin), tint = textColor, onClick = onPin)
+            TopBarMenuItem(iconRes = R.drawable.ic_settings, text = stringResource(R.string.settings_title), tint = textColor, onClick = onSettings)
+            TopBarMenuItem(iconRes = R.drawable.ic_trash, text = stringResource(R.string.action_delete), tint = deleteColor, onClick = onDelete)
         }
     }
 }
@@ -459,6 +453,7 @@ private fun TopBarMenuItem(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ModelSelectionDropdown(
+    expanded: Boolean,
     models: List<com.android.everytalk.data.DataClass.ApiConfig>,
     selectedApiConfig: com.android.everytalk.data.DataClass.ApiConfig?,
     onModelSelected: (com.android.everytalk.data.DataClass.ApiConfig) -> Unit,
@@ -484,65 +479,63 @@ private fun ModelSelectionDropdown(
     val popupMaxHeight = ModelSelectionVerticalPadding * 2 +
         ModelSelectionItemHeight * sortedModels.size.coerceAtMost(MODEL_SELECTION_VISIBLE_ITEM_COUNT)
 
-    Popup(
+    AppFloatingCardPopup(
+        visible = expanded,
         alignment = Alignment.TopStart,
         offset = androidx.compose.ui.unit.IntOffset(0, with(androidx.compose.ui.platform.LocalDensity.current) { 48.dp.toPx().toInt() }),
         onDismissRequest = onDismiss,
-        properties = PopupProperties(focusable = true)
+        properties = PopupProperties(focusable = true),
+        modifier = Modifier
+            .testTag("model_selection_dropdown")
+            .width(IntrinsicSize.Max)
+            .widthIn(max = 280.dp)
+            .heightIn(max = popupMaxHeight),
     ) {
-        AppFloatingCard(
+        Column(
             modifier = Modifier
-                .testTag("model_selection_dropdown")
-                .width(IntrinsicSize.Max)
-                .widthIn(max = 280.dp)
-                .heightIn(max = popupMaxHeight),
+                .fillMaxWidth()
+                .verticalScroll(scrollState)
+                .padding(vertical = ModelSelectionVerticalPadding),
+            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .verticalScroll(scrollState)
-                    .padding(vertical = ModelSelectionVerticalPadding),
-                horizontalAlignment = Alignment.CenterHorizontally
-            ) {
-                sortedModels.forEach { modelConfig ->
-                    val isSelected = modelConfig.id == selectedApiConfig?.id
-                    val modelInteractionModifier = if (onModelLongClick != null) {
-                        Modifier.combinedClickable(
-                            onClickLabel = stringResource(R.string.model_select),
-                            onLongClickLabel = stringResource(R.string.model_parameters_open),
-                            onClick = { onModelSelected(modelConfig) },
-                            onLongClick = { onModelLongClick(modelConfig) },
+            sortedModels.forEach { modelConfig ->
+                val isSelected = modelConfig.id == selectedApiConfig?.id
+                val modelInteractionModifier = if (onModelLongClick != null) {
+                    Modifier.combinedClickable(
+                        onClickLabel = stringResource(R.string.model_select),
+                        onLongClickLabel = stringResource(R.string.model_parameters_open),
+                        onClick = { onModelSelected(modelConfig) },
+                        onLongClick = { onModelLongClick(modelConfig) },
+                    )
+                } else {
+                    Modifier.clickable { onModelSelected(modelConfig) }
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(modelInteractionModifier)
+                        .height(ModelSelectionItemHeight)
+                        .padding(horizontal = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.Center
+                ) {
+                    if (isSelected) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_check),
+                            contentDescription = null,
+                            tint = textColor,
+                            modifier = Modifier.size(16.dp)
                         )
-                    } else {
-                        Modifier.clickable { onModelSelected(modelConfig) }
+                        Spacer(modifier = Modifier.width(6.dp))
                     }
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .then(modelInteractionModifier)
-                            .height(ModelSelectionItemHeight)
-                            .padding(horizontal = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.Center
-                    ) {
-                        if (isSelected) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_check),
-                                contentDescription = null,
-                                tint = textColor,
-                                modifier = Modifier.size(16.dp)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                        }
-                        Text(
-                            text = modelConfig.name.ifEmpty { modelConfig.model },
-                            fontSize = 14.sp,
-                            fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
-                            color = textColor,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
+                    Text(
+                        text = modelConfig.name.ifEmpty { modelConfig.model },
+                        fontSize = 14.sp,
+                        fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
+                        color = textColor,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
             }
         }

@@ -52,7 +52,7 @@ import com.android.everytalk.ui.screens.settings.dialogs.AutoFetchModelsConfirmD
 import com.android.everytalk.ui.screens.settings.dialogs.ModelSelectionDialog
 import com.android.everytalk.util.storage.readAtMost
 import com.android.everytalk.ui.components.floatingEdgeGradient
-import com.android.everytalk.ui.components.popup.AppFloatingCard
+import com.android.everytalk.ui.components.popup.AppFloatingCardPopup
 import java.util.UUID
 
 private const val MAX_SETTINGS_IMPORT_BYTES = 50L * 1024L * 1024L
@@ -901,70 +901,66 @@ private fun SettingsTabMenu(
             .sortedBy { it.second.length }
     }
 
-    if (!expanded) return
-
-    androidx.compose.ui.window.Popup(
+    AppFloatingCardPopup(
+        visible = expanded,
         alignment = Alignment.TopEnd,
         offset = androidx.compose.ui.unit.IntOffset(0, with(androidx.compose.ui.platform.LocalDensity.current) { 48.dp.toPx().toInt() }),
         onDismissRequest = onDismiss,
-        properties = androidx.compose.ui.window.PopupProperties(focusable = true)
+        properties = androidx.compose.ui.window.PopupProperties(focusable = true),
+        modifier = Modifier.widthIn(min = 112.dp, max = 176.dp),
     ) {
-        AppFloatingCard(
-            modifier = Modifier.widthIn(min = 112.dp, max = 176.dp),
+        Column(
+            modifier = Modifier.padding(vertical = 6.dp)
         ) {
-            Column(
-                modifier = Modifier.padding(vertical = 6.dp)
-            ) {
-                sortedTabs.forEach { (index, title) ->
-                    val isSelected = index == currentTabIndex
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(38.dp)
-                            .clickable { onTabSelected(index) }
-                            .padding(horizontal = 14.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = title,
-                            fontSize = 16.sp,
-                            fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
-                            color = textColor,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        if (isSelected) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_check),
-                                contentDescription = null,
-                                tint = textColor,
-                                modifier = Modifier
-                                    .align(Alignment.CenterStart)
-                                    .size(12.dp)
-                            )
-                        }
-                    }
-                }
+            sortedTabs.forEach { (index, title) ->
+                val isSelected = index == currentTabIndex
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(38.dp)
-                        .clickable {
-                            onImportExport()
-                            onDismiss()
-                        }
+                        .clickable { onTabSelected(index) }
                         .padding(horizontal = 14.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Text(
-                        text = stringResource(R.string.settings_import_export),
+                        text = title,
                         fontSize = 16.sp,
-                        fontWeight = FontWeight.Medium,
+                        fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Medium,
                         color = textColor,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
+                    if (isSelected) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_check),
+                            contentDescription = null,
+                            tint = textColor,
+                            modifier = Modifier
+                                .align(Alignment.CenterStart)
+                                .size(12.dp)
+                        )
+                    }
                 }
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(38.dp)
+                    .clickable {
+                        onImportExport()
+                        onDismiss()
+                    }
+                    .padding(horizontal = 14.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = stringResource(R.string.settings_import_export),
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = textColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
             }
         }
     }

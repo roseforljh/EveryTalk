@@ -14,11 +14,10 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import com.android.everytalk.R
-import com.android.everytalk.ui.components.popup.AppFloatingCard
+import com.android.everytalk.ui.components.popup.AppFloatingCardPopup
 
 @Composable
 internal fun ConversationItemMenu(
@@ -35,62 +34,58 @@ internal fun ConversationItemMenu(
     onMoveToGroupClick: () -> Unit,
     onShareClick: () -> Unit = {}
 ) {
-    if (!expanded) return
-
     val isDark = isSystemInDarkTheme()
 
-    Popup(
+    AppFloatingCardPopup(
+        visible = expanded,
         popupPositionProvider = popupPositionProvider,
         onDismissRequest = onDismissRequest,
-        properties = PopupProperties(focusable = true)
+        properties = PopupProperties(focusable = true),
+        modifier = Modifier
+            .wrapContentWidth()
+            .widthIn(min = 200.dp),
     ) {
-        AppFloatingCard(
-            modifier = Modifier
-                .wrapContentWidth()
-                .widthIn(min = 200.dp),
-        ) {
-            val textColor = if (isDark) Color.White else Color(0xFF0D0D0D)
-            val deleteColor = Color(0xFFEF5350)
-            val disabledColor = textColor.copy(alpha = 0.4f)
+        val textColor = if (isDark) Color.White else Color(0xFF0D0D0D)
+        val deleteColor = Color(0xFFEF5350)
+        val disabledColor = textColor.copy(alpha = 0.4f)
 
-            Column(
-                modifier = Modifier
-                    .width(IntrinsicSize.Max)
-                    .padding(vertical = 12.dp)
-            ) {
-                DrawerMenuItem(
-                    iconRes = R.drawable.ic_pin,
-                    text = stringResource(if (isPinned) R.string.action_unpin else R.string.action_pin),
-                    tint = textColor,
-                    onClick = { onTogglePinClick(); onDismissRequest() }
-                )
-                DrawerMenuItem(
-                    iconRes = R.drawable.ic_pencil,
-                    text = stringResource(R.string.action_rename),
-                    tint = if (isRenameEnabled) textColor else disabledColor,
-                    onClick = {
-                        if (isRenameEnabled) { onRenameClick(); onDismissRequest() }
-                    }
-                )
-                DrawerMenuItem(
-                    iconRes = R.drawable.ic_folder,
-                    text = stringResource(R.string.drawer_move_to),
-                    tint = textColor,
-                    onClick = { onMoveToGroupClick(); onDismissRequest() }
-                )
-                DrawerMenuItem(
-                    iconRes = R.drawable.ic_share,
-                    text = stringResource(R.string.action_share),
-                    tint = textColor,
-                    onClick = { onShareClick(); onDismissRequest() }
-                )
-                DrawerMenuItem(
-                    iconRes = R.drawable.ic_trash,
-                    text = stringResource(R.string.action_delete),
-                    tint = deleteColor,
-                    onClick = { onDeleteClick(); onDismissRequest() }
-                )
-            }
+        Column(
+            modifier = Modifier
+                .width(IntrinsicSize.Max)
+                .padding(vertical = 12.dp)
+        ) {
+            DrawerMenuItem(
+                iconRes = R.drawable.ic_pin,
+                text = stringResource(if (isPinned) R.string.action_unpin else R.string.action_pin),
+                tint = textColor,
+                onClick = { onTogglePinClick(); onDismissRequest() }
+            )
+            DrawerMenuItem(
+                iconRes = R.drawable.ic_pencil,
+                text = stringResource(R.string.action_rename),
+                tint = if (isRenameEnabled) textColor else disabledColor,
+                onClick = {
+                    if (isRenameEnabled) { onRenameClick(); onDismissRequest() }
+                }
+            )
+            DrawerMenuItem(
+                iconRes = R.drawable.ic_folder,
+                text = stringResource(R.string.drawer_move_to),
+                tint = textColor,
+                onClick = { onMoveToGroupClick(); onDismissRequest() }
+            )
+            DrawerMenuItem(
+                iconRes = R.drawable.ic_share,
+                text = stringResource(R.string.action_share),
+                tint = textColor,
+                onClick = { onShareClick(); onDismissRequest() }
+            )
+            DrawerMenuItem(
+                iconRes = R.drawable.ic_trash,
+                text = stringResource(R.string.action_delete),
+                tint = deleteColor,
+                onClick = { onDeleteClick(); onDismissRequest() }
+            )
         }
     }
 }

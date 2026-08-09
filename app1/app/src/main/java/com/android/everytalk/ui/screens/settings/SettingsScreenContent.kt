@@ -53,7 +53,7 @@ import com.android.everytalk.data.DataClass.ModalityType
 import com.android.everytalk.data.network.ExternalWebSearchProvider
 import com.android.everytalk.data.network.ExternalWebSearchProviderConfig
 import com.android.everytalk.statecontroller.controller.config.modelConfigGroupId
-import com.android.everytalk.ui.components.popup.AppFloatingCard
+import com.android.everytalk.ui.components.popup.AppFloatingCardPopup
 import com.android.everytalk.ui.screens.MainScreen.chat.models.sortModelConfigs
 
 @SuppressLint("ConfigurationScreenWidthHeight")
@@ -548,16 +548,15 @@ private fun ApiKeyItemGroup(
                     }
                 }
 
-                if (showModelPopup && canExpandModels) {
-                    ModelListPopup(
-                        configs = configsInGroup,
-                        selectedConfigId = selectedConfigIdInApp,
-                        onSelectConfig = onSelectConfig,
-                        onDeleteConfig = onDeleteModelForApiKey,
-                        onConfigureModelParameters = onConfigureModelParameters,
-                        onDismiss = { showModelPopup = false }
-                    )
-                }
+                ModelListPopup(
+                    expanded = showModelPopup && canExpandModels,
+                    configs = configsInGroup,
+                    selectedConfigId = selectedConfigIdInApp,
+                    onSelectConfig = onSelectConfig,
+                    onDeleteConfig = onDeleteModelForApiKey,
+                    onConfigureModelParameters = onConfigureModelParameters,
+                    onDismiss = { showModelPopup = false }
+                )
             }
         }
     }
@@ -681,6 +680,7 @@ private fun ModelItem(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ModelListPopup(
+    expanded: Boolean,
     configs: List<ApiConfig>,
     selectedConfigId: String?,
     onSelectConfig: (ApiConfig) -> Unit,
@@ -693,85 +693,83 @@ private fun ModelListPopup(
     val selectedColor = if (isDark) Color(0xFF6EB5FF) else Color(0xFF3B82F6)
     val sortedConfigs = remember(configs) { sortModelConfigs(configs) }
 
-    androidx.compose.ui.window.Popup(
+    AppFloatingCardPopup(
+        visible = expanded,
         alignment = Alignment.TopCenter,
         offset = androidx.compose.ui.unit.IntOffset(0, with(androidx.compose.ui.platform.LocalDensity.current) { 48.dp.toPx().toInt() }),
         onDismissRequest = onDismiss,
-        properties = androidx.compose.ui.window.PopupProperties(focusable = true)
+        properties = androidx.compose.ui.window.PopupProperties(focusable = true),
+        modifier = Modifier
+            .widthIn(min = 220.dp, max = 320.dp)
+            .heightIn(max = 400.dp),
     ) {
-        AppFloatingCard(
-            modifier = Modifier
-                .widthIn(min = 220.dp, max = 320.dp)
-                .heightIn(max = 400.dp),
-        ) {
-            if (configs.isEmpty()) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(24.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Text(
-                        text = stringResource(R.string.settings_no_models),
-                        fontSize = 16.sp,
-                        color = textColor.copy(alpha = 0.6f)
-                    )
-                }
-            } else {
-                Column(
-                    modifier = Modifier
-                        .verticalScroll(rememberScrollState())
-                        .padding(vertical = 8.dp)
-                ) {
-                    sortedConfigs.forEach { config ->
-                        val isSelected = config.id == selectedConfigId
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .combinedClickable(
-                                    onClick = {
-                                        onSelectConfig(config)
+        if (configs.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(24.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = stringResource(R.string.settings_no_models),
+                    fontSize = 16.sp,
+                    color = textColor.copy(alpha = 0.6f)
+                )
+            }
+        } else {
+            Column(
+                modifier = Modifier
+                    .verticalScroll(rememberScrollState())
+                    .padding(vertical = 8.dp)
+            ) {
+                sortedConfigs.forEach { config ->
+                    val isSelected = config.id == selectedConfigId
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .combinedClickable(
+                                onClick = {
+                                    onSelectConfig(config)
+                                    onDismiss()
+                                },
+                                onLongClick = onConfigureModelParameters?.let { configure ->
+                                    {
+                                        configure(config)
                                         onDismiss()
-                                    },
-                                    onLongClick = onConfigureModelParameters?.let { configure ->
-                                        {
-                                            configure(config)
-                                            onDismiss()
-                                        }
-                                    },
-                                )
-                                .padding(horizontal = 16.dp, vertical = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            if (isSelected) {
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_check),
-                                    contentDescription = null,
-                                    tint = selectedColor,
-                                    modifier = Modifier.size(18.dp)
-                                )
-                                Spacer(modifier = Modifier.width(10.dp))
-                            }
-                            Text(
-                                text = config.name.ifEmpty { config.model },
-                                fontSize = 16.sp,
-                                fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
-                                color = if (isSelected) selectedColor else textColor,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                                modifier = Modifier.weight(1f)
+                                    }
+                                },
                             )
-                            IconButton(
-                                onClick = { onDeleteConfig(config) },
-                                modifier = Modifier.size(32.dp)
-                            ) {
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_trash),
-                                    contentDescription = stringResource(R.string.action_delete),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                    modifier = Modifier.size(16.dp)
-                                )
-                            }
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        if (isSelected) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_check),
+                                contentDescription = null,
+                                tint = selectedColor,
+                                modifier = Modifier.size(18.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                        }
+                        Text(
+                            text = config.name.ifEmpty { config.model },
+                            fontSize = 16.sp,
+                            fontWeight = if (isSelected) FontWeight.Medium else FontWeight.Normal,
+                            color = if (isSelected) selectedColor else textColor,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f)
+                        )
+                        IconButton(
+                            onClick = { onDeleteConfig(config) },
+                            modifier = Modifier.size(32.dp)
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_trash),
+                                contentDescription = stringResource(R.string.action_delete),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                modifier = Modifier.size(16.dp)
+                            )
                         }
                     }
                 }

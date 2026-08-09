@@ -64,14 +64,13 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
-import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.models.ImageSourceOption
 import com.android.everytalk.models.MoreOptionsType
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.components.modifier.diffuseShadow
-import com.android.everytalk.ui.components.popup.AppFloatingCard
+import com.android.everytalk.ui.components.popup.AppFloatingCardPopup
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -636,106 +635,96 @@ fun ChatInputArea(
                                 }
                             }
 
-                            if (showFunctionPanel) {
-                                Popup(
-                                    popupPositionProvider = functionPanelPositionProvider,
-                                    onDismissRequest = {
+                            AppFloatingCardPopup(
+                                visible = showFunctionPanel,
+                                popupPositionProvider = functionPanelPositionProvider,
+                                onDismissRequest = {
+                                    lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
+                                    if (showFunctionPanel) showFunctionPanel = false
+                                },
+                                properties = PopupProperties(focusable = false, dismissOnBackPress = false, dismissOnClickOutside = true),
+                                modifier = Modifier
+                                    .widthIn(max = 320.dp)
+                                    .wrapContentHeight(),
+                            ) {
+                                FunctionPanelContent(
+                                    isWebSearchEnabled = isWebSearchEnabled,
+                                    isWebSearchAvailable = effectiveWebSearchAvailable,
+                                    onToggleWebSearch = onToggleWebSearch,
+                                    isCodeExecutionEnabled = isCodeExecutionEnabled,
+                                    onToggleCodeExecution = onToggleCodeExecution,
+                                    isGeminiChannel = isGeminiChannel,
+                                    onToggleImagePanel = onToggleImagePanel,
+                                    onToggleMoreOptionsPanel = onToggleMoreOptionsPanel,
+                                    hasContent = hasContent,
+                                    onClearContent = {
+                                        localTextFieldValue = TextFieldValue("", TextRange(0))
+                                        lastExternalText = ""
+                                        onTextChange("")
+                                        onClearMediaItems()
+                                        syncJob?.cancel()
+                                    },
+                                    onDismiss = {
                                         lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
-                                        if (showFunctionPanel) showFunctionPanel = false
+                                        showFunctionPanel = false
                                     },
-                                    properties = PopupProperties(focusable = false, dismissOnBackPress = false, dismissOnClickOutside = true)
-                                ) {
-                                    AppFloatingCard(
-                                        modifier = Modifier
-                                            .widthIn(max = 320.dp)
-                                            .wrapContentHeight(),
-                                    ) {
-                                        FunctionPanelContent(
-                                            isWebSearchEnabled = isWebSearchEnabled,
-                                            isWebSearchAvailable = effectiveWebSearchAvailable,
-                                            onToggleWebSearch = onToggleWebSearch,
-                                            isCodeExecutionEnabled = isCodeExecutionEnabled,
-                                            onToggleCodeExecution = onToggleCodeExecution,
-                                            isGeminiChannel = isGeminiChannel,
-                                            onToggleImagePanel = onToggleImagePanel,
-                                            onToggleMoreOptionsPanel = onToggleMoreOptionsPanel,
-                                            hasContent = hasContent,
-                                            onClearContent = {
-                                                localTextFieldValue = TextFieldValue("", TextRange(0))
-                                                lastExternalText = ""
-                                                onTextChange("")
-                                                onClearMediaItems()
-                                                syncJob?.cancel()
-                                            },
-                                            onDismiss = {
-                                                lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
-                                                showFunctionPanel = false
-                                            },
-                                            isMcpEnabled = isMcpEnabled,
-                                            onToggleMcp = { viewModel.setMcpEnabledForNextRequest(!isMcpEnabled) },
-                                            onOpenFilePicker = { filePickerLauncher.launch(arrayOf("*/*")) },
-                                            onOpenCamera = { cameraPermissionLauncher.launch(Manifest.permission.CAMERA) },
-                                            onOpenGallery = {
-                                                photoPickerLauncher.launch(
-                                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
-                                                )
-                                            },
-                                            onOpenSystemPrompt = {
-                                                viewModel.showSystemPromptDialog()
-                                            }
+                                    isMcpEnabled = isMcpEnabled,
+                                    onToggleMcp = { viewModel.setMcpEnabledForNextRequest(!isMcpEnabled) },
+                                    onOpenFilePicker = { filePickerLauncher.launch(arrayOf("*/*")) },
+                                    onOpenCamera = { cameraPermissionLauncher.launch(Manifest.permission.CAMERA) },
+                                    onOpenGallery = {
+                                        photoPickerLauncher.launch(
+                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
                                         )
+                                    },
+                                    onOpenSystemPrompt = {
+                                        viewModel.showSystemPromptDialog()
+                                    }
+                                )
+                            }
+
+                            AppFloatingCardPopup(
+                                visible = showImageSelectionPanel,
+                                alignment = Alignment.BottomStart,
+                                offset = IntOffset(0, with(density) { (-56).dp.toPx().toInt() }),
+                                onDismissRequest = {
+                                    lastImagePanelDismissAt = android.os.SystemClock.uptimeMillis()
+                                    if (showImageSelectionPanel) showImageSelectionPanel = false
+                                },
+                                properties = PopupProperties(focusable = false, dismissOnBackPress = true, dismissOnClickOutside = true),
+                            ) {
+                                OptimizedImageSelectionPanel { selectedOption ->
+                                    if (showImageSelectionPanel) showImageSelectionPanel = false
+                                    when (selectedOption) {
+                                        ImageSourceOption.ALBUM -> photoPickerLauncher.launch(
+                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
+                                        )
+                                        ImageSourceOption.CAMERA -> cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
                                     }
                                 }
                             }
 
-                            if (showImageSelectionPanel) {
-                                Popup(
-                                    alignment = Alignment.BottomStart,
-                                    offset = IntOffset(0, with(density) { (-56).dp.toPx().toInt() }),
-                                    onDismissRequest = {
-                                        lastImagePanelDismissAt = android.os.SystemClock.uptimeMillis()
-                                        if (showImageSelectionPanel) showImageSelectionPanel = false
-                                    },
-                                    properties = PopupProperties(focusable = false, dismissOnBackPress = true, dismissOnClickOutside = true)
-                                ) {
-                                    AppFloatingCard {
-                                        OptimizedImageSelectionPanel { selectedOption ->
-                                            if (showImageSelectionPanel) showImageSelectionPanel = false
-                                            when (selectedOption) {
-                                                ImageSourceOption.ALBUM -> photoPickerLauncher.launch(
-                                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
-                                                )
-                                                ImageSourceOption.CAMERA -> cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                                            }
+                            AppFloatingCardPopup(
+                                visible = showMoreOptionsPanel,
+                                alignment = Alignment.BottomStart,
+                                offset = IntOffset(0, with(density) { (-56).dp.toPx().toInt() }),
+                                onDismissRequest = {
+                                    lastMorePanelDismissAt = android.os.SystemClock.uptimeMillis()
+                                    if (showMoreOptionsPanel) showMoreOptionsPanel = false
+                                },
+                                properties = PopupProperties(focusable = false, dismissOnBackPress = true, dismissOnClickOutside = true),
+                            ) {
+                                OptimizedMoreOptionsPanel(isMcpEnabled = isMcpEnabled) { selectedOption ->
+                                    when (selectedOption) {
+                                        MoreOptionsType.MCP -> {
+                                            viewModel.setMcpEnabledForNextRequest(!isMcpEnabled)
                                         }
-                                    }
-                                }
-                            }
-
-                            if (showMoreOptionsPanel) {
-                                Popup(
-                                    alignment = Alignment.BottomStart,
-                                    offset = IntOffset(0, with(density) { (-56).dp.toPx().toInt() }),
-                                    onDismissRequest = {
-                                        lastMorePanelDismissAt = android.os.SystemClock.uptimeMillis()
-                                        if (showMoreOptionsPanel) showMoreOptionsPanel = false
-                                    },
-                                    properties = PopupProperties(focusable = false, dismissOnBackPress = true, dismissOnClickOutside = true)
-                                ) {
-                                    AppFloatingCard {
-                                        OptimizedMoreOptionsPanel(isMcpEnabled = isMcpEnabled) { selectedOption ->
-                                            when (selectedOption) {
-                                                MoreOptionsType.MCP -> {
-                                                    viewModel.setMcpEnabledForNextRequest(!isMcpEnabled)
-                                                }
-                                                else -> {
-                                                    if (showMoreOptionsPanel) showMoreOptionsPanel = false
-                                                    val mimeTypesArray = Array(selectedOption.mimeTypes.size) { index ->
-                                                        selectedOption.mimeTypes[index]
-                                                    }
-                                                    filePickerLauncher.launch(mimeTypesArray)
-                                                }
+                                        else -> {
+                                            if (showMoreOptionsPanel) showMoreOptionsPanel = false
+                                            val mimeTypesArray = Array(selectedOption.mimeTypes.size) { index ->
+                                                selectedOption.mimeTypes[index]
                                             }
+                                            filePickerLauncher.launch(mimeTypesArray)
                                         }
                                     }
                                 }

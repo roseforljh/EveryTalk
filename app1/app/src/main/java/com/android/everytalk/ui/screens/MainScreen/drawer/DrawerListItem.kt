@@ -211,9 +211,15 @@ internal fun DrawerConversationListItem(
             }
 
             val currentLongPressPosition = longPressPositionForMenu
-            if (expandedItemIndex == originalIndex && currentLongPressPosition != null) {
+            val isMenuExpanded = expandedItemIndex == originalIndex && currentLongPressPosition != null
+            var retainedMenuPosition by remember { mutableStateOf<Offset?>(null) }
+            LaunchedEffect(isMenuExpanded, currentLongPressPosition) {
+                if (isMenuExpanded) retainedMenuPosition = currentLongPressPosition
+            }
+            val menuPosition = if (isMenuExpanded) currentLongPressPosition else retainedMenuPosition
+            if (menuPosition != null) {
                 ConversationItemMenu(
-                    expanded = true,
+                    expanded = isMenuExpanded,
                     onDismissRequest = { onCollapseMenu() },
                     onRenameClick = { onRenameRequest(originalIndex) },
                     onDeleteClick = { onDeleteTriggered(originalIndex) },
@@ -227,8 +233,8 @@ internal fun DrawerConversationListItem(
                             layoutDirection: LayoutDirection,
                             popupContentSize: IntSize
                         ): IntOffset {
-                            val x = anchorBounds.left + currentLongPressPosition.x.roundToInt()
-                            val y = anchorBounds.top + currentLongPressPosition.y.roundToInt()
+                            val x = anchorBounds.left + menuPosition.x.roundToInt()
+                            val y = anchorBounds.top + menuPosition.y.roundToInt()
                             val finalX = x.coerceIn(0, windowSize.width - popupContentSize.width)
                             val finalY = y.coerceIn(0, windowSize.height - popupContentSize.height)
                             return IntOffset(finalX, finalY)

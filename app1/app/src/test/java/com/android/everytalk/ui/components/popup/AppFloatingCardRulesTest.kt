@@ -1,39 +1,39 @@
 package com.android.everytalk.ui.components.popup
 
 import java.io.File
-import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppFloatingCardRulesTest {
     @Test
-    fun `所有自定义 Popup 使用统一悬浮卡片`() {
-        val popupFiles = mainSourceRoot()
+    fun `所有自定义 Popup 使用统一动画悬浮卡片`() {
+        val sourceFiles = mainSourceRoot()
             .walkTopDown()
             .filter { it.isFile && it.extension == "kt" }
+            .toList()
+        val popupComponent = sourceFiles.single { it.name == "AppFloatingCard.kt" }
+        val directPopupFiles = sourceFiles
+            .filterNot { it == popupComponent }
             .mapNotNull { file ->
                 val lines = file.readLines(Charsets.UTF_8)
-                val popupCount = lines.count { line ->
+                val hasDirectPopup = lines.any { line ->
                     val code = line.trimStart()
                     code.startsWith("Popup(") ||
                         code.startsWith("androidx.compose.ui.window.Popup(")
                 }
-                if (popupCount == 0) null else Triple(file, lines, popupCount)
+                file.takeIf { hasDirectPopup }
             }
             .toList()
-
-        assertTrue("至少应存在一个自定义 Popup", popupFiles.isNotEmpty())
-        popupFiles.forEach { (file, lines, popupCount) ->
-            val cardCount = lines.count { line ->
-                val code = line.trimStart()
-                code.startsWith("AppFloatingCard(") || code.startsWith("AppFloatingCard {")
+        val animatedPopupCount = sourceFiles
+            .filterNot { it == popupComponent }
+            .sumOf { file ->
+                file.readLines(Charsets.UTF_8).count { line ->
+                    line.trimStart().startsWith("AppFloatingCardPopup(")
+                }
             }
-            assertEquals(
-                "${file.name} 中每个自定义 Popup 都必须使用 AppFloatingCard",
-                popupCount,
-                cardCount,
-            )
-        }
+
+        assertTrue("自定义 Popup 只能由 AppFloatingCardPopup 创建：$directPopupFiles", directPopupFiles.isEmpty())
+        assertTrue("至少应存在一个统一动画悬浮卡片", animatedPopupCount > 0)
     }
 
     @Test
@@ -59,7 +59,7 @@ class AppFloatingCardRulesTest {
     }
 
     @Test
-    fun `悬浮卡片复用正确浮层的同步阴影入场实现`() {
+    fun `悬浮卡片复用正确浮层的入场和快速淡出实现`() {
         val source = File(
             mainSourceRoot(),
             "ui/components/popup/AppFloatingCard.kt",
@@ -71,6 +71,10 @@ class AppFloatingCardRulesTest {
         assertTrue("统一悬浮卡片必须复用 0.8 起始缩放", source.contains("val scale = remember { Animatable(0.8f) }"))
         assertTrue("统一悬浮卡片必须复用 30ms 透明度动画", source.contains("durationMillis = 30"))
         assertTrue("统一悬浮卡片必须复用 120ms 缩放动画", source.contains("durationMillis = 120"))
+        assertTrue("统一悬浮卡片必须使用 80ms 快速淡出", source.contains("AppFloatingCardExitDurationMillis = 80"))
+        assertTrue("统一悬浮卡片必须直接把自身透明度降为零", source.contains("targetValue = 0f"))
+        assertTrue("Popup 必须保留到淡出完成", source.contains("delay(AppFloatingCardExitDurationMillis.toLong())"))
+        assertTrue("圆角阴影外不得套矩形 AnimatedVisibility 图层", !source.contains("AnimatedVisibility"))
 
         val layerIndex = source.indexOf(".graphicsLayer {")
         val shadowIndex = source.indexOf(".shadow(AppFloatingCardElevation, AppFloatingCardShape)")
@@ -89,16 +93,16 @@ class AppFloatingCardRulesTest {
     }
 
     @Test
-    fun `AI 气泡悬浮卡片关闭时立即移除`() {
+    fun `AI 气泡悬浮卡片关闭时走统一淡出`() {
         val source = File(
             mainSourceRoot(),
             "ui/screens/MainScreen/chat/text/ui/AiContextUsagePopup.kt",
         ).readText(Charsets.UTF_8)
         val popupFunction = source.substringAfter("internal fun AiMessageFloatingPopupCard(")
 
-        assertTrue("AI 气泡悬浮卡片必须由 expanded 直接控制", popupFunction.contains("if (!expanded) return"))
-        assertTrue("AI 气泡悬浮卡片不得保留退出可见状态", !popupFunction.contains("var visible"))
-        assertTrue("AI 气泡悬浮卡片不得延迟退出", !popupFunction.contains("delay("))
+        assertTrue("AI 气泡悬浮卡片必须使用统一动画容器", popupFunction.contains("AppFloatingCardPopup("))
+        assertTrue("AI 气泡悬浮卡片必须由 expanded 控制", popupFunction.contains("visible = expanded"))
+        assertTrue("AI 气泡悬浮卡片不得在退出前直接移除", !popupFunction.contains("if (!expanded) return"))
     }
 
     private fun mainSourceRoot(): File {

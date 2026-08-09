@@ -25,19 +25,21 @@ class FunctionPanelShadowAnimationRulesTest {
     }
 
     @Test
-    fun `功能面板使用统一同步阴影入场且关闭不延迟`() {
+    fun `功能面板使用统一同步阴影入场和快速淡出`() {
         val source = chatInputSource().readText(Charsets.UTF_8)
         val floatingCard = floatingCardSource().readText(Charsets.UTF_8)
         val popupBlock = source
-            .substringAfterLast("if (showFunctionPanel) {")
-            .substringBefore("if (showImageSelectionPanel) {")
+            .substringAfter("AppFloatingCardPopup(")
+            .substringBefore("AppFloatingCardPopup(")
 
-        assertTrue("功能面板必须使用统一悬浮卡片", popupBlock.contains("AppFloatingCard("))
-        assertTrue("功能面板必须由显示状态直接控制", source.contains("if (showFunctionPanel) {"))
-        assertTrue("功能面板不得保留延迟退出状态", !source.contains("renderFunctionPanel"))
+        assertTrue("功能面板必须使用统一动画悬浮卡片", popupBlock.contains("visible = showFunctionPanel"))
+        assertTrue("功能面板不得在关闭时直接移除", !popupBlock.contains("if (showFunctionPanel) {"))
         assertTrue("功能面板不得保留透明度动画", !source.contains("functionPanelAlpha"))
         assertTrue("功能面板不得保留缩放动画", !source.contains("functionPanelScale"))
         assertTrue("入场动画必须集中在统一悬浮卡片", floatingCard.contains("val scale = remember { Animatable(0.8f) }"))
+        assertTrue("退出动画必须集中在统一悬浮卡片", floatingCard.contains("AppFloatingCardExitDurationMillis = 80"))
+        assertTrue("统一悬浮卡片必须直接淡出自身图层", floatingCard.contains("targetValue = 0f"))
+        assertTrue("阴影外不得套矩形动画图层", !floatingCard.contains("AnimatedVisibility"))
         assertTrue(
             "阴影必须随卡片同步入场",
             floatingCard.indexOf(".shadow(AppFloatingCardElevation, AppFloatingCardShape)") >

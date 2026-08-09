@@ -38,7 +38,6 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.ApiConfig
@@ -46,7 +45,7 @@ import com.android.everytalk.data.DataClass.ContextUsageDataSource
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.network.TokenUsageSource
-import com.android.everytalk.ui.components.popup.AppFloatingCard
+import com.android.everytalk.ui.components.popup.AppFloatingCardPopup
 import java.util.Locale
 import kotlin.math.roundToInt
 
@@ -467,16 +466,13 @@ internal fun AiMessageFloatingPopupCard(
     offset: IntOffset = IntOffset.Zero,
     content: @Composable () -> Unit,
 ) {
-    if (!expanded) return
-    Popup(
+    AppFloatingCardPopup(
+        visible = expanded,
         alignment = Alignment.BottomStart,
         offset = offset,
         onDismissRequest = onDismiss,
         properties = PopupProperties(focusable = true),
-    ) {
-        AppFloatingCard(
-            modifier = modifier.widthIn(min = minWidth),
-            content = content,
-        )
-    }
+        modifier = modifier.widthIn(min = minWidth),
+        content = content,
+    )
 }

@@ -71,7 +71,6 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.zIndex
@@ -94,7 +93,7 @@ import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldDefaultBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldColors
-import com.android.everytalk.ui.components.popup.AppFloatingCard
+import com.android.everytalk.ui.components.popup.AppFloatingCardPopup
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
@@ -600,76 +599,72 @@ fun ImageGenerationInputArea(
                                 }
                             }
 
-                            if (showFunctionPanel) {
-                                Popup(
-                                    popupPositionProvider = functionPanelPositionProvider,
-                                    onDismissRequest = {
+                            AppFloatingCardPopup(
+                                visible = showFunctionPanel,
+                                popupPositionProvider = functionPanelPositionProvider,
+                                onDismissRequest = {
+                                    lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
+                                    if (showFunctionPanel) showFunctionPanel = false
+                                },
+                                properties = PopupProperties(
+                                    focusable = false,
+                                    dismissOnBackPress = false,
+                                    dismissOnClickOutside = true
+                                ),
+                                modifier = Modifier
+                                    .widthIn(max = 320.dp)
+                                    .wrapContentHeight(),
+                            ) {
+                                ImageFunctionPanelContent(
+                                    supportsImageEditing = supportsImageEditing,
+                                    hasContent = hasContent,
+                                    isQwenEdit = isQwenEdit,
+                                    detectedFamily = detectedFamily,
+                                    onChangeImageSteps = onChangeImageSteps,
+                                    onChangeImageParams = onChangeImageParams,
+                                    onOpenGallery = {
                                         lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
-                                        if (showFunctionPanel) showFunctionPanel = false
-                                    },
-                                    properties = PopupProperties(
-                                        focusable = false,
-                                        dismissOnBackPress = false,
-                                        dismissOnClickOutside = true
-                                    )
-                                ) {
-                                    AppFloatingCard(
-                                        modifier = Modifier
-                                            .widthIn(max = 320.dp)
-                                            .wrapContentHeight(),
-                                    ) {
-                                        ImageFunctionPanelContent(
-                                            supportsImageEditing = supportsImageEditing,
-                                            hasContent = hasContent,
-                                            isQwenEdit = isQwenEdit,
-                                            detectedFamily = detectedFamily,
-                                            onChangeImageSteps = onChangeImageSteps,
-                                            onChangeImageParams = onChangeImageParams,
-                                            onOpenGallery = {
-                                                lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
-                                                showFunctionPanel = false
-                                                photoPickerLauncher.launch(
-                                                    PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
-                                                )
-                                            },
-                                            onOpenCamera = {
-                                                lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
-                                                showFunctionPanel = false
-                                                cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                                            },
-                                            onShowRatioDialog = {
-                                                lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
-                                                showFunctionPanel = false
-                                                showRatioDialog = true
-                                            },
-                                            onShowStepsDialog = {
-                                                lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
-                                                showFunctionPanel = false
-                                                showStepsDialog = true
-                                            },
-                                            onShowParamsDialog = {
-                                                lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
-                                                showFunctionPanel = false
-                                                showParamsDialog = true
-                                            },
-                                            onClearContent = {
-                                                onClearContent()
-                                                lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
-                                                showFunctionPanel = false
-                                            },
-                                            currentImageSteps = currentImageSteps,
-                                            selectedImageRatio = selectedImageRatio,
-                                            maxHeight = functionPanelMaxHeight,
-                                            isGptImage = detectedFamily == ImageGenCapabilities.ModelFamily.GPT_IMAGE,
-                                            currentGptImageQuality = currentGptImageQuality,
-                                            onShowQualityDialog = {
-                                                lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
-                                                showFunctionPanel = false
-                                                showGptQualityDialog = true
-                                            }
+                                        showFunctionPanel = false
+                                        photoPickerLauncher.launch(
+                                            PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
                                         )
+                                    },
+                                    onOpenCamera = {
+                                        lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
+                                        showFunctionPanel = false
+                                        cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                                    },
+                                    onShowRatioDialog = {
+                                        lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
+                                        showFunctionPanel = false
+                                        showRatioDialog = true
+                                    },
+                                    onShowStepsDialog = {
+                                        lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
+                                        showFunctionPanel = false
+                                        showStepsDialog = true
+                                    },
+                                    onShowParamsDialog = {
+                                        lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
+                                        showFunctionPanel = false
+                                        showParamsDialog = true
+                                    },
+                                    onClearContent = {
+                                        onClearContent()
+                                        lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
+                                        showFunctionPanel = false
+                                    },
+                                    currentImageSteps = currentImageSteps,
+                                    selectedImageRatio = selectedImageRatio,
+                                    maxHeight = functionPanelMaxHeight,
+                                    isGptImage = detectedFamily == ImageGenCapabilities.ModelFamily.GPT_IMAGE,
+                                    currentGptImageQuality = currentGptImageQuality,
+                                    onShowQualityDialog = {
+                                        lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
+                                        showFunctionPanel = false
+                                        showGptQualityDialog = true
                                     }
-                                }
+                                )
                             }
 
                         }

@@ -75,7 +75,6 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.R
@@ -84,7 +83,7 @@ import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.components.ChatMarkdownTextStyle
 import com.android.everytalk.ui.components.ProportionalAsyncImage
 import com.android.everytalk.ui.components.ImagePreviewDialog
-import com.android.everytalk.ui.components.popup.AppFloatingCard
+import com.android.everytalk.ui.components.popup.AppFloatingCardPopup
 import com.android.everytalk.ui.components.streaming.StreamBlockParser
 import com.android.everytalk.ui.components.streaming.UnifiedMarkdownRenderer
 import com.android.everytalk.ui.components.streaming.contentVersionForRendering
@@ -734,7 +733,7 @@ fun MessageContextMenu(
     onRegenerate: (Message) -> Unit,
     pressOffset: Offset = Offset.Zero
 ) {
-    if (isVisible) {
+    key(message.id) {
         val density = LocalDensity.current
         val windowSize = LocalWindowInfo.current.containerSize
         val isDark = isSystemInDarkTheme()
@@ -748,14 +747,15 @@ fun MessageContextMenu(
         val rawX = pressOffset.x - menuWidthPx
         val rawY = pressOffset.y
 
-        val finalX = rawX.coerceIn(0f, screenWidthPx - menuWidthPx)
-        val finalY = rawY.coerceIn(0f, screenHeightPx - estimatedMenuHeightPx)
+        val finalX = rawX.coerceIn(0f, (screenWidthPx - menuWidthPx).coerceAtLeast(0f))
+        val finalY = rawY.coerceIn(0f, (screenHeightPx - estimatedMenuHeightPx).coerceAtLeast(0f))
 
         val iconBg = if (isDark) Color(0xFF3B3B3B) else Color(0xFFE8E8E8)
         val textColor = if (isDark) Color.White else Color(0xFF0D0D0D)
         val iconTint = if (isDark) Color.White else Color(0xFF0D0D0D)
 
-        Popup(
+        AppFloatingCardPopup(
+            visible = isVisible,
             alignment = Alignment.TopStart,
             offset = IntOffset(finalX.toInt(), finalY.toInt()),
             onDismissRequest = onDismiss,
@@ -764,37 +764,34 @@ fun MessageContextMenu(
                 dismissOnBackPress = true,
                 dismissOnClickOutside = true,
                 clippingEnabled = false
-            )
+            ),
+            modifier = Modifier.width(menuWidth),
         ) {
-            AppFloatingCard(
-                modifier = Modifier.width(menuWidth),
-            ) {
-                Column(modifier = Modifier.padding(vertical = 8.dp)) {
-                    ContextMenuRow(
-                        icon = Icons.Filled.ContentCopy,
-                        label = stringResource(R.string.action_copy),
-                        iconBg = iconBg,
-                        iconTint = iconTint,
-                        textColor = textColor,
-                        onClick = { onCopy(message) }
-                    )
-                    ContextMenuRow(
-                        icon = Icons.Filled.Edit,
-                        label = stringResource(R.string.chat_action_edit),
-                        iconBg = iconBg,
-                        iconTint = iconTint,
-                        textColor = textColor,
-                        onClick = { onEdit(message) }
-                    )
-                    ContextMenuRow(
-                        icon = Icons.Filled.Refresh,
-                        label = stringResource(R.string.chat_action_regenerate),
-                        iconBg = iconBg,
-                        iconTint = iconTint,
-                        textColor = textColor,
-                        onClick = { onRegenerate(message) }
-                    )
-                }
+            Column(modifier = Modifier.padding(vertical = 8.dp)) {
+                ContextMenuRow(
+                    icon = Icons.Filled.ContentCopy,
+                    label = stringResource(R.string.action_copy),
+                    iconBg = iconBg,
+                    iconTint = iconTint,
+                    textColor = textColor,
+                    onClick = { onCopy(message) }
+                )
+                ContextMenuRow(
+                    icon = Icons.Filled.Edit,
+                    label = stringResource(R.string.chat_action_edit),
+                    iconBg = iconBg,
+                    iconTint = iconTint,
+                    textColor = textColor,
+                    onClick = { onEdit(message) }
+                )
+                ContextMenuRow(
+                    icon = Icons.Filled.Refresh,
+                    label = stringResource(R.string.chat_action_regenerate),
+                    iconBg = iconBg,
+                    iconTint = iconTint,
+                    textColor = textColor,
+                    onClick = { onRegenerate(message) }
+                )
             }
         }
     }
@@ -810,7 +807,7 @@ fun ImageContextMenu(
    onEdit: ((Message) -> Unit)? = null,
    pressOffset: Offset = Offset.Zero
 ) {
-   if (isVisible) {
+   key(message.id) {
        val density = LocalDensity.current
        val windowSize = LocalWindowInfo.current.containerSize
        val isDark = isSystemInDarkTheme()
@@ -825,14 +822,15 @@ fun ImageContextMenu(
        val rawX = pressOffset.x
        val rawY = pressOffset.y + fingerVerticalOffsetPx
 
-       val finalX = rawX.coerceIn(0f, screenWidthPx - menuWidthPx)
-       val finalY = rawY.coerceIn(0f, screenHeightPx - estimatedMenuHeightPx)
+       val finalX = rawX.coerceIn(0f, (screenWidthPx - menuWidthPx).coerceAtLeast(0f))
+       val finalY = rawY.coerceIn(0f, (screenHeightPx - estimatedMenuHeightPx).coerceAtLeast(0f))
 
        val iconBg = if (isDark) Color(0xFF3B3B3B) else Color(0xFFE8E8E8)
        val textColor = if (isDark) Color.White else Color(0xFF0D0D0D)
        val iconTint = if (isDark) Color.White else Color(0xFF0D0D0D)
 
-       Popup(
+       AppFloatingCardPopup(
+           visible = isVisible,
            alignment = Alignment.TopStart,
            offset = IntOffset(finalX.toInt(), finalY.toInt()),
            onDismissRequest = onDismiss,
@@ -841,39 +839,36 @@ fun ImageContextMenu(
                dismissOnBackPress = true,
                dismissOnClickOutside = true,
                clippingEnabled = false
-           )
+           ),
+           modifier = Modifier.width(menuWidth),
        ) {
-           AppFloatingCard(
-               modifier = Modifier.width(menuWidth),
-           ) {
-               Column(modifier = Modifier.padding(vertical = 8.dp)) {
+           Column(modifier = Modifier.padding(vertical = 8.dp)) {
+               ContextMenuRow(
+                   icon = Icons.Outlined.Image,
+                   label = stringResource(R.string.image_view),
+                   iconBg = iconBg,
+                   iconTint = iconTint,
+                   textColor = textColor,
+                   onClick = { onView(message) }
+               )
+               if (onEdit != null) {
                    ContextMenuRow(
-                       icon = Icons.Outlined.Image,
-                       label = stringResource(R.string.image_view),
+                       icon = Icons.Filled.Edit,
+                       label = stringResource(imageContextMenuEditLabelRes()),
                        iconBg = iconBg,
                        iconTint = iconTint,
                        textColor = textColor,
-                       onClick = { onView(message) }
-                   )
-                   if (onEdit != null) {
-                       ContextMenuRow(
-                           icon = Icons.Filled.Edit,
-                           label = stringResource(imageContextMenuEditLabelRes()),
-                           iconBg = iconBg,
-                           iconTint = iconTint,
-                           textColor = textColor,
-                           onClick = { onEdit(message) }
-                       )
-                   }
-                   ContextMenuRow(
-                       icon = Icons.Outlined.Download,
-                       label = stringResource(R.string.image_download),
-                       iconBg = iconBg,
-                       iconTint = iconTint,
-                       textColor = textColor,
-                       onClick = { onDownload(message) }
+                       onClick = { onEdit(message) }
                    )
                }
+               ContextMenuRow(
+                   icon = Icons.Outlined.Download,
+                   label = stringResource(R.string.image_download),
+                   iconBg = iconBg,
+                   iconTint = iconTint,
+                   textColor = textColor,
+                   onClick = { onDownload(message) }
+               )
            }
        }
    }
