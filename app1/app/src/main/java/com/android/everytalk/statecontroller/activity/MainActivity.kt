@@ -9,11 +9,11 @@ import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.IntentCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -100,7 +100,7 @@ internal fun rememberDrawerSessionKey(drawerState: DrawerState): Int {
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
-class MainActivity : ComponentActivity() {
+class MainActivity : AppCompatActivity() {
 
     private var fileContentToSave: String? = null
     private lateinit var appViewModel: AppViewModel
@@ -179,8 +179,6 @@ class MainActivity : ComponentActivity() {
                         )
                     )
 
-                    val isSearchActiveInDrawer by appViewModel.isSearchActiveInDrawer.collectAsState()
-                    val searchQueryInDrawer by appViewModel.searchQueryInDrawer.collectAsState()
                     val expandedDrawerItemIndex by appViewModel.expandedDrawerItemIndex.collectAsState()
                     val isLoadingHistoryData by appViewModel.isLoadingHistoryData.collectAsState()
 
@@ -216,12 +214,6 @@ class MainActivity : ComponentActivity() {
                     ) { contentPadding ->
                         val density = LocalDensity.current
                         val screenWidthDp = with(density) { LocalWindowInfo.current.containerSize.width.toDp() }
-
-                        LaunchedEffect(appViewModel.drawerState.isClosed, isSearchActiveInDrawer) {
-                            if (appViewModel.drawerState.isClosed && isSearchActiveInDrawer) {
-                                appViewModel.setSearchActiveInDrawer(false)
-                            }
-                        }
 
                         // 处理抽屉的返回键逻辑 - 最低优先级，只在抽屉打开时有效
                         BackHandler(enabled = !appViewModel.drawerState.isClosed) {
@@ -270,17 +262,22 @@ class MainActivity : ComponentActivity() {
                                     AppDrawerContent(
                                         historicalConversations = if (isImageGenerationMode) appViewModel.imageGenerationHistoricalConversations.collectAsState().value else appViewModel.historicalConversations.collectAsState().value,
                                         loadedHistoryIndex = if (isImageGenerationMode) appViewModel.loadedImageGenerationHistoryIndex.collectAsState().value else appViewModel.loadedHistoryIndex.collectAsState().value,
-                                        isSearchActive = isSearchActiveInDrawer,
-                                        currentSearchQuery = searchQueryInDrawer,
-                                        onSearchActiveChange = { isActive ->
-                                            appViewModel.setSearchActiveInDrawer(
-                                                isActive
+                                        onConversationSearchClick = {
+                                            appViewModel.simpleModeManager.setIntendedMode(
+                                                SimpleModeManager.ModeType.TEXT,
+                                                showToast = false,
                                             )
-                                        },
-                                        onSearchQueryChange = { query ->
-                                            appViewModel.onDrawerSearchQueryChange(
-                                                query
-                                            )
+                                            appViewModel.setConversationSearchActive(true)
+                                            navController.navigate(Screen.CHAT_SCREEN) {
+                                                popUpTo(navController.graph.startDestinationRoute!!) {
+                                                    saveState = true
+                                                }
+                                                launchSingleTop = true
+                                                restoreState = true
+                                            }
+                                            coroutineScope.launch {
+                                                appViewModel.drawerState.close()
+                                            }
                                         },
                                         onImageGenerationConversationClick = { index ->
                                         // 先声明意图模式，避免因内容/索引造成的误判

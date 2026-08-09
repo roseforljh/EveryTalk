@@ -76,6 +76,7 @@ import com.android.everytalk.ui.screens.MainScreen.chat.models.ModelSelectionBot
 import com.android.everytalk.ui.screens.MainScreen.chat.text.state.rememberChatScrollStateManager
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
 import com.android.everytalk.ui.screens.MainScreen.chat.core.PlaceholderRole
+import com.android.everytalk.ui.screens.MainScreen.search.ConversationSearchContent
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.delay
@@ -89,6 +90,9 @@ fun ChatScreen(
 ) {
     val messages: List<Message> = viewModel.messages
     val text by viewModel.text.collectAsState()
+    val isConversationSearchActive by viewModel.isConversationSearchActive.collectAsState()
+    val conversationSearchQuery by viewModel.conversationSearchQuery.collectAsState()
+    val historicalConversations by viewModel.historicalConversations.collectAsState()
 
     // Dynamic config selection based on mode
     val uiMode by viewModel.uiModeFlow.collectAsState()
@@ -174,9 +178,8 @@ fun ChatScreen(
     val conversationIdState = rememberUpdatedState(conversationId)
     val isLoadingHistoryDataState = rememberUpdatedState(isLoadingHistoryData)
 
-    // 获取抽屉和搜索相关状态
+    // 获取抽屉相关状态
     val isDrawerOpen = !viewModel.drawerState.isClosed
-    val isSearchActiveInDrawer by viewModel.isSearchActiveInDrawer.collectAsState()
     val expandedDrawerItemIndex by viewModel.expandedDrawerItemIndex.collectAsState()
 
     // 处理返回键逻辑 - 优先处理抽屉相关操作，再处理页面导航
@@ -185,16 +188,15 @@ fun ChatScreen(
         viewModel.setExpandedDrawerItemIndex(null)
     }
 
-    BackHandler(enabled = isDrawerOpen && isSearchActiveInDrawer) {
-        // 中等优先级：退出搜索模式
-        viewModel.setSearchActiveInDrawer(false)
-    }
-
-    BackHandler(enabled = isDrawerOpen && expandedDrawerItemIndex == null && !isSearchActiveInDrawer) {
+    BackHandler(enabled = isDrawerOpen && expandedDrawerItemIndex == null) {
         // 低优先级：关闭抽屉
         coroutineScope.launch {
             viewModel.drawerState.close()
         }
+    }
+
+    BackHandler(enabled = !isDrawerOpen && isConversationSearchActive) {
+        viewModel.setConversationSearchActive(false)
     }
 
 
@@ -516,6 +518,17 @@ fun ChatScreen(
                 .fillMaxSize()
                 .padding(scaffoldPaddingValues)
         ) {
+            if (isConversationSearchActive) {
+                ConversationSearchContent(
+                    query = conversationSearchQuery,
+                    conversations = historicalConversations,
+                    getConversationTitle = { index ->
+                        viewModel.getConversationPreviewText(index, isImageGeneration = false)
+                    },
+                    onQueryChange = viewModel::onConversationSearchQueryChange,
+                    onConversationClick = viewModel::loadConversationFromHistory,
+                )
+            } else {
             // 主内容区域 - 消息列表填满整个区域
             Box(
                 modifier = Modifier.fillMaxSize(),
@@ -683,6 +696,7 @@ fun ChatScreen(
                 scrollStateManager = scrollStateManager,
                 bottomPadding = inputAreaHeightDp + 12.dp
             )
+            }
 
             // 浮动顶栏 - 覆盖在内容上方
             AppTopBar(

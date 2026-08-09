@@ -1,20 +1,13 @@
 package com.android.everytalk.ui.screens.MainScreen
 import com.android.everytalk.statecontroller.*
 import androidx.activity.compose.BackHandler
-import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.ui.res.painterResource
 import com.android.everytalk.R
 import androidx.compose.material3.*
@@ -22,24 +15,16 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
-import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.ui.focus.FocusRequester
-import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.zIndex
-import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.platform.LocalWindowInfo
-import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.ui.screens.MainScreen.drawer.* // 导入抽屉子包下的所有内容
@@ -57,17 +42,13 @@ import com.android.everytalk.ui.components.dialog.appDialogTextFieldColors
 import com.android.everytalk.ui.components.floatingEdgeGradient
 @OptIn(
     ExperimentalMaterial3Api::class,
-    ExperimentalComposeUiApi::class,
     ExperimentalFoundationApi::class
 )
 @Composable
 fun AppDrawerContent(
     historicalConversations: List<List<Message>>,
     loadedHistoryIndex: Int?,
-    isSearchActive: Boolean,
-    currentSearchQuery: String,
-    onSearchActiveChange: (Boolean) -> Unit,
-    onSearchQueryChange: (String) -> Unit,
+    onConversationSearchClick: () -> Unit,
     onConversationClick: (Int) -> Unit,
     onImageGenerationConversationClick: (Int) -> Unit, // 新增：图像模式历史点击回调
     onNewChatClick: () -> Unit,
@@ -111,10 +92,6 @@ fun AppDrawerContent(
     val deletingGroups = remember { mutableStateListOf<String>() }
     val deletingItems = remember { mutableStateListOf<String>() }
     val scope = rememberCoroutineScope()
-    val focusRequester = remember { FocusRequester() }
-    val keyboardController = LocalSoftwareKeyboardController.current
-    val focusManager = LocalFocusManager.current
-    val screenWidth = with(LocalDensity.current) { LocalWindowInfo.current.containerSize.width.toDp() }
     LaunchedEffect(loadedHistoryIndex) {
         if (loadedHistoryIndex == null) {
             selectedSet.clear()
@@ -126,38 +103,15 @@ fun AppDrawerContent(
             longPressPosition = null
         }
     }
-    LaunchedEffect(isSearchActive, keyboardController) {
-        if (isSearchActive) {
-            delay(100)
-            focusRequester.requestFocus()
-            keyboardController?.show()
-        } else {
-            keyboardController?.hide()
-            focusManager.clearFocus(force = true)
-        }
-    }
     // 解析会话稳定ID的辅助函数（与 AppViewModel 中的逻辑一致）
     fun resolveStableId(conversation: List<Message>): String? {
         return com.android.everytalk.util.ConversationNameHelper.resolveStableId(conversation)
     }
-    val processedItems = remember(currentSearchQuery, historicalConversations, isSearchActive, pinnedIds, conversationGroups) {
+    val processedItems = remember(historicalConversations, pinnedIds, conversationGroups) {
         derivedStateOf {
-            val baseItems = if (!isSearchActive || currentSearchQuery.isBlank()) {
-                historicalConversations.mapIndexed { index, conversation ->
-                    val stableId = resolveStableId(conversation) ?: "unknown_$index"
-                    FilteredConversationItem(index, conversation, stableId)
-                }
-            } else {
-                historicalConversations.mapIndexedNotNull { index, conversation ->
-                    val searchableMessages = conversation.take(3)
-                    val matches = searchableMessages.any { message ->
-                        message.text.contains(currentSearchQuery, ignoreCase = true)
-                    }
-                    if (matches) {
-                        val stableId = resolveStableId(conversation) ?: "unknown_$index"
-                        FilteredConversationItem(index, conversation, stableId)
-                    } else null
-                }
+            val baseItems = historicalConversations.mapIndexed { index, conversation ->
+                val stableId = resolveStableId(conversation) ?: "unknown_$index"
+                FilteredConversationItem(index, conversation, stableId)
             }
             val pinned = baseItems.filter {
                 val stableId = resolveStableId(it.conversation)
@@ -183,12 +137,6 @@ fun AppDrawerContent(
             ProcessedDrawerItems(pinned, custom, ungrouped)
         }
     }.value
-    val targetWidth = if (isSearchActive) screenWidth else DEFAULT_DRAWER_WIDTH
-    val animatedWidth by animateDpAsState(
-        targetValue = targetWidth,
-        animationSpec = tween(durationMillis = EXPAND_ANIMATION_DURATION_MS),
-        label = "drawerWidthAnimation"
-    )
     @Composable
     fun ConversationItem(itemData: FilteredConversationItem, modifier: Modifier = Modifier) {
         val stableId = resolveStableId(itemData.conversation)
@@ -200,8 +148,8 @@ fun AppDrawerContent(
         ) {
             DrawerConversationListItem(
                 itemData = itemData,
-                isSearchActive = isSearchActive,
-                currentSearchQuery = currentSearchQuery,
+                isSearchActive = false,
+                currentSearchQuery = "",
                 loadedHistoryIndex = loadedHistoryIndex,
                 getPreviewForIndex = getPreviewForIndex,
                 onConversationClick = { index ->
@@ -249,9 +197,6 @@ fun AppDrawerContent(
             )
         }
     }
-    BackHandler(enabled = isSearchActive) {
-        onSearchActiveChange(false)
-    }
     // Bug修复：当有条目展开时，优先处理返回事件为收起条目
     BackHandler(enabled = expandedItemIndex != null) {
         onExpandItem(null)
@@ -264,7 +209,7 @@ fun AppDrawerContent(
     ModalDrawerSheet(
         modifier = modifier
             .fillMaxHeight()
-            .width(animatedWidth)
+            .width(DEFAULT_DRAWER_WIDTH)
             .shadow(
                 elevation = 6.dp,
                 clip = false,
@@ -282,21 +227,8 @@ fun AppDrawerContent(
                 .background(drawerBackground)
                 .animateContentSize(animationSpec = tween(durationMillis = CONTENT_CHANGE_ANIMATION_DURATION_MS))
         ) {
-            val textFieldInteractionSource = remember { MutableInteractionSource() }
-            val isTextFieldFocused by textFieldInteractionSource.collectIsFocusedAsState()
-            LaunchedEffect(isTextFieldFocused) {
-                if (isTextFieldFocused && !isSearchActive) {
-                    onSearchActiveChange(true)
-                }
-            }
-            DrawerSearchBar(
-                value = currentSearchQuery,
-                isSearchActive = isSearchActive,
-                onValueChange = onSearchQueryChange,
-                onSearchActiveChange = onSearchActiveChange,
-                focusRequester = focusRequester,
-                focusManager = focusManager,
-                interactionSource = textFieldInteractionSource,
+            DrawerHeader(
+                onSearchClick = onConversationSearchClick,
                 modifier = Modifier
                     .align(Alignment.TopCenter)
                     .windowInsetsPadding(WindowInsets.statusBars)
@@ -492,19 +424,6 @@ fun AppDrawerContent(
                             }
                         }
                     }
-                    isSearchActive && currentSearchQuery.isNotBlank() && processedItems.pinned.isEmpty() && processedItems.custom.isEmpty() && processedItems.ungrouped.isEmpty() -> {
-                        item(key = "history_search_empty") {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .heightIn(min = 160.dp)
-                                    .padding(vertical = 20.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text("无匹配结果", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        }
-                    }
                     else -> {
                         // "已置顶" 分组
                         if (processedItems.pinned.isNotEmpty()) {
@@ -561,14 +480,15 @@ fun AppDrawerContent(
                     .floatingEdgeGradient(drawerBackground, fromTop = false)
                     .zIndex(1f),
             )
-            DrawerAppInfoButton(
-                onClick = onAppInfoClick,
+            Box(
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
                     .windowInsetsPadding(WindowInsets.navigationBars)
                     .padding(end = 16.dp, bottom = 16.dp)
                     .zIndex(2f),
-            )
+            ) {
+                DrawerAppInfoButton(onClick = onAppInfoClick)
+            }
              // --- 对话框 ---
              DeleteConfirmationDialog(
                  showDialog = showDeleteConfirm,

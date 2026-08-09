@@ -54,6 +54,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.coroutines.flow.map
 import com.android.everytalk.statecontroller.viewmodel.DialogManager
+import com.android.everytalk.statecontroller.viewmodel.ConversationSearchManager
 import com.android.everytalk.statecontroller.viewmodel.DrawerManager
 import com.android.everytalk.statecontroller.viewmodel.ProviderManager
 import com.android.everytalk.statecontroller.viewmodel.ExportManager
@@ -346,9 +347,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     )
 
     internal val drawerManager = DrawerManager()
-    val isSearchActiveInDrawer: StateFlow<Boolean> = drawerManager.isSearchActiveInDrawer
     val expandedDrawerItemIndex: StateFlow<Int?> = drawerManager.expandedDrawerItemIndex
-    val searchQueryInDrawer: StateFlow<String> = drawerManager.searchQueryInDrawer
+    internal val conversationSearchManager = ConversationSearchManager()
+    val isConversationSearchActive: StateFlow<Boolean> = conversationSearchManager.isActive
+    val conversationSearchQuery: StateFlow<String> = conversationSearchManager.query
 
     // 滚动状态控制器
     internal val scrollStateController = ScrollStateController(stateHolder)

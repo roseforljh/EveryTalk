@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.screens.MainScreen
 
+import android.content.Context
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.foundation.layout.height
 import androidx.compose.runtime.getValue
@@ -16,7 +17,9 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollToIndex
 import androidx.compose.ui.unit.dp
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import org.junit.After
@@ -47,6 +50,10 @@ class AppDrawerContentScrollTest {
         }
         var drawerSessionKey by mutableIntStateOf(0)
         var appInfoClickCount = 0
+        var searchClickCount = 0
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val appInfoContentDescription = context.getString(R.string.drawer_app_info_content_description)
+        val searchContentDescription = context.getString(R.string.drawer_conversation_search_content_description)
 
         composeRule.setContent {
             MaterialTheme {
@@ -54,10 +61,7 @@ class AppDrawerContentScrollTest {
                     AppDrawerContent(
                         historicalConversations = conversations,
                         loadedHistoryIndex = null,
-                        isSearchActive = false,
-                        currentSearchQuery = "",
-                        onSearchActiveChange = {},
-                        onSearchQueryChange = {},
+                        onConversationSearchClick = { searchClickCount++ },
                         onConversationClick = {},
                         onImageGenerationConversationClick = {},
                         onNewChatClick = {},
@@ -91,15 +95,16 @@ class AppDrawerContentScrollTest {
             }
         }
 
-        composeRule.onNodeWithText("搜索历史记录").assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("应用信息").assertIsDisplayed().performClick()
+        composeRule.onNodeWithContentDescription(searchContentDescription).assertIsDisplayed().performClick()
+        composeRule.runOnIdle { assertEquals(1, searchClickCount) }
+        composeRule.onNodeWithContentDescription(appInfoContentDescription).assertIsDisplayed().performClick()
         composeRule.runOnIdle { assertEquals(1, appInfoClickCount) }
 
         composeRule.onNode(hasScrollToIndexAction()).performScrollToIndex(33)
         composeRule.onNodeWithText("Conversation 30").assertIsDisplayed()
         composeRule.onNodeWithText("新建会话").assertIsNotDisplayed()
-        composeRule.onNodeWithText("搜索历史记录").assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("应用信息").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription(searchContentDescription).assertIsDisplayed()
+        composeRule.onNodeWithContentDescription(appInfoContentDescription).assertIsDisplayed()
 
         composeRule.runOnUiThread { drawerSessionKey++ }
         composeRule.waitForIdle()

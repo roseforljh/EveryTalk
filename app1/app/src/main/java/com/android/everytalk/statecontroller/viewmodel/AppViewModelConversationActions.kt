@@ -107,6 +107,7 @@ import java.util.TimeZone
 
 
     internal fun AppViewModel.startNewImageGeneration() {
+        if (isConversationSearchActive.value) setConversationSearchActive(false)
         dismissEditDialog()
         dismissSourcesDialog()
         cancelPendingTextHistoryLoad()
@@ -120,7 +121,6 @@ import java.util.TimeZone
                     if (stateHolder.shouldAutoScroll()) {
                         triggerScrollToBottom()
                     }
-                    if (isSearchActiveInDrawer.value) setSearchActiveInDrawer(false)
                 }
             } catch (e: CancellationException) {
                 throw e
@@ -132,13 +132,13 @@ import java.util.TimeZone
     }
 
     internal fun AppViewModel.loadConversationFromHistory(index: Int) {
+        if (isConversationSearchActive.value) setConversationSearchActive(false)
         if (shouldSkipReloadingLoadedHistory(
                 requestedIndex = index,
                 loadedIndex = stateHolder._loadedHistoryIndex.value,
                 hasLoadedMessages = stateHolder.messages.isNotEmpty(),
             )
         ) {
-            if (isSearchActiveInDrawer.value) setSearchActiveInDrawer(false)
             return
         }
         dismissEditDialog()
@@ -180,13 +180,13 @@ import java.util.TimeZone
     }
 
     internal fun AppViewModel.loadImageGenerationConversationFromHistory(index: Int) {
+        if (isConversationSearchActive.value) setConversationSearchActive(false)
         if (shouldSkipReloadingLoadedHistory(
                 requestedIndex = index,
                 loadedIndex = stateHolder._loadedImageGenerationHistoryIndex.value,
                 hasLoadedMessages = stateHolder.imageGenerationMessages.isNotEmpty(),
             )
         ) {
-            if (isSearchActiveInDrawer.value) setSearchActiveInDrawer(false)
             return
         }
         dismissEditDialog()

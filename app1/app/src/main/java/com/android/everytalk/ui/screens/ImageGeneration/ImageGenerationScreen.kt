@@ -163,9 +163,8 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
     val selectedImageRatio by viewModel.stateHolder._selectedImageRatio.collectAsState()
     val gptImageQuality by viewModel.stateHolder._gptImageQuality.collectAsState()
 
-    // 获取抽屉和搜索相关状态
+    // 获取抽屉相关状态
     val isDrawerOpen = !viewModel.drawerState.isClosed
-    val isSearchActiveInDrawer by viewModel.isSearchActiveInDrawer.collectAsState()
     val expandedDrawerItemIndex by viewModel.expandedDrawerItemIndex.collectAsState()
     
     // 处理返回键逻辑 - 优先处理抽屉相关操作，再处理页面导航
@@ -174,12 +173,7 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
         viewModel.setExpandedDrawerItemIndex(null)
     }
     
-    BackHandler(enabled = isDrawerOpen && isSearchActiveInDrawer) {
-        // 中等优先级：退出搜索模式
-        viewModel.setSearchActiveInDrawer(false)
-    }
-    
-    BackHandler(enabled = isDrawerOpen && expandedDrawerItemIndex == null && !isSearchActiveInDrawer) {
+    BackHandler(enabled = isDrawerOpen && expandedDrawerItemIndex == null) {
         // 低优先级：关闭抽屉
         coroutineScope.launch {
             viewModel.drawerState.close()

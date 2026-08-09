@@ -390,16 +390,16 @@ import java.util.TimeZone
         }
     }
 
-    internal fun AppViewModel.setSearchActiveInDrawer(isActive: Boolean) {
-        drawerManager.setSearchActive(isActive)
+    internal fun AppViewModel.setConversationSearchActive(isActive: Boolean) {
+        conversationSearchManager.setActive(isActive)
     }
 
     internal fun AppViewModel.setExpandedDrawerItemIndex(index: Int?) {
         drawerManager.setExpandedItemIndex(index)
     }
 
-    internal fun AppViewModel.onDrawerSearchQueryChange(query: String) {
-        drawerManager.onSearchQueryChange(query)
+    internal fun AppViewModel.onConversationSearchQueryChange(query: String) {
+        conversationSearchManager.onQueryChange(query)
     }
 
     internal fun AppViewModel.onTextChange(newText: String) {
@@ -554,6 +554,7 @@ import java.util.TimeZone
 
 
     internal fun AppViewModel.startNewChat() {
+        if (isConversationSearchActive.value) setConversationSearchActive(false)
         dismissEditDialog()
         dismissSourcesDialog()
         cancelPendingTextHistoryLoad()
@@ -567,7 +568,6 @@ import java.util.TimeZone
                     if (stateHolder.shouldAutoScroll()) {
                         triggerScrollToBottom()
                     }
-                    if (isSearchActiveInDrawer.value) setSearchActiveInDrawer(false)
                 }
             } catch (e: CancellationException) {
                 throw e

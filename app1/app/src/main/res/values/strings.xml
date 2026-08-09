@@ -1,4 +1,64 @@
+<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">EveryTalk</string>
-    <string name="ai_reply_message">AI回复消息</string>
+    <string name="ai_reply_message">AI reply</string>
+
+    <string name="app_info_title">App information</string>
+    <string name="app_info_section_title">Information and support</string>
+    <string name="app_info_tagline">Language, privacy, version, and app information</string>
+    <string name="app_info_language_title">Language</string>
+    <string name="app_language_dialog_title">App language</string>
+    <string name="app_language_system">System default</string>
+    <string name="app_language_simplified_chinese">Simplified Chinese</string>
+    <string name="app_language_english">English</string>
+    <string name="app_info_privacy_title">Privacy policy</string>
+    <string name="app_info_privacy_description">View how data is handled in the app</string>
+    <string name="app_info_about_title">About EveryTalk</string>
+    <string name="app_info_version">Version %1$s</string>
+    <string name="drawer_app_info_content_description">App information</string>
+    <string name="drawer_conversation_search_content_description">Search conversations</string>
+    <string name="conversation_search_empty">No matching conversations</string>
+    <string name="conversation_search_expand">Expand matching content</string>
+    <string name="conversation_search_collapse">Collapse matching content</string>
+    <string name="conversation_search_input_hint">Search conversations and message content</string>
+    <string name="conversation_search_truncated">Many matches; showing the first %1$d text snippets</string>
+    <string name="conversation_search_source_title">Conversation title</string>
+    <string name="conversation_search_source_user">You</string>
+    <string name="conversation_search_source_ai">AI</string>
+    <string name="conversation_search_source_system">System</string>
+    <string name="conversation_search_source_tool">Tool</string>
+    <plurals name="conversation_search_match_count">
+        <item quantity="one">%1$d match</item>
+        <item quantity="other">%1$d matches</item>
+    </plurals>
+    <string name="navigation_back">Back</string>
+    <string name="action_close">Close</string>
+
+    <string name="about_title">About EveryTalk</string>
+    <string name="about_version">Version: %1$s</string>
+    <string name="about_description">An open-source, highly customizable AI chat client.</string>
+    <string name="about_github_label">GitHub:</string>
+
+    <string name="privacy_policy_title">Privacy policy</string>
+    <string name="privacy_policy_heading">EveryTalk Privacy Policy</string>
+    <string name="privacy_effective_date">Effective date: %1$s</string>
+    <string name="privacy_effective_date_value">August 9, 2026</string>
+    <string name="privacy_intro">EveryTalk is an AI client. This policy explains how the app handles information when you use chat, image, voice, web search, and MCP features.</string>
+    <string name="privacy_section_1_title">1. Information stored locally</string>
+    <string name="privacy_section_1_body">Chat history, model service settings, API keys, groups, pinned status, and other app settings are stored locally on your device. EveryTalk disables Android system backups, so this data is not transferred through system backup.</string>
+    <string name="privacy_section_2_title">2. Network requests and third-party services</string>
+    <string name="privacy_section_2_body">When you actively use chat, image generation, speech recognition, web search, or MCP features, the app sends the text, system prompts, attachments, images, audio, or search terms required for that request to the service you selected or that the app configured. Each service handles data under its own privacy policy. Do not submit sensitive information to services you do not trust.</string>
+    <string name="privacy_section_3_title">3. Permission usage</string>
+    <string name="privacy_section_3_body">Network access connects to model and related services. Microphone access is used only when you start voice input. Camera access is used only when you take and attach a photo. Bluetooth connection access supports paired audio devices. Denying an optional permission does not affect features unrelated to that permission.</string>
+    <string name="privacy_section_4_title">4. Information sharing</string>
+    <string name="privacy_section_4_body">EveryTalk does not include advertising SDKs or sell personal information. To perform a feature you actively request, necessary data is transmitted to the corresponding AI, speech recognition, search, or MCP service.</string>
+    <string name="privacy_section_5_title">5. Retention and deletion</string>
+    <string name="privacy_section_5_body">Local data remains until you clear records, delete the related configuration, or uninstall the app. Files you export or save to system storage are managed by Android file management and are not deleted with chat history.</string>
+    <string name="privacy_section_6_title">6. Data security</string>
+    <string name="privacy_section_6_body">The app blocks cleartext network traffic and stores its database and configuration in the private app directory. Network security also depends on the provider, endpoint, and device you use. Keep your API keys secure.</string>
+    <string name="privacy_section_7_title">7. AI content safety and reporting</string>
+    <string name="privacy_section_7_body">The app locally blocks high-risk generation requests and passes safety constraints to supported model services. When you report AI content, the app records the report category, additional details, a summary of the related reply, the model and provider names, and the app version. It does not include API keys or the full conversation. If the network request fails, the report is temporarily stored in the private app directory and retried. After successful submission, the local report text and details are removed, leaving only a deduplication receipt.</string>
+    <string name="privacy_section_8_title">8. Policy updates and contact</string>
+    <string name="privacy_section_8_body">This policy may be updated as features or compliance requirements change. The updated version will appear on this page. For questions about this policy, contact the maintainers through the EveryTalk open-source project page.</string>
+    <string name="privacy_project_link">EveryTalk open-source project and contact</string>
 </resources>
