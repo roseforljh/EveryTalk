@@ -31,6 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
@@ -47,6 +48,7 @@ import com.android.everytalk.ui.screens.ImageGeneration.ImageGenerationScreen
 import com.android.everytalk.ui.screens.appinfo.AppInfoScreen
 import com.android.everytalk.ui.screens.appinfo.PrivacyPolicyScreen
 import com.android.everytalk.ui.screens.settings.SettingsScreen
+import com.android.everytalk.ui.components.splash.PixelPenguinSplash
 import com.android.everytalk.ui.theme.App1Theme
 import com.android.everytalk.util.message.MAX_EXTERNAL_TRANSFER_BYTES
 import com.android.everytalk.util.storage.readAtMost
@@ -144,12 +146,30 @@ class MainActivity : ComponentActivity() {
         setContent {
             App1Theme(dynamicColor = false) {
                 // 根据当前主题动态设置状态栏和导航栏图标颜色
+                var showAnimatedSplash by remember { mutableStateOf(savedInstanceState == null) }
+                var mainContentStarted by remember { mutableStateOf(savedInstanceState != null) }
                 val isDarkTheme = isSystemInDarkTheme()
                 val windowInsetsController = WindowInsetsControllerCompat(window, window.decorView)
-                windowInsetsController.isAppearanceLightNavigationBars = !isDarkTheme
-                windowInsetsController.isAppearanceLightStatusBars = !isDarkTheme
-                
-                val snackbarHostState = remember { SnackbarHostState() }
+                val useDarkSystemBarIcons = showAnimatedSplash || !isDarkTheme
+                SideEffect {
+                    windowInsetsController.isAppearanceLightNavigationBars = useDarkSystemBarIcons
+                    windowInsetsController.isAppearanceLightStatusBars = useDarkSystemBarIcons
+                }
+
+                Box(modifier = Modifier.fillMaxSize()) {
+                    if (showAnimatedSplash) {
+                        PixelPenguinSplash(
+                            modifier = Modifier.zIndex(1f),
+                            onAnimationVisible = { mainContentStarted = true },
+                            onFinished = {
+                                showAnimatedSplash = false
+                                mainContentStarted = true
+                            },
+                        )
+                    }
+
+                    if (mainContentStarted) {
+                    val snackbarHostState = remember { SnackbarHostState() }
                     val navController = rememberNavController()
                     val coroutineScope = rememberCoroutineScope()
 
@@ -664,6 +684,8 @@ class MainActivity : ComponentActivity() {
                            }
                        }
                }
+                    }
+                }
            }
        }
    }

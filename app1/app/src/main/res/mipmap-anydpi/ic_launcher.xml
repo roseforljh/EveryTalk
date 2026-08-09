@@ -3,5 +3,5 @@
     xmlns:tools="http://schemas.android.com/tools"
     tools:ignore="MonochromeLauncherIcon">
     <background android:drawable="@color/ic_launcher_background" />
-    <foreground android:drawable="@drawable/launcher_logo_foreground_asset" />
+    <foreground android:drawable="@drawable/pixel_penguin_logo" />
 </adaptive-icon>

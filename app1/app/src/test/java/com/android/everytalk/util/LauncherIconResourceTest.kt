@@ -12,7 +12,7 @@ import org.junit.Test
 class LauncherIconResourceTest {
 
     @Test
-    fun `launcher resources use centered chat logo foreground assets`() {
+    fun `launcher resources use pixel penguin vector`() {
         val resDir = findResDir()
         val lightLauncherFiles = listOf(
             resDir.resolve("mipmap-anydpi-v33/ic_launcher.xml"),
@@ -44,36 +44,24 @@ class LauncherIconResourceTest {
             )
             assertTrue("${file.path} must provide a monochrome themed-icon layer", text.contains("<monochrome"))
         }
-        lightLauncherFiles.forEach { file ->
+        (lightLauncherFiles + nightLauncherFiles).forEach { file ->
             val text = file.readText()
-            assertTrue("${file.path} must use the new launcher foreground", text.contains("@drawable/launcher_logo_foreground_asset"))
-            assertTrue("${file.path} must use the white launcher background", text.contains("@color/ic_launcher_background"))
-        }
-        nightLauncherFiles.forEach { file ->
-            val text = file.readText()
-            assertTrue("${file.path} must use the new launcher foreground", text.contains("@drawable/launcher_logo_foreground_asset"))
-            assertTrue("${file.path} must keep the white launcher background", text.contains("@color/ic_launcher_background"))
+            assertTrue("${file.path} must use the pixel penguin foreground", text.contains("@drawable/pixel_penguin_logo"))
+            assertTrue("${file.path} must keep the source launcher background", text.contains("@color/ic_launcher_background"))
             assertFalse("${file.path} must not switch launcher background by theme", text.contains("@color/ic_launcher_background_dark"))
         }
 
-        val foregroundAsset = resDir.resolve("drawable-nodpi/launcher_logo_foreground_asset.png")
-        assertTrue("Missing transparent launcher foreground PNG", foregroundAsset.isFile)
+        val foregroundAsset = resDir.resolve("drawable/pixel_penguin_logo.xml")
+        assertTrue("Missing pixel penguin vector", foregroundAsset.isFile)
+        val foregroundText = foregroundAsset.readText()
+        assertTrue("Launcher vector must keep the source viewport", foregroundText.contains("android:viewportWidth=\"1536\"") && foregroundText.contains("android:viewportHeight=\"1536\""))
+        assertTrue("Launcher vector must keep the black penguin path", foregroundText.contains("android:fillColor=\"#FF000000\"") && foregroundText.contains("android:pathData=\"M631,322"))
+        assertTrue("Launcher logo must be centered and scaled down proportionally", foregroundText.contains("android:pivotX=\"768\"") && foregroundText.contains("android:pivotY=\"768\"") && foregroundText.contains("android:scaleX=\"0.78\"") && foregroundText.contains("android:scaleY=\"0.78\""))
         assertTrue(
-            "Launcher foreground PNG must be valid",
-            foregroundAsset
-                .readBytes()
-                .take(8)
-                .toByteArray()
-                .contentEquals(byteArrayOf(-119, 80, 78, 71, 13, 10, 26, 10)),
-        )
-        val foregroundSize = foregroundAsset.readPngSize()
-        assertEquals("Launcher foreground width must stay high resolution", 1024, foregroundSize.width)
-        assertEquals("Launcher foreground height must stay high resolution", 1024, foregroundSize.height)
-        assertTrue(
-            "Launcher adaptive icon background must be white",
+            "Launcher adaptive icon background must match the source SVG",
             resDir.resolve("values/ic_launcher_background.xml")
                 .readText()
-                .contains("#FFFFFFFF"),
+                .contains("#FFFEFEFE"),
         )
         assertFalse("Old drawable launcher foreground XML must be deleted", resDir.resolve("drawable/ic_launcher_foreground.xml").exists())
         assertFalse("Old default green launcher background XML must be deleted", resDir.resolve("drawable/ic_launcher_background.xml").exists())
@@ -133,23 +121,25 @@ class LauncherIconResourceTest {
     }
 
     @Test
-    fun `android 12 splash uses provided transparent logo scaled to four times current size`() {
+    fun `android 12 splash hands off to provided penguin gif`() {
         val resDir = findResDir()
         val v31Theme = resDir.resolve("values-v31/themes.xml")
-        val lightSplash = resDir.resolve("drawable-nodpi/splash_logo.png")
+        val systemPlaceholder = resDir.resolve("drawable/splash_placeholder.xml")
+        val animatedSplash = resDir.resolve("drawable-nodpi/pixel_penguin_splash.gif")
         val lightColors = resDir.resolve("values/colors.xml")
         val darkColors = resDir.resolve("values-night/colors.xml")
 
         assertTrue("Missing Android 12 theme", v31Theme.isFile)
-        assertTrue("Missing light splash logo", lightSplash.isFile)
+        assertTrue("Missing transparent system splash placeholder", systemPlaceholder.isFile)
+        assertTrue("Missing pixel penguin splash GIF", animatedSplash.isFile)
         assertTrue("Missing light splash background color", lightColors.isFile)
         assertTrue("Missing dark splash background color", darkColors.isFile)
 
         val themeText = v31Theme.readText()
         assertTrue(
-            "Android 12 splash theme must use the theme-specific logo",
+            "Android 12 splash theme must use the transparent handoff placeholder",
             themeText.contains("windowSplashScreenAnimatedIcon") &&
-                themeText.contains("@drawable/splash_logo"),
+                themeText.contains("@drawable/splash_placeholder"),
         )
         assertTrue(
             "Android 12 splash theme must use the theme-specific background color",
@@ -165,22 +155,31 @@ class LauncherIconResourceTest {
             themeText.contains("Theme.SplashVideo") ||
                 themeText.contains("@drawable/splash_video_empty_icon"),
         )
+        assertTrue("System splash placeholder must stay transparent", systemPlaceholder.readText().contains("#00000000"))
+        val gifBytes = animatedSplash.readBytes()
+        assertTrue("Splash asset must be a valid GIF", String(gifBytes, 0, 6, Charsets.US_ASCII).startsWith("GIF8"))
+        assertEquals("Splash GIF must keep the provided width", 1024, gifBytes.readGifUnsignedShort(6))
+        assertEquals("Splash GIF must keep the provided height", 1024, gifBytes.readGifUnsignedShort(8))
+
+        val mainDir = requireNotNull(resDir.parentFile)
+        val splashSource = mainDir.resolve("java/com/android/everytalk/ui/components/splash/PixelPenguinSplash.kt")
+        val mainActivitySource = mainDir.resolve("java/com/android/everytalk/statecontroller/activity/MainActivity.kt")
+        assertTrue("Missing GIF splash composable", splashSource.isFile)
+        val splashSourceText = splashSource.readText()
+        assertTrue("GIF splash must play the provided resource", splashSourceText.contains("R.drawable.pixel_penguin_splash"))
+        assertTrue("GIF splash must play exactly once", splashSourceText.contains(".repeatCount(0)"))
+        assertTrue("GIF splash must wait until animation playback starts before warming main content", splashSourceText.contains(".onAnimationStart") && splashSourceText.contains("100L"))
+        assertTrue("GIF splash must close from the decoder end callback", splashSourceText.contains(".onAnimationEnd"))
+        assertTrue("GIF splash must hold its finished frame for half a second", splashSourceText.contains("500L"))
+        val mainActivityText = mainActivitySource.readText()
+        assertTrue("MainActivity must show the GIF splash directly", mainActivityText.contains("PixelPenguinSplash"))
         assertTrue(
-            "Light splash logo must be a transparent pure-logo PNG",
-            lightSplash.readBytes()
-                .take(8)
-                .toByteArray()
-                .contentEquals(byteArrayOf(-119, 80, 78, 71, 13, 10, 26, 10)),
+            "Main content must start only after the splash becomes visible",
+            mainActivityText.contains("onAnimationVisible = { mainContentStarted = true }") &&
+                mainActivityText.indexOf("PixelPenguinSplash(") in 0 until mainActivityText.indexOf("if (mainContentStarted)"),
         )
-        assertEquals("Light splash PNG must use the provided pure-logo width", 718, lightSplash.readPngSize().width)
-        assertEquals("Light splash PNG must use the provided pure-logo height", 730, lightSplash.readPngSize().height)
-        assertTrue("Light splash PNG corners must stay transparent", lightSplash.hasTransparentCorners())
-        val bounds = lightSplash.readVisibleAlphaBounds()
-        assertEquals("Splash visible logo must be four times the previous width", 288, bounds.width)
-        assertEquals("Splash visible logo must be four times the previous height", 292, bounds.height)
-        assertTrue("Splash visible logo must stay centered with empty margins", bounds.minMargin >= 215)
+
         assertFalse("Duplicate dark splash asset must be removed", resDir.resolve("drawable-night-nodpi/splash_logo.png").exists())
-        assertFalse("Light splash XML wrapper must be deleted", resDir.resolve("drawable/splash_logo.xml").exists())
         assertFalse("Dark splash XML wrapper must be deleted", resDir.resolve("drawable-night/splash_logo.xml").exists())
         assertFalse("Old light splash intermediate PNG must be deleted", resDir.resolve("drawable/splash_logo_black_asset.png").exists())
         assertFalse("Old dark splash intermediate PNG must be deleted", resDir.resolve("drawable/splash_logo_white_asset.png").exists())
@@ -189,8 +188,8 @@ class LauncherIconResourceTest {
             lightColors.readText().contains("<color name=\"splash_screen_background\">#FFFFFFFF</color>"),
         )
         assertTrue(
-            "Dark splash background must be black",
-            darkColors.readText().contains("<color name=\"splash_screen_background\">#FF000000</color>"),
+            "Dark splash background must stay white to match the GIF",
+            darkColors.readText().contains("<color name=\"splash_screen_background\">#FFFFFFFF</color>"),
         )
     }
 
@@ -405,4 +404,7 @@ class LauncherIconResourceTest {
             ((this[offset + 1].toInt() and 0xFF) shl 16) or
             ((this[offset + 2].toInt() and 0xFF) shl 8) or
             (this[offset + 3].toInt() and 0xFF)
+
+    private fun ByteArray.readGifUnsignedShort(offset: Int): Int =
+        (this[offset].toInt() and 0xFF) or ((this[offset + 1].toInt() and 0xFF) shl 8)
 }
