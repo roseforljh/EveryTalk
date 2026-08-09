@@ -48,6 +48,7 @@
 ## 📚 文档入口
 
 - **项目总览**: 当前 `README_zh.md`（中文）/ `README.md`（英文）。
+- **隐私政策**: [`PRIVACY_POLICY.md`](PRIVACY_POLICY.md)（英文 / 简体中文）。
 - **方案沉淀**: `docs/plans/`，包含部分功能设计与演进方案，可用于理解历史决策与结构调整方向。
 - **Claude / Agent 相关文档**: `CLAUDE.md` 与 `AGENTS.md`，适合需要在本仓库内继续开发或协作的维护者。
 
