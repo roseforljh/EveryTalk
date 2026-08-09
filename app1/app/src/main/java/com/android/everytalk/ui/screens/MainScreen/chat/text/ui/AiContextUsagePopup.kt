@@ -120,10 +120,13 @@ internal fun aiContextUsageSummary(
 internal fun resolveLiveContextWindowTokens(
     message: Message,
     configs: List<ApiConfig>,
+    activeConfigId: String? = null,
 ): Long {
     val snapshot = message.contextUsageSnapshot
     val configId = snapshot?.configId
-    val liveConfig = configId
+    val liveConfig = activeConfigId
+        ?.let { id -> configs.firstOrNull { it.id == id } }
+        ?: configId
         ?.let { id -> configs.firstOrNull { it.id == id } }
         ?: configs.firstOrNull { config ->
             config.model == message.modelName && config.provider == message.providerName

@@ -33,6 +33,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.clickable
 import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -82,6 +84,7 @@ import com.android.everytalk.ui.components.dialog.appDialogBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.components.dialog.appDialogSubtextColor
+import com.android.everytalk.ui.components.safety.AiContentReportDialog
 import com.android.everytalk.ui.components.scrollFadeEdge
 import com.android.everytalk.ui.components.markdown.FootnoteNavigationState
 import com.android.everytalk.ui.components.streaming.PreparedMessage
@@ -412,17 +415,23 @@ fun AiMessageFooterItem(
 ) {
     var showPopupMenu by remember { mutableStateOf(false) }
     var showContextUsage by remember(message.id) { mutableStateOf(false) }
+    var showReportDialog by remember(message.id) { mutableStateOf(false) }
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val availableModels by viewModel.apiConfigs.collectAsState()
-    val selectedModelId by viewModel.selectedApiConfig.collectAsState()
+    val selectedModel by viewModel.selectedApiConfig.collectAsState()
     val liveContextWindowTokens = remember(
         message.contextUsageSnapshot?.configId,
         message.modelName,
         message.providerName,
         availableModels,
+        selectedModel?.id,
     ) {
-        resolveLiveContextWindowTokens(message, availableModels)
+        resolveLiveContextWindowTokens(
+            message = message,
+            configs = availableModels,
+            activeConfigId = selectedModel?.id,
+        )
     }
 
     Column(
@@ -469,6 +478,21 @@ fun AiMessageFooterItem(
                     tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )
             }
+            IconButton(
+                onClick = {
+                    showContextUsage = false
+                    showPopupMenu = false
+                    showReportDialog = true
+                },
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.Flag,
+                    contentDescription = "举报 AI 内容",
+                    modifier = Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
+            }
             AiContextUsageButton(
                 message = message,
                 conversationTotalTokens = conversationTotalTokens,
@@ -505,7 +529,7 @@ fun AiMessageFooterItem(
                     },
                     modelName = message.modelName,
                     availableModels = availableModels,
-                    selectedModelId = selectedModelId?.id,
+                    selectedModelId = selectedModel?.id,
                     onChangeModelConfirm = { config ->
                         val latestMessage = viewModel.getMessageById(message.id) ?: message
                         scrollStateManager.lockAutoScroll()
@@ -518,6 +542,22 @@ fun AiMessageFooterItem(
                 )
             }
         }
+    }
+
+    if (showReportDialog) {
+        AiContentReportDialog(
+            onDismiss = { showReportDialog = false },
+            onSubmit = { category, details ->
+                val latestMessage = viewModel.getMessageById(message.id) ?: message
+                viewModel.submitAiContentReport(
+                    message = latestMessage,
+                    category = category,
+                    details = details,
+                    isImageGeneration = false,
+                )
+                showReportDialog = false
+            },
+        )
     }
 }
 

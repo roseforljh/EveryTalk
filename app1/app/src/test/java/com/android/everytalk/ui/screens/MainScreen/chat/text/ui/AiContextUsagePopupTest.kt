@@ -112,6 +112,35 @@ class AiContextUsagePopupTest {
     }
 
     @Test
+    fun `切换模型后圆环使用当前会话模型的上下文上限`() {
+        val message = usageMessage(configId = "model-a")
+        val modelA = ApiConfig(
+            address = "https://example.com",
+            key = "test-key",
+            model = "model-a",
+            provider = "OpenAI",
+            id = "model-a",
+            name = "模型 A",
+            modelParameters = ModelParameters(maxContextTokens = 128_000),
+        )
+        val modelB = modelA.copy(
+            model = "model-b",
+            id = "model-b",
+            name = "模型 B",
+            modelParameters = ModelParameters(maxContextTokens = 1_000_000),
+        )
+
+        assertEquals(
+            1_000_000L,
+            resolveLiveContextWindowTokens(
+                message = message,
+                configs = listOf(modelA, modelB),
+                activeConfigId = modelB.id,
+            ),
+        )
+    }
+
+    @Test
     fun `最新上下文上限变化时圆环实时重组`() {
         val message = usageMessage(configId = "config-1")
         lateinit var updateContextWindow: (Long) -> Unit
