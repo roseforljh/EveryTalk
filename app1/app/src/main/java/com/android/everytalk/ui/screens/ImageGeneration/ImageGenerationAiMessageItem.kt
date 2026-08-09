@@ -47,8 +47,6 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -120,6 +118,7 @@ import com.android.everytalk.ui.screens.BubbleMain.Main.MessageContextMenu
 import com.android.everytalk.ui.screens.BubbleMain.Main.ImageContextMenu
 import com.android.everytalk.ui.screens.BubbleMain.Main.UserOrErrorMessageContent
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.HistoryLoadingBubblePlaceholderItem
+import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.AiMessageFloatingPopupCard
 import com.android.everytalk.ui.components.ChatMarkdownTextStyle
 import com.android.everytalk.ui.components.streaming.UnifiedMarkdownRenderer
 import com.android.everytalk.ui.components.streaming.buildStreamingRenderState
@@ -127,6 +126,7 @@ import com.android.everytalk.ui.theme.ChatDimensions
 import com.android.everytalk.ui.theme.chatColors
 import com.android.everytalk.ui.components.scrollFadeEdge
 import com.android.everytalk.ui.components.safety.AiContentReportDialog
+import com.android.everytalk.ui.components.safety.AiContentReportMenuItem
 import com.android.everytalk.ui.topanchor.BottomScrollReason
 import com.android.everytalk.ui.topanchor.RunTopAnchorReserveEngine
 import com.android.everytalk.ui.topanchor.TopAnchorConfig
@@ -214,6 +214,7 @@ internal fun AiMessageItem(
     }
     val currentMessage by rememberUpdatedState(message)
     val currentOnLongPress by rememberUpdatedState(onLongPress)
+    var showActionsMenu by remember(message.id) { mutableStateOf(false) }
     var showReportDialog by remember(message.id) { mutableStateOf(false) }
 
     Row(
@@ -302,16 +303,36 @@ internal fun AiMessageItem(
                             modifier = Modifier.fillMaxWidth(),
                             horizontalArrangement = Arrangement.Start,
                         ) {
-                            IconButton(
-                                onClick = { showReportDialog = true },
-                                modifier = Modifier.size(36.dp),
-                            ) {
-                                Icon(
-                                    imageVector = Icons.Outlined.Flag,
-                                    contentDescription = "举报 AI 内容",
-                                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-                                    modifier = Modifier.size(18.dp),
-                                )
+                            Box {
+                                IconButton(
+                                    onClick = { showActionsMenu = true },
+                                    modifier = Modifier.size(36.dp),
+                                ) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_dots_horizontal),
+                                        contentDescription = "更多",
+                                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                                        modifier = Modifier.size(18.dp),
+                                    )
+                                }
+                                AiMessageFloatingPopupCard(
+                                    expanded = showActionsMenu,
+                                    onDismiss = { showActionsMenu = false },
+                                    modifier = Modifier.wrapContentWidth(),
+                                ) {
+                                    Column(
+                                        modifier = Modifier
+                                            .width(IntrinsicSize.Max)
+                                            .padding(vertical = 12.dp),
+                                    ) {
+                                        AiContentReportMenuItem(
+                                            onClick = {
+                                                showActionsMenu = false
+                                                showReportDialog = true
+                                            },
+                                        )
+                                    }
+                                }
                             }
                         }
                     }

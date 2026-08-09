@@ -33,8 +33,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.clickable
 import androidx.compose.material3.*
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.outlined.Flag
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -85,6 +83,7 @@ import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.components.dialog.appDialogSubtextColor
 import com.android.everytalk.ui.components.safety.AiContentReportDialog
+import com.android.everytalk.ui.components.safety.AiContentReportMenuItem
 import com.android.everytalk.ui.components.scrollFadeEdge
 import com.android.everytalk.ui.components.markdown.FootnoteNavigationState
 import com.android.everytalk.ui.components.streaming.PreparedMessage
@@ -478,21 +477,6 @@ fun AiMessageFooterItem(
                     tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )
             }
-            IconButton(
-                onClick = {
-                    showContextUsage = false
-                    showPopupMenu = false
-                    showReportDialog = true
-                },
-                modifier = Modifier.size(36.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.Flag,
-                    contentDescription = "举报 AI 内容",
-                    modifier = Modifier.size(18.dp),
-                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
-                )
-            }
             AiContextUsageButton(
                 message = message,
                 conversationTotalTokens = conversationTotalTokens,
@@ -538,7 +522,8 @@ fun AiMessageFooterItem(
                     onExport = {
                         val latestMessage = viewModel.getMessageById(message.id) ?: message
                         viewModel.exportMessageText(latestMessage.text)
-                    }
+                    },
+                    onReport = { showReportDialog = true },
                 )
             }
         }
@@ -571,6 +556,7 @@ private fun AiMessagePopupMenu(
     selectedModelId: String?,
     onChangeModelConfirm: (ApiConfig) -> Unit,
     onExport: () -> Unit,
+    onReport: () -> Unit,
 ) {
     var showModelPicker by remember { mutableStateOf(false) }
     var pendingConfirmModel by remember { mutableStateOf<ApiConfig?>(null) }
@@ -619,6 +605,16 @@ private fun AiMessagePopupMenu(
                     textColor = textColor,
                     iconTint = iconTint,
                     onClick = { onExport(); onDismiss() }
+                )
+                HorizontalDivider(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                    color = textColor.copy(alpha = 0.08f),
+                )
+                AiContentReportMenuItem(
+                    onClick = {
+                        onDismiss()
+                        onReport()
+                    },
                 )
             }
         }
