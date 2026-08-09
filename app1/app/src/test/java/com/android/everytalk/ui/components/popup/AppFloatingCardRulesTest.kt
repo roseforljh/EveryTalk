@@ -77,7 +77,7 @@ class AppFloatingCardRulesTest {
         assertTrue("圆角阴影外不得套矩形 AnimatedVisibility 图层", !source.contains("AnimatedVisibility"))
 
         val layerIndex = source.indexOf(".graphicsLayer {")
-        val shadowIndex = source.indexOf(".shadow(AppFloatingCardElevation, AppFloatingCardShape)")
+        val shadowIndex = source.indexOf(".dropShadow(AppFloatingCardShape)")
         val borderIndex = source.indexOf(".border(1.dp, appFloatingCardBorderColor(), AppFloatingCardShape)")
         assertTrue(
             "阴影必须和卡片处于同一个入场动画链",
@@ -94,8 +94,8 @@ class AppFloatingCardRulesTest {
             source.contains("this.alpha = alpha.value"),
         )
         assertTrue(
-            "圆角阴影必须保持完整高度",
-            source.contains(".shadow(AppFloatingCardElevation, AppFloatingCardShape)"),
+            "圆角阴影必须保持零偏移对称绘制",
+            source.contains("offset = Offset.Zero"),
         )
         assertTrue("统一悬浮卡片不得使用逐绘制透明度", !source.contains("CompositingStrategy"))
     }

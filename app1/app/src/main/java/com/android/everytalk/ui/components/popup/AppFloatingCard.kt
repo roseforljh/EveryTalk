@@ -17,7 +17,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.draw.dropShadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
@@ -34,7 +35,7 @@ import kotlinx.coroutines.launch
 val AppFloatingCardShape = RoundedCornerShape(28.dp)
 val AppFloatingCardElevation = 8.dp
 val AppFloatingCardTransformOrigin = TransformOrigin(0.5f, 0f)
-private val AppFloatingCardShadowInset = 24.dp
+private val AppFloatingCardShadowInset = 32.dp
 
 private val AppFloatingCardEmphasizedDecelerate = CubicBezierEasing(0f, 0f, 0.2f, 1f)
 private val AppFloatingCardDecelerate = CubicBezierEasing(0.4f, 0f, 0.2f, 1f)
@@ -127,7 +128,12 @@ private fun AppFloatingCard(
                 scaleY = scale.value
                 transformOrigin = AppFloatingCardTransformOrigin
             }
-            .shadow(AppFloatingCardElevation, AppFloatingCardShape)
+            .dropShadow(AppFloatingCardShape) {
+                radius = 12.dp.toPx()
+                offset = Offset.Zero
+                color = Color.Black
+                this.alpha = 0.16f
+            }
             .border(1.dp, appFloatingCardBorderColor(), AppFloatingCardShape),
         shape = AppFloatingCardShape,
         color = appFloatingCardContainerColor(),
