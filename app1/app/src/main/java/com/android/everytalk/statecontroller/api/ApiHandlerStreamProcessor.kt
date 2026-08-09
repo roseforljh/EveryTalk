@@ -27,6 +27,10 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 
+internal fun shouldAppendStreamTextChunk(chunk: String?): Boolean =
+    !chunk.isNullOrEmpty() &&
+        (chunk.isNotBlank() || chunk.any { character -> character == '\n' || character == '\r' })
+
 private fun nativeContextWindowId(
     messageId: String,
     compactionItemId: String?,
@@ -346,8 +350,8 @@ internal class ApiHandlerStreamProcessor(
                 is AppStreamEvent.Content -> {
                     if (processedResult is com.android.everytalk.util.messageprocessor.ProcessedEventResult.ContentUpdated) {
                         val deltaChunk = processedResult.text
-                        // 过滤纯空白内容，防止后端发送大量空格导致卡死
-                        if (!deltaChunk.isNullOrEmpty() && deltaChunk.isNotBlank()) {
+                        // 过滤无结构意义的纯空白内容，保留 Markdown 结构所需换行
+                        if (shouldAppendStreamTextChunk(deltaChunk)) {
                             // 🛡️ 防 prompt 泄露：通过检测器过滤
                             val leakDetector = promptLeakDetectors.computeIfAbsent(aiMessageId) {
                                 PromptLeakGuard.StreamingDetector()
@@ -417,8 +421,8 @@ internal class ApiHandlerStreamProcessor(
                 is AppStreamEvent.Text -> {
                     if (processedResult is com.android.everytalk.util.messageprocessor.ProcessedEventResult.ContentUpdated) {
                         val deltaChunk = processedResult.text
-                        // 过滤纯空白内容
-                        if (!deltaChunk.isNullOrEmpty() && deltaChunk.isNotBlank()) {
+                        // 过滤无结构意义的纯空白内容，保留 Markdown 结构所需换行
+                        if (shouldAppendStreamTextChunk(deltaChunk)) {
                             // 🛡️ 防 prompt 泄露：通过检测器过滤
                             val leakDetector = promptLeakDetectors.computeIfAbsent(aiMessageId) {
                                 PromptLeakGuard.StreamingDetector()
