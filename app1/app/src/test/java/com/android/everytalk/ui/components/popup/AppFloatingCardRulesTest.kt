@@ -73,7 +73,7 @@ class AppFloatingCardRulesTest {
         assertTrue("统一悬浮卡片必须复用 120ms 缩放动画", source.contains("durationMillis = 120"))
         assertTrue("统一悬浮卡片必须使用 80ms 快速淡出", source.contains("AppFloatingCardExitDurationMillis = 80"))
         assertTrue("统一悬浮卡片必须直接把自身透明度降为零", source.contains("targetValue = 0f"))
-        assertTrue("Popup 必须保留到淡出完成", source.contains("delay(AppFloatingCardExitDurationMillis.toLong())"))
+        assertTrue("Popup 必须保留到淡出完成", source.contains("onExitAnimationFinished()"))
         assertTrue("圆角阴影外不得套矩形 AnimatedVisibility 图层", !source.contains("AnimatedVisibility"))
 
         val layerIndex = source.indexOf(".graphicsLayer {")
@@ -89,7 +89,15 @@ class AppFloatingCardRulesTest {
         )
         assertTrue("不得延迟启用阴影", !source.contains("enterAnimationFinished"))
         assertTrue("不得改用 Surface 延迟阴影", !source.contains("shadowElevation ="))
-        assertTrue("统一悬浮卡片不得使用离屏合成策略", !source.contains("CompositingStrategy"))
+        assertTrue(
+            "卡片与阴影必须共用透明度图层",
+            source.contains("this.alpha = alpha.value"),
+        )
+        assertTrue(
+            "圆角阴影必须保持完整高度",
+            source.contains(".shadow(AppFloatingCardElevation, AppFloatingCardShape)"),
+        )
+        assertTrue("统一悬浮卡片不得使用逐绘制透明度", !source.contains("CompositingStrategy"))
     }
 
     @Test

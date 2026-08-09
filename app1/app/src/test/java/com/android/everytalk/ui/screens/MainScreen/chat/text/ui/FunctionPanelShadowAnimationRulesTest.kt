@@ -27,7 +27,6 @@ class FunctionPanelShadowAnimationRulesTest {
     @Test
     fun `功能面板使用统一同步阴影入场和快速淡出`() {
         val source = chatInputSource().readText(Charsets.UTF_8)
-        val floatingCard = floatingCardSource().readText(Charsets.UTF_8)
         val popupBlock = source
             .substringAfter("AppFloatingCardPopup(")
             .substringBefore("AppFloatingCardPopup(")
@@ -36,17 +35,6 @@ class FunctionPanelShadowAnimationRulesTest {
         assertTrue("功能面板不得在关闭时直接移除", !popupBlock.contains("if (showFunctionPanel) {"))
         assertTrue("功能面板不得保留透明度动画", !source.contains("functionPanelAlpha"))
         assertTrue("功能面板不得保留缩放动画", !source.contains("functionPanelScale"))
-        assertTrue("入场动画必须集中在统一悬浮卡片", floatingCard.contains("val scale = remember { Animatable(0.8f) }"))
-        assertTrue("退出动画必须集中在统一悬浮卡片", floatingCard.contains("AppFloatingCardExitDurationMillis = 80"))
-        assertTrue("统一悬浮卡片必须直接淡出自身图层", floatingCard.contains("targetValue = 0f"))
-        assertTrue("阴影外不得套矩形动画图层", !floatingCard.contains("AnimatedVisibility"))
-        assertTrue(
-            "阴影必须随卡片同步入场",
-            floatingCard.indexOf(".shadow(AppFloatingCardElevation, AppFloatingCardShape)") >
-                floatingCard.indexOf(".graphicsLayer {"),
-        )
-        assertTrue("不得延迟启用阴影", !floatingCard.contains("enterAnimationFinished"))
-        assertTrue("统一悬浮卡片不得使用离屏合成策略", !floatingCard.contains("CompositingStrategy"))
     }
 
     private fun chatInputSource(): File {
@@ -67,15 +55,5 @@ class FunctionPanelShadowAnimationRulesTest {
             File("app1/app/src/main/java/com/android/everytalk/$relativePath"),
         )
         return requireNotNull(candidates.firstOrNull(File::isFile)) { "找不到 ChatInputPanels.kt" }
-    }
-
-    private fun floatingCardSource(): File {
-        val relativePath = "ui/components/popup/AppFloatingCard.kt"
-        val candidates = listOf(
-            File("src/main/java/com/android/everytalk/$relativePath"),
-            File("app/src/main/java/com/android/everytalk/$relativePath"),
-            File("app1/app/src/main/java/com/android/everytalk/$relativePath"),
-        )
-        return requireNotNull(candidates.firstOrNull(File::isFile)) { "找不到 AppFloatingCard.kt" }
     }
 }
