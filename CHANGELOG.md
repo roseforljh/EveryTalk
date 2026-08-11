@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.26.0](https://github.com/roseforljh/EveryTalk/compare/v1.25.0...v1.26.0) (2026-08-09)
+
+
+### Features
+
+* 启动屏与系统启动屏交接优化 ([5c678c5](https://github.com/roseforljh/EveryTalk/commit/5c678c5dc0baf8e7b0ed49a81c653daf091ea1ff))
+* 应用内主题切换 ([0e68ba2](https://github.com/roseforljh/EveryTalk/commit/0e68ba2de0ff153da0ae980d85721cd45aec1a0f))
+
+
+### Bug Fixes
+
+* 更新举报范围说明为最多 4,000 字符 ([5278a8a](https://github.com/roseforljh/EveryTalk/commit/5278a8ab7c1cd25b654fd02119697bc300b0b909))
+
 ## [1.25.0](https://github.com/roseforljh/EveryTalk/compare/v1.24.0...v1.25.0) (2026-08-09)
 
 
