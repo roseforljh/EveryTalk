@@ -9,6 +9,8 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -30,6 +32,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -40,6 +43,25 @@ import com.android.everytalk.models.MoreOptionsType
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.theme.SeaBlue
 
+internal val ChatAgentColor = Color(0xFF009688)
+
+internal enum class AgentToggleAction {
+    DISABLE,
+    OPEN_SERVER_PICKER,
+    ENABLE_SELECTED,
+}
+
+/** 短按 Agent 的决定保持纯函数，避免准备中重复发起连接。 */
+internal fun resolveAgentToggleAction(
+    isEnabled: Boolean,
+    isPreparing: Boolean,
+    hasSelectedComputer: Boolean,
+): AgentToggleAction = when {
+    isEnabled || isPreparing -> AgentToggleAction.DISABLE
+    !hasSelectedComputer -> AgentToggleAction.OPEN_SERVER_PICKER
+    else -> AgentToggleAction.ENABLE_SELECTED
+}
+
 internal fun webSearchToggleLabelRes(isSupported: Boolean, isEnabled: Boolean): Int {
     return if (!isSupported) {
         R.string.chat_input_search_unavailable
@@ -47,6 +69,44 @@ internal fun webSearchToggleLabelRes(isSupported: Boolean, isEnabled: Boolean): 
         R.string.chat_input_disable_search
     } else {
         R.string.chat_input_web_search
+    }
+}
+
+/** 输入框内共用的紧凑功能标签，三项同时开启时仍保持短文本。 */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+internal fun ActiveFunctionTag(
+    iconRes: Int,
+    label: String,
+    tint: Color,
+    lightBackground: Color,
+    closeContentDescription: String,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
+) {
+    val background = if (isSystemInDarkTheme()) Color(0xFF2A2A2A) else lightBackground
+    Row(
+        modifier = Modifier
+            .background(background, RoundedCornerShape(percent = 50))
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+            .padding(horizontal = 8.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            painter = painterResource(iconRes),
+            contentDescription = null,
+            tint = tint,
+            modifier = Modifier.size(15.dp),
+        )
+        Spacer(Modifier.width(3.dp))
+        Text(text = label, fontSize = 14.sp, color = tint, maxLines = 1)
+        Spacer(Modifier.width(3.dp))
+        Icon(
+            painter = painterResource(R.drawable.ic_close),
+            contentDescription = closeContentDescription,
+            tint = tint,
+            modifier = Modifier.size(13.dp),
+        )
     }
 }
 

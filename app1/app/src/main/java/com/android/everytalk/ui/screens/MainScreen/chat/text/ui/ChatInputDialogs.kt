@@ -53,6 +53,7 @@ import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -99,6 +100,10 @@ import kotlinx.coroutines.withContext
 import com.android.everytalk.config.PerformanceConfig
 import com.android.everytalk.data.mcp.McpServerState
 import com.android.everytalk.data.mcp.McpServerConfig
+import com.android.everytalk.data.computer.Computer
+import com.android.everytalk.data.computer.ComputerDisclosureKind
+import com.android.everytalk.ui.components.dialog.AppDialogShape
+import com.android.everytalk.ui.components.dialog.appDialogBorderColor
 import com.android.everytalk.ui.screens.mcp.McpServerListDialog
 import java.io.File
 import java.text.SimpleDateFormat
@@ -138,4 +143,54 @@ internal fun ChatInputDialogs(
             }
         }
     }
+}
+
+/** 首次启用 Agent 时按当前服务器权限分层展示风险说明。 */
+@Composable
+internal fun AgentDisclosureDialog(
+    computer: Computer?,
+    disclosures: Set<ComputerDisclosureKind>,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    if (computer == null || disclosures.isEmpty()) return
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
+        shape = AppDialogShape,
+        title = { Text(stringResource(R.string.agent_disclosure_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                if (ComputerDisclosureKind.MODEL_DATA_FLOW in disclosures) {
+                    Text(
+                        text = stringResource(R.string.agent_disclosure_model_data),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (ComputerDisclosureKind.DIRECT_SSH_PERMISSION in disclosures) {
+                    Text(
+                        text = stringResource(R.string.agent_disclosure_direct_permission),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (ComputerDisclosureKind.ROOT_SSH_PERMISSION in disclosures) {
+                    Text(
+                        text = stringResource(R.string.agent_disclosure_root_permission),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onConfirm) {
+                Text(stringResource(R.string.agent_disclosure_confirm))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.action_cancel))
+            }
+        },
+    )
 }

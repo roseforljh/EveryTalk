@@ -10,6 +10,11 @@ NETWORK="everytalk-agent"
 
 fail() { printf '%s\n' "$1" >&2; exit "${2:-50}"; }
 require_root() { [ "$(id -u)" -eq 0 ] || fail 'helper 需要 root 权限' 51; }
+require_exact_args() {
+    expected="$1"
+    shift
+    [ "$#" -eq "$expected" ] || fail 'helper 参数数量无效' 74
+}
 valid_id() {
     value="${1:-}"
     [ -n "$value" ] && [ "${#value}" -le 128 ] || return 1
@@ -35,6 +40,17 @@ container_name() {
     workspace_id="${1:-}"
     valid_id "$workspace_id" || fail 'Workspace ID 无效' 54
     printf 'everytalk-%s' "$workspace_id"
+}
+
+require_workspace_container() {
+    workspace_id="${1:-}"
+    valid_id "$workspace_id" || fail 'Workspace ID 无效' 54
+    name="$(container_name "$workspace_id")"
+    docker container inspect "$name" >/dev/null 2>&1 || fail 'Workspace Container 不存在' 70
+    managed="$(docker inspect -f '{{index .Config.Labels "com.everytalk.managed"}}' "$name")"
+    owner="$(docker inspect -f '{{index .Config.Labels "com.everytalk.workspace"}}' "$name")"
+    [ "$managed" = true ] && [ "$owner" = "$workspace_id" ] || fail 'Container 归属校验失败' 60
+    printf '%s' "$name"
 }
 
 ensure_network() {
@@ -109,8 +125,9 @@ ensure_workspace() {
     ensure_network
 
     if docker container inspect "$name" >/dev/null 2>&1; then
-        managed="$(docker inspect -f '{{index .Config.Labels "com.everytalk.managed"}}' "$name")"
-        [ "$managed" = true ] || fail '同名 Container 不归 EveryTalk 管理' 60
+        name="$(require_workspace_container "$workspace_id")"
+        # 迁移旧版本创建的 Container，确保 VPS 重启后不会自动拉起历史会话。
+        docker update --restart=no "$name" >/dev/null
         docker start "$name" >/dev/null
         printf 'container=%s\n' "$name"
         return
@@ -121,7 +138,7 @@ ensure_workspace() {
         --name "$name" \
         --label com.everytalk.managed=true \
         --label "com.everytalk.workspace=$workspace_id" \
-        --restart unless-stopped \
+        --restart no \
         --security-opt no-new-privileges:true \
         --network "$NETWORK" \
         --user "$uid:$gid" \
@@ -134,7 +151,7 @@ ensure_workspace() {
 }
 
 container_address() {
-    name="$(container_name "${1:-}")"
+    name="$(require_workspace_container "${1:-}")"
     docker inspect -f "{{with index .NetworkSettings.Networks \"$NETWORK\"}}{{.IPAddress}}{{end}}" "$name"
 }
 
@@ -148,7 +165,7 @@ run_workspace() {
     [ "$root_mode" = true ] || [ "$root_mode" = false ] || fail 'root 参数无效' 65
     case "$timeout_seconds" in ''|*[!0-9]*) fail 'timeout 参数无效' 66 ;; esac
     [ "$timeout_seconds" -ge 1 ] && [ "$timeout_seconds" -le 3600 ] || fail 'timeout 参数越界' 66
-    name="$(container_name "$workspace_id")"
+    name="$(require_workspace_container "$workspace_id")"
     runtime="/workspace/.everytalk/runtime/$runtime_id"
     user_arguments=""
     [ "$root_mode" = true ] && user_arguments="--user 0:0"
@@ -166,7 +183,7 @@ run_workspace_background() {
     valid_id "$runtime_id" || fail 'Runtime ID 无效' 64
     valid_id "$process_id" || fail 'Process ID 无效' 67
     [ "$root_mode" = true ] || [ "$root_mode" = false ] || fail 'root 参数无效' 65
-    name="$(container_name "$workspace_id")"
+    name="$(require_workspace_container "$workspace_id")"
     runtime="/workspace/.everytalk/runtime/$runtime_id"
     logs="/workspace/.everytalk/background/$process_id"
     user_arguments=""
@@ -179,7 +196,7 @@ run_workspace_background() {
 open_terminal() {
     workspace_id="${1:-}"
     valid_id "$workspace_id" || fail 'Workspace ID 无效' 54
-    name="$(container_name "$workspace_id")"
+    name="$(require_workspace_container "$workspace_id")"
     docker exec -it "$name" /bin/bash
 }
 
@@ -191,9 +208,8 @@ open_public_preview() {
     valid_id "$preview_id" || fail 'Preview ID 无效' 68
     case "$remote_port" in ''|*[!0-9]*) fail 'Preview 端口无效' 69 ;; esac
     [ "$remote_port" -ge 1 ] && [ "$remote_port" -le 65535 ] || fail 'Preview 端口越界' 69
-    target="$(container_name "$workspace_id")"
+    target="$(require_workspace_container "$workspace_id")"
     proxy="everytalk-$preview_id"
-    docker container inspect "$target" >/dev/null 2>&1 || fail 'Workspace Container 不存在' 70
     if docker container inspect "$proxy" >/dev/null 2>&1; then
         managed="$(docker inspect -f '{{index .Config.Labels "com.everytalk.preview"}}' "$proxy")"
         [ "$managed" = "$preview_id" ] || fail '同名 Preview 不归 EveryTalk 管理' 71
@@ -205,7 +221,7 @@ open_public_preview() {
         --label "com.everytalk.preview=$preview_id" \
         --label "com.everytalk.workspace=$workspace_id" \
         --label "com.everytalk.remote-port=$remote_port" \
-        --restart unless-stopped \
+        --restart no \
         --read-only \
         --cap-drop ALL \
         --security-opt no-new-privileges:true \
@@ -232,7 +248,8 @@ close_public_preview() {
     proxy="everytalk-$preview_id"
     docker container inspect "$proxy" >/dev/null 2>&1 || return 0
     managed="$(docker inspect -f '{{index .Config.Labels "com.everytalk.preview"}}' "$proxy")"
-    [ "$managed" = "$preview_id" ] || fail 'Preview 归属校验失败' 71
+    everytalk_managed="$(docker inspect -f '{{index .Config.Labels "com.everytalk.managed"}}' "$proxy")"
+    [ "$everytalk_managed" = true ] && [ "$managed" = "$preview_id" ] || fail 'Preview 归属校验失败' 71
     workspace_id="$(docker inspect -f '{{index .Config.Labels "com.everytalk.workspace"}}' "$proxy")"
     remote_port="$(docker inspect -f '{{index .Config.Labels "com.everytalk.remote-port"}}' "$proxy")"
     target="$(container_name "$workspace_id")"
@@ -252,7 +269,10 @@ delete_workspace() {
     workspace_id="${1:-}"
     delete_files="${2:-false}"
     name="$(container_name "$workspace_id")"
-    docker rm --force "$name" >/dev/null 2>&1 || true
+    if docker container inspect "$name" >/dev/null 2>&1; then
+        name="$(require_workspace_container "$workspace_id")"
+        docker rm --force "$name" >/dev/null
+    fi
     if [ "$delete_files" = true ]; then
         workspace="$(workspace_path "$workspace_id")"
         case "$workspace" in */.everytalk/workspaces/ws_*) rm -rf -- "$workspace" ;; *) fail '拒绝删除异常路径' 61 ;; esac
@@ -265,17 +285,21 @@ require_root
 command_name="${1:-}"
 shift || true
 case "$command_name" in
-    install) install_helper "$@" ;;
-    version) printf 'version=%s\n' "$VERSION" ;;
-    build-image) build_image ;;
-    set-network) configure_network_boundary "$@" ;;
-    ensure-workspace) ensure_workspace "$@" ;;
-    container-address) container_address "$@" ;;
-    run) run_workspace "$@" ;;
-    run-background) run_workspace_background "$@" ;;
-    terminal) open_terminal "$@" ;;
-    open-public) open_public_preview "$@" ;;
-    close-public) close_public_preview "$@" ;;
-    delete-workspace) delete_workspace "$@" ;;
+    install)
+        require_exact_args 2 "$@"
+        [ "$(readlink -f -- "$0")" != "$HELPER_PATH" ] || fail '已安装 helper 禁止重复 install' 75
+        install_helper "$@"
+        ;;
+    version) require_exact_args 0 "$@"; printf 'version=%s\n' "$VERSION" ;;
+    build-image) require_exact_args 0 "$@"; build_image ;;
+    set-network) require_exact_args 1 "$@"; configure_network_boundary "$@" ;;
+    ensure-workspace) require_exact_args 1 "$@"; ensure_workspace "$@" ;;
+    container-address) require_exact_args 1 "$@"; container_address "$@" ;;
+    run) require_exact_args 4 "$@"; run_workspace "$@" ;;
+    run-background) require_exact_args 4 "$@"; run_workspace_background "$@" ;;
+    terminal) require_exact_args 1 "$@"; open_terminal "$@" ;;
+    open-public) require_exact_args 3 "$@"; open_public_preview "$@" ;;
+    close-public) require_exact_args 1 "$@"; close_public_preview "$@" ;;
+    delete-workspace) require_exact_args 2 "$@"; delete_workspace "$@" ;;
     *) fail 'helper 子命令无效' 63 ;;
 esac

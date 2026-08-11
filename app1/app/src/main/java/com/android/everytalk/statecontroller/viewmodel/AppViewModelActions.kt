@@ -21,6 +21,9 @@ import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.safety.AiContentReportCategory
 import com.android.everytalk.data.safety.AiContentReportSubmissionResult
+import com.android.everytalk.data.computer.AddComputerRequest
+import com.android.everytalk.data.computer.Computer
+import com.android.everytalk.data.computer.HostKeyProbeResult
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
 import com.android.everytalk.ui.components.math.MathJaxSvgRenderer
@@ -556,6 +559,29 @@ import java.util.TimeZone
     internal fun AppViewModel.respondToComputerPublicPreview(approved: Boolean) {
         computerManager.respondToPublicPreview(approved)
     }
+
+    /** 服务器页面调用这些挂起函数，所有网络流量仍由 Android 本地 SSH 组件处理。 */
+    internal suspend fun AppViewModel.probeComputerHostKey(request: AddComputerRequest): HostKeyProbeResult =
+        computerManager.probeHostKey(request)
+
+    internal suspend fun AppViewModel.addConfirmedComputer(
+        request: AddComputerRequest,
+        confirmedHostKey: HostKeyProbeResult,
+    ): Computer = computerManager.addConfirmedComputer(request, confirmedHostKey)
+
+    internal suspend fun AppViewModel.provisionComputerContainer(
+        computerId: String,
+        sudoPassword: CharArray?,
+    ): Computer = computerManager.provisionContainer(computerId, sudoPassword)
+
+    internal suspend fun AppViewModel.refreshComputer(computerId: String): Computer =
+        computerManager.refreshComputer(computerId)
+
+    internal suspend fun AppViewModel.disconnectComputer(computerId: String) =
+        computerManager.disconnect(computerId)
+
+    internal suspend fun AppViewModel.deleteComputer(computerId: String) =
+        computerManager.deleteComputer(computerId)
 
     internal fun AppViewModel.retryPendingAiContentReports() {
         viewModelScope.launch(Dispatchers.IO) {

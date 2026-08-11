@@ -28,6 +28,8 @@ import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.WindowInsets
@@ -97,6 +99,8 @@ import kotlinx.coroutines.withContext
 import com.android.everytalk.config.PerformanceConfig
 import com.android.everytalk.data.mcp.McpServerState
 import com.android.everytalk.data.mcp.McpServerConfig
+import com.android.everytalk.data.computer.Computer
+import com.android.everytalk.data.computer.ComputerStatus
 import com.android.everytalk.ui.screens.mcp.McpServerListDialog
 import java.io.File
 import java.text.SimpleDateFormat
@@ -119,6 +123,10 @@ internal fun FunctionPanelContent(
     onDismiss: () -> Unit,
     isMcpEnabled: Boolean = false,
     onToggleMcp: () -> Unit = {},
+    isAgentEnabled: Boolean = false,
+    isAgentPreparing: Boolean = false,
+    onToggleAgent: () -> Unit = {},
+    onLongPressAgent: () -> Unit = {},
     onOpenFilePicker: () -> Unit = {},
     onOpenCamera: () -> Unit = {},
     onOpenGallery: () -> Unit = {},
@@ -181,6 +189,17 @@ internal fun FunctionPanelContent(
             onClick = { onToggleMcp() }
         )
         FunctionPanelRow(
+            iconRes = R.drawable.ic_gpt_terminal,
+            label = stringResource(R.string.chat_input_agent),
+            iconBg = iconBg,
+            iconTint = if (isAgentEnabled || isAgentPreparing) ChatAgentColor else iconTint,
+            textColor = textColor,
+            isChecked = isAgentEnabled,
+            isLoading = isAgentPreparing,
+            onClick = onToggleAgent,
+            onLongClick = onLongPressAgent,
+        )
+        FunctionPanelRow(
             iconRes = R.drawable.ic_prompt,
             label = stringResource(R.string.chat_input_prompt),
             iconBg = iconBg,
@@ -192,6 +211,7 @@ internal fun FunctionPanelContent(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun FunctionPanelRow(
     iconRes: Int,
@@ -200,12 +220,14 @@ internal fun FunctionPanelRow(
     iconTint: Color,
     textColor: Color,
     isChecked: Boolean = false,
-    onClick: () -> Unit
+    isLoading: Boolean = false,
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -230,7 +252,13 @@ internal fun FunctionPanelRow(
             color = textColor,
             modifier = Modifier.weight(1f)
         )
-        if (isChecked) {
+        if (isLoading) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(20.dp),
+                color = ChatAgentColor,
+                strokeWidth = 2.dp,
+            )
+        } else if (isChecked) {
             Icon(
                 painter = painterResource(R.drawable.ic_check),
                 contentDescription = null,
@@ -239,4 +267,103 @@ internal fun FunctionPanelRow(
             )
         }
     }
+}
+
+/** 长按 Agent 后显示的会话级服务器单选卡片。 */
+@Composable
+internal fun ComputerSelectionCard(
+    computers: List<Computer>,
+    selectedComputerId: String?,
+    onSelect: (Computer) -> Unit,
+    onUnavailable: (Computer) -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .width(300.dp)
+            .heightIn(max = 380.dp),
+    ) {
+        Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp)) {
+            Text(
+                text = stringResource(R.string.agent_server_picker_title),
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+            Text(
+                text = stringResource(R.string.agent_server_picker_description),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+
+        if (computers.isEmpty()) {
+            Text(
+                text = stringResource(R.string.agent_server_picker_empty),
+                modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 20.dp),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            return@Column
+        }
+
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
+        Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+            computers.forEachIndexed { index, computer ->
+                val isReady = computer.status == ComputerStatus.READY
+                val statusLabel = stringResource(computerStatusLabelRes(computer.status))
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            if (isReady) onSelect(computer) else onUnavailable(computer)
+                        }
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_gpt_terminal),
+                        contentDescription = null,
+                        tint = if (isReady) ChatAgentColor else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
+                        modifier = Modifier.size(22.dp),
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = computer.displayName,
+                            style = MaterialTheme.typography.bodyLarge,
+                            color = if (isReady) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = "${computer.username}@${computer.host}:${computer.port} · $statusLabel",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                        )
+                    }
+                    RadioButton(
+                        selected = selectedComputerId == computer.id,
+                        onClick = null,
+                        enabled = isReady,
+                        colors = RadioButtonDefaults.colors(selectedColor = ChatAgentColor),
+                    )
+                }
+                if (index != computers.lastIndex) {
+                    HorizontalDivider(
+                        modifier = Modifier.padding(start = 48.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
+                    )
+                }
+            }
+        }
+    }
+}
+
+internal fun computerStatusLabelRes(status: ComputerStatus): Int = when (status) {
+    ComputerStatus.READY -> R.string.agent_server_ready
+    ComputerStatus.OFFLINE, ComputerStatus.DISCONNECTED -> R.string.agent_server_offline
+    ComputerStatus.ACTION_REQUIRED, ComputerStatus.HOST_KEY_CHANGED,
+    ComputerStatus.CONFIGURATION_REQUIRED -> R.string.agent_server_action_required
+    else -> R.string.agent_server_unavailable
 }

@@ -566,6 +566,38 @@ class MainActivity : AppCompatActivity() {
                                      )
                                  }
                                 composable(
+                                    route = Screen.COMPUTER_SCREEN,
+                                    enterTransition = {
+                                        androidx.compose.animation.slideInHorizontally(
+                                            initialOffsetX = { fullWidth -> fullWidth },
+                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
+                                        )
+                                    },
+                                    exitTransition = {
+                                        androidx.compose.animation.slideOutHorizontally(
+                                            targetOffsetX = { fullWidth -> -fullWidth / 4 },
+                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
+                                        )
+                                    },
+                                    popEnterTransition = {
+                                        androidx.compose.animation.slideInHorizontally(
+                                            initialOffsetX = { fullWidth -> -fullWidth / 4 },
+                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
+                                        )
+                                    },
+                                    popExitTransition = {
+                                        androidx.compose.animation.slideOutHorizontally(
+                                            targetOffsetX = { fullWidth -> fullWidth },
+                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
+                                        )
+                                    },
+                                ) {
+                                    com.android.everytalk.ui.screens.computer.ComputerScreen(
+                                        viewModel = appViewModel,
+                                        navController = navController,
+                                    )
+                                }
+                                composable(
                                     route = Screen.APP_INFO_SCREEN,
                                     enterTransition = {
                                         androidx.compose.animation.slideInHorizontally(

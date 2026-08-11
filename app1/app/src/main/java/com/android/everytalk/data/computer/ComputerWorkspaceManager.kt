@@ -20,7 +20,24 @@ class ComputerWorkspaceManager(private val repository: ComputerRepository) {
         return workspaceLocks.computeIfAbsent(lockKey) { Mutex() }.withLock {
             val dao = repository.dao()
             val existing = dao.getWorkspace(computerId, conversationId)?.toModel()
-            if (existing?.status == ComputerWorkspaceStatus.READY) return@withLock existing
+            if (existing?.status == ComputerWorkspaceStatus.READY) {
+                val restored = existing.copy(lastUsedAt = System.currentTimeMillis())
+                if (existing.runMode == ComputerRunMode.CONTAINER) {
+                    val computer = repository.getComputer(computerId)
+                        ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
+                    try {
+                        // Container 禁止自动重启。会话真正使用它时，才通过受限 helper 主动恢复。
+                        repository.withConnection(computerId) { connection, _ ->
+                            ensureContainerWorkspace(connection, computer, existing.id)
+                        }
+                    } catch (error: Throwable) {
+                        dao.upsertWorkspace(restored.copy(status = ComputerWorkspaceStatus.ERROR).toEntity())
+                        throw error
+                    }
+                }
+                dao.upsertWorkspace(restored.toEntity())
+                return@withLock restored
+            }
 
             val computer = repository.getComputer(computerId)
                 ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")

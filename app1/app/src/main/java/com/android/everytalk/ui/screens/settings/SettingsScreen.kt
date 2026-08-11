@@ -53,6 +53,7 @@ import com.android.everytalk.ui.screens.settings.dialogs.ModelSelectionDialog
 import com.android.everytalk.util.storage.readAtMost
 import com.android.everytalk.ui.components.floatingEdgeGradient
 import com.android.everytalk.ui.components.popup.AppFloatingCardPopup
+import com.android.everytalk.navigation.Screen
 import java.util.UUID
 
 private const val MAX_SETTINGS_IMPORT_BYTES = 50L * 1024L * 1024L
@@ -565,6 +566,10 @@ fun SettingsScreen(
                                     showTabMenu = false
                                 },
                                 onImportExport = { showImportExportDialog = true },
+                                onOpenComputers = {
+                                    showTabMenu = false
+                                    navController.navigate(Screen.COMPUTER_SCREEN) { launchSingleTop = true }
+                                },
                                 onDismiss = { showTabMenu = false }
                             )
                         }
@@ -621,6 +626,10 @@ fun SettingsScreen(
                                 currentTabIndex = -1,
                                 onTabSelected = { showTabMenu = false },
                                 onImportExport = { showImportExportDialog = true },
+                                onOpenComputers = {
+                                    showTabMenu = false
+                                    navController.navigate(Screen.COMPUTER_SCREEN) { launchSingleTop = true }
+                                },
                                 onDismiss = { showTabMenu = false }
                             )
                         }
@@ -889,6 +898,7 @@ private fun SettingsTabMenu(
     currentTabIndex: Int,
     onTabSelected: (Int) -> Unit,
     onImportExport: () -> Unit,
+    onOpenComputers: () -> Unit,
     onDismiss: () -> Unit
 ) {
     val isDark = isSystemInDarkTheme()
@@ -941,6 +951,26 @@ private fun SettingsTabMenu(
                         )
                     }
                 }
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(38.dp)
+                    .clickable {
+                        onOpenComputers()
+                        onDismiss()
+                    }
+                    .padding(horizontal = 14.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = stringResource(R.string.settings_servers),
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = textColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
             Box(
                 modifier = Modifier

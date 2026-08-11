@@ -3,7 +3,9 @@ import com.android.everytalk.statecontroller.*
 import kotlin.math.max
 import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.util.Log
 import com.android.everytalk.util.image.validateUserImageForSelection
 import androidx.activity.compose.BackHandler
@@ -65,7 +67,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.window.PopupProperties
+import androidx.core.content.ContextCompat
 import com.android.everytalk.data.DataClass.ApiConfig
+import com.android.everytalk.data.computer.Computer
+import com.android.everytalk.data.computer.ComputerDisclosureKind
+import com.android.everytalk.data.computer.ComputerDisclosureStore
+import com.android.everytalk.data.computer.ComputerStatus
 import com.android.everytalk.models.ImageSourceOption
 import com.android.everytalk.models.MoreOptionsType
 import com.android.everytalk.models.SelectedMediaItem
@@ -85,6 +92,14 @@ import com.android.everytalk.data.mcp.McpServerConfig
 import com.android.everytalk.ui.screens.mcp.McpServerListDialog
 import java.io.File
 import java.util.UUID
+
+private data class PendingAgentAction(
+    val computer: Computer,
+    val conversationId: String,
+    val selectComputer: Boolean,
+    val enableAgentAfterSelection: Boolean,
+    val requiresDisclosure: Boolean,
+)
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -130,8 +145,62 @@ fun ChatInputArea(
     var lastImagePanelDismissAt by remember { mutableLongStateOf(0L) }
     var lastMorePanelDismissAt by remember { mutableLongStateOf(0L) }
     var showMcpServerListDialog by remember { mutableStateOf(false) }
+    var showComputerSelectionPopup by remember { mutableStateOf(false) }
+    var enableAgentAfterComputerSelection by remember { mutableStateOf(false) }
     var tempCameraImageUri by remember { mutableStateOf<Uri?>(null) }
     val isMcpEnabled by viewModel.stateHolder._isMcpEnabledForNextRequest.collectAsState()
+    val isAgentEnabled by viewModel.isAgentEnabled.collectAsState()
+    val isAgentPreparing by viewModel.isAgentPreparing.collectAsState()
+    val computers by viewModel.computers.collectAsState()
+    val computerSelections by viewModel.computerSelections.collectAsState()
+    val currentConversationId by viewModel.currentConversationId.collectAsState()
+    val selectedComputerId = computerSelections[currentConversationId]
+    val disclosureStore = remember(context) { ComputerDisclosureStore(context) }
+    var pendingAgentAction by remember { mutableStateOf<PendingAgentAction?>(null) }
+    var pendingAgentDisclosures by remember { mutableStateOf<Set<ComputerDisclosureKind>>(emptySet()) }
+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { }
+
+    fun requestAgentNotificationPermission() {
+        if (
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    fun executeAgentAction(action: PendingAgentAction) {
+        if (action.conversationId != currentConversationId) {
+            onShowSnackbar(context.getString(R.string.agent_conversation_changed))
+            return
+        }
+        if (action.enableAgentAfterSelection) requestAgentNotificationPermission()
+        if (action.selectComputer) {
+            viewModel.selectComputerForCurrentConversation(
+                computerId = action.computer.id,
+                enableAgentAfterSelection = action.enableAgentAfterSelection,
+            )
+        } else {
+            viewModel.setAgentEnabled(true)
+        }
+    }
+
+    fun requestAgentAction(action: PendingAgentAction) {
+        val missing = if (action.requiresDisclosure) {
+            disclosureStore.missingFor(action.computer)
+        } else {
+            emptySet()
+        }
+        if (missing.isEmpty()) {
+            executeAgentAction(action)
+        } else {
+            pendingAgentAction = action
+            pendingAgentDisclosures = missing
+        }
+    }
 
     val photoPickerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.PickMultipleVisualMedia()
@@ -445,6 +514,66 @@ fun ChatInputArea(
                     lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
                     showFunctionPanel = false
                 }
+                BackHandler(enabled = showComputerSelectionPopup) {
+                    showComputerSelectionPopup = false
+                }
+
+                fun openComputerSelection(enableAgentAfterSelection: Boolean) {
+                    enableAgentAfterComputerSelection = enableAgentAfterSelection
+                    showFunctionPanel = false
+                    showComputerSelectionPopup = true
+                }
+
+                fun toggleAgent() {
+                    val selectedComputer = computers.firstOrNull { it.id == selectedComputerId }
+                    when (
+                        resolveAgentToggleAction(
+                            isEnabled = isAgentEnabled,
+                            isPreparing = isAgentPreparing,
+                            hasSelectedComputer = selectedComputer != null,
+                        )
+                    ) {
+                        AgentToggleAction.DISABLE -> viewModel.setAgentEnabled(false)
+                        AgentToggleAction.OPEN_SERVER_PICKER ->
+                            openComputerSelection(enableAgentAfterSelection = true)
+                        AgentToggleAction.ENABLE_SELECTED -> {
+                            val computer = requireNotNull(selectedComputer)
+                            if (computer.status != ComputerStatus.READY) {
+                                val status = context.getString(computerStatusLabelRes(computer.status))
+                                onShowSnackbar(context.getString(R.string.agent_server_cannot_select, status))
+                                return
+                            }
+                            requestAgentAction(
+                                PendingAgentAction(
+                                    computer = computer,
+                                    conversationId = currentConversationId,
+                                    selectComputer = false,
+                                    enableAgentAfterSelection = true,
+                                    requiresDisclosure = true,
+                                ),
+                            )
+                        }
+                    }
+                }
+
+                fun selectComputer(computer: Computer) {
+                    if (computer.status != ComputerStatus.READY) {
+                        val status = context.getString(computerStatusLabelRes(computer.status))
+                        onShowSnackbar(context.getString(R.string.agent_server_cannot_select, status))
+                        return
+                    }
+                    val enableAfterSelection = enableAgentAfterComputerSelection
+                    showComputerSelectionPopup = false
+                    requestAgentAction(
+                        PendingAgentAction(
+                            computer = computer,
+                            conversationId = currentConversationId,
+                            selectComputer = true,
+                            enableAgentAfterSelection = enableAfterSelection,
+                            requiresDisclosure = enableAfterSelection || isAgentEnabled,
+                        ),
+                    )
+                }
 
                 // 输入法收起/展开进度直接跟随 imeInsets，避免等 isImeVisible 布尔值最后一刻才切换
                 val imeBottomPx = imeInsets.getBottom(density)
@@ -478,7 +607,7 @@ fun ChatInputArea(
                     com.android.everytalk.data.network.WebSearchSupport.supportsNativeWebSearch(config)
                 } == true
                 val effectiveWebSearchAvailable = isWebSearchAvailable || supportsNativeWebSearch
-                val hasActiveTags = (isWebSearchEnabled && effectiveWebSearchAvailable) || isMcpEnabled
+                val hasActiveTags = (isWebSearchEnabled && effectiveWebSearchAvailable) || isMcpEnabled || isAgentEnabled
 
                 // 合并保护：只有输入框完全回到原始状态（无文本、无媒体、无标签）
                 // 且输入框高度动画已完成后，才允许合并
@@ -670,6 +799,12 @@ fun ChatInputArea(
                                     },
                                     isMcpEnabled = isMcpEnabled,
                                     onToggleMcp = { viewModel.setMcpEnabledForNextRequest(!isMcpEnabled) },
+                                    isAgentEnabled = isAgentEnabled,
+                                    isAgentPreparing = isAgentPreparing,
+                                    onToggleAgent = ::toggleAgent,
+                                    onLongPressAgent = {
+                                        openComputerSelection(enableAgentAfterSelection = false)
+                                    },
                                     onOpenFilePicker = { filePickerLauncher.launch(arrayOf("*/*")) },
                                     onOpenCamera = { cameraPermissionLauncher.launch(Manifest.permission.CAMERA) },
                                     onOpenGallery = {
@@ -702,6 +837,27 @@ fun ChatInputArea(
                                         ImageSourceOption.CAMERA -> cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
                                     }
                                 }
+                            }
+
+                            AppFloatingCardPopup(
+                                visible = showComputerSelectionPopup,
+                                popupPositionProvider = functionPanelPositionProvider,
+                                onDismissRequest = { showComputerSelectionPopup = false },
+                                properties = PopupProperties(
+                                    focusable = true,
+                                    dismissOnBackPress = true,
+                                    dismissOnClickOutside = true,
+                                ),
+                                modifier = Modifier
+                                    .widthIn(max = 320.dp)
+                                    .wrapContentHeight(),
+                            ) {
+                                ComputerSelectionCard(
+                                    computers = computers,
+                                    selectedComputerId = selectedComputerId,
+                                    onSelect = ::selectComputer,
+                                    onUnavailable = ::selectComputer,
+                                )
                             }
 
                             AppFloatingCardPopup(
@@ -779,74 +935,43 @@ fun ChatInputArea(
                                         .padding(start = textStartPadding, end = 5.dp, top = safeVerticalPadding, bottom = safeVerticalPadding)
                                 ) {
                                     if (hasActiveTags) {
-                                        Row(
+                                        FlowRow(
                                             modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
-                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                            verticalAlignment = Alignment.CenterVertically
+                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                            verticalArrangement = Arrangement.spacedBy(4.dp),
                                         ) {
                                             if (isWebSearchEnabled && effectiveWebSearchAvailable) {
-                                                Row(
-                                                    modifier = Modifier
-                                                        .background(
-                                                            if (isDarkTheme) Color(0xFF2A2A2A) else Color(0xFFD0D0D0),
-                                                            RoundedCornerShape(percent = 50)
-                                                        )
-                                                        .clickable { onToggleWebSearch() }
-                                                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                                                    verticalAlignment = Alignment.CenterVertically
-                                                ) {
-                                                    Icon(
-                                                        painter = painterResource(R.drawable.ic_globe),
-                                                        contentDescription = null,
-                                                        tint = Color(0xFF66B5FF),
-                                                        modifier = Modifier.size(16.dp)
-                                                    )
-                                                    Spacer(Modifier.width(4.dp))
-                                                    Text(
-                                                        stringResource(R.string.chat_input_search_tag),
-                                                        fontSize = 15.sp,
-                                                        color = Color(0xFF66B5FF)
-                                                    )
-                                                    Spacer(Modifier.width(4.dp))
-                                                    Icon(
-                                                        painter = painterResource(R.drawable.ic_close),
-                                                        contentDescription = stringResource(R.string.chat_input_close_web_search),
-                                                        tint = Color(0xFF66B5FF),
-                                                        modifier = Modifier.size(14.dp)
-                                                    )
-                                                }
+                                                ActiveFunctionTag(
+                                                    iconRes = R.drawable.ic_globe,
+                                                    label = stringResource(R.string.chat_input_search_tag),
+                                                    tint = Color(0xFF66B5FF),
+                                                    lightBackground = Color(0xFFDDEEFF),
+                                                    closeContentDescription = stringResource(R.string.chat_input_close_web_search),
+                                                    onClick = onToggleWebSearch,
+                                                )
                                             }
                                             if (isMcpEnabled) {
-                                                Row(
-                                                    modifier = Modifier
-                                                        .background(
-                                                            if (isDarkTheme) Color(0xFF2A2A2A) else Color(0xFFFFECE5),
-                                                            RoundedCornerShape(percent = 50)
-                                                        )
-                                                        .clickable { viewModel.setMcpEnabledForNextRequest(false) }
-                                                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                                                    verticalAlignment = Alignment.CenterVertically
-                                                ) {
-                                                    Icon(
-                                                        painter = painterResource(R.drawable.ic_hammer),
-                                                        contentDescription = null,
-                                                        tint = Color(0xFFFF6B00),
-                                                        modifier = Modifier.size(16.dp)
-                                                    )
-                                                    Spacer(Modifier.width(4.dp))
-                                                    Text(
-                                                        "MCP",
-                                                        fontSize = 15.sp,
-                                                        color = Color(0xFFFF6B00)
-                                                    )
-                                                    Spacer(Modifier.width(4.dp))
-                                                    Icon(
-                                                        painter = painterResource(R.drawable.ic_close),
-                                                        contentDescription = stringResource(R.string.chat_input_close_mcp),
-                                                        tint = Color(0xFFFF6B00),
-                                                        modifier = Modifier.size(14.dp)
-                                                    )
-                                                }
+                                                ActiveFunctionTag(
+                                                    iconRes = R.drawable.ic_hammer,
+                                                    label = stringResource(R.string.chat_input_mcp),
+                                                    tint = Color(0xFFFF6B00),
+                                                    lightBackground = Color(0xFFFFECE5),
+                                                    closeContentDescription = stringResource(R.string.chat_input_close_mcp),
+                                                    onClick = { viewModel.setMcpEnabledForNextRequest(false) },
+                                                )
+                                            }
+                                            if (isAgentEnabled) {
+                                                ActiveFunctionTag(
+                                                    iconRes = R.drawable.ic_gpt_terminal,
+                                                    label = stringResource(R.string.chat_input_agent),
+                                                    tint = ChatAgentColor,
+                                                    lightBackground = Color(0xFFE0F2F1),
+                                                    closeContentDescription = stringResource(R.string.chat_input_close_agent),
+                                                    onClick = { viewModel.setAgentEnabled(false) },
+                                                    onLongClick = {
+                                                        openComputerSelection(enableAgentAfterSelection = false)
+                                                    },
+                                                )
                                             }
                                         }
                                     }
@@ -939,5 +1064,23 @@ fun ChatInputArea(
         onToggleMcpServer = onToggleMcpServer,
         tempCameraImageUri = tempCameraImageUri,
         context = context,
+    )
+
+    AgentDisclosureDialog(
+        computer = pendingAgentAction?.computer,
+        disclosures = pendingAgentDisclosures,
+        onConfirm = {
+            val action = pendingAgentAction
+            if (action != null) {
+                disclosureStore.accept(action.computer, pendingAgentDisclosures)
+                pendingAgentAction = null
+                pendingAgentDisclosures = emptySet()
+                executeAgentAction(action)
+            }
+        },
+        onDismiss = {
+            pendingAgentAction = null
+            pendingAgentDisclosures = emptySet()
+        },
     )
 }

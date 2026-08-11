@@ -37,10 +37,10 @@ object GeminiDirectClient {
 
     @Synchronized
     fun setMcpToolExecutor(
-        executor: AppToolExecutor?,
+        executor: LegacyAppToolExecutor?,
     ) {
         mcpToolExecutorOwner = null
-        mcpToolExecutor = executor
+        mcpToolExecutor = executor.toAppToolExecutor()
     }
 
     @Synchronized

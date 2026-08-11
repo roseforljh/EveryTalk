@@ -107,6 +107,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+import java.util.UUID
 
 internal const val TOOL_STATUS_TARGET_MAX_CHARS = 24
 
@@ -151,8 +152,8 @@ internal fun isCurrentHistoryLoad(
 internal suspend fun executeSharedToolCall(
     toolName: String,
     arguments: JsonObject,
-    toolCallId: String,
-    computerRequestContext: ComputerRequestContext?,
+    toolCallId: String = UUID.randomUUID().toString(),
+    computerRequestContext: ComputerRequestContext? = null,
     updateStatus: suspend (String?) -> Unit = {},
     localWebFetchExecutor: suspend (JsonObject) -> JsonElement = { WebFetchToolExecutor.execute(it) },
     mcpWebFetchFallback: (suspend (JsonObject) -> JsonElement)? = null,
