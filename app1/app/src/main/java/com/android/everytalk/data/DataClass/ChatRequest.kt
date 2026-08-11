@@ -1,7 +1,9 @@
 package com.android.everytalk.data.DataClass
+import com.android.everytalk.data.computer.ComputerRequestContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Contextual
+import kotlinx.serialization.Transient
 
 @Serializable
 data class ImageGenRequest(
@@ -109,4 +111,8 @@ data class ChatRequest(
 
     @SerialName("contextManagement")
     val contextManagement: RequestContextManagement? = null,
+
+    /** 仅供 Android 本地 Tool 路由，序列化时必须忽略，禁止发送给模型服务。 */
+    @Transient
+    val localComputerRequestContext: ComputerRequestContext? = null,
 )

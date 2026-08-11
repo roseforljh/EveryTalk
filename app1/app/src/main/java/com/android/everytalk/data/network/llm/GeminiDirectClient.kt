@@ -17,18 +17,19 @@ import io.ktor.utils.io.*
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.*
+import java.util.UUID
 
 object GeminiDirectClient {
     private const val TAG = "GeminiDirectClient"
     private const val MAX_TOOL_LOOPS = 5
     
-    private var mcpToolExecutor: (suspend (String, JsonObject, suspend (String?) -> Unit) -> JsonElement)? = null
+    private var mcpToolExecutor: AppToolExecutor? = null
     private var mcpToolExecutorOwner: Any? = null
 
     @Synchronized
     fun setMcpToolExecutor(
         owner: Any,
-        executor: (suspend (String, JsonObject, suspend (String?) -> Unit) -> JsonElement)?,
+        executor: AppToolExecutor?,
     ) {
         mcpToolExecutorOwner = owner
         mcpToolExecutor = executor
@@ -36,7 +37,7 @@ object GeminiDirectClient {
 
     @Synchronized
     fun setMcpToolExecutor(
-        executor: (suspend (String, JsonObject, suspend (String?) -> Unit) -> JsonElement)?,
+        executor: AppToolExecutor?,
     ) {
         mcpToolExecutorOwner = null
         mcpToolExecutor = executor
@@ -80,7 +81,7 @@ object GeminiDirectClient {
                 }
                 Log.d(TAG, "请求 payload 长度: ${payload.length}")
                 
-                var pendingToolCalls = mutableListOf<Pair<String, JsonObject>>()
+                var pendingToolCalls = mutableListOf<GeminiToolCall>()
                 var hasContent = false
                 
                 var parseResult: ParseResult? = null
@@ -103,9 +104,9 @@ object GeminiDirectClient {
 
                     parseResult = parseGeminiSSEStreamWithToolCapture(
                         channel = response.bodyAsChannel(),
-                        onToolCall = { toolName, args ->
-                            Log.d(TAG, "回调捕获工具: $toolName")
-                            pendingToolCalls.add(toolName to args)
+                        onToolCall = { toolCall ->
+                            Log.d(TAG, "回调捕获工具: ${toolCall.name}")
+                            pendingToolCalls.add(toolCall)
                         },
                         emitEvent = { event ->
                             val orderedEvent = event.withRequestOrdinal(loopCount)
@@ -148,13 +149,19 @@ object GeminiDirectClient {
                 Log.i(TAG, "🔧 处理 ${pendingToolCalls.size} 个工具调用")
                 
                 val toolResponses = mutableListOf<JsonObject>()
-                for ((toolName, args) in pendingToolCalls) {
+                for ((toolCallId, toolName, args) in pendingToolCalls) {
                     try {
                         Log.d(TAG, "🔧 开始执行工具: $toolName")
-                        val result = mcpToolExecutor!!.invoke(toolName, args) { status ->
+                        val result = mcpToolExecutor!!.invoke(
+                            toolName,
+                            args,
+                            toolCallId,
+                            request.localComputerRequestContext,
+                        ) { status ->
                             send(AppStreamEvent.ExecutionStatusUpdate(status))
                         }
                         Log.i(TAG, "🔧 工具 $toolName 执行成功: resultChars=${result.toString().length}")
+                        computerExecutionCompletedEvent(result, toolCallId)?.let { send(it) }
 
                         val webResults = WebSearchToolResultExtractor.extract(toolName, result)
                         if (webResults.isNotEmpty()) {
@@ -215,7 +222,7 @@ object GeminiDirectClient {
                 conversationHistory.add(buildJsonObject {
                     put("role", "model")
                     putJsonArray("parts") {
-                        pendingToolCalls.forEach { (name, args) ->
+                        pendingToolCalls.forEach { (_, name, args) ->
                             addJsonObject {
                                 put("functionCall", buildJsonObject {
                                     put("name", name)
@@ -680,7 +687,7 @@ object GeminiDirectClient {
     @OptIn(ExperimentalCoroutinesApi::class)
     private suspend fun parseGeminiSSEStreamWithToolCapture(
         channel: ByteReadChannel,
-        onToolCall: (String, JsonObject) -> Unit,
+        onToolCall: (GeminiToolCall) -> Unit,
         emitEvent: suspend (AppStreamEvent) -> Unit
     ): ParseResult {
         val boundedChannel = BoundedSseLineReader(channel)
@@ -761,9 +768,10 @@ object GeminiDirectClient {
                                             val name = fcObj["name"]?.jsonPrimitive?.contentOrNull ?: return@let
                                             val args = fcObj["args"]?.jsonObject ?: JsonObject(emptyMap())
                                             hasToolCalls = true
-                                            onToolCall(name, args)
+                                            val toolCallId = "fc_${UUID.randomUUID()}"
+                                            onToolCall(GeminiToolCall(toolCallId, name, args))
                                             emitEvent(AppStreamEvent.ToolCall(
-                                                id = "fc_${System.currentTimeMillis()}",
+                                                id = toolCallId,
                                                 name = name,
                                                 argumentsObj = args
                                             ))
@@ -832,3 +840,9 @@ object GeminiDirectClient {
     }
 
 }
+
+private data class GeminiToolCall(
+    val id: String,
+    val name: String,
+    val arguments: JsonObject,
+)

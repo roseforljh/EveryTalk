@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.outlined.AutoAwesome
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LocalContentColor
@@ -65,6 +66,7 @@ private const val MAX_VISIBLE_SOURCE_PILLS = 5
 private val TimelineSearchBlue = Color(0xFF2563EB)
 private val TimelineWebGreen = Color(0xFF00A86B)
 private val TimelineToolOrange = Color(0xFFF06A00)
+private val TimelineAgentTeal = Color(0xFF00897B)
 private val TimelineReasoningPurple = Color(0xFF7C3AED)
 private val TimelineErrorRed = Color(0xFFE5484D)
 
@@ -174,8 +176,8 @@ internal fun executionTimelineEntries(steps: List<ExecutionStep>): List<Executio
             val previous = lastOrNull()
             val previousToolName = previous?.step?.labels?.singleOrNull()?.trim().orEmpty()
             val toolName = step.labels.singleOrNull()?.trim().orEmpty()
-            val continuesSameTool = step.type == ExecutionStepType.Tool &&
-                previous?.step?.type == ExecutionStepType.Tool &&
+            val continuesSameTool = step.type in setOf(ExecutionStepType.Tool, ExecutionStepType.Agent) &&
+                previous?.step?.type == step.type &&
                 toolName.isNotEmpty() &&
                 toolName == previousToolName
             if (continuesSameTool) {
@@ -454,12 +456,14 @@ private fun stepIcon(type: ExecutionStepType): ImageVector = when (type) {
     ExecutionStepType.Search -> Icons.Filled.Search
     ExecutionStepType.Web -> Icons.Filled.Public
     ExecutionStepType.Tool -> Icons.Filled.Build
+    ExecutionStepType.Agent -> Icons.Filled.Terminal
 }
 
 private fun stepIconTint(type: ExecutionStepType): Color = when (type) {
     ExecutionStepType.Search -> TimelineSearchBlue
     ExecutionStepType.Web -> TimelineWebGreen
     ExecutionStepType.Tool -> TimelineToolOrange
+    ExecutionStepType.Agent -> TimelineAgentTeal
 }
 
 @Composable
@@ -481,6 +485,7 @@ private fun ExecutionLabels(
                     ExecutionStepType.Search -> Icons.Filled.Search
                     ExecutionStepType.Web -> Icons.Filled.Public
                     ExecutionStepType.Tool -> Icons.Filled.Build
+                    ExecutionStepType.Agent -> Icons.Filled.Terminal
                 },
                 iconTint = stepIconTint(step.type),
                 onClick = if (step.type == ExecutionStepType.Web) {
@@ -488,7 +493,9 @@ private fun ExecutionLabels(
                 } else {
                     null
                 },
-                trailingText = if (step.type == ExecutionStepType.Tool && invocationCount > 1) {
+                trailingText = if (
+                    step.type in setOf(ExecutionStepType.Tool, ExecutionStepType.Agent) && invocationCount > 1
+                ) {
                     "x $invocationCount"
                 } else {
                     null

@@ -52,13 +52,13 @@ object AnthropicDirectClient {
     private const val COMPACTION_EDIT_TYPE = "compact_20260112"
     private val unsupportedNativeCompaction = ConcurrentHashMap.newKeySet<String>()
 
-    private var mcpToolExecutor: (suspend (String, JsonObject, suspend (String?) -> Unit) -> JsonElement)? = null
+    private var mcpToolExecutor: AppToolExecutor? = null
     private var mcpToolExecutorOwner: Any? = null
 
     @Synchronized
     fun setMcpToolExecutor(
         owner: Any,
-        executor: (suspend (String, JsonObject, suspend (String?) -> Unit) -> JsonElement)?,
+        executor: AppToolExecutor?,
     ) {
         mcpToolExecutorOwner = owner
         mcpToolExecutor = executor
@@ -66,7 +66,7 @@ object AnthropicDirectClient {
 
     @Synchronized
     fun setMcpToolExecutor(
-        executor: (suspend (String, JsonObject, suspend (String?) -> Unit) -> JsonElement)?,
+        executor: AppToolExecutor?,
     ) {
         mcpToolExecutorOwner = null
         mcpToolExecutor = executor
@@ -230,9 +230,15 @@ object AnthropicDirectClient {
                         ),
                     )
                     val execution = try {
-                        val result = executor(toolCall.name, toolCall.input) { status ->
+                        val result = executor(
+                            toolCall.name,
+                            toolCall.input,
+                            toolCall.id,
+                            request.localComputerRequestContext,
+                        ) { status ->
                             send(AppStreamEvent.ExecutionStatusUpdate(status))
                         }
+                        computerExecutionCompletedEvent(result, toolCall.id)?.let { send(it) }
                         val webResults = WebSearchToolResultExtractor.extract(toolCall.name, result)
                         if (webResults.isNotEmpty()) {
                             send(AppStreamEvent.WebSearchResults(webResults))

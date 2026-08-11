@@ -43,7 +43,8 @@ interface ChatDao {
                currentWebSearchStage, imageUrls AS imageUrlsJson, attachments AS attachmentsJson,
                outputType, parts AS partsJson, executionStatus,
                executionSteps AS executionStepsJson,
-               enabledToolIds AS enabledToolIdsJson, modelName, providerName,
+               enabledToolIds AS enabledToolIdsJson, computerIdSnapshot, workspaceIdSnapshot,
+               modelName, providerName,
                tokenUsage AS tokenUsageJson,
                contextUsageSnapshot AS contextUsageSnapshotJson,
                contextCompressionState AS contextCompressionStateJson

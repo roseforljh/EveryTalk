@@ -93,6 +93,7 @@ import com.android.everytalk.data.network.OpenAIDirectClient
 import com.android.everytalk.data.network.OpenAIResponsesClient
 import com.android.everytalk.data.network.WebSearchSupport
 import com.android.everytalk.data.network.WebFetchToolExecutor
+import com.android.everytalk.data.computer.ComputerException
 import com.android.everytalk.util.storage.readAtMost
 import com.android.everytalk.util.ConversationNameHelper
 import kotlinx.serialization.json.JsonElement
@@ -464,6 +465,96 @@ import java.util.TimeZone
             }
             showSnackbar(getApplication<Application>().getString(messageRes))
         }
+    }
+
+    /**
+     * Agent 关闭立即生效并保留服务器选择与 Workspace。
+     * 开启前会验证当前模型、服务器和 Workspace，失败时保持关闭。
+     */
+    internal fun AppViewModel.setAgentEnabled(enabled: Boolean) {
+        val generation = stateHolder.agentActionGeneration.incrementAndGet()
+        if (!enabled) {
+            stateHolder.updateCurrentConversationFunctionToggleState { it.copy(agentEnabled = false) }
+            stateHolder._isAgentEnabled.value = false
+            stateHolder._isAgentPreparing.value = false
+            viewModelScope.launch {
+                persistenceManager.saveConversationFunctionToggleStates(
+                    stateHolder.conversationFunctionToggleStates.value,
+                )
+            }
+            return
+        }
+
+        if (!computerManager.supportsToolCalls(stateHolder._selectedApiConfig.value)) {
+            showSnackbar("当前模型不支持 Agent Tool Call")
+            return
+        }
+
+        stateHolder._isAgentPreparing.value = true
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                computerManager.prepareRequest(
+                    conversationId = stateHolder._currentConversationId.value,
+                    agentEnabled = true,
+                )
+                if (stateHolder.agentActionGeneration.get() != generation) return@launch
+                stateHolder.updateCurrentConversationFunctionToggleState { it.copy(agentEnabled = true) }
+                stateHolder._isAgentEnabled.value = true
+                persistenceManager.saveConversationFunctionToggleStates(
+                    stateHolder.conversationFunctionToggleStates.value,
+                )
+            } catch (error: ComputerException) {
+                if (stateHolder.agentActionGeneration.get() == generation) showSnackbar(error.message)
+            } catch (error: Exception) {
+                if (stateHolder.agentActionGeneration.get() == generation) showSnackbar("Agent 准备失败")
+                Log.e("AppViewModel", "Agent 准备失败", error)
+            } finally {
+                if (stateHolder.agentActionGeneration.get() == generation) {
+                    stateHolder._isAgentPreparing.value = false
+                }
+            }
+        }
+    }
+
+    /** 长按选服使用；Agent 已开启时先准备目标 Workspace，失败后保留原选择。 */
+    internal fun AppViewModel.selectComputerForCurrentConversation(
+        computerId: String,
+        enableAgentAfterSelection: Boolean = false,
+    ) {
+        val generation = stateHolder.agentActionGeneration.incrementAndGet()
+        val shouldPrepareWorkspace = stateHolder._isAgentEnabled.value || enableAgentAfterSelection
+        if (enableAgentAfterSelection && !computerManager.supportsToolCalls(stateHolder._selectedApiConfig.value)) {
+            showSnackbar("当前模型不支持 Agent Tool Call")
+            return
+        }
+        stateHolder._isAgentPreparing.value = shouldPrepareWorkspace
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val conversationId = stateHolder._currentConversationId.value
+                computerManager.selectComputer(conversationId, computerId, shouldPrepareWorkspace)
+                if (stateHolder.agentActionGeneration.get() != generation) return@launch
+                if (enableAgentAfterSelection) {
+                    stateHolder.updateCurrentConversationFunctionToggleState { it.copy(agentEnabled = true) }
+                    stateHolder._isAgentEnabled.value = true
+                    persistenceManager.saveConversationFunctionToggleStates(
+                        stateHolder.conversationFunctionToggleStates.value,
+                    )
+                }
+            } catch (error: ComputerException) {
+                if (stateHolder.agentActionGeneration.get() == generation) showSnackbar(error.message)
+            } catch (error: Exception) {
+                if (stateHolder.agentActionGeneration.get() == generation) showSnackbar("服务器选择失败")
+                Log.e("AppViewModel", "服务器选择失败", error)
+            } finally {
+                if (stateHolder.agentActionGeneration.get() == generation) {
+                    stateHolder._isAgentPreparing.value = false
+                }
+            }
+        }
+    }
+
+    internal fun AppViewModel.respondToComputerPublicPreview(approved: Boolean) {
+        computerManager.respondToPublicPreview(approved)
     }
 
     internal fun AppViewModel.retryPendingAiContentReports() {

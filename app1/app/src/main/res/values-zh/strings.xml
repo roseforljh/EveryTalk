@@ -954,4 +954,9 @@
         <item quantity="other">……还有 %1$d 个错误</item>
     </plurals>
     <string name="settings_import_no_valid_data">导入完成，未发现有效数据</string>
+    <string name="computer_connection_channel">Agent 服务器连接</string>
+    <string name="computer_connection_channel_description">保持正在使用的 SSH 工具、终端和私有预览连接。</string>
+    <string name="computer_connection_notification_title">Agent 正在使用服务器</string>
+    <string name="computer_connection_notification_text">SSH 活动仅在本机运行。</string>
+    <string name="computer_connection_stop">停止连接</string>
 </resources>

@@ -43,7 +43,8 @@ class HistoryManager(
     private val persistenceManager: DataPersistenceManager,
     private val compareMessageLists: suspend (List<Message>?, List<Message>?) -> Boolean,
     private val onHistoryModified: () -> Unit,
-    private val scope: CoroutineScope
+    private val scope: CoroutineScope,
+    private val onConversationIdMigrated: suspend (String, String) -> Unit = { _, _ -> },
 ) {
     private val TAG_HM = "HistoryManager"
 
@@ -707,6 +708,9 @@ class HistoryManager(
 
             // 迁移系统提示及其相关状态
             if (migrationSourceId != stableId) {
+                if (!isImageGeneration) {
+                    onConversationIdMigrated(migrationSourceId, stableId)
+                }
                 val currentSysPrompt = stateHolder.systemPrompts[migrationSourceId]
                 if (currentSysPrompt != null) {
                     stateHolder.systemPrompts[stableId] = currentSysPrompt

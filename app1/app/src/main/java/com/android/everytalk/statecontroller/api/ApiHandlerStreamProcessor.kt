@@ -26,6 +26,7 @@ import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.security.MessageDigest
 import java.util.Locale
+import com.android.everytalk.data.computer.ComputerToolNames
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
@@ -128,7 +129,11 @@ private fun compactStreamToolName(name: String, maxChars: Int = 24): String {
 
 private fun buildToolCallStatus(toolName: String): String {
     val compactName = compactStreamToolName(toolName)
-    val prefix = if (compactName.contains("mcp", ignoreCase = true)) "调用MCP" else "调用工具"
+    val prefix = when {
+        ComputerToolNames.all.any { it.equals(compactName, ignoreCase = true) } -> "运行 Agent"
+        compactName.contains("mcp", ignoreCase = true) -> "调用MCP"
+        else -> "调用工具"
+    }
     return if (compactName.isBlank()) prefix else "$prefix · $compactName"
 }
 
@@ -152,6 +157,8 @@ internal fun executionStepForToolCall(event: AppStreamEvent.ToolCall): Execution
     val url = event.argumentText("url", "href", "link")
     val normalizedName = toolName.lowercase(Locale.ROOT)
     val type = when {
+        ComputerToolNames.all.any { it.equals(normalizedName, ignoreCase = true) } ->
+            ExecutionStepType.Agent
         query.isNotBlank() || normalizedName.contains("search") || normalizedName.contains("query") ->
             ExecutionStepType.Search
         url.isNotBlank() || normalizedName.contains("fetch") || normalizedName.contains("crawl") ->
@@ -163,6 +170,7 @@ internal fun executionStepForToolCall(event: AppStreamEvent.ToolCall): Execution
             ExecutionStepType.Search -> add(query.ifBlank { toolName })
             ExecutionStepType.Web -> add(url.ifBlank { toolName })
             ExecutionStepType.Tool -> add(toolName)
+            ExecutionStepType.Agent -> add(toolName)
         }
     }
         .filter { it.isNotBlank() }
@@ -175,6 +183,7 @@ internal fun executionStepForToolCall(event: AppStreamEvent.ToolCall): Execution
             ExecutionStepType.Search -> "搜索网页"
             ExecutionStepType.Web -> "读取网页"
             ExecutionStepType.Tool -> "调用工具"
+            ExecutionStepType.Agent -> "运行 Agent"
         },
         labels = labels,
     )
@@ -565,17 +574,34 @@ internal class ApiHandlerStreamProcessor(
                     }
                 }
                 is AppStreamEvent.ExecutionStatusUpdate -> {
+                    val executionStepsWithResult = if (
+                        !appEvent.toolCallId.isNullOrBlank() && !appEvent.executionId.isNullOrBlank()
+                    ) {
+                        updatedMessage.executionSteps.map { step ->
+                            if (step.id == appEvent.toolCallId) {
+                                step.copy(completed = true, executionId = appEvent.executionId)
+                            } else {
+                                step
+                            }
+                        }
+                    } else {
+                        updatedMessage.executionSteps
+                    }
                     updatedMessage = if (currentMessage.contentStarted || currentMessage.text.isNotBlank()) {
                         updatedMessage.copy(
                             currentWebSearchStage = null,
                             executionStatus = null,
-                            executionSteps = updatedMessage.executionSteps.completeAllSteps(),
+                            executionSteps = executionStepsWithResult.completeAllSteps(),
                         )
                     } else if (appEvent.status.isNullOrBlank()) {
                         updatedMessage.copy(
                             currentWebSearchStage = null,
                             executionStatus = null,
-                            executionSteps = updatedMessage.executionSteps.completeLastPendingStep(),
+                            executionSteps = if (appEvent.toolCallId.isNullOrBlank()) {
+                                executionStepsWithResult.completeLastPendingStep()
+                            } else {
+                                executionStepsWithResult
+                            },
                         )
                     } else {
                         updatedMessage.copy(executionStatus = appEvent.status)

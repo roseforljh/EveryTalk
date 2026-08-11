@@ -25,6 +25,11 @@ import com.android.everytalk.data.DataClass.ThinkingConfig
 import com.android.everytalk.data.DataClass.ImageGenRequest
 import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.network.WebSearchSupport
+import com.android.everytalk.data.computer.ComputerException
+import com.android.everytalk.data.computer.ComputerErrorCodes
+import com.android.everytalk.data.computer.ComputerToolCatalog
+import com.android.everytalk.data.computer.ComputerToolNames
+import com.android.everytalk.data.computer.PreparedComputerRequest
 import com.android.everytalk.data.network.ExternalWebSearchProvider
 import com.android.everytalk.data.network.MAX_ATTACHMENT_PAGE_CHARS
 import com.android.everytalk.statecontroller.mcp.dispatch.McpToolCandidate
@@ -251,6 +256,24 @@ internal fun appendBuiltInReadAttachmentTool(
     return tools + builtInReadAttachmentToolDefinition()
 }
 
+/** Agent Tool 名称必须独占，避免自定义工具或 MCP 工具劫持本地服务器调用。 */
+internal fun appendComputerTools(
+    tools: List<Map<String, Any>>,
+    enabled: Boolean,
+): List<Map<String, Any>> {
+    if (!enabled) return tools
+    val conflicts = tools.mapNotNull(::extractToolName).filter { existingName ->
+        ComputerToolNames.all.any { it.equals(existingName, ignoreCase = true) }
+    }
+    if (conflicts.isNotEmpty()) {
+        throw ComputerException(
+            ComputerErrorCodes.TOOL_NAME_CONFLICT,
+            "Agent 工具名与现有工具冲突：${conflicts.distinct().joinToString()}",
+        )
+    }
+    return tools + ComputerToolCatalog.definitions()
+}
+
 internal fun addOrReplaceRegeneratedUserMessage(
     messageList: MutableList<UiMessage>,
     newUserMessage: UiMessage,
@@ -297,6 +320,7 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
     internal val getMcpDispatchCandidates: () -> List<McpToolCandidate> = { emptyList() },
     internal val getSelectedExternalWebSearchProvider: () -> ExternalWebSearchProvider? = { null },
     internal val getSelectedExternalWebSearchProviderApiKey: () -> String = { "" },
+    internal val prepareComputerRequest: suspend (String, Boolean) -> PreparedComputerRequest? = { _, _ -> null },
 ) {
 
     internal val fileManager: FileManager by lazy { FileManager(application) }

@@ -9,18 +9,26 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.android.everytalk.data.database.daos.ApiConfigDao
 import com.android.everytalk.data.database.daos.ChatDao
+import com.android.everytalk.data.database.daos.ComputerDao
 import com.android.everytalk.data.database.daos.McpConfigDao
 import com.android.everytalk.data.database.daos.SettingsDao
 import com.android.everytalk.data.database.daos.VoiceConfigDao
 import com.android.everytalk.data.database.entities.ApiConfigEntity
 import com.android.everytalk.data.database.entities.ChatSessionEntity
 import com.android.everytalk.data.database.entities.ConversationGroupEntity
+import com.android.everytalk.data.database.entities.ComputerAuditEventEntity
+import com.android.everytalk.data.database.entities.ComputerEntity
+import com.android.everytalk.data.database.entities.ComputerExecutionEntity
+import com.android.everytalk.data.database.entities.ComputerPreviewEntity
+import com.android.everytalk.data.database.entities.ComputerWorkspaceEntity
+import com.android.everytalk.data.database.entities.ConversationComputerSelectionEntity
 import com.android.everytalk.data.database.entities.ExpandedGroupEntity
 import com.android.everytalk.data.database.entities.McpServerConfigEntity
 import com.android.everytalk.data.database.entities.MessageEntity
 import com.android.everytalk.data.database.entities.PinnedItemEntity
 import com.android.everytalk.data.database.entities.SystemSettingEntity
 import com.android.everytalk.data.database.entities.VoiceBackendConfigEntity
+import com.android.everytalk.data.database.entities.WorkspaceSecretMetadataEntity
 
 @Database(
     entities = [
@@ -32,9 +40,16 @@ import com.android.everytalk.data.database.entities.VoiceBackendConfigEntity
         PinnedItemEntity::class,
         ConversationGroupEntity::class,
         ExpandedGroupEntity::class,
-        McpServerConfigEntity::class
+        McpServerConfigEntity::class,
+        ComputerEntity::class,
+        ComputerWorkspaceEntity::class,
+        ConversationComputerSelectionEntity::class,
+        ComputerExecutionEntity::class,
+        ComputerPreviewEntity::class,
+        WorkspaceSecretMetadataEntity::class,
+        ComputerAuditEventEntity::class,
     ],
-    version = 12,
+    version = 13,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -44,6 +59,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun chatDao(): ChatDao
     abstract fun settingsDao(): SettingsDao
     abstract fun mcpConfigDao(): McpConfigDao
+    abstract fun computerDao(): ComputerDao
 
     companion object {
         @Volatile
@@ -70,6 +86,7 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_9_10,
                     MIGRATION_10_11,
                     MIGRATION_11_12,
+                    MIGRATION_12_13,
                 )
                 .build()
                 INSTANCE = instance
@@ -201,6 +218,146 @@ abstract class AppDatabase : RoomDatabase() {
         val MIGRATION_11_12 = object : Migration(11, 12) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE messages ADD COLUMN contextCompressionState TEXT")
+            }
+        }
+
+        val MIGRATION_12_13 = object : Migration(12, 13) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN computerIdSnapshot TEXT")
+                db.execSQL("ALTER TABLE messages ADD COLUMN workspaceIdSnapshot TEXT")
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS computers (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        displayName TEXT NOT NULL,
+                        host TEXT NOT NULL,
+                        port INTEGER NOT NULL,
+                        username TEXT NOT NULL,
+                        resolvedAddress TEXT,
+                        hostKeyAlgorithm TEXT,
+                        hostKeyBlobBase64 TEXT,
+                        hostKeyFingerprint TEXT,
+                        authKind TEXT NOT NULL,
+                        credentialState TEXT NOT NULL,
+                        runMode TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        capabilitiesJson TEXT,
+                        bootstrapVersion TEXT,
+                        sandboxImage TEXT,
+                        allowPrivateNetwork INTEGER NOT NULL,
+                        lastConnectedAt INTEGER,
+                        lastErrorCode TEXT,
+                        createdAt INTEGER NOT NULL,
+                        updatedAt INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_computers_status ON computers(status)")
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS computer_workspaces (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        computerId TEXT NOT NULL,
+                        conversationId TEXT NOT NULL,
+                        runMode TEXT NOT NULL,
+                        hostPath TEXT NOT NULL,
+                        containerName TEXT,
+                        containerImage TEXT,
+                        status TEXT NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        lastUsedAt INTEGER NOT NULL,
+                        FOREIGN KEY(computerId) REFERENCES computers(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_computer_workspaces_computerId ON computer_workspaces(computerId)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_computer_workspaces_computerId_conversationId ON computer_workspaces(computerId, conversationId)")
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS conversation_computer_selections (
+                        conversationId TEXT NOT NULL PRIMARY KEY,
+                        selectedComputerId TEXT NOT NULL,
+                        updatedAt INTEGER NOT NULL,
+                        FOREIGN KEY(selectedComputerId) REFERENCES computers(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_conversation_computer_selections_selectedComputerId ON conversation_computer_selections(selectedComputerId)")
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS computer_executions (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        toolCallId TEXT NOT NULL,
+                        computerId TEXT NOT NULL,
+                        workspaceId TEXT NOT NULL,
+                        toolName TEXT NOT NULL,
+                        requestHash TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        startedAt INTEGER,
+                        finishedAt INTEGER,
+                        exitCode INTEGER,
+                        errorCode TEXT,
+                        safeSummary TEXT,
+                        FOREIGN KEY(computerId) REFERENCES computers(id) ON UPDATE NO ACTION ON DELETE CASCADE,
+                        FOREIGN KEY(workspaceId) REFERENCES computer_workspaces(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_computer_executions_computerId ON computer_executions(computerId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_computer_executions_workspaceId ON computer_executions(workspaceId)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_computer_executions_toolCallId ON computer_executions(toolCallId)")
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS computer_previews (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        workspaceId TEXT NOT NULL,
+                        remotePort INTEGER NOT NULL,
+                        localPort INTEGER,
+                        publicPort INTEGER,
+                        protocol TEXT NOT NULL,
+                        visibility TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        expiresAt INTEGER,
+                        FOREIGN KEY(workspaceId) REFERENCES computer_workspaces(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_computer_previews_workspaceId ON computer_previews(workspaceId)")
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS workspace_secret_metadata (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        workspaceId TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        updatedAt INTEGER NOT NULL,
+                        FOREIGN KEY(workspaceId) REFERENCES computer_workspaces(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_workspace_secret_metadata_workspaceId ON workspace_secret_metadata(workspaceId)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_workspace_secret_metadata_workspaceId_name ON workspace_secret_metadata(workspaceId, name)")
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS computer_audit_events (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        computerId TEXT NOT NULL,
+                        eventType TEXT NOT NULL,
+                        outcome TEXT NOT NULL,
+                        safeSummary TEXT,
+                        createdAt INTEGER NOT NULL,
+                        FOREIGN KEY(computerId) REFERENCES computers(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_computer_audit_events_computerId_createdAt ON computer_audit_events(computerId, createdAt)")
             }
         }
     }

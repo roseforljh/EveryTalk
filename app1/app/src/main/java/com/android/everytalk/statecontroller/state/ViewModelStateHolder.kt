@@ -21,6 +21,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import java.util.concurrent.atomic.AtomicLong
  
  class ViewModelStateHolder {
     // 🎯 Streaming message state manager for efficient UI updates
@@ -98,6 +99,9 @@ import kotlinx.coroutines.flow.update
     val _isTextApiCalling = MutableStateFlow(false)
     val _isImageApiCalling = MutableStateFlow(false)
     val _isMcpEnabledForNextRequest = MutableStateFlow(false)
+    val _isAgentEnabled = MutableStateFlow(false)
+    val _isAgentPreparing = MutableStateFlow(false)
+    val agentActionGeneration = AtomicLong(0)
 
     val _lastSentUserMessageId = MutableStateFlow<String?>(null)
     val _lastSentImageUserMessageId = MutableStateFlow<String?>(null)
@@ -157,6 +161,7 @@ val _isStreamingPaused = MutableStateFlow(false)
         _isWebSearchEnabled.value = toggleState.webSearchEnabled
         _isCodeExecutionEnabled.value = toggleState.codeExecutionEnabled
         _isMcpEnabledForNextRequest.value = toggleState.mcpEnabled
+        _isAgentEnabled.value = toggleState.agentEnabled
     }
 
     fun applyCurrentImageConversationFunctionToggleState() {
@@ -164,6 +169,7 @@ val _isStreamingPaused = MutableStateFlow(false)
         _isWebSearchEnabled.value = toggleState.webSearchEnabled
         _isCodeExecutionEnabled.value = toggleState.codeExecutionEnabled
         _isMcpEnabledForNextRequest.value = toggleState.mcpEnabled
+        _isAgentEnabled.value = false
     }
 
     // 分离的展开推理状态

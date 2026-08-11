@@ -21,6 +21,7 @@ import com.android.everytalk.data.DataClass.MAX_AUTO_CONTEXT_COMPRESSION_THRESHO
 import com.android.everytalk.data.DataClass.RequestContextManagement
 import com.android.everytalk.data.DataClass.ModelParameterProtocol
 import com.android.everytalk.data.DataClass.MessageToolIds
+import com.android.everytalk.data.computer.ComputerException
 import com.android.everytalk.data.DataClass.PartsApiMessage
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.DataClass.Message as UiMessage
@@ -89,11 +90,13 @@ internal fun enabledMessageToolIdsForRequest(
     isImageGeneration: Boolean,
     webSearchEnabled: Boolean,
     mcpEnabled: Boolean,
+    agentEnabled: Boolean = false,
 ): List<String> {
     if (isImageGeneration) return emptyList()
     return buildList {
         if (webSearchEnabled) add(MessageToolIds.WEB_SEARCH)
         if (mcpEnabled) add(MessageToolIds.MCP)
+        if (agentEnabled) add(MessageToolIds.AGENT)
     }
 }
 
@@ -189,10 +192,25 @@ internal fun MessageSender.sendMessageInternal(
             val providerForRequestBackend = currentConfig.provider
             val webSearchEnabledForRequest = !isImageGeneration && stateHolder._isWebSearchEnabled.value
             val isMcpEnabledForRequest = !isImageGeneration && stateHolder._isMcpEnabledForNextRequest.value
+            val isAgentEnabledForRequest = !isImageGeneration && stateHolder._isAgentEnabled.value
+            var preparedComputerRequest = try {
+                prepareComputerRequest(
+                    stateHolder._currentConversationId.value,
+                    isAgentEnabledForRequest,
+                )
+            } catch (error: ComputerException) {
+                showSnackbar(error.message)
+                return@launch
+            }
+            if (isAgentEnabledForRequest && preparedComputerRequest == null) {
+                showSnackbar("Agent 本地执行器未初始化")
+                return@launch
+            }
             val enabledToolIdsForRequest = enabledMessageToolIdsForRequest(
                 isImageGeneration = isImageGeneration,
                 webSearchEnabled = webSearchEnabledForRequest,
                 mcpEnabled = isMcpEnabledForRequest,
+                agentEnabled = isAgentEnabledForRequest,
             )
             val isDefaultProvider = currentConfig.provider.trim().lowercase() in listOf("默认", "default")
             val customModelParameters = if (parameterProtocol == ModelParameterProtocol.OPENAI_COMPATIBLE) {
@@ -278,6 +296,8 @@ internal fun MessageSender.sendMessageInternal(
                 imageUrls = attachmentResult.imageUriStringsForUi,
                 attachments = attachmentResult.processedAttachmentsForUi,
                 enabledToolIds = enabledToolIdsForRequest,
+                computerIdSnapshot = preparedComputerRequest?.context?.computerId,
+                workspaceIdSnapshot = preparedComputerRequest?.context?.workspaceId,
                 modelName = currentConfig.model,
                 providerName = currentConfig.provider
             )
@@ -315,6 +335,16 @@ internal fun MessageSender.sendMessageInternal(
             if (isNewTextChatFirstMessage || isNewImageChatFirstMessage) {
                 withContext(Dispatchers.IO) {
                     historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = isImageGeneration)
+                }
+            }
+            if (!isImageGeneration) {
+                preparedComputerRequest = preparedComputerRequest?.let { prepared ->
+                    val stableConversationId = stateHolder._currentConversationId.value
+                    if (prepared.context.conversationId == stableConversationId) {
+                        prepared
+                    } else {
+                        prepared.copy(context = prepared.context.copy(conversationId = stableConversationId))
+                    }
                 }
             }
 
@@ -481,9 +511,15 @@ internal fun MessageSender.sendMessageInternal(
                 val shouldInjectWebSearchTool = !shouldEnableGoogleSearch && !mcpHasSearchTool
                         && (webSearchRouting.externalProvider != null || webSearchRouting.useJinaSearch)
 
-                if (!systemPrompt.isNullOrBlank()) {
-                    val systemMessage = SimpleTextApiMessage(role = "system", content = systemPrompt.trim())
-                    val existingSystemMessageIndex = apiMessagesForBackend.indexOfFirst { it.role == "system" }
+                val existingSystemMessageIndex = apiMessagesForBackend.indexOfFirst { it.role == "system" }
+                val existingSystemPrompt = existingSystemMessageIndex.takeIf { it >= 0 }
+                    ?.let { index -> extractPrimaryText(apiMessagesForBackend[index]).trim().takeIf(String::isNotBlank) }
+                val effectiveSystemPrompt = listOfNotNull(
+                    systemPrompt?.trim()?.takeIf(String::isNotBlank) ?: existingSystemPrompt,
+                    preparedComputerRequest?.environmentPrompt,
+                ).joinToString("\n\n")
+                if (effectiveSystemPrompt.isNotBlank()) {
+                    val systemMessage = SimpleTextApiMessage(role = "system", content = effectiveSystemPrompt)
                     if (existingSystemMessageIndex != -1) {
                         apiMessagesForBackend[existingSystemMessageIndex] = systemMessage
                     } else {
@@ -548,9 +584,13 @@ internal fun MessageSender.sendMessageInternal(
                     } || historyUiMessages.any { message ->
                         message.attachments.any { it is SelectedMediaItem.GenericFile }
                     }
-                    appendBuiltInReadAttachmentTool(
+                    val toolsWithAttachmentReader = appendBuiltInReadAttachmentTool(
                         tools = effectiveToolsWithCurrentTime,
                         enabled = hasGenericAttachments,
+                    )
+                    appendComputerTools(
+                        tools = toolsWithAttachmentReader,
+                        enabled = preparedComputerRequest != null,
                     ).ifEmpty { null }
                 })
 
@@ -848,6 +888,7 @@ internal fun MessageSender.sendMessageInternal(
                         restoredState = activeCompressionState,
                         restoredStateCoversRequestPrefix = nativeThroughMessageId != null,
                     ),
+                    localComputerRequestContext = preparedComputerRequest?.context,
                     imageGenRequest = if (isImageGeneration) {
                         // 调试信息：检查发送的配置
                         Log.d("MessageSender", "Image generation config: ${safeApiConfigSummary(currentConfig)}")

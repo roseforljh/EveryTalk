@@ -24,13 +24,13 @@ object OpenAIDirectClient {
     private const val MAX_TOOL_LOOPS = 50
     private const val MAX_QWEN_UPLOAD_FILE_BYTES = 10L * 1024L * 1024L
 
-    private var mcpToolExecutor: (suspend (String, JsonObject, suspend (String?) -> Unit) -> JsonElement)? = null
+    private var mcpToolExecutor: AppToolExecutor? = null
     private var mcpToolExecutorOwner: Any? = null
 
     @Synchronized
     fun setMcpToolExecutor(
         owner: Any,
-        executor: (suspend (String, JsonObject, suspend (String?) -> Unit) -> JsonElement)?,
+        executor: AppToolExecutor?,
     ) {
         mcpToolExecutorOwner = owner
         mcpToolExecutor = executor
@@ -38,7 +38,7 @@ object OpenAIDirectClient {
 
     @Synchronized
     fun setMcpToolExecutor(
-        executor: (suspend (String, JsonObject, suspend (String?) -> Unit) -> JsonElement)?,
+        executor: AppToolExecutor?,
     ) {
         mcpToolExecutorOwner = null
         mcpToolExecutor = executor
@@ -227,10 +227,16 @@ object OpenAIDirectClient {
                         }
 
                         Log.d(TAG, "🔧 开始执行工具: ${toolInfo.name}")
-                        val result = mcpToolExecutor!!.invoke(toolInfo.name, argsJson) { status ->
+                        val result = mcpToolExecutor!!.invoke(
+                            toolInfo.name,
+                            argsJson,
+                            toolInfo.id,
+                            request.localComputerRequestContext,
+                        ) { status ->
                             send(AppStreamEvent.ExecutionStatusUpdate(status))
                         }
                         Log.i(TAG, "🔧 工具 ${toolInfo.name} 执行成功: resultChars=${result.toString().length}")
+                        computerExecutionCompletedEvent(result, toolInfo.id)?.let { send(it) }
 
                         val webResults = WebSearchToolResultExtractor.extract(toolInfo.name, result)
                         if (webResults.isNotEmpty()) {

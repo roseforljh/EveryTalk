@@ -310,6 +310,11 @@ ksp {
         implementation(libs.ktor.client.logging)
         implementation(libs.ktor.client.websockets)  // WebSocket 支持，用于阿里云实时语音识别
 
+        // ===== 用户 VPS 本地直连 =====
+        // SSH、SFTP、PTY 与端口转发全部在 Android 本地完成，凭据不经过项目方服务器。
+        implementation(libs.sshj)
+        implementation(libs.bouncycastle.provider)
+
         // SLF4J - Ktor logging 的间接依赖,必须保留
         implementation(libs.slf4j.nop)
 
@@ -363,7 +368,10 @@ ksp {
         implementation(libs.mikepenz.markdown.coil3)
 
         // ===== PDF 处理 =====
-        implementation(libs.pdfbox.android)
+        // PDFBox 自带旧版 BouncyCastle，与 SSHJ 使用的新版类名完全重叠；统一复用 SSHJ 的实现。
+        implementation(libs.pdfbox.android) {
+            exclude(group = "org.bouncycastle")
+        }
         // ===== Room Database =====
         implementation(libs.room.runtime)
         implementation(libs.room.ktx)

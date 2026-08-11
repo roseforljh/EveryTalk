@@ -80,10 +80,12 @@ import com.android.everytalk.statecontroller.controller.media.ClipboardControlle
 import com.android.everytalk.statecontroller.controller.config.ConfigFacade
 import com.android.everytalk.statecontroller.controller.config.ProviderController
 import com.android.everytalk.statecontroller.viewmodel.McpManager
+import com.android.everytalk.statecontroller.viewmodel.ComputerManager
 import com.android.everytalk.data.mcp.McpServerConfig
 import com.android.everytalk.data.mcp.McpServerState
 import com.android.everytalk.data.mcp.McpStatus
 import com.android.everytalk.data.network.GeminiDirectClient
+import com.android.everytalk.data.network.AppToolExecutor
 import com.android.everytalk.data.network.AnthropicDirectClient
 import com.android.everytalk.data.network.ExternalWebSearchProvider
 import com.android.everytalk.data.network.ExternalWebSearchProviderConfig
@@ -178,6 +180,35 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     imageLoader
              )
 
+    /** Computer 的 SSH、Workspace 与凭据全部由 Android 本地对象持有。 */
+    internal val computerManager = ComputerManager(
+        context = application.applicationContext,
+        scope = viewModelScope,
+        attachmentsForConversation = { conversationId ->
+            if (stateHolder._currentConversationId.value != conversationId) {
+                emptyList()
+            } else {
+                stateHolder.messages
+                    .flatMap(Message::attachments)
+                    .filterIsInstance<SelectedMediaItem.GenericFile>()
+            }
+        },
+        onDownloaded = { conversationId, attachment ->
+            withContext(Dispatchers.Main.immediate) {
+                if (stateHolder._currentConversationId.value != conversationId) return@withContext
+                val targetMessageId = stateHolder._currentTextStreamingAiMessageId.value
+                val targetIndex = stateHolder.messages.indexOfFirst { message -> message.id == targetMessageId }
+                if (targetIndex >= 0) {
+                    val message = stateHolder.messages[targetIndex]
+                    if (message.attachments.none { it.id == attachment.id }) {
+                        stateHolder.messages[targetIndex] = message.copy(attachments = message.attachments + attachment)
+                        stateHolder.isTextConversationDirty.value = true
+                    }
+                }
+            }
+        },
+    )
+
     internal val historyManager: HistoryManager =
             HistoryManager(
                     stateHolder,
@@ -186,7 +217,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     onHistoryModified = {
                         conversationPreviewController.clearAllCaches()
                     },
-                    scope = viewModelScope
+                    scope = viewModelScope,
+                    onConversationIdMigrated = computerManager::migrateConversationId,
             )
 
     val simpleModeManager = SimpleModeManager(stateHolder, historyManager, viewModelScope)
@@ -245,7 +277,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 uriToBase64Encoder = { uri -> encodeUriAsBase64(uri) },
                 getMcpDispatchCandidates = { mcpManager.getDispatchCandidates() },
                 getSelectedExternalWebSearchProvider = { selectedExternalWebSearchProvider },
-                getSelectedExternalWebSearchProviderApiKey = { selectedExternalWebSearchProviderApiKey }
+                getSelectedExternalWebSearchProviderApiKey = { selectedExternalWebSearchProviderApiKey },
+                prepareComputerRequest = computerManager::prepareRequest,
         )
     }
 
@@ -388,6 +421,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         get() = stateHolder._isWebSearchEnabled.asStateFlow()
     val isCodeExecutionEnabled: StateFlow<Boolean>
         get() = stateHolder._isCodeExecutionEnabled.asStateFlow()
+    val isAgentEnabled: StateFlow<Boolean>
+        get() = stateHolder._isAgentEnabled.asStateFlow()
+    val isAgentPreparing: StateFlow<Boolean>
+        get() = stateHolder._isAgentPreparing.asStateFlow()
+    val computers get() = computerManager.computers
+    val computerSelections get() = computerManager.selections
+    val pendingComputerPublicPreview get() = computerManager.pendingPublicPreview
     val showSourcesDialog: StateFlow<Boolean>
         get() = stateHolder._showSourcesDialog.asStateFlow()
     val sourcesForDialog: StateFlow<List<WebSearchResult>>
@@ -550,58 +590,34 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
   private val mcpToolExecutorOwner = Any()
 
   init {
-         GeminiDirectClient.setMcpToolExecutor(mcpToolExecutorOwner) { toolName, arguments, updateStatus ->
+         val appToolExecutor: AppToolExecutor = {
+             toolName,
+             arguments,
+             toolCallId,
+             computerRequestContext,
+             updateStatus,
+         ->
             executeSharedToolCall(
                 toolName = toolName,
                 arguments = arguments,
+                toolCallId = toolCallId,
+                computerRequestContext = computerRequestContext,
                 updateStatus = updateStatus,
                 mcpWebFetchFallback = buildMcpWebFetchFallback(),
                 localWebSearchExecutor = buildLocalWebSearchExecutor(),
                 localAttachmentExecutor = buildLocalAttachmentExecutor(),
+                localComputerExecutor = { localToolName, localArguments, localToolCallId, requestContext ->
+                    computerManager.execute(localToolName, localArguments, localToolCallId, requestContext)
+                },
                 fallbackExecutor = { fallbackToolName, fallbackArguments ->
                     mcpManager.callTool(fallbackToolName, fallbackArguments)
                 }
             )
          }
-         OpenAIDirectClient.setMcpToolExecutor(mcpToolExecutorOwner) { toolName, arguments, updateStatus ->
-            executeSharedToolCall(
-                toolName = toolName,
-                arguments = arguments,
-                updateStatus = updateStatus,
-                mcpWebFetchFallback = buildMcpWebFetchFallback(),
-                localWebSearchExecutor = buildLocalWebSearchExecutor(),
-                localAttachmentExecutor = buildLocalAttachmentExecutor(),
-                fallbackExecutor = { fallbackToolName, fallbackArguments ->
-                    mcpManager.callTool(fallbackToolName, fallbackArguments)
-                }
-            )
-         }
-         OpenAIResponsesClient.setMcpToolExecutor(mcpToolExecutorOwner) { toolName, arguments, updateStatus ->
-            executeSharedToolCall(
-                toolName = toolName,
-                arguments = arguments,
-                updateStatus = updateStatus,
-                mcpWebFetchFallback = buildMcpWebFetchFallback(),
-                localWebSearchExecutor = buildLocalWebSearchExecutor(),
-                localAttachmentExecutor = buildLocalAttachmentExecutor(),
-                fallbackExecutor = { fallbackToolName, fallbackArguments ->
-                    mcpManager.callTool(fallbackToolName, fallbackArguments)
-                }
-            )
-         }
-         AnthropicDirectClient.setMcpToolExecutor(mcpToolExecutorOwner) { toolName, arguments, updateStatus ->
-            executeSharedToolCall(
-                toolName = toolName,
-                arguments = arguments,
-                updateStatus = updateStatus,
-                mcpWebFetchFallback = buildMcpWebFetchFallback(),
-                localWebSearchExecutor = buildLocalWebSearchExecutor(),
-                localAttachmentExecutor = buildLocalAttachmentExecutor(),
-                fallbackExecutor = { fallbackToolName, fallbackArguments ->
-                    mcpManager.callTool(fallbackToolName, fallbackArguments)
-                }
-            )
-         }
+         GeminiDirectClient.setMcpToolExecutor(mcpToolExecutorOwner, appToolExecutor)
+         OpenAIDirectClient.setMcpToolExecutor(mcpToolExecutorOwner, appToolExecutor)
+         OpenAIResponsesClient.setMcpToolExecutor(mcpToolExecutorOwner, appToolExecutor)
+         AnthropicDirectClient.setMcpToolExecutor(mcpToolExecutorOwner, appToolExecutor)
 
         viewModelScope.launch(Dispatchers.IO) {
             aiContentReportRepository.retryPendingReports()
@@ -878,6 +894,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         lifecycleCoordinator.onCleared()
         // 关闭 MCP 管理器
         mcpManager.close()
+        computerManager.close()
     }
 
     // ===== MCP 服务器管理方法 =====

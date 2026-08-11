@@ -3,6 +3,9 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import com.android.everytalk.data.DataClass.WebSearchResult
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 
 @Serializable
 enum class TokenUsageSource {
@@ -94,7 +97,11 @@ sealed class AppStreamEvent {
 
     @Serializable
     @SerialName("execution_status_update")
-    data class ExecutionStatusUpdate(val status: String?) : AppStreamEvent()
+    data class ExecutionStatusUpdate(
+        val status: String?,
+        val toolCallId: String? = null,
+        val executionId: String? = null,
+    ) : AppStreamEvent()
 
     @Serializable
     @SerialName("tool_call")
@@ -140,6 +147,23 @@ sealed class AppStreamEvent {
         @SerialName("executableCode") val executableCode: String? = null,
         @SerialName("codeLanguage") val codeLanguage: String? = null
     ) : AppStreamEvent()
+}
+
+/** 从 Computer Tool 统一结果中提取本地 Execution ID，供消息时间线持久化。 */
+internal fun computerExecutionCompletedEvent(
+    result: JsonElement,
+    toolCallId: String,
+): AppStreamEvent.ExecutionStatusUpdate? {
+    val resultObject = result as? JsonObject ?: return null
+    val executionId = (resultObject["execution_id"] as? JsonPrimitive)
+        ?.contentOrNull
+        ?.takeIf(String::isNotBlank)
+        ?: return null
+    return AppStreamEvent.ExecutionStatusUpdate(
+        status = null,
+        toolCallId = toolCallId,
+        executionId = executionId,
+    )
 }
 
 internal fun AppStreamEvent.withRequestOrdinal(ordinal: Int): AppStreamEvent = when (this) {

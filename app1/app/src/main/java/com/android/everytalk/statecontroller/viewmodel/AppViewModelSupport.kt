@@ -90,6 +90,9 @@ import com.android.everytalk.data.network.OpenAIResponsesClient
 import com.android.everytalk.data.network.PromptCapabilityCatalog
 import com.android.everytalk.data.network.WebSearchSupport
 import com.android.everytalk.data.network.WebFetchToolExecutor
+import com.android.everytalk.data.computer.ComputerErrorCodes
+import com.android.everytalk.data.computer.ComputerRequestContext
+import com.android.everytalk.data.computer.ComputerToolNames
 import com.android.everytalk.util.storage.readAtMost
 import com.android.everytalk.util.ConversationNameHelper
 import kotlinx.serialization.json.JsonElement
@@ -148,11 +151,14 @@ internal fun isCurrentHistoryLoad(
 internal suspend fun executeSharedToolCall(
     toolName: String,
     arguments: JsonObject,
+    toolCallId: String,
+    computerRequestContext: ComputerRequestContext?,
     updateStatus: suspend (String?) -> Unit = {},
     localWebFetchExecutor: suspend (JsonObject) -> JsonElement = { WebFetchToolExecutor.execute(it) },
     mcpWebFetchFallback: (suspend (JsonObject) -> JsonElement)? = null,
     localWebSearchExecutor: (suspend (String) -> JsonElement)? = null,
     localAttachmentExecutor: (suspend (JsonObject) -> JsonElement)? = null,
+    localComputerExecutor: (suspend (String, JsonObject, String, ComputerRequestContext) -> JsonElement)? = null,
     localCurrentTimeExecutor: suspend () -> JsonElement = {
         val now = Date()
         val calendar = Calendar.getInstance()
@@ -229,6 +235,40 @@ internal suspend fun executeSharedToolCall(
         val result = localWebSearchExecutor(query)
         updateStatus(null)
         return result
+    }
+    val computerToolName = ComputerToolNames.all.firstOrNull { candidate ->
+        candidate.equals(toolName, ignoreCase = true)
+    }
+    if (computerToolName != null) {
+        val requestContext = computerRequestContext
+        val executor = localComputerExecutor
+        if (requestContext == null || executor == null) {
+            return buildJsonObject {
+                put("ok", JsonPrimitive(false))
+                put("execution_id", JsonPrimitive(""))
+                put("error", buildJsonObject {
+                    put("code", JsonPrimitive(ComputerErrorCodes.COMPUTER_NOT_READY))
+                    put("message", JsonPrimitive("当前请求没有可用的 Agent 服务器快照"))
+                    put("retryable", JsonPrimitive(false))
+                })
+            }
+        }
+        val status = when (computerToolName) {
+            ComputerToolNames.EXEC -> "执行服务器命令"
+            ComputerToolNames.READ_FILE -> "读取服务器文件"
+            ComputerToolNames.WRITE_FILE -> "写入服务器文件"
+            ComputerToolNames.TERMINAL -> "操作服务器终端"
+            ComputerToolNames.UPLOAD -> "上传附件到服务器"
+            ComputerToolNames.DOWNLOAD -> "从服务器下载文件"
+            ComputerToolNames.OPEN_PORT -> "打开服务器预览"
+            else -> "调用 Agent"
+        }
+        updateStatus(status)
+        return try {
+            executor(computerToolName, arguments, toolCallId, requestContext)
+        } finally {
+            updateStatus(null)
+        }
     }
     updateStatus(buildToolStatus("调用MCP", toolName))
     return try {

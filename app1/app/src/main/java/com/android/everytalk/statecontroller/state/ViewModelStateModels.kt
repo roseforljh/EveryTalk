@@ -30,4 +30,5 @@ data class ConversationFunctionToggleState(
     val webSearchEnabled: Boolean = false,
     val codeExecutionEnabled: Boolean = false,
     val mcpEnabled: Boolean = false,
+    val agentEnabled: Boolean = false,
 )

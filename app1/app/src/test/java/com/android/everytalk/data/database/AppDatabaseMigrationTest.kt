@@ -245,6 +245,53 @@ class AppDatabaseMigrationTest {
         migrateHelper.close()
     }
 
+    @Test
+    fun `migration 12 to 13 preserves messages and creates local computer tables`() {
+        val createHelper = openHelper(
+            version = 12,
+            onCreate = { db ->
+                db.execSQL("CREATE TABLE messages (id TEXT NOT NULL PRIMARY KEY)")
+                db.execSQL("INSERT INTO messages (id) VALUES ('message-1')")
+            },
+        )
+        createHelper.writableDatabase.close()
+        createHelper.close()
+
+        val migrateHelper = openHelper(
+            version = 13,
+            onUpgrade = { db, oldVersion, newVersion ->
+                assertEquals(12, oldVersion)
+                assertEquals(13, newVersion)
+                AppDatabase.MIGRATION_12_13.migrate(db)
+            },
+        )
+        val db = migrateHelper.writableDatabase
+
+        db.query("SELECT computerIdSnapshot, workspaceIdSnapshot FROM messages WHERE id = 'message-1'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue(cursor.isNull(0))
+            assertTrue(cursor.isNull(1))
+        }
+
+        val expectedTables = setOf(
+            "computers",
+            "computer_workspaces",
+            "conversation_computer_selections",
+            "computer_executions",
+            "computer_previews",
+            "workspace_secret_metadata",
+            "computer_audit_events",
+        )
+        val actualTables = mutableSetOf<String>()
+        db.query("SELECT name FROM sqlite_master WHERE type = 'table'").use { cursor ->
+            while (cursor.moveToNext()) actualTables += cursor.getString(0)
+        }
+        assertTrue(actualTables.containsAll(expectedTables))
+
+        db.close()
+        migrateHelper.close()
+    }
+
     private fun openHelper(
         version: Int,
         onCreate: (SupportSQLiteDatabase) -> Unit = {},

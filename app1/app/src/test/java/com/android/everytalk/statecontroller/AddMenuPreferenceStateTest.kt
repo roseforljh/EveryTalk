@@ -13,6 +13,7 @@ class AddMenuPreferenceStateTest {
         assertEquals(false, state.webSearchEnabled)
         assertEquals(false, state.codeExecutionEnabled)
         assertEquals(false, state.mcpEnabled)
+        assertEquals(false, state.agentEnabled)
     }
 
     @Test
@@ -25,7 +26,8 @@ class AddMenuPreferenceStateTest {
             textConversationId to ConversationFunctionToggleState(
                 webSearchEnabled = true,
                 codeExecutionEnabled = true,
-                mcpEnabled = true
+                mcpEnabled = true,
+                agentEnabled = true,
             ),
             imageConversationId to ConversationFunctionToggleState(
                 webSearchEnabled = false,
@@ -40,6 +42,7 @@ class AddMenuPreferenceStateTest {
         assertFalse(holder._isWebSearchEnabled.value)
         assertFalse(holder._isCodeExecutionEnabled.value)
         assertFalse(holder._isMcpEnabledForNextRequest.value)
+        assertFalse(holder._isAgentEnabled.value)
     }
 
 }

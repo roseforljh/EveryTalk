@@ -29,6 +29,8 @@ navigationCompose = "2.9.8"
 appcompat = "1.7.1"
 material = "1.14.0"
 okhttp = "5.4.0"
+sshj = "0.40.0"
+bouncyCastle = "1.80.2"
 androidxWebkit = "1.16.0"
 coil = "3.5.0"
 pdfbox = "2.0.27.0"
@@ -119,6 +121,8 @@ ktor-serialization-kotlinx-json = { module = "io.ktor:ktor-serialization-kotlinx
 ktor-client-logging = { module = "io.ktor:ktor-client-logging", version.ref = "ktor" }
 ktor-client-websockets = { module = "io.ktor:ktor-client-websockets", version.ref = "ktor" }
 okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+sshj = { group = "com.hierynomus", name = "sshj", version.ref = "sshj" }
+bouncycastle-provider = { group = "org.bouncycastle", name = "bcprov-jdk18on", version.ref = "bouncyCastle" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

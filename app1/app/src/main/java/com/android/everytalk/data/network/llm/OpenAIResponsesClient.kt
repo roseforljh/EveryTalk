@@ -20,13 +20,13 @@ object OpenAIResponsesClient {
     private const val TAG = "OpenAIResponsesClient"
     private const val MAX_TOOL_LOOPS = 50
 
-    private var mcpToolExecutor: (suspend (String, JsonObject, suspend (String?) -> Unit) -> JsonElement)? = null
+    private var mcpToolExecutor: AppToolExecutor? = null
     private var mcpToolExecutorOwner: Any? = null
 
     @Synchronized
     fun setMcpToolExecutor(
         owner: Any,
-        executor: (suspend (String, JsonObject, suspend (String?) -> Unit) -> JsonElement)?,
+        executor: AppToolExecutor?,
     ) {
         mcpToolExecutorOwner = owner
         mcpToolExecutor = executor
@@ -34,7 +34,7 @@ object OpenAIResponsesClient {
 
     @Synchronized
     fun setMcpToolExecutor(
-        executor: (suspend (String, JsonObject, suspend (String?) -> Unit) -> JsonElement)?,
+        executor: AppToolExecutor?,
     ) {
         mcpToolExecutorOwner = null
         mcpToolExecutor = executor
@@ -165,10 +165,16 @@ object OpenAIResponsesClient {
                             JsonObject(emptyMap())
                         }
 
-                        val result = mcpToolExecutor!!.invoke(toolInfo.name, argsJson) { status ->
+                        val result = mcpToolExecutor!!.invoke(
+                            toolInfo.name,
+                            argsJson,
+                            toolInfo.callId,
+                            request.localComputerRequestContext,
+                        ) { status ->
                             send(AppStreamEvent.ExecutionStatusUpdate(status))
                         }
                         Log.i(TAG, "工具 ${toolInfo.name} 执行成功")
+                        computerExecutionCompletedEvent(result, toolInfo.callId)?.let { send(it) }
 
                         val webResults = WebSearchToolResultExtractor.extract(toolInfo.name, result)
                         if (webResults.isNotEmpty()) {

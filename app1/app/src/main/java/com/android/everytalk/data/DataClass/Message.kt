@@ -31,6 +31,7 @@ enum class Sender {
 object MessageToolIds {
     const val WEB_SEARCH = "web_search"
     const val MCP = "mcp"
+    const val AGENT = "agent"
 }
 
 @Serializable
@@ -38,6 +39,7 @@ enum class ExecutionStepType {
     Search,
     Web,
     Tool,
+    Agent,
 }
 
 @Serializable
@@ -47,6 +49,7 @@ data class ExecutionStep(
     val title: String,
     val labels: List<String> = emptyList(),
     val completed: Boolean = false,
+    val executionId: String? = null,
 )
 
 // 将Sender枚举值映射到API角色字符串
@@ -78,6 +81,10 @@ data class Message(
     val executionStatus: String? = null,
     val executionSteps: List<ExecutionStep> = emptyList(),
     val enabledToolIds: List<String> = emptyList(),
+    /** 记录本条消息发送时实际使用的服务器，只用于历史展示与本地审计。 */
+    val computerIdSnapshot: String? = null,
+    /** 记录本条消息发送时实际使用的持久 Workspace。 */
+    val workspaceIdSnapshot: String? = null,
     // 新增：记录发送消息时使用的模型名称
     val modelName: String? = null,
     // 新增：记录发送消息时使用的提供商名称

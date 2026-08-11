@@ -979,4 +979,9 @@
         <item quantity="other">...and %1$d more errors</item>
     </plurals>
     <string name="settings_import_no_valid_data">Import complete. No valid data was found</string>
+    <string name="computer_connection_channel">Agent server connection</string>
+    <string name="computer_connection_channel_description">Keeps active SSH tools, terminals, and private previews connected.</string>
+    <string name="computer_connection_notification_title">Agent is using a server</string>
+    <string name="computer_connection_notification_text">SSH activity is running locally on this device.</string>
+    <string name="computer_connection_stop">Stop connection</string>
 </resources>
