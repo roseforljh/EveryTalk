@@ -2,6 +2,7 @@ package com.android.everytalk.data.safety
 
 import android.content.Context
 import android.util.AtomicFile
+import android.util.Log
 import com.android.everytalk.BuildConfig
 import com.android.everytalk.data.DataClass.Message
 import io.ktor.client.HttpClient
@@ -83,6 +84,7 @@ class AiContentReportRepository(
         encodeDefaults = true
     }
     private val storageMutex = Mutex()
+    private val deliveryMutex = Mutex()
     private val reportFile = File(context.applicationContext.filesDir, REPORT_FILE_PATH)
     private val atomicFile = AtomicFile(reportFile)
     private val endpoint = reportEndpoint.trim().takeIf(::isValidHttpsEndpoint)
@@ -116,34 +118,38 @@ class AiContentReportRepository(
         if (!stored) return AiContentReportSubmissionResult.StorageFailure
 
         val targetEndpoint = endpoint ?: return AiContentReportSubmissionResult.SavedLocally
-        return if (deliver(targetEndpoint, payload)) {
-            markSubmitted(payload.reportId)
-            AiContentReportSubmissionResult.Submitted
-        } else {
-            AiContentReportSubmissionResult.QueuedForRetry
+        return deliveryMutex.withLock {
+            if (deliver(targetEndpoint, payload)) {
+                markSubmitted(payload.reportId)
+                AiContentReportSubmissionResult.Submitted
+            } else {
+                AiContentReportSubmissionResult.QueuedForRetry
+            }
         }
     }
 
     suspend fun retryPendingReports() {
         val targetEndpoint = endpoint ?: return
-        val pending = try {
-            storageMutex.withLock {
-                readReports()
-                    .asSequence()
-                    .filter { it.deliveryState == ReportDeliveryState.PENDING }
-                    .take(MAX_RETRY_BATCH_SIZE)
-                    .map(StoredAiContentReport::payload)
-                    .toList()
+        deliveryMutex.withLock {
+            val pending = try {
+                storageMutex.withLock {
+                    readReports()
+                        .asSequence()
+                        .filter { it.deliveryState == ReportDeliveryState.PENDING }
+                        .take(MAX_RETRY_BATCH_SIZE)
+                        .map(StoredAiContentReport::payload)
+                        .toList()
+                }
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                return
             }
-        } catch (error: CancellationException) {
-            throw error
-        } catch (_: Exception) {
-            return
-        }
 
-        pending.forEach { payload ->
-            if (deliver(targetEndpoint, payload)) {
-                markSubmitted(payload.reportId)
+            pending.forEach { payload ->
+                if (deliver(targetEndpoint, payload)) {
+                    markSubmitted(payload.reportId)
+                }
             }
         }
     }
@@ -184,8 +190,9 @@ class AiContentReportRepository(
             }
         } catch (error: CancellationException) {
             throw error
-        } catch (_: Exception) {
+        } catch (error: Exception) {
             // 上传已经成功，本地回执清理失败不应把成功状态误报为失败。
+            Log.w(TAG, "举报已上传，但本地回执清理失败", error)
         }
     }
 
@@ -214,6 +221,7 @@ class AiContentReportRepository(
 
     companion object {
         private const val REPORT_FILE_PATH = "safety/ai_content_reports.json"
+        private const val TAG = "AiContentReport"
         private const val MAX_STORED_REPORTS = 100
         private const val MAX_RETRY_BATCH_SIZE = 20
         internal const val MAX_DETAILS_CHARS = 500

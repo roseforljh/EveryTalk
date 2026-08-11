@@ -92,13 +92,13 @@ android {
     // 建议与 targetSdk 和 Compose BOM 推荐的 SDK 版本对齐
 
     defaultConfig {
-        applicationId = "com.android.everytalk"
+        applicationId = "io.github.roseforljh.everytalk"
         minSdk = 27
         //noinspection OldTargetApi
         targetSdk = 37 // 通常与 compileSdk 一致
-        versionCode = 6000
+        versionCode = 6002
         // 优先从环境变量获取版本号(CI环境)，否则使用默认值
-        val baseVersionName = "1.20.0"
+        val baseVersionName = "1.26.0"
         val envVersionName = System.getenv("VERSION_NAME")
         versionName = if (!envVersionName.isNullOrBlank()) envVersionName else baseVersionName
 

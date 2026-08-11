@@ -846,6 +846,7 @@
     <string name="safety_block_dangerous_activity">This request may provide instructions for dangerous activities and was blocked by the safety filter.</string>
     <string name="safety_block_fraud_impersonation">This request may be used for fraud, impersonation, or forgery and was blocked by the safety filter.</string>
     <string name="safety_block_malicious_code">This request may be used to create or deploy malicious code and was blocked by the safety filter.</string>
+    <string name="safety_block_provider">The model service blocked this generation under its safety policy. Adjust the request and try again.</string>
     <string name="model_parameter_number_required">Parameter %1$s requires a valid number</string>
     <string name="model_parameter_boolean_required">Parameter %1$s requires true or false</string>
     <string name="model_parameter_duplicate_name">Parameter names cannot be duplicated: %1$s</string>

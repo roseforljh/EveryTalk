@@ -845,6 +845,9 @@ object ImageGenerationDirectClient {
     private fun parseGeminiImageResponse(responseText: String): ImageGenerationResponse {
         val json = Json { ignoreUnknownKeys = true }
         val root = json.parseToJsonElement(responseText).jsonObject
+        ProviderSafetyResponse.geminiBlockReason(root)?.let { reason ->
+            throw AiContentSafetyBlockedException(reason)
+        }
         val images = mutableListOf<ImageUrl>()
         var text: String? = null
         

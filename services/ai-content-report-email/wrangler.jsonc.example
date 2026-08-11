@@ -1,0 +1,33 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "everytalk-ai-content-report-email",
+  "main": "src/index.js",
+  "compatibility_date": "2026-08-10",
+  "workers_dev": true,
+  "routes": [
+    {
+      "pattern": "reports.example.com",
+      "custom_domain": true
+    }
+  ],
+  "vars": {
+    "REPORT_FROM_EMAIL": "EveryTalk <reports@example.com>",
+    "REPORT_TO_EMAIL": "owner@example.com"
+  },
+  "send_email": [
+    {
+      "name": "REPORT_EMAIL",
+      "destination_address": "owner@example.com"
+    }
+  ],
+  "ratelimits": [
+    {
+      "name": "REPORT_RATE_LIMITER",
+      "namespace_id": "26081101",
+      "simple": {
+        "limit": 10,
+        "period": 60
+      }
+    }
+  ]
+}

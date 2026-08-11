@@ -800,6 +800,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
    
+   override fun onStart() {
+       super.onStart()
+       if (this::appViewModel.isInitialized) {
+           appViewModel.retryPendingAiContentReports()
+       }
+   }
+
    override fun onStop() {
        super.onStop()
        if (this::appViewModel.isInitialized) {

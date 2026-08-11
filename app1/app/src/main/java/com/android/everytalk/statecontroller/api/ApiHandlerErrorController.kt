@@ -4,6 +4,7 @@ import android.content.Context
 import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.network.NetworkUtils
+import com.android.everytalk.data.network.AiContentSafetyBlockedException
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
 import com.android.everytalk.util.AppLogger
 import com.android.everytalk.util.debug.PerformanceMonitor
@@ -71,10 +72,19 @@ internal class ApiHandlerErrorController(
             if (idx != -1) {
                 val msg = messageList[idx]
                 if (!msg.isError) {
-                    val existingContent = (msg.text.takeIf { it.isNotBlank() }
-                        ?: msg.reasoning?.takeIf { it.isNotBlank() && msg.text.isBlank() } ?: "")
+                    val safetyBlocked = error is AiContentSafetyBlockedException
+                    val existingContent = if (safetyBlocked) {
+                        ""
+                    } else {
+                        msg.text.takeIf { it.isNotBlank() }
+                            ?: msg.reasoning?.takeIf { it.isNotBlank() && msg.text.isBlank() }
+                            ?: ""
+                    }
                     val errorPrefix = if (existingContent.isNotBlank()) "\n\n" else ""
                     val errorTextContent = errorVisualPrefix + when (error) {
+                        is AiContentSafetyBlockedException -> context.localizeUiMessage(
+                            error.message.orEmpty(),
+                        )
                         is IOException -> {
                             val rawMessage = NetworkUtils.sanitizeMessage(
                                 error.message ?: context.getString(R.string.ai_error_io),
@@ -99,7 +109,12 @@ internal class ApiHandlerErrorController(
                         text = existingContent + errorPrefix + errorTextContent,
                         isError = true,
                         contentStarted = true,
-                        reasoning = if (existingContent == msg.reasoning && errorPrefix.isNotBlank()) null else msg.reasoning,
+                        reasoning = if (safetyBlocked || (existingContent == msg.reasoning && errorPrefix.isNotBlank())) {
+                            null
+                        } else {
+                            msg.reasoning
+                        },
+                        parts = if (safetyBlocked) emptyList() else msg.parts,
                         currentWebSearchStage = null,
                         executionStatus = null
                     )

@@ -693,6 +693,7 @@ object GeminiDirectClient {
         var reasoningFinished = false
         var contentStarted = false
         var hasToolCalls = false
+        var safetyBlocked = false
         val thinkRouter = ThinkTagStreamRouter()
         
         try {
@@ -710,6 +711,12 @@ object GeminiDirectClient {
                             
                             try {
                                 val jsonChunk = Json.parseToJsonElement(chunk).jsonObject
+                                ProviderSafetyResponse.geminiBlockReason(jsonChunk)?.let { reason ->
+                                    safetyBlocked = true
+                                    emitEvent(ProviderSafetyResponse.error(reason))
+                                }
+                                if (safetyBlocked) break
+
                                 NativeWebSearchResultExtractor.extract(jsonChunk)
                                     .takeIf { it.isNotEmpty() }
                                     ?.let { sources ->
@@ -786,6 +793,10 @@ object GeminiDirectClient {
                         }
                     }
                 }
+            }
+
+            if (safetyBlocked) {
+                return ParseResult(hasToolCalls = false, fullText = "")
             }
             
             // 冲刷 thinkRouter 剩余内容

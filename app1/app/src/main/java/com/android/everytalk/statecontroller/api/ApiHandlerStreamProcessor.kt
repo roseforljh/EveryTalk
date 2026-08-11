@@ -7,6 +7,8 @@ import com.android.everytalk.data.DataClass.ExecutionStep
 import com.android.everytalk.data.DataClass.ExecutionStepType
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.network.AppStreamEvent
+import com.android.everytalk.data.network.AI_CONTENT_SAFETY_ERROR_TYPE
+import com.android.everytalk.data.network.AiContentSafetyBlockedException
 import com.android.everytalk.data.network.NativeContextCompactionKind
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
 import com.android.everytalk.util.AppLogger
@@ -671,7 +673,18 @@ internal class ApiHandlerStreamProcessor(
                 is AppStreamEvent.Error -> {
                     // 🎯 错误事件会触发 updateMessageWithError，它会自动刷新和清理 buffer
                     PerformanceMonitor.recordEvent(aiMessageId, "Error", 0)
-                    updateMessageWithError(aiMessageId, IOException(appEvent.message), isImageGeneration)
+                    val isSafetyBlock = appEvent.type == AI_CONTENT_SAFETY_ERROR_TYPE
+                    val error = if (isSafetyBlock) {
+                        AiContentSafetyBlockedException(appEvent.code)
+                    } else {
+                        IOException(appEvent.message)
+                    }
+                    updateMessageWithError(
+                        messageId = aiMessageId,
+                        error = error,
+                        isImageGeneration = isImageGeneration,
+                        allowRetry = !isSafetyBlock,
+                    )
                 }
                 is AppStreamEvent.ToolCall -> {
                     logger.debug("Received ToolCall event: ${appEvent.name}")

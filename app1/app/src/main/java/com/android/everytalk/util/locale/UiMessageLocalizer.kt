@@ -82,6 +82,8 @@ private val EXACT_MESSAGE_RESOURCES = mapOf(
         R.string.safety_block_fraud_impersonation,
     "该请求可能用于制作或投放恶意代码，已被安全过滤器拦截。" to
         R.string.safety_block_malicious_code,
+    "模型服务已根据安全策略拦截这次生成。请调整请求内容后重试。" to
+        R.string.safety_block_provider,
     "参数名不能为空" to R.string.model_parameter_name_required,
     "未知错误" to R.string.unknown_error,
     "压缩响应流在完成前中断" to R.string.compression_error_stream_interrupted,

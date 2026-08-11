@@ -10,6 +10,7 @@ import androidx.compose.runtime.snapshots.SnapshotStateMap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import coil3.imageLoader
+import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.util.storage.FileManager
 import com.android.everytalk.data.DataClass.Message
@@ -454,15 +455,20 @@ import java.util.TimeZone
                     isImageGeneration = isImageGeneration,
                 )
             }
-            showSnackbar(
-                when (result) {
-                    AiContentReportSubmissionResult.Submitted -> "举报已提交，感谢反馈"
-                    AiContentReportSubmissionResult.QueuedForRetry -> "网络暂不可用，举报已保存并会自动重试"
-                    AiContentReportSubmissionResult.SavedLocally -> "已在应用内标记；举报接收服务尚未配置"
-                    AiContentReportSubmissionResult.AlreadyReported -> "这条 AI 内容已经举报过了"
-                    AiContentReportSubmissionResult.StorageFailure -> "举报保存失败，请稍后重试"
-                }
-            )
+            val messageRes = when (result) {
+                AiContentReportSubmissionResult.Submitted -> R.string.ui_message_report_submitted
+                AiContentReportSubmissionResult.QueuedForRetry -> R.string.ui_message_report_queued
+                AiContentReportSubmissionResult.SavedLocally -> R.string.ui_message_report_saved_locally
+                AiContentReportSubmissionResult.AlreadyReported -> R.string.ui_message_report_duplicate
+                AiContentReportSubmissionResult.StorageFailure -> R.string.ui_message_report_storage_failed
+            }
+            showSnackbar(getApplication<Application>().getString(messageRes))
+        }
+    }
+
+    internal fun AppViewModel.retryPendingAiContentReports() {
+        viewModelScope.launch(Dispatchers.IO) {
+            aiContentReportRepository.retryPendingReports()
         }
     }
 

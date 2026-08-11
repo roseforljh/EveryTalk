@@ -57,7 +57,6 @@
 * 各渠道工具循环上下文压缩与原生压缩事件 ([51f30e6](https://github.com/roseforljh/EveryTalk/commit/51f30e69ea24dde422941b1dfc6ea5fe0927d07c))
 * 执行步骤时间线与通用底部弹窗组件 ([5f2b958](https://github.com/roseforljh/EveryTalk/commit/5f2b95872dd6756bdb0ce3ff6cf7f6ead5639b70))
 * 接入 Anthropic 原生 Messages API 与端点规则 ([bd78ce9](https://github.com/roseforljh/EveryTalk/commit/bd78ce92cac9509df81195c082e756f90050cd28))
-* 数据库迁移 v7 移除 OpenClaw 配置字段 ([4958b0c](https://github.com/roseforljh/EveryTalk/commit/4958b0ce6eae7bc59be980bda65bb66e49cb4225))
 * 数据库迁移 v8-v10 支持模型参数与 token 用量 ([5b887fe](https://github.com/roseforljh/EveryTalk/commit/5b887fe283b03294997a0417134d087fba8406d1))
 * 模型参数对话框自动加载与用户工具徽标内联 ([612e4b6](https://github.com/roseforljh/EveryTalk/commit/612e4b660f0709bbe7d5a8348e73c4ea76981775))
 * 模型目录协议与服务接入 ([a2c5863](https://github.com/roseforljh/EveryTalk/commit/a2c5863dadbe8b506939587add525cad40f835f0))

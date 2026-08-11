@@ -766,6 +766,7 @@ object OpenAIDirectClient {
         val contentAggregator = StreamingContentAggregator()
         val thinkRouter = ThinkTagStreamRouter()
         var hasToolCalls = false
+        var safetyBlocked = false
 
         // 用于聚合流式的 tool_calls（OpenAI 会分多个 chunk 发送）
         val toolCallsMap = mutableMapOf<Int, Triple<String, String, StringBuilder>>() // index -> (id, name, arguments)
@@ -871,6 +872,9 @@ object OpenAIDirectClient {
                                     val finishReason = choice["finish_reason"]?.jsonPrimitive?.contentOrNull
                                     if (finishReason == "tool_calls") {
                                         Log.d(TAG, "Finish reason: tool_calls, 准备处理工具调用")
+                                    } else if (ProviderSafetyResponse.isSafetyReason(finishReason)) {
+                                        safetyBlocked = true
+                                        emitEvent(ProviderSafetyResponse.error(finishReason))
                                     }
                                 }
                             } catch (e: CancellationException) {
@@ -879,6 +883,7 @@ object OpenAIDirectClient {
                                 Log.w(TAG, "解析 SSE chunk 失败: ${e.message}")
                                 throw e
                             }
+                            if (safetyBlocked) break
                         }
                         lineBuffer.clear()
                     }
@@ -892,6 +897,14 @@ object OpenAIDirectClient {
                         // SSE 注释/心跳，忽略
                     }
                 }
+            }
+
+            if (safetyBlocked) {
+                return OpenAIParseResult(
+                    hasToolCalls = false,
+                    fullText = "",
+                    reasoningContent = "",
+                )
             }
 
             // 冲刷 thinkRouter 剩余内容

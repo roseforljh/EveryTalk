@@ -11,6 +11,16 @@
 !LICENSE
 !*.md
 
+# ===== 允许独立服务源码 =====
+!services/
+!services/**
+services/**/node_modules/
+services/**/.wrangler/
+services/**/.dev.vars
+services/**/.env*
+services/**/coverage/
+services/**/wrangler.jsonc
+
 # ===== 允许 Gradle 相关文件 =====
 !gradle/
 !gradle/**

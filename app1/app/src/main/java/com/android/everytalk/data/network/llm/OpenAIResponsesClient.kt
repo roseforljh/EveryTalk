@@ -491,6 +491,7 @@ object OpenAIResponsesClient {
         val fullText = StringBuilder()
         val fullReasoningContent = StringBuilder()
         var hasToolCalls = false
+        var safetyBlocked = false
         val streamedOutputItems = linkedMapOf<String, JsonElement>()
         var completedOutputItems: List<JsonElement>? = null
         var finalUsage: TokenUsage? = null
@@ -527,6 +528,14 @@ object OpenAIResponsesClient {
                                     "response.output_text.done" -> {
                                         // 文本完成，不需要额外处理
                                     }
+                                    "response.refusal.delta" -> {
+                                        val delta = event["delta"]?.jsonPrimitive?.contentOrNull.orEmpty()
+                                        if (delta.isNotEmpty()) {
+                                            fullText.append(delta)
+                                            emitEvent(AppStreamEvent.Content(delta, null, "refusal"))
+                                        }
+                                    }
+                                    "response.refusal.done" -> Unit
                                     "response.function_call_arguments.delta" -> {
                                         val callId = event["call_id"]?.jsonPrimitive?.contentOrNull
                                             ?: event["item_id"]?.jsonPrimitive?.contentOrNull ?: ""
@@ -657,6 +666,33 @@ object OpenAIResponsesClient {
                                             emitEvent(AppStreamEvent.Usage(parsedUsage))
                                         }
                                     }
+                                    "response.incomplete" -> {
+                                        val responseObject = event["response"] as? JsonObject
+                                        val reason = (responseObject?.get("incomplete_details") as? JsonObject)
+                                            ?.get("reason")
+                                            ?.jsonPrimitive
+                                            ?.contentOrNull
+                                        if (ProviderSafetyResponse.isSafetyReason(reason)) {
+                                            safetyBlocked = true
+                                            emitEvent(ProviderSafetyResponse.error(reason))
+                                        }
+                                    }
+                                    "response.failed" -> {
+                                        val responseObject = event["response"] as? JsonObject
+                                        val errorObject = responseObject?.get("error") as? JsonObject
+                                        val reason = errorObject?.get("code")?.jsonPrimitive?.contentOrNull
+                                            ?: errorObject?.get("type")?.jsonPrimitive?.contentOrNull
+                                        if (ProviderSafetyResponse.isSafetyReason(reason)) {
+                                            safetyBlocked = true
+                                            emitEvent(ProviderSafetyResponse.error(reason))
+                                        } else {
+                                            val message = errorObject?.get("message")
+                                                ?.jsonPrimitive
+                                                ?.contentOrNull
+                                                ?: "Responses API 请求失败"
+                                            throw IllegalStateException(message)
+                                        }
+                                    }
                                     "error" -> {
                                         val errorMsg = event["message"]?.jsonPrimitive?.contentOrNull
                                             ?: event["error"]?.let { errEl ->
@@ -671,6 +707,7 @@ object OpenAIResponsesClient {
                                 Log.w(TAG, "解析 Responses SSE 事件失败: ${e.message}")
                                 throw e
                             }
+                            if (safetyBlocked) break
                         }
                         lineBuffer.clear()
                     }
@@ -687,6 +724,16 @@ object OpenAIResponsesClient {
                         // 心跳
                     }
                 }
+            }
+
+            if (safetyBlocked) {
+                return ResponsesParseResult(
+                    hasToolCalls = false,
+                    fullText = "",
+                    reasoningContent = "",
+                    outputItems = emptyList(),
+                    usage = finalUsage,
+                )
             }
 
             // 发送聚合的工具调用
