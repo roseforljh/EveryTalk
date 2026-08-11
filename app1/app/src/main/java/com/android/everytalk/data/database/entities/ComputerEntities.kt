@@ -5,6 +5,7 @@ import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.android.everytalk.data.computer.Computer
+import com.android.everytalk.data.computer.ComputerAuditEvent
 import com.android.everytalk.data.computer.ComputerAuthKind
 import com.android.everytalk.data.computer.ComputerCapabilities
 import com.android.everytalk.data.computer.ComputerCredentialState
@@ -328,6 +329,15 @@ fun ComputerPreview.toEntity(): ComputerPreviewEntity = ComputerPreviewEntity(
     status = status.name,
     createdAt = createdAt,
     expiresAt = expiresAt,
+)
+
+fun ComputerAuditEventEntity.toModel(): ComputerAuditEvent = ComputerAuditEvent(
+    id = id,
+    computerId = computerId,
+    eventType = eventType,
+    outcome = outcome,
+    safeSummary = safeSummary,
+    createdAt = createdAt,
 )
 
 private inline fun <reified T : Enum<T>> enumValueOrDefault(value: String, default: T): T =

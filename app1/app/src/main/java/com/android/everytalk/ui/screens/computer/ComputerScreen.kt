@@ -89,6 +89,7 @@ fun ComputerScreen(
     var prepared by remember { mutableStateOf<PreparedComputerAdd?>(null) }
     var hostKey by remember { mutableStateOf<com.android.everytalk.data.computer.HostKeyProbeResult?>(null) }
     val latestPrepared by rememberUpdatedState(prepared)
+    ComputerSecureWindowEffect(showAddCard)
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -164,10 +165,12 @@ fun ComputerScreen(
         errorText = null
         isBusy = true
         scope.launch {
+            var addedComputer: com.android.everytalk.data.computer.Computer? = null
             try {
                 val added = withContext(Dispatchers.IO) {
                     viewModel.addConfirmedComputer(current.request, confirmed)
                 }
+                addedComputer = added
                 if (
                     added.runMode == ComputerRunMode.CONTAINER &&
                     added.status == ComputerStatus.CONFIGURATION_REQUIRED
@@ -184,9 +187,23 @@ fun ComputerScreen(
                 form = ComputerAddFormState()
                 showAddCard = false
             } catch (error: Throwable) {
-                errorText = context.localizeUiMessage(
+                val localizedError = context.localizeUiMessage(
                     error.message ?: context.getString(R.string.unknown_error),
                 )
+                val savedComputer = addedComputer
+                if (savedComputer != null) {
+                    prepared = null
+                    progressText = null
+                    errorText = null
+                    form = ComputerAddFormState()
+                    showAddCard = false
+                    viewModel.showSnackbar(
+                        context.getString(R.string.computer_add_saved_needs_repair, localizedError),
+                    )
+                    navController.navigate(Screen.computerDetail(savedComputer.id))
+                } else {
+                    errorText = localizedError
+                }
             } finally {
                 current.clear()
                 if (prepared === current) prepared = null

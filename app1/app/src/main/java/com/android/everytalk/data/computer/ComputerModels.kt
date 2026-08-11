@@ -168,6 +168,25 @@ data class ComputerPreview(
     val expiresAt: Long? = null,
 )
 
+/**
+ * 服务器详情页展示的本地安全审计记录。
+ * safeSummary 只能保存经过筛选的短说明，禁止放入 Host、用户名、命令、输出或 Secret 值。
+ */
+data class ComputerAuditEvent(
+    val id: String,
+    val computerId: String,
+    val eventType: String,
+    val outcome: String,
+    val safeSummary: String? = null,
+    val createdAt: Long,
+)
+
+/** 删除服务器后的远端清理结果。无论远端是否在线，本地删除都可以完成。 */
+data class ComputerDeleteResult(
+    val remoteKeyRemoved: Boolean,
+    val remoteWorkspaceCleanupSucceeded: Boolean = true,
+)
+
 data class HostKeyProbeResult(
     val host: String,
     val resolvedAddress: String,

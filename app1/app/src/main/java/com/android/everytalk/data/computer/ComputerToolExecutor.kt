@@ -24,14 +24,14 @@ class ComputerToolExecutor(
     context: Context,
     private val repository: ComputerRepository,
     private val workspaceManager: ComputerWorkspaceManager,
+    private val previewManager: ComputerPreviewManager,
+    private val secretManager: ComputerWorkspaceSecretManager,
     private val attachmentBridge: ComputerAttachmentBridge? = null,
     private val publicPreviewConfirmer: suspend (ComputerPublicPreviewRequest) -> Boolean = { false },
 ) : AutoCloseable {
     private val fileTransfer = ComputerFileTransfer()
     private val runtimeEnvelope = ComputerRuntimeEnvelope(context.applicationContext, fileTransfer)
     private val terminalManager = ComputerTerminalManager(repository)
-    private val previewManager = ComputerPreviewManager(repository)
-    private val secretManager = ComputerWorkspaceSecretManager(repository)
     private val completedResults = ConcurrentHashMap<String, JsonElement>()
 
     suspend fun execute(
@@ -466,9 +466,17 @@ class ComputerToolExecutor(
         else -> "Computer Tool 已完成"
     }
 
+    /** 删除 Workspace 前关闭仍在本机进程中的 PTY，避免留下失效会话。 */
+    fun closeWorkspace(workspaceId: String) {
+        terminalManager.closeWorkspace(workspaceId)
+    }
+
+    fun closeTransientConnections() {
+        terminalManager.closeActiveSessions()
+    }
+
     override fun close() {
         terminalManager.close()
-        previewManager.close()
         completedResults.clear()
     }
 }

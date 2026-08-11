@@ -114,6 +114,29 @@ internal class ComputerDedicatedKeyManager(private val sshClient: ComputerSshCli
         removeAuthorizedKey(connection, authorizedKeyLine)
     }
 
+    /** 删除服务器时按固定注释移除当前 Computer 的专用公钥，保留用户其他 Key。 */
+    suspend fun removeForComputer(connection: ComputerSshConnection, computerId: String) {
+        ComputerIdentifier.requireValid(computerId, "Computer ID")
+        val input = "$computerId\n".toByteArray()
+        try {
+            val result = connection.execute(
+                command = REMOVE_COMPUTER_AUTHORIZED_KEY_COMMAND,
+                stdin = input,
+                timeoutMillis = AUTHORIZED_KEYS_TIMEOUT_MILLIS,
+                maxOutputBytes = 64 * 1024,
+            )
+            if (result.timedOut || result.exitCode != 0) {
+                throw ComputerException(
+                    ComputerErrorCodes.AUTH_FAILED,
+                    "无法移除服务器专用 SSH Key",
+                    retryable = true,
+                )
+            }
+        } finally {
+            input.fill(0)
+        }
+    }
+
     private suspend fun appendAuthorizedKey(connection: ComputerSshConnection, keyLine: String) {
         val input = "$keyLine\n".toByteArray()
         try {
@@ -179,6 +202,19 @@ private val REMOVE_AUTHORIZED_KEY_COMMAND = """
     status=0
     grep -Fvx -- "${'$'}everytalk_key" "${'$'}key_file" > "${'$'}temporary" || status=${'$'}?
     if [ "${'$'}status" -gt 1 ]; then rm -f "${'$'}temporary"; exit "${'$'}status"; fi
+    chmod 600 "${'$'}temporary"
+    mv -f "${'$'}temporary" "${'$'}key_file"
+""".trimIndent()
+
+private val REMOVE_COMPUTER_AUTHORIZED_KEY_COMMAND = """
+    set -eu
+    umask 077
+    key_file="${'$'}HOME/.ssh/authorized_keys"
+    [ -f "${'$'}key_file" ] || exit 0
+    IFS= read -r computer_id
+    marker="everytalk:${'$'}computer_id"
+    temporary="${'$'}key_file.everytalk.${'$'}${'$'}"
+    awk -v marker="${'$'}marker" '{ if (${'$'}NF != marker) print }' "${'$'}key_file" > "${'$'}temporary"
     chmod 600 "${'$'}temporary"
     mv -f "${'$'}temporary" "${'$'}key_file"
 """.trimIndent()

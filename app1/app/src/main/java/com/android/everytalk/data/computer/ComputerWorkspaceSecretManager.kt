@@ -41,9 +41,11 @@ class ComputerWorkspaceSecretManager(private val repository: ComputerRepository)
         try {
             repository.dao().upsertWorkspaceSecretMetadata(metadata)
         } catch (error: Throwable) {
-            repository.credentialStore().deleteWorkspaceSecret(metadata.id)
+            // 新建失败时清理孤立密文；更新沿用原 ID，保留已经原子替换的新值，避免误删旧 Secret。
+            if (existing == null) repository.credentialStore().deleteWorkspaceSecret(metadata.id)
             throw error
         }
+        repository.recordAudit(workspace.computerId, "WORKSPACE_SECRET_SAVED", "SUCCESS", metadata.name)
         return metadata.toSecretModel()
     }
 
@@ -70,8 +72,12 @@ class ComputerWorkspaceSecretManager(private val repository: ComputerRepository)
 
     suspend fun delete(workspaceId: String, name: String) {
         val metadata = repository.dao().getWorkspaceSecret(workspaceId, name) ?: return
+        val computerId = repository.dao().getWorkspaceById(workspaceId)?.computerId
         repository.credentialStore().deleteWorkspaceSecret(metadata.id)
         repository.dao().deleteWorkspaceSecretMetadata(metadata.id)
+        if (computerId != null) {
+            repository.recordAudit(computerId, "WORKSPACE_SECRET_DELETED", "SUCCESS", metadata.name)
+        }
     }
 
     suspend fun deleteAll(workspaceId: String) {

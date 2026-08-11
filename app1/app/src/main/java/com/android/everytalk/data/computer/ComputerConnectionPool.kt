@@ -50,8 +50,17 @@ class ComputerConnectionPool(
         computer: Computer,
         block: suspend (ComputerSshConnection) -> T,
     ): T {
-        val lease = acquire(computer)
+        var lease = acquire(computer)
+        val startedBefore = lease.connection.startedChannelCount
         return try {
+            block(lease.connection)
+        } catch (error: ComputerSshChannelOpenException) {
+            if (!shouldRetryComputerChannelOpen(startedBefore, lease.connection.startedChannelCount)) {
+                throw error
+            }
+            lease.invalidate()
+            lease.close()
+            lease = acquire(computer)
             block(lease.connection)
         } finally {
             lease.close()
@@ -86,6 +95,10 @@ class ComputerConnectionPool(
         entries.clear()
     }
 }
+
+/** 只有本次 block 尚未成功启动任何 Channel 时，重连重试才不会重放远端副作用。 */
+internal fun shouldRetryComputerChannelOpen(startedBefore: Long, startedAfter: Long): Boolean =
+    startedBefore == startedAfter
 
 class ComputerConnectionLease internal constructor(
     val connection: ComputerSshConnection,

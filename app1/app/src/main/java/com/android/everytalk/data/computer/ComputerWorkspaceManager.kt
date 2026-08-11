@@ -77,6 +77,62 @@ class ComputerWorkspaceManager(private val repository: ComputerRepository) {
         repository.dao().deleteWorkspace(workspaceId)
     }
 
+    /**
+     * 按详情页选择清理远端 Workspace。
+     * Container 模式始终删除对应 Container；Host Path 只有二次确认后才删除。
+     */
+    suspend fun deleteRemote(workspaceId: String, deleteFiles: Boolean) {
+        ComputerIdentifier.requireValid(workspaceId, "Workspace ID")
+        val workspace = repository.dao().getWorkspaceById(workspaceId)?.toModel()
+            ?: throw ComputerException(ComputerErrorCodes.WORKSPACE_NOT_READY, "Workspace 不存在")
+        repository.dao().upsertWorkspace(workspace.copy(status = ComputerWorkspaceStatus.DELETING).toEntity())
+        try {
+            repository.withConnection(workspace.computerId, requireReady = false) { connection, computer ->
+                val result = when (workspace.runMode) {
+                    ComputerRunMode.CONTAINER -> {
+                        val helper = if (computer.username == "root") {
+                            CONTAINER_HELPER
+                        } else {
+                            "sudo -n -- $CONTAINER_HELPER"
+                        }
+                        connection.execute(
+                            command = "$helper delete-workspace $workspaceId $deleteFiles",
+                            timeoutMillis = WORKSPACE_COMMAND_TIMEOUT_MILLIS,
+                            maxOutputBytes = 64 * 1024,
+                        )
+                    }
+                    ComputerRunMode.DIRECT -> {
+                        if (!deleteFiles) return@withConnection
+                        connection.execute(
+                            command = directWorkspaceDeleteCommand(workspaceId),
+                            timeoutMillis = WORKSPACE_COMMAND_TIMEOUT_MILLIS,
+                            maxOutputBytes = 64 * 1024,
+                        )
+                    }
+                }
+                if (result.timedOut || result.exitCode != 0) {
+                    throw ComputerException(
+                        ComputerErrorCodes.WORKSPACE_NOT_READY,
+                        "清理远端 Workspace 失败",
+                        retryable = true,
+                    )
+                }
+            }
+        } catch (error: Throwable) {
+            repository.dao().upsertWorkspace(workspace.copy(status = ComputerWorkspaceStatus.ERROR).toEntity())
+            throw error
+        }
+    }
+
+    private fun directWorkspaceDeleteCommand(workspaceId: String): String = """
+        set -eu
+        workspace="${'$'}HOME/.everytalk/workspaces/$workspaceId"
+        case "${'$'}workspace" in
+            */.everytalk/workspaces/ws_*) rm -rf -- "${'$'}workspace" ;;
+            *) exit 61 ;;
+        esac
+    """.trimIndent()
+
     private fun newWorkspace(computer: Computer, conversationId: String): ComputerWorkspace {
         val id = "ws_${UUID.randomUUID().toString().replace("-", "")}"
         ComputerIdentifier.requireValid(id, "Workspace ID")

@@ -30,7 +30,8 @@ class ComputerContainerHelperContractTest {
             "run" to 4,
             "run-background" to 4,
             "terminal" to 1,
-            "open-public" to 3,
+            "open-public" to 4,
+            "preview-status" to 1,
             "close-public" to 1,
             "delete-workspace" to 2,
         )
@@ -42,6 +43,7 @@ class ComputerContainerHelperContractTest {
         assertTrue(source.contains("Container 归属校验失败"))
         assertTrue(source.contains("Preview 归属校验失败"))
         assertTrue(source.contains("已安装 helper 禁止重复 install"))
+        assertTrue(source.contains("/usr/bin/timeout --signal=TERM"))
         assertFalse(source.contains("docker \$@"))
     }
 

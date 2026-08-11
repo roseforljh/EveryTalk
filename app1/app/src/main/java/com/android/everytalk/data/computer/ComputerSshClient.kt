@@ -1,6 +1,7 @@
 package com.android.everytalk.data.computer
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
@@ -34,6 +35,7 @@ import java.util.Base64
 import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 
 private const val DEFAULT_CONNECT_TIMEOUT_MILLIS = 15_000
@@ -407,9 +409,14 @@ class ComputerSshClient internal constructor(
 class ComputerSshConnection internal constructor(private val client: SSHClient) : Closeable {
     private val resources = CopyOnWriteArraySet<Closeable>()
     private val closed = AtomicBoolean(false)
+    private val startedChannels = AtomicLong(0)
 
     val isUsable: Boolean
         get() = !closed.get() && client.isConnected && client.isAuthenticated
+
+    /** 连接池用它判断失败前是否已经启动过本次 Channel，防止自动重放有副作用操作。 */
+    internal val startedChannelCount: Long
+        get() = startedChannels.get()
 
     suspend fun execute(
         command: String,
@@ -420,10 +427,9 @@ class ComputerSshConnection internal constructor(private val client: SSHClient) 
         require(command.isNotBlank()) { "SSH 命令不能为空" }
         require(timeoutMillis > 0) { "命令超时必须大于 0" }
         require(maxOutputBytes > 0) { "输出上限必须大于 0" }
-        ensureUsable()
-
-        client.startSession().use { session ->
-            val remoteCommand = session.exec(command)
+        openChannel { client.startSession() }.use { session ->
+            val remoteCommand = openChannel { session.exec(command) }
+            startedChannels.incrementAndGet()
             try {
                 coroutineScope {
                     val stdout = async(Dispatchers.IO) {
@@ -464,17 +470,18 @@ class ComputerSshConnection internal constructor(private val client: SSHClient) 
     }
 
     suspend fun <T> withSftp(block: (SFTPClient) -> T): T = withContext(Dispatchers.IO) {
-        ensureUsable()
-        client.newSFTPClient().use(block)
+        val sftp = openChannel { client.newSFTPClient() }
+        startedChannels.incrementAndGet()
+        sftp.use(block)
     }
 
     suspend fun openPty(columns: Int = 120, rows: Int = 40): ComputerPtyHandle = withContext(Dispatchers.IO) {
         require(columns > 0 && rows > 0) { "PTY 尺寸必须大于 0" }
-        ensureUsable()
-        val session = client.startSession()
+        val session = openChannel { client.startSession() }
         try {
             session.allocatePTY("xterm-256color", columns, rows, 0, 0, emptyMap<PTYMode, Int>())
             val shell = session.startShell()
+            startedChannels.incrementAndGet()
             ComputerPtyHandle(session, shell) { handle -> resources.remove(handle) }
                 .also(resources::add)
         } catch (error: Throwable) {
@@ -513,6 +520,18 @@ class ComputerSshConnection internal constructor(private val client: SSHClient) 
         if (!isUsable) throw IOException("SSH connection is closed")
     }
 
+    /** 只包装远端命令尚未开始前的 Channel 建立失败，供连接池安全重连。 */
+    private inline fun <T> openChannel(block: () -> T): T {
+        try {
+            ensureUsable()
+            return block()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            throw ComputerSshChannelOpenException(error)
+        }
+    }
+
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
         resources.toList().forEach { resource -> runCatching { resource.close() } }
@@ -521,6 +540,11 @@ class ComputerSshConnection internal constructor(private val client: SSHClient) 
     }
 
 }
+
+internal class ComputerSshChannelOpenException(cause: Throwable) : IOException(
+    "SSH Channel 建立失败",
+    cause,
+)
 
 class ComputerPtyHandle internal constructor(
     private val session: Session,

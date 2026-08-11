@@ -40,7 +40,22 @@ class ComputerRepository(
         selections.associate { it.conversationId to it.selectedComputerId }
     }
 
+    fun observeWorkspaces(computerId: String): Flow<List<ComputerWorkspace>> =
+        dao.observeWorkspaces(computerId).map { entities -> entities.map { it.toModel() } }
+
+    fun observePreviews(workspaceId: String): Flow<List<ComputerPreview>> =
+        dao.observePreviews(workspaceId).map { entities -> entities.map { it.toModel() } }
+
+    fun observeAuditEvents(computerId: String): Flow<List<ComputerAuditEvent>> =
+        dao.observeAuditEvents(computerId).map { entities -> entities.map { it.toModel() } }
+
     suspend fun getComputer(computerId: String): Computer? = dao.getComputer(computerId)?.toModel(json)
+
+    suspend fun getWorkspace(workspaceId: String): ComputerWorkspace? =
+        dao.getWorkspaceById(workspaceId)?.toModel()
+
+    suspend fun getWorkspaces(computerId: String): List<ComputerWorkspace> =
+        dao.getWorkspacesForComputer(computerId).map { it.toModel() }
 
     suspend fun getSelectedComputer(conversationId: String): Computer? {
         val computerId = dao.getSelectedComputerId(conversationId) ?: return null
@@ -98,7 +113,7 @@ class ComputerRepository(
             }
             val status = if (
                 computer.runMode == ComputerRunMode.CONTAINER &&
-                (!capabilities.dockerAvailable || computer.bootstrapVersion == null)
+                (!capabilities.dockerAvailable || computer.bootstrapVersion != COMPUTER_BOOTSTRAP_VERSION)
             ) {
                 ComputerStatus.CONFIGURATION_REQUIRED
             } else {
@@ -129,6 +144,8 @@ class ComputerRepository(
 
     suspend fun refreshComputer(computerId: String): Computer {
         val current = requireComputer(computerId)
+        // 用户触发“重连并探测”时必须建立新 Transport，确保再次核对固定 Host Key。
+        connectionPool.disconnect(computerId)
         dao.updateComputerStatus(computerId, ComputerStatus.PROBING.name, null)
         return try {
             val capabilities = connectionPool.withConnection(current) { connection ->
@@ -137,7 +154,7 @@ class ComputerRepository(
             val refreshed = current.copy(
                 status = if (
                     current.runMode == ComputerRunMode.CONTAINER &&
-                    (!capabilities.dockerAvailable || current.bootstrapVersion == null)
+                    (!capabilities.dockerAvailable || current.bootstrapVersion != COMPUTER_BOOTSTRAP_VERSION)
                 ) {
                     ComputerStatus.CONFIGURATION_REQUIRED
                 } else {
@@ -227,7 +244,7 @@ class ComputerRepository(
         )
         dao.upsertComputer(updated.toEntity(json))
         recordAudit(computerId, "CREDENTIAL_REPLACED", "SUCCESS", null)
-        return refreshComputer(computerId)
+        return tryUpgradeToDedicatedKey(refreshComputer(computerId))
     }
 
     suspend fun probeReplacementHostKey(computerId: String): HostKeyProbeResult {
@@ -252,7 +269,7 @@ class ComputerRepository(
             updatedAt = System.currentTimeMillis(),
         )
         dao.upsertComputer(updated.toEntity(json))
-        recordAudit(computerId, "HOST_KEY_REPLACED", "CONFIRMED", replacement.fingerprint)
+        recordAudit(computerId, "HOST_KEY_REPLACED", "CONFIRMED", null)
         return refreshComputer(computerId)
     }
 
@@ -263,18 +280,74 @@ class ComputerRepository(
         recordAudit(computerId, "DISCONNECT", "SUCCESS", null)
     }
 
-    suspend fun deleteComputer(computerId: String) {
-        requireComputer(computerId)
+    /** Container 模式允许用户在详情页显式调整是否访问 VPS 私有网络。 */
+    suspend fun setPrivateNetworkAllowed(computerId: String, allowed: Boolean): Computer {
+        val current = requireComputer(computerId)
+        if (current.runMode != ComputerRunMode.CONTAINER) {
+            throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "Direct SSH 模式沿用 SSH 账号的网络权限")
+        }
+        val helper = if (current.username == "root") {
+            "/usr/local/libexec/everytalk-containerctl"
+        } else {
+            "sudo -n -- /usr/local/libexec/everytalk-containerctl"
+        }
+        val mode = if (allowed) "private" else "restricted"
+        val result = withConnection(computerId) { connection, _ ->
+            connection.execute(
+                command = "$helper set-network $mode",
+                timeoutMillis = 30_000,
+                maxOutputBytes = 64 * 1024,
+            )
+        }
+        if (result.timedOut || result.exitCode != 0) {
+            throw ComputerException(
+                ComputerErrorCodes.HELPER_INTEGRITY_FAILED,
+                "更新 Container 网络权限失败",
+                retryable = true,
+            )
+        }
+        val updated = current.copy(
+            allowPrivateNetwork = allowed,
+            updatedAt = System.currentTimeMillis(),
+        )
+        dao.upsertComputer(updated.toEntity(json))
+        recordAudit(computerId, "PRIVATE_NETWORK", "SUCCESS", if (allowed) "已允许" else "已阻止")
+        return updated
+    }
+
+    /**
+     * 删除本地服务器记录前尝试移除 EveryTalk 专用公钥。
+     * 远端不可达时仍销毁本地凭据，并通过返回值让 UI 准确提示残留公钥。
+     */
+    suspend fun deleteComputer(computerId: String): ComputerDeleteResult {
+        val computer = requireComputer(computerId)
         dao.updateComputerStatus(computerId, ComputerStatus.DELETING.name, null)
+        val remoteKeyRemoved = if (computer.credentialState == ComputerCredentialState.DEDICATED_KEY) {
+            runCatching {
+                withConnection(computerId, requireReady = false) { connection, _ ->
+                    dedicatedKeyManager.removeForComputer(connection, computerId)
+                }
+            }.isSuccess
+        } else {
+            true
+        }
         connectionPool.disconnect(computerId)
         credentialStore.deleteComputerCredential(computerId)
         dao.deleteComputer(computerId)
+        return ComputerDeleteResult(remoteKeyRemoved = remoteKeyRemoved)
     }
 
     suspend fun recoverLocalState() {
         dao.markInterruptedExecutionsUnknown()
         dao.markPrivatePreviewsStopped()
+        dao.markOutdatedContainerConfiguration(COMPUTER_BOOTSTRAP_VERSION)
         connectionPool.closeIdle(maxIdleMillis = 0)
+    }
+
+    /** 手机网络发生切换时丢弃旧 Transport，下一次操作会重新解析并验证固定 Host Key。 */
+    suspend fun handleNetworkChanged() {
+        connectionPool.close()
+        dao.markPrivatePreviewsStopped()
     }
 
     suspend fun migrateConversationId(sourceConversationId: String, targetConversationId: String) {
@@ -312,7 +385,7 @@ class ComputerRepository(
     private suspend fun requireComputer(computerId: String): Computer = getComputer(computerId)
         ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
 
-    private suspend fun recordAudit(
+    internal suspend fun recordAudit(
         computerId: String,
         eventType: String,
         outcome: String,

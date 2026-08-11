@@ -598,6 +598,45 @@ class MainActivity : AppCompatActivity() {
                                     )
                                 }
                                 composable(
+                                    route = Screen.COMPUTER_DETAIL_SCREEN,
+                                    arguments = listOf(
+                                        androidx.navigation.navArgument("computerId") {
+                                            type = androidx.navigation.NavType.StringType
+                                        },
+                                    ),
+                                    enterTransition = {
+                                        androidx.compose.animation.slideInHorizontally(
+                                            initialOffsetX = { fullWidth -> fullWidth },
+                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
+                                        )
+                                    },
+                                    exitTransition = {
+                                        androidx.compose.animation.slideOutHorizontally(
+                                            targetOffsetX = { fullWidth -> fullWidth },
+                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
+                                        )
+                                    },
+                                    popEnterTransition = {
+                                        androidx.compose.animation.slideInHorizontally(
+                                            initialOffsetX = { fullWidth -> -fullWidth / 4 },
+                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
+                                        )
+                                    },
+                                    popExitTransition = {
+                                        androidx.compose.animation.slideOutHorizontally(
+                                            targetOffsetX = { fullWidth -> fullWidth },
+                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
+                                        )
+                                    },
+                                ) { entry ->
+                                    val computerId = entry.arguments?.getString("computerId").orEmpty()
+                                    com.android.everytalk.ui.screens.computer.ComputerDetailScreen(
+                                        viewModel = appViewModel,
+                                        navController = navController,
+                                        computerId = computerId,
+                                    )
+                                }
+                                composable(
                                     route = Screen.APP_INFO_SCREEN,
                                     enterTransition = {
                                         androidx.compose.animation.slideInHorizontally(
@@ -722,16 +761,19 @@ class MainActivity : AppCompatActivity() {
                                            animationSpec = tween(300, easing = FastOutSlowInEasing)
                                        )
                                    }
-                              ) {
-                                  val selectedApiConfig by appViewModel.selectedApiConfig.collectAsState()
-                                  com.android.everytalk.ui.screens.MainScreen.chat.voice.ui.VoiceInputScreen(
+                               ) {
+                                   val selectedApiConfig by appViewModel.selectedApiConfig.collectAsState()
+                                   com.android.everytalk.ui.screens.MainScreen.chat.voice.ui.VoiceInputScreen(
                                       onClose = { navController.popBackStack() },
                                       selectedApiConfig = selectedApiConfig,
                                       viewModel = appViewModel
-                                  )
-                              }
-                           }
-                       }
+                                   )
+                               }
+                            }
+                            com.android.everytalk.ui.screens.computer.ComputerPublicPreviewConfirmationDialog(
+                                viewModel = appViewModel,
+                            )
+                        }
                }
                     }
                 }

@@ -4,6 +4,7 @@
     tools:ignore="ExtraText"> <!-- 这个 tools:ignore="ExtraText" 通常与IDE lint关于额外文本的警告有关 -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />

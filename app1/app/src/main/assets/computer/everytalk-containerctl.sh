@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-VERSION="1"
+VERSION="2"
 HELPER_PATH="/usr/local/libexec/everytalk-containerctl"
 RUNTIME_WRAPPER_PATH="/usr/local/libexec/everytalk-runtime-wrapper"
 DOCKERFILE_PATH="/usr/local/share/everytalk/Dockerfile"
@@ -200,20 +200,46 @@ open_terminal() {
     docker exec -it "$name" /bin/bash
 }
 
+remove_preview_rules() {
+    preview_id="${1:-}"
+    valid_id "$preview_id" || fail 'Preview ID 无效' 68
+    marker="everytalk-preview:$preview_id"
+    while :; do
+        rule_number="$(iptables -L DOCKER-USER --line-numbers -n 2>/dev/null | awk -v marker="$marker" 'index($0, marker) { print $1; exit }')"
+        [ -n "$rule_number" ] || break
+        case "$rule_number" in *[!0-9]*) fail 'Preview 网络规则编号无效' 73 ;; esac
+        iptables -D DOCKER-USER "$rule_number"
+    done
+}
+
 open_public_preview() {
     workspace_id="${1:-}"
     preview_id="${2:-}"
     remote_port="${3:-}"
+    expires_seconds="${4:-}"
     valid_id "$workspace_id" || fail 'Workspace ID 无效' 54
     valid_id "$preview_id" || fail 'Preview ID 无效' 68
     case "$remote_port" in ''|*[!0-9]*) fail 'Preview 端口无效' 69 ;; esac
     [ "$remote_port" -ge 1 ] && [ "$remote_port" -le 65535 ] || fail 'Preview 端口越界' 69
+    case "$expires_seconds" in ''|*[!0-9]*) fail 'Preview 有效期无效' 76 ;; esac
+    [ "$expires_seconds" -le 604800 ] || fail 'Preview 有效期越界' 76
     target="$(require_workspace_container "$workspace_id")"
     proxy="everytalk-$preview_id"
+    remove_preview_rules "$preview_id"
     if docker container inspect "$proxy" >/dev/null 2>&1; then
         managed="$(docker inspect -f '{{index .Config.Labels "com.everytalk.preview"}}' "$proxy")"
         [ "$managed" = "$preview_id" ] || fail '同名 Preview 不归 EveryTalk 管理' 71
         docker rm --force "$proxy" >/dev/null
+    fi
+    if [ "$expires_seconds" -eq 0 ]; then
+        set -- /usr/bin/socat "TCP-LISTEN:$remote_port,fork,reuseaddr" "TCP:$target:$remote_port"
+    else
+        # 到期后停止 socat，但让只读代理 Container 保持空闲并占住原 IP。
+        # 这样即使手机离线，端口也会失效，旧防火墙规则不会误套到复用该 IP 的其他 Container。
+        set -- /bin/sh -c '
+            /usr/bin/timeout --signal=TERM "$1" /usr/bin/socat "TCP-LISTEN:$2,fork,reuseaddr" "TCP:$3:$2" || true
+            exec sleep infinity
+        ' everytalk-preview "$expires_seconds" "$remote_port" "$target"
     fi
     docker run --detach \
         --name "$proxy" \
@@ -221,13 +247,14 @@ open_public_preview() {
         --label "com.everytalk.preview=$preview_id" \
         --label "com.everytalk.workspace=$workspace_id" \
         --label "com.everytalk.remote-port=$remote_port" \
+        --label "com.everytalk.expires-seconds=$expires_seconds" \
         --restart no \
         --read-only \
         --cap-drop ALL \
         --security-opt no-new-privileges:true \
         --network "$NETWORK" \
         --publish "$remote_port" \
-        "$IMAGE" /usr/bin/socat "TCP-LISTEN:$remote_port,fork,reuseaddr" "TCP:$target:$remote_port" >/dev/null
+        "$IMAGE" "$@" >/dev/null
     proxy_ip="$(docker inspect -f "{{with index .NetworkSettings.Networks \"$NETWORK\"}}{{.IPAddress}}{{end}}" "$proxy")"
     target_ip="$(docker inspect -f "{{with index .NetworkSettings.Networks \"$NETWORK\"}}{{.IPAddress}}{{end}}" "$target")"
     [ -n "$proxy_ip" ] && [ -n "$target_ip" ] || { docker rm --force "$proxy" >/dev/null; fail 'Preview 网络地址无效' 72; }
@@ -238,30 +265,40 @@ open_public_preview() {
     fi
     mapping="$(docker port "$proxy" "$remote_port/tcp" | head -n 1)"
     public_port="${mapping##*:}"
-    case "$public_port" in ''|*[!0-9]*) docker rm --force "$proxy" >/dev/null; fail '无法确定 Public Port' 72 ;; esac
+    case "$public_port" in
+        ''|*[!0-9]*) remove_preview_rules "$preview_id"; docker rm --force "$proxy" >/dev/null; fail '无法确定 Public Port' 72 ;;
+    esac
     printf 'public_port=%s\n' "$public_port"
+}
+
+preview_status() {
+    preview_id="${1:-}"
+    valid_id "$preview_id" || fail 'Preview ID 无效' 68
+    proxy="everytalk-$preview_id"
+    if ! docker container inspect "$proxy" >/dev/null 2>&1; then
+        printf 'status=missing\n'
+        return 0
+    fi
+    managed="$(docker inspect -f '{{index .Config.Labels "com.everytalk.preview"}}' "$proxy")"
+    everytalk_managed="$(docker inspect -f '{{index .Config.Labels "com.everytalk.managed"}}' "$proxy")"
+    [ "$everytalk_managed" = true ] && [ "$managed" = "$preview_id" ] || fail 'Preview 归属校验失败' 71
+    running="$(docker inspect -f '{{.State.Running}}' "$proxy")"
+    if [ "$running" = true ] && docker exec "$proxy" pgrep -x socat >/dev/null 2>&1; then
+        printf 'status=active\n'
+    else
+        printf 'status=inactive\n'
+    fi
 }
 
 close_public_preview() {
     preview_id="${1:-}"
     valid_id "$preview_id" || fail 'Preview ID 无效' 68
     proxy="everytalk-$preview_id"
+    remove_preview_rules "$preview_id"
     docker container inspect "$proxy" >/dev/null 2>&1 || return 0
     managed="$(docker inspect -f '{{index .Config.Labels "com.everytalk.preview"}}' "$proxy")"
     everytalk_managed="$(docker inspect -f '{{index .Config.Labels "com.everytalk.managed"}}' "$proxy")"
     [ "$everytalk_managed" = true ] && [ "$managed" = "$preview_id" ] || fail 'Preview 归属校验失败' 71
-    workspace_id="$(docker inspect -f '{{index .Config.Labels "com.everytalk.workspace"}}' "$proxy")"
-    remote_port="$(docker inspect -f '{{index .Config.Labels "com.everytalk.remote-port"}}' "$proxy")"
-    target="$(container_name "$workspace_id")"
-    proxy_ip="$(docker inspect -f "{{with index .NetworkSettings.Networks \"$NETWORK\"}}{{.IPAddress}}{{end}}" "$proxy")"
-    target_ip="$(docker inspect -f "{{with index .NetworkSettings.Networks \"$NETWORK\"}}{{.IPAddress}}{{end}}" "$target" 2>/dev/null || true)"
-    if [ -n "$proxy_ip" ] && [ -n "$target_ip" ]; then
-        while iptables -C DOCKER-USER -s "$proxy_ip/32" -d "$target_ip/32" -p tcp --dport "$remote_port" \
-            -m comment --comment "everytalk-preview:$preview_id" -j ACCEPT >/dev/null 2>&1; do
-            iptables -D DOCKER-USER -s "$proxy_ip/32" -d "$target_ip/32" -p tcp --dport "$remote_port" \
-                -m comment --comment "everytalk-preview:$preview_id" -j ACCEPT
-        done
-    fi
     docker rm --force "$proxy" >/dev/null
 }
 
@@ -298,7 +335,8 @@ case "$command_name" in
     run) require_exact_args 4 "$@"; run_workspace "$@" ;;
     run-background) require_exact_args 4 "$@"; run_workspace_background "$@" ;;
     terminal) require_exact_args 1 "$@"; open_terminal "$@" ;;
-    open-public) require_exact_args 3 "$@"; open_public_preview "$@" ;;
+    open-public) require_exact_args 4 "$@"; open_public_preview "$@" ;;
+    preview-status) require_exact_args 1 "$@"; preview_status "$@" ;;
     close-public) require_exact_args 1 "$@"; close_public_preview "$@" ;;
     delete-workspace) require_exact_args 2 "$@"; delete_workspace "$@" ;;
     *) fail 'helper 子命令无效' 63 ;;

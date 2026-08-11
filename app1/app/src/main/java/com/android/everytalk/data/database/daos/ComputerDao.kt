@@ -69,6 +69,9 @@ interface ComputerDao {
     @Query("SELECT * FROM computer_workspaces WHERE computerId = :computerId ORDER BY lastUsedAt DESC")
     fun observeWorkspaces(computerId: String): Flow<List<ComputerWorkspaceEntity>>
 
+    @Query("SELECT * FROM computer_workspaces WHERE computerId = :computerId ORDER BY lastUsedAt DESC")
+    suspend fun getWorkspacesForComputer(computerId: String): List<ComputerWorkspaceEntity>
+
     @Upsert
     suspend fun upsertWorkspace(workspace: ComputerWorkspaceEntity)
 
@@ -114,6 +117,24 @@ interface ComputerDao {
 
     @Query("SELECT * FROM computer_previews WHERE workspaceId = :workspaceId ORDER BY createdAt DESC")
     fun observePreviews(workspaceId: String): Flow<List<ComputerPreviewEntity>>
+
+    @Query("SELECT * FROM computer_previews WHERE workspaceId = :workspaceId ORDER BY createdAt DESC")
+    suspend fun getPreviews(workspaceId: String): List<ComputerPreviewEntity>
+
+    @Query("SELECT * FROM computer_previews WHERE visibility = 'PUBLIC' AND status = 'ACTIVE' AND expiresAt IS NOT NULL AND expiresAt <= :now")
+    suspend fun getExpiredPublicPreviews(now: Long = System.currentTimeMillis()): List<ComputerPreviewEntity>
+
+    @Query("SELECT * FROM computer_previews WHERE visibility = 'PUBLIC' AND status = 'ACTIVE'")
+    suspend fun getActivePublicPreviews(): List<ComputerPreviewEntity>
+
+    @Query("SELECT p.* FROM computer_previews p INNER JOIN computer_workspaces w ON w.id = p.workspaceId WHERE w.computerId = :computerId AND p.visibility = 'PUBLIC' AND p.status = 'ACTIVE' ORDER BY p.createdAt DESC")
+    suspend fun getActivePublicPreviewsForComputer(computerId: String): List<ComputerPreviewEntity>
+
+    @Query("UPDATE computers SET status = 'CONFIGURATION_REQUIRED', updatedAt = :updatedAt WHERE runMode = 'CONTAINER' AND status = 'READY' AND (bootstrapVersion IS NULL OR bootstrapVersion != :expectedVersion)")
+    suspend fun markOutdatedContainerConfiguration(
+        expectedVersion: String,
+        updatedAt: Long = System.currentTimeMillis(),
+    )
 
     @Query("SELECT * FROM computer_previews WHERE id = :previewId LIMIT 1")
     suspend fun getPreview(previewId: String): ComputerPreviewEntity?

@@ -23,6 +23,13 @@ import com.android.everytalk.data.safety.AiContentReportCategory
 import com.android.everytalk.data.safety.AiContentReportSubmissionResult
 import com.android.everytalk.data.computer.AddComputerRequest
 import com.android.everytalk.data.computer.Computer
+import com.android.everytalk.data.computer.ComputerAuditEvent
+import com.android.everytalk.data.computer.ComputerCredential
+import com.android.everytalk.data.computer.ComputerDeleteResult
+import com.android.everytalk.data.computer.ComputerPreview
+import com.android.everytalk.data.computer.ComputerPreviewOpenResult
+import com.android.everytalk.data.computer.ComputerWorkspace
+import com.android.everytalk.data.computer.ComputerWorkspaceSecret
 import com.android.everytalk.data.computer.HostKeyProbeResult
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
@@ -580,8 +587,112 @@ import java.util.TimeZone
     internal suspend fun AppViewModel.disconnectComputer(computerId: String) =
         computerManager.disconnect(computerId)
 
-    internal suspend fun AppViewModel.deleteComputer(computerId: String) =
-        computerManager.deleteComputer(computerId)
+    internal fun AppViewModel.observeComputerWorkspaces(computerId: String): Flow<List<ComputerWorkspace>> =
+        computerManager.observeWorkspaces(computerId)
+
+    internal fun AppViewModel.observeComputerPreviews(workspaceId: String): Flow<List<ComputerPreview>> =
+        computerManager.observePreviews(workspaceId)
+
+    internal fun AppViewModel.observeComputerWorkspaceSecrets(
+        workspaceId: String,
+    ): Flow<List<ComputerWorkspaceSecret>> = computerManager.observeWorkspaceSecrets(workspaceId)
+
+    internal fun AppViewModel.observeComputerAuditEvents(computerId: String): Flow<List<ComputerAuditEvent>> =
+        computerManager.observeAuditEvents(computerId)
+
+    internal suspend fun AppViewModel.saveComputerWorkspaceSecret(
+        workspaceId: String,
+        name: String,
+        value: CharArray,
+    ): ComputerWorkspaceSecret = computerManager.saveWorkspaceSecret(workspaceId, name, value)
+
+    internal suspend fun AppViewModel.deleteComputerWorkspaceSecret(workspaceId: String, name: String) =
+        computerManager.deleteWorkspaceSecret(workspaceId, name)
+
+    internal suspend fun AppViewModel.openComputerPrivatePreview(
+        workspace: ComputerWorkspace,
+        port: Int,
+        protocol: String,
+    ): ComputerPreviewOpenResult = computerManager.openPrivatePreview(workspace, port, protocol)
+
+    internal suspend fun AppViewModel.openComputerPublicPreview(
+        workspace: ComputerWorkspace,
+        port: Int,
+        protocol: String,
+        expiresInSeconds: Long?,
+    ): ComputerPreviewOpenResult = computerManager.openPublicPreview(
+        workspace,
+        port,
+        protocol,
+        expiresInSeconds,
+    )
+
+    internal suspend fun AppViewModel.stopComputerPreview(previewId: String) =
+        computerManager.stopPreview(previewId)
+
+    internal suspend fun AppViewModel.replaceComputerCredential(
+        computerId: String,
+        credential: ComputerCredential,
+    ): Computer = computerManager.replaceCredential(computerId, credential)
+
+    internal suspend fun AppViewModel.probeComputerReplacementHostKey(computerId: String): HostKeyProbeResult =
+        computerManager.probeReplacementHostKey(computerId)
+
+    internal suspend fun AppViewModel.confirmComputerReplacementHostKey(
+        computerId: String,
+        replacement: HostKeyProbeResult,
+    ): Computer = computerManager.confirmReplacementHostKey(computerId, replacement)
+
+    internal suspend fun AppViewModel.setComputerPrivateNetworkAllowed(
+        computerId: String,
+        allowed: Boolean,
+    ): Computer = computerManager.setPrivateNetworkAllowed(computerId, allowed)
+
+    internal suspend fun AppViewModel.deleteComputerWorkspace(
+        workspaceId: String,
+        deleteRemoteFiles: Boolean,
+    ) {
+        val deleted = computerManager.deleteWorkspace(workspaceId, deleteRemoteFiles)
+        stateHolder.conversationFunctionToggleStates.update { current ->
+            val state = current[deleted.conversationId] ?: return@update current
+            current + (deleted.conversationId to state.copy(agentEnabled = false))
+        }
+        if (stateHolder._currentConversationId.value == deleted.conversationId) {
+            stateHolder.agentActionGeneration.incrementAndGet()
+            stateHolder._isAgentEnabled.value = false
+            stateHolder._isAgentPreparing.value = false
+        }
+        persistenceManager.saveConversationFunctionToggleStates(
+            stateHolder.conversationFunctionToggleStates.value,
+        )
+    }
+
+    internal suspend fun AppViewModel.deleteComputer(
+        computerId: String,
+        cleanupContainers: Boolean,
+        deleteRemoteFiles: Boolean,
+    ): ComputerDeleteResult {
+        val affectedConversationIds = computerManager.selections.value
+            .filterValues { selectedComputerId -> selectedComputerId == computerId }
+            .keys
+        val result = computerManager.deleteComputer(computerId, cleanupContainers, deleteRemoteFiles)
+        if (affectedConversationIds.isNotEmpty()) {
+            stateHolder.conversationFunctionToggleStates.update { current ->
+                current.mapValues { (conversationId, state) ->
+                    if (conversationId in affectedConversationIds) state.copy(agentEnabled = false) else state
+                }
+            }
+            if (stateHolder._currentConversationId.value in affectedConversationIds) {
+                stateHolder.agentActionGeneration.incrementAndGet()
+                stateHolder._isAgentEnabled.value = false
+                stateHolder._isAgentPreparing.value = false
+            }
+            persistenceManager.saveConversationFunctionToggleStates(
+                stateHolder.conversationFunctionToggleStates.value,
+            )
+        }
+        return result
+    }
 
     internal fun AppViewModel.retryPendingAiContentReports() {
         viewModelScope.launch(Dispatchers.IO) {

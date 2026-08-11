@@ -6,7 +6,7 @@ import java.nio.CharBuffer
 import java.security.MessageDigest
 import java.util.EnumSet
 
-private const val BOOTSTRAP_VERSION = "1"
+internal const val COMPUTER_BOOTSTRAP_VERSION = "2"
 private const val SANDBOX_IMAGE = "everytalk-sandbox:1"
 private const val BOOTSTRAP_COMMAND_TIMEOUT_MILLIS = 20 * 60 * 1000L
 private const val BOOTSTRAP_OUTPUT_BYTES = 2 * 1024 * 1024
@@ -66,7 +66,7 @@ class ComputerProvisioner(private val context: Context) {
                 if (computer.allowPrivateNetwork) "set-network private" else "set-network restricted",
                 sudoPassword,
             )
-            return ComputerProvisionResult(BOOTSTRAP_VERSION, SANDBOX_IMAGE)
+            return ComputerProvisionResult(COMPUTER_BOOTSTRAP_VERSION, SANDBOX_IMAGE)
         } finally {
             sudoPassword?.fill('\u0000')
             runCatching {

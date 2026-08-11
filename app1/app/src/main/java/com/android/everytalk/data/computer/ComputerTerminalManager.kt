@@ -141,6 +141,21 @@ class ComputerTerminalManager(private val repository: ComputerRepository) : Clos
         closeSession(session)
     }
 
+    /** Workspace 被清理时关闭属于它的所有本地 PTY。 */
+    fun closeWorkspace(workspaceId: String) {
+        terminals.entries
+            .filter { (_, session) -> session.context.workspaceId == workspaceId }
+            .forEach { (terminalId, session) ->
+                if (terminals.remove(terminalId, session)) closeSession(session)
+            }
+    }
+
+    /** 前台通知的停止动作关闭全部当前 PTY，但保留管理器供后续新 Terminal 使用。 */
+    fun closeActiveSessions() {
+        terminals.values.forEach(::closeSession)
+        terminals.clear()
+    }
+
     private fun requireSession(context: ComputerRequestContext, terminalId: String): TerminalSession {
         val session = terminals[terminalId] ?: throw terminalLost()
         if (session.context != context) throw terminalLost()
@@ -161,8 +176,7 @@ class ComputerTerminalManager(private val repository: ComputerRepository) : Clos
     )
 
     override fun close() {
-        terminals.values.forEach(::closeSession)
-        terminals.clear()
+        closeActiveSessions()
         scope.cancel()
     }
 }

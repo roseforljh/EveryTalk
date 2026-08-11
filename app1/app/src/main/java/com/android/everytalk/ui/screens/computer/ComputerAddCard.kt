@@ -238,7 +238,9 @@ private fun ComputerTextField(
         singleLine = maxLines == 1,
         minLines = minLines,
         maxLines = maxLines,
-        keyboardOptions = KeyboardOptions(keyboardType = keyboardType),
+        keyboardOptions = KeyboardOptions(
+            keyboardType = if (isPassword) KeyboardType.Password else keyboardType,
+        ),
         visualTransformation = if (isPassword) PasswordVisualTransformation() else VisualTransformation.None,
     )
 }
@@ -268,6 +270,7 @@ internal fun ComputerHostKeyDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(stringResource(R.string.computer_host_key_body))
+                Text(stringResource(R.string.computer_host_key_endpoint, hostKey.host, hostKey.port))
                 Text(hostKey.fingerprint, style = MaterialTheme.typography.titleSmall)
                 Text(stringResource(R.string.computer_host_key_algorithm, hostKey.algorithm))
                 Text(stringResource(R.string.computer_host_key_address, hostKey.resolvedAddress))
