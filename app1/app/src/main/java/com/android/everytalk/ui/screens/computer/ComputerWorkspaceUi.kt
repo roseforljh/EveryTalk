@@ -41,6 +41,8 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.SecureFlagPolicy
 import com.android.everytalk.R
 import com.android.everytalk.data.computer.Computer
+import com.android.everytalk.data.computer.ComputerDiagnostics
+import com.android.everytalk.data.computer.ComputerFailureStage
 import com.android.everytalk.data.computer.ComputerPreview
 import com.android.everytalk.data.computer.ComputerPreviewVisibility
 import com.android.everytalk.data.computer.ComputerRunMode
@@ -94,6 +96,7 @@ internal fun ComputerWorkspaceCard(
             try {
                 withContext(Dispatchers.IO) { block() }
             } catch (error: Throwable) {
+                ComputerDiagnostics.logFailure(ComputerFailureStage.WORKSPACE_ACTION, error)
                 dialogError = error.message ?: actionFailedMessage
                 onMessage(dialogError.orEmpty())
             } finally {

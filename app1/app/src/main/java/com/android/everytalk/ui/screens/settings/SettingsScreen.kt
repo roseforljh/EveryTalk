@@ -298,6 +298,28 @@ fun SettingsScreen(
     var currentTabIndex by remember { mutableIntStateOf(0) }
     var showTabMenu by remember { mutableStateOf(false) }
     var showMcpAddDialog by remember { mutableStateOf(false) }
+    val settingsBackStackEntry = remember(navController) {
+        navController.getBackStackEntry(Screen.SETTINGS_SCREEN)
+    }
+    val requestedTabIndex by settingsBackStackEntry.savedStateHandle
+        .getStateFlow(Screen.SETTINGS_TAB_REQUEST_KEY, -1)
+        .collectAsState()
+    val importExportRequested by settingsBackStackEntry.savedStateHandle
+        .getStateFlow(Screen.SETTINGS_IMPORT_EXPORT_REQUEST_KEY, false)
+        .collectAsState()
+
+    LaunchedEffect(requestedTabIndex) {
+        if (requestedTabIndex in tabs.indices) {
+            currentTabIndex = requestedTabIndex
+            settingsBackStackEntry.savedStateHandle[Screen.SETTINGS_TAB_REQUEST_KEY] = -1
+        }
+    }
+    LaunchedEffect(importExportRequested) {
+        if (importExportRequested) {
+            showImportExportDialog = true
+            settingsBackStackEntry.savedStateHandle[Screen.SETTINGS_IMPORT_EXPORT_REQUEST_KEY] = false
+        }
+    }
 
     val topContentPadding = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + topButtonSize + 24.dp
     val bottomContentPadding = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 48.dp
@@ -892,24 +914,20 @@ fun SettingsScreen(
 }
 
 @Composable
-private fun SettingsTabMenu(
+internal fun SettingsTabMenu(
     expanded: Boolean,
     tabs: List<String>,
     currentTabIndex: Int,
     onTabSelected: (Int) -> Unit,
     onImportExport: () -> Unit,
     onOpenComputers: () -> Unit,
+    isComputerSelected: Boolean = false,
     onDismiss: () -> Unit
 ) {
     val isDark = isSystemInDarkTheme()
     val textColor = if (isDark) Color.White else Color(0xFF0D0D0D)
     val selectedColor = if (isDark) Color(0xFF6EB5FF) else Color(0xFF3B82F6)
     val subtextColor = if (isDark) Color.White.copy(alpha = 0.5f) else Color(0xFF0D0D0D).copy(alpha = 0.5f)
-
-    val sortedTabs = remember(tabs) {
-        tabs.mapIndexed { index, title -> index to title }
-            .sortedBy { it.second.length }
-    }
 
     AppFloatingCardPopup(
         visible = expanded,
@@ -922,7 +940,8 @@ private fun SettingsTabMenu(
         Column(
             modifier = Modifier.padding(vertical = 6.dp)
         ) {
-            sortedTabs.forEach { (index, title) ->
+            // 菜单顺序与设置页页签一致，服务器入口固定紧跟第三项 MCP。
+            tabs.forEachIndexed { index, title ->
                 val isSelected = index == currentTabIndex
                 Box(
                     modifier = Modifier
@@ -966,11 +985,21 @@ private fun SettingsTabMenu(
                 Text(
                     text = stringResource(R.string.settings_servers),
                     fontSize = 16.sp,
-                    fontWeight = FontWeight.Medium,
+                    fontWeight = if (isComputerSelected) FontWeight.SemiBold else FontWeight.Medium,
                     color = textColor,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                 )
+                if (isComputerSelected) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_check),
+                        contentDescription = null,
+                        tint = textColor,
+                        modifier = Modifier
+                            .align(Alignment.CenterStart)
+                            .size(12.dp),
+                    )
+                }
             }
             Box(
                 modifier = Modifier

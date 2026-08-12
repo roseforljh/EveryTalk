@@ -1,18 +1,27 @@
 package com.android.everytalk.ui.screens.computer
 
 import androidx.compose.foundation.border
+import androidx.compose.foundation.background
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -22,11 +31,9 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -34,7 +41,6 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
-import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -44,11 +50,16 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.SecureFlagPolicy
 import androidx.navigation.NavController
@@ -58,6 +69,8 @@ import com.android.everytalk.data.computer.ComputerAuditEvent
 import com.android.everytalk.data.computer.ComputerAuthKind
 import com.android.everytalk.data.computer.ComputerCredential
 import com.android.everytalk.data.computer.ComputerCredentialState
+import com.android.everytalk.data.computer.ComputerDiagnostics
+import com.android.everytalk.data.computer.ComputerFailureStage
 import com.android.everytalk.data.computer.ComputerRunMode
 import com.android.everytalk.data.computer.ComputerStatus
 import com.android.everytalk.data.computer.HostKeyProbeResult
@@ -73,6 +86,7 @@ import com.android.everytalk.statecontroller.refreshComputer
 import com.android.everytalk.statecontroller.replaceComputerCredential
 import com.android.everytalk.statecontroller.setComputerPrivateNetworkAllowed
 import com.android.everytalk.statecontroller.showSnackbar
+import com.android.everytalk.ui.components.floatingEdgeGradient
 import com.android.everytalk.ui.components.dialog.AppDialogShape
 import com.android.everytalk.ui.components.dialog.appDialogBorderColor
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.ChatAgentColor
@@ -81,7 +95,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ComputerDetailScreen(
     viewModel: AppViewModel,
@@ -110,6 +123,7 @@ fun ComputerDetailScreen(
             try {
                 withContext(Dispatchers.IO) { block() }
             } catch (error: Throwable) {
+                ComputerDiagnostics.logFailure(ComputerFailureStage.SERVER_DETAIL_ACTION, error)
                 viewModel.showSnackbar(error.message ?: genericFailure)
             } finally {
                 busyAction = null
@@ -117,114 +131,161 @@ fun ComputerDetailScreen(
         }
     }
 
+    val topButtonSize = 46.dp
+    val screenBackground = MaterialTheme.colorScheme.background
+    val isDarkTheme = isSystemInDarkTheme()
+    val topButtonBackground = if (isDarkTheme) Color(0xFF303030) else Color.White
+    val topButtonContentColor = if (isDarkTheme) Color.White else Color(0xFF0D0D0D)
+    val topContentPadding =
+        WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + topButtonSize + 24.dp
+    val bottomContentPadding =
+        WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 24.dp
+
     Scaffold(
         modifier = modifier.fillMaxSize(),
-        containerColor = MaterialTheme.colorScheme.background,
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        text = computer?.displayName ?: stringResource(R.string.computer_detail_title),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = { navController.popBackStack() }) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_arrow_back),
-                            contentDescription = stringResource(R.string.navigation_back),
-                        )
-                    }
-                },
-            )
-        },
+        containerColor = screenBackground,
+        contentWindowInsets = WindowInsets(0.dp),
     ) { padding ->
-        if (computer == null) {
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding)
-                    .padding(24.dp),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text(stringResource(R.string.computer_detail_missing))
-                TextButton(onClick = { navController.popBackStack() }) {
-                    Text(stringResource(R.string.navigation_back))
-                }
-            }
-            return@Scaffold
-        }
-
-        LazyColumn(
+        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),
-            contentPadding = PaddingValues(16.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            item {
-                ComputerOverviewCard(computer)
-            }
-            item {
-                ComputerSecurityCard(computer)
-            }
-            item {
-                ComputerActionsCard(
-                    computer = computer,
-                    busyAction = busyAction,
-                    onRefresh = {
-                        launchAction("refresh") {
-                            viewModel.refreshComputer(computer.id)
-                            withContext(Dispatchers.Main) {
-                                viewModel.showSnackbar(genericSuccessMessage(viewModel, R.string.computer_refresh_success))
-                            }
-                        }
-                    },
-                    onRepair = { repairDialogVisible = true },
-                    onReplaceCredential = { credentialDialogVisible = true },
-                    onReplaceHostKey = {
-                        launchAction("host-key-probe") {
-                            val result = viewModel.probeComputerReplacementHostKey(computer.id)
-                            withContext(Dispatchers.Main) { replacementHostKey = result }
-                        }
-                    },
-                    onNetworkChange = { allowed ->
-                        launchAction("network") {
-                            viewModel.setComputerPrivateNetworkAllowed(computer.id, allowed)
-                        }
-                    },
-                    onDisconnect = {
-                        launchAction("disconnect") {
-                            viewModel.disconnectComputer(computer.id)
-                        }
-                    },
-                    onDelete = { deleteDialogVisible = true },
-                )
-            }
-            item {
-                ComputerSectionTitle(
-                    title = stringResource(R.string.computer_workspace_section),
-                    body = stringResource(R.string.computer_workspace_section_body),
-                )
-            }
-            if (workspaces.isEmpty()) {
-                item {
-                    ComputerEmptySection(stringResource(R.string.computer_workspace_empty))
+            if (computer == null) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(top = topContentPadding, bottom = bottomContentPadding)
+                        .padding(horizontal = 24.dp),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(stringResource(R.string.computer_detail_missing))
+                    TextButton(onClick = { navController.popBackStack() }) {
+                        Text(stringResource(R.string.navigation_back))
+                    }
                 }
             } else {
-                items(workspaces, key = { it.id }) { workspace ->
-                    ComputerWorkspaceCard(
-                        viewModel = viewModel,
-                        computer = computer,
-                        workspace = workspace,
-                        onMessage = viewModel::showSnackbar,
-                    )
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(
+                        start = 16.dp,
+                        top = topContentPadding,
+                        end = 16.dp,
+                        bottom = bottomContentPadding,
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                ) {
+                    item {
+                        ComputerOverviewCard(computer)
+                    }
+                    item {
+                        ComputerSecurityCard(computer)
+                    }
+                    item {
+                        ComputerActionsCard(
+                            computer = computer,
+                            busyAction = busyAction,
+                            onRefresh = {
+                                launchAction("refresh") {
+                                    viewModel.refreshComputer(computer.id)
+                                    withContext(Dispatchers.Main) {
+                                        viewModel.showSnackbar(genericSuccessMessage(viewModel, R.string.computer_refresh_success))
+                                    }
+                                }
+                            },
+                            onRepair = { repairDialogVisible = true },
+                            onReplaceCredential = { credentialDialogVisible = true },
+                            onReplaceHostKey = {
+                                launchAction("host-key-probe") {
+                                    val result = viewModel.probeComputerReplacementHostKey(computer.id)
+                                    withContext(Dispatchers.Main) { replacementHostKey = result }
+                                }
+                            },
+                            onNetworkChange = { allowed ->
+                                launchAction("network") {
+                                    viewModel.setComputerPrivateNetworkAllowed(computer.id, allowed)
+                                }
+                            },
+                            onDisconnect = {
+                                launchAction("disconnect") {
+                                    viewModel.disconnectComputer(computer.id)
+                                }
+                            },
+                            onDelete = { deleteDialogVisible = true },
+                        )
+                    }
+                    item {
+                        ComputerSectionTitle(
+                            title = stringResource(R.string.computer_workspace_section),
+                            body = stringResource(R.string.computer_workspace_section_body),
+                        )
+                    }
+                    if (workspaces.isEmpty()) {
+                        item {
+                            ComputerEmptySection(stringResource(R.string.computer_workspace_empty))
+                        }
+                    } else {
+                        items(workspaces, key = { it.id }) { workspace ->
+                            ComputerWorkspaceCard(
+                                viewModel = viewModel,
+                                computer = computer,
+                                workspace = workspace,
+                                onMessage = viewModel::showSnackbar,
+                            )
+                        }
+                    }
+                    item {
+                        ComputerAuditCard(audits)
+                    }
                 }
             }
-            item {
-                ComputerAuditCard(audits)
+
+            // 底部渐隐层只负责让内容自然融入手势区，系统栏背景由页面本身绘制。
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .height(bottomContentPadding)
+                    .floatingEdgeGradient(screenBackground, fromTop = false),
+            )
+
+            // 与配置页一致的浮动顶栏，内容可在其后方滚动，避免出现整块白色 TopAppBar。
+            Row(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .fillMaxWidth()
+                    .floatingEdgeGradient(screenBackground, fromTop = true)
+                    .windowInsetsPadding(WindowInsets.statusBars)
+                    .padding(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TopCircleButton(
+                    iconRes = R.drawable.ic_arrow_back,
+                    contentDescription = stringResource(R.string.navigation_back),
+                    modifier = Modifier,
+                    onClick = { navController.popBackStack() },
+                )
+                Box(
+                    modifier = Modifier
+                        .height(topButtonSize)
+                        .widthIn(max = 220.dp)
+                        .shadow(3.dp, RoundedCornerShape(percent = 50), clip = false)
+                        .clip(RoundedCornerShape(percent = 50))
+                        .background(topButtonBackground)
+                        .padding(horizontal = 16.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = computer?.displayName ?: stringResource(R.string.computer_detail_title),
+                        color = topButtonContentColor,
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
             }
         }
     }
@@ -546,7 +607,7 @@ private fun ComputerAuditCard(audits: List<ComputerAuditEvent>) {
                 Row {
                     Column(Modifier.weight(1f)) {
                         Text(auditEventLabel(event.eventType), style = MaterialTheme.typography.labelLarge)
-                        event.safeSummary?.let {
+                        auditSafeSummary(event)?.let {
                             Text(
                                 text = it,
                                 style = MaterialTheme.typography.bodySmall,
@@ -555,7 +616,7 @@ private fun ComputerAuditCard(audits: List<ComputerAuditEvent>) {
                         }
                     }
                     Column(horizontalAlignment = Alignment.End) {
-                        Text(event.outcome, style = MaterialTheme.typography.labelSmall)
+                        Text(auditOutcomeLabel(event.outcome), style = MaterialTheme.typography.labelSmall)
                         Text(
                             formatComputerDate(event.createdAt),
                             style = MaterialTheme.typography.labelSmall,
@@ -583,11 +644,52 @@ private fun auditEventLabel(eventType: String): String = stringResource(
         "PRIVATE_PREVIEW_OPENED" -> R.string.computer_audit_private_preview
         "PUBLIC_PREVIEW_OPENED" -> R.string.computer_audit_public_preview
         "PREVIEW_EXPIRED" -> R.string.computer_audit_preview_expired
+        "PREVIEW_STOPPED" -> R.string.computer_audit_preview_stopped
         "PREVIEW_REVOKED" -> R.string.computer_audit_preview_revoked
         "WORKSPACE_DELETED" -> R.string.computer_audit_workspace_deleted
         else -> R.string.computer_audit_other
     },
 )
+
+@Composable
+private fun auditOutcomeLabel(outcome: String): String {
+    val resource = when (outcome) {
+        "SUCCESS" -> R.string.computer_audit_outcome_success
+        "FAILED" -> R.string.computer_audit_outcome_failed
+        "CONFIRMED" -> R.string.computer_audit_outcome_confirmed
+        "FALLBACK" -> R.string.computer_audit_outcome_fallback
+        else -> null
+    }
+    return resource?.let { stringResource(it) } ?: outcome
+}
+
+/**
+ * Room 只保存稳定代码或非敏感动态值，界面在展示时按当前语言补全说明。
+ * 同时兼容早期版本已经落库的中文安全摘要。
+ */
+@Composable
+private fun auditSafeSummary(event: ComputerAuditEvent): String? {
+    val summary = event.safeSummary ?: return null
+    return when {
+        event.eventType == "WORKSPACE_SECRET_SAVED" || event.eventType == "WORKSPACE_SECRET_DELETED" ->
+            stringResource(R.string.computer_audit_summary_secret, summary)
+        event.eventType == "PRIVATE_PREVIEW_OPENED" || event.eventType == "PUBLIC_PREVIEW_OPENED" ->
+            stringResource(R.string.computer_audit_summary_port, summary.removePrefix("端口 "))
+        event.eventType == "PRIVATE_NETWORK" && summary in setOf("ALLOWED", "已允许") ->
+            stringResource(R.string.computer_audit_summary_private_allowed)
+        event.eventType == "PRIVATE_NETWORK" && summary in setOf("BLOCKED", "已阻止") ->
+            stringResource(R.string.computer_audit_summary_private_blocked)
+        summary == "ORIGINAL_CREDENTIAL_RETAINED" || summary == "保留本地加密的原始凭据" ->
+            stringResource(R.string.computer_audit_summary_credential_retained)
+        summary == "REMOTE_CLEANUP_PENDING" || summary == "远端清理待重试" ->
+            stringResource(R.string.computer_audit_summary_remote_cleanup)
+        summary == "SSH 登录和本地能力探测成功" ->
+            stringResource(R.string.computer_audit_summary_probe_ready)
+        summary == "Container 环境配置完成" ->
+            stringResource(R.string.computer_audit_summary_container_ready)
+        else -> summary
+    }
+}
 
 @Composable
 private fun ComputerCredentialReplaceDialog(

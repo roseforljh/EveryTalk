@@ -1,17 +1,26 @@
 package com.android.everytalk.ui.screens.computer
 
+import android.view.WindowManager
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -19,30 +28,56 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.SideEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import androidx.compose.ui.window.DialogWindowProvider
 import com.android.everytalk.R
 import com.android.everytalk.data.computer.ComputerAuthKind
 import com.android.everytalk.data.computer.ComputerRunMode
 import com.android.everytalk.data.computer.HostKeyProbeResult
+import com.android.everytalk.ui.components.dialog.AppDialogButtonShape
 import com.android.everytalk.ui.components.dialog.AppDialogShape
+import com.android.everytalk.ui.components.dialog.AppDialogTextFieldShape
 import com.android.everytalk.ui.components.dialog.appDialogBorderColor
+import com.android.everytalk.ui.components.dialog.appDialogContainerColor
+import com.android.everytalk.ui.components.dialog.appDialogContentColor
+import com.android.everytalk.ui.components.dialog.appDialogTextFieldColors
+import com.android.everytalk.ui.screens.settings.SettingsFieldLabel
 
-/** 复用设置页悬浮卡片容器的服务器表单内容。 */
+/**
+ * 添加服务器对话框。
+ *
+ * 容器、输入框和底部按钮直接沿用配置对话框的尺寸与颜色规则。
+ * `imePadding` 会在输入法出现时压缩卡片可用高度，表单内容随后在卡片内滚动。
+ */
 @Composable
 internal fun ComputerAddCard(
     form: ComputerAddFormState,
@@ -53,166 +88,274 @@ internal fun ComputerAddCard(
     onSubmit: () -> Unit,
     onDismiss: () -> Unit,
 ) {
-    val maxHeight = (LocalConfiguration.current.screenHeightDp.dp - 120.dp).coerceAtLeast(320.dp)
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .heightIn(max = maxHeight)
-            .verticalScroll(rememberScrollState())
-            .padding(20.dp),
+    val dialogBackground = appDialogContainerColor()
+    val borderColor = appDialogBorderColor()
+    val contentColor = appDialogContentColor()
+    val choiceColors = FilterChipDefaults.filterChipColors(
+        containerColor = dialogBackground,
+        labelColor = contentColor,
+        selectedContainerColor = contentColor,
+        selectedLabelColor = dialogBackground,
+        disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+        disabledLabelColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+    )
+
+    Dialog(
+        onDismissRequest = { if (!isBusy) onDismiss() },
+        properties = DialogProperties(
+            usePlatformDefaultWidth = false,
+            decorFitsSystemWindows = false,
+        ),
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text(
-                text = stringResource(R.string.computer_add_title),
-                style = MaterialTheme.typography.titleLarge,
-                modifier = Modifier.weight(1f),
-            )
-            IconButton(onClick = onDismiss, enabled = !isBusy) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_close),
-                    contentDescription = stringResource(R.string.action_cancel),
+        val dialogWindow = (LocalView.current.parent as? DialogWindowProvider)?.window
+        SideEffect {
+            dialogWindow?.clearFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+            dialogWindow?.setDimAmount(0f)
+        }
+
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    onClick = { if (!isBusy) onDismiss() },
                 )
-            }
-        }
-
-        Spacer(Modifier.height(8.dp))
-        ComputerTextField(
-            value = form.displayName,
-            onValueChange = { onFormChange(form.copy(displayName = it)) },
-            label = stringResource(R.string.computer_field_name),
-            enabled = !isBusy,
-        )
-        ComputerTextField(
-            value = form.host,
-            onValueChange = { onFormChange(form.copy(host = it)) },
-            label = stringResource(R.string.computer_field_host),
-            enabled = !isBusy,
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            ComputerTextField(
-                value = form.port,
-                onValueChange = { value ->
-                    if (value.all(Char::isDigit)) onFormChange(form.copy(port = value))
-                },
-                label = stringResource(R.string.computer_field_port),
-                enabled = !isBusy,
-                keyboardType = KeyboardType.Number,
-                modifier = Modifier.weight(0.36f),
-            )
-            ComputerTextField(
-                value = form.username,
-                onValueChange = { onFormChange(form.copy(username = it)) },
-                label = stringResource(R.string.computer_field_username),
-                enabled = !isBusy,
-                modifier = Modifier.weight(0.64f),
-            )
-        }
-
-        SectionLabel(stringResource(R.string.computer_field_auth))
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(
-                selected = form.authKind == ComputerAuthKind.PASSWORD,
-                onClick = { onFormChange(form.copy(authKind = ComputerAuthKind.PASSWORD)) },
-                label = { Text(stringResource(R.string.computer_auth_password)) },
-                enabled = !isBusy,
-            )
-            FilterChip(
-                selected = form.authKind == ComputerAuthKind.PRIVATE_KEY,
-                onClick = { onFormChange(form.copy(authKind = ComputerAuthKind.PRIVATE_KEY)) },
-                label = { Text(stringResource(R.string.computer_auth_private_key)) },
-                enabled = !isBusy,
-            )
-        }
-
-        if (form.authKind == ComputerAuthKind.PASSWORD) {
-            ComputerTextField(
-                value = form.password,
-                onValueChange = { onFormChange(form.copy(password = it)) },
-                label = stringResource(R.string.computer_field_password),
-                enabled = !isBusy,
-                isPassword = true,
-            )
-        } else {
-            ComputerTextField(
-                value = form.privateKey,
-                onValueChange = { onFormChange(form.copy(privateKey = it)) },
-                label = stringResource(R.string.computer_field_private_key),
-                enabled = !isBusy,
-                minLines = 4,
-                maxLines = 8,
-            )
-            ComputerTextField(
-                value = form.privateKeyPassphrase,
-                onValueChange = { onFormChange(form.copy(privateKeyPassphrase = it)) },
-                label = stringResource(R.string.computer_field_private_key_passphrase),
-                enabled = !isBusy,
-                isPassword = true,
-            )
-        }
-
-        SectionLabel(stringResource(R.string.computer_field_mode))
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            FilterChip(
-                selected = form.runMode == ComputerRunMode.CONTAINER,
-                onClick = { onFormChange(form.copy(runMode = ComputerRunMode.CONTAINER)) },
-                label = { Text(stringResource(R.string.computer_mode_container)) },
-                enabled = !isBusy,
-            )
-            FilterChip(
-                selected = form.runMode == ComputerRunMode.DIRECT,
-                onClick = { onFormChange(form.copy(runMode = ComputerRunMode.DIRECT)) },
-                label = { Text(stringResource(R.string.computer_mode_direct)) },
-                enabled = !isBusy,
-            )
-        }
-        Text(
-            text = stringResource(
-                if (form.runMode == ComputerRunMode.CONTAINER) {
-                    R.string.computer_mode_container_description
-                } else {
-                    R.string.computer_mode_direct_description
-                },
-            ),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-
-        if (form.runMode == ComputerRunMode.CONTAINER && form.username.trim() != "root") {
-            ComputerTextField(
-                value = form.sudoPassword,
-                onValueChange = { onFormChange(form.copy(sudoPassword = it)) },
-                label = stringResource(R.string.computer_field_sudo_password),
-                enabled = !isBusy,
-                isPassword = true,
-            )
-        }
-
-        if (progressText != null) {
-            Row(
-                modifier = Modifier.padding(top = 12.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                Spacer(Modifier.width(10.dp))
-                Text(progressText, style = MaterialTheme.typography.bodyMedium)
-            }
-        }
-        if (errorText != null) {
-            Text(
-                text = errorText,
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(top = 12.dp),
-            )
-        }
-
-        Spacer(Modifier.height(18.dp))
-        Button(
-            onClick = onSubmit,
-            enabled = !isBusy,
-            modifier = Modifier.fillMaxWidth(),
+                .statusBarsPadding()
+                .navigationBarsPadding()
+                .imePadding()
+                .padding(horizontal = 16.dp),
+            contentAlignment = Alignment.TopCenter,
         ) {
-            Text(stringResource(R.string.computer_add_save))
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .wrapContentHeight()
+                    .padding(top = 24.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                        onClick = {},
+                    )
+                    .clip(AppDialogShape)
+                    .border(1.dp, borderColor, AppDialogShape),
+                shape = AppDialogShape,
+                color = dialogBackground,
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .verticalScroll(rememberScrollState())
+                        .padding(24.dp),
+                ) {
+                    Text(
+                        text = stringResource(R.string.computer_add_title),
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = contentColor,
+                    )
+                    Spacer(Modifier.height(16.dp))
+
+                    ComputerTextField(
+                        value = form.displayName,
+                        onValueChange = { onFormChange(form.copy(displayName = it)) },
+                        label = stringResource(R.string.computer_field_name),
+                        enabled = !isBusy,
+                    )
+                    ComputerTextField(
+                        value = form.host,
+                        onValueChange = { onFormChange(form.copy(host = it)) },
+                        label = stringResource(R.string.computer_field_host),
+                        enabled = !isBusy,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        ComputerTextField(
+                            value = form.port,
+                            onValueChange = { value ->
+                                if (value.all(Char::isDigit)) onFormChange(form.copy(port = value))
+                            },
+                            label = stringResource(R.string.computer_field_port),
+                            enabled = !isBusy,
+                            keyboardType = KeyboardType.Number,
+                            modifier = Modifier.weight(0.4f),
+                        )
+                        ComputerTextField(
+                            value = form.username,
+                            onValueChange = { onFormChange(form.copy(username = it)) },
+                            label = stringResource(R.string.computer_field_username),
+                            enabled = !isBusy,
+                            modifier = Modifier.weight(0.6f),
+                        )
+                    }
+
+                    SettingsFieldLabel(stringResource(R.string.computer_field_auth))
+                    FlowRow(
+                        modifier = Modifier.padding(bottom = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        FilterChip(
+                            modifier = Modifier.height(40.dp),
+                            selected = form.authKind == ComputerAuthKind.PASSWORD,
+                            onClick = { onFormChange(form.copy(authKind = ComputerAuthKind.PASSWORD)) },
+                            label = { Text(stringResource(R.string.computer_auth_password)) },
+                            enabled = !isBusy,
+                            shape = AppDialogTextFieldShape,
+                            colors = choiceColors,
+                        )
+                        FilterChip(
+                            modifier = Modifier.height(40.dp),
+                            selected = form.authKind == ComputerAuthKind.PRIVATE_KEY,
+                            onClick = { onFormChange(form.copy(authKind = ComputerAuthKind.PRIVATE_KEY)) },
+                            label = { Text(stringResource(R.string.computer_auth_private_key)) },
+                            enabled = !isBusy,
+                            shape = AppDialogTextFieldShape,
+                            colors = choiceColors,
+                        )
+                    }
+
+                    if (form.authKind == ComputerAuthKind.PASSWORD) {
+                        ComputerTextField(
+                            value = form.password,
+                            onValueChange = { onFormChange(form.copy(password = it)) },
+                            label = stringResource(R.string.computer_field_password),
+                            enabled = !isBusy,
+                            isPassword = true,
+                        )
+                    } else {
+                        ComputerTextField(
+                            value = form.privateKey,
+                            onValueChange = { onFormChange(form.copy(privateKey = it)) },
+                            label = stringResource(R.string.computer_field_private_key),
+                            enabled = !isBusy,
+                            minLines = 4,
+                            maxLines = 8,
+                        )
+                        ComputerTextField(
+                            value = form.privateKeyPassphrase,
+                            onValueChange = { onFormChange(form.copy(privateKeyPassphrase = it)) },
+                            label = stringResource(R.string.computer_field_private_key_passphrase),
+                            enabled = !isBusy,
+                            isPassword = true,
+                        )
+                    }
+
+                    SettingsFieldLabel(stringResource(R.string.computer_field_mode))
+                    FlowRow(
+                        modifier = Modifier.padding(bottom = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        FilterChip(
+                            modifier = Modifier.height(40.dp),
+                            selected = form.runMode == ComputerRunMode.CONTAINER,
+                            onClick = { onFormChange(form.copy(runMode = ComputerRunMode.CONTAINER)) },
+                            label = { Text(stringResource(R.string.computer_mode_container)) },
+                            enabled = !isBusy,
+                            shape = AppDialogTextFieldShape,
+                            colors = choiceColors,
+                        )
+                        FilterChip(
+                            modifier = Modifier.height(40.dp),
+                            selected = form.runMode == ComputerRunMode.DIRECT,
+                            onClick = { onFormChange(form.copy(runMode = ComputerRunMode.DIRECT)) },
+                            label = { Text(stringResource(R.string.computer_mode_direct)) },
+                            enabled = !isBusy,
+                            shape = AppDialogTextFieldShape,
+                            colors = choiceColors,
+                        )
+                    }
+                    Text(
+                        text = stringResource(
+                            if (form.runMode == ComputerRunMode.CONTAINER) {
+                                R.string.computer_mode_container_description
+                            } else {
+                                R.string.computer_mode_direct_description
+                            },
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 12.dp),
+                    )
+
+                    if (form.runMode == ComputerRunMode.CONTAINER && form.username.trim() != "root") {
+                        ComputerTextField(
+                            value = form.sudoPassword,
+                            onValueChange = { onFormChange(form.copy(sudoPassword = it)) },
+                            label = stringResource(R.string.computer_field_sudo_password),
+                            enabled = !isBusy,
+                            isPassword = true,
+                            imeAction = ImeAction.Done,
+                        )
+                    }
+
+                    if (progressText != null) {
+                        Row(
+                            modifier = Modifier.padding(bottom = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                            Spacer(Modifier.width(10.dp))
+                            Text(progressText, style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                    if (errorText != null) {
+                        Text(
+                            text = errorText,
+                            color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(bottom = 12.dp),
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(top = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        OutlinedButton(
+                            onClick = onDismiss,
+                            enabled = !isBusy,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp),
+                            shape = AppDialogButtonShape,
+                            colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                                containerColor = dialogBackground,
+                                contentColor = contentColor,
+                            ),
+                            border = BorderStroke(1.dp, borderColor),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.action_cancel),
+                                style = MaterialTheme.typography.labelLarge.copy(
+                                    fontWeight = FontWeight.SemiBold,
+                                ),
+                            )
+                        }
+                        Button(
+                            onClick = onSubmit,
+                            enabled = !isBusy,
+                            modifier = Modifier
+                                .weight(1f)
+                                .height(48.dp),
+                            shape = AppDialogButtonShape,
+                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                                containerColor = contentColor,
+                                contentColor = dialogBackground,
+                                disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                            ),
+                        ) {
+                            Text(
+                                text = stringResource(R.string.computer_add_save),
+                                style = MaterialTheme.typography.labelLarge.copy(
+                                    fontWeight = FontWeight.SemiBold,
+                                ),
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -228,31 +371,52 @@ private fun ComputerTextField(
     isPassword: Boolean = false,
     minLines: Int = 1,
     maxLines: Int = 1,
+    imeAction: ImeAction = ImeAction.Next,
 ) {
-    OutlinedTextField(
-        value = value,
-        onValueChange = onValueChange,
-        label = { Text(label) },
-        modifier = modifier.padding(top = 8.dp),
-        enabled = enabled,
-        singleLine = maxLines == 1,
-        minLines = minLines,
-        maxLines = maxLines,
-        keyboardOptions = KeyboardOptions(
-            keyboardType = if (isPassword) KeyboardType.Password else keyboardType,
-        ),
-        visualTransformation = if (isPassword) PasswordVisualTransformation() else VisualTransformation.None,
-    )
-}
-
-@Composable
-private fun SectionLabel(text: String) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.labelLarge,
-        color = MaterialTheme.colorScheme.onSurfaceVariant,
-        modifier = Modifier.padding(top = 16.dp, bottom = 2.dp),
-    )
+    var passwordVisible by remember { mutableStateOf(false) }
+    Column(modifier = modifier) {
+        SettingsFieldLabel(label)
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 12.dp),
+            enabled = enabled,
+            singleLine = maxLines == 1,
+            minLines = minLines,
+            maxLines = maxLines,
+            keyboardOptions = KeyboardOptions(
+                keyboardType = if (isPassword) KeyboardType.Password else keyboardType,
+                imeAction = if (maxLines == 1) imeAction else ImeAction.Default,
+            ),
+            visualTransformation = if (isPassword && !passwordVisible) {
+                PasswordVisualTransformation()
+            } else {
+                VisualTransformation.None
+            },
+            trailingIcon = if (isPassword) {
+                {
+                    IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                        Icon(
+                            painter = painterResource(
+                                if (passwordVisible) R.drawable.ic_eye else R.drawable.ic_eye_off,
+                            ),
+                            contentDescription = stringResource(
+                                if (passwordVisible) R.string.settings_hide_key else R.string.settings_show_key,
+                            ),
+                            modifier = Modifier.size(20.dp),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            } else {
+                null
+            },
+            shape = AppDialogTextFieldShape,
+            colors = appDialogTextFieldColors(),
+        )
+    }
 }
 
 @Composable

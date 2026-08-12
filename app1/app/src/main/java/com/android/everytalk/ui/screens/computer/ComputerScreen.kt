@@ -7,6 +7,7 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.*
@@ -27,6 +28,7 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -45,16 +47,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.navigation.NavController
 import com.android.everytalk.R
+import com.android.everytalk.data.computer.ComputerDiagnostics
+import com.android.everytalk.data.computer.ComputerFailureStage
 import com.android.everytalk.data.computer.ComputerRunMode
 import com.android.everytalk.data.computer.ComputerStatus
 import com.android.everytalk.navigation.Screen
@@ -65,7 +66,7 @@ import com.android.everytalk.statecontroller.provisionComputerContainer
 import com.android.everytalk.statecontroller.refreshComputer
 import com.android.everytalk.statecontroller.showSnackbar
 import com.android.everytalk.ui.components.floatingEdgeGradient
-import com.android.everytalk.ui.components.popup.AppFloatingCardPopup
+import com.android.everytalk.ui.screens.settings.SettingsTabMenu
 import com.android.everytalk.util.locale.localizeUiMessage
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -78,10 +79,10 @@ fun ComputerScreen(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val density = LocalDensity.current
     val computers by viewModel.computers.collectAsState()
     val scope = rememberCoroutineScope()
     var showAddCard by remember { mutableStateOf(false) }
+    var showTabMenu by remember { mutableStateOf(false) }
     var form by remember { mutableStateOf(ComputerAddFormState()) }
     var isBusy by remember { mutableStateOf(false) }
     var progressText by remember { mutableStateOf<String?>(null) }
@@ -108,6 +109,27 @@ fun ComputerScreen(
         errorText = null
         form = ComputerAddFormState()
         showAddCard = false
+    }
+
+    /** 返回已有设置页，并把三点菜单选择的目标交给该页面处理。 */
+    fun returnToSettings(tabIndex: Int? = null, openImportExport: Boolean = false) {
+        val existingSettingsEntry = runCatching {
+            navController.getBackStackEntry(Screen.SETTINGS_SCREEN)
+        }.getOrNull()
+        val targetEntry = existingSettingsEntry ?: run {
+            navController.navigate(Screen.SETTINGS_SCREEN) { launchSingleTop = true }
+            navController.currentBackStackEntry
+        }
+        tabIndex?.let {
+            targetEntry?.savedStateHandle?.set(Screen.SETTINGS_TAB_REQUEST_KEY, it)
+        }
+        if (openImportExport) {
+            targetEntry?.savedStateHandle?.set(Screen.SETTINGS_IMPORT_EXPORT_REQUEST_KEY, true)
+        }
+        showTabMenu = false
+        if (existingSettingsEntry != null) {
+            navController.popBackStack(Screen.SETTINGS_SCREEN, inclusive = false)
+        }
     }
 
     fun validationMessage(error: ComputerAddFormError): String = context.getString(
@@ -138,6 +160,7 @@ fun ComputerScreen(
                     viewModel.probeComputerHostKey(current.request)
                 }
             } catch (error: Throwable) {
+                ComputerDiagnostics.logFailure(ComputerFailureStage.HOST_KEY_PROBE, error)
                 current.clear()
                 if (prepared === current) prepared = null
                 errorText = context.localizeUiMessage(
@@ -166,6 +189,7 @@ fun ComputerScreen(
         isBusy = true
         scope.launch {
             var addedComputer: com.android.everytalk.data.computer.Computer? = null
+            var failureStage = ComputerFailureStage.ADD_SERVER
             try {
                 val added = withContext(Dispatchers.IO) {
                     viewModel.addConfirmedComputer(current.request, confirmed)
@@ -175,6 +199,7 @@ fun ComputerScreen(
                     added.runMode == ComputerRunMode.CONTAINER &&
                     added.status == ComputerStatus.CONFIGURATION_REQUIRED
                 ) {
+                    failureStage = ComputerFailureStage.CONTAINER_PROVISION
                     progressText = context.getString(R.string.computer_progress_provisioning)
                     withContext(Dispatchers.IO) {
                         viewModel.provisionComputerContainer(added.id, current.sudoPassword)
@@ -187,6 +212,7 @@ fun ComputerScreen(
                 form = ComputerAddFormState()
                 showAddCard = false
             } catch (error: Throwable) {
+                ComputerDiagnostics.logFailure(failureStage, error)
                 val localizedError = context.localizeUiMessage(
                     error.message ?: context.getString(R.string.unknown_error),
                 )
@@ -213,7 +239,17 @@ fun ComputerScreen(
         }
     }
 
-    val topBarHeight = 72.dp
+    val topButtonSize = 46.dp
+    val isDarkTheme = isSystemInDarkTheme()
+    val topButtonBackground = if (isDarkTheme) Color(0xFF303030) else Color.White
+    val topButtonContentColor = if (isDarkTheme) Color.White else Color(0xFF0D0D0D)
+    val settingsTabs = listOf(
+        stringResource(R.string.settings_tab_platforms),
+        stringResource(R.string.settings_tab_web_search),
+        stringResource(R.string.settings_tab_mcp),
+    )
+    val topContentPadding =
+        WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + topButtonSize + 24.dp
     Scaffold(
         modifier = modifier.fillMaxSize(),
         containerColor = MaterialTheme.colorScheme.background,
@@ -249,7 +285,7 @@ fun ComputerScreen(
                     contentPadding = PaddingValues(
                         start = 16.dp,
                         end = 16.dp,
-                        top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + topBarHeight,
+                        top = topContentPadding,
                         bottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding() + 24.dp,
                     ),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -263,6 +299,7 @@ fun ComputerScreen(
                                     runCatching {
                                         withContext(Dispatchers.IO) { viewModel.refreshComputer(computer.id) }
                                     }.onFailure { error ->
+                                        ComputerDiagnostics.logFailure(ComputerFailureStage.SERVER_REFRESH, error)
                                         viewModel.showSnackbar(
                                             context.localizeUiMessage(
                                                 error.message ?: context.getString(R.string.unknown_error),
@@ -284,48 +321,80 @@ fun ComputerScreen(
                     .padding(12.dp),
             ) {
                 TopCircleButton(
-                    iconRes = R.drawable.ic_plus,
-                    contentDescription = stringResource(R.string.action_add),
-                    modifier = Modifier.align(Alignment.CenterStart),
-                    onClick = {
-                        errorText = null
-                        showAddCard = true
-                    },
-                )
-                Text(
-                    text = stringResource(R.string.computer_screen_title),
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.align(Alignment.Center),
-                )
-                TopCircleButton(
                     iconRes = R.drawable.ic_arrow_back,
                     contentDescription = stringResource(R.string.navigation_back),
-                    modifier = Modifier.align(Alignment.CenterEnd),
+                    modifier = Modifier.align(Alignment.CenterStart),
                     onClick = { navController.popBackStack() },
                 )
-            }
-
-            val popupWidth = (LocalConfiguration.current.screenWidthDp.dp - 24.dp).coerceAtMost(380.dp)
-            val popupTop = WindowInsets.statusBars.getTop(density) + with(density) { 64.dp.roundToPx() }
-            AppFloatingCardPopup(
-                visible = showAddCard,
-                alignment = Alignment.TopStart,
-                offset = IntOffset(with(density) { 12.dp.roundToPx() }, popupTop),
-                onDismissRequest = { closeAddCard() },
-                properties = androidx.compose.ui.window.PopupProperties(focusable = true),
-                modifier = Modifier.width(popupWidth),
-            ) {
-                ComputerAddCard(
-                    form = form,
-                    isBusy = isBusy,
-                    progressText = progressText,
-                    errorText = errorText,
-                    onFormChange = { form = it; errorText = null },
-                    onSubmit = ::startHostKeyProbe,
-                    onDismiss = ::closeAddCard,
-                )
+                Box(modifier = Modifier.align(Alignment.CenterEnd)) {
+                    Row(
+                        modifier = Modifier
+                            .width(topButtonSize * 2)
+                            .height(topButtonSize)
+                            .shadow(3.dp, RoundedCornerShape(percent = 50), clip = false)
+                            .clip(RoundedCornerShape(percent = 50))
+                            .background(topButtonBackground),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.End,
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(topButtonSize)
+                                .clip(CircleShape)
+                                .clickable {
+                                    showTabMenu = false
+                                    errorText = null
+                                    showAddCard = true
+                                },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_plus),
+                                contentDescription = stringResource(R.string.action_add),
+                                tint = topButtonContentColor,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+                        Box(
+                            modifier = Modifier
+                                .size(topButtonSize)
+                                .clip(CircleShape)
+                                .clickable { showTabMenu = true },
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_dots_horizontal),
+                                contentDescription = stringResource(R.string.action_more),
+                                tint = topButtonContentColor,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+                    }
+                    SettingsTabMenu(
+                        expanded = showTabMenu,
+                        tabs = settingsTabs,
+                        currentTabIndex = -1,
+                        onTabSelected = { index -> returnToSettings(tabIndex = index) },
+                        onImportExport = { returnToSettings(openImportExport = true) },
+                        onOpenComputers = { showTabMenu = false },
+                        isComputerSelected = true,
+                        onDismiss = { showTabMenu = false },
+                    )
+                }
             }
         }
+    }
+
+    if (showAddCard) {
+        ComputerAddCard(
+            form = form,
+            isBusy = isBusy,
+            progressText = progressText,
+            errorText = errorText,
+            onFormChange = { form = it; errorText = null },
+            onSubmit = ::startHostKeyProbe,
+            onDismiss = ::closeAddCard,
+        )
     }
 
     ComputerHostKeyDialog(
@@ -340,18 +409,21 @@ fun ComputerScreen(
 }
 
 @Composable
-private fun TopCircleButton(
+internal fun TopCircleButton(
     iconRes: Int,
     contentDescription: String,
     modifier: Modifier,
     onClick: () -> Unit,
 ) {
+    val isDarkTheme = isSystemInDarkTheme()
+    val buttonBackground = if (isDarkTheme) Color(0xFF303030) else Color.White
+    val contentColor = if (isDarkTheme) Color.White else Color(0xFF0D0D0D)
     Box(
         modifier = modifier
             .size(46.dp)
             .shadow(3.dp, CircleShape, clip = false)
             .clip(CircleShape)
-            .background(MaterialTheme.colorScheme.surface)
+            .background(buttonBackground)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
@@ -359,6 +431,7 @@ private fun TopCircleButton(
             painter = painterResource(iconRes),
             contentDescription = contentDescription,
             modifier = Modifier.size(20.dp),
+            tint = contentColor,
         )
     }
 }
