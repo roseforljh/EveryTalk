@@ -13,6 +13,7 @@
 .externalNativeBuild
 .cxx
 .kotlin
+.gradle-user-home
 local.properties
 # Github properties should be local
 github.properties
