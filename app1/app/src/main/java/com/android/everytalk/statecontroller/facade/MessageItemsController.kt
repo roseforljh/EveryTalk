@@ -3,6 +3,7 @@ package com.android.everytalk.statecontroller.facade
 import android.util.Log
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.ExecutionStep
+import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.data.DataClass.hasReviewableExecutionProcess
@@ -60,6 +61,7 @@ open class MessageItemsController(
         val executionStatus: String?,
         val currentWebSearchStage: String?,
         val executionSteps: List<ExecutionStep>,
+        val executionTrace: List<ExecutionTraceEvent>,
         val items: List<ChatListItem>
     )
 
@@ -142,15 +144,18 @@ open class MessageItemsController(
     }
 
     private fun resolveStreamingStageText(message: Message, _elapsedMs: Long, reasoningComplete: Boolean = false): String? {
-        if (message.contentStarted || message.text.isNotBlank()) {
-            return null
+        val hasVisibleContent = message.contentStarted || message.text.isNotBlank()
+        val hasAgentLoop = message.executionSteps.isNotEmpty()
+        if (!hasVisibleContent || hasAgentLoop) {
+            message.executionStatus?.takeIf { it.isNotBlank() }?.let { status ->
+                formatStatusText(status)?.let { return it }
+            }
+            message.currentWebSearchStage?.takeIf { it.isNotBlank() }?.let {
+                normalizeStatusText(message).takeIf { it.isNotBlank() }?.let { return it }
+            }
         }
-        message.executionStatus?.takeIf { it.isNotBlank() }?.let { status ->
-            formatStatusText(status)?.let { return it }
-        }
-        message.currentWebSearchStage?.takeIf { it.isNotBlank() }?.let {
-            normalizeStatusText(message).takeIf { it.isNotBlank() }?.let { return it }
-        }
+        if (!message.reasoning.isNullOrBlank() && !reasoningComplete) return "正在接收思考"
+        if (hasVisibleContent) return null
         return buildRuntimeLoadingStatus(message, reasoningComplete)
     }
 
@@ -240,7 +245,7 @@ open class MessageItemsController(
 
                             val reasoningComplete = stateHolder.textReasoningCompleteMap[message.id] ?: false
 
-                            val expectedStageText = if (isCurrentlyStreaming && !effectiveMessage.contentStarted) {
+                            val expectedStageText = if (isCurrentlyStreaming) {
                                 val elapsedMs = streamingStartTimestamps[message.id]?.let { System.currentTimeMillis() - it } ?: 0L
                                 resolveStreamingStageText(effectiveMessage, elapsedMs, reasoningComplete)
                             } else null
@@ -280,6 +285,7 @@ open class MessageItemsController(
                                 cached.executionStatus == message.executionStatus &&
                                 cached.currentWebSearchStage == message.currentWebSearchStage &&
                                 cached.executionSteps == message.executionSteps &&
+                                cached.executionTrace == message.executionTrace &&
                                 activityStatusMatches &&
                                 (cached.items.isNotEmpty() || message.text.isBlank()) &&
                                 footerMatches &&
@@ -311,6 +317,7 @@ open class MessageItemsController(
                                     executionStatus = message.executionStatus,
                                     currentWebSearchStage = message.currentWebSearchStage,
                                     executionSteps = message.executionSteps,
+                                    executionTrace = message.executionTrace,
                                     items = newItems
                                 )
                                 newItems
@@ -354,7 +361,7 @@ open class MessageItemsController(
                                 preferStreamingState = isCurrentlyStreaming,
                             )
                             val reasoningComplete = stateHolder.imageReasoningCompleteMap[message.id] ?: false
-                            val expectedStageText = if (isCurrentlyStreaming && !effectiveMessage.contentStarted) {
+                            val expectedStageText = if (isCurrentlyStreaming) {
                                 val elapsedMs = streamingStartTimestamps[message.id]?.let { System.currentTimeMillis() - it } ?: 0L
                                 resolveStreamingStageText(effectiveMessage, elapsedMs, reasoningComplete)
                             } else null
@@ -377,6 +384,7 @@ open class MessageItemsController(
                                 cached.executionStatus == message.executionStatus &&
                                 cached.currentWebSearchStage == message.currentWebSearchStage &&
                                 cached.executionSteps == message.executionSteps &&
+                                cached.executionTrace == message.executionTrace &&
                                 activityStatusMatches
 
                             if (cacheValid) {
@@ -403,6 +411,7 @@ open class MessageItemsController(
                                     executionStatus = message.executionStatus,
                                     currentWebSearchStage = message.currentWebSearchStage,
                                     executionSteps = message.executionSteps,
+                                    executionTrace = message.executionTrace,
                                     items = newItems
                                 )
                                 newItems
@@ -560,7 +569,19 @@ open class MessageItemsController(
                 val items = mutableListOf<ChatListItem>()
                 // 正文开始后继续保留所有可回看的执行记录，避免入口在流式转场时消失。
                 if (hasReviewableProcess) {
-                    items.add(ChatListItem.AiMessageReasoning(message))
+                    val elapsedMs = streamingStartTimestamps[message.id]
+                        ?.let { System.currentTimeMillis() - it }
+                        ?: 0L
+                    items.add(
+                        ChatListItem.AiMessageReasoning(
+                            message = message,
+                            activityStatusText = resolveStreamingStageText(
+                                message,
+                                elapsedMs,
+                                reasoningComplete,
+                            ),
+                        )
+                    )
                 }
 
                 // 始终使用“完成态”组件类型，由统一 Markdown 入口实时接收流式内容。

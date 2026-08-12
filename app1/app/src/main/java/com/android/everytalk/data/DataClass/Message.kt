@@ -50,7 +50,27 @@ data class ExecutionStep(
     val labels: List<String> = emptyList(),
     val completed: Boolean = false,
     val executionId: String? = null,
+    /**
+     * 这次工具调用前，模型刚产生且尚未归入前序步骤的思考文本。
+     * null 表示旧版消息没有顺序信息，空字符串表示新版消息在调用前没有文本。
+     */
+    val reasoningBefore: String? = null,
 )
+
+/**
+ * AI 执行过程的有序事件。
+ *
+ * 这里直接保存流事件的先后关系。Reasoning 增量只和相邻 Reasoning 合并，
+ * Tool 一到达就形成边界，因此思考和工具不会在渲染时被重新归组。
+ */
+@Serializable
+sealed class ExecutionTraceEvent {
+    @Serializable
+    data class Reasoning(val text: String) : ExecutionTraceEvent()
+
+    @Serializable
+    data class Tool(val step: ExecutionStep) : ExecutionTraceEvent()
+}
 
 // 将Sender枚举值映射到API角色字符串
 fun Sender.toRole(): String = when(this) {
@@ -80,6 +100,7 @@ data class Message(
     val parts: List<MarkdownPart> = emptyList(),
     val executionStatus: String? = null,
     val executionSteps: List<ExecutionStep> = emptyList(),
+    val executionTrace: List<ExecutionTraceEvent> = emptyList(),
     val enabledToolIds: List<String> = emptyList(),
     /** 记录本条消息发送时实际使用的服务器，只用于历史展示与本地审计。 */
     val computerIdSnapshot: String? = null,
@@ -180,16 +201,19 @@ data class Message(
 fun hasReviewableExecutionProcess(
     reasoningText: String?,
     executionSteps: List<ExecutionStep>,
+    executionTrace: List<ExecutionTraceEvent> = emptyList(),
     webSearchResults: List<WebSearchResult>?,
     executionStatus: String? = null,
 ): Boolean = !reasoningText.isNullOrBlank() ||
     executionSteps.isNotEmpty() ||
+    executionTrace.isNotEmpty() ||
     !webSearchResults.isNullOrEmpty() ||
     executionStatus?.startsWith("上下文压缩失败：") == true
 
 fun Message.hasReviewableExecutionProcess(): Boolean = hasReviewableExecutionProcess(
     reasoningText = reasoning,
     executionSteps = executionSteps,
+    executionTrace = executionTrace,
     webSearchResults = webSearchResults,
     executionStatus = executionStatus,
 )

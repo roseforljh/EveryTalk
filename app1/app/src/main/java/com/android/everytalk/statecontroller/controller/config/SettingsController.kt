@@ -5,6 +5,7 @@ import android.util.Log
 import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.Message
+import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.VoiceBackendConfig
 import com.android.everytalk.statecontroller.ViewModelStateHolder
@@ -163,6 +164,7 @@ class SettingsController(
         val text: String,
         val sender: String,
         val reasoning: String? = null,
+        val executionTrace: List<ExecutionTraceEvent> = emptyList(),
         val timestamp: Long,
         val isError: Boolean = false,
         val imageUrls: List<String>? = null
@@ -356,6 +358,7 @@ class SettingsController(
                     text = msg.text,
                     sender = msg.sender.name,
                     reasoning = msg.reasoning,
+                    executionTrace = msg.executionTrace,
                     timestamp = msg.timestamp,
                     isError = msg.isError,
                     // 过滤本地文件路径，只保留可访问的URL

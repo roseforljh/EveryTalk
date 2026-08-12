@@ -650,16 +650,9 @@ fun ChatMessagesList(
                                 } else {
                                     item.message.reasoning ?: ""
                                 }
-                            val isReasoningStreaming = remember(
-                                currentStreamingId,
-                                item.message.id,
-                                reasoningCompleteMap[item.message.id],
-                                item.message.contentStarted
-                            ) {
-                                currentStreamingId == item.message.id &&
-                                (reasoningCompleteMap[item.message.id] != true) &&
-                                !item.message.contentStarted
-                            }
+                            val isReasoningStreaming = currentStreamingId == item.message.id &&
+                                reasoningCompleteMap[item.message.id] != true &&
+                                displayedReasoningText.isNotBlank()
                             val isReasoningComplete = reasoningCompleteMap[item.message.id] ?: false
 
                             Box(
@@ -673,6 +666,7 @@ fun ChatMessagesList(
                                     displayedReasoningText = displayedReasoningText,
                                     activityStatusText = item.activityStatusText,
                                     executionSteps = item.message.executionSteps,
+                                    executionTrace = item.message.executionTrace,
                                     webSearchResults = item.message.webSearchResults.orEmpty(),
                                     isReasoningStreaming = isReasoningStreaming,
                                     isReasoningComplete = isReasoningComplete,

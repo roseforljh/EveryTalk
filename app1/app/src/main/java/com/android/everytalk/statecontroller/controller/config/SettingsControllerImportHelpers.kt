@@ -479,6 +479,7 @@ internal fun SettingsController.importConversationInternal(
                     text = msg.text,
                     sender = sender,
                     reasoning = msg.reasoning,
+                    executionTrace = msg.executionTrace,
                     timestamp = msg.timestamp,
                     isError = msg.isError,
                     imageUrls = msg.imageUrls

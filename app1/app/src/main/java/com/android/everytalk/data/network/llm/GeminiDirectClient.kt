@@ -85,6 +85,10 @@ object GeminiDirectClient {
                 var hasContent = false
                 
                 var parseResult: ParseResult? = null
+                val roundContentBuffer = ToolRoundContentBuffer { event ->
+                    send(event)
+                    kotlinx.coroutines.yield()
+                }
                 
                 client.preparePost(url) {
                     contentType(ContentType.Application.Json)
@@ -126,13 +130,15 @@ object GeminiDirectClient {
                                 }
                                 else -> {}
                             }
-                            send(orderedEvent)
-                            kotlinx.coroutines.yield()
+                            roundContentBuffer.accept(orderedEvent)
                         }
                     )
                 }
 
                 if (terminalSent) return@channelFlow
+                roundContentBuffer.finish(
+                    hasToolCalls = parseResult?.hasToolCalls == true || pendingToolCalls.isNotEmpty(),
+                )
                 
                 Log.i(TAG, "循环 #$loopCount 结束, pendingToolCalls=${pendingToolCalls.size}, hasContent=$hasContent, hasToolCalls=${parseResult?.hasToolCalls}")
                 

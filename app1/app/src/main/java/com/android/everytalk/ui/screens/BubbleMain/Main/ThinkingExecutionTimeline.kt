@@ -55,9 +55,11 @@ import coil3.compose.AsyncImage
 import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.ExecutionStep
 import com.android.everytalk.data.DataClass.ExecutionStepType
+import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.statecontroller.CONTEXT_COMPRESSION_FAILURE_PREFIX
 import com.android.everytalk.statecontroller.CONTEXT_COMPRESSION_RUNNING_STATUS
+import com.android.everytalk.statecontroller.AGENT_LOOP_CONTINUING_STATUS
 import com.android.everytalk.util.web.linkFaviconUrl
 import com.android.everytalk.util.web.linkHost
 import com.android.everytalk.util.locale.localizeUiMessage
@@ -78,6 +80,7 @@ internal fun localizedExecutionStatusText(status: String?): String? {
         text == "等待首个响应" -> stringResource(R.string.thinking_waiting_first_response)
         text == "正在接收思考" -> stringResource(R.string.thinking_receiving)
         text == "已收到思考，等待正文" -> stringResource(R.string.thinking_received_waiting_content)
+        text == AGENT_LOOP_CONTINUING_STATUS -> stringResource(R.string.thinking_analyzing_tool_result)
         text == "搜索网页" -> stringResource(R.string.thinking_searching_web)
         text.startsWith("搜索网页 · ") -> stringResource(
             R.string.thinking_searching_web_named,
@@ -144,7 +147,7 @@ internal fun executionSummaryText(
     return "等待首个响应"
 }
 
-private fun latestReasoningSummary(reasoningText: String): String? {
+internal fun latestReasoningSummary(reasoningText: String): String? {
     val line = reasoningText
         .lineSequence()
         .map(String::trim)
@@ -170,23 +173,32 @@ internal data class ExecutionTimelineEntry(
     val invocationCount: Int = 1,
 )
 
+internal sealed interface OrderedExecutionItem {
+    data class Reasoning(val text: String) : OrderedExecutionItem
+    data class Step(val entry: ExecutionTimelineEntry) : OrderedExecutionItem
+}
+
+private fun continuesSameTool(previous: ExecutionTimelineEntry?, step: ExecutionStep): Boolean {
+    val previousToolName = previous?.step?.labels?.singleOrNull()?.trim().orEmpty()
+    val toolName = step.labels.singleOrNull()?.trim().orEmpty()
+    return step.type in setOf(ExecutionStepType.Tool, ExecutionStepType.Agent) &&
+        previous?.step?.type == step.type &&
+        toolName.isNotEmpty() &&
+        toolName == previousToolName
+}
+
 internal fun executionTimelineEntries(steps: List<ExecutionStep>): List<ExecutionTimelineEntry> =
     buildList {
         steps.forEach { step ->
             val previous = lastOrNull()
-            val previousToolName = previous?.step?.labels?.singleOrNull()?.trim().orEmpty()
-            val toolName = step.labels.singleOrNull()?.trim().orEmpty()
-            val continuesSameTool = step.type in setOf(ExecutionStepType.Tool, ExecutionStepType.Agent) &&
-                previous?.step?.type == step.type &&
-                toolName.isNotEmpty() &&
-                toolName == previousToolName
-            if (continuesSameTool) {
+            if (continuesSameTool(previous, step)) {
+                val previousEntry = requireNotNull(previous)
                 this[lastIndex] = ExecutionTimelineEntry(
                     step = step,
-                    invocationCount = if (previous.invocationCount == Int.MAX_VALUE) {
+                    invocationCount = if (previousEntry.invocationCount == Int.MAX_VALUE) {
                         Int.MAX_VALUE
                     } else {
-                        previous.invocationCount + 1
+                        previousEntry.invocationCount + 1
                     },
                 )
             } else {
@@ -195,53 +207,157 @@ internal fun executionTimelineEntries(steps: List<ExecutionStep>): List<Executio
         }
     }
 
+/**
+ * 新消息利用 reasoningBefore 还原真实顺序。旧消息没有该字段时采用“思考在前、工具在后”的兼容顺序。
+ */
+internal fun orderedExecutionItems(
+    reasoningText: String,
+    executionSteps: List<ExecutionStep>,
+    executionTrace: List<ExecutionTraceEvent> = emptyList(),
+): List<OrderedExecutionItem> = buildList {
+    if (executionTrace.isNotEmpty()) {
+        executionTrace.forEach { event ->
+            when (event) {
+                is ExecutionTraceEvent.Reasoning -> event.text
+                    .takeIf(String::isNotBlank)
+                    ?.let { add(OrderedExecutionItem.Reasoning(it)) }
+                is ExecutionTraceEvent.Tool -> add(
+                    OrderedExecutionItem.Step(ExecutionTimelineEntry(event.step))
+                )
+            }
+        }
+        return@buildList
+    }
+
+    // 混合新旧步骤时顺序信息不完整，统一走旧消息兼容布局，避免伪造执行先后。
+    val hasCompleteOrderMetadata = executionSteps.isNotEmpty() &&
+        executionSteps.all { it.reasoningBefore != null }
+    if (!hasCompleteOrderMetadata) {
+        reasoningText.takeIf(String::isNotBlank)?.let { add(OrderedExecutionItem.Reasoning(it)) }
+        executionTimelineEntries(executionSteps).forEach { add(OrderedExecutionItem.Step(it)) }
+        return@buildList
+    }
+
+    fun appendStep(step: ExecutionStep) {
+        val previous = lastOrNull() as? OrderedExecutionItem.Step
+        if (continuesSameTool(previous?.entry, step)) {
+            val previousItem = requireNotNull(previous)
+            this[lastIndex] = OrderedExecutionItem.Step(
+                ExecutionTimelineEntry(
+                    step = step,
+                    invocationCount = if (previousItem.entry.invocationCount == Int.MAX_VALUE) {
+                        Int.MAX_VALUE
+                    } else {
+                        previousItem.entry.invocationCount + 1
+                    },
+                )
+            )
+        } else {
+            add(OrderedExecutionItem.Step(ExecutionTimelineEntry(step)))
+        }
+    }
+
+    executionSteps.forEach { step ->
+        step.reasoningBefore
+            ?.takeIf(String::isNotBlank)
+            ?.let { add(OrderedExecutionItem.Reasoning(it)) }
+        appendStep(step)
+    }
+
+    val recordedPrefix = buildString {
+        executionSteps.forEach { step -> step.reasoningBefore?.let(::append) }
+    }
+    val trailingReasoning = when {
+        recordedPrefix.isEmpty() -> reasoningText
+        reasoningText.startsWith(recordedPrefix) -> reasoningText.drop(recordedPrefix.length)
+        else -> ""
+    }
+    trailingReasoning
+        .takeIf(String::isNotBlank)
+        ?.let { add(OrderedExecutionItem.Reasoning(it)) }
+}
+
 @Composable
 internal fun ThinkingExecutionTimeline(
     executionSteps: List<ExecutionStep>,
+    executionTrace: List<ExecutionTraceEvent> = emptyList(),
     webSearchResults: List<WebSearchResult>,
     activityStatusText: String?,
     reasoningText: String,
     isReasoningActive: Boolean,
     messageIsError: Boolean,
     modifier: Modifier = Modifier,
-    reasoningContent: @Composable () -> Unit,
+    reasoningContent: @Composable (text: String, index: Int) -> Unit,
 ) {
     val localizedActivityStatusText = localizedExecutionStatusText(activityStatusText)
-    val hasReasoning = reasoningText.isNotBlank()
-    val timelineEntries = executionTimelineEntries(executionSteps)
-    val pendingStepIndex = timelineEntries.indexOfLast { !it.step.completed }
-    val reasoningIsActive = isReasoningActive && hasReasoning &&
-        (pendingStepIndex < 0 || isGenericExecutionStatus(activityStatusText.orEmpty()))
-    val showStandaloneActivity = isReasoningActive && !reasoningIsActive && pendingStepIndex < 0
-    val sourceStepIndex = timelineEntries.indexOfLast { it.step.type == ExecutionStepType.Search }
-    val nodeCount = timelineEntries.size +
+    val orderedItems = orderedExecutionItems(reasoningText, executionSteps, executionTrace)
+    val pendingItemIndex = orderedItems.indexOfFirst { item ->
+        item is OrderedExecutionItem.Step && !item.entry.step.completed
+    }
+    val hasSpecificActivity = !activityStatusText.isNullOrBlank() &&
+        !isGenericExecutionStatus(activityStatusText)
+    val activeReasoningItemIndex = orderedItems.lastIndex.takeIf { index ->
+        isReasoningActive &&
+            index >= 0 &&
+            orderedItems[index] is OrderedExecutionItem.Reasoning &&
+            pendingItemIndex < 0 &&
+            !hasSpecificActivity
+    } ?: -1
+    val showStandaloneActivity = isReasoningActive && activeReasoningItemIndex < 0 && pendingItemIndex < 0
+    val sourceItemIndex = orderedItems.indexOfLast { item ->
+        item is OrderedExecutionItem.Step && item.entry.step.type == ExecutionStepType.Search
+    }
+    val nodeCount = orderedItems.size +
         (if (showStandaloneActivity) 1 else 0) +
-        (if (hasReasoning) 1 else 0) +
-        (if (webSearchResults.isNotEmpty() && sourceStepIndex < 0) 1 else 0) +
+        (if (webSearchResults.isNotEmpty() && sourceItemIndex < 0) 1 else 0) +
         (if (!isReasoningActive) 1 else 0)
     var nodeIndex = 0
+    var toolNodeIndex = 0
+    var reasoningNodeIndex = 0
 
     Column(
         modifier = modifier
             .fillMaxWidth()
             .testTag("reasoning-execution-timeline"),
     ) {
-        timelineEntries.forEachIndexed { stepIndex, entry ->
-            val step = entry.step
-            val isActive = isReasoningActive && stepIndex == pendingStepIndex
-            TimelineNode(
-                icon = stepIcon(step.type),
-                iconTint = stepIconTint(step.type),
-                title = localizedExecutionStatusText(step.title) ?: step.title,
-                active = isActive,
-                completed = step.completed,
-                first = nodeIndex == 0,
-                last = nodeIndex == nodeCount - 1,
-                modifier = Modifier.testTag("reasoning-execution-step-$stepIndex"),
-            ) {
-                ExecutionLabels(step, entry.invocationCount)
-                if (stepIndex == sourceStepIndex && webSearchResults.isNotEmpty()) {
-                    WebsiteLabels(webSearchResults)
+        orderedItems.forEachIndexed { itemIndex, item ->
+            when (item) {
+                is OrderedExecutionItem.Reasoning -> {
+                    val currentReasoningIndex = reasoningNodeIndex++
+                    TimelineNode(
+                        icon = Icons.Outlined.AutoAwesome,
+                        iconTint = TimelineReasoningPurple,
+                        title = stringResource(R.string.thinking_process),
+                        active = itemIndex == activeReasoningItemIndex,
+                        completed = itemIndex != activeReasoningItemIndex,
+                        first = nodeIndex == 0,
+                        last = nodeIndex == nodeCount - 1,
+                        modifier = Modifier.testTag(
+                            "reasoning-execution-reasoning-step-$currentReasoningIndex"
+                        ),
+                    ) {
+                        reasoningContent(item.text, currentReasoningIndex)
+                    }
+                }
+                is OrderedExecutionItem.Step -> {
+                    val entry = item.entry
+                    val step = entry.step
+                    val currentToolIndex = toolNodeIndex++
+                    TimelineNode(
+                        icon = stepIcon(step.type),
+                        iconTint = stepIconTint(step.type),
+                        title = localizedExecutionStatusText(step.title) ?: step.title,
+                        active = isReasoningActive && itemIndex == pendingItemIndex,
+                        completed = step.completed,
+                        first = nodeIndex == 0,
+                        last = nodeIndex == nodeCount - 1,
+                        modifier = Modifier.testTag("reasoning-execution-step-$currentToolIndex"),
+                    ) {
+                        ExecutionLabels(step, entry.invocationCount)
+                        if (itemIndex == sourceItemIndex && webSearchResults.isNotEmpty()) {
+                            WebsiteLabels(webSearchResults)
+                        }
+                    }
                 }
             }
             nodeIndex++
@@ -262,7 +378,7 @@ internal fun ThinkingExecutionTimeline(
             nodeIndex++
         }
 
-        if (webSearchResults.isNotEmpty() && sourceStepIndex < 0) {
+        if (webSearchResults.isNotEmpty() && sourceItemIndex < 0) {
             TimelineNode(
                 icon = Icons.Filled.Public,
                 iconTint = TimelineWebGreen,
@@ -274,22 +390,6 @@ internal fun ThinkingExecutionTimeline(
                 modifier = Modifier.testTag("reasoning-execution-sources-step"),
             ) {
                 WebsiteLabels(webSearchResults)
-            }
-            nodeIndex++
-        }
-
-        if (hasReasoning) {
-            TimelineNode(
-                icon = Icons.Outlined.AutoAwesome,
-                iconTint = TimelineReasoningPurple,
-                title = stringResource(R.string.thinking_process),
-                active = reasoningIsActive,
-                completed = !reasoningIsActive,
-                first = nodeIndex == 0,
-                last = nodeIndex == nodeCount - 1,
-                modifier = Modifier.testTag("reasoning-execution-reasoning-step"),
-            ) {
-                reasoningContent()
             }
             nodeIndex++
         }
@@ -452,14 +552,14 @@ private fun ActiveTimelineNodeIcon(
     )
 }
 
-private fun stepIcon(type: ExecutionStepType): ImageVector = when (type) {
+internal fun stepIcon(type: ExecutionStepType): ImageVector = when (type) {
     ExecutionStepType.Search -> Icons.Filled.Search
     ExecutionStepType.Web -> Icons.Filled.Public
     ExecutionStepType.Tool -> Icons.Filled.Build
     ExecutionStepType.Agent -> Icons.Filled.Terminal
 }
 
-private fun stepIconTint(type: ExecutionStepType): Color = when (type) {
+internal fun stepIconTint(type: ExecutionStepType): Color = when (type) {
     ExecutionStepType.Search -> TimelineSearchBlue
     ExecutionStepType.Web -> TimelineWebGreen
     ExecutionStepType.Tool -> TimelineToolOrange

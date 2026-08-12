@@ -90,6 +90,10 @@ object OpenAIResponsesClient {
                 var pendingToolCalls = mutableListOf<ResponsesToolCallInfo>()
                 var parseResult: ResponsesParseResult? = null
                 var retryWithoutNativeContextManagement = false
+                val roundContentBuffer = ToolRoundContentBuffer { event ->
+                    send(event)
+                    kotlinx.coroutines.yield()
+                }
 
                 client.preparePost(url) {
                     contentType(ContentType.Application.Json)
@@ -125,8 +129,7 @@ object OpenAIResponsesClient {
                             pendingToolCalls.add(toolInfo)
                         },
                         emitEvent = { event ->
-                            send(event.withRequestOrdinal(loopCount))
-                            kotlinx.coroutines.yield()
+                            roundContentBuffer.accept(event.withRequestOrdinal(loopCount))
                         }
                     )
                 }
@@ -139,6 +142,9 @@ object OpenAIResponsesClient {
 
                 val completedResponse = parseResult
                     ?: throw IllegalStateException("Responses 流未返回可解析结果")
+                roundContentBuffer.finish(
+                    hasToolCalls = completedResponse.hasToolCalls || pendingToolCalls.isNotEmpty(),
+                )
                 conversationInput.addAll(completedResponse.outputItems)
                 latestCompactionItemId = pruneBeforeLatestCompaction(conversationInput)
                     ?: latestCompactionItemId

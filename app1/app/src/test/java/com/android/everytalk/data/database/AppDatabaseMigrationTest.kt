@@ -292,6 +292,35 @@ class AppDatabaseMigrationTest {
         migrateHelper.close()
     }
 
+    @Test
+    fun `migration 13 to 14 preserves messages and adds ordered execution trace`() {
+        val createHelper = openHelper(
+            version = 13,
+            onCreate = { db ->
+                db.execSQL("CREATE TABLE messages (id TEXT NOT NULL PRIMARY KEY)")
+                db.execSQL("INSERT INTO messages (id) VALUES ('message-1')")
+            },
+        )
+        createHelper.writableDatabase.close()
+        createHelper.close()
+
+        val migrateHelper = openHelper(
+            version = 14,
+            onUpgrade = { db, oldVersion, newVersion ->
+                assertEquals(13, oldVersion)
+                assertEquals(14, newVersion)
+                AppDatabase.MIGRATION_13_14.migrate(db)
+            },
+        )
+        val db = migrateHelper.writableDatabase
+        db.query("SELECT executionTrace FROM messages WHERE id = 'message-1'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("[]", cursor.getString(0))
+        }
+        db.close()
+        migrateHelper.close()
+    }
+
     private fun openHelper(
         version: Int,
         onCreate: (SupportSQLiteDatabase) -> Unit = {},

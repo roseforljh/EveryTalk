@@ -49,7 +49,7 @@ import com.android.everytalk.data.database.entities.WorkspaceSecretMetadataEntit
         WorkspaceSecretMetadataEntity::class,
         ComputerAuditEventEntity::class,
     ],
-    version = 13,
+    version = 14,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -87,6 +87,7 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_10_11,
                     MIGRATION_11_12,
                     MIGRATION_12_13,
+                    MIGRATION_13_14,
                 )
                 .build()
                 INSTANCE = instance
@@ -358,6 +359,14 @@ abstract class AppDatabase : RoomDatabase() {
                     """.trimIndent(),
                 )
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_computer_audit_events_computerId_createdAt ON computer_audit_events(computerId, createdAt)")
+            }
+        }
+
+        val MIGRATION_13_14 = object : Migration(13, 14) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE messages ADD COLUMN executionTrace TEXT NOT NULL DEFAULT '[]'"
+                )
             }
         }
     }

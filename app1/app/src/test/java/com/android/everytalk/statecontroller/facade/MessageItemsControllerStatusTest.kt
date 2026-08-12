@@ -433,6 +433,57 @@ class MessageItemsControllerStatusTest {
     }
 
     @Test
+    fun `前导正文出现后 Agent 执行状态仍进入思考区`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.stateHolder.messages.add(
+            Message(
+                id = "ai-agent-running",
+                text = "我来实际检查一下这台机器",
+                sender = Sender.AI,
+                contentStarted = true,
+                currentWebSearchStage = "运行 Agent · exec",
+                executionSteps = listOf(
+                    ExecutionStep(
+                        id = "call-1",
+                        type = ExecutionStepType.Agent,
+                        title = "运行 Agent",
+                        labels = listOf("exec"),
+                    )
+                ),
+            )
+        )
+        controller.stateHolder._isTextApiCalling.value = true
+        controller.stateHolder._currentTextStreamingAiMessageId.value = "ai-agent-running"
+
+        val items = controller.chatListItemsForTest()
+
+        assertTrue(items.any { it is ChatListItem.AiMessage })
+        assertEquals(
+            "运行 Agent · exec",
+            items.filterIsInstance<ChatListItem.AiMessageReasoning>().single().activityStatusText,
+        )
+    }
+
+    @Test
+    fun `前导正文后的下一轮思考仍显示运行状态`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+
+        val text = controller.resolveStreamingStageTextForTest(
+            Message(
+                id = "ai-agent-reasoning-again",
+                text = "我已经检查了第一批信息",
+                sender = Sender.AI,
+                reasoning = "第一轮思考，第二轮继续分析",
+                contentStarted = true,
+                executionSteps = listOf(completedToolStep()),
+            ),
+            0L,
+        )
+
+        assertEquals("正在接收思考", text)
+    }
+
+    @Test
     fun `bubble state does not return to connecting once visible content has arrived during api call`() {
         val controller = MessageItemsControllerTestAccess.newController()
         controller.seedStreamingRenderContent("ai-streaming", "已经输出一部分内容")

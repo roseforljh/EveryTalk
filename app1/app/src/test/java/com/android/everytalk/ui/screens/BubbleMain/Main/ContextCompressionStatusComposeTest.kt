@@ -5,6 +5,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.core.app.ApplicationProvider
@@ -42,6 +43,13 @@ class ContextCompressionStatusComposeTest {
         mathRenderer.close()
     }
 
+    private fun openReasoningSheet() {
+        composeRule.onNodeWithTag("reasoning-inline-status").performClick()
+        composeRule.mainClock.advanceTimeBy(250L)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("reasoning-chain-summary-0").performClick()
+    }
+
     @Test
     fun `压缩期间在原执行抽屉显示扫描高光文字`() {
         val context = ApplicationProvider.getApplicationContext<Application>()
@@ -66,7 +74,7 @@ class ContextCompressionStatusComposeTest {
 
         composeRule.mainClock.advanceTimeBy(500L)
         composeRule.waitForIdle()
-        composeRule.onNodeWithText(localizedStatus).performClick()
+        openReasoningSheet()
         composeRule.mainClock.advanceTimeBy(500L)
         composeRule.waitForIdle()
 
@@ -102,11 +110,13 @@ class ContextCompressionStatusComposeTest {
 
         composeRule.mainClock.advanceTimeBy(500L)
         composeRule.waitForIdle()
-        composeRule.onNodeWithTag("reasoning-sheet-review-toggle").performClick()
+        openReasoningSheet()
         composeRule.mainClock.advanceTimeBy(500L)
         composeRule.waitForIdle()
 
         composeRule.onNodeWithTag("reasoning-execution-finish-step").fetchSemanticsNode("")
-        composeRule.onNodeWithText(localizedFailure).fetchSemanticsNode("")
+        org.junit.Assert.assertTrue(
+            composeRule.onAllNodesWithText(localizedFailure).fetchSemanticsNodes().isNotEmpty()
+        )
     }
 }

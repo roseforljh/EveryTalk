@@ -7,6 +7,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -123,6 +124,37 @@ class ToolLoopContextGuardTest {
             }
         )
         assertTrue(history.sumOf(::estimateToolLoopJsonTokens) <= 64_000L)
+    }
+
+    @Test
+    fun `工具轮过渡正文进入思考并排在工具调用之前`() = runTest {
+        val emitted = mutableListOf<AppStreamEvent>()
+        val buffer = ToolRoundContentBuffer { emitted += it }
+        val toolCall = AppStreamEvent.ToolCall(
+            id = "call-1",
+            name = "exec",
+            argumentsObj = JsonObject(emptyMap()),
+        )
+
+        buffer.accept(AppStreamEvent.Content("我先检查服务器："))
+        buffer.accept(toolCall)
+        buffer.finish(hasToolCalls = true)
+
+        assertEquals(
+            listOf(AppStreamEvent.Reasoning("我先检查服务器："), toolCall),
+            emitted,
+        )
+    }
+
+    @Test
+    fun `最终轮正文仍作为最终回答输出`() = runTest {
+        val emitted = mutableListOf<AppStreamEvent>()
+        val buffer = ToolRoundContentBuffer { emitted += it }
+
+        buffer.accept(AppStreamEvent.Content("最终结论"))
+        buffer.finish(hasToolCalls = false)
+
+        assertEquals(listOf(AppStreamEvent.Content("最终结论")), emitted)
     }
 
     private fun responseOutput(callId: String, output: String): JsonObject = JsonObject(

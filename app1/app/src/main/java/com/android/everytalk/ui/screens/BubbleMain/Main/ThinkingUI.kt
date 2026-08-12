@@ -4,7 +4,7 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
@@ -14,25 +14,24 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.ScrollState
-import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -40,10 +39,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
@@ -60,6 +59,7 @@ import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.ExecutionStep
+import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.data.DataClass.hasReviewableExecutionProcess
 import com.android.everytalk.ui.components.sheet.AppModalBottomSheet
@@ -72,7 +72,6 @@ import com.android.everytalk.ui.components.streaming.UnifiedMarkdownNodesRendere
 import com.android.everytalk.ui.components.streaming.contentVersionForRendering
 import com.mikepenz.markdown.model.State
 import com.mikepenz.markdown.model.parseMarkdown
-import kotlinx.coroutines.delay
 
 internal fun reasoningSheetTallHeightFraction(): Float = AppModalBottomSheetMaximumHeightFraction
 
@@ -162,6 +161,7 @@ internal fun ReasoningToggleAndContent(
     displayedReasoningText: String,
     activityStatusText: String? = null,
     executionSteps: List<ExecutionStep> = emptyList(),
+    executionTrace: List<ExecutionTraceEvent> = emptyList(),
     webSearchResults: List<WebSearchResult> = emptyList(),
     isReasoningStreaming: Boolean,
     isReasoningComplete: Boolean,
@@ -176,24 +176,32 @@ internal fun ReasoningToggleAndContent(
     val focusManager = LocalFocusManager.current
     val view = LocalView.current
     var showReasoningSheet by remember(currentMessageId) { mutableStateOf(false) }
+    var executionChainExpanded by remember(currentMessageId) { mutableStateOf(false) }
     var visibilityNotified by remember(currentMessageId) { mutableStateOf(false) }
 
-    val showInlineThinkingStatus = !messageIsError &&
-        !mainContentHasStarted &&
-        (isReasoningStreaming || displayedReasoningText.isNotBlank() || activityStatusText != null)
+    val processIsActive = !messageIsError &&
+        (isReasoningStreaming || !activityStatusText.isNullOrBlank())
     val hasReviewableProcess = hasReviewableExecutionProcess(
         reasoningText = displayedReasoningText,
         executionSteps = executionSteps,
+        executionTrace = executionTrace,
         webSearchResults = webSearchResults,
         executionStatus = activityStatusText,
     )
-    val shouldShowReviewDotToggle = hasReviewableProcess &&
-        (isReasoningComplete || !isReasoningStreaming)
     val inlineStatusText = localizedExecutionStatusText(executionSummaryText(
         reasoningText = displayedReasoningText,
         activityStatusText = activityStatusText,
         executionSteps = executionSteps,
     )).orEmpty()
+    val shouldShowExecutionChain = processIsActive || hasReviewableProcess ||
+        (!mainContentHasStarted && displayedReasoningText.isNotBlank())
+    val executionChainTitle = when {
+        processIsActive -> inlineStatusText
+        messageIsError -> stringResource(R.string.thinking_execution_failed)
+        isReasoningComplete || !isReasoningStreaming || mainContentHasStarted ->
+            stringResource(R.string.thinking_process)
+        else -> inlineStatusText
+    }
     val openReasoningSheet = {
         focusManager.clearFocus()
         showReasoningSheet = true
@@ -204,7 +212,7 @@ internal fun ReasoningToggleAndContent(
         horizontalAlignment = Alignment.Start,
     ) {
         AnimatedVisibility(
-            visible = showInlineThinkingStatus,
+            visible = shouldShowExecutionChain,
             enter = fadeIn(tween(150)) + expandVertically(
                 animationSpec = tween(220),
                 expandFrom = Alignment.Top,
@@ -214,64 +222,35 @@ internal fun ReasoningToggleAndContent(
                 shrinkTowards = Alignment.Top,
             ),
         ) {
-            ThinkingStatusRow(
-                text = inlineStatusText,
-                textColor = reasoningTextColor,
-                onClick = openReasoningSheet,
-                modifier = Modifier.onSizeChanged {
-                    if (it.height > 0 && !visibilityNotified) {
-                        view.post { onVisibilityChanged() }
-                        visibilityNotified = true
-                    }
-                },
-            )
-        }
-
-        var showDotDelayed by remember(currentMessageId) {
-            mutableStateOf(!showInlineThinkingStatus)
-        }
-        LaunchedEffect(showInlineThinkingStatus) {
-            if (showInlineThinkingStatus) {
-                showDotDelayed = false
-            } else {
-                delay(280)
-                showDotDelayed = true
-            }
-        }
-
-        AnimatedVisibility(
-            visible = shouldShowReviewDotToggle && showDotDelayed,
-            enter = fadeIn(tween(200)),
-            exit = fadeOut(tween(150)),
-        ) {
-            Box(
-                modifier = Modifier.padding(start = 8.dp),
-            ) {
-                Box(
-                    contentAlignment = Alignment.Center,
-                    modifier = Modifier
-                        .size(16.dp)
-                        .clip(CircleShape)
-                        .background(MaterialTheme.colorScheme.surface)
-                        .testTag("reasoning-sheet-review-toggle")
-                        .clickable(
-                            indication = null,
-                            interactionSource = remember { MutableInteractionSource() },
-                            onClick = openReasoningSheet,
-                        ),
+            Column {
+                ExecutionChainHeader(
+                    text = executionChainTitle,
+                    active = processIsActive,
+                    expanded = executionChainExpanded,
+                    textColor = reasoningTextColor,
+                    iconColor = reasoningToggleDotColor,
+                    onClick = { executionChainExpanded = !executionChainExpanded },
+                    modifier = Modifier.onSizeChanged {
+                        if (it.height > 0 && !visibilityNotified) {
+                            view.post { onVisibilityChanged() }
+                            visibilityNotified = true
+                        }
+                    },
+                )
+                AnimatedVisibility(
+                    visible = executionChainExpanded,
+                    enter = fadeIn(tween(140)) + expandVertically(
+                        animationSpec = tween(200),
+                        expandFrom = Alignment.Top,
+                    ),
+                    exit = fadeOut(tween(120)) + shrinkVertically(
+                        animationSpec = tween(180),
+                        shrinkTowards = Alignment.Top,
+                    ),
                 ) {
-                    val circleIconSize by animateDpAsState(
-                        targetValue = if (showReasoningSheet) 10.dp else 7.dp,
-                        animationSpec = tween(
-                            durationMillis = 250,
-                            easing = FastOutSlowInEasing,
-                        ),
-                        label = "reasoningSheetToggleIconSize_$currentMessageId",
-                    )
-                    Box(
-                        modifier = Modifier
-                            .size(circleIconSize)
-                            .background(reasoningToggleDotColor, CircleShape),
+                    ExecutionChainSummaryList(
+                        text = inlineStatusText,
+                        onOpenSheet = openReasoningSheet,
                     )
                 }
             }
@@ -283,8 +262,9 @@ internal fun ReasoningToggleAndContent(
             displayedReasoningText = displayedReasoningText,
             activityStatusText = activityStatusText,
             executionSteps = executionSteps,
+            executionTrace = executionTrace,
             webSearchResults = webSearchResults,
-            isReasoningActive = !messageIsError && !mainContentHasStarted,
+            isReasoningActive = processIsActive,
             messageIsError = messageIsError,
             scrollState = streamingScrollState,
             onDismissRequest = { showReasoningSheet = false },
@@ -293,12 +273,20 @@ internal fun ReasoningToggleAndContent(
 }
 
 @Composable
-private fun ThinkingStatusRow(
+private fun ExecutionChainHeader(
     text: String,
+    active: Boolean,
+    expanded: Boolean,
     textColor: Color,
+    iconColor: Color,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val arrowRotation by animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        animationSpec = tween(180, easing = FastOutSlowInEasing),
+        label = "executionChainArrow",
+    )
     Row(
         modifier = modifier
             .testTag("reasoning-inline-status")
@@ -311,16 +299,85 @@ private fun ThinkingStatusRow(
                 interactionSource = remember { MutableInteractionSource() },
                 onClick = onClick,
             )
+            .heightIn(min = 44.dp)
             .padding(horizontal = 8.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (active) {
+            ScanningHighlightText(
+                text = text,
+                textColor = textColor,
+                useSmallStyle = false,
+                modifier = Modifier
+                    .widthIn(max = 260.dp)
+                    .testTag("reasoning-inline-status-text"),
+            )
+        } else {
+            Text(
+                text = text,
+                color = textColor,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .widthIn(max = 260.dp)
+                    .testTag("reasoning-inline-status-text"),
+            )
+        }
+        Icon(
+            imageVector = Icons.Filled.KeyboardArrowDown,
+            contentDescription = stringResource(
+                if (expanded) R.string.thinking_collapse_execution else R.string.thinking_expand_execution
+            ),
+            tint = iconColor.copy(alpha = 0.72f),
+            modifier = Modifier
+                .padding(start = 2.dp)
+                .size(18.dp)
+                .graphicsLayer { rotationZ = arrowRotation },
+        )
+    }
+}
+
+@Composable
+private fun ExecutionChainSummaryList(
+    text: String,
+    onOpenSheet: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .padding(start = 8.dp, bottom = 4.dp)
+            .testTag("reasoning-chain-summaries"),
+    ) {
+        ExecutionChainSummaryRow(
+            text = text,
+            onClick = onOpenSheet,
+            modifier = Modifier.testTag("reasoning-chain-summary-0"),
+        )
+    }
+}
+
+@Composable
+private fun ExecutionChainSummaryRow(
+    text: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .height(44.dp)
+            .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         ScanningHighlightText(
             text = text,
-            textColor = textColor,
+            textColor = MaterialTheme.colorScheme.onSurfaceVariant,
             useSmallStyle = false,
             modifier = Modifier
-                .widthIn(max = 280.dp)
-                .testTag("reasoning-inline-status-text"),
+                .fillMaxWidth()
+                .testTag("reasoning-chain-summary-text"),
         )
     }
 }
@@ -374,6 +431,7 @@ private fun ReasoningBottomSheet(
     displayedReasoningText: String,
     activityStatusText: String?,
     executionSteps: List<ExecutionStep>,
+    executionTrace: List<ExecutionTraceEvent>,
     webSearchResults: List<WebSearchResult>,
     isReasoningActive: Boolean,
     messageIsError: Boolean,
@@ -395,27 +453,6 @@ private fun ReasoningBottomSheet(
             errorText = stringResource(R.string.reasoning_error),
             emptyText = stringResource(R.string.reasoning_empty),
         )
-    }
-    val normalizedSheetMarkdown = remember(sheetText) {
-        normalizeReasoningMarkdown(sheetText)
-    }
-    val preparedSheetMessage = remember(normalizedSheetMarkdown) {
-        StreamBlockParser.prepareMessage(
-            content = normalizedSheetMarkdown,
-            messageId = "reasoning-sheet",
-            contentVersion = contentVersionForRendering(normalizedSheetMarkdown),
-        )
-    }
-    val preparedSheetDocument = remember(preparedSheetMessage) {
-        (parseMarkdown(
-            preparedSheetMessage.markdown,
-            flavour = EveryTalkMarkdownFlavourDescriptor,
-        ) as? State.Success)?.let { state ->
-            PreparedMarkdownDocument(
-                state = state,
-                nodes = state.node.children,
-            )
-        }
     }
     AppModalBottomSheet(
         onDismissRequest = onDismissRequest,
@@ -446,6 +483,7 @@ private fun ReasoningBottomSheet(
     ) {
         ThinkingExecutionTimeline(
             executionSteps = executionSteps,
+            executionTrace = executionTrace,
             webSearchResults = webSearchResults,
             activityStatusText = activityStatusText,
             reasoningText = sheetText,
@@ -458,27 +496,51 @@ private fun ReasoningBottomSheet(
                         contentDescription = executionLoadingDescription
                     }
                 },
-        ) {
-            if (sheetText.isNotBlank()) {
-                val markdownModifier = Modifier
-                    .fillMaxWidth()
-                    .testTag("reasoning-sheet-markdown")
-                if (preparedSheetDocument != null) {
-                    UnifiedMarkdownNodesRenderer(
-                        preparedMessage = preparedSheetMessage,
-                        preparedMarkdownDocument = preparedSheetDocument,
-                        nodes = preparedSheetDocument.nodes,
-                        sender = Sender.AI,
-                        modifier = markdownModifier,
-                    )
-                } else {
-                    UnifiedMarkdownRenderer(
-                        preparedMessage = preparedSheetMessage,
-                        sender = Sender.AI,
-                        modifier = markdownModifier,
-                    )
-                }
-            }
+        ) { reasoningSegment, reasoningIndex ->
+            ReasoningMarkdownBlock(reasoningSegment, reasoningIndex)
         }
+    }
+}
+
+/** 每段思考在自己的时间线节点内渲染，避免工具与整段文本被拆成两个区域。 */
+@Composable
+private fun ReasoningMarkdownBlock(text: String, index: Int) {
+    if (text.isBlank()) return
+    val normalizedMarkdown = remember(text) { normalizeReasoningMarkdown(text) }
+    val preparedMessage = remember(normalizedMarkdown, index) {
+        StreamBlockParser.prepareMessage(
+            content = normalizedMarkdown,
+            messageId = "reasoning-sheet-$index",
+            contentVersion = contentVersionForRendering(normalizedMarkdown),
+        )
+    }
+    val preparedDocument = remember(preparedMessage) {
+        (parseMarkdown(
+            preparedMessage.markdown,
+            flavour = EveryTalkMarkdownFlavourDescriptor,
+        ) as? State.Success)?.let { state ->
+            PreparedMarkdownDocument(
+                state = state,
+                nodes = state.node.children,
+            )
+        }
+    }
+    val markdownModifier = Modifier
+        .fillMaxWidth()
+        .testTag(if (index == 0) "reasoning-sheet-markdown" else "reasoning-sheet-markdown-$index")
+    if (preparedDocument != null) {
+        UnifiedMarkdownNodesRenderer(
+            preparedMessage = preparedMessage,
+            preparedMarkdownDocument = preparedDocument,
+            nodes = preparedDocument.nodes,
+            sender = Sender.AI,
+            modifier = markdownModifier,
+        )
+    } else {
+        UnifiedMarkdownRenderer(
+            preparedMessage = preparedMessage,
+            sender = Sender.AI,
+            modifier = markdownModifier,
+        )
     }
 }

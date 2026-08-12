@@ -5,6 +5,7 @@ import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.ContextCompressionState
 import com.android.everytalk.data.DataClass.ExecutionStep
 import com.android.everytalk.data.DataClass.ExecutionStepType
+import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.network.AppStreamEvent
 import com.android.everytalk.data.network.AI_CONTENT_SAFETY_ERROR_TYPE
@@ -34,6 +35,9 @@ import kotlinx.serialization.json.contentOrNull
 internal fun shouldAppendStreamTextChunk(chunk: String?): Boolean =
     !chunk.isNullOrEmpty() &&
         (chunk.isNotBlank() || chunk.any { character -> character == '\n' || character == '\r' })
+
+/** 工具完成到下一轮模型输出之间，持续告诉用户 Agent Loop 仍在运行。 */
+internal const val AGENT_LOOP_CONTINUING_STATUS = "正在分析工具结果"
 
 private fun nativeContextWindowId(
     messageId: String,
@@ -138,7 +142,7 @@ private fun buildToolCallStatus(toolName: String): String {
 }
 
 private fun compactExecutionLabel(value: String, maxChars: Int = 180): String {
-    val normalized = value.trim()
+    val normalized = value.replace('\r', ' ').replace('\n', ' ').trim()
     if (normalized.length <= maxChars) return normalized
     return normalized.take(maxChars - 3).trimEnd() + "..."
 }
@@ -151,10 +155,21 @@ private fun AppStreamEvent.ToolCall.argumentText(vararg keys: String): String =
             ?.takeIf { it.isNotEmpty() }
     }.orEmpty()
 
-internal fun executionStepForToolCall(event: AppStreamEvent.ToolCall): ExecutionStep {
+internal fun executionStepForToolCall(
+    event: AppStreamEvent.ToolCall,
+    reasoningBefore: String? = null,
+): ExecutionStep {
     val toolName = event.name.trim()
     val query = event.argumentText("query", "q", "search_query", "searchQuery")
     val url = event.argumentText("url", "href", "link")
+    val agentTarget = event.argumentText(
+        "command",
+        "path",
+        "destination_path",
+        "source_path",
+        "port",
+        "action",
+    )
     val normalizedName = toolName.lowercase(Locale.ROOT)
     val type = when {
         ComputerToolNames.all.any { it.equals(normalizedName, ignoreCase = true) } ->
@@ -170,7 +185,7 @@ internal fun executionStepForToolCall(event: AppStreamEvent.ToolCall): Execution
             ExecutionStepType.Search -> add(query.ifBlank { toolName })
             ExecutionStepType.Web -> add(url.ifBlank { toolName })
             ExecutionStepType.Tool -> add(toolName)
-            ExecutionStepType.Agent -> add(toolName)
+            ExecutionStepType.Agent -> add(agentTarget.ifBlank { toolName })
         }
     }
         .filter { it.isNotBlank() }
@@ -186,6 +201,7 @@ internal fun executionStepForToolCall(event: AppStreamEvent.ToolCall): Execution
             ExecutionStepType.Agent -> "运行 Agent"
         },
         labels = labels,
+        reasoningBefore = reasoningBefore,
     )
 }
 
@@ -196,12 +212,209 @@ internal fun mergeExecutionStep(
     val index = existing.indexOfFirst { it.id == incoming.id }
     if (index < 0) return existing + incoming
     return existing.toMutableList().apply {
-        this[index] = incoming.copy(completed = this[index].completed)
+        val previous = this[index]
+        this[index] = incoming.copy(
+            completed = previous.completed,
+            executionId = previous.executionId ?: incoming.executionId,
+            // 同一 ToolCall 可能被兼容服务重复发送，首次归档的顺序快照不能被后续空片段覆盖。
+            reasoningBefore = previous.reasoningBefore ?: incoming.reasoningBefore,
+        )
     }
 }
 
-private fun List<ExecutionStep>.completeLastPendingStep(): List<ExecutionStep> {
-    val index = indexOfLast { !it.completed }
+private fun List<ExecutionTraceEvent>.appendReasoningChunk(chunk: String): List<ExecutionTraceEvent> {
+    if (chunk.isEmpty()) return this
+    val previous = lastOrNull()
+    if (previous !is ExecutionTraceEvent.Reasoning) {
+        return this + ExecutionTraceEvent.Reasoning(chunk)
+    }
+    return toMutableList().apply {
+        this[lastIndex] = previous.copy(text = previous.text + chunk)
+    }
+}
+
+private fun List<ExecutionTraceEvent>.mergeToolStep(step: ExecutionStep): List<ExecutionTraceEvent> {
+    val index = indexOfFirst { event ->
+        event is ExecutionTraceEvent.Tool && event.step.id == step.id
+    }
+    if (index < 0) return this + ExecutionTraceEvent.Tool(step)
+    return toMutableList().apply {
+        val previous = this[index] as ExecutionTraceEvent.Tool
+        this[index] = ExecutionTraceEvent.Tool(
+            step.copy(
+                completed = previous.step.completed,
+                executionId = previous.step.executionId ?: step.executionId,
+            )
+        )
+    }
+}
+
+private fun List<ExecutionTraceEvent>.completeTool(
+    toolCallId: String?,
+    executionId: String?,
+): List<ExecutionTraceEvent> {
+    val index = if (!toolCallId.isNullOrBlank()) {
+        indexOfFirst { event ->
+            event is ExecutionTraceEvent.Tool && event.step.id == toolCallId
+        }
+    } else {
+        indexOfFirst { event -> event is ExecutionTraceEvent.Tool && !event.step.completed }
+    }
+    if (index < 0) return this
+    return toMutableList().apply {
+        val event = this[index] as ExecutionTraceEvent.Tool
+        this[index] = event.copy(
+            step = event.step.copy(
+                completed = true,
+                executionId = executionId ?: event.step.executionId,
+            )
+        )
+    }
+}
+
+private fun List<ExecutionTraceEvent>.completeAllTraceTools(): List<ExecutionTraceEvent> =
+    if (none { event -> event is ExecutionTraceEvent.Tool && !event.step.completed }) {
+        this
+    } else {
+        map { event ->
+            if (event is ExecutionTraceEvent.Tool) {
+                event.copy(step = event.step.copy(completed = true))
+            } else {
+                event
+            }
+        }
+    }
+
+/**
+ * 把真实流事件归约为单条有序执行链。
+ * 该函数无 UI 和数据库依赖，回归测试可以直接验证事件边界是否被保留。
+ */
+internal fun reduceExecutionTrace(
+    trace: List<ExecutionTraceEvent>,
+    event: AppStreamEvent,
+): List<ExecutionTraceEvent> = when (event) {
+    is AppStreamEvent.Reasoning -> trace.appendReasoningChunk(
+        TextSanitizer.removeUnicodeReplacementCharacters(event.text)
+    )
+    is AppStreamEvent.ToolCall -> trace.mergeToolStep(executionStepForToolCall(event))
+    is AppStreamEvent.ExecutionStatusUpdate -> if (event.status.isNullOrBlank()) {
+        trace.completeTool(event.toolCallId, event.executionId)
+    } else {
+        trace
+    }
+    is AppStreamEvent.Finish,
+    is AppStreamEvent.StreamEnd,
+    -> trace.completeAllTraceTools()
+    else -> trace
+}
+
+/**
+ * reasoning 是整条消息的累积文本，已记录片段始终位于它的前部。
+ * 这里只取尚未分配给旧工具步骤的尾部，避免抽屉重复显示同一段思考。
+ */
+private fun reasoningBeforeNextTool(
+    reasoningText: String,
+    existingSteps: List<ExecutionStep>,
+): String {
+    val recordedPrefix = buildString {
+        existingSteps.forEach { step -> step.reasoningBefore?.let(::append) }
+    }
+    return when {
+        recordedPrefix.isEmpty() -> reasoningText
+        reasoningText.startsWith(recordedPrefix) -> reasoningText.drop(recordedPrefix.length)
+        else -> ""
+    }
+}
+
+/**
+ * 工具调用即使出现在前导正文之后，也必须保留为正在执行的步骤。
+ * 前导正文只代表当前轮已经输出文字，不代表整个 Agent Loop 已结束。
+ */
+internal fun applyToolCallEventToMessage(
+    message: Message,
+    event: AppStreamEvent.ToolCall,
+    reasoningText: String = message.reasoning.orEmpty(),
+): Message {
+    val toolStatus = event.status?.takeIf { it.isNotBlank() }
+        ?: buildToolCallStatus(event.name)
+    return message.copy(
+        currentWebSearchStage = toolStatus.takeIf { it.isNotBlank() },
+        executionStatus = null,
+        executionSteps = mergeExecutionStep(
+            message.executionSteps,
+            executionStepForToolCall(
+                event = event,
+                reasoningBefore = reasoningBeforeNextTool(reasoningText, message.executionSteps),
+            ),
+        ),
+        executionTrace = reduceExecutionTrace(message.executionTrace, event),
+    )
+}
+
+/**
+ * 工具状态独立于正文状态更新。空状态表示本次工具已返回，随后仍需等待模型处理结果。
+ */
+internal fun applyExecutionStatusEventToMessage(
+    message: Message,
+    event: AppStreamEvent.ExecutionStatusUpdate,
+): Message {
+    val stepsWithResult = if (!event.toolCallId.isNullOrBlank() && !event.executionId.isNullOrBlank()) {
+        message.executionSteps.map { step ->
+            if (step.id == event.toolCallId) {
+                step.copy(completed = true, executionId = event.executionId)
+            } else {
+                step
+            }
+        }
+    } else {
+        message.executionSteps
+    }
+    val status = event.status?.trim()?.takeIf { it.isNotEmpty() }
+    if (status != null) {
+        return message.copy(
+            currentWebSearchStage = null,
+            executionStatus = status,
+            executionSteps = stepsWithResult,
+            executionTrace = reduceExecutionTrace(message.executionTrace, event),
+        )
+    }
+
+    val completedSteps = if (event.toolCallId.isNullOrBlank()) {
+        stepsWithResult.completeFirstPendingStep()
+    } else {
+        stepsWithResult
+    }
+    return message.copy(
+        currentWebSearchStage = null,
+        executionStatus = AGENT_LOOP_CONTINUING_STATUS.takeIf { completedSteps.isNotEmpty() },
+        executionSteps = completedSteps,
+        executionTrace = reduceExecutionTrace(message.executionTrace, event),
+    )
+}
+
+/** 新一轮思考开始时移除上一轮工具等待文案，完整 reasoning 继续由流式状态累积。 */
+internal fun applyActiveReasoningChunk(currentMessage: Message, reasoningChunk: String): Message {
+    if (reasoningChunk.isBlank()) return currentMessage
+    return applyReasoningChunk(currentMessage, reasoningChunk).copy(
+        currentWebSearchStage = null,
+        executionStatus = null,
+        executionTrace = reduceExecutionTrace(
+            currentMessage.executionTrace,
+            AppStreamEvent.Reasoning(reasoningChunk),
+        ),
+    )
+}
+
+/** 每一轮新的 reasoning 都会重新打开思考运行态，直到该轮收到 ReasoningFinish。 */
+internal fun markReasoningRoundActive(
+    reasoningCompleteMap: MutableMap<String, Boolean>,
+    messageId: String,
+) {
+    reasoningCompleteMap[messageId] = false
+}
+
+private fun List<ExecutionStep>.completeFirstPendingStep(): List<ExecutionStep> {
+    val index = indexOfFirst { !it.completed }
     if (index < 0) return this
     return toMutableList().apply { this[index] = this[index].copy(completed = true) }
 }
@@ -493,10 +706,17 @@ internal class ApiHandlerStreamProcessor(
                     if (processedResult is com.android.everytalk.util.messageprocessor.ProcessedEventResult.ReasoningUpdated) {
                         val reasoningChunk = TextSanitizer.removeUnicodeReplacementCharacters(appEvent.text)
                         if (reasoningChunk.isNotBlank()) {
-                            val seededMessage = applyReasoningChunk(currentMessage, reasoningChunk)
-                            if (seededMessage !== currentMessage) {
+                            val latestMessage = latestMessageForUpdate()
+                            val seededMessage = applyActiveReasoningChunk(latestMessage, reasoningChunk)
+                            if (seededMessage != latestMessage) {
                                 messageList[messageIndex] = seededMessage
                             }
+                            val reasoningMap = if (isImageGeneration) {
+                                stateHolder.imageReasoningCompleteMap
+                            } else {
+                                stateHolder.textReasoningCompleteMap
+                            }
+                            markReasoningRoundActive(reasoningMap, aiMessageId)
                             PerformanceMonitor.recordEvent(aiMessageId, "Reasoning", reasoningChunk.length)
                             stateHolder.appendReasoningToMessage(aiMessageId, reasoningChunk, isImageGeneration)
                         }
@@ -574,38 +794,10 @@ internal class ApiHandlerStreamProcessor(
                     }
                 }
                 is AppStreamEvent.ExecutionStatusUpdate -> {
-                    val executionStepsWithResult = if (
-                        !appEvent.toolCallId.isNullOrBlank() && !appEvent.executionId.isNullOrBlank()
-                    ) {
-                        updatedMessage.executionSteps.map { step ->
-                            if (step.id == appEvent.toolCallId) {
-                                step.copy(completed = true, executionId = appEvent.executionId)
-                            } else {
-                                step
-                            }
-                        }
-                    } else {
-                        updatedMessage.executionSteps
-                    }
-                    updatedMessage = if (currentMessage.contentStarted || currentMessage.text.isNotBlank()) {
-                        updatedMessage.copy(
-                            currentWebSearchStage = null,
-                            executionStatus = null,
-                            executionSteps = executionStepsWithResult.completeAllSteps(),
-                        )
-                    } else if (appEvent.status.isNullOrBlank()) {
-                        updatedMessage.copy(
-                            currentWebSearchStage = null,
-                            executionStatus = null,
-                            executionSteps = if (appEvent.toolCallId.isNullOrBlank()) {
-                                executionStepsWithResult.completeLastPendingStep()
-                            } else {
-                                executionStepsWithResult
-                            },
-                        )
-                    } else {
-                        updatedMessage.copy(executionStatus = appEvent.status)
-                    }
+                    updatedMessage = applyExecutionStatusEventToMessage(
+                        latestMessageForUpdate(),
+                        appEvent,
+                    )
                 }
                 is AppStreamEvent.WebSearchResults -> {
                     updatedMessage = updatedMessage.copy(
@@ -662,6 +854,11 @@ internal class ApiHandlerStreamProcessor(
                     updatedMessage = mergeStreamingCompletionMessage(
                         syncedMessage = messageList[messageIndex],
                         finalizedMessage = finalizedMessage,
+                    ).copy(
+                        executionSteps = messageList[messageIndex].executionSteps.completeAllSteps(),
+                        executionTrace = messageList[messageIndex].executionTrace.completeAllTraceTools(),
+                        currentWebSearchStage = null,
+                        executionStatus = null,
                     )
                     updatedMessage = applyEstimatedTokenUsageFallback(updatedMessage)
                     logger.debug("Synced streaming message $aiMessageId to messages list")
@@ -714,32 +911,14 @@ internal class ApiHandlerStreamProcessor(
                 }
                 is AppStreamEvent.ToolCall -> {
                     logger.debug("Received ToolCall event: ${appEvent.name}")
-                    val toolStatus = appEvent.status?.takeIf { it.isNotBlank() }
-                        ?: buildToolCallStatus(appEvent.name)
                     val latestMessage = latestMessageForUpdate()
-                    val executionSteps = mergeExecutionStep(
-                        latestMessage.executionSteps,
-                        executionStepForToolCall(appEvent),
+                    val streamedReasoning = stateHolder.getStreamingReasoning(aiMessageId).value
+                    updatedMessage = applyToolCallEventToMessage(
+                        message = latestMessage,
+                        event = appEvent,
+                        reasoningText = streamedReasoning.ifEmpty { latestMessage.reasoning.orEmpty() },
                     )
-                    updatedMessage = if (
-                        toolStatus.isNotBlank() &&
-                        !latestMessage.contentStarted &&
-                        latestMessage.text.isBlank()
-                    ) {
-                        latestMessage.copy(
-                            currentWebSearchStage = toolStatus,
-                            executionSteps = executionSteps,
-                        )
-                    } else {
-                        latestMessage.copy(executionSteps = executionSteps)
-                    }
                 }
-            }
-
-            if (updatedMessage.contentStarted && updatedMessage.executionSteps.any { !it.completed }) {
-                updatedMessage = updatedMessage.copy(
-                    executionSteps = updatedMessage.executionSteps.completeAllSteps(),
-                )
             }
     
             // 若处于"暂停流式显示"状态，则不更新UI，仅由恢复时一次性刷新

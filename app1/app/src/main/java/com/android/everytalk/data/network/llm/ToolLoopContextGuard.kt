@@ -11,6 +11,60 @@ import kotlinx.serialization.json.jsonPrimitive
 internal const val TOOL_CONTEXT_COMPRESSION_STATUS = "正在压缩上下文"
 internal const val TRUNCATED_TOOL_OUTPUT_TEXT = "工具输出已为上下文窗口缩减，关键结论请参考后续回答"
 
+/**
+ * 暂存单轮模型正文，等本轮是否调用工具明确后再决定去向。
+ * 工具轮正文属于执行说明，会转换成 reasoning；最终轮正文仍按 Content 输出。
+ */
+internal class ToolRoundContentBuffer(
+    private val emitEvent: suspend (AppStreamEvent) -> Unit,
+) {
+    private val pendingContent = mutableListOf<AppStreamEvent>()
+    private var pendingFinalContent: AppStreamEvent.ContentFinal? = null
+    private var toolCallObserved = false
+
+    suspend fun accept(event: AppStreamEvent) {
+        when (event) {
+            is AppStreamEvent.Content,
+            is AppStreamEvent.Text,
+            -> if (toolCallObserved) {
+                emitAsReasoning(event)
+            } else {
+                pendingContent += event
+            }
+            is AppStreamEvent.ContentFinal -> pendingFinalContent = event
+            is AppStreamEvent.ToolCall -> {
+                flushContent(asReasoning = true)
+                toolCallObserved = true
+                emitEvent(event)
+            }
+            else -> emitEvent(event)
+        }
+    }
+
+    suspend fun finish(hasToolCalls: Boolean) {
+        val isToolRound = hasToolCalls || toolCallObserved
+        flushContent(asReasoning = isToolRound)
+        if (!isToolRound) pendingFinalContent?.let { emitEvent(it) }
+        pendingFinalContent = null
+    }
+
+    private suspend fun flushContent(asReasoning: Boolean) {
+        pendingContent.forEach { event ->
+            if (asReasoning) emitAsReasoning(event) else emitEvent(event)
+        }
+        pendingContent.clear()
+    }
+
+    private suspend fun emitAsReasoning(event: AppStreamEvent) {
+        val text = when (event) {
+            is AppStreamEvent.Content -> event.text
+            is AppStreamEvent.Text -> event.text
+            else -> return
+        }
+        if (text.isNotEmpty()) emitEvent(AppStreamEvent.Reasoning(text))
+    }
+}
+
 private const val MIN_RETAINED_TOOL_OUTPUT_TOKENS = 64L
 // ponytail: 固定硬预算防止兼容服务上报错误上下文规格；以后接入统一 tokenizer 时可替换估算器。
 private const val MAX_RETAINED_TOOL_OUTPUT_TOKENS = 64_000L

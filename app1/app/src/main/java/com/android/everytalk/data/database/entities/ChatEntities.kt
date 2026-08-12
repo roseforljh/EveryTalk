@@ -8,6 +8,7 @@ import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.ContextUsageSnapshot
 import com.android.everytalk.data.DataClass.ContextCompressionState
 import com.android.everytalk.data.DataClass.ExecutionStep
+import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.data.database.Converters
@@ -57,6 +58,7 @@ data class MessageEntity(
     val parts: List<MarkdownPart>,
     val executionStatus: String?,
     val executionSteps: List<ExecutionStep>,
+    val executionTrace: List<ExecutionTraceEvent>,
     val enabledToolIds: List<String>,
     val computerIdSnapshot: String? = null,
     val workspaceIdSnapshot: String? = null,
@@ -89,6 +91,7 @@ data class RawMessageRow(
     val partsJson: String,
     val executionStatus: String?,
     val executionStepsJson: String,
+    val executionTraceJson: String,
     val enabledToolIdsJson: String,
     val computerIdSnapshot: String?,
     val workspaceIdSnapshot: String?,
@@ -117,6 +120,7 @@ fun RawMessageRow.toMessage(converters: Converters): Message = Message(
     parts = converters.toMarkdownPartList(partsJson),
     executionStatus = executionStatus,
     executionSteps = converters.toExecutionStepList(executionStepsJson),
+    executionTrace = converters.toExecutionTrace(executionTraceJson),
     enabledToolIds = converters.toStringList(enabledToolIdsJson),
     computerIdSnapshot = computerIdSnapshot,
     workspaceIdSnapshot = workspaceIdSnapshot,
@@ -146,6 +150,7 @@ fun MessageEntity.toMessage(): Message {
         parts = parts,
         executionStatus = executionStatus,
         executionSteps = executionSteps,
+        executionTrace = executionTrace,
         enabledToolIds = enabledToolIds,
         computerIdSnapshot = computerIdSnapshot,
         workspaceIdSnapshot = workspaceIdSnapshot,
@@ -177,6 +182,7 @@ fun Message.toEntity(sessionId: String): MessageEntity {
         parts = parts,
         executionStatus = executionStatus,
         executionSteps = executionSteps,
+        executionTrace = executionTrace,
         enabledToolIds = enabledToolIds,
         computerIdSnapshot = computerIdSnapshot,
         workspaceIdSnapshot = workspaceIdSnapshot,

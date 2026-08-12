@@ -3,6 +3,7 @@ package com.android.everytalk.ui.screens.BubbleMain.Main
 import android.app.Application
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onNodeWithTag
@@ -10,6 +11,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.android.everytalk.data.DataClass.ExecutionStep
 import com.android.everytalk.data.DataClass.ExecutionStepType
+import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -36,7 +38,7 @@ class ThinkingExecutionTimelineGroupingTest {
                     reasoningText = "",
                     isReasoningActive = false,
                     messageIsError = false,
-                    reasoningContent = {},
+                    reasoningContent = { _, _ -> },
                 )
             }
         }
@@ -66,6 +68,86 @@ class ThinkingExecutionTimelineGroupingTest {
             listOf("read_attachment", "current_time", "read_attachment"),
             entries.map { it.step.labels.single() },
         )
+    }
+
+    @Test
+    fun `思考与工具按模型实际执行顺序交错排列`() {
+        val items = orderedExecutionItems(
+            reasoningText = "兼容字段不参与新消息排序",
+            executionSteps = emptyList(),
+            executionTrace = listOf(
+                ExecutionTraceEvent.Reasoning("先读取配置。"),
+                ExecutionTraceEvent.Tool(toolStep("1", "uname -a")),
+                ExecutionTraceEvent.Reasoning("再检查负载。"),
+                ExecutionTraceEvent.Tool(toolStep("2", "df -h")),
+                ExecutionTraceEvent.Reasoning("最后汇总结论。"),
+            ),
+        )
+
+        assertEquals(
+            listOf("先读取配置。", "uname -a", "再检查负载。", "df -h", "最后汇总结论。"),
+            items.map { item ->
+                when (item) {
+                    is OrderedExecutionItem.Reasoning -> item.text
+                    is OrderedExecutionItem.Step -> item.entry.step.labels.single()
+                }
+            },
+        )
+    }
+
+    @Test
+    fun `新旧步骤混合时使用旧消息兼容顺序`() {
+        val items = orderedExecutionItems(
+            reasoningText = "旧消息的完整思考。",
+            executionSteps = listOf(
+                toolStep("legacy", "clock"),
+                toolStep("new", "exec").copy(reasoningBefore = ""),
+            ),
+        )
+
+        assertTrue(items.first() is OrderedExecutionItem.Reasoning)
+        assertEquals(
+            listOf("clock", "exec"),
+            items.filterIsInstance<OrderedExecutionItem.Step>().map { it.entry.step.labels.single() },
+        )
+    }
+
+    @Test
+    fun `抽屉节点按有序执行链交错渲染`() {
+        val trace = listOf(
+            ExecutionTraceEvent.Reasoning("第一段思考"),
+            ExecutionTraceEvent.Tool(toolStep("1", "uname -a")),
+            ExecutionTraceEvent.Reasoning("第二段思考"),
+            ExecutionTraceEvent.Tool(toolStep("2", "df -h")),
+        )
+
+        composeRule.setContent {
+            MaterialTheme {
+                ThinkingExecutionTimeline(
+                    executionSteps = emptyList(),
+                    executionTrace = trace,
+                    webSearchResults = emptyList(),
+                    activityStatusText = null,
+                    reasoningText = "",
+                    isReasoningActive = false,
+                    messageIsError = false,
+                    reasoningContent = { text, index ->
+                        androidx.compose.material3.Text(
+                            text = text,
+                            modifier = androidx.compose.ui.Modifier.testTag("trace-reasoning-$index"),
+                        )
+                    },
+                )
+            }
+        }
+
+        val verticalPositions = listOf(
+            composeRule.onNodeWithTag("trace-reasoning-0").fetchSemanticsNode("").boundsInRoot.top,
+            composeRule.onNodeWithTag("reasoning-execution-step-0").fetchSemanticsNode("").boundsInRoot.top,
+            composeRule.onNodeWithTag("trace-reasoning-1").fetchSemanticsNode("").boundsInRoot.top,
+            composeRule.onNodeWithTag("reasoning-execution-step-1").fetchSemanticsNode("").boundsInRoot.top,
+        )
+        assertEquals(verticalPositions.sorted(), verticalPositions)
     }
 
     private fun toolStep(id: String, name: String) = ExecutionStep(

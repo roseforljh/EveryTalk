@@ -104,6 +104,10 @@ object OpenAIDirectClient {
                 var parseResult: OpenAIParseResult? = null
                 var shouldRetryWithoutImages = false
                 var shouldFallbackResponses = false
+                val roundContentBuffer = ToolRoundContentBuffer { event ->
+                    send(event)
+                    kotlinx.coroutines.yield()
+                }
 
                 client.preparePost(url) {
                     contentType(ContentType.Application.Json)
@@ -162,8 +166,7 @@ object OpenAIDirectClient {
                                 }
                                 else -> {}
                             }
-                            send(orderedEvent)
-                            kotlinx.coroutines.yield()
+                            roundContentBuffer.accept(orderedEvent)
                         }
                     )
                 }
@@ -181,6 +184,10 @@ object OpenAIDirectClient {
                     loopCount--
                     continue
                 }
+
+                roundContentBuffer.finish(
+                    hasToolCalls = parseResult?.hasToolCalls == true || pendingToolCalls.isNotEmpty(),
+                )
 
                 Log.i(TAG, "循环 #$loopCount 结束, pendingToolCalls=${pendingToolCalls.size}, hasContent=$hasContent")
 

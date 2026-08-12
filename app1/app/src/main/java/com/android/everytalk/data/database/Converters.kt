@@ -6,6 +6,7 @@ import com.android.everytalk.data.DataClass.ModelParameters
 import com.android.everytalk.data.DataClass.ContextUsageSnapshot
 import com.android.everytalk.data.DataClass.ContextCompressionState
 import com.android.everytalk.data.DataClass.ExecutionStep
+import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.ModalityType
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.WebSearchResult
@@ -143,6 +144,20 @@ class Converters {
         if (value.isNullOrEmpty()) return emptyList()
         return try {
             json.decodeFromString(ListSerializer(ExecutionStep.serializer()), value)
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    @TypeConverter
+    fun fromExecutionTrace(value: List<ExecutionTraceEvent>): String =
+        json.encodeToString(ListSerializer(ExecutionTraceEvent.serializer()), value)
+
+    @TypeConverter
+    fun toExecutionTrace(value: String?): List<ExecutionTraceEvent> {
+        if (value.isNullOrEmpty()) return emptyList()
+        return try {
+            json.decodeFromString(ListSerializer(ExecutionTraceEvent.serializer()), value)
         } catch (_: Exception) {
             emptyList()
         }

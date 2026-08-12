@@ -98,6 +98,10 @@ object AnthropicDirectClient {
             repeat(MAX_TOOL_LOOPS) { loopIndex ->
                 var parseResult: AnthropicParseResult? = null
                 var retryWithoutNativeContextManagement: Boolean
+                val roundContentBuffer = ToolRoundContentBuffer { event ->
+                    send(event)
+                    yield()
+                }
                 do {
                     retryWithoutNativeContextManagement = false
                     val payload = buildAnthropicPayload(
@@ -141,14 +145,14 @@ object AnthropicDirectClient {
 
                         parseResult = parseAnthropicSse(response.bodyAsChannel()) { event ->
                             val orderedEvent = event.withRequestOrdinal(loopIndex + 1)
-                            send(orderedEvent)
-                            yield()
+                            roundContentBuffer.accept(orderedEvent)
                         }
                     }
                     if (terminalSent) return@channelFlow
                 } while (retryWithoutNativeContextManagement)
 
                 val parsed = parseResult ?: error("Anthropic 流未返回解析结果")
+                roundContentBuffer.finish(hasToolCalls = parsed.toolCalls.isNotEmpty())
                 latestActiveUsage = parsed.activeUsage ?: latestActiveUsage
                 parsed.errorMessage?.let { message ->
                     send(AppStreamEvent.Error("Anthropic API 错误: $message"))
