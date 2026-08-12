@@ -5,12 +5,32 @@
 | 项目 | 内容 |
 | --- | --- |
 | 状态 | 已确认，实施中 |
-| 版本 | v2.1 |
+| 版本 | v2.2 |
 | 日期 | 2026-08-12 |
 | 目标仓库 | EveryTalk |
 | Android 工程 | `app1/` |
 | 核心架构 | Android 直接通过 SSH 连接用户 VPS |
 | 替代文档 | 本文完整替代 v1.1 独立控制面方案 |
+
+### 当前实施状态
+
+Android 本地直连主链路已经进入完整功能收尾阶段。当前代码已经包含多服务器管理、Host Key 固定、Keystore 本地凭据、Direct 与 Container、会话级选服、自动 Workspace、七个 Tool、服务器详情、Secret、Private Preview、Public Preview、删除与本地审计。
+
+v2.2 已同步以下实现：
+
+1. Container helper 升级为 v3，旧版服务器会进入 `CONFIGURATION_REQUIRED` 并由详情页修复。
+2. `exec(background=true)` 在 VPS 保存 `process_id`、PID、进程起始标记、状态、Exit Code、日志和更新时间。
+3. 删除 Workspace 前根据状态文件停止已记录后台进程；Direct 模式同时核对 PID、起始标记、Session ID 和进程参数，防止 PID 复用导致误杀。
+4. PTY 与 Private Preview 使用统一的 Channel 建立重试边界，端口转发纳入活跃 Channel 计数。
+5. `PREVIEW_STOPPED`、审计结果和安全摘要具备独立中英文显示。
+6. Public Preview 的 Container 到期由 VPS 端 `timeout` 执行，手机离线后仍会停止公网代理。
+
+以下项目仍属于发布验收，当前文档不把它们标记为完成：
+
+1. Ubuntu、Debian、amd64、arm64 的真实 VPS 矩阵。
+2. Android 真机的四类 SSH 凭据、切网、锁屏、系统回收与 WebSocket Preview。
+3. 抓包、云安全组、VPS 防火墙和 Host Key 更换的真实端到端验证。
+4. CI 中的容器化 sshd、Container 安全断言、镜像扫描与 Release 制品。
 
 ## 1. 完整范围声明
 
@@ -269,6 +289,8 @@ ComputerConnection
 
 系统强制停止 App 后，SSH、PTY 和本地端口转发立即失效。只有通过 `exec(background=true)` 启动的后台任务、已经独立运行的服务和正在运行的 Container 可以继续。结果尚未确认的前台命令进入 `UNKNOWN`，禁止自动重放；原 PTY 返回 `TERMINAL_LOST`，Private Preview 进入 `STOPPED`。后台任务的 PID、日志和状态文件保存在 VPS，App 下次启动后重新连接并对账。
 
+PTY 和 Private Preview 在新 Channel 尚未启动时允许丢弃旧 Transport 并安全重连一次。Channel 已启动后禁止自动重放。端口转发创建成功后计入连接的活跃 Channel，网络切换、Disconnect 和前台通知停止动作都会关闭旧转发。
+
 ## 9. SSH Host Key 验证
 
 ### 9.1 首次连接
@@ -475,7 +497,7 @@ App 通过一次性 sudo 会话安装 root-owned helper：
 /usr/local/libexec/everytalk-containerctl
 ```
 
-helper 只允许 Probe、网络、镜像、Workspace Container、容器执行、地址解析与 Public Preview 固定子命令。每个子命令强制准确参数数量，ID、Label、规范路径、端口、协议和镜像全部严格解析。所有 Container 操作先校验 EveryTalk Label 与 Workspace 归属，禁止接收任意 Docker 参数。安装完成后的 helper 拒绝再次执行安装入口。sudoers 只允许执行这个 root-owned 且普通用户不可写的 helper。helper 不监听端口，不保留常驻控制进程。
+helper v3 只允许 Probe、网络、镜像、Workspace Container、容器执行、后台任务停止、地址解析与 Public Preview 固定子命令。每个子命令强制准确参数数量，ID、Label、规范路径、端口、协议和镜像全部严格解析。所有 Container 操作先校验 EveryTalk Label 与 Workspace 归属，禁止接收任意 Docker 参数。安装完成后的 helper 拒绝再次执行安装入口。sudoers 只允许执行这个 root-owned 且普通用户不可写的 helper。helper 不监听端口，不保留常驻控制进程。
 
 ### 13.4 Container 安全边界
 
@@ -500,6 +522,8 @@ Container 使用专用 Docker Bridge。默认允许公网，阻止私网、link-
 ```
 
 目录包含工作文件以及 `.everytalk/workspace.json`、`runtime/`、`background/` 和 `previews/`。Container 内统一映射为 `/workspace`。
+
+每个后台任务使用 `.everytalk/background/<process_id>/`，其中 `stdout.log` 和 `stderr.log` 保存输出，`state` 原子保存 `execution_id`、`process_id`、PID、Linux 进程起始标记、`RUNNING | SUCCEEDED | FAILED | CANCELLED | STOPPED`、Exit Code 和更新时间。状态文件不保存命令、环境变量、Secret 或完整输出。
 
 用户第一次在某台服务器上开启 Agent 时执行幂等 get-or-create。切回曾经使用的服务器时恢复原目录和 Container。关闭 Agent、切换模型、切换服务器和删除聊天都不会自动删除 Workspace。
 
@@ -554,6 +578,8 @@ exec({
 8. 大输出只返回首尾片段并标记截断。
 9. 后台日志写入 `.everytalk/background/<process_id>/`。
 10. `as_root` 只在 Container 模式有效。
+11. 后台 Runtime 作为独立 Session 运行，完成、失败或取消后原子更新远端状态并清理 Runtime 信封。
+12. 删除 Direct Workspace 时只有 PID、进程起始标记、Session ID 和状态目录参数全部匹配才发送终止信号。
 
 ### 15.3 `read_file`
 
@@ -940,6 +966,9 @@ Room 禁止保存 SSH 密码、私钥、私钥口令、sudo 密码和 Workspace 
 8. 输出截断与敏感信息脱敏。
 9. `tool_call_id` 幂等与 hash 冲突。
 10. 会话选服、Agent 开关与 Workspace 恢复。
+11. 后台 Runtime 的成功、取消、状态落盘、PID 起始标记和信封清理。
+12. 首个 Channel 建立失败可安全重连，已启动 Channel 禁止重放。
+13. 审计事件、结果和安全摘要的中英文映射。
 
 ### 26.2 Android SSH 集成测试
 
@@ -1006,6 +1035,7 @@ Room 禁止保存 SSH 密码、私钥、私钥口令、sudo 密码和 Workspace 
 5. Android 编译执行 `:app:testDebugUnitTest`、`:app:compileDebugKotlin` 和 `:app:assembleDebug`。
 6. CI 禁止要求 Computer 后端环境变量。
 7. 发布包内的 Bootstrap 脚本、Helper 与镜像引用必须带版本和 SHA-256。
+8. CI 对 `runtime-wrapper.sh` 与 `everytalk-containerctl.sh` 执行 `bash -n`，并运行后台 Runtime Shell 自检。
 
 ## 28. 实施里程碑
 
