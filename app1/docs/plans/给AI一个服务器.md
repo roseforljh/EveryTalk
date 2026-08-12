@@ -5,7 +5,7 @@
 | 项目 | 内容 |
 | --- | --- |
 | 状态 | 已确认，实施中 |
-| 版本 | v2.2 |
+| 版本 | v2.3 |
 | 日期 | 2026-08-12 |
 | 目标仓库 | EveryTalk |
 | Android 工程 | `app1/` |
@@ -14,16 +14,20 @@
 
 ### 当前实施状态
 
-Android 本地直连主链路已经进入完整功能收尾阶段。当前代码已经包含多服务器管理、Host Key 固定、Keystore 本地凭据、Direct 与 Container、会话级选服、自动 Workspace、七个 Tool、服务器详情、Secret、Private Preview、Public Preview、删除与本地审计。
+Android 本地直连主链路已经进入完整功能收尾阶段。当前代码已经包含多服务器管理、Host Key 固定、Keystore 本地凭据、统一 SSH 与 Container 混合模式、会话级选服、自动 Workspace、七个 Tool、服务器详情、Secret、Private Preview、Public Preview、删除与本地审计。
 
-v2.2 已同步以下实现：
+v2.3 已同步以下实现：
 
-1. Container helper 升级为 v3，旧版服务器会进入 `CONFIGURATION_REQUIRED` 并由详情页修复。
-2. `exec(background=true)` 在 VPS 保存 `process_id`、PID、进程起始标记、状态、Exit Code、日志和更新时间。
-3. 删除 Workspace 前根据状态文件停止已记录后台进程；Direct 模式同时核对 PID、起始标记、Session ID 和进程参数，防止 PID 复用导致误杀。
-4. PTY 与 Private Preview 使用统一的 Channel 建立重试边界，端口转发纳入活跃 Channel 计数。
-5. `PREVIEW_STOPPED`、审计结果和安全摘要具备独立中英文显示。
-6. Public Preview 的 Container 到期由 VPS 端 `timeout` 执行，手机离线后仍会停止公网代理。
+1. 新增服务器不再选择运行模式，统一通过 SSH 连接 VPS，并配置 Container Workspace。
+2. `exec.target` 支持 `container | host`，默认 `container`。代码、脚本、编译、测试和依赖安装进入 Container；VPS 服务、进程、端口、系统和已有部署使用 Host。
+3. 明确只读的 Host 命令自动执行。写入、提权、Shell 组合、敏感读取和未知命令会在输入框上方显示单次确认卡。
+4. Host 确认绑定不可变请求与 `requestId`。确认前完成完整参数校验，批准后只执行卡片展示的原命令和工作目录。
+5. Host 禁止隐藏环境变量、Workspace Secret、stdin、`background=true` 和 `as_root=true`。需要提权时必须在完整命令中显式写出 `sudo`。
+6. Runtime Wrapper 与 Container Helper 升级为 v5。命令、cwd、Container 环境变量和 stdin 通过同一个 SSH exec Channel 传输，Wrapper 按内容版本持久化。
+7. 模型首轮思考期间并行预连接 SSH 并校验 Wrapper，避免每条命令重复握手、SFTP 建目录和多文件写入。
+8. `open_port.target` 同样支持 `container | host`，既能预览 Agent 创建的服务，也能预览 VPS 已有服务。
+9. 旧 Direct 记录只迁移本地路由字段并进入“需要配置”。迁移不连接 VPS，不删除凭据、Workspace 文件或服务。
+10. Room 升级至 15，Preview 持久化实际目标，旧 Direct Preview 迁移为 Host 目标。
 
 以下项目仍属于发布验收，当前文档不把它们标记为完成：
 
@@ -36,7 +40,7 @@ v2.2 已同步以下实现：
 
 本文是一份完整功能实施计划。全部里程碑共同组成最终交付范围，里程碑只表示依赖顺序。
 
-本功能完成后，用户可以在 EveryTalk Android App 中添加和管理多台 Linux 服务器。每个聊天保存一台当前服务器，用户可以随时切换。开启 Agent 后，当前会话里的模型可以通过手机与 VPS 之间的 SSH 连接执行命令、读写文件、使用交互终端、上传和下载文件、运行后台服务并打开网页预览。
+本功能完成后，用户可以在 EveryTalk Android App 中添加和管理多台 Linux 服务器。每个聊天保存一台当前服务器，用户可以随时切换。开启 Agent 后，当前会话里的模型可以通过手机与 VPS 之间的 SSH 连接维护 VPS，并在 Container Workspace 中安全地完成代码、脚本、编译、测试、文件和预览任务。
 
 所有 Computer 功能只在以下两个位置运行：
 
@@ -78,6 +82,10 @@ v2.2 已同步以下实现：
 17. SSH 凭据只在手机本地加密保存。
 18. App 内私有预览通过 SSH 本地端口转发完成。
 19. 公开预览直接暴露用户 VPS 端口，必须由用户逐次确认。
+20. 新增服务器统一使用 SSH + Container 混合模式，不提供 Direct 与 Container 二选一。
+21. Host 高风险命令只允许单次确认，不提供永久放行。
+22. Host 只执行确认卡能够完整展示的命令与工作目录，隐藏输入直接拒绝。
+23. Container 不影响 Agent 查看和维护 VPS 已有服务；模型按每次操作选择 `host` 或 `container`。
 
 ## 3. 一句话定义
 
@@ -108,7 +116,7 @@ Android 直接读取 SSH Host Key
 Android 直接验证登录并安装当前服务器的专用 SSH Key
           │
           ▼
-探测系统，配置 Direct SSH 或 Container 隔离环境
+探测系统并配置统一 SSH + Container 混合环境
           │
           ▼
 服务器卡片显示“已就绪”
@@ -162,8 +170,7 @@ Android 直接验证登录并安装当前服务器的专用 SSH Key
 │ 用户 VPS                                     │
 │                                              │
 │ sshd                                         │
-│   ├── Direct SSH Workspace                   │
-│   │      ~/.everytalk/workspaces/<id>        │
+│   ├── Host：查看和维护 VPS 已有系统与服务    │
 │   └── Docker                                 │
 │          └── EveryTalk Workspace Container   │
 │                 /workspace                   │
@@ -222,20 +229,20 @@ Android 直接验证登录并安装当前服务器的专用 SSH Key
 
 Computer 功能禁止向 EveryTalk 项目方发送 SSH 凭据、sudo 密码、Workspace Secret、SSH 命令、输出、文件、Host Key、Host 和 Username。
 
-模型 Provider 会接收模型主动调用 Tool 所需的命令、必要结果和文件片段，这是现有 Agent Loop 的工作方式。SSH 凭据、真实 Host、Username 和 Host Key 永远不进入模型上下文。所有运行模式首次启用 Agent 时都显示该数据流说明。
+模型 Provider 会接收模型主动调用 Tool 所需的命令、必要结果和文件片段，这是现有 Agent Loop 的工作方式。SSH 凭据、真实 Host、Username 和 Host Key 永远不进入模型上下文。首次启用 Agent 时显示该数据流说明。
 
 Android Keystore 保护静态凭据。App 建立 SSH 连接时会在当前进程内短暂取得明文凭据。设备已 Root、App 进程被注入或系统安全区失陷时，无法承诺凭据安全。
 
 ## 7. 支持矩阵
 
-| 系统 | 架构 | Direct SSH | 已安装 Docker | 自动安装 Docker | Container 隔离环境 |
+| 系统 | 架构 | SSH Host 管理 | 已安装 Docker | 自动安装 Docker | Container Workspace |
 | --- | --- | --- | --- | --- | --- |
 | Ubuntu 20.04、22.04、24.04 | amd64 | 支持 | 支持 | 支持 | 支持 |
 | Ubuntu 20.04、22.04、24.04 | arm64 | 支持 | 支持 | 支持 | 支持 |
 | Debian 11、12、13 | amd64 | 支持 | 支持 | 支持 | 支持 |
 | Debian 11、12、13 | arm64 | 支持 | 支持 | 支持 | 支持 |
 
-其他 Linux 在具备 OpenSSH Server、POSIX Shell 和基础命令时支持 Direct SSH。已经安装兼容 Docker 时允许探测 Container 隔离环境。探测失败后保留 Direct SSH 路径。
+其他 Linux 在具备 OpenSSH Server、POSIX Shell、基础命令和兼容 Docker 时可以手动验收。自动配置仅覆盖表中系统；Docker 配置失败时服务器保留为 `CONFIGURATION_REQUIRED`，Agent 不降级为旧 Direct 模式。
 
 本地直连支持公网与局域网 IPv4、IPv6、域名、主机名和自定义端口。Host 字段禁止 URL、userinfo、路径、换行和 Shell 片段。
 
@@ -324,12 +331,14 @@ PTY 和 Private Preview 在新 Channel 尚未启动时允许丢弃旧 Transport 
 3. SSH Private Key。
 4. SSH Private Key 与可选 Passphrase。
 
-### 10.2 一次性输入
+### 10.2 本地加密保存
 
 1. 输入控件关闭自动填充、截屏预览和无关日志。
 2. 原始输入不写入 Room、SharedPreferences、聊天和崩溃日志。
-3. 登录成功后优先升级成 Computer 专属 SSH Key。
-4. sudo 密码只存在于当前配置协程内，结束后清理引用。
+3. SSH 原始登录凭据和 sudo 密码分别由 Android Keystore 加密保存到 `noBackupFilesDir`，只用于编辑、修复和重新配置。
+4. 登录成功后，日常 SSH 连接优先使用 Computer 专属 SSH Key；原始凭据不参与日常 Agent Tool 调用。
+5. 每次读取只创建可清零的短生命周期字符数组，使用完成后立即覆盖。
+6. 删除服务器时同时销毁专用 Key、本地原始凭据和 sudo 密码信封。
 
 ### 10.3 每台服务器专用 Key
 
@@ -345,7 +354,7 @@ PTY 和 Private Preview 在新 Channel 尚未启动时允许丢弃旧 Transport 
           ▼
 建立第二条连接验证专用私钥
           │
-          ├── 成功：清除原始凭据
+          ├── 成功：日常连接切换到专用 Key，原始凭据保留为本地加密恢复材料
           └── 失败：回滚新增公钥并保存加密回退凭据
 ```
 
@@ -387,7 +396,7 @@ host_key_blob
 host_key_fingerprint
 auth_kind
 credential_state
-run_mode
+run_mode（现有值固定为 `CONTAINER`，`DIRECT` 只用于旧记录迁移）
 status
 capabilities
 os_release
@@ -407,7 +416,7 @@ updated_at
 workspace_id
 computer_id
 conversation_id
-run_mode
+run_mode（现有值固定为 `CONTAINER`，`DIRECT` 只用于旧记录迁移）
 host_path
 container_name
 container_image
@@ -429,7 +438,7 @@ last_used_at
 
 ### 11.4 Preview
 
-Preview 保存 Workspace、远端端口、本地端口、公开端口、协议、可见性、状态和有效期。本地端口只在当前连接存活期间有效。
+Preview 保存 Workspace、目标 `container | host`、远端端口、本地端口、公开端口、协议、可见性、状态和有效期。本地端口只在当前连接存活期间有效。
 
 ## 12. 状态机
 
@@ -457,7 +466,7 @@ READY → STOPPED | RECOVERING | ERROR | DELETING
 DELETING → DELETED
 ```
 
-Direct SSH Workspace 不使用 `STOPPED`。
+旧 Direct Workspace 启动迁移后进入 `RECOVERING`，完成 Container 配置并实际使用时恢复为 `READY`。
 
 ### 12.3 Execution
 
@@ -472,22 +481,24 @@ QUEUED → STARTING → RUNNING
 
 远端命令已开始且手机在取得结果前断线时进入 `UNKNOWN`。App 禁止自动重复该命令。
 
-## 13. Probe 与运行模式
+## 13. Probe 与统一混合运行模式
 
 ### 13.1 Probe
 
 App 通过只读 SSH 命令探测 `/etc/os-release`、内核、架构、用户、Shell、CPU、内存、磁盘、负载、Docker、sudo、端口转发、SFTP 和 PTY。低内存、低磁盘和高负载只生成提示。
 
-### 13.2 Direct SSH
+### 13.2 统一 SSH + Container
 
-1. Agent 拥有 SSH 登录账号的实际权限。
-2. `/workspace` 映射到 `~/.everytalk/workspaces/<workspace_id>`。
-3. 结构化文件 Tool 只能访问当前 Workspace。
-4. `exec` 具备登录账号本身的权限。
-5. 首次启用时显示“Agent 使用 SSH 用户本身权限执行操作”。
-6. SSH 用户为 root 时，额外显示高风险确认。
+每台现有服务器都使用同一个模式：Android 通过 SSH 连接 VPS，VPS 同时提供 Host 管理能力和 Container Workspace。
 
-### 13.3 Container 隔离环境
+1. Host 用于查看或维护 VPS 操作系统、服务、进程、端口、日志、包和已有部署。
+2. Container 用于写代码、运行脚本、编译、测试、依赖安装和生成文件，默认工作目录为 `/workspace`。
+3. 模型按每次 `exec` 选择 `target=host | container`，默认 `container`。
+4. `read_file`、`write_file`、`terminal`、`upload` 和 `download` 始终位于 Container Workspace。
+5. 旧 Direct 记录升级后进入 `CONFIGURATION_REQUIRED`，用户完成配置后接入统一模式。
+6. 旧记录迁移只修改 Android Room，不主动连接或改动 VPS。
+
+### 13.3 Container 环境
 
 Ubuntu 与 Debian 使用 Docker 官方 APT Repository 安装 Docker。禁止执行 `curl ... | sh`。
 
@@ -497,7 +508,7 @@ App 通过一次性 sudo 会话安装 root-owned helper：
 /usr/local/libexec/everytalk-containerctl
 ```
 
-helper v3 只允许 Probe、网络、镜像、Workspace Container、容器执行、后台任务停止、地址解析与 Public Preview 固定子命令。每个子命令强制准确参数数量，ID、Label、规范路径、端口、协议和镜像全部严格解析。所有 Container 操作先校验 EveryTalk Label 与 Workspace 归属，禁止接收任意 Docker 参数。安装完成后的 helper 拒绝再次执行安装入口。sudoers 只允许执行这个 root-owned 且普通用户不可写的 helper。helper 不监听端口，不保留常驻控制进程。
+helper v5 只允许 Probe、网络、镜像、Workspace Container、容器执行、后台任务停止、地址解析与 Public Preview 固定子命令。每个子命令强制准确参数数量，ID、Label、规范路径、端口、协议和镜像全部严格解析。所有 Container 操作先校验 EveryTalk Label 与 Workspace 归属，禁止接收任意 Docker 参数。安装完成后的 helper 拒绝再次执行安装入口。sudoers 只允许执行这个 root-owned 且普通用户不可写的 helper。helper 不监听端口，不保留常驻控制进程。
 
 ### 13.4 Container 安全边界
 
@@ -511,7 +522,7 @@ helper v3 只允许 Probe、网络、镜像、Workspace Container、容器执行
 
 ### 13.5 网络边界
 
-Container 使用专用 Docker Bridge。默认允许公网，阻止私网、link-local、云元数据与 IPv6 ULA。用户可以在详情页显式允许访问 VPS 私有网络。Direct SSH 沿用登录账号的网络权限。
+Container 使用专用 Docker Bridge。默认允许公网，阻止私网、link-local、云元数据与 IPv6 ULA。用户可以在详情页显式允许访问 VPS 私有网络。Host 沿用 SSH 登录账号的网络权限。
 
 ## 14. Workspace
 
@@ -554,6 +565,7 @@ type ComputerToolResult<T> = {
 ```ts
 exec({
   command: string
+  target?: "container" | "host"
   cwd?: string
   env?: Record<string, string>
   secret_names?: string[]
@@ -564,22 +576,23 @@ exec({
 })
 ```
 
-前台返回 exit code、stdout、stderr、timeout 与截断标记。后台返回 process ID、PID 和日志路径。
+前台返回 exit code、stdout、stderr、timeout 与截断标记。Container 后台返回 process ID、PID 和日志路径。
 
 实现要求：
 
-1. `cwd` 默认 `/workspace`。
-2. Android 通过 SFTP 写入 0600 临时执行信封和脚本。
-3. SSH 命令行只出现受控固定路径和经过验证的 ID。
-4. 目标 Shell 从临时文件读取 command、cwd、env 和 stdin。
-5. Secret 不进入命令参数和进程标题。
-6. 前台超时终止远端进程组。
-7. 无法确认终止时返回 `EXECUTION_UNKNOWN`。
-8. 大输出只返回首尾片段并标记截断。
-9. 后台日志写入 `.everytalk/background/<process_id>/`。
-10. `as_root` 只在 Container 模式有效。
-11. 后台 Runtime 作为独立 Session 运行，完成、失败或取消后原子更新远端状态并清理 Runtime 信封。
-12. 删除 Direct Workspace 时只有 PID、进程起始标记、Session ID 和状态目录参数全部匹配才发送终止信号。
+1. `target` 默认 `container`。Container 的 `cwd` 默认 `/workspace`，Host 的 `cwd` 默认 SSH 用户 Home。
+2. command、cwd、Container env 和 Container stdin 通过同一个 SSH exec Channel 的长度前缀 Envelope 传入固定 Wrapper，不再为每条命令建立 SFTP 多文件写入流程。
+3. SSH 命令行只出现受控固定路径和经过验证的 ID，模型命令不会进入 SSH 参数。
+4. Secret 不进入命令参数和进程标题，只允许注入 Container。
+5. Host 禁止 env、Secret、stdin、`background=true` 和 `as_root=true`。提权必须在完整命令中显式使用 `sudo`。
+6. Host 命令、cwd、timeout 和长度在确认前完整校验，非法请求不弹确认卡、不建立 SSH Channel。
+7. 明确只读的 Host 命令自动执行；写入、提权、Shell 组合、敏感读取和未知命令进入单次确认。
+8. 确认卡完整显示冻结的原命令和工作目录，只提供“允许本次”和“拒绝”。批准后不得重新解析或替换请求。
+9. `ip monitor`、未带 `--no-stream` 的 `docker stats`、可能输出进程参数的 `ps` 等命令不在自动白名单。
+10. 前台超时终止远端进程组；无法确认终止时返回 `EXECUTION_UNKNOWN`。
+11. Tool 输出限制为保护模型上下文的固定上限，并标记 stdout、stderr 是否截断。
+12. Container 后台日志写入 `.everytalk/background/<process_id>/`。后台 Runtime 作为独立 Session 运行并原子更新状态。
+13. Wrapper 使用内容摘要版本化并持久化到 VPS；模型首轮响应期间预连接 SSH 和校验 Wrapper。
 
 ### 15.3 `read_file`
 
@@ -651,6 +664,7 @@ SFTP 流式写入 Android FileManager。模型只收到文件名、MIME、大小
 ```ts
 open_port({
   port: number
+  target?: "container" | "host"
   protocol?: "http" | "https"
   visibility?: "private" | "public"
   expires_in_seconds?: number
@@ -659,8 +673,8 @@ open_port({
 
 Private Preview：
 
-1. Direct 模式转发到 VPS `127.0.0.1:<port>`。
-2. Container 模式先解析 Container Address。
+1. `target=host` 转发到 VPS `127.0.0.1:<port>`。
+2. `target=container` 先解析 Container Address。
 3. Android 在 `127.0.0.1` 选择随机本地端口。
 4. SSH 本地端口转发承载 HTTP、HTTPS 和 WebSocket。
 5. URL 只在当前手机和当前连接存活期间有效。
@@ -668,8 +682,8 @@ Private Preview：
 Public Preview：
 
 1. Tool Call 暂停并弹出用户确认。
-2. Container 模式通过受限 helper 创建带 Label 的端口转发资源。
-3. Direct 模式要求用户程序监听 VPS 公网地址，App 只确认并检查端口。
+2. `target=container` 通过受限 helper 创建带 Label 的端口转发资源。
+3. `target=host` 要求用户程序监听 VPS 公网地址，App 只确认并检查端口。
 4. 返回 `http(s)://<VPS Host>:<public_port>`。
 5. 云厂商安全组或 VPS 防火墙仍可能阻止访问，UI 必须准确显示该限制。
 6. HTTPS 证书由用户服务或用户域名负责。
@@ -682,7 +696,7 @@ Public Preview：
 1. UI 创建后只显示名称、更新时间和作用域。
 2. 模型只知道可用 Secret 名称。
 3. `exec.secret_names` 明确声明本次使用项。
-4. Android 解密后通过 SFTP 写入远端 0600 临时环境文件。
+4. Android 解密后只把选中值写入发往 Container Wrapper 的临时执行 Envelope。
 5. Wrapper 在启动目标进程前读取并立即删除文件。
 6. 成功、失败、超时和取消都执行清理。
 7. terminal 默认不注入 Secret。
@@ -724,7 +738,7 @@ MCP fallback
 
 四类 Provider 继续复用同一个回调。Computer Tool Executor 使用当前请求启动时保存的会话、Computer 和 Workspace 快照，避免用户在生成过程中切换聊天导致路由漂移。
 
-Agent 环境提示保持紧凑，只包含 `/workspace`、运行模式、系统架构和七个 Tool 名称。禁止加入 Host、端口、用户名、真实 Host Path、Host Key 和 Secret。
+Agent 环境提示保持紧凑，只包含 Host 与 Container 的分流规则、`/workspace`、系统架构和七个 Tool 名称。禁止加入 Host、端口、用户名、真实 Host Path、Host Key 和 Secret。
 
 ## 18. Android 产品交互
 
@@ -740,11 +754,15 @@ Agent 环境提示保持紧凑，只包含 `/workspace`、运行模式、系统�
 
 ### 18.2 添加服务器悬浮卡片
 
-字段包含名称、服务器地址、SSH 端口、用户名、登录方式、密码或私钥、可选私钥口令与运行模式。
+字段包含名称、服务器地址、SSH 端口、用户名、登录方式、密码或私钥、可选私钥口令和按需使用的 sudo 密码。页面不提供运行模式选择。输入的 Secret 只在 Android 本地加密保存。
 
-流程：本地校验、读取 Host Key、确认指纹、登录、升级专用 Key、Probe、配置运行模式、验收。添加服务器阶段不创建 Workspace。
+流程：本地校验、读取 Host Key、确认指纹、登录、升级专用 Key、Probe、配置统一 SSH + Container 环境、验收。添加服务器阶段不创建 Workspace。
 
-首次启用 Agent 时显示通用数据流提示：必要的命令、执行结果和文件片段可能发送给当前 AI 模型服务商。Direct SSH 模式同时显示权限提示；root 登录账号额外显示高风险确认。确认记录只保存在 Android 本地。
+详情页提供“编辑服务器”，复用添加表单编辑全部参数。密码、私钥和 sudo 密码留空时沿用本地保存值。地址、端口或用户名变化时重新确认 Host Key，验证新目标后再替换本地记录。
+
+“修复 Container”直接读取添加或编辑时保存的本地凭据。修复弹窗不重复要求密码；停止、系统返回和页面返回都会取消修复、断开对应 SSH Transport，并把服务器恢复到可再次修复的状态。
+
+首次启用 Agent 时显示通用数据流提示：必要的命令、执行结果和文件片段可能发送给当前 AI 模型服务商。Host 权限风险由每条需要确认的命令单独展示，确认记录不提供永久放行。
 
 ### 18.3 Agent 短按
 
@@ -769,7 +787,7 @@ Agent 开启后只显示 `[终端图标 Agent ×]`。标签禁止显示服务器
 
 ### 18.6 服务器详情
 
-详情页包含状态、最后连接、系统资源、运行模式、权限说明、Host Key、Credential 状态、自动 Workspace、Secret、Preview、重连、探测、修复、停用、清理、删除和本地审计。
+详情页包含状态、最后连接、系统资源、统一混合模式说明、权限说明、Host Key、Credential 状态、自动 Workspace、Secret、Preview、重连、探测、修复、停用、清理、删除和本地审计。
 
 ## 19. 消息持久化
 
@@ -860,11 +878,11 @@ Agent 开启后只显示 `[终端图标 Agent ×]`。标签禁止显示服务器
 | `HOST_RESOLUTION_FAILED` | 域名解析失败 | 检查 Host 和当前网络 |
 | `SSH_TIMEOUT` | SSH 连接超时 | 检查 VPS、端口和防火墙 |
 | `HOST_KEY_CHANGED` | 服务器身份变化 | 核对并确认新指纹 |
-| `AUTH_FAILED` | SSH 认证失败 | 更新登录信息 |
+| `AUTH_FAILED` | SSH 认证失败 | 编辑服务器登录信息 |
 | `PRIVATE_KEY_INVALID` | 私钥格式或口令错误 | 重新输入 |
 | `KEYSTORE_UNAVAILABLE` | 本地安全密钥不可用 | 解锁设备或重新添加服务器 |
-| `SUDO_REQUIRED` | 自动配置需要 sudo | 输入一次性 sudo 密码或选择 Direct |
-| `UNSUPPORTED_OS` | 不支持自动安装 Docker | 使用 Direct SSH |
+| `SUDO_REQUIRED` | 自动配置需要 sudo | 编辑服务器并补充 sudo 密码 |
+| `UNSUPPORTED_OS` | 不支持自动安装 Docker | 更换受支持系统或手动准备兼容 Docker |
 | `DOCKER_INSTALL_FAILED` | Docker 安装失败 | 查看失败步骤并重试 |
 | `HELPER_INTEGRITY_FAILED` | Helper 校验失败 | 重新配置环境 |
 | `SERVER_NOT_SELECTED` | 当前会话未选择服务器 | 选择一台服务器 |
@@ -878,6 +896,7 @@ Agent 开启后只显示 `[终端图标 Agent ×]`。标签禁止显示服务器
 | `DOWNLOAD_INTERRUPTED` | 下载中断 | 重试 |
 | `PREVIEW_FORWARD_LOST` | 本地 SSH 转发失效 | 重建预览 |
 | `PUBLIC_PORT_BLOCKED` | 公网端口无法访问 | 检查安全组和防火墙 |
+| `HOST_COMMAND_REJECTED` | 用户拒绝本次 Host 命令 | Agent 根据拒绝结果继续或调整方案 |
 | `VPS_DISK_FULL` | 远端磁盘写入失败 | 清理 VPS 文件 |
 | `VPS_PROCESS_OOM` | 进程疑似被 OOM Killer 终止 | 查看资源状态 |
 
@@ -897,6 +916,7 @@ Agent 开启后只显示 `[终端图标 Agent ×]`。标签禁止显示服务器
 | `data/computer/ComputerWorkspaceManager.kt` | 自动 Workspace 与 Container 生命周期 |
 | `data/computer/ComputerToolCatalog.kt` | 七个稳定 Tool Schema |
 | `data/computer/ComputerToolExecutor.kt` | 参数校验、会话快照和七个 Tool 路由 |
+| `data/computer/ComputerHostCommandPolicy.kt` | Host 只读白名单、风险分类与单次确认门 |
 | `data/computer/ComputerFileTransfer.kt` | ContentResolver、FileManager 与 SFTP 流式桥接 |
 | `data/computer/ComputerTerminalManager.kt` | PTY 与进程内 Ring Buffer |
 | `data/computer/ComputerPreviewManager.kt` | 本地 SSH 转发与 Public Port 生命周期 |
@@ -925,8 +945,8 @@ runtime-wrapper.sh
 | 路径 | 修改内容 |
 | --- | --- |
 | `navigation/Screen.kt` | 增加服务器列表与详情路由 |
-| `AppDatabase.kt` | 增加 Entity、DAO 和 12 到 13 迁移 |
-| `app/schemas/.../13.json` | 提交 Room Schema |
+| `AppDatabase.kt` | 增加 Entity、DAO，以及 12 到 13、13 到 14、14 到 15 迁移 |
+| `app/schemas/.../13.json`、`14.json`、`15.json` | 提交 Room Schema |
 | `Message.kt` | 增加 Agent Tool ID、Computer/Workspace 快照和执行语义 |
 | `ChatEntities.kt`、`ChatDao.kt` | 持久化新消息字段 |
 | `ViewModelStateModels.kt` | 增加 `agentEnabled` |
@@ -1016,7 +1036,7 @@ Room 禁止保存 SSH 密码、私钥、私钥口令、sudo 密码和 Workspace 
 
 1. 在真实 Android 设备添加 Ubuntu 与 Debian VPS。
 2. 两台服务器都能独立管理。
-3. Container 与 Direct 各创建一个会话 Workspace。
+3. 同一服务器分别完成 Host 维护命令和 Container Workspace 代码任务。
 4. 切服、关闭、重开和切模型后文件关系正确。
 5. 上传 CSV、运行分析、下载结果。
 6. 创建 Web 项目并打开 App 内 private preview。
@@ -1051,7 +1071,7 @@ Room 禁止保存 SSH 密码、私钥、私钥口令、sudo 密码和 Workspace 
 
 ### 里程碑 1：本地数据、安全与 SSH
 
-1. Room 13 Schema 与迁移。
+1. Room 15 Schema 与完整迁移链。
 2. Credential Store。
 3. Host Key 首次确认、固定和变化阻断。
 4. 四类认证输入。
@@ -1060,9 +1080,9 @@ Room 禁止保存 SSH 密码、私钥、私钥口令、sudo 密码和 Workspace 
 
 完成条件：凭据不离开手机，重连始终验证固定 Host Key。
 
-### 里程碑 2：Probe 与两种运行模式
+### 里程碑 2：Probe 与统一混合模式
 
-1. 完整 Probe 与 Direct Adapter。
+1. 完整 Probe、Host 执行目标与 Container 执行目标。
 2. Docker 安装脚本、Container Helper 与 sudoers。
 3. 专用 Bridge、网络规则与 Container Image。
 4. 自动 Workspace 生命周期。
@@ -1111,7 +1131,7 @@ Room 禁止保存 SSH 密码、私钥、私钥口令、sudo 密码和 Workspace 
 5. 首次 Host Key 在认证前确认，变化会阻断所有 Tool。
 6. 原始凭据可以升级为每台服务器专用 Key。
 7. Credential 和 Workspace Secret 只在本地 Keystore 加密存储。
-8. Direct 与 Container 权限语义和 UI 一致。
+8. Host 与 Container 的分流、权限语义和 UI 一致。
 9. Container 不持有 Docker Socket、Host Root、Host PID 或 Host Network。
 10. Container 没有 CPU、内存、磁盘和 PID 配额。
 11. Workspace 与 Public Preview Container 均为 `restart=no`，VPS 重启后只按需恢复当前会话。
@@ -1126,7 +1146,7 @@ Room 禁止保存 SSH 密码、私钥、私钥口令、sudo 密码和 Workspace 
 20. 切换模型不改变 Agent 能力关系。
 21. Agent 标签紧凑且不显示服务器信息。
 22. 不可用服务器只在选择卡片中阻止并报错。
-23. 所有模式显示模型数据流提示，Direct SSH 与 root 权限风险分层确认。
+23. 首次开启显示模型数据流提示，Host 写入、提权、敏感读取和未知命令逐次确认。
 24. 中英文、TalkBack、Room Migration 与备份排除通过。
 25. Android CI、Container Image 和发布制品完整。
 26. 文档中的状态、目录、错误码与实际实现一致。
