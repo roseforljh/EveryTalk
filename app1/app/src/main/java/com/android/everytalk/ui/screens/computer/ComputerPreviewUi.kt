@@ -57,7 +57,11 @@ import com.android.everytalk.data.computer.ComputerRunMode
 import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.statecontroller.respondToComputerPublicPreview
 import com.android.everytalk.ui.components.dialog.AppDialogShape
+import com.android.everytalk.ui.components.dialog.AppDialogTextFieldShape
 import com.android.everytalk.ui.components.dialog.appDialogBorderColor
+import com.android.everytalk.ui.components.dialog.appDialogContainerColor
+import com.android.everytalk.ui.components.dialog.appDialogContentColor
+import com.android.everytalk.ui.components.dialog.appDialogTextFieldColors
 import java.text.DateFormat
 import java.util.Date
 
@@ -87,6 +91,9 @@ internal fun ComputerPreviewCreateDialog(
         onDismissRequest = { if (!isBusy) onDismiss() },
         modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
         shape = AppDialogShape,
+        containerColor = appDialogContainerColor(),
+        titleContentColor = appDialogContentColor(),
+        textContentColor = appDialogContentColor(),
         title = {
             Text(
                 stringResource(
@@ -115,6 +122,8 @@ internal fun ComputerPreviewCreateDialog(
                     enabled = !isBusy,
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                     modifier = Modifier.fillMaxWidth(),
+                    shape = AppDialogTextFieldShape,
+                    colors = appDialogTextFieldColors(),
                 )
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     FilterChip(
@@ -122,12 +131,14 @@ internal fun ComputerPreviewCreateDialog(
                         onClick = { form = form.copy(protocol = "http") },
                         label = { Text("HTTP") },
                         enabled = !isBusy,
+                        shape = AppDialogTextFieldShape,
                     )
                     FilterChip(
                         selected = form.protocol == "https",
                         onClick = { form = form.copy(protocol = "https") },
                         label = { Text("HTTPS") },
                         enabled = !isBusy,
+                        shape = AppDialogTextFieldShape,
                     )
                 }
                 if (publicPreview) {
@@ -143,6 +154,8 @@ internal fun ComputerPreviewCreateDialog(
                         enabled = !isBusy,
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                         modifier = Modifier.fillMaxWidth(),
+                        shape = AppDialogTextFieldShape,
+                        colors = appDialogTextFieldColors(),
                     )
                 }
                 (localError ?: errorText)?.let { message ->
@@ -256,7 +269,7 @@ internal fun ComputerPreviewList(
                             text = previewStatusLabel(preview.status),
                             style = MaterialTheme.typography.labelSmall,
                             color = if (preview.status == ComputerPreviewStatus.ACTIVE) {
-                                MaterialTheme.colorScheme.primary
+                                MaterialTheme.colorScheme.onSurface
                             } else {
                                 MaterialTheme.colorScheme.onSurfaceVariant
                             },
@@ -439,6 +452,9 @@ fun ComputerPublicPreviewConfirmationDialog(viewModel: AppViewModel) {
         onDismissRequest = { viewModel.respondToComputerPublicPreview(false) },
         modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
         shape = AppDialogShape,
+        containerColor = appDialogContainerColor(),
+        titleContentColor = appDialogContentColor(),
+        textContentColor = appDialogContentColor(),
         title = { Text(stringResource(R.string.computer_public_confirmation_title)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -456,7 +472,10 @@ fun ComputerPublicPreviewConfirmationDialog(viewModel: AppViewModel) {
                         ),
                     )
                 }
-                if (computer?.runMode == ComputerRunMode.DIRECT) {
+                if (
+                    pending.target == com.android.everytalk.data.computer.ComputerExecTarget.HOST ||
+                    computer?.runMode == ComputerRunMode.DIRECT
+                ) {
                     Text(stringResource(R.string.computer_public_confirmation_direct))
                 }
                 Text(

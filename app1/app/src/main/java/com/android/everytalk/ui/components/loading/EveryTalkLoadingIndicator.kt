@@ -82,6 +82,7 @@ fun EveryTalkTimedLoadingStatus(
     modifier: Modifier = Modifier,
     size: Dp = 18.dp,
     strokeWidth: Dp = 2.dp,
+    showIndicator: Boolean = true,
     textStyle: TextStyle = MaterialTheme.typography.bodySmall,
     textColor: Color = MaterialTheme.colorScheme.onSurface,
     contentDescription: String = text,
@@ -96,11 +97,13 @@ fun EveryTalkTimedLoadingStatus(
         verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        EveryTalkLoadingIndicator(
-            size = size,
-            strokeWidth = strokeWidth,
-            contentDescription = contentDescription,
-        )
+        if (showIndicator) {
+            EveryTalkLoadingIndicator(
+                size = size,
+                strokeWidth = strokeWidth,
+                contentDescription = contentDescription,
+            )
+        }
         Text(
             text = text,
             style = textStyle,

@@ -205,6 +205,8 @@ internal fun shouldUsePreparedStaticAiRender(
 
 internal fun shouldAddConversationGapAfter(item: ChatListItem): Boolean = when (item) {
     is ChatListItem.AiMessageSources -> false
+    // 思考过程和紧随其后的正文属于同一条 AI 回复，不能插入完整会话间距。
+    is ChatListItem.AiMessageReasoning -> false
     is ChatListItem.AiMarkdownNode -> item.isLastNode
     else -> true
 }

@@ -222,16 +222,8 @@ class ComputerCredentialStore(private val context: Context) {
     private val rootDirectory = File(context.noBackupFilesDir, "computer_credentials")
     private val envelopeCipher by lazy { ComputerEnvelopeCipher(getOrCreateMasterKey()) }
 
-    suspend fun saveComputerCredential(computerId: String, credential: ComputerCredential) = withContext(Dispatchers.IO) {
-        val scope = "credential:$computerId"
-        val plaintext = ComputerCredentialCodec.encode(credential)
-        try {
-            writeEnvelope(fileForScope(scope), envelopeCipher.encrypt(scope, plaintext))
-        } finally {
-            plaintext.fill(0)
-            credential.clear()
-        }
-    }
+    suspend fun saveComputerCredential(computerId: String, credential: ComputerCredential) =
+        saveCredential("credential:$computerId", credential)
 
     suspend fun loadComputerCredential(computerId: String): ComputerCredential = withContext(Dispatchers.IO) {
         val scope = "credential:$computerId"
@@ -253,6 +245,45 @@ class ComputerCredentialStore(private val context: Context) {
 
     suspend fun deleteComputerCredential(computerId: String) = withContext(Dispatchers.IO) {
         cryptoShred(fileForScope("credential:$computerId"))
+    }
+
+    /**
+     * 专用 SSH Key 安装后，连接凭据会被替换；这里单独保留用户最初填写的登录信息，
+     * 仅用于详情页编辑与重新配置，仍由 Android Keystore 加密且不会写入 Room。
+     */
+    suspend fun saveOriginalComputerCredential(computerId: String, credential: ComputerCredential) =
+        saveCredential("original-credential:$computerId", credential)
+
+    suspend fun loadOriginalComputerCredential(computerId: String): ComputerCredential? =
+        loadOptionalCredential("original-credential:$computerId")
+
+    suspend fun deleteOriginalComputerCredential(computerId: String) = withContext(Dispatchers.IO) {
+        cryptoShred(fileForScope("original-credential:$computerId"))
+    }
+
+    /** sudo 密码与 SSH 凭据分开加密，root 或免密 sudo 时传 null 会清除旧值。 */
+    suspend fun saveComputerSudoPassword(computerId: String, password: CharArray?) {
+        if (password == null || password.isEmpty()) {
+            password?.fill('\u0000')
+            deleteComputerSudoPassword(computerId)
+            return
+        }
+        saveCredential("sudo-password:$computerId", ComputerCredential.Password(password))
+    }
+
+    suspend fun loadComputerSudoPassword(computerId: String): CharArray? {
+        val credential = loadOptionalCredential("sudo-password:$computerId") ?: return null
+        return when (credential) {
+            is ComputerCredential.Password -> credential.password
+            is ComputerCredential.PrivateKey -> {
+                credential.clear()
+                throw ComputerException(ComputerErrorCodes.CREDENTIAL_MISSING, "本地 sudo 密码格式无效")
+            }
+        }
+    }
+
+    suspend fun deleteComputerSudoPassword(computerId: String) = withContext(Dispatchers.IO) {
+        cryptoShred(fileForScope("sudo-password:$computerId"))
     }
 
     suspend fun saveWorkspaceSecret(secretId: String, value: CharArray) = withContext(Dispatchers.IO) {
@@ -293,6 +324,27 @@ class ComputerCredentialStore(private val context: Context) {
 
     suspend fun deleteWorkspaceSecret(secretId: String) = withContext(Dispatchers.IO) {
         cryptoShred(fileForScope("workspace-secret:$secretId"))
+    }
+
+    private suspend fun saveCredential(scope: String, credential: ComputerCredential) = withContext(Dispatchers.IO) {
+        val plaintext = ComputerCredentialCodec.encode(credential)
+        try {
+            writeEnvelope(fileForScope(scope), envelopeCipher.encrypt(scope, plaintext))
+        } finally {
+            plaintext.fill(0)
+            credential.clear()
+        }
+    }
+
+    private suspend fun loadOptionalCredential(scope: String): ComputerCredential? = withContext(Dispatchers.IO) {
+        val file = fileForScope(scope)
+        if (!file.isFile) return@withContext null
+        val plaintext = envelopeCipher.decrypt(scope, readEnvelope(file))
+        try {
+            ComputerCredentialCodec.decode(plaintext)
+        } finally {
+            plaintext.fill(0)
+        }
     }
 
     private fun getOrCreateMasterKey(): SecretKey {

@@ -55,12 +55,37 @@ class ComputerContainerHelperContractTest {
             .substringAfter("delete_workspace() {")
             .substringBefore("\n}\n\nrequire_root")
 
-        assertTrue(helper.contains("VERSION=\"3\""))
+        assertTrue(helper.contains("VERSION=\"5\""))
+        assertTrue(helper.contains("docker exec -i"))
+        assertTrue(helper.contains("runtime_target=\"\$RUNTIME_WRAPPER_PATH-\$runtime_hash\""))
+        assertTrue(helper.contains("ln -sfn"))
+        assertTrue(runtimeWrapper.contains("EVERYTALK_EXEC_V1"))
+        assertTrue(runtimeWrapper.contains("EVERYTALK_EXEC_HOST_V1"))
+        assertFalse(runtimeWrapper.contains("host-background"))
+        assertFalse(runtimeWrapper.contains("--host-files"))
+        assertTrue(runtimeWrapper.contains("--envelope"))
         assertTrue(deleteWorkspaceBody.contains("stop_workspace_backgrounds"))
         assertTrue(runtimeWrapper.contains("status=RUNNING"))
         assertTrue(runtimeWrapper.contains("start_ticks="))
         assertTrue(runtimeWrapper.contains("status=SUCCEEDED"))
         assertTrue(runtimeWrapper.contains("status=FAILED"))
+    }
+
+    @Test
+    fun `Wrapper升级会重建受管Container并保留Workspace挂载`() {
+        val helper = helperSource()
+        val ensureWorkspaceBody = helper
+            .substringAfter("ensure_workspace() {")
+            .substringBefore("\n}\n\ncontainer_address")
+
+        assertTrue(ensureWorkspaceBody.contains("runtime_hash=\"\$(runtime_wrapper_hash)\""))
+        assertTrue(ensureWorkspaceBody.contains("mounted_wrapper_hash="))
+        assertTrue(ensureWorkspaceBody.contains("com.everytalk.wrapper=\$runtime_hash"))
+        assertTrue(ensureWorkspaceBody.contains("stop_workspace_backgrounds \"\$workspace_id\" \"\$name\""))
+        assertTrue(ensureWorkspaceBody.contains("docker rm --force \"\$name\""))
+        assertTrue(ensureWorkspaceBody.contains("--mount \"type=bind,src=\$workspace,dst=/workspace\""))
+        assertTrue(ensureWorkspaceBody.contains("src=\$RUNTIME_WRAPPER_PATH-\$runtime_hash"))
+        assertFalse(ensureWorkspaceBody.contains("rm -rf -- \"\$workspace\""))
     }
 
     private fun helperSource(): String {

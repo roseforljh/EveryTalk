@@ -66,6 +66,7 @@ class AppFloatingCardRulesTest {
         ).readText(Charsets.UTF_8)
 
         assertTrue(source.contains("AppFloatingCardShape = RoundedCornerShape(28.dp)"))
+        assertTrue(source.contains("fun AppFloatingCardContainer("))
         assertTrue(source.contains("AppFloatingCardElevation = 8.dp"))
         assertTrue("统一悬浮卡片必须从顶部同步展开", source.contains("TransformOrigin(0.5f, 0f)"))
         assertTrue("统一悬浮卡片必须复用 0.8 起始缩放", source.contains("val scale = remember { Animatable(0.8f) }"))

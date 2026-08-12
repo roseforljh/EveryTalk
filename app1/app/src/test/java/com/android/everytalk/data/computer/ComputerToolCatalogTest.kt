@@ -21,4 +21,34 @@ class ComputerToolCatalogTest {
         assertFalse("workspace_id" in schemaText)
         assertFalse("host_key" in schemaText)
     }
+
+    @Test
+    fun `exec默认进入容器并允许模型明确选择主机`() {
+        val exec = ComputerToolCatalog.definitions().first { definition ->
+            val function = definition["function"] as Map<*, *>
+            function["name"] == ComputerToolNames.EXEC
+        }
+        val function = exec["function"] as Map<*, *>
+        val parameters = function["parameters"] as Map<*, *>
+        val properties = parameters["properties"] as Map<*, *>
+        val target = properties["target"] as Map<*, *>
+
+        assertEquals(listOf("container", "host"), target["enum"])
+        assertEquals("container", target["default"])
+    }
+
+    @Test
+    fun `openPort可以预览容器服务和VPS已有服务`() {
+        val openPort = ComputerToolCatalog.definitions().first { definition ->
+            val function = definition["function"] as Map<*, *>
+            function["name"] == ComputerToolNames.OPEN_PORT
+        }
+        val function = openPort["function"] as Map<*, *>
+        val parameters = function["parameters"] as Map<*, *>
+        val properties = parameters["properties"] as Map<*, *>
+        val target = properties["target"] as Map<*, *>
+
+        assertEquals(listOf("container", "host"), target["enum"])
+        assertEquals("container", target["default"])
+    }
 }

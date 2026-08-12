@@ -21,6 +21,9 @@ interface ComputerDao {
     @Query("SELECT * FROM computers WHERE id = :computerId LIMIT 1")
     suspend fun getComputer(computerId: String): ComputerEntity?
 
+    @Query("SELECT * FROM computers WHERE runMode = 'DIRECT' AND status != 'DELETED'")
+    suspend fun getLegacyDirectComputers(): List<ComputerEntity>
+
     @Upsert
     suspend fun upsertComputer(computer: ComputerEntity)
 
@@ -29,6 +32,13 @@ interface ComputerDao {
         computerId: String,
         status: String,
         errorCode: String?,
+        updatedAt: Long = System.currentTimeMillis(),
+    )
+
+    @Query("UPDATE computers SET permissionMode = :permissionMode, updatedAt = :updatedAt WHERE id = :computerId")
+    suspend fun updatePermissionMode(
+        computerId: String,
+        permissionMode: String,
         updatedAt: Long = System.currentTimeMillis(),
     )
 
@@ -74,6 +84,34 @@ interface ComputerDao {
 
     @Upsert
     suspend fun upsertWorkspace(workspace: ComputerWorkspaceEntity)
+
+    /**
+     * 远端准备只更新不会改变 Workspace 归属的运行字段。
+     * 首条消息可能同时迁移 conversationId，禁止用旧实体整行 Upsert 把稳定 ID 覆盖回临时 ID。
+     */
+    @Query(
+        """
+        UPDATE computer_workspaces
+        SET hostPath = :hostPath,
+            status = :status,
+            lastUsedAt = :lastUsedAt
+        WHERE id = :workspaceId
+        """,
+    )
+    suspend fun updateWorkspaceRuntimeState(
+        workspaceId: String,
+        hostPath: String,
+        status: String,
+        lastUsedAt: Long = System.currentTimeMillis(),
+    )
+
+    /** Container 配置成功后补齐迁移自旧 Direct 记录的镜像元数据。 */
+    @Query("UPDATE computer_workspaces SET containerImage = :containerImage WHERE computerId = :computerId AND runMode = 'CONTAINER'")
+    suspend fun updateContainerWorkspaceImage(computerId: String, containerImage: String)
+
+    /** 服务器地址、端口或账号改变后，旧 Workspace 保留文件映射并等待新目标重新校验。 */
+    @Query("UPDATE computer_workspaces SET status = 'RECOVERING' WHERE computerId = :computerId")
+    suspend fun markComputerWorkspacesRecovering(computerId: String)
 
     @Query("DELETE FROM computer_workspaces WHERE id = :workspaceId")
     suspend fun deleteWorkspace(workspaceId: String)
@@ -132,6 +170,27 @@ interface ComputerDao {
 
     @Query("UPDATE computers SET status = 'CONFIGURATION_REQUIRED', updatedAt = :updatedAt WHERE runMode = 'CONTAINER' AND status = 'READY' AND (bootstrapVersion IS NULL OR bootstrapVersion != :expectedVersion)")
     suspend fun markOutdatedContainerConfiguration(
+        expectedVersion: String,
+        updatedAt: Long = System.currentTimeMillis(),
+    )
+
+    /**
+     * Android 进程可能在 SSH 探测或 Container 配置期间被系统直接结束。
+     * Container 版本落后时回到待修复，其余情况回到离线，禁止永久保留不可操作的中间状态。
+     */
+    @Query(
+        """
+        UPDATE computers
+        SET status = CASE
+                WHEN runMode = 'CONTAINER' AND (bootstrapVersion IS NULL OR bootstrapVersion != :expectedVersion)
+                    THEN 'CONFIGURATION_REQUIRED'
+                ELSE 'OFFLINE'
+            END,
+            updatedAt = :updatedAt
+        WHERE status IN ('PROBING', 'PROVISIONING', 'VERIFYING')
+        """,
+    )
+    suspend fun recoverInterruptedComputerOperations(
         expectedVersion: String,
         updatedAt: Long = System.currentTimeMillis(),
     )

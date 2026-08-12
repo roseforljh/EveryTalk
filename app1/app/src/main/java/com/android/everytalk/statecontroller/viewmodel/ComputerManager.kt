@@ -9,13 +9,15 @@ import com.android.everytalk.data.computer.AddComputerRequest
 import com.android.everytalk.data.computer.Computer
 import com.android.everytalk.data.computer.ComputerAttachmentBridge
 import com.android.everytalk.data.computer.ComputerAuditEvent
-import com.android.everytalk.data.computer.ComputerCredential
 import com.android.everytalk.data.computer.ComputerDeleteResult
 import com.android.everytalk.data.computer.ComputerException
 import com.android.everytalk.data.computer.ComputerErrorCodes
+import com.android.everytalk.data.computer.ComputerExecTarget
+import com.android.everytalk.data.computer.ComputerHostCommandConfirmationRequest
 import com.android.everytalk.data.computer.ComputerPreview
 import com.android.everytalk.data.computer.ComputerPreviewManager
 import com.android.everytalk.data.computer.ComputerPreviewOpenResult
+import com.android.everytalk.data.computer.ComputerPermissionMode
 import com.android.everytalk.data.computer.ComputerPublicPreviewRequest
 import com.android.everytalk.data.computer.ComputerRepository
 import com.android.everytalk.data.computer.ComputerRequestContext
@@ -28,11 +30,16 @@ import com.android.everytalk.data.computer.ComputerWorkspaceSecret
 import com.android.everytalk.data.computer.ComputerWorkspaceSecretManager
 import com.android.everytalk.data.computer.HostKeyProbeResult
 import com.android.everytalk.data.computer.PreparedComputerRequest
+import com.android.everytalk.data.computer.UpdateComputerRequest
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.service.ComputerConnectionServiceController
+import com.android.everytalk.util.AppLogger
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.Flow
@@ -41,10 +48,119 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.async
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
+
+/** 同一 Workspace 同时只运行一个预热任务，任务结束时按实例安全移除。 */
+internal fun launchComputerPrewarm(
+    scope: CoroutineScope,
+    jobs: java.util.concurrent.ConcurrentHashMap<String, Job>,
+    workspaceId: String,
+    dispatcher: kotlin.coroutines.CoroutineContext = Dispatchers.IO,
+    block: suspend () -> Unit,
+) {
+    var created: Job? = null
+    jobs.compute(workspaceId) { _, current ->
+        current?.takeUnless { it.isCompleted } ?: scope.launch(
+            context = dispatcher,
+            start = CoroutineStart.LAZY,
+        ) {
+            block()
+        }.also { created = it }
+    }
+    created?.let { job ->
+        job.invokeOnCompletion { jobs.remove(workspaceId, job) }
+        job.start()
+    }
+}
+
+/** 同一 Workspace 只创建一份远端准备任务，开启 Agent、模型思考和工具调用共同复用。 */
+internal fun <T> sharedComputerPreparation(
+    scope: CoroutineScope,
+    preparations: java.util.concurrent.ConcurrentHashMap<String, Deferred<T>>,
+    key: String,
+    dispatcher: kotlin.coroutines.CoroutineContext = Dispatchers.IO,
+    block: suspend () -> T,
+): Deferred<T> {
+    var created: Deferred<T>? = null
+    val preparation = preparations.compute(key) { _, current ->
+        // 失败任务会在 invokeOnCompletion 中按实例移除；这里无需读取实验性的完成异常 API。
+        current?.takeUnless { it.isCancelled }
+            ?: scope.async(context = dispatcher, start = CoroutineStart.LAZY) { block() }.also { created = it }
+    } ?: error("无法创建 Agent 准备任务")
+    created?.let { deferred ->
+        deferred.invokeOnCompletion { error ->
+            if (error != null) preparations.remove(key, deferred)
+        }
+        deferred.start()
+    }
+    return preparation
+}
+
+/**
+ * 串行化“创建会话映射”和“临时会话 ID 迁移”。
+ * 迁移先完成时会记住新 ID；创建先完成时，后续数据库迁移会接管已经创建的映射。
+ */
+internal class ComputerConversationIdCoordinator {
+    private val mutex = Mutex()
+    private val migratedIds = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    /** 读取当前有效 ID。允许连续迁移，并防止异常数据形成循环。 */
+    fun resolve(conversationId: String): String {
+        var current = conversationId
+        val visited = mutableSetOf<String>()
+        while (visited.add(current)) {
+            current = migratedIds[current] ?: return current
+        }
+        return conversationId
+    }
+
+    suspend fun <T> withCurrentId(
+        conversationId: String,
+        block: suspend (String) -> T,
+    ): T = mutex.withLock { block(resolve(conversationId)) }
+
+    suspend fun migrate(
+        sourceConversationId: String,
+        targetConversationId: String,
+        migrateStoredMappings: suspend (sourceId: String, targetId: String) -> Unit,
+    ) = mutex.withLock {
+        val sourceId = resolve(sourceConversationId)
+        val targetId = resolve(targetConversationId)
+        if (sourceId != targetId) migrateStoredMappings(sourceId, targetId)
+        if (sourceConversationId != targetId) migratedIds[sourceConversationId] = targetId
+        if (sourceId != targetId) migratedIds[sourceId] = targetId
+    }
+}
+
+/** Agent 按钮的本地校验结果，便于在无网络测试中锁定即时反馈路径。 */
+internal fun requireSelectedReadyComputer(
+    conversationId: String,
+    selections: Map<String, String>,
+    computers: List<Computer>,
+): Computer {
+    val computerId = selections[conversationId] ?: throw ComputerException(
+        ComputerErrorCodes.SERVER_NOT_SELECTED,
+        "当前会话还没有选择服务器",
+        action = "SELECT_COMPUTER",
+    )
+    val computer = computers.firstOrNull { it.id == computerId } ?: throw ComputerException(
+        ComputerErrorCodes.COMPUTER_NOT_READY,
+        "当前服务器不可用，请长按 Agent 改选或修复服务器",
+        action = "SELECT_COMPUTER",
+    )
+    if (computer.status != ComputerStatus.READY) {
+        throw ComputerException(
+            ComputerErrorCodes.COMPUTER_NOT_READY,
+            "当前服务器不可用，请长按 Agent 改选或修复服务器",
+            action = "SELECT_COMPUTER",
+        )
+    }
+    return computer
+}
 
 /**
  * Android 端 Computer 功能协调器。
@@ -66,10 +182,15 @@ class ComputerManager(
         onDownloaded = onDownloaded,
     )
     private val previewConfirmationMutex = Mutex()
+    private val hostCommandConfirmationMutex = Mutex()
     private val _pendingPublicPreview = MutableStateFlow<ComputerPublicPreviewRequest?>(null)
+    private val _pendingHostCommand = MutableStateFlow<ComputerHostCommandConfirmationRequest?>(null)
 
     @Volatile
     private var publicPreviewDecision: CompletableDeferred<Boolean>? = null
+
+    @Volatile
+    private var hostCommandDecision: CompletableDeferred<Boolean>? = null
 
     private val toolExecutor = ComputerToolExecutor(
         context = context.applicationContext,
@@ -79,8 +200,12 @@ class ComputerManager(
         secretManager = secretManager,
         attachmentBridge = attachmentBridge,
         publicPreviewConfirmer = ::awaitPublicPreviewConfirmation,
+        hostCommandConfirmer = ::awaitHostCommandConfirmation,
     )
     private val closed = AtomicBoolean(false)
+    private val prewarmJobs = java.util.concurrent.ConcurrentHashMap<String, Job>()
+    private val requestPreparations = java.util.concurrent.ConcurrentHashMap<String, Deferred<PreparedComputerRequest>>()
+    private val conversationIds = ComputerConversationIdCoordinator()
     private val connectivityManager = context.applicationContext
         .getSystemService(ConnectivityManager::class.java)
     private val activeNetwork = AtomicReference<Network?>(null)
@@ -95,11 +220,13 @@ class ComputerManager(
         }
 
         private fun handleNetworkChanged() {
+            clearRequestPreparations()
             previewManager.handleNetworkChanged()
             scope.launch(Dispatchers.IO) { repository.handleNetworkChanged() }
         }
     }
     private val connectionStopListener = ComputerConnectionServiceController.addStopListener {
+        clearRequestPreparations()
         previewManager.handleNetworkChanged()
         toolExecutor.closeTransientConnections()
         scope.launch(Dispatchers.IO) { repository.handleNetworkChanged() }
@@ -116,6 +243,7 @@ class ComputerManager(
         initialValue = emptyMap(),
     )
     val pendingPublicPreview: StateFlow<ComputerPublicPreviewRequest?> = _pendingPublicPreview.asStateFlow()
+    val pendingHostCommand: StateFlow<ComputerHostCommandConfirmationRequest?> = _pendingHostCommand.asStateFlow()
 
     init {
         connectivityManager?.registerDefaultNetworkCallback(networkCallback)
@@ -131,39 +259,124 @@ class ComputerManager(
         config.modalityType in setOf(ModalityType.TEXT, ModalityType.MULTIMODAL)
 
     /**
+     * Agent 按钮只读取已经加载到内存的服务器与选择状态，禁止在点击反馈前连接 VPS。
+     * 发送消息时的 prepareRequest 仍会执行完整 Workspace 和远端校验。
+     */
+    fun requireSelectedReadyComputer(conversationId: String): Computer {
+        val resolvedId = conversationIds.resolve(conversationId)
+        val currentSelections = selections.value
+        val lookupId = resolvedId.takeIf(currentSelections::containsKey) ?: conversationId
+        return requireSelectedReadyComputer(lookupId, currentSelections, computers.value)
+    }
+
+    /**
      * 在模型请求启动前冻结 Computer 与 Workspace。
      * Agent 已关闭时返回 null；已开启却不可用时抛出明确错误，禁止静默移除工具。
      */
     suspend fun prepareRequest(conversationId: String, agentEnabled: Boolean): PreparedComputerRequest? {
         if (!agentEnabled) return null
-        val computer = repository.getSelectedComputer(conversationId) ?: throw ComputerException(
-            ComputerErrorCodes.SERVER_NOT_SELECTED,
-            "当前会话还没有选择服务器",
-            action = "SELECT_COMPUTER",
-        )
-        if (computer.status != ComputerStatus.READY) {
-            throw ComputerException(
-                ComputerErrorCodes.COMPUTER_NOT_READY,
-                "当前服务器不可用，请长按 Agent 改选或修复服务器",
+        return conversationIds.withCurrentId(conversationId) { currentConversationId ->
+            val computer = repository.getSelectedComputer(currentConversationId) ?: throw ComputerException(
+                ComputerErrorCodes.SERVER_NOT_SELECTED,
+                "当前会话还没有选择服务器",
                 action = "SELECT_COMPUTER",
             )
+            if (computer.status != ComputerStatus.READY) {
+                throw ComputerException(
+                    ComputerErrorCodes.COMPUTER_NOT_READY,
+                    "当前服务器不可用，请长按 Agent 改选或修复服务器",
+                    action = "SELECT_COMPUTER",
+                )
+            }
+            val workspace = workspaceManager.getOrCreateLocal(computer.id, currentConversationId)
+            val requestContext = ComputerRequestContext(
+                conversationId = currentConversationId,
+                computerId = computer.id,
+                workspaceId = workspace.id,
+                permissionMode = computer.permissionMode,
+            )
+            prepareComputer(computer, requestContext)
+            PreparedComputerRequest(
+                context = requestContext,
+                environmentPrompt = buildEnvironmentPrompt(computer),
+                permissionMode = computer.permissionMode,
+            )
         }
-        val workspace = workspaceManager.getOrCreate(computer.id, conversationId)
-        val requestContext = ComputerRequestContext(
-            conversationId = conversationId,
-            computerId = computer.id,
-            workspaceId = workspace.id,
-        )
-        return PreparedComputerRequest(
-            context = requestContext,
-            environmentPrompt = buildEnvironmentPrompt(computer),
-        )
     }
 
-    /** Agent 开启时先准备目标 Workspace，成功后才覆盖当前选择。 */
+    private fun prepareComputer(
+        computer: Computer,
+        requestContext: ComputerRequestContext,
+    ): Deferred<PreparedComputerRequest> {
+        val key = preparationKey(computer.id, requestContext.workspaceId)
+        return sharedComputerPreparation(scope, requestPreparations, key) {
+            val workspace = workspaceManager.prepare(requestContext.workspaceId)
+            val preparedContext = requestContext.copy(
+                conversationId = workspace.conversationId,
+                permissionMode = computer.permissionMode,
+            )
+            startPrewarm(preparedContext)
+            PreparedComputerRequest(
+                context = preparedContext,
+                environmentPrompt = buildEnvironmentPrompt(computer),
+                permissionMode = computer.permissionMode,
+            )
+        }
+    }
+
+    /**
+     * 请求返回后模型才开始首轮响应，这里只负责异步预热 SSH 和 Wrapper。
+     * 同一 Workspace 的重复发送复用正在执行的预热，避免取消后立刻再做一次冷启动。
+     */
+    private fun startPrewarm(requestContext: ComputerRequestContext) {
+        launchComputerPrewarm(scope, prewarmJobs, requestContext.workspaceId) {
+            try {
+                toolExecutor.prewarm(requestContext)
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                AppLogger.warn(
+                    "ComputerRuntime",
+                    "Agent SSH 预热失败，将在工具调用时重试：${error.javaClass.simpleName}",
+                )
+            }
+        }
+    }
+
+    /** 服务器选择只更新本地映射；Workspace 在后台预热或首次发送时创建。 */
     suspend fun selectComputer(conversationId: String, computerId: String, agentEnabled: Boolean) {
-        if (agentEnabled) workspaceManager.getOrCreate(computerId, conversationId)
-        repository.selectComputer(conversationId, computerId)
+        val selectedConversationId = conversationIds.withCurrentId(conversationId) { currentConversationId ->
+            repository.selectComputer(currentConversationId, computerId)
+            currentConversationId
+        }
+        if (agentEnabled) prewarmWorkspace(computerId, selectedConversationId)
+    }
+
+    private fun prewarmWorkspace(computerId: String, conversationId: String) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val computer = repository.getComputer(computerId) ?: return@launch
+                val (currentConversationId, workspace) = conversationIds.withCurrentId(conversationId) { currentId ->
+                    currentId to workspaceManager.getOrCreateLocal(computerId, currentId)
+                }
+                prepareComputer(
+                    computer = computer,
+                    requestContext = ComputerRequestContext(
+                        conversationId = currentConversationId,
+                        computerId = computerId,
+                        workspaceId = workspace.id,
+                        permissionMode = computer.permissionMode,
+                    ),
+                ).await()
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                AppLogger.warn(
+                    "ComputerRuntime",
+                    "Agent Workspace 后台准备失败，将在发送时重试：${error.javaClass.simpleName}",
+                )
+            }
+        }
     }
 
     suspend fun execute(
@@ -171,15 +384,30 @@ class ComputerManager(
         arguments: kotlinx.serialization.json.JsonObject,
         toolCallId: String,
         requestContext: ComputerRequestContext,
-    ): kotlinx.serialization.json.JsonElement = toolExecutor.execute(
-        toolName = toolName,
-        arguments = arguments,
-        toolCallId = toolCallId,
-        requestContext = requestContext,
-    )
+    ): kotlinx.serialization.json.JsonElement {
+        // 首轮模型响应已经与 SSH 准备并行；模型真正调用工具时再确认远端 Workspace 已就绪。
+        val computer = repository.getComputer(requestContext.computerId)
+            ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
+        val prepared = prepareComputer(computer, requestContext).await()
+        val currentContext = prepared.context.copy(
+            conversationId = requestContext.conversationId,
+            permissionMode = requestContext.permissionMode,
+        )
+        return toolExecutor.execute(
+            toolName = toolName,
+            arguments = arguments,
+            toolCallId = toolCallId,
+            requestContext = currentContext,
+        )
+    }
 
     suspend fun migrateConversationId(sourceConversationId: String, targetConversationId: String) {
-        repository.migrateConversationId(sourceConversationId, targetConversationId)
+        if (sourceConversationId.isBlank() || targetConversationId.isBlank() || sourceConversationId == targetConversationId) {
+            return
+        }
+        conversationIds.migrate(sourceConversationId, targetConversationId) { sourceId, targetId ->
+            repository.migrateConversationId(sourceId, targetId)
+        }
     }
 
     suspend fun probeHostKey(request: AddComputerRequest): HostKeyProbeResult = repository.probeHostKey(request)
@@ -187,20 +415,46 @@ class ComputerManager(
     suspend fun addConfirmedComputer(
         request: AddComputerRequest,
         confirmedHostKey: HostKeyProbeResult,
-    ): Computer = repository.addConfirmedComputer(request, confirmedHostKey)
+        sudoPassword: CharArray?,
+        onProgress: suspend (com.android.everytalk.data.computer.ComputerSetupStage) -> Unit = {},
+    ): Computer = repository.addConfirmedComputer(request, confirmedHostKey, sudoPassword, onProgress)
+
+    suspend fun probeUpdatedComputerHostKey(request: UpdateComputerRequest): HostKeyProbeResult =
+        repository.probeUpdatedComputerHostKey(request)
+
+    suspend fun updateComputer(
+        request: UpdateComputerRequest,
+        confirmedHostKey: HostKeyProbeResult,
+        sudoPassword: CharArray?,
+        replaceSudoPassword: Boolean,
+    ): Computer {
+        clearComputerPreparations(request.id)
+        return repository.updateComputer(
+            request,
+            confirmedHostKey,
+            sudoPassword,
+            replaceSudoPassword,
+        )
+    }
 
     suspend fun refreshComputer(computerId: String): Computer {
+        clearComputerPreparations(computerId)
         val refreshed = repository.refreshComputer(computerId)
         previewManager.reconcileExpirations()
         previewManager.reconcileComputer(computerId)
         return refreshed
     }
 
-    suspend fun provisionContainer(computerId: String, sudoPassword: CharArray?): Computer {
-        val provisioned = repository.provisionContainer(computerId, sudoPassword)
+    suspend fun provisionContainer(
+        computerId: String,
+        onProgress: suspend (com.android.everytalk.data.computer.ComputerSetupStage) -> Unit = {},
+    ): Computer {
+        val provisioned = repository.provisionContainer(computerId, onProgress)
         previewManager.reconcileComputer(computerId)
         return provisioned
     }
+
+    suspend fun cancelComputerOperation(computerId: String) = repository.cancelComputerOperation(computerId)
 
     fun observeWorkspaces(computerId: String): Flow<List<ComputerWorkspace>> =
         repository.observeWorkspaces(computerId)
@@ -237,13 +491,11 @@ class ComputerManager(
             port = port,
             protocol = protocol,
             expiresInSeconds = expiresInSeconds,
+            target = ComputerExecTarget.CONTAINER,
         ),
     )
 
     suspend fun stopPreview(previewId: String) = previewManager.stop(previewId)
-
-    suspend fun replaceCredential(computerId: String, credential: ComputerCredential): Computer =
-        repository.replaceCredential(computerId, credential)
 
     suspend fun probeReplacementHostKey(computerId: String): HostKeyProbeResult =
         repository.probeReplacementHostKey(computerId)
@@ -255,6 +507,11 @@ class ComputerManager(
 
     suspend fun setPrivateNetworkAllowed(computerId: String, allowed: Boolean): Computer =
         repository.setPrivateNetworkAllowed(computerId, allowed)
+
+    suspend fun setPermissionMode(computerId: String, permissionMode: ComputerPermissionMode): Computer {
+        clearComputerPreparations(computerId)
+        return repository.setPermissionMode(computerId, permissionMode)
+    }
 
     /** 删除单个 Workspace；Host Path 只有用户二次确认后才从 VPS 删除。 */
     suspend fun deleteWorkspace(workspaceId: String, deleteRemoteFiles: Boolean): ComputerWorkspace {
@@ -269,7 +526,10 @@ class ComputerManager(
         return workspace
     }
 
-    suspend fun disconnect(computerId: String) = repository.disconnect(computerId)
+    suspend fun disconnect(computerId: String) {
+        clearComputerPreparations(computerId)
+        repository.disconnect(computerId)
+    }
 
     /**
      * 删除 Computer 时始终销毁本地 Secret 和凭据。
@@ -280,6 +540,7 @@ class ComputerManager(
         cleanupContainers: Boolean,
         deleteRemoteFiles: Boolean,
     ): ComputerDeleteResult {
+        clearComputerPreparations(computerId)
         val workspaces = repository.getWorkspaces(computerId)
         var remoteWorkspaceCleanupSucceeded = true
         workspaces.forEach { workspace ->
@@ -300,6 +561,11 @@ class ComputerManager(
         publicPreviewDecision?.complete(approved)
     }
 
+    /** 只完成当前确认请求；重复点击和已经过期的 UI 回调不会影响下一条命令。 */
+    fun respondToHostCommand(requestId: String, approved: Boolean) {
+        if (_pendingHostCommand.value?.requestId == requestId) hostCommandDecision?.complete(approved)
+    }
+
     private suspend fun awaitPublicPreviewConfirmation(request: ComputerPublicPreviewRequest): Boolean =
         previewConfirmationMutex.withLock {
             val decision = CompletableDeferred<Boolean>()
@@ -313,17 +579,44 @@ class ComputerManager(
             }
         }
 
+    private suspend fun awaitHostCommandConfirmation(request: ComputerHostCommandConfirmationRequest): Boolean =
+        hostCommandConfirmationMutex.withLock {
+            val decision = CompletableDeferred<Boolean>()
+            hostCommandDecision = decision
+            _pendingHostCommand.value = request
+            try {
+                decision.await()
+            } finally {
+                _pendingHostCommand.value = null
+                hostCommandDecision = null
+            }
+        }
+
     private fun buildEnvironmentPrompt(computer: Computer): String {
-        val mode = computer.runMode.name.lowercase()
         val architecture = computer.capabilities?.architecture?.takeIf(String::isNotBlank) ?: "unknown"
-        return "Agent server tools are enabled for this request. Work inside /workspace. " +
-            "Runtime mode: $mode. Architecture: $architecture. Available tools: " +
-            ComputerToolNames.all.sorted().joinToString(", ") + "."
+        val permissionInstruction = when (computer.permissionMode) {
+            ComputerPermissionMode.MANUAL ->
+                "The app decides locally which host commands and public previews require user approval."
+            ComputerPermissionMode.SMART ->
+                "For every exec and open_port call, set ask_user_approval=true only when you judge that the user should approve it; otherwise set false and execute directly."
+            ComputerPermissionMode.FULL ->
+                "All valid Agent operations execute directly without a user approval prompt."
+        }
+        return "Agent server tools are enabled for this request. The Android app connects to the VPS directly over SSH. " +
+            "For exec, use target=container by default for code, scripts, builds, tests, dependency installation, and file-producing work. " +
+            "Use target=host only when inspecting or managing the VPS operating system, services, processes, ports, logs, packages, or deployed applications. " +
+            "$permissionInstruction " +
+            "All file, terminal, upload, and download tools operate in the persistent /workspace Container. " +
+            "Architecture: $architecture. Available tools: ${ComputerToolNames.all.sorted().joinToString(", ")}."
     }
 
     override fun close() {
         if (!closed.compareAndSet(false, true)) return
+        prewarmJobs.values.forEach(Job::cancel)
+        prewarmJobs.clear()
+        clearRequestPreparations()
         publicPreviewDecision?.complete(false)
+        hostCommandDecision?.complete(false)
         toolExecutor.close()
         previewManager.close()
         runCatching { connectivityManager?.unregisterNetworkCallback(networkCallback) }
@@ -336,4 +629,21 @@ class ComputerManager(
         computerId = computerId,
         workspaceId = id,
     )
+
+    private fun clearComputerPreparations(computerId: String) {
+        val prefix = "$computerId\u0000"
+        requestPreparations.entries.removeIf { (key, preparation) ->
+            if (!key.startsWith(prefix)) return@removeIf false
+            preparation.cancel()
+            true
+        }
+    }
+
+    private fun clearRequestPreparations() {
+        requestPreparations.values.forEach { it.cancel() }
+        requestPreparations.clear()
+    }
+
+    private fun preparationKey(computerId: String, workspaceId: String): String =
+        "$computerId\u0000$workspaceId"
 }

@@ -6,6 +6,7 @@ import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.statecontroller.controller.conversation.prepareLoadedHistoryMessages
 import com.android.everytalk.ui.components.toRecoveredMarkdown
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
+import com.android.everytalk.util.ConversationNameHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -293,7 +294,9 @@ class SimpleModeManager(
         Log.d(TAG, "🔥 Stable ID: $stableId, System Prompt chars=${systemPrompt.length}")
 
         val (processedMessages, reasoningCompleteStates, animationPlayedStates) = withContext(Dispatchers.Default) {
-            val recoveredMessages = conversationToLoad.map { msg ->
+            val recoveredMessages = ConversationNameHelper
+                .withoutStoredConversationTitle(conversationToLoad)
+                .map { msg ->
                 // 修复：处理AI消息文本丢失问题
                 if (msg.sender == Sender.AI) {
                     android.util.Log.d("SimpleModeManager", "Processing AI message ${msg.id}: text length=${msg.text.length}, parts=${msg.parts.size}, contentStarted=${msg.contentStarted}")
@@ -439,7 +442,8 @@ class SimpleModeManager(
         val conversationToLoad = conversationList[index]
         
         // 5. 设置对话ID（必须在消息加载前设置）
-        val stableId = conversationToLoad.firstOrNull()?.id ?: "image_history_${UUID.randomUUID()}"
+        val stableId = ConversationNameHelper.resolveStableId(conversationToLoad)
+            ?: "image_history_${UUID.randomUUID()}"
         stateHolder._currentImageGenerationConversationId.value = stableId
         stateHolder.applyCurrentImageConversationFunctionToggleState()
         
@@ -461,7 +465,9 @@ class SimpleModeManager(
         stateHolder.imageGenerationMessages.clear()
         
         // 处理消息：设置 contentStarted 状态（包含图像URL）
-        val processedMessages = conversationToLoad.map { msg ->
+        val processedMessages = ConversationNameHelper
+            .withoutStoredConversationTitle(conversationToLoad)
+            .map { msg ->
             // 针对图像模式，若AI消息包含图片URL，应视为已产生内容
             val hasImages = (msg.imageUrls?.isNotEmpty() == true)
             val updatedContentStarted = msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank() || msg.isError || hasImages

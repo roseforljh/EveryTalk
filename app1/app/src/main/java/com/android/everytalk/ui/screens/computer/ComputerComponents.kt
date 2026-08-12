@@ -33,12 +33,44 @@ import com.android.everytalk.R
 import com.android.everytalk.data.computer.Computer
 import com.android.everytalk.data.computer.ComputerRunMode
 import com.android.everytalk.data.computer.ComputerStatus
-import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.ChatAgentColor
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.computerStatusLabelRes
+import com.android.everytalk.ui.components.dialog.appDialogContainerColor
+import com.android.everytalk.ui.components.dialog.appDialogContentColor
+
+/**
+ * 服务器页面使用配置页同款黑白控件色，阻断全局 Material 紫色主色。
+ * 只覆盖服务器页面及其弹窗，错误色和其他语义色继续沿用应用主题。
+ */
+@Composable
+fun ComputerNeutralTheme(content: @Composable () -> Unit) {
+    val colorScheme = MaterialTheme.colorScheme
+    val controlColor = appDialogContentColor()
+    val onControlColor = appDialogContainerColor()
+    MaterialTheme(
+        colorScheme = colorScheme.copy(
+            primary = controlColor,
+            onPrimary = onControlColor,
+            primaryContainer = controlColor,
+            onPrimaryContainer = onControlColor,
+            secondary = controlColor,
+            onSecondary = onControlColor,
+            secondaryContainer = controlColor,
+            onSecondaryContainer = onControlColor,
+            tertiary = controlColor,
+            onTertiary = onControlColor,
+            tertiaryContainer = controlColor,
+            onTertiaryContainer = onControlColor,
+            inversePrimary = controlColor,
+            surfaceTint = Color.Transparent,
+        ),
+        content = content,
+    )
+}
 
 @Composable
 internal fun ComputerCard(
     computer: Computer,
+    accentColor: Color,
     onClick: () -> Unit,
     onRefresh: () -> Unit,
 ) {
@@ -64,7 +96,7 @@ internal fun ComputerCard(
             Icon(
                 painter = painterResource(R.drawable.ic_gpt_terminal),
                 contentDescription = null,
-                tint = if (isReady) ChatAgentColor else MaterialTheme.colorScheme.onSurfaceVariant,
+                tint = accentColor,
                 modifier = Modifier.size(28.dp),
             )
             Spacer(Modifier.width(14.dp))
@@ -88,7 +120,7 @@ internal fun ComputerCard(
                 Text(
                     text = stringResource(R.string.computer_card_mode, mode, status),
                     style = MaterialTheme.typography.labelMedium,
-                    color = if (isReady) ChatAgentColor else statusColor(computer.status),
+                    color = if (isReady) accentColor else statusColor(computer.status),
                 )
                 computer.capabilities?.let { capabilities ->
                     val resources = buildList {
@@ -118,6 +150,47 @@ internal fun ComputerCard(
         }
     }
 }
+
+/**
+ * 服务器 ID 在创建时由 UUID 随机生成，因此由 ID 选择的初始色也是随机的。
+ * 按创建顺序处理颜色冲突，保证色板容量内同一列表没有重复颜色，刷新页面也不会跳色。
+ */
+internal fun computerCardAccentColorIndexes(computers: List<Computer>): Map<String, Int> {
+    val usedColorIndexes = mutableSetOf<Int>()
+    return computers
+        .sortedWith(compareBy<Computer> { it.createdAt }.thenBy { it.id })
+        .associate { computer ->
+            val initialIndex = Math.floorMod(computer.id.hashCode(), COMPUTER_CARD_ACCENT_COLOR_COUNT)
+            val colorIndex = (0 until COMPUTER_CARD_ACCENT_COLOR_COUNT)
+                .map { offset -> (initialIndex + offset) % COMPUTER_CARD_ACCENT_COLOR_COUNT }
+                .firstOrNull(usedColorIndexes::add)
+                ?: initialIndex
+            computer.id to colorIndex
+        }
+}
+
+internal fun computerCardAccentColors(computers: List<Computer>): Map<String, Color> =
+    computerCardAccentColorIndexes(computers).mapValues { (_, colorIndex) ->
+        ComputerCardAccentPalette[colorIndex]
+    }
+
+internal const val COMPUTER_CARD_ACCENT_COLOR_COUNT = 12
+
+/** 避开服务器页面已经明确排除的紫色，并保持亮色、暗色主题下都清晰。 */
+internal val ComputerCardAccentPalette = listOf(
+    Color(0xFF1976D2),
+    Color(0xFF0288D1),
+    Color(0xFF0097A7),
+    Color(0xFF00897B),
+    Color(0xFF388E3C),
+    Color(0xFF689F38),
+    Color(0xFFF9A825),
+    Color(0xFFF57C00),
+    Color(0xFFEF6C00),
+    Color(0xFFD32F2F),
+    Color(0xFFC2185B),
+    Color(0xFF546E7A),
+)
 
 private fun statusColor(status: ComputerStatus): Color = when (status) {
     ComputerStatus.HOST_KEY_CHANGED, ComputerStatus.ACTION_REQUIRED, ComputerStatus.ERROR -> Color(0xFFD32F2F)

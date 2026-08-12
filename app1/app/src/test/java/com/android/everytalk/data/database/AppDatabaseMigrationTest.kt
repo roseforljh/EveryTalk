@@ -321,6 +321,79 @@ class AppDatabaseMigrationTest {
         migrateHelper.close()
     }
 
+    @Test
+    fun `migration 14 to 15 records preview execution target`() {
+        val createHelper = openHelper(
+            version = 14,
+            onCreate = { db ->
+                db.execSQL("CREATE TABLE computer_workspaces (id TEXT NOT NULL PRIMARY KEY, runMode TEXT NOT NULL)")
+                db.execSQL(
+                    "CREATE TABLE computer_previews (id TEXT NOT NULL PRIMARY KEY, workspaceId TEXT NOT NULL)",
+                )
+                db.execSQL("INSERT INTO computer_workspaces (id, runMode) VALUES ('direct', 'DIRECT'), ('container', 'CONTAINER')")
+                db.execSQL("INSERT INTO computer_previews (id, workspaceId) VALUES ('host-preview', 'direct'), ('container-preview', 'container')")
+            },
+        )
+        createHelper.writableDatabase.close()
+        createHelper.close()
+
+        val migrateHelper = openHelper(
+            version = 15,
+            onUpgrade = { db, oldVersion, newVersion ->
+                assertEquals(14, oldVersion)
+                assertEquals(15, newVersion)
+                AppDatabase.MIGRATION_14_15.migrate(db)
+            },
+        )
+        val db = migrateHelper.writableDatabase
+        db.query("SELECT id, target FROM computer_previews ORDER BY id").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("container-preview", cursor.getString(0))
+            assertEquals("CONTAINER", cursor.getString(1))
+            assertTrue(cursor.moveToNext())
+            assertEquals("host-preview", cursor.getString(0))
+            assertEquals("HOST", cursor.getString(1))
+        }
+        db.query("PRAGMA table_info(computer_previews)").use { cursor ->
+            var targetDefault: String? = null
+            while (cursor.moveToNext()) {
+                if (cursor.getString(1) == "target") targetDefault = cursor.getString(4)
+            }
+            assertEquals("'CONTAINER'", targetDefault)
+        }
+        db.close()
+        migrateHelper.close()
+    }
+
+    @Test
+    fun `migration 15 to 16 adds manual approval mode`() {
+        val createHelper = openHelper(
+            version = 15,
+            onCreate = { db ->
+                db.execSQL("CREATE TABLE computers (id TEXT NOT NULL PRIMARY KEY)")
+                db.execSQL("INSERT INTO computers (id) VALUES ('computer-1')")
+            },
+        )
+        createHelper.writableDatabase.close()
+        createHelper.close()
+
+        val migrateHelper = openHelper(
+            version = 16,
+            onUpgrade = { db, oldVersion, newVersion ->
+                assertEquals(15, oldVersion)
+                assertEquals(16, newVersion)
+                AppDatabase.MIGRATION_15_16.migrate(db)
+            },
+        )
+        val db = migrateHelper.writableDatabase
+        db.query("SELECT permissionMode FROM computers WHERE id = 'computer-1'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("MANUAL", cursor.getString(0))
+        }
+        db.close()
+        migrateHelper.close()
+    }
+
     private fun openHelper(
         version: Int,
         onCreate: (SupportSQLiteDatabase) -> Unit = {},

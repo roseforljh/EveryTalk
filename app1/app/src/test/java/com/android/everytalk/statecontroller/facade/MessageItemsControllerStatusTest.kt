@@ -146,6 +146,27 @@ class MessageItemsControllerStatusTest {
     }
 
     @Test
+    fun `conversation title metadata is never rendered as a system bubble`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.stateHolder.messages.add(
+            Message(
+                id = "title-1",
+                text = "会话名称",
+                sender = Sender.System,
+                isPlaceholderName = true,
+            ),
+        )
+        controller.stateHolder.messages.add(
+            Message(id = "user-1", text = "hello", sender = Sender.User),
+        )
+
+        val items = controller.chatListItemsForTest()
+
+        assertEquals(1, items.size)
+        assertTrue(items.single() is ChatListItem.UserMessage)
+    }
+
+    @Test
     fun `connecting stage text uses factual runtime fallback until backend reports progress`() {
         val controller = MessageItemsControllerTestAccess.newController()
 

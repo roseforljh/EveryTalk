@@ -55,7 +55,7 @@ fun appFloatingCardBorderColor(): Color =
     }
 
 @Composable
-private fun AppFloatingCard(
+fun AppFloatingCardContainer(
     visible: Boolean,
     modifier: Modifier,
     onExitAnimationFinished: () -> Unit,
@@ -162,7 +162,7 @@ fun AppFloatingCardPopup(
             onDismissRequest = onDismissRequest,
             properties = properties,
         ) {
-            AppFloatingCard(
+            AppFloatingCardContainer(
                 visible = visible,
                 modifier = modifier,
                 onExitAnimationFinished = { shouldRender = false },
@@ -191,7 +191,7 @@ fun AppFloatingCardPopup(
             onDismissRequest = onDismissRequest,
             properties = properties,
         ) {
-            AppFloatingCard(
+            AppFloatingCardContainer(
                 visible = visible,
                 modifier = modifier,
                 onExitAnimationFinished = { shouldRender = false },

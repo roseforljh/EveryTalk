@@ -45,6 +45,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
@@ -61,7 +62,6 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
 import com.android.everytalk.R
 import com.android.everytalk.data.computer.ComputerAuthKind
-import com.android.everytalk.data.computer.ComputerRunMode
 import com.android.everytalk.data.computer.HostKeyProbeResult
 import com.android.everytalk.ui.components.dialog.AppDialogButtonShape
 import com.android.everytalk.ui.components.dialog.AppDialogShape
@@ -70,6 +70,7 @@ import com.android.everytalk.ui.components.dialog.appDialogBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldColors
+import com.android.everytalk.ui.components.EveryTalkTimedLoadingStatus
 import com.android.everytalk.ui.screens.settings.SettingsFieldLabel
 
 /**
@@ -83,10 +84,15 @@ internal fun ComputerAddCard(
     form: ComputerAddFormState,
     isBusy: Boolean,
     progressText: String?,
+    progressDetailText: String? = null,
     errorText: String?,
     onFormChange: (ComputerAddFormState) -> Unit,
     onSubmit: () -> Unit,
     onDismiss: () -> Unit,
+    title: String = stringResource(R.string.computer_add_title),
+    submitLabel: String = stringResource(R.string.computer_add_save),
+    keepCredentialHint: Boolean = false,
+    allowBusyDismiss: Boolean = false,
 ) {
     val dialogBackground = appDialogContainerColor()
     val borderColor = appDialogBorderColor()
@@ -101,7 +107,7 @@ internal fun ComputerAddCard(
     )
 
     Dialog(
-        onDismissRequest = { if (!isBusy) onDismiss() },
+        onDismissRequest = { if (!isBusy || allowBusyDismiss) onDismiss() },
         properties = DialogProperties(
             usePlatformDefaultWidth = false,
             decorFitsSystemWindows = false,
@@ -119,7 +125,7 @@ internal fun ComputerAddCard(
                 .clickable(
                     interactionSource = remember { MutableInteractionSource() },
                     indication = null,
-                    onClick = { if (!isBusy) onDismiss() },
+                    onClick = { if (!isBusy || allowBusyDismiss) onDismiss() },
                 )
                 .statusBarsPadding()
                 .navigationBarsPadding()
@@ -149,12 +155,14 @@ internal fun ComputerAddCard(
                         .padding(24.dp),
                 ) {
                     Text(
-                        text = stringResource(R.string.computer_add_title),
+                        text = title,
                         fontSize = 20.sp,
                         fontWeight = FontWeight.Bold,
                         color = contentColor,
                     )
-                    Spacer(Modifier.height(16.dp))
+                    Spacer(Modifier.height(18.dp))
+
+                    ComputerFormSectionTitle(stringResource(R.string.computer_form_basic))
 
                     ComputerTextField(
                         value = form.displayName,
@@ -188,6 +196,10 @@ internal fun ComputerAddCard(
                         )
                     }
 
+                    ComputerFormSectionTitle(
+                        text = stringResource(R.string.computer_form_login),
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
                     SettingsFieldLabel(stringResource(R.string.computer_field_auth))
                     FlowRow(
                         modifier = Modifier.padding(bottom = 12.dp),
@@ -239,44 +251,25 @@ internal fun ComputerAddCard(
                         )
                     }
 
-                    SettingsFieldLabel(stringResource(R.string.computer_field_mode))
-                    FlowRow(
-                        modifier = Modifier.padding(bottom = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        FilterChip(
-                            modifier = Modifier.height(40.dp),
-                            selected = form.runMode == ComputerRunMode.CONTAINER,
-                            onClick = { onFormChange(form.copy(runMode = ComputerRunMode.CONTAINER)) },
-                            label = { Text(stringResource(R.string.computer_mode_container)) },
-                            enabled = !isBusy,
-                            shape = AppDialogTextFieldShape,
-                            colors = choiceColors,
-                        )
-                        FilterChip(
-                            modifier = Modifier.height(40.dp),
-                            selected = form.runMode == ComputerRunMode.DIRECT,
-                            onClick = { onFormChange(form.copy(runMode = ComputerRunMode.DIRECT)) },
-                            label = { Text(stringResource(R.string.computer_mode_direct)) },
-                            enabled = !isBusy,
-                            shape = AppDialogTextFieldShape,
-                            colors = choiceColors,
+                    if (keepCredentialHint) {
+                        Text(
+                            text = stringResource(R.string.computer_edit_secret_hint),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 12.dp),
                         )
                     }
-                    Text(
-                        text = stringResource(
-                            if (form.runMode == ComputerRunMode.CONTAINER) {
-                                R.string.computer_mode_container_description
-                            } else {
-                                R.string.computer_mode_direct_description
-                            },
-                        ),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(bottom = 12.dp),
-                    )
 
-                    if (form.runMode == ComputerRunMode.CONTAINER && form.username.trim() != "root") {
+                    if (!keepCredentialHint) {
+                        Text(
+                            text = stringResource(R.string.computer_mode_hybrid_description),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(bottom = 12.dp),
+                        )
+                    }
+
+                    if (form.username.trim() != "root") {
                         ComputerTextField(
                             value = form.sudoPassword,
                             onValueChange = { onFormChange(form.copy(sudoPassword = it)) },
@@ -288,13 +281,21 @@ internal fun ComputerAddCard(
                     }
 
                     if (progressText != null) {
-                        Row(
-                            modifier = Modifier.padding(bottom = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                            Spacer(Modifier.width(10.dp))
-                            Text(progressText, style = MaterialTheme.typography.bodyMedium)
+                        Column(modifier = Modifier.padding(bottom = 12.dp)) {
+                            EveryTalkTimedLoadingStatus(
+                                text = progressText,
+                                size = 20.dp,
+                                showIndicator = false,
+                                textStyle = MaterialTheme.typography.bodyMedium,
+                            )
+                            if (progressDetailText != null) {
+                                Text(
+                                    text = progressDetailText,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.padding(top = 4.dp),
+                                )
+                            }
                         }
                     }
                     if (errorText != null) {
@@ -314,7 +315,7 @@ internal fun ComputerAddCard(
                     ) {
                         OutlinedButton(
                             onClick = onDismiss,
-                            enabled = !isBusy,
+                            enabled = !isBusy || allowBusyDismiss,
                             modifier = Modifier
                                 .weight(1f)
                                 .height(48.dp),
@@ -346,18 +347,43 @@ internal fun ComputerAddCard(
                                 disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
                             ),
                         ) {
-                            Text(
-                                text = stringResource(R.string.computer_add_save),
-                                style = MaterialTheme.typography.labelLarge.copy(
-                                    fontWeight = FontWeight.SemiBold,
-                                ),
-                            )
+                            Box(contentAlignment = Alignment.Center) {
+                                Text(
+                                    text = submitLabel,
+                                    modifier = Modifier.alpha(if (isBusy) 0f else 1f),
+                                    style = MaterialTheme.typography.labelLarge.copy(
+                                        fontWeight = FontWeight.SemiBold,
+                                    ),
+                                )
+                                if (isBusy) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(18.dp),
+                                        strokeWidth = 2.dp,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                }
+                            }
                         }
                     }
                 }
             }
         }
     }
+}
+
+/** 表单分组只承担导航作用，避免继续用大卡片切碎对话框。 */
+@Composable
+private fun ComputerFormSectionTitle(
+    text: String,
+    modifier: Modifier = Modifier,
+) {
+    Text(
+        text = text,
+        modifier = modifier.padding(bottom = 4.dp),
+        style = MaterialTheme.typography.titleSmall,
+        fontWeight = FontWeight.SemiBold,
+        color = appDialogContentColor(),
+    )
 }
 
 @Composable
@@ -430,6 +456,9 @@ internal fun ComputerHostKeyDialog(
         onDismissRequest = onDismiss,
         modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
         shape = AppDialogShape,
+        containerColor = appDialogContainerColor(),
+        titleContentColor = appDialogContentColor(),
+        textContentColor = appDialogContentColor(),
         title = { Text(stringResource(R.string.computer_host_key_title)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

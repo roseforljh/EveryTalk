@@ -72,6 +72,7 @@ import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.computer.Computer
 import com.android.everytalk.data.computer.ComputerDisclosureKind
 import com.android.everytalk.data.computer.ComputerDisclosureStore
+import com.android.everytalk.data.computer.ComputerHostCommandConfirmationRequest
 import com.android.everytalk.data.computer.ComputerStatus
 import com.android.everytalk.models.ImageSourceOption
 import com.android.everytalk.models.MoreOptionsType
@@ -155,6 +156,7 @@ fun ChatInputArea(
     val computerSelections by viewModel.computerSelections.collectAsState()
     val currentConversationId by viewModel.currentConversationId.collectAsState()
     val selectedComputerId = computerSelections[currentConversationId]
+    val pendingHostCommand by viewModel.pendingComputerHostCommand.collectAsState()
     val disclosureStore = remember(context) { ComputerDisclosureStore(context) }
     var pendingAgentAction by remember { mutableStateOf<PendingAgentAction?>(null) }
     var pendingAgentDisclosures by remember { mutableStateOf<Set<ComputerDisclosureKind>>(emptySet()) }
@@ -498,6 +500,14 @@ fun ChatInputArea(
                     .fillMaxWidth()
                     .padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 4.dp)
             ) {
+                ComputerHostCommandConfirmationCard(
+                    request = pendingHostCommand?.takeIf { request ->
+                        request.context.conversationId == currentConversationId
+                    },
+                    onDecision = { requestId, approved ->
+                        viewModel.respondToComputerHostCommand(requestId, approved)
+                    },
+                )
 // 使用优化的组件
                 OptimizedMediaItemsList(
                     selectedMediaItems = selectedMediaItems,
@@ -607,7 +617,11 @@ fun ChatInputArea(
                     com.android.everytalk.data.network.WebSearchSupport.supportsNativeWebSearch(config)
                 } == true
                 val effectiveWebSearchAvailable = isWebSearchAvailable || supportsNativeWebSearch
-                val hasActiveTags = (isWebSearchEnabled && effectiveWebSearchAvailable) || isMcpEnabled || isAgentEnabled
+                val activeTagCount =
+                    (if (isWebSearchEnabled && effectiveWebSearchAvailable) 1 else 0) +
+                        (if (isMcpEnabled) 1 else 0) +
+                        (if (isAgentEnabled) 1 else 0)
+                val hasActiveTags = activeTagCount > 0
 
                 // 合并保护：只有输入框完全回到原始状态（无文本、无媒体、无标签）
                 // 且输入框高度动画已完成后，才允许合并
@@ -849,6 +863,7 @@ fun ChatInputArea(
                                     dismissOnClickOutside = true,
                                 ),
                                 modifier = Modifier
+                                    .wrapContentWidth()
                                     .widthIn(max = 320.dp)
                                     .wrapContentHeight(),
                             ) {
@@ -936,9 +951,17 @@ fun ChatInputArea(
                                 ) {
                                     if (hasActiveTags) {
                                         FlowRow(
-                                            modifier = Modifier.padding(top = 4.dp, bottom = 2.dp),
-                                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                                            verticalArrangement = Arrangement.spacedBy(4.dp),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                // 输入容器右侧只有 5dp，这里补齐到左侧的 16dp，保证标签首尾留白一致。
+                                                .padding(top = 4.dp, end = 11.dp, bottom = 2.dp),
+                                            maxItemsInEachRow = 3,
+                                            horizontalArrangement = if (activeTagCount == 3) {
+                                                Arrangement.SpaceBetween
+                                            } else {
+                                                Arrangement.spacedBy(2.dp)
+                                            },
+                                            verticalArrangement = Arrangement.spacedBy(2.dp),
                                         ) {
                                             if (isWebSearchEnabled && effectiveWebSearchAvailable) {
                                                 ActiveFunctionTag(
@@ -954,7 +977,7 @@ fun ChatInputArea(
                                                 ActiveFunctionTag(
                                                     iconRes = R.drawable.ic_hammer,
                                                     label = stringResource(R.string.chat_input_mcp),
-                                                    tint = Color(0xFFFF6B00),
+                                                    tint = ChatMcpColor,
                                                     lightBackground = Color(0xFFFFECE5),
                                                     closeContentDescription = stringResource(R.string.chat_input_close_mcp),
                                                     onClick = { viewModel.setMcpEnabledForNextRequest(false) },

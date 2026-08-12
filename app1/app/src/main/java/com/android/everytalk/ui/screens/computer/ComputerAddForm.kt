@@ -1,9 +1,10 @@
 package com.android.everytalk.ui.screens.computer
 
 import com.android.everytalk.data.computer.AddComputerRequest
+import com.android.everytalk.data.computer.Computer
 import com.android.everytalk.data.computer.ComputerAuthKind
 import com.android.everytalk.data.computer.ComputerCredential
-import com.android.everytalk.data.computer.ComputerRunMode
+import com.android.everytalk.data.computer.UpdateComputerRequest
 import java.util.UUID
 
 internal enum class ComputerAddFormError {
@@ -25,15 +26,16 @@ internal data class ComputerAddFormState(
     val password: String = "",
     val privateKey: String = "",
     val privateKeyPassphrase: String = "",
-    val runMode: ComputerRunMode = ComputerRunMode.CONTAINER,
     val sudoPassword: String = "",
 ) {
-    fun validationError(): ComputerAddFormError? = when {
+    fun validationError(reusableAuthKind: ComputerAuthKind? = null): ComputerAddFormError? = when {
         host.isBlank() -> ComputerAddFormError.HOST_REQUIRED
         port.toIntOrNull()?.let { it in 1..65535 } != true -> ComputerAddFormError.PORT_INVALID
         username.isBlank() -> ComputerAddFormError.USERNAME_REQUIRED
-        authKind == ComputerAuthKind.PASSWORD && password.isEmpty() -> ComputerAddFormError.PASSWORD_REQUIRED
-        authKind == ComputerAuthKind.PRIVATE_KEY && privateKey.isBlank() -> ComputerAddFormError.PRIVATE_KEY_REQUIRED
+        authKind == ComputerAuthKind.PASSWORD && password.isEmpty() && reusableAuthKind != authKind ->
+            ComputerAddFormError.PASSWORD_REQUIRED
+        authKind == ComputerAuthKind.PRIVATE_KEY && privateKey.isBlank() && reusableAuthKind != authKind ->
+            ComputerAddFormError.PRIVATE_KEY_REQUIRED
         else -> null
     }
 
@@ -54,14 +56,51 @@ internal data class ComputerAddFormState(
                 port = requireNotNull(port.toIntOrNull()),
                 username = username,
                 credential = credential,
-                runMode = runMode,
+                runMode = com.android.everytalk.data.computer.ComputerRunMode.CONTAINER,
             ),
-            sudoPassword = sudoPassword.takeIf {
-                runMode == ComputerRunMode.CONTAINER && username.trim() != "root" && it.isNotEmpty()
-            }?.toCharArray(),
+            sudoPassword = sudoPassword.takeIf { username.trim() != "root" && it.isNotEmpty() }?.toCharArray(),
+        )
+    }
+
+    fun prepareUpdate(existing: Computer): PreparedComputerUpdate {
+        check(validationError(existing.authKind) == null) { "编辑服务器表单尚未通过校验" }
+        val credential = when (authKind) {
+            ComputerAuthKind.PASSWORD -> password.takeIf(String::isNotEmpty)?.let {
+                ComputerCredential.Password(it.toCharArray())
+            }
+            ComputerAuthKind.PRIVATE_KEY -> privateKey.takeIf(String::isNotBlank)?.let {
+                ComputerCredential.PrivateKey(
+                    privateKey = it.toCharArray(),
+                    passphrase = privateKeyPassphrase.takeIf(String::isNotEmpty)?.toCharArray(),
+                )
+            }
+        }
+        return PreparedComputerUpdate(
+            request = UpdateComputerRequest(
+                id = existing.id,
+                displayName = displayName,
+                host = host,
+                port = requireNotNull(port.toIntOrNull()),
+                username = username,
+                credential = credential,
+            ),
+            sudoPassword = sudoPassword.takeIf { username.trim() != "root" && it.isNotEmpty() }?.toCharArray(),
+            replaceSudoPassword = username.trim() == "root" ||
+                username.trim() != existing.username ||
+                sudoPassword.isNotEmpty(),
         )
     }
 }
+
+/** 编辑时只回填非敏感参数，密码和私钥留空代表沿用本地已保存值。 */
+internal fun Computer.toEditFormState(): ComputerAddFormState = ComputerAddFormState(
+    id = id,
+    displayName = displayName,
+    host = host,
+    port = port.toString(),
+    username = username,
+    authKind = authKind,
+)
 
 internal data class PreparedComputerAdd(
     val request: AddComputerRequest,
@@ -69,6 +108,17 @@ internal data class PreparedComputerAdd(
 ) {
     fun clear() {
         request.credential.clear()
+        sudoPassword?.fill('\u0000')
+    }
+}
+
+internal data class PreparedComputerUpdate(
+    val request: UpdateComputerRequest,
+    val sudoPassword: CharArray?,
+    val replaceSudoPassword: Boolean,
+) {
+    fun clear() {
+        request.credential?.clear()
         sudoPassword?.fill('\u0000')
     }
 }

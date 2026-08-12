@@ -475,10 +475,11 @@ internal fun DataPersistenceManager.loadInitialDataInternal(
 
                     withContext(Dispatchers.Main.immediate) {
                         lastOpenChat?.let { loadedMessages ->
+                            val visibleMessages = ConversationNameHelper.withoutStoredConversationTitle(loadedMessages)
                             stateHolder.messages.clear()
-                            stateHolder.messages.addAll(loadedMessages)
+                            stateHolder.messages.addAll(visibleMessages)
                             stateHolder.textReasoningCompleteMap.clear()
-                            loadedMessages.forEach { message ->
+                            visibleMessages.forEach { message ->
                                 if (message.sender == com.android.everytalk.data.DataClass.Sender.AI &&
                                     !message.reasoning.isNullOrBlank()
                                 ) {
@@ -492,10 +493,11 @@ internal fun DataPersistenceManager.loadInitialDataInternal(
                             stateHolder._loadedHistoryIndex.value = null
                         }
                         lastOpenImageGenChat?.let { loadedMessages ->
+                            val visibleMessages = ConversationNameHelper.withoutStoredConversationTitle(loadedMessages)
                             stateHolder.imageGenerationMessages.clear()
-                            stateHolder.imageGenerationMessages.addAll(loadedMessages)
+                            stateHolder.imageGenerationMessages.addAll(visibleMessages)
                             stateHolder.imageReasoningCompleteMap.clear()
-                            loadedMessages.forEach { message ->
+                            visibleMessages.forEach { message ->
                                 if (message.sender == com.android.everytalk.data.DataClass.Sender.AI &&
                                     !message.reasoning.isNullOrBlank()
                                 ) {
@@ -503,7 +505,8 @@ internal fun DataPersistenceManager.loadInitialDataInternal(
                                 }
                             }
                             stateHolder._currentImageGenerationConversationId.value =
-                                loadedMessages.firstOrNull()?.id ?: "image_resume_${System.currentTimeMillis()}"
+                                ConversationNameHelper.resolveStableId(loadedMessages)
+                                    ?: "image_resume_${System.currentTimeMillis()}"
                             stateHolder._loadedImageGenerationHistoryIndex.value = null
                         }
                     }

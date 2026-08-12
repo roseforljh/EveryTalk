@@ -27,6 +27,7 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -35,12 +36,13 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.GraphicEq
@@ -57,12 +59,15 @@ import com.android.everytalk.R
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
@@ -101,6 +106,10 @@ import com.android.everytalk.data.mcp.McpServerState
 import com.android.everytalk.data.mcp.McpServerConfig
 import com.android.everytalk.data.computer.Computer
 import com.android.everytalk.data.computer.ComputerStatus
+import com.android.everytalk.data.computer.ComputerHostCommandConfirmationRequest
+import com.android.everytalk.ui.screens.computer.ComputerCardAccentPalette
+import com.android.everytalk.ui.screens.computer.computerCardAccentColorIndexes
+import com.android.everytalk.ui.components.popup.AppFloatingCardContainer
 import com.android.everytalk.ui.screens.mcp.McpServerListDialog
 import java.io.File
 import java.text.SimpleDateFormat
@@ -183,7 +192,7 @@ internal fun FunctionPanelContent(
             iconRes = R.drawable.ic_hammer,
             label = "MCP",
             iconBg = iconBg,
-            iconTint = if (isMcpEnabled) Color(0xFF66B5FF) else iconTint,
+            iconTint = if (isMcpEnabled) ChatMcpColor else iconTint,
             textColor = textColor,
             isChecked = isMcpEnabled,
             onClick = { onToggleMcp() }
@@ -227,6 +236,7 @@ internal fun FunctionPanelRow(
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),
         verticalAlignment = Alignment.CenterVertically
@@ -277,83 +287,199 @@ internal fun ComputerSelectionCard(
     onSelect: (Computer) -> Unit,
     onUnavailable: (Computer) -> Unit,
 ) {
+    val accentColorIndexes = remember(computers.map { it.id }) {
+        computerCardAccentColorIndexes(computers)
+    }
     Column(
         modifier = Modifier
-            .width(300.dp)
-            .heightIn(max = 380.dp),
+            .wrapContentWidth()
+            .widthIn(max = 320.dp)
+            .heightIn(max = 380.dp)
+            .verticalScroll(rememberScrollState())
+            .padding(10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 16.dp)) {
-            Text(
-                text = stringResource(R.string.agent_server_picker_title),
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface,
-            )
-            Text(
-                text = stringResource(R.string.agent_server_picker_description),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-
         if (computers.isEmpty()) {
             Text(
                 text = stringResource(R.string.agent_server_picker_empty),
-                modifier = Modifier.padding(start = 20.dp, end = 20.dp, bottom = 20.dp),
+                modifier = Modifier.padding(10.dp),
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             return@Column
         }
 
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.6f))
-        Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
-            computers.forEachIndexed { index, computer ->
+        computers.chunked(3).forEach { computerRow ->
+            // 每行最多三个。宽度只设上限，短名称仍按内容收紧，长名称会在胶囊内省略。
+            val maxItemWidth = when (computerRow.size) {
+                1 -> 184.dp
+                2 -> 146.dp
+                else -> 94.dp
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                computerRow.forEach { computer ->
                 val isReady = computer.status == ComputerStatus.READY
-                val statusLabel = stringResource(computerStatusLabelRes(computer.status))
-                Row(
+                val isSelected = selectedComputerId == computer.id
+                val accentColor = ComputerCardAccentPalette[accentColorIndexes.getValue(computer.id)]
+                Surface(
+                    onClick = {
+                        if (isReady) onSelect(computer) else onUnavailable(computer)
+                    },
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable {
-                            if (isReady) onSelect(computer) else onUnavailable(computer)
-                        }
-                        .padding(horizontal = 14.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                        .widthIn(min = 72.dp, max = maxItemWidth)
+                        .height(48.dp),
+                    shape = RoundedCornerShape(percent = 50),
+                    color = if (isSelected) {
+                        accentColor.copy(alpha = if (isSystemInDarkTheme()) 0.18f else 0.11f)
+                    } else {
+                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.52f)
+                    },
+                    border = if (isSelected) BorderStroke(1.dp, accentColor) else null,
                 ) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_gpt_terminal),
-                        contentDescription = null,
-                        tint = if (isReady) ChatAgentColor else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.45f),
-                        modifier = Modifier.size(22.dp),
-                    )
-                    Spacer(Modifier.width(12.dp))
-                    Column(modifier = Modifier.weight(1f)) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 11.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_gpt_terminal),
+                            contentDescription = null,
+                            tint = if (isReady) accentColor else accentColor.copy(alpha = 0.42f),
+                            modifier = Modifier.size(21.dp),
+                        )
+                        Spacer(Modifier.width(8.dp))
                         Text(
                             text = computer.displayName,
-                            style = MaterialTheme.typography.bodyLarge,
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
                             color = if (isReady) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
                             overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
                         )
+                        if (isSelected) {
+                            Spacer(Modifier.width(7.dp))
+                            Icon(
+                                painter = painterResource(R.drawable.ic_check),
+                                contentDescription = stringResource(R.string.state_selected),
+                                tint = accentColor,
+                                modifier = Modifier.size(16.dp),
+                            )
+                        }
+                    }
+                }
+            }
+            }
+        }
+    }
+}
+
+/**
+ * 主机命令在输入框上方就地确认。卡片完整展示当前命令，按钮只批准这一个 requestId。
+ */
+@Composable
+internal fun ComputerHostCommandConfirmationCard(
+    request: ComputerHostCommandConfirmationRequest?,
+    onDecision: (requestId: String, approved: Boolean) -> Unit,
+) {
+    if (request == null) return
+    val isDark = isSystemInDarkTheme()
+    val contentColor = if (isDark) Color.White else Color(0xFF0D0D0D)
+    val secondaryColor = contentColor.copy(alpha = 0.62f)
+    val commandBackground = if (isDark) Color.White.copy(alpha = 0.07f) else Color.Black.copy(alpha = 0.045f)
+    val buttonBackground = contentColor
+    val buttonContent = if (isDark) Color(0xFF0D0D0D) else Color.White
+
+    AppFloatingCardContainer(
+        visible = true,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 8.dp),
+        onExitAnimationFinished = {},
+    ) {
+        Column {
+            // 头部和底部保持固定，中间命令内容单独滚动。
+            Column(
+                modifier = Modifier.padding(start = 18.dp, top = 16.dp, end = 18.dp, bottom = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(5.dp),
+            ) {
+                Text(
+                    text = stringResource(R.string.agent_host_command_title),
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = contentColor,
+                )
+                Text(
+                    text = stringResource(R.string.agent_host_command_server, request.computerName),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = secondaryColor,
+                )
+            }
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 220.dp)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 18.dp),
+                verticalArrangement = Arrangement.spacedBy(9.dp),
+            ) {
+                Text(
+                    text = request.reason,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = contentColor,
+                )
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(16.dp),
+                    color = commandBackground,
+                ) {
+                    SelectionContainer {
                         Text(
-                            text = "${computer.username}@${computer.host}:${computer.port} · $statusLabel",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                            text = request.command,
+                            modifier = Modifier.padding(12.dp),
+                            style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                            color = contentColor,
                         )
                     }
-                    RadioButton(
-                        selected = selectedComputerId == computer.id,
-                        onClick = null,
-                        enabled = isReady,
-                        colors = RadioButtonDefaults.colors(selectedColor = ChatAgentColor),
+                }
+                Text(
+                    text = stringResource(R.string.agent_host_command_cwd, request.cwd),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = secondaryColor,
+                )
+                if (request.requestsPrivilege) {
+                    Text(
+                        text = stringResource(R.string.agent_host_command_detail_privilege),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.error,
                     )
                 }
-                if (index != computers.lastIndex) {
-                    HorizontalDivider(
-                        modifier = Modifier.padding(start = 48.dp),
-                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
-                    )
+            }
+
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(12.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                OutlinedButton(
+                    onClick = { onDecision(request.requestId, false) },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(percent = 50),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = contentColor),
+                    border = BorderStroke(1.dp, contentColor.copy(alpha = 0.18f)),
+                ) {
+                    Text(stringResource(R.string.agent_host_command_reject))
+                }
+                Button(
+                    onClick = { onDecision(request.requestId, true) },
+                    modifier = Modifier.weight(1f),
+                    shape = RoundedCornerShape(percent = 50),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = buttonBackground,
+                        contentColor = buttonContent,
+                    ),
+                ) {
+                    Text(stringResource(R.string.agent_host_command_allow_once))
                 }
             }
         }

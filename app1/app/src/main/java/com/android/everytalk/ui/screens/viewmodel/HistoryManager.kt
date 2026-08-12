@@ -98,6 +98,27 @@ class HistoryManager(
     private fun stableConversationId(messages: List<Message>): String? =
         ConversationNameHelper.resolveStableId(messages)
 
+    /**
+     * 保存任务可能在重命名之前取得旧快照，因此提交前以当前历史中的名称为准。
+     * 这里只合并名称元数据，不改变保存任务刚产生的聊天内容。
+     */
+    private fun preserveLatestConversationTitles(
+        conversationsToCommit: List<List<Message>>,
+        latestHistory: List<List<Message>>,
+    ): List<List<Message>> {
+        val latestByStableId = latestHistory.mapNotNull { conversation ->
+            stableConversationId(conversation)?.let { stableId -> stableId to conversation }
+        }.toMap()
+        return conversationsToCommit.map { conversation ->
+            val latestConversation = stableConversationId(conversation)?.let(latestByStableId::get)
+            if (latestConversation == null) {
+                conversation
+            } else {
+                ConversationNameHelper.preserveStoredConversationTitle(latestConversation, conversation)
+            }
+        }
+    }
+
     private fun conversationContainsMessageId(messages: List<Message>, messageId: String?): Boolean {
         if (messageId.isNullOrBlank()) return false
         return messages.any { it.id == messageId }
@@ -311,7 +332,8 @@ class HistoryManager(
                 if (msg.isError) return@filter false
                 when (msg.sender) {
                     Sender.User -> true
-                    Sender.System -> true // 保留所有 System 消息（包括用户自定义标题）
+                    // 会话名称属于历史元数据，保存聊天内容时统一从历史记录合并。
+                    Sender.System -> !msg.isPlaceholderName
                     Sender.AI -> hasAiSubstance(msg)
                     else -> true
                 }
@@ -501,11 +523,16 @@ class HistoryManager(
         }
 
         if (currentLoadedIdx != null && currentLoadedIdx in mutableHistory.indices) {
-            val existingMessages = filterMessagesForSaving(mutableHistory[currentLoadedIdx])
+            val storedConversation = mutableHistory[currentLoadedIdx]
+            val existingMessages = filterMessagesForSaving(storedConversation)
+            val updatedConversation = ConversationNameHelper.preserveStoredConversationTitle(
+                storedConversation = storedConversation,
+                currentMessages = messagesToSave,
+            )
             val contentChanged = !compareMessageLists(existingMessages, messagesToSave)
             if (messagesToSave.isNotEmpty() && (isDirty || forceSave && contentChanged)) {
                 if (contentChanged) {
-                    mutableHistory[currentLoadedIdx] = messagesToSave
+                    mutableHistory[currentLoadedIdx] = updatedConversation
                     if (currentLoadedIdx > 0) {
                         mutableHistory.add(0, mutableHistory.removeAt(currentLoadedIdx))
                         finalNewLoadedIndex = 0
@@ -515,7 +542,7 @@ class HistoryManager(
                     historyListModified = true
                     Log.d(TAG_HM, "Updated existing history at index=$currentLoadedIdx, fp=${newConversationFingerprint.take(64)}")
                 }
-                conversationToPersist = messagesToSave
+                conversationToPersist = updatedConversation
             } else if (!contentChanged) {
                 Log.d(TAG_HM, "History index $currentLoadedIdx content unchanged; preserving its original position.")
             } else {
@@ -556,7 +583,11 @@ class HistoryManager(
                     conversationToPersist = messagesToSave
                     addedNewConversation = true
                 } else {
-                    mutableHistory[duplicateIndex] = messagesToSave
+                    val updatedConversation = ConversationNameHelper.preserveStoredConversationTitle(
+                        storedConversation = mutableHistory[duplicateIndex],
+                        currentMessages = messagesToSave,
+                    )
+                    mutableHistory[duplicateIndex] = updatedConversation
                     if (duplicateIndex > 0) {
                         mutableHistory.add(0, mutableHistory.removeAt(duplicateIndex))
                         finalNewLoadedIndex = 0
@@ -564,7 +595,7 @@ class HistoryManager(
                         finalNewLoadedIndex = duplicateIndex
                     }
                     historyListModified = true
-                    conversationToPersist = messagesToSave
+                    conversationToPersist = updatedConversation
                 }
             }
         } else {
@@ -600,9 +631,11 @@ class HistoryManager(
             Log.w(TAG_HM, "Global dedup removed $removed duplicate conversations (stableId/fingerprint-based)")
             historyListModified = true
         }
-        if (deduped != currentHistory) historicalConversations.value = deduped
+        val latestHistory = historicalConversations.value
+        val committedHistory = preserveLatestConversationTitles(deduped, latestHistory)
+        if (committedHistory != latestHistory) historicalConversations.value = committedHistory
         val removedSessionIds = currentHistory.mapNotNull(::stableConversationId).toSet() -
-            deduped.mapNotNull(::stableConversationId).toSet()
+            committedHistory.mapNotNull(::stableConversationId).toSet()
  
         if (isStillSavingLiveConversation() && loadedHistoryIndex != finalNewLoadedIndex) {
             if (isImageGeneration) {
@@ -614,9 +647,12 @@ class HistoryManager(
             Log.d(TAG_HM, "LoadedHistoryIndex updated to: $finalNewLoadedIndex")
         }
  
-        conversationToPersist?.let { conversation ->
-            val sessionId = stableConversationId(conversation)
+        conversationToPersist?.let { pendingConversation ->
+            val sessionId = stableConversationId(pendingConversation)
             if (sessionId != null) {
+                val conversation = committedHistory.firstOrNull {
+                    stableConversationId(it) == sessionId
+                } ?: pendingConversation
                 persistenceManager.saveHistorySession(sessionId, conversation, isImageGeneration)
             }
         }

@@ -12,9 +12,11 @@ import io.mockk.mockk
 import io.mockk.mockkStatic
 import io.mockk.unmockkAll
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -780,6 +782,106 @@ class HistoryManagerCustomPromptPersistenceTest {
 
             assertEquals(listOf("dirty-save", "direct-sync"), calls)
         } finally {
+            scope.coroutineContext[Job]?.cancelAndJoin()
+        }
+    }
+
+    @Test
+    fun `保存已重命名的当前会话时保留历史中的最新名称`() = runBlocking {
+        val stateHolder = ViewModelStateHolder()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val persistenceManager = mockk<DataPersistenceManager>(relaxed = true)
+        val historyManager = HistoryManager(
+            stateHolder = stateHolder,
+            persistenceManager = persistenceManager,
+            compareMessageLists = { left, right -> left == right },
+            onHistoryModified = {},
+            scope = scope,
+        )
+        val title = Message(
+            id = "title-1",
+            text = "最近修改的名称",
+            sender = Sender.System,
+            isPlaceholderName = true,
+        )
+        val user = Message(id = "user-title", text = "最初的问题", sender = Sender.User)
+        stateHolder._historicalConversations.value = listOf(
+            listOf(title, user, Message(id = "ai-old", text = "旧回答", sender = Sender.AI)),
+        )
+        stateHolder._loadedHistoryIndex.value = 0
+        stateHolder.setCurrentConversationId(user.id)
+        stateHolder.messages.addAll(
+            listOf(user, Message(id = "ai-new", text = "新回答", sender = Sender.AI)),
+        )
+        stateHolder.isTextConversationDirty.value = true
+
+        try {
+            historyManager.saveCurrentChatToHistoryNow(forceSave = true)
+
+            val saved = stateHolder._historicalConversations.value.single()
+            assertEquals("最近修改的名称", saved.first().text)
+            assertTrue(saved.first().isPlaceholderName)
+            coVerify(exactly = 1) {
+                persistenceManager.saveHistorySession("user-title", saved, false)
+            }
+        } finally {
+            scope.coroutineContext[Job]?.cancelAndJoin()
+        }
+    }
+
+    @Test
+    fun `保存进行中发生重命名时不会用旧名称覆盖最新名称`() = runBlocking {
+        val stateHolder = ViewModelStateHolder()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val persistenceManager = mockk<DataPersistenceManager>(relaxed = true)
+        val compareStarted = CompletableDeferred<Unit>()
+        val continueCompare = CompletableDeferred<Unit>()
+        var pauseFirstComparison = true
+        val historyManager = HistoryManager(
+            stateHolder = stateHolder,
+            persistenceManager = persistenceManager,
+            compareMessageLists = { left, right ->
+                if (pauseFirstComparison) {
+                    pauseFirstComparison = false
+                    compareStarted.complete(Unit)
+                    continueCompare.await()
+                }
+                left == right
+            },
+            onHistoryModified = {},
+            scope = scope,
+        )
+        val oldTitle = Message(
+            id = "title-race",
+            text = "旧名称",
+            sender = Sender.System,
+            isPlaceholderName = true,
+        )
+        val user = Message(id = "user-race", text = "问题", sender = Sender.User)
+        val oldAnswer = Message(id = "ai-old-race", text = "旧回答", sender = Sender.AI)
+        val newAnswer = Message(id = "ai-new-race", text = "新回答", sender = Sender.AI)
+        stateHolder._historicalConversations.value = listOf(listOf(oldTitle, user, oldAnswer))
+        stateHolder._loadedHistoryIndex.value = 0
+        stateHolder.setCurrentConversationId(user.id)
+        stateHolder.messages.addAll(listOf(user, newAnswer))
+        stateHolder.isTextConversationDirty.value = true
+
+        try {
+            val save = async { historyManager.saveCurrentChatToHistoryNow(forceSave = true) }
+            withTimeout(5_000) { compareStarted.await() }
+
+            val latestTitle = oldTitle.copy(text = "最新名称")
+            stateHolder._historicalConversations.value = listOf(listOf(latestTitle, user, oldAnswer))
+            continueCompare.complete(Unit)
+            save.await()
+
+            val saved = stateHolder._historicalConversations.value.single()
+            assertEquals("最新名称", saved.first().text)
+            coVerify(exactly = 1) {
+                persistenceManager.saveHistorySession("user-race", saved, false)
+            }
+        } finally {
+            continueCompare.complete(Unit)
             scope.coroutineContext[Job]?.cancelAndJoin()
         }
     }

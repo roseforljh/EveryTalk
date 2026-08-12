@@ -9,14 +9,10 @@ enum class ComputerDisclosureKind {
     ROOT_SSH_PERMISSION,
 }
 
-/** 根据运行模式和 SSH 用户计算本次需要展示的说明。 */
+/** 统一模式只在每次主机高风险命令前确认，首次开启这里只说明模型数据流。 */
 internal object ComputerDisclosurePolicy {
     fun requiredFor(computer: Computer): Set<ComputerDisclosureKind> = buildSet {
         add(ComputerDisclosureKind.MODEL_DATA_FLOW)
-        if (computer.runMode == ComputerRunMode.DIRECT) {
-            add(ComputerDisclosureKind.DIRECT_SSH_PERMISSION)
-            if (computer.username == "root") add(ComputerDisclosureKind.ROOT_SSH_PERMISSION)
-        }
     }
 }
 

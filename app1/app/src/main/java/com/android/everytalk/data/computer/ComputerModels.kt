@@ -27,6 +27,39 @@ enum class ComputerStatus {
 @Serializable
 enum class ComputerRunMode { CONTAINER, DIRECT }
 
+/**
+ * Agent 操作这台服务器时采用的确认方式。
+ * 该设置跟随服务器保存，切换会话或模型时保持一致。
+ */
+@Serializable
+enum class ComputerPermissionMode {
+    MANUAL,
+    SMART,
+    FULL,
+}
+
+/**
+ * 首次添加服务器时对用户展示的真实处理阶段。
+ *
+ * 枚举顺序就是界面上的步骤顺序，新增或调整阶段时必须同时更新中英文文案。
+ */
+enum class ComputerSetupStage {
+    READING_HOST_KEY,
+    AUTHENTICATING,
+    INSPECTING_VPS,
+    SECURING_CONNECTION,
+    PREPARING_CONTAINER,
+    PREPARING_DOCKER,
+    INSTALLING_HELPER,
+    BUILDING_IMAGE,
+    CONFIGURING_NETWORK,
+    VERIFYING,
+}
+
+/** 单次 exec 的执行位置。服务器连接始终使用 SSH，代码任务默认进入 Container。 */
+@Serializable
+enum class ComputerExecTarget { CONTAINER, HOST }
+
 @Serializable
 enum class ComputerAuthKind { PASSWORD, PRIVATE_KEY }
 
@@ -79,6 +112,34 @@ sealed interface ComputerCredential {
     }
 }
 
+/** 复制一份可独立清零的凭据，供测试连接与多份本地加密存储使用。 */
+internal fun ComputerCredential.copySecret(): ComputerCredential = when (this) {
+    is ComputerCredential.Password -> ComputerCredential.Password(password.copyOf())
+    is ComputerCredential.PrivateKey -> ComputerCredential.PrivateKey(
+        privateKey = privateKey.copyOf(),
+        passphrase = passphrase?.copyOf(),
+    )
+}
+
+/** 优先使用单独保存的 sudo 密码；未填写时，密码登录用户沿用其 SSH 密码。 */
+internal fun resolveComputerProvisionPassword(
+    savedSudoPassword: CharArray?,
+    originalCredential: ComputerCredential?,
+): CharArray? {
+    if (savedSudoPassword != null) {
+        originalCredential?.clear()
+        return savedSudoPassword
+    }
+    return when (originalCredential) {
+        is ComputerCredential.Password -> originalCredential.password
+        is ComputerCredential.PrivateKey -> {
+            originalCredential.clear()
+            null
+        }
+        null -> null
+    }
+}
+
 @Serializable
 data class ComputerCapabilities(
     val osId: String = "",
@@ -118,6 +179,7 @@ data class Computer(
     val bootstrapVersion: String? = null,
     val sandboxImage: String? = null,
     val allowPrivateNetwork: Boolean = false,
+    val permissionMode: ComputerPermissionMode = ComputerPermissionMode.MANUAL,
     val lastConnectedAt: Long? = null,
     val lastErrorCode: String? = null,
     val createdAt: Long = System.currentTimeMillis(),
@@ -137,6 +199,33 @@ data class ComputerWorkspace(
     val createdAt: Long = System.currentTimeMillis(),
     val lastUsedAt: Long = System.currentTimeMillis(),
 )
+
+/** 旧 Direct 记录只迁移本地路由字段，Host、凭据和远端文件位置保持原值。 */
+internal fun migrateLegacyDirectComputer(computer: Computer): Computer =
+    if (computer.runMode == ComputerRunMode.DIRECT) {
+        computer.copy(
+            runMode = ComputerRunMode.CONTAINER,
+            status = ComputerStatus.CONFIGURATION_REQUIRED,
+            updatedAt = System.currentTimeMillis(),
+        )
+    } else {
+        computer
+    }
+
+/** 原 Host Workspace 继续作为 Container 的 bind mount，迁移过程中不移动或删除文件。 */
+internal fun migrateLegacyDirectWorkspace(
+    workspace: ComputerWorkspace,
+    containerImage: String?,
+): ComputerWorkspace = if (workspace.runMode == ComputerRunMode.DIRECT) {
+    workspace.copy(
+        runMode = ComputerRunMode.CONTAINER,
+        containerName = "everytalk-${workspace.id}",
+        containerImage = containerImage,
+        status = ComputerWorkspaceStatus.RECOVERING,
+    )
+} else {
+    workspace
+}
 
 @Serializable
 data class ComputerExecution(
@@ -159,6 +248,7 @@ data class ComputerPreview(
     val id: String = "preview_${UUID.randomUUID()}",
     val workspaceId: String,
     val remotePort: Int,
+    val target: ComputerExecTarget = ComputerExecTarget.CONTAINER,
     val localPort: Int? = null,
     val publicPort: Int? = null,
     val protocol: String = "http",
@@ -206,10 +296,24 @@ data class AddComputerRequest(
     val runMode: ComputerRunMode,
 )
 
+/**
+ * 编辑服务器时的候选参数。
+ * credential 为 null 表示沿用当前登录凭据，避免为了修改名称而要求用户再次输入 Secret。
+ */
+data class UpdateComputerRequest(
+    val id: String,
+    val displayName: String,
+    val host: String,
+    val port: Int,
+    val username: String,
+    val credential: ComputerCredential?,
+)
+
 data class ComputerRequestContext(
     val conversationId: String,
     val computerId: String,
     val workspaceId: String,
+    val permissionMode: ComputerPermissionMode = ComputerPermissionMode.MANUAL,
 )
 
 /**
@@ -226,6 +330,7 @@ internal fun ComputerWorkspace.matchesRequestContext(context: ComputerRequestCon
 data class PreparedComputerRequest(
     val context: ComputerRequestContext,
     val environmentPrompt: String,
+    val permissionMode: ComputerPermissionMode,
 )
 
 @Serializable
@@ -277,6 +382,7 @@ object ComputerErrorCodes {
     const val DOWNLOAD_INTERRUPTED = "DOWNLOAD_INTERRUPTED"
     const val PREVIEW_FORWARD_LOST = "PREVIEW_FORWARD_LOST"
     const val PUBLIC_PORT_BLOCKED = "PUBLIC_PORT_BLOCKED"
+    const val HOST_COMMAND_REJECTED = "HOST_COMMAND_REJECTED"
     const val IDEMPOTENCY_CONFLICT = "IDEMPOTENCY_CONFLICT"
     const val TOOL_NAME_CONFLICT = "TOOL_NAME_CONFLICT"
     const val VPS_DISK_FULL = "VPS_DISK_FULL"

@@ -16,7 +16,10 @@ class ComputerRuntimeWrapperCacheTest {
         val installs = AtomicInteger()
 
         repeat(2) {
-            cache.ensureInstalled(byteArrayOf(1)) { installs.incrementAndGet() }
+            cache.ensureInstalled(byteArrayOf(1)) {
+                installs.incrementAndGet()
+                true
+            }
         }
 
         assertEquals(1, installs.get())
@@ -27,8 +30,8 @@ class ComputerRuntimeWrapperCacheTest {
         val cache = ComputerRuntimeWrapperCache()
         val installs = AtomicInteger()
 
-        cache.ensureInstalled(byteArrayOf(1)) { installs.incrementAndGet() }
-        cache.ensureInstalled(byteArrayOf(2)) { installs.incrementAndGet() }
+        cache.ensureInstalled(byteArrayOf(1)) { installs.incrementAndGet(); true }
+        cache.ensureInstalled(byteArrayOf(2)) { installs.incrementAndGet(); true }
 
         assertEquals(2, installs.get())
     }
@@ -44,7 +47,7 @@ class ComputerRuntimeWrapperCacheTest {
                 error("安装失败")
             }
         }.exceptionOrNull()
-        cache.ensureInstalled(byteArrayOf(1)) { installs.incrementAndGet() }
+        cache.ensureInstalled(byteArrayOf(1)) { installs.incrementAndGet(); true }
 
         assertTrue(failure is IllegalStateException)
         assertEquals(2, installs.get())
@@ -60,6 +63,7 @@ class ComputerRuntimeWrapperCacheTest {
                 cache.ensureInstalled(byteArrayOf(1)) {
                     installs.incrementAndGet()
                     yield()
+                    true
                 }
             }
         }.awaitAll()
@@ -68,15 +72,19 @@ class ComputerRuntimeWrapperCacheTest {
     }
 
     @Test
-    fun `不同连接分别安装`() = runTest {
+    fun `不同连接各自校验但VPS版本路径保持一致`() = runTest {
         val firstConnectionCache = ComputerRuntimeWrapperCache()
         val secondConnectionCache = ComputerRuntimeWrapperCache()
-        val installs = AtomicInteger()
+        val checks = AtomicInteger()
 
-        firstConnectionCache.ensureInstalled(byteArrayOf(1)) { installs.incrementAndGet() }
-        secondConnectionCache.ensureInstalled(byteArrayOf(1)) { installs.incrementAndGet() }
+        firstConnectionCache.ensureInstalled(byteArrayOf(1)) { checks.incrementAndGet(); false }
+        secondConnectionCache.ensureInstalled(byteArrayOf(1)) { checks.incrementAndGet(); false }
 
-        assertEquals(2, installs.get())
+        assertEquals(2, checks.get())
+        assertEquals(
+            runtimeWrapperRemotePath("a".repeat(64)),
+            runtimeWrapperRemotePath("a".repeat(64)),
+        )
     }
 
     @Test
@@ -85,9 +93,12 @@ class ComputerRuntimeWrapperCacheTest {
             workspaceId = "workspace_1",
             runtimeId = "run_execution_1",
             timeoutSeconds = 120,
+            wrapperVersion = "a".repeat(64),
         )
 
         assertTrue(command.contains("timeout --signal=TERM --kill-after=5s 120s"))
+        assertTrue(command.contains("everytalk-runtime-wrapper-${"a".repeat(64)}"))
+        assertTrue(command.contains("--envelope"))
         assertTrue(command.contains("rm -f -- \"\$runtime/environment.sh\""))
         assertTrue(command.contains("rmdir -- \"\$runtime\""))
         assertTrue(command.endsWith("exit \"\$status\""))

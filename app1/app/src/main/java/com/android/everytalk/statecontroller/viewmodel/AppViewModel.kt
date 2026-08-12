@@ -428,6 +428,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val computers get() = computerManager.computers
     val computerSelections get() = computerManager.selections
     val pendingComputerPublicPreview get() = computerManager.pendingPublicPreview
+    val pendingComputerHostCommand get() = computerManager.pendingHostCommand
     val showSourcesDialog: StateFlow<Boolean>
         get() = stateHolder._showSourcesDialog.asStateFlow()
     val sourcesForDialog: StateFlow<List<WebSearchResult>>

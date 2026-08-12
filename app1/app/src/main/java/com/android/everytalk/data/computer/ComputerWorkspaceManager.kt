@@ -14,13 +14,36 @@ private const val CONTAINER_HELPER = "/usr/local/libexec/everytalk-containerctl"
 class ComputerWorkspaceManager(private val repository: ComputerRepository) {
     private val workspaceLocks = ConcurrentHashMap<String, Mutex>()
 
-    suspend fun getOrCreate(computerId: String, conversationId: String): ComputerWorkspace {
+    /**
+     * 在模型请求前只创建本地 Workspace 映射，不连接 VPS。
+     * 远端目录由 prepare 在后台准备，模型首轮思考因此可以与 SSH 冷启动并行。
+     */
+    suspend fun getOrCreateLocal(computerId: String, conversationId: String): ComputerWorkspace {
         require(conversationId.isNotBlank()) { "Conversation ID 不能为空" }
         val lockKey = "$computerId\u0000$conversationId"
         return workspaceLocks.computeIfAbsent(lockKey) { Mutex() }.withLock {
             val dao = repository.dao()
-            val existing = dao.getWorkspace(computerId, conversationId)?.toModel()
-            if (existing?.status == ComputerWorkspaceStatus.READY) {
+            dao.getWorkspace(computerId, conversationId)?.toModel()?.let { return@withLock it }
+            val computer = repository.getComputer(computerId)
+                ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
+            newWorkspace(computer, conversationId).also { workspace ->
+                dao.upsertWorkspace(workspace.toEntity())
+            }
+        }
+    }
+
+    /**
+     * 按模型请求已经冻结的 Workspace ID 准备远端目录。
+     * 会话 ID 在首条消息入库时会变化，Workspace ID 始终不变，因此它才是并发准备的稳定主键。
+     */
+    suspend fun prepare(workspaceId: String): ComputerWorkspace {
+        ComputerIdentifier.requireValid(workspaceId, "Workspace ID")
+        return workspaceLocks.computeIfAbsent(workspaceId) { Mutex() }.withLock {
+            val dao = repository.dao()
+            val existing = dao.getWorkspaceById(workspaceId)?.toModel()
+                ?: throw ComputerException(ComputerErrorCodes.WORKSPACE_NOT_READY, "Workspace 不存在")
+            val computerId = existing.computerId
+            if (existing.status == ComputerWorkspaceStatus.READY) {
                 val restored = existing.copy(lastUsedAt = System.currentTimeMillis())
                 if (existing.runMode == ComputerRunMode.CONTAINER) {
                     val computer = repository.getComputer(computerId)
@@ -31,39 +54,55 @@ class ComputerWorkspaceManager(private val repository: ComputerRepository) {
                             ensureContainerWorkspace(connection, computer, existing.id)
                         }
                     } catch (error: Throwable) {
-                        dao.upsertWorkspace(restored.copy(status = ComputerWorkspaceStatus.ERROR).toEntity())
+                        dao.updateWorkspaceRuntimeState(
+                            workspaceId = existing.id,
+                            hostPath = existing.hostPath,
+                            status = ComputerWorkspaceStatus.ERROR.name,
+                        )
                         throw error
                     }
                 }
-                dao.upsertWorkspace(restored.toEntity())
-                return@withLock restored
+                dao.updateWorkspaceRuntimeState(
+                    workspaceId = existing.id,
+                    hostPath = restored.hostPath,
+                    status = restored.status.name,
+                    lastUsedAt = restored.lastUsedAt,
+                )
+                return@withLock dao.getWorkspaceById(existing.id)?.toModel() ?: restored
             }
 
             val computer = repository.getComputer(computerId)
                 ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
-            val workspace = existing ?: newWorkspace(computer, conversationId)
-            dao.upsertWorkspace(workspace.copy(status = ComputerWorkspaceStatus.CREATING).toEntity())
+            dao.updateWorkspaceRuntimeState(
+                workspaceId = existing.id,
+                hostPath = existing.hostPath,
+                status = ComputerWorkspaceStatus.CREATING.name,
+            )
 
             try {
                 val ready = repository.withConnection(computerId) { connection, _ ->
-                    val hostPath = ensureHostWorkspace(connection, workspace.id)
-                    if (workspace.runMode == ComputerRunMode.CONTAINER) {
-                        ensureContainerWorkspace(connection, computer, workspace.id)
+                    val hostPath = ensureHostWorkspace(connection, existing.id)
+                    if (existing.runMode == ComputerRunMode.CONTAINER) {
+                        ensureContainerWorkspace(connection, computer, existing.id)
                     }
-                    workspace.copy(
+                    existing.copy(
                         hostPath = hostPath,
                         status = ComputerWorkspaceStatus.READY,
                         lastUsedAt = System.currentTimeMillis(),
                     )
                 }
-                dao.upsertWorkspace(ready.toEntity())
-                ready
+                dao.updateWorkspaceRuntimeState(
+                    workspaceId = ready.id,
+                    hostPath = ready.hostPath,
+                    status = ready.status.name,
+                    lastUsedAt = ready.lastUsedAt,
+                )
+                dao.getWorkspaceById(ready.id)?.toModel() ?: ready
             } catch (error: Throwable) {
-                dao.upsertWorkspace(
-                    workspace.copy(
-                        status = ComputerWorkspaceStatus.ERROR,
-                        lastUsedAt = System.currentTimeMillis(),
-                    ).toEntity(),
+                dao.updateWorkspaceRuntimeState(
+                    workspaceId = existing.id,
+                    hostPath = existing.hostPath,
+                    status = ComputerWorkspaceStatus.ERROR.name,
                 )
                 throw error
             }
@@ -144,9 +183,22 @@ class ComputerWorkspaceManager(private val repository: ComputerRepository) {
                 if [ "${'$'}status" = RUNNING ] && [ "${'$'}pid" -gt 1 ] && [ -r "/proc/${'$'}pid/stat" ]; then
                     actual_ticks="${'$'}(awk '{print ${'$'}22}' "/proc/${'$'}pid/stat" 2>/dev/null || true)"
                     actual_sid="${'$'}(ps -o sid= -p "${'$'}pid" 2>/dev/null | tr -d ' ' || true)"
-                    wrapper_path="${'$'}HOME/.everytalk/bin/everytalk-runtime-wrapper"
+                    wrapper_argument="${'$'}(tr '\000' '\n' < "/proc/${'$'}pid/cmdline" | while IFS= read -r argument; do
+                        case "${'$'}argument" in
+                            "${'$'}HOME/.everytalk/bin/everytalk-runtime-wrapper") printf '%s' "${'$'}argument"; break ;;
+                            "${'$'}HOME/.everytalk/bin/everytalk-runtime-wrapper-"*) printf '%s' "${'$'}argument"; break ;;
+                        esac
+                    done)"
+                    if [ "${'$'}wrapper_argument" != "${'$'}HOME/.everytalk/bin/everytalk-runtime-wrapper" ]; then
+                        wrapper_version="${'$'}{wrapper_argument##*-}"
+                        case "${'$'}wrapper_version" in
+                            *[!0-9a-f]*|'') wrapper_argument='' ;;
+                        esac
+                        [ "${'$'}{#wrapper_version}" -eq 64 ] || wrapper_argument=''
+                    fi
                     if [ "${'$'}actual_ticks" = "${'$'}start_ticks" ] && [ "${'$'}actual_sid" = "${'$'}pid" ] &&
-                        tr '\000' '\n' < "/proc/${'$'}pid/cmdline" | grep -Fqx -- "${'$'}wrapper_path" &&
+                        [ -n "${'$'}wrapper_argument" ] &&
+                        tr '\000' '\n' < "/proc/${'$'}pid/cmdline" | grep -Fqx -- "${'$'}wrapper_argument" &&
                         tr '\000' '\n' < "/proc/${'$'}pid/cmdline" | grep -Fqx -- "${'$'}process_dir"; then
                         kill -TERM "-${'$'}pid" 2>/dev/null || true
                         attempt=0

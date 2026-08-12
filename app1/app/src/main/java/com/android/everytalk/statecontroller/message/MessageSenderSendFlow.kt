@@ -49,10 +49,12 @@ import com.android.everytalk.statecontroller.mcp.dispatch.toToolDefinition
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
 import com.android.everytalk.util.AiContentSafetyDecision
 import com.android.everytalk.util.AiContentSafetyPolicy
+import com.android.everytalk.util.ConversationNameHelper
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
@@ -99,6 +101,12 @@ internal fun enabledMessageToolIdsForRequest(
         if (agentEnabled) add(MessageToolIds.AGENT)
     }
 }
+
+/** AI 加载占位不参与首条用户消息判断，避免开启 Agent 后新会话漏掉首次入库。 */
+internal fun isFirstUserMessageForNewChat(
+    messages: List<UiMessage>,
+    loadedHistoryIndex: Int?,
+): Boolean = loadedHistoryIndex == null && messages.count { it.sender == UiSender.User } == 1
 
 internal fun MessageSender.sendMessageInternal(
         messageText: String,
@@ -193,18 +201,10 @@ internal fun MessageSender.sendMessageInternal(
             val webSearchEnabledForRequest = !isImageGeneration && stateHolder._isWebSearchEnabled.value
             val isMcpEnabledForRequest = !isImageGeneration && stateHolder._isMcpEnabledForNextRequest.value
             val isAgentEnabledForRequest = !isImageGeneration && stateHolder._isAgentEnabled.value
-            var preparedComputerRequest = try {
-                prepareComputerRequest(
-                    stateHolder._currentConversationId.value,
-                    isAgentEnabledForRequest,
-                )
-            } catch (error: ComputerException) {
-                showSnackbar(error.message)
-                return@launch
-            }
-            if (isAgentEnabledForRequest && preparedComputerRequest == null) {
-                showSnackbar("Agent 本地执行器未初始化")
-                return@launch
+            val requestConversationId = stateHolder._currentConversationId.value
+            // Workspace 准备和附件处理并行。用户消息无需等待 SSH，点击发送后立即进入消息列表。
+            val computerPreparation = async(Dispatchers.IO) {
+                prepareComputerRequest(requestConversationId, isAgentEnabledForRequest)
             }
             val enabledToolIdsForRequest = enabledMessageToolIdsForRequest(
                 isImageGeneration = isImageGeneration,
@@ -296,8 +296,6 @@ internal fun MessageSender.sendMessageInternal(
                 imageUrls = attachmentResult.imageUriStringsForUi,
                 attachments = attachmentResult.processedAttachmentsForUi,
                 enabledToolIds = enabledToolIdsForRequest,
-                computerIdSnapshot = preparedComputerRequest?.context?.computerId,
-                workspaceIdSnapshot = preparedComputerRequest?.context?.workspaceId,
                 modelName = currentConfig.model,
                 providerName = currentConfig.provider
             )
@@ -323,19 +321,62 @@ internal fun MessageSender.sendMessageInternal(
                 }
             }
 
-            // 🔥 新增：当在新会话中发送第一条消息时，立即将其添加到历史记录中，以便在抽屉中即时可见
+            // 先判断首条消息。Agent 的 AI 加载占位也会进入 messages，不能让它改变会话入库判断。
             val isNewTextChatFirstMessage = !isImageGeneration &&
-                    stateHolder.messages.size == 1 &&
-                    stateHolder._loadedHistoryIndex.value == null
+                    isFirstUserMessageForNewChat(
+                        messages = stateHolder.messages,
+                        loadedHistoryIndex = stateHolder._loadedHistoryIndex.value,
+                    )
 
             val isNewImageChatFirstMessage = isImageGeneration &&
-                    stateHolder.imageGenerationMessages.size == 1 &&
-                    stateHolder._loadedImageGenerationHistoryIndex.value == null
+                    isFirstUserMessageForNewChat(
+                        messages = stateHolder.imageGenerationMessages,
+                        loadedHistoryIndex = stateHolder._loadedImageGenerationHistoryIndex.value,
+                    )
 
-            if (isNewTextChatFirstMessage || isNewImageChatFirstMessage) {
-                withContext(Dispatchers.IO) {
-                    historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = isImageGeneration)
-                }
+            // Agent 冻结本地 Workspace 快照时立即显示 AI 加载占位，避免短暂准备阶段看起来毫无响应。
+            var preCreatedAiMessageId: String? = if (isAgentEnabledForRequest) {
+                apiHandler.prepareStreamingAiMessage(
+                    modelName = currentConfig.model,
+                    providerName = currentConfig.provider,
+                    isImageGeneration = false,
+                    afterUserMessageId = newUserMessageForUi.id,
+                    executionStatus = "正在准备服务器",
+                    preparationJob = currentCoroutineContext()[Job],
+                )
+            } else {
+                null
+            }
+
+            // 这里只等待本地 Workspace 快照。远端 SSH 准备已在后台继续执行，不阻塞模型首轮响应。
+            // 必须先冻结快照再触发首次会话迁移，否则迁移可能早于 Workspace 映射创建。
+            var preparedComputerRequest = try {
+                computerPreparation.await()
+            } catch (error: ComputerException) {
+                val failureText = error.message
+                val failedMessageId = preCreatedAiMessageId ?: apiHandler.prepareStreamingAiMessage(
+                    modelName = currentConfig.model,
+                    providerName = currentConfig.provider,
+                    isImageGeneration = false,
+                    afterUserMessageId = newUserMessageForUi.id,
+                    preparationJob = currentCoroutineContext()[Job],
+                ).also { preCreatedAiMessageId = it }
+                apiHandler.failPreparedStreamingAiMessage(failedMessageId, failureText)
+                showSnackbar(failureText)
+                return@launch
+            }
+            if (isAgentEnabledForRequest && preparedComputerRequest == null) {
+                val failureText = "Agent 本地执行器未初始化"
+                val failedMessageId = preCreatedAiMessageId ?: apiHandler.prepareStreamingAiMessage(
+                    modelName = currentConfig.model,
+                    providerName = currentConfig.provider,
+                    isImageGeneration = false,
+                    afterUserMessageId = newUserMessageForUi.id,
+                    preparationJob = currentCoroutineContext()[Job],
+                ).also { preCreatedAiMessageId = it }
+                apiHandler.failPreparedStreamingAiMessage(failedMessageId, failureText)
+                showSnackbar(failureText)
+                return@launch
             }
             if (!isImageGeneration) {
                 preparedComputerRequest = preparedComputerRequest?.let { prepared ->
@@ -345,6 +386,24 @@ internal fun MessageSender.sendMessageInternal(
                     } else {
                         prepared.copy(context = prepared.context.copy(conversationId = stableConversationId))
                     }
+                }
+                preparedComputerRequest?.let { prepared ->
+                    withContext(Dispatchers.Main.immediate) {
+                        val messageIndex = stateHolder.messages.indexOfFirst { it.id == newUserMessageForUi.id }
+                        if (messageIndex >= 0) {
+                            stateHolder.messages[messageIndex] = stateHolder.messages[messageIndex].copy(
+                                computerIdSnapshot = prepared.context.computerId,
+                                workspaceIdSnapshot = prepared.context.workspaceId,
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Workspace 快照已经冻结，此时再入库并迁移会话 ID，映射不会遗留在临时会话下。
+            if (isNewTextChatFirstMessage || isNewImageChatFirstMessage) {
+                withContext(Dispatchers.IO) {
+                    historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = isImageGeneration)
                 }
             }
 
@@ -361,7 +420,13 @@ internal fun MessageSender.sendMessageInternal(
                 val messagesInChatUiSnapshot = if (isImageGeneration) stateHolder.imageGenerationMessages.toList() else stateHolder.messages.toList()
                 logUiMessages("rawMessages", messagesInChatUiSnapshot)
                 val historyEndIndex = messagesInChatUiSnapshot.indexOfFirst { it.id == newUserMessageForUi.id }
-                val historyUiMessagesRaw = if (historyEndIndex != -1) messagesInChatUiSnapshot.subList(0, historyEndIndex) else messagesInChatUiSnapshot
+                val historyUiMessagesRaw = ConversationNameHelper.withoutStoredConversationTitle(
+                    if (historyEndIndex != -1) {
+                        messagesInChatUiSnapshot.subList(0, historyEndIndex)
+                    } else {
+                        messagesInChatUiSnapshot
+                    },
+                )
 
                 // 当"系统提示接入"处于暂停状态时，过滤掉会话历史中的系统消息，避免仍然将 Prompt 注入到请求
                 val engagedForThisConversation = stateHolder.systemPromptEngagedState[stateHolder._currentConversationId.value] ?: false
@@ -591,6 +656,8 @@ internal fun MessageSender.sendMessageInternal(
                     appendComputerTools(
                         tools = toolsWithAttachmentReader,
                         enabled = preparedComputerRequest != null,
+                        permissionMode = preparedComputerRequest?.permissionMode
+                            ?: com.android.everytalk.data.computer.ComputerPermissionMode.MANUAL,
                     ).ifEmpty { null }
                 })
 
@@ -650,7 +717,6 @@ internal fun MessageSender.sendMessageInternal(
                     ).coerceAtLeast(0L)
                 val nativeThroughMessageId = nativeResponsesState?.openAiResponsesThroughMessageId
                     ?: nativeAnthropicState?.anthropicThroughMessageId
-                var preCreatedAiMessageId: String? = null
                 suspend fun showCompressionStatus() {
                     if (preCreatedAiMessageId == null) {
                         preCreatedAiMessageId = apiHandler.prepareStreamingAiMessage(

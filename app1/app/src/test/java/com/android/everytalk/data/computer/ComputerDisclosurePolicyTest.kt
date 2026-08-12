@@ -13,20 +13,13 @@ class ComputerDisclosurePolicyTest {
     }
 
     @Test
-    fun `Direct SSH 根据 root 权限分层确认`() {
+    fun `旧Direct记录迁移期间也只在首次开启说明模型数据流`() {
         assertEquals(
-            setOf(
-                ComputerDisclosureKind.MODEL_DATA_FLOW,
-                ComputerDisclosureKind.DIRECT_SSH_PERMISSION,
-            ),
+            setOf(ComputerDisclosureKind.MODEL_DATA_FLOW),
             ComputerDisclosurePolicy.requiredFor(computer(ComputerRunMode.DIRECT, "ubuntu")),
         )
         assertEquals(
-            setOf(
-                ComputerDisclosureKind.MODEL_DATA_FLOW,
-                ComputerDisclosureKind.DIRECT_SSH_PERMISSION,
-                ComputerDisclosureKind.ROOT_SSH_PERMISSION,
-            ),
+            setOf(ComputerDisclosureKind.MODEL_DATA_FLOW),
             ComputerDisclosurePolicy.requiredFor(computer(ComputerRunMode.DIRECT, "root")),
         )
     }

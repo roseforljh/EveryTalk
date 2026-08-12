@@ -4,16 +4,19 @@ import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
+import androidx.room.ColumnInfo
 import com.android.everytalk.data.computer.Computer
 import com.android.everytalk.data.computer.ComputerAuditEvent
 import com.android.everytalk.data.computer.ComputerAuthKind
 import com.android.everytalk.data.computer.ComputerCapabilities
 import com.android.everytalk.data.computer.ComputerCredentialState
+import com.android.everytalk.data.computer.ComputerExecTarget
 import com.android.everytalk.data.computer.ComputerExecution
 import com.android.everytalk.data.computer.ComputerExecutionStatus
 import com.android.everytalk.data.computer.ComputerPreview
 import com.android.everytalk.data.computer.ComputerPreviewStatus
 import com.android.everytalk.data.computer.ComputerPreviewVisibility
+import com.android.everytalk.data.computer.ComputerPermissionMode
 import com.android.everytalk.data.computer.ComputerRunMode
 import com.android.everytalk.data.computer.ComputerStatus
 import com.android.everytalk.data.computer.ComputerWorkspace
@@ -42,6 +45,7 @@ data class ComputerEntity(
     val bootstrapVersion: String?,
     val sandboxImage: String?,
     val allowPrivateNetwork: Boolean,
+    val permissionMode: String,
     val lastConnectedAt: Long?,
     val lastErrorCode: String?,
     val createdAt: Long,
@@ -147,6 +151,7 @@ data class ComputerPreviewEntity(
     @PrimaryKey val id: String,
     val workspaceId: String,
     val remotePort: Int,
+    @ColumnInfo(defaultValue = "'CONTAINER'") val target: String,
     val localPort: Int?,
     val publicPort: Int?,
     val protocol: String,
@@ -219,6 +224,7 @@ fun ComputerEntity.toModel(json: Json): Computer = Computer(
     bootstrapVersion = bootstrapVersion,
     sandboxImage = sandboxImage,
     allowPrivateNetwork = allowPrivateNetwork,
+    permissionMode = enumValueOrDefault(permissionMode, ComputerPermissionMode.MANUAL),
     lastConnectedAt = lastConnectedAt,
     lastErrorCode = lastErrorCode,
     createdAt = createdAt,
@@ -243,6 +249,7 @@ fun Computer.toEntity(json: Json): ComputerEntity = ComputerEntity(
     bootstrapVersion = bootstrapVersion,
     sandboxImage = sandboxImage,
     allowPrivateNetwork = allowPrivateNetwork,
+    permissionMode = permissionMode.name,
     lastConnectedAt = lastConnectedAt,
     lastErrorCode = lastErrorCode,
     createdAt = createdAt,
@@ -309,6 +316,7 @@ fun ComputerPreviewEntity.toModel(): ComputerPreview = ComputerPreview(
     id = id,
     workspaceId = workspaceId,
     remotePort = remotePort,
+    target = enumValueOrDefault(target, ComputerExecTarget.CONTAINER),
     localPort = localPort,
     publicPort = publicPort,
     protocol = protocol,
@@ -322,6 +330,7 @@ fun ComputerPreview.toEntity(): ComputerPreviewEntity = ComputerPreviewEntity(
     id = id,
     workspaceId = workspaceId,
     remotePort = remotePort,
+    target = target.name,
     localPort = localPort,
     publicPort = publicPort,
     protocol = protocol,

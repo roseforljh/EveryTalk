@@ -14,30 +14,56 @@ object ComputerToolNames {
 
 /** 七个稳定的 Computer Tool Schema，服务器身份由 Android 请求快照注入，模型参数中不出现。 */
 object ComputerToolCatalog {
-    fun definitions(): List<Map<String, Any>> = listOf(
+    fun definitions(
+        permissionMode: ComputerPermissionMode = ComputerPermissionMode.MANUAL,
+    ): List<Map<String, Any>> = listOf(
         function(
             name = ComputerToolNames.EXEC,
-            description = "Run a command in the current persistent /workspace on the user's selected server. Combine related read-only diagnostics into one command when possible to avoid repeated remote round trips.",
-            properties = mapOf(
-                "command" to string("Command or shell script to run."),
-                "cwd" to string("Working directory inside /workspace. Defaults to /workspace."),
-                "env" to mapOf(
-                    "type" to "object",
-                    "description" to "Non-secret environment variables.",
-                    "additionalProperties" to mapOf("type" to "string"),
-                ),
-                "secret_names" to mapOf(
-                    "type" to "array",
-                    "description" to "Names of workspace secrets to inject for this command.",
-                    "items" to mapOf("type" to "string"),
-                    "uniqueItems" to true,
-                ),
-                "stdin" to string("Optional UTF-8 stdin."),
-                "timeout_ms" to integer("Foreground timeout in milliseconds.", 1, 3_600_000),
-                "background" to boolean("Start a persistent background process."),
-                "as_root" to boolean("Run as root inside Container mode only."),
-            ),
-            required = listOf("command"),
+            description = execDescription(permissionMode),
+            properties = buildMap {
+                put("command", string("Command or shell script to run."))
+                put(
+                    "target",
+                    enumStringWithDefault(
+                        description = "Execution location. Defaults to the isolated Container.",
+                        default = "container",
+                        "container",
+                        "host",
+                    ),
+                )
+                put("cwd", string("Working directory. Container defaults to /workspace; host defaults to the SSH user's home directory."))
+                put(
+                    "env",
+                    mapOf(
+                        "type" to "object",
+                        "description" to "Non-secret environment variables for target=container only.",
+                        "additionalProperties" to mapOf("type" to "string"),
+                    ),
+                )
+                put(
+                    "secret_names",
+                    mapOf(
+                        "type" to "array",
+                        "description" to "Names of workspace secrets to inject for target=container only.",
+                        "items" to mapOf("type" to "string"),
+                        "uniqueItems" to true,
+                    ),
+                )
+                put("stdin", string("Optional UTF-8 stdin for target=container only."))
+                put("timeout_ms", integer("Foreground timeout in milliseconds.", 1, 3_600_000))
+                put("background", boolean("Start a persistent background process inside the Container only."))
+                put("as_root", boolean("Run as root inside the Container only. Never use for target=host; use an explicit sudo command there."))
+                if (permissionMode == ComputerPermissionMode.SMART) {
+                    put(
+                        "ask_user_approval",
+                        boolean("Required in smart approval mode. Set true only when this operation should pause for the user's approval; otherwise set false."),
+                    )
+                }
+            },
+            required = buildList {
+                add("command")
+                if (permissionMode == ComputerPermissionMode.SMART) add("ask_user_approval")
+            },
         ),
         function(
             name = ComputerToolNames.READ_FILE,
@@ -96,14 +122,32 @@ object ComputerToolCatalog {
         ),
         function(
             name = ComputerToolNames.OPEN_PORT,
-            description = "Open a private phone-local preview or request a confirmed public port for a service.",
-            properties = mapOf(
-                "port" to integer("Service port on the VPS or Workspace Container.", 1, 65_535),
-                "protocol" to enumString("http", "https"),
-                "visibility" to enumString("private", "public"),
-                "expires_in_seconds" to integer("Optional public preview expiry.", 60, 604_800),
-            ),
-            required = listOf("port"),
+            description = "Open an HTTP or HTTPS service. Use target=container for services created in /workspace and target=host for services already running on the VPS.",
+            properties = buildMap {
+                put("port", integer("Service port on the VPS or Workspace Container.", 1, 65_535))
+                put(
+                    "target",
+                    enumStringWithDefault(
+                        description = "Service location. Defaults to the Workspace Container.",
+                        default = "container",
+                        "container",
+                        "host",
+                    ),
+                )
+                put("protocol", enumString("http", "https"))
+                put("visibility", enumString("private", "public"))
+                put("expires_in_seconds", integer("Optional public preview expiry.", 60, 604_800))
+                if (permissionMode == ComputerPermissionMode.SMART) {
+                    put(
+                        "ask_user_approval",
+                        boolean("Required in smart approval mode. Set true only when opening this port should pause for the user's approval; otherwise set false."),
+                    )
+                }
+            },
+            required = buildList {
+                add("port")
+                if (permissionMode == ComputerPermissionMode.SMART) add("ask_user_approval")
+            },
         ),
     )
 
@@ -126,6 +170,20 @@ object ComputerToolCatalog {
         ),
     )
 
+    private fun execDescription(permissionMode: ComputerPermissionMode): String {
+        val approvalText = when (permissionMode) {
+            ComputerPermissionMode.MANUAL ->
+                "The app applies its local approval policy to host operations."
+            ComputerPermissionMode.SMART ->
+                "You must decide whether to ask the user by setting ask_user_approval."
+            ComputerPermissionMode.FULL ->
+                "Valid operations execute without an approval prompt."
+        }
+        return "Run a command on the user's selected server. Use target=container for code, scripts, builds, tests, package installs, and file-producing work. " +
+            "Use target=host only to inspect or manage the VPS itself. $approvalText Combine related read-only diagnostics and cap output. " +
+            "For basic VPS configuration, prefer one host call: hostname; uname -a; cat /etc/os-release; nproc; free -m; df -h."
+    }
+
     private fun string(description: String): Map<String, Any> = mapOf(
         "type" to "string",
         "description" to description,
@@ -146,5 +204,16 @@ object ComputerToolCatalog {
     private fun enumString(vararg values: String): Map<String, Any> = mapOf(
         "type" to "string",
         "enum" to values.toList(),
+    )
+
+    private fun enumStringWithDefault(
+        description: String,
+        default: String,
+        vararg values: String,
+    ): Map<String, Any> = mapOf(
+        "type" to "string",
+        "description" to description,
+        "enum" to values.toList(),
+        "default" to default,
     )
 }

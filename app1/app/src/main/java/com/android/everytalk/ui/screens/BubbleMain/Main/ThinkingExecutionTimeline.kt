@@ -80,6 +80,7 @@ internal fun localizedExecutionStatusText(status: String?): String? {
         text == "等待首个响应" -> stringResource(R.string.thinking_waiting_first_response)
         text == "正在接收思考" -> stringResource(R.string.thinking_receiving)
         text == "已收到思考，等待正文" -> stringResource(R.string.thinking_received_waiting_content)
+        text == "正在准备服务器" -> stringResource(R.string.thinking_preparing_server)
         text == AGENT_LOOP_CONTINUING_STATUS -> stringResource(R.string.thinking_analyzing_tool_result)
         text == "搜索网页" -> stringResource(R.string.thinking_searching_web)
         text.startsWith("搜索网页 · ") -> stringResource(

@@ -29,6 +29,7 @@ import com.android.everytalk.data.computer.ComputerException
 import com.android.everytalk.data.computer.ComputerErrorCodes
 import com.android.everytalk.data.computer.ComputerToolCatalog
 import com.android.everytalk.data.computer.ComputerToolNames
+import com.android.everytalk.data.computer.ComputerPermissionMode
 import com.android.everytalk.data.computer.PreparedComputerRequest
 import com.android.everytalk.data.network.ExternalWebSearchProvider
 import com.android.everytalk.data.network.MAX_ATTACHMENT_PAGE_CHARS
@@ -260,6 +261,7 @@ internal fun appendBuiltInReadAttachmentTool(
 internal fun appendComputerTools(
     tools: List<Map<String, Any>>,
     enabled: Boolean,
+    permissionMode: ComputerPermissionMode = ComputerPermissionMode.MANUAL,
 ): List<Map<String, Any>> {
     if (!enabled) return tools
     val conflicts = tools.mapNotNull(::extractToolName).filter { existingName ->
@@ -271,7 +273,7 @@ internal fun appendComputerTools(
             "Agent 工具名与现有工具冲突：${conflicts.distinct().joinToString()}",
         )
     }
-    return tools + ComputerToolCatalog.definitions()
+    return tools + ComputerToolCatalog.definitions(permissionMode)
 }
 
 internal fun addOrReplaceRegeneratedUserMessage(

@@ -1,6 +1,7 @@
 package com.android.everytalk.ui.screens.computer
 
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -8,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
@@ -32,6 +34,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -59,7 +63,11 @@ import com.android.everytalk.statecontroller.openComputerPublicPreview
 import com.android.everytalk.statecontroller.saveComputerWorkspaceSecret
 import com.android.everytalk.statecontroller.stopComputerPreview
 import com.android.everytalk.ui.components.dialog.AppDialogShape
+import com.android.everytalk.ui.components.dialog.AppDialogTextFieldShape
 import com.android.everytalk.ui.components.dialog.appDialogBorderColor
+import com.android.everytalk.ui.components.dialog.appDialogContainerColor
+import com.android.everytalk.ui.components.dialog.appDialogContentColor
+import com.android.everytalk.ui.components.dialog.appDialogTextFieldColors
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -71,6 +79,7 @@ internal fun ComputerWorkspaceCard(
     viewModel: AppViewModel,
     computer: Computer,
     workspace: ComputerWorkspace,
+    displayName: String,
     onMessage: (String) -> Unit,
 ) {
     val previewsFlow = remember(workspace.id) { viewModel.observeComputerPreviews(workspace.id) }
@@ -84,6 +93,7 @@ internal fun ComputerWorkspaceCard(
     var previewUrl by remember { mutableStateOf<String?>(null) }
     var busyAction by remember { mutableStateOf<String?>(null) }
     var dialogError by remember { mutableStateOf<String?>(null) }
+    var expanded by remember(workspace.id) { mutableStateOf(false) }
     val actionFailedMessage = stringResource(R.string.computer_action_failed)
     val secretSavedMessage = stringResource(R.string.computer_secret_saved)
     val workspaceDeletedMessage = stringResource(R.string.computer_workspace_deleted)
@@ -111,22 +121,22 @@ internal fun ComputerWorkspaceCard(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_folder),
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .clip(RoundedCornerShape(16.dp))
+                    .clickable { expanded = !expanded },
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
                 Column(
-                    modifier = Modifier
-                        .padding(start = 10.dp)
-                        .weight(1f),
+                    modifier = Modifier.weight(1f),
                 ) {
                     Text(
-                        text = workspace.id,
+                        text = displayName,
                         style = MaterialTheme.typography.titleSmall,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
@@ -134,8 +144,8 @@ internal fun ComputerWorkspaceCard(
                     Text(
                         text = stringResource(
                             R.string.computer_workspace_mode_status,
-                            workspaceModeLabel(workspace.runMode),
                             workspaceStatusLabel(workspace.status),
+                            formatComputerDate(workspace.lastUsedAt),
                         ),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -143,37 +153,93 @@ internal fun ComputerWorkspaceCard(
                 }
                 if (busyAction != null) {
                     CircularProgressIndicator(modifier = Modifier.height(22.dp), strokeWidth = 2.dp)
+                } else {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_gpt_chevron_right),
+                        contentDescription = stringResource(if (expanded) R.string.action_collapse else R.string.action_expand),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.rotate(if (expanded) 90f else 0f),
+                    )
                 }
             }
 
-            ComputerDetailValue(
-                label = stringResource(R.string.computer_workspace_path),
-                value = workspace.hostPath,
-            )
-            ComputerDetailValue(
-                label = stringResource(R.string.computer_workspace_last_used),
-                value = formatComputerDate(workspace.lastUsedAt),
-            )
+            if (expanded) {
+                ComputerDetailValue(
+                    label = stringResource(R.string.computer_workspace_path),
+                    value = workspace.hostPath,
+                )
+                ComputerDetailValue(
+                    label = stringResource(R.string.computer_workspace_last_used),
+                    value = formatComputerDate(workspace.lastUsedAt),
+                )
 
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(
-                    onClick = { secretDialogVisible = true; dialogError = null },
-                    enabled = busyAction == null,
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    Text(stringResource(R.string.computer_secret_add))
+                    OutlinedButton(
+                        onClick = { secretDialogVisible = true; dialogError = null },
+                        enabled = busyAction == null,
+                    ) {
+                        Text(stringResource(R.string.computer_secret_add))
+                    }
+                    OutlinedButton(
+                        onClick = { previewVisibility = ComputerPreviewVisibility.PRIVATE; dialogError = null },
+                        enabled = busyAction == null && workspace.status == ComputerWorkspaceStatus.READY,
+                    ) {
+                        Text(stringResource(R.string.computer_preview_private_create))
+                    }
+                    OutlinedButton(
+                        onClick = { previewVisibility = ComputerPreviewVisibility.PUBLIC; dialogError = null },
+                        enabled = busyAction == null && workspace.status == ComputerWorkspaceStatus.READY,
+                    ) {
+                        Text(stringResource(R.string.computer_preview_public_create))
+                    }
                 }
-                OutlinedButton(
-                    onClick = { previewVisibility = ComputerPreviewVisibility.PRIVATE; dialogError = null },
-                    enabled = busyAction == null && workspace.status == ComputerWorkspaceStatus.READY,
-                ) {
-                    Text(stringResource(R.string.computer_preview_private_create))
+
+                if (secrets.isNotEmpty()) {
+                    HorizontalDivider()
+                    Text(
+                        text = stringResource(R.string.computer_secret_section),
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    ComputerSecretList(
+                        secrets = secrets,
+                        enabled = busyAction == null,
+                        onDelete = { secret ->
+                            launchAction("secret-delete") {
+                                viewModel.deleteComputerWorkspaceSecret(workspace.id, secret.name)
+                            }
+                        },
+                    )
                 }
-                OutlinedButton(
-                    onClick = { previewVisibility = ComputerPreviewVisibility.PUBLIC; dialogError = null },
-                    enabled = busyAction == null && workspace.status == ComputerWorkspaceStatus.READY,
-                ) {
-                    Text(stringResource(R.string.computer_preview_public_create))
+
+                if (previews.isNotEmpty()) {
+                    HorizontalDivider()
+                    Text(
+                        text = stringResource(R.string.computer_preview_section),
+                        style = MaterialTheme.typography.titleSmall,
+                    )
+                    if (
+                        computer.runMode == ComputerRunMode.DIRECT &&
+                        previews.any { it.visibility == ComputerPreviewVisibility.PUBLIC }
+                    ) {
+                        Text(
+                            text = stringResource(R.string.computer_preview_direct_stop_notice),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    ComputerPreviewList(
+                        computer = computer,
+                        previews = previews,
+                        onOpen = { previewUrl = it },
+                        onStop = { preview ->
+                            launchAction("preview-stop") { viewModel.stopComputerPreview(preview.id) }
+                        },
+                    )
                 }
+
                 TextButton(
                     onClick = { deleteDialogVisible = true; dialogError = null },
                     enabled = busyAction == null,
@@ -184,45 +250,6 @@ internal fun ComputerWorkspaceCard(
                     )
                 }
             }
-
-            HorizontalDivider()
-            Text(
-                text = stringResource(R.string.computer_secret_section),
-                style = MaterialTheme.typography.titleSmall,
-            )
-            ComputerSecretList(
-                secrets = secrets,
-                enabled = busyAction == null,
-                onDelete = { secret ->
-                    launchAction("secret-delete") {
-                        viewModel.deleteComputerWorkspaceSecret(workspace.id, secret.name)
-                    }
-                },
-            )
-
-            HorizontalDivider()
-            Text(
-                text = stringResource(R.string.computer_preview_section),
-                style = MaterialTheme.typography.titleSmall,
-            )
-            if (
-                computer.runMode == ComputerRunMode.DIRECT &&
-                previews.any { it.visibility == ComputerPreviewVisibility.PUBLIC }
-            ) {
-                Text(
-                    text = stringResource(R.string.computer_preview_direct_stop_notice),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-            ComputerPreviewList(
-                computer = computer,
-                previews = previews,
-                onOpen = { previewUrl = it },
-                onStop = { preview ->
-                    launchAction("preview-stop") { viewModel.stopComputerPreview(preview.id) }
-                },
-            )
         }
     }
 
@@ -340,6 +367,9 @@ private fun ComputerSecretEditorDialog(
         properties = DialogProperties(securePolicy = SecureFlagPolicy.SecureOn),
         modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
         shape = AppDialogShape,
+        containerColor = appDialogContainerColor(),
+        titleContentColor = appDialogContentColor(),
+        textContentColor = appDialogContentColor(),
         title = { Text(stringResource(R.string.computer_secret_add)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -355,6 +385,8 @@ private fun ComputerSecretEditorDialog(
                     singleLine = true,
                     enabled = !isBusy,
                     modifier = Modifier.fillMaxWidth(),
+                    shape = AppDialogTextFieldShape,
+                    colors = appDialogTextFieldColors(),
                 )
                 OutlinedTextField(
                     value = value,
@@ -367,6 +399,8 @@ private fun ComputerSecretEditorDialog(
                     singleLine = true,
                     enabled = !isBusy,
                     modifier = Modifier.fillMaxWidth(),
+                    shape = AppDialogTextFieldShape,
+                    colors = appDialogTextFieldColors(),
                 )
                 (localError ?: errorText)?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             }
@@ -404,6 +438,9 @@ private fun ComputerWorkspaceDeleteDialog(
         onDismissRequest = { if (!isBusy) onDismiss() },
         modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
         shape = AppDialogShape,
+        containerColor = appDialogContainerColor(),
+        titleContentColor = appDialogContentColor(),
+        textContentColor = appDialogContentColor(),
         title = { Text(stringResource(R.string.computer_workspace_delete_title)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -477,11 +514,6 @@ internal fun ComputerDetailValue(label: String, value: String) {
         )
     }
 }
-
-@Composable
-private fun workspaceModeLabel(mode: ComputerRunMode): String = stringResource(
-    if (mode == ComputerRunMode.CONTAINER) R.string.computer_mode_container else R.string.computer_mode_direct,
-)
 
 @Composable
 private fun workspaceStatusLabel(status: ComputerWorkspaceStatus): String = stringResource(

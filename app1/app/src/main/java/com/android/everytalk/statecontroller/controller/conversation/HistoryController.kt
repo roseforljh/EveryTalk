@@ -14,9 +14,13 @@ import kotlinx.coroutines.withContext
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.network.extractThinkTagContent
+import com.android.everytalk.util.ConversationNameHelper
 
 internal fun prepareLoadedHistoryMessages(messages: List<Message>, sessionId: String): List<Message> =
-    repairHistoryMessageParts(processLoadedMessages(messages), sessionId)
+    repairHistoryMessageParts(
+        processLoadedMessages(ConversationNameHelper.withoutStoredConversationTitle(messages)),
+        sessionId,
+    )
 
 private fun processLoadedMessages(messages: List<Message>): List<Message> {
     return messages.map { message ->
@@ -113,6 +117,7 @@ class HistoryController(
             stateHolder._historicalConversations.value
         }
         val conversation = conversationList.getOrNull(index) ?: return getDefaultConversationName(index, isImageGeneration)
+        ConversationNameHelper.getStoredConversationTitle(conversation)?.let { return it }
         val firstUser = conversation.firstOrNull { it.sender == Sender.User && it.text.isNotBlank() }
         val raw = firstUser?.text?.trim() ?: return getDefaultConversationName(index, isImageGeneration)
         return com.android.everytalk.util.ConversationNameHelper.cleanAndTruncateText(raw, 100)
@@ -124,86 +129,61 @@ class HistoryController(
             showSnackbar("新名称不能为空")
             return
         }
+        val historicalState = if (isImageGeneration) {
+            stateHolder._imageGenerationHistoricalConversations
+        } else {
+            stateHolder._historicalConversations
+        }
+        val currentHistorical = historicalState.value
+        if (index !in currentHistorical.indices) {
+            showSnackbar("无法重命名：对话索引错误")
+            return
+        }
+
+        val original = currentHistorical[index].toMutableList()
+        val existingTitleIndex = original.indexOfFirst {
+            it.sender == Sender.System && it.isPlaceholderName
+        }
+        if (existingTitleIndex >= 0) {
+            original[existingTitleIndex] = original[existingTitleIndex].copy(
+                text = trimmed,
+                timestamp = System.currentTimeMillis(),
+            )
+        } else {
+            original.add(
+                0,
+                Message(
+                    id = "title_${java.util.UUID.randomUUID()}",
+                    text = trimmed,
+                    sender = Sender.System,
+                    timestamp = System.currentTimeMillis() - 1,
+                    contentStarted = true,
+                    isPlaceholderName = true,
+                ),
+            )
+        }
+        historicalState.value = currentHistorical.toMutableList().apply {
+            this[index] = original.toList()
+        }
+
+        // 当前聊天只保留可见消息，名称继续只存在于历史元数据中。
+        val loadedIndex = if (isImageGeneration) {
+            stateHolder._loadedImageGenerationHistoryIndex.value
+        } else {
+            stateHolder._loadedHistoryIndex.value
+        }
+        if (loadedIndex == index) {
+            val visibleMessages = if (isImageGeneration) {
+                stateHolder.imageGenerationMessages
+            } else {
+                stateHolder.messages
+            }
+            visibleMessages.removeAll { it.sender == Sender.System && it.isPlaceholderName }
+        }
+
         scope.launch {
-            val success = withContext(Dispatchers.Default) {
-                val currentHistorical = if (isImageGeneration)
-                    stateHolder._imageGenerationHistoricalConversations.value
-                else
-                    stateHolder._historicalConversations.value
-                if (index < 0 || index >= currentHistorical.size) {
-                    withContext(Dispatchers.Main) { showSnackbar("无法重命名：对话索引错误") }
-                    return@withContext false
-                }
-                val original = currentHistorical[index].toMutableList()
-                var updatedOrAdded = false
-                val existingTitleIndex = original.indexOfFirst { it.sender == Sender.System && it.isPlaceholderName }
-                if (existingTitleIndex != -1) {
-                    original[existingTitleIndex] = original[existingTitleIndex].copy(
-                        text = trimmed,
-                        timestamp = System.currentTimeMillis()
-                    )
-                    updatedOrAdded = true
-                }
-                if (!updatedOrAdded) {
-                    val titleMessage = Message(
-                        id = "title_${java.util.UUID.randomUUID()}",
-                        text = trimmed,
-                        sender = Sender.System,
-                        timestamp = System.currentTimeMillis() - 1,
-                        contentStarted = true,
-                        isPlaceholderName = true
-                    )
-                    original.add(0, titleMessage)
-                }
-                val updatedList = currentHistorical.toMutableList().apply { this[index] = original.toList() }
-                withContext(Dispatchers.Main.immediate) {
-                    if (isImageGeneration) {
-                        stateHolder._imageGenerationHistoricalConversations.value = updatedList.toList()
-                    } else {
-                        stateHolder._historicalConversations.value = updatedList.toList()
-                    }
-                }
-                // 持久化重命名后的历史列表
-                withContext(Dispatchers.IO) {
-                    historyManager.persistHistoryListDirectly(isImageGeneration)
-                }
-                val loadedIndex = if (isImageGeneration) stateHolder._loadedImageGenerationHistoryIndex.value
-                else stateHolder._loadedHistoryIndex.value
-                if (loadedIndex == index) {
-                    val reloaded = original.toList().map { msg ->
-                        val contentStarted = msg.text.isNotBlank() || !msg.reasoning.isNullOrBlank() || msg.isError
-                        msg.copy(contentStarted = contentStarted)
-                    }
-                    messagesMutex.withLock {
-                        withContext(Dispatchers.Main.immediate) {
-                            if (isImageGeneration) {
-                                stateHolder.imageGenerationMessages.clear()
-                                stateHolder.imageGenerationMessages.addAll(reloaded)
-                            } else {
-                                stateHolder.messages.clear()
-                                stateHolder.messages.addAll(reloaded)
-                            }
-                            reloaded.forEach { msg ->
-                                val hasContentOrError = msg.contentStarted || msg.isError
-                                val hasReasoning = !msg.reasoning.isNullOrBlank()
-                                if (msg.sender == Sender.AI && hasReasoning) {
-                                    if (isImageGeneration) stateHolder.imageReasoningCompleteMap[msg.id] = true
-                                    else stateHolder.textReasoningCompleteMap[msg.id] = true
-                                }
-                                val animationPlayed = hasContentOrError || (msg.sender == Sender.AI && hasReasoning)
-                                if (animationPlayed) {
-                                    if (isImageGeneration) stateHolder.imageMessageAnimationStates[msg.id] = true
-                                    else stateHolder.textMessageAnimationStates[msg.id] = true
-                                }
-                            }
-                        }
-                    }
-                }
-                true
-            }
-            if (success) {
-                withContext(Dispatchers.Main) { showSnackbar("对话已重命名") }
-            }
+            historyManager.persistHistoryListDirectly(isImageGeneration)
+            withContext(Dispatchers.Main) { showSnackbar("对话已重命名") }
         }
     }
 

@@ -82,7 +82,9 @@ class ThinkingUiScrollComposeTest {
     @Test
     fun `执行链默认收起并可展开后再次收起`() {
         composeRule.mainClock.autoAdvance = false
+        var pixelsPerDp = 1f
         composeRule.setContent {
+            pixelsPerDp = LocalDensity.current.density
             MaterialTheme {
                 ReasoningToggleAndContent(
                     currentMessageId = "collapsible-chain",
@@ -101,11 +103,32 @@ class ThinkingUiScrollComposeTest {
         composeRule.mainClock.advanceTimeBy(500L)
         composeRule.waitForIdle()
         assertTrue(composeRule.onAllNodesWithTag("reasoning-chain-summaries").fetchSemanticsNodes().isEmpty())
+        val collapsedHeaderHeight = composeRule
+            .onNodeWithTag("reasoning-inline-status")
+            .fetchSemanticsNode("")
+            .boundsInRoot
+            .height
+        assertTrue(
+            "折叠标题仍有过多上下留白：height=$collapsedHeaderHeight, density=$pixelsPerDp",
+            collapsedHeaderHeight < 40f * pixelsPerDp,
+        )
 
         composeRule.onNodeWithTag("reasoning-inline-status").performClick()
         composeRule.mainClock.advanceTimeBy(250L)
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("reasoning-chain-summary-0").assertHasClickAction()
+        composeRule.onNodeWithTag(
+            "reasoning-chain-summary-static",
+            useUnmergedTree = true,
+        ).fetchSemanticsNode("")
+        composeRule.onNodeWithText("思考过程").fetchSemanticsNode("")
+        composeRule.onNodeWithText("先分析需求").fetchSemanticsNode("")
+        assertTrue(
+            composeRule.onAllNodesWithTag(
+                "reasoning-chain-summary-scanning",
+                useUnmergedTree = true,
+            ).fetchSemanticsNodes().isEmpty(),
+        )
 
         composeRule.onNodeWithTag("reasoning-inline-status").performClick()
         composeRule.mainClock.advanceTimeBy(250L)
@@ -117,8 +140,10 @@ class ThinkingUiScrollComposeTest {
     fun `执行链增长时展开区保持单条固定高度并可打开抽屉`() {
         composeRule.mainClock.autoAdvance = false
         lateinit var appendExecutionTrace: () -> Unit
+        var pixelsPerDp = 1f
 
         composeRule.setContent {
+            pixelsPerDp = LocalDensity.current.density
             var executionTrace by remember {
                 mutableStateOf<List<ExecutionTraceEvent>>(
                     listOf(ExecutionTraceEvent.Reasoning("先检查系统信息")),
@@ -174,10 +199,16 @@ class ThinkingUiScrollComposeTest {
             .fetchSemanticsNode("")
             .boundsInRoot
             .height
+        assertTrue(
+            "展开摘要仍有过多空白：height=$initialHeight, density=$pixelsPerDp",
+            initialHeight < 40f * pixelsPerDp,
+        )
         composeRule.onNodeWithTag(
-            "reasoning-chain-summary-text",
+            "reasoning-chain-summary-scanning",
             useUnmergedTree = true,
         ).fetchSemanticsNode("")
+        composeRule.onNodeWithText("先检查系统信息").fetchSemanticsNode("")
+        composeRule.onNodeWithText("执行过程").fetchSemanticsNode("")
         assertEquals(
             1,
             composeRule.onAllNodesWithTag("reasoning-chain-summary-0").fetchSemanticsNodes().size,

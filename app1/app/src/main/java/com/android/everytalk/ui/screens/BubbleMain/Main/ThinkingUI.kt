@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
@@ -202,6 +201,24 @@ internal fun ReasoningToggleAndContent(
             stringResource(R.string.thinking_process)
         else -> inlineStatusText
     }
+    val latestStep = executionSteps.lastOrNull()
+    val latestStepTitle = latestStep?.let { step ->
+        localizedExecutionStatusText(step.title) ?: step.title
+    }
+    val latestStepSummary = latestStep?.let { step ->
+        listOfNotNull(latestStepTitle, step.labels.firstOrNull()).joinToString(" · ")
+    }
+    val executionSummaryFallback = stringResource(R.string.thinking_execution)
+    val completionSummaryFallback = stringResource(R.string.thinking_complete)
+    val expandedSummaryText = listOf(
+        inlineStatusText,
+        latestReasoningSummary(displayedReasoningText),
+        latestStepSummary,
+        localizedExecutionStatusText(activityStatusText),
+    ).filterNotNull().firstOrNull { candidate ->
+        candidate.isNotBlank() && candidate != executionChainTitle
+    } ?: executionSummaryFallback.takeIf { it != executionChainTitle }
+        ?: completionSummaryFallback
     val openReasoningSheet = {
         focusManager.clearFocus()
         showReasoningSheet = true
@@ -249,7 +266,8 @@ internal fun ReasoningToggleAndContent(
                     ),
                 ) {
                     ExecutionChainSummaryList(
-                        text = inlineStatusText,
+                        text = expandedSummaryText,
+                        active = processIsActive,
                         onOpenSheet = openReasoningSheet,
                     )
                 }
@@ -299,8 +317,8 @@ private fun ExecutionChainHeader(
                 interactionSource = remember { MutableInteractionSource() },
                 onClick = onClick,
             )
-            .heightIn(min = 44.dp)
-            .padding(horizontal = 8.dp, vertical = 7.dp),
+            .height(32.dp)
+            .padding(horizontal = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (active) {
@@ -342,15 +360,17 @@ private fun ExecutionChainHeader(
 @Composable
 private fun ExecutionChainSummaryList(
     text: String,
+    active: Boolean,
     onOpenSheet: () -> Unit,
 ) {
     Column(
         modifier = Modifier
-            .padding(start = 8.dp, bottom = 4.dp)
+            .padding(start = 8.dp)
             .testTag("reasoning-chain-summaries"),
     ) {
         ExecutionChainSummaryRow(
             text = text,
+            active = active,
             onClick = onOpenSheet,
             modifier = Modifier.testTag("reasoning-chain-summary-0"),
         )
@@ -360,25 +380,43 @@ private fun ExecutionChainSummaryList(
 @Composable
 private fun ExecutionChainSummaryRow(
     text: String,
+    active: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .height(44.dp)
-            .padding(horizontal = 8.dp),
+            .clickable(
+                indication = null,
+                interactionSource = remember { MutableInteractionSource() },
+                onClick = onClick,
+            )
+            .height(32.dp)
+            .padding(start = 8.dp, end = 8.dp, bottom = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        ScanningHighlightText(
-            text = text,
-            textColor = MaterialTheme.colorScheme.onSurfaceVariant,
-            useSmallStyle = false,
-            modifier = Modifier
-                .fillMaxWidth()
-                .testTag("reasoning-chain-summary-text"),
-        )
+        if (active) {
+            ScanningHighlightText(
+                text = text,
+                textColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                useSmallStyle = false,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("reasoning-chain-summary-scanning"),
+            )
+        } else {
+            Text(
+                text = text,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodyMedium,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("reasoning-chain-summary-static"),
+            )
+        }
     }
 }
 

@@ -676,9 +676,9 @@ open class MessageItemsController(
     }
 
     private fun filterRenderableMessages(messages: List<Message>): List<Message> {
-        return messages.dropWhile {
-            it.sender == Sender.System && !it.isPlaceholderName && it.text.isNotBlank()
-        }
+        return messages
+            .filterNot { it.sender == Sender.System && it.isPlaceholderName }
+            .dropWhile { it.sender == Sender.System && it.text.isNotBlank() }
     }
 
     protected fun normalizeStatusText(message: Message): String {

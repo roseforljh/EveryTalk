@@ -1,9 +1,10 @@
 #!/bin/sh
 set -eu
 
-VERSION="3"
+VERSION="5"
 HELPER_PATH="/usr/local/libexec/everytalk-containerctl"
 RUNTIME_WRAPPER_PATH="/usr/local/libexec/everytalk-runtime-wrapper"
+RUNTIME_WRAPPER_VERSION_PATH="/usr/local/libexec/everytalk-runtime-wrapper.sha256"
 DOCKERFILE_PATH="/usr/local/share/everytalk/Dockerfile"
 IMAGE="everytalk-sandbox:1"
 NETWORK="everytalk-agent"
@@ -35,6 +36,14 @@ workspace_path() {
     workspace_id="${1:-}"
     valid_id "$workspace_id" || fail 'Workspace ID 无效' 54
     printf '%s/.everytalk/workspaces/%s' "$(target_home)" "$workspace_id"
+}
+runtime_wrapper_hash() {
+    [ -f "$RUNTIME_WRAPPER_VERSION_PATH" ] || fail 'Runtime Wrapper 版本缺失' 58
+    IFS= read -r runtime_hash < "$RUNTIME_WRAPPER_VERSION_PATH"
+    case "$runtime_hash" in ''|*[!0-9a-f]*) fail 'Runtime Wrapper 版本无效' 58 ;; esac
+    [ "${#runtime_hash}" -eq 64 ] || fail 'Runtime Wrapper 版本无效' 58
+    [ -f "$RUNTIME_WRAPPER_PATH-$runtime_hash" ] || fail 'Runtime Wrapper 文件缺失' 58
+    printf '%s' "$runtime_hash"
 }
 container_name() {
     workspace_id="${1:-}"
@@ -94,7 +103,19 @@ install_helper() {
 
     install -d -o root -g root -m 0755 /usr/local/libexec /usr/local/share/everytalk
     install -o root -g root -m 0755 "$0" "$HELPER_PATH"
-    install -o root -g root -m 0755 "$runtime_source" "$RUNTIME_WRAPPER_PATH"
+    runtime_hash="$(sha256sum "$runtime_source" | cut -d' ' -f1)"
+    runtime_target="$RUNTIME_WRAPPER_PATH-$runtime_hash"
+    install -o root -g root -m 0755 "$runtime_source" "$runtime_target"
+    runtime_version_temporary="$RUNTIME_WRAPPER_VERSION_PATH.tmp.$$"
+    printf '%s\n' "$runtime_hash" > "$runtime_version_temporary"
+    chmod 0644 "$runtime_version_temporary"
+    chown root:root "$runtime_version_temporary"
+    mv -f "$runtime_version_temporary" "$RUNTIME_WRAPPER_VERSION_PATH"
+    # 兼容旧 Container，同时让当前版本继续使用不变的挂载目标。
+    if [ -e "$RUNTIME_WRAPPER_PATH" ] && [ ! -L "$RUNTIME_WRAPPER_PATH" ]; then
+        rm -f "$RUNTIME_WRAPPER_PATH"
+    fi
+    ln -sfn "${runtime_target##*/}" "$RUNTIME_WRAPPER_PATH"
     install -o root -g root -m 0644 "$dockerfile_source" "$DOCKERFILE_PATH"
 
     user="$(target_user)"
@@ -123,14 +144,22 @@ ensure_workspace() {
     name="$(container_name "$workspace_id")"
     install -d -o "$uid" -g "$gid" -m 0700 "$workspace"
     ensure_network
+    runtime_hash="$(runtime_wrapper_hash)"
 
     if docker container inspect "$name" >/dev/null 2>&1; then
         name="$(require_workspace_container "$workspace_id")"
         # 迁移旧版本创建的 Container，确保 VPS 重启后不会自动拉起历史会话。
         docker update --restart=no "$name" >/dev/null
-        docker start "$name" >/dev/null
-        printf 'container=%s\n' "$name"
-        return
+        mounted_wrapper_hash="$(docker inspect -f '{{index .Config.Labels "com.everytalk.wrapper"}}' "$name")"
+        if [ "$mounted_wrapper_hash" != "$runtime_hash" ]; then
+            # 旧 Container 没有当前哈希标签时按需重建，Host Workspace 继续原路径挂载。
+            stop_workspace_backgrounds "$workspace_id" "$name"
+            docker rm --force "$name" >/dev/null
+        else
+            docker start "$name" >/dev/null
+            printf 'container=%s\n' "$name"
+            return
+        fi
     fi
 
     # 明确不传 CPU、内存、磁盘、swap 或 PID 配额参数。
@@ -138,6 +167,7 @@ ensure_workspace() {
         --name "$name" \
         --label com.everytalk.managed=true \
         --label "com.everytalk.workspace=$workspace_id" \
+        --label "com.everytalk.wrapper=$runtime_hash" \
         --restart no \
         --security-opt no-new-privileges:true \
         --network "$NETWORK" \
@@ -145,7 +175,7 @@ ensure_workspace() {
         --env HOME=/workspace \
         --workdir /workspace \
         --mount "type=bind,src=$workspace,dst=/workspace" \
-        --mount "type=bind,src=$RUNTIME_WRAPPER_PATH,dst=/usr/local/bin/everytalk-runtime-wrapper,readonly" \
+        --mount "type=bind,src=$RUNTIME_WRAPPER_PATH-$runtime_hash,dst=/usr/local/bin/everytalk-runtime-wrapper,readonly" \
         "$IMAGE" >/dev/null
     printf 'container=%s\n' "$name"
 }
@@ -169,9 +199,21 @@ run_workspace() {
     runtime="/workspace/.everytalk/runtime/$runtime_id"
     user_arguments=""
     [ "$root_mode" = true ] && user_arguments="--user 0:0"
+    cleanup_runtime() {
+        docker exec "$name" rm -f -- \
+            "$runtime/environment.sh" "$runtime/stdin" "$runtime/cwd" "$runtime/command.sh" >/dev/null 2>&1 || true
+        docker exec "$name" rmdir -- "$runtime" >/dev/null 2>&1 || true
+    }
+    trap cleanup_runtime EXIT
+    trap 'exit 143' HUP INT TERM
     # user_arguments 只可能为空或固定的 --user 0:0。
-    docker exec $user_arguments "$name" timeout --signal=TERM --kill-after=5s "${timeout_seconds}s" \
-        /usr/local/bin/everytalk-runtime-wrapper "$runtime"
+    status=0
+    docker exec -i $user_arguments "$name" timeout --signal=TERM --kill-after=5s "${timeout_seconds}s" \
+        /usr/local/bin/everytalk-runtime-wrapper "$runtime" '' --envelope || status="$?"
+    trap - HUP INT TERM
+    cleanup_runtime
+    trap - EXIT
+    return "$status"
 }
 
 run_workspace_background() {
@@ -188,25 +230,9 @@ run_workspace_background() {
     logs="/workspace/.everytalk/background/$process_id"
     user_arguments=""
     [ "$root_mode" = true ] && user_arguments="--user 0:0"
-    # runtime 和 logs 作为位置参数传入固定脚本，禁止拼接为可执行 Shell 内容。
-    docker exec $user_arguments "$name" /bin/sh -c '
-        umask 077
-        runtime="$1"
-        logs="$2"
-        mkdir -p "$logs"
-        chmod 700 "$logs"
-        nohup setsid /usr/local/bin/everytalk-runtime-wrapper "$runtime" "$logs" > "$logs/stdout.log" 2> "$logs/stderr.log" < /dev/null &
-        pid="$!"
-        attempt=0
-        while [ ! -f "$logs/state" ] && [ "$attempt" -lt 30 ]; do
-            sleep 0.1
-            attempt="$((attempt + 1))"
-        done
-        [ -f "$logs/state" ] || { kill -TERM "-$pid" 2>/dev/null || true; exit 77; }
-        state_pid="$(awk -F= '$1 == "pid" { print $2; exit }' "$logs/state")"
-        [ "$state_pid" = "$pid" ] || { kill -TERM "-$pid" 2>/dev/null || true; exit 77; }
-        printf "pid=%s\n" "$pid"
-    ' everytalk-background "$runtime" "$logs"
+    # Wrapper 先从当前 docker exec stdin 持久化 Runtime，再切换为后台任务。
+    docker exec -i $user_arguments "$name" \
+        /usr/local/bin/everytalk-runtime-wrapper "$runtime" "$logs" --envelope
     printf 'process_id=%s\nlogs=/workspace/.everytalk/background/%s\n' "$process_id" "$process_id"
 }
 
@@ -395,7 +421,7 @@ case "$command_name" in
         [ "$(readlink -f -- "$0")" != "$HELPER_PATH" ] || fail '已安装 helper 禁止重复 install' 75
         install_helper "$@"
         ;;
-    version) require_exact_args 0 "$@"; printf 'version=%s\n' "$VERSION" ;;
+    version) require_exact_args 0 "$@"; runtime_wrapper_hash >/dev/null; printf 'version=%s\n' "$VERSION" ;;
     build-image) require_exact_args 0 "$@"; build_image ;;
     set-network) require_exact_args 1 "$@"; configure_network_boundary "$@" ;;
     ensure-workspace) require_exact_args 1 "$@"; ensure_workspace "$@" ;;

@@ -520,7 +520,7 @@ class ComputerSshConnection internal constructor(private val client: SSHClient) 
      */
     internal suspend fun ensureRuntimeWrapper(
         expectedHash: ByteArray,
-        installer: suspend () -> Unit,
+        installer: suspend () -> Boolean,
     ): Boolean = runtimeWrapperCache.ensureInstalled(expectedHash, installer)
 
     suspend fun openPty(columns: Int = 120, rows: Int = 40): ComputerPtyHandle = withContext(Dispatchers.IO) {
@@ -603,13 +603,13 @@ internal class ComputerRuntimeWrapperCache {
     private var installedHash: ByteArray? = null
 
     /** 返回 true 表示本次调用实际完成了安装。 */
-    suspend fun ensureInstalled(expectedHash: ByteArray, installer: suspend () -> Unit): Boolean {
+    suspend fun ensureInstalled(expectedHash: ByteArray, installer: suspend () -> Boolean): Boolean {
         if (installedHash?.contentEquals(expectedHash) == true) return false
         return installationMutex.withLock {
             if (installedHash?.contentEquals(expectedHash) == true) return@withLock false
-            installer()
+            val installed = installer()
             installedHash = expectedHash.copyOf()
-            true
+            installed
         }
     }
 }

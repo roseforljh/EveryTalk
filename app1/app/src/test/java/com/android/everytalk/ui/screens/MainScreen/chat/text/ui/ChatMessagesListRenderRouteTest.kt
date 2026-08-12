@@ -184,6 +184,20 @@ class ChatMessagesListRenderRouteTest {
     }
 
     @Test
+    fun `同一条回复的思考项后不插入会话级间距`() {
+        val message = Message(
+            id = "reasoning-spacing",
+            text = "正文",
+            sender = Sender.AI,
+            reasoning = "思考内容",
+        )
+
+        assertFalse(
+            shouldAddConversationGapAfter(ChatListItem.AiMessageReasoning(message))
+        )
+    }
+
+    @Test
     fun `completed matching ai content uses background prepared render`() {
         assertTrue(
             shouldUsePreparedStaticAiRender(

@@ -28,9 +28,10 @@ class ComputerToolExecutor(
     private val secretManager: ComputerWorkspaceSecretManager,
     private val attachmentBridge: ComputerAttachmentBridge? = null,
     private val publicPreviewConfirmer: suspend (ComputerPublicPreviewRequest) -> Boolean = { false },
+    private val hostCommandConfirmer: suspend (ComputerHostCommandConfirmationRequest) -> Boolean = { false },
 ) : AutoCloseable {
     private val fileTransfer = ComputerFileTransfer()
-    private val runtimeEnvelope = ComputerRuntimeEnvelope(context.applicationContext, fileTransfer)
+    private val runtimeEnvelope = ComputerRuntimeEnvelope(context.applicationContext)
     private val terminalManager = ComputerTerminalManager(repository)
     private val completedResults = ConcurrentHashMap<String, JsonElement>()
 
@@ -46,6 +47,16 @@ class ComputerToolExecutor(
         } finally {
             foregroundActivity.close()
         }
+    }
+
+    /** 在模型首轮思考期间建立 SSH Transport，并完成 Runtime 版本校验。 */
+    suspend fun prewarm(requestContext: ComputerRequestContext) {
+        val workspace = requireRequestWorkspace(requestContext)
+        repository.withConnection(requestContext.computerId) { connection, computer ->
+            runtimeEnvelope.prewarm(connection, computer)
+        }
+        // 读取 Workspace 能确保预热和后续工具调用绑定同一个本地请求快照。
+        check(workspace.id == requestContext.workspaceId)
     }
 
     private suspend fun executeWhileActive(
@@ -190,11 +201,22 @@ class ComputerToolExecutor(
         }
         val secretNames = arguments.stringList("secret_names")
         val command = arguments.requiredString("command")
-        val cwd = arguments.optionalString("cwd") ?: "/workspace"
+        val target = when (arguments.optionalString("target") ?: "container") {
+            "container" -> ComputerExecTarget.CONTAINER
+            "host" -> ComputerExecTarget.HOST
+            else -> throw invalidArgument("target")
+        }
+        val cwd = arguments.optionalString("cwd") ?: if (target == ComputerExecTarget.HOST) "~" else "/workspace"
         val stdin = arguments.optionalString("stdin")
         val timeoutMillis = arguments.optionalLong("timeout_ms") ?: 120_000
         val background = arguments.optionalBoolean("background") ?: false
         val asRoot = arguments.optionalBoolean("as_root") ?: false
+        if (target == ComputerExecTarget.HOST && secretNames.isNotEmpty()) {
+            throw ComputerException(
+                ComputerErrorCodes.WORKSPACE_PATH_INVALID,
+                "VPS 主机命令不允许注入 Workspace Secret",
+            )
+        }
         val secrets = secretManager.loadSelected(workspace.id, secretNames)
         val request = ComputerExecRequest(
             command = command,
@@ -205,10 +227,39 @@ class ComputerToolExecutor(
             timeoutMillis = timeoutMillis,
             background = background,
             asRoot = asRoot,
+            target = target,
         )
         val result = try {
-            repository.withConnection(context.computerId) { connection, computer ->
-                runtimeEnvelope.execute(connection, computer, workspace, executionId, request)
+            val runRequest: suspend (ComputerExecRequest) -> ComputerExecResult = { frozenRequest ->
+                repository.withConnection(context.computerId) { connection, computer ->
+                    runtimeEnvelope.execute(connection, computer, workspace, executionId, frozenRequest)
+                }
+            }
+            if (target == ComputerExecTarget.HOST) {
+                val computer = repository.getComputer(context.computerId)
+                    ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
+                executeHostCommandWithConfirmation(
+                    request = request,
+                    permissionMode = context.permissionMode,
+                    askUserApproval = arguments.optionalBoolean("ask_user_approval"),
+                    confirmationRequest = { assessment ->
+                        ComputerHostCommandConfirmationRequest(
+                            requestId = executionId,
+                            context = context,
+                            computerName = computer.displayName,
+                            command = request.command,
+                            cwd = request.cwd,
+                            requestsPrivilege = request.asRoot ||
+                                ComputerHostCommandRisk.PRIVILEGE_ESCALATION in assessment.risks,
+                            reason = assessment.reason ?: "AI 请求确认这次 VPS 命令",
+                            risks = assessment.risks,
+                        )
+                    },
+                    confirmer = hostCommandConfirmer,
+                    execute = runRequest,
+                )
+            } else {
+                runRequest(request)
             }
         } finally {
             secrets.values.forEach { it.fill('\u0000') }
@@ -397,16 +448,28 @@ class ComputerToolExecutor(
         val port = (arguments.optionalLong("port") ?: throw invalidArgument("port")).toIntChecked("port")
         val protocol = arguments.optionalString("protocol") ?: "http"
         val visibility = arguments.optionalString("visibility") ?: "private"
+        val target = when (arguments.optionalString("target") ?: "container") {
+            "container" -> ComputerExecTarget.CONTAINER
+            "host" -> ComputerExecTarget.HOST
+            else -> throw invalidArgument("target")
+        }
         val result = when (visibility) {
-            "private" -> previewManager.openPrivate(context, port, protocol)
+            "private" -> previewManager.openPrivate(context, port, protocol, target)
             "public" -> {
                 val request = ComputerPublicPreviewRequest(
                     context = context,
                     port = port,
                     protocol = protocol,
                     expiresInSeconds = arguments.optionalLong("expires_in_seconds"),
+                    target = target,
                 )
-                if (!publicPreviewConfirmer(request)) {
+                val requiresConfirmation = when (context.permissionMode) {
+                    ComputerPermissionMode.MANUAL -> true
+                    ComputerPermissionMode.SMART -> arguments.optionalBoolean("ask_user_approval")
+                        ?: throw invalidArgument("ask_user_approval")
+                    ComputerPermissionMode.FULL -> false
+                }
+                if (requiresConfirmation && !publicPreviewConfirmer(request)) {
                     throw ComputerException(
                         ComputerErrorCodes.PUBLIC_PORT_BLOCKED,
                         "用户未确认 Public Preview",
@@ -421,6 +484,7 @@ class ComputerToolExecutor(
             put("preview_id", result.preview.id)
             put("url", result.url)
             put("visibility", result.preview.visibility.name.lowercase())
+            put("target", result.preview.target.name.lowercase())
             result.preview.expiresAt?.let { put("expires_at", it) }
             result.warning?.let { put("warning", it) }
         }

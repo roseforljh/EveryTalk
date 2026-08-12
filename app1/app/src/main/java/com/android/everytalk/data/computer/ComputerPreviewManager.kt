@@ -27,6 +27,7 @@ data class ComputerPublicPreviewRequest(
     val port: Int,
     val protocol: String,
     val expiresInSeconds: Long?,
+    val target: ComputerExecTarget = ComputerExecTarget.CONTAINER,
 )
 
 /** Private Preview 持有 SSH lease；Public Preview 只有显式确认后才创建。 */
@@ -45,6 +46,7 @@ class ComputerPreviewManager(private val repository: ComputerRepository) : Close
         context: ComputerRequestContext,
         port: Int,
         protocol: String = "http",
+        target: ComputerExecTarget = ComputerExecTarget.CONTAINER,
     ): ComputerPreviewOpenResult {
         validatePortAndProtocol(port, protocol)
         val workspace = requireWorkspace(context)
@@ -54,9 +56,9 @@ class ComputerPreviewManager(private val repository: ComputerRepository) : Close
         try {
             computer = repository.getComputer(context.computerId)
                 ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
-            remoteHost = when (computer.runMode) {
-                ComputerRunMode.DIRECT -> "127.0.0.1"
-                ComputerRunMode.CONTAINER -> repository.withConnection(computer.id) { connection, _ ->
+            remoteHost = when (effectivePreviewTarget(computer, target)) {
+                ComputerExecTarget.HOST -> "127.0.0.1"
+                ComputerExecTarget.CONTAINER -> repository.withConnection(computer.id) { connection, _ ->
                     resolveContainerAddress(connection, computer, workspace.id)
                 }
             }
@@ -76,6 +78,7 @@ class ComputerPreviewManager(private val repository: ComputerRepository) : Close
             val preview = ComputerPreview(
                 workspaceId = workspace.id,
                 remotePort = port,
+                target = effectivePreviewTarget(computer, target),
                 localPort = forward.localPort,
                 protocol = protocol,
                 visibility = ComputerPreviewVisibility.PRIVATE,
@@ -97,9 +100,10 @@ class ComputerPreviewManager(private val repository: ComputerRepository) : Close
         val computer = repository.getComputer(request.context.computerId)
             ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
         val previewId = "preview_${UUID.randomUUID().toString().replace("-", "")}"
-        val publicPort = when (computer.runMode) {
-            ComputerRunMode.DIRECT -> verifyDirectPublicPort(computer, request.port)
-            ComputerRunMode.CONTAINER -> openContainerPublicPort(
+        val target = effectivePreviewTarget(computer, request.target)
+        val publicPort = when (target) {
+            ComputerExecTarget.HOST -> verifyHostPublicPort(computer, request.port)
+            ComputerExecTarget.CONTAINER -> openContainerPublicPort(
                 computer,
                 workspace.id,
                 previewId,
@@ -112,6 +116,7 @@ class ComputerPreviewManager(private val repository: ComputerRepository) : Close
             id = previewId,
             workspaceId = workspace.id,
             remotePort = request.port,
+            target = target,
             publicPort = publicPort,
             protocol = request.protocol,
             visibility = ComputerPreviewVisibility.PUBLIC,
@@ -147,7 +152,7 @@ class ComputerPreviewManager(private val repository: ComputerRepository) : Close
             val workspace = repository.dao().getWorkspaceById(preview.workspaceId)?.toModel()
             if (workspace != null) {
                 val computer = repository.getComputer(workspace.computerId)
-                if (computer?.runMode == ComputerRunMode.CONTAINER) {
+                if (preview.target == ComputerExecTarget.CONTAINER && computer?.runMode == ComputerRunMode.CONTAINER) {
                     try {
                         repository.withConnection(computer.id, requireReady = false) { connection, _ ->
                             val result = connection.execute(
@@ -211,7 +216,9 @@ class ComputerPreviewManager(private val repository: ComputerRepository) : Close
     suspend fun reconcileComputer(computerId: String) {
         val computer = repository.getComputer(computerId) ?: return
         if (computer.runMode != ComputerRunMode.CONTAINER || computer.status != ComputerStatus.READY) return
-        val previews = repository.dao().getActivePublicPreviewsForComputer(computerId).map { it.toModel() }
+        val previews = repository.dao().getActivePublicPreviewsForComputer(computerId)
+            .map { it.toModel() }
+            .filter { it.target == ComputerExecTarget.CONTAINER }
         if (previews.isEmpty()) return
         val inactiveIds = repository.withConnection(computerId) { connection, _ ->
             previews.filter { preview ->
@@ -265,7 +272,7 @@ class ComputerPreviewManager(private val repository: ComputerRepository) : Close
         }
     }
 
-    private suspend fun verifyDirectPublicPort(computer: Computer, port: Int): Int {
+    private suspend fun verifyHostPublicPort(computer: Computer, port: Int): Int {
         val result = repository.withConnection(computer.id) { connection, _ ->
             connection.execute(
                 command = "ss -ltnH 'sport = :$port'",
@@ -282,7 +289,7 @@ class ComputerPreviewManager(private val repository: ComputerRepository) : Close
         if (result.exitCode != 0 || !publiclyBound) {
             throw ComputerException(
                 ComputerErrorCodes.PUBLIC_PORT_BLOCKED,
-                "Direct 服务没有监听公网地址",
+                "VPS 主机服务没有监听公网地址",
                 action = "CHECK_LISTEN_ADDRESS",
             )
         }
@@ -334,6 +341,10 @@ class ComputerPreviewManager(private val repository: ComputerRepository) : Close
     } else {
         "sudo -n -- $PREVIEW_HELPER"
     }
+
+    /** 旧 Direct 记录只可能访问 Host；统一模式下按 Tool 请求选择 Host 或 Container。 */
+    private fun effectivePreviewTarget(computer: Computer, requested: ComputerExecTarget): ComputerExecTarget =
+        if (computer.runMode == ComputerRunMode.DIRECT) ComputerExecTarget.HOST else requested
 
     private fun scheduleExpiry(preview: ComputerPreview) {
         val expiresAt = preview.expiresAt ?: return

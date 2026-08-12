@@ -44,6 +44,7 @@ import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.theme.SeaBlue
 
 internal val ChatAgentColor = Color(0xFF009688)
+internal val ChatMcpColor = Color(0xFFFF6B00)
 
 internal enum class AgentToggleAction {
     DISABLE,
@@ -87,25 +88,26 @@ internal fun ActiveFunctionTag(
     val background = if (isSystemInDarkTheme()) Color(0xFF2A2A2A) else lightBackground
     Row(
         modifier = Modifier
+            .clip(RoundedCornerShape(percent = 50))
             .background(background, RoundedCornerShape(percent = 50))
             .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 8.dp, vertical = 5.dp),
+            .padding(horizontal = 5.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Icon(
             painter = painterResource(iconRes),
             contentDescription = null,
             tint = tint,
-            modifier = Modifier.size(15.dp),
+            modifier = Modifier.size(14.dp),
         )
-        Spacer(Modifier.width(3.dp))
-        Text(text = label, fontSize = 14.sp, color = tint, maxLines = 1)
-        Spacer(Modifier.width(3.dp))
+        Spacer(Modifier.width(2.dp))
+        Text(text = label, fontSize = 13.sp, color = tint, maxLines = 1)
+        Spacer(Modifier.width(2.dp))
         Icon(
             painter = painterResource(R.drawable.ic_close),
             contentDescription = closeContentDescription,
             tint = tint,
-            modifier = Modifier.size(13.dp),
+            modifier = Modifier.size(12.dp),
         )
     }
 }

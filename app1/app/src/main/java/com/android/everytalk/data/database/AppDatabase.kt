@@ -49,7 +49,7 @@ import com.android.everytalk.data.database.entities.WorkspaceSecretMetadataEntit
         WorkspaceSecretMetadataEntity::class,
         ComputerAuditEventEntity::class,
     ],
-    version = 14,
+    version = 16,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -88,6 +88,8 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_11_12,
                     MIGRATION_12_13,
                     MIGRATION_13_14,
+                    MIGRATION_14_15,
+                    MIGRATION_15_16,
                 )
                 .build()
                 INSTANCE = instance
@@ -366,6 +368,30 @@ abstract class AppDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
                     "ALTER TABLE messages ADD COLUMN executionTrace TEXT NOT NULL DEFAULT '[]'"
+                )
+            }
+        }
+
+        val MIGRATION_14_15 = object : Migration(14, 15) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE computer_previews ADD COLUMN target TEXT NOT NULL DEFAULT 'CONTAINER'")
+                // 数据库升级先于旧 Direct 记录迁移，因此此处仍能准确识别已有 Host Preview。
+                db.execSQL(
+                    """
+                    UPDATE computer_previews
+                    SET target = 'HOST'
+                    WHERE workspaceId IN (
+                        SELECT id FROM computer_workspaces WHERE runMode = 'DIRECT'
+                    )
+                    """.trimIndent(),
+                )
+            }
+        }
+
+        val MIGRATION_15_16 = object : Migration(15, 16) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE computers ADD COLUMN permissionMode TEXT NOT NULL DEFAULT 'MANUAL'",
                 )
             }
         }

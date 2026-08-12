@@ -7,9 +7,11 @@ import com.android.everytalk.data.database.daos.ComputerDao
 import com.android.everytalk.data.database.entities.ComputerAuditEventEntity
 import com.android.everytalk.data.database.entities.toEntity
 import com.android.everytalk.data.database.entities.toModel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
-import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import java.io.Closeable
 import java.util.Base64
@@ -72,13 +74,17 @@ class ComputerRepository(
     suspend fun addConfirmedComputer(
         request: AddComputerRequest,
         confirmedHostKey: HostKeyProbeResult,
+        sudoPassword: CharArray?,
+        onProgress: suspend (ComputerSetupStage) -> Unit = {},
     ): Computer {
         val endpoint = ComputerEndpointValidator.validate(request.host, request.port, request.username)
         if (endpoint.host != confirmedHostKey.host || endpoint.port != confirmedHostKey.port) {
             request.credential.clear()
+            sudoPassword?.fill('\u0000')
             throw ComputerException(ComputerErrorCodes.HOST_KEY_CHANGED, "确认期间服务器地址发生变化")
         }
 
+        onProgress(ComputerSetupStage.AUTHENTICATING)
         val now = System.currentTimeMillis()
         var computer = Computer(
             id = request.id,
@@ -98,17 +104,25 @@ class ComputerRepository(
             updatedAt = now,
         )
 
-        credentialStore.saveComputerCredential(computer.id, request.credential)
+        val originalCredential = request.credential.copySecret()
         try {
+            credentialStore.saveOriginalComputerCredential(computer.id, originalCredential)
+            credentialStore.saveComputerSudoPassword(computer.id, sudoPassword)
+            credentialStore.saveComputerCredential(computer.id, request.credential)
             dao.upsertComputer(computer.toEntity(json))
         } catch (error: Throwable) {
             credentialStore.deleteComputerCredential(computer.id)
+            credentialStore.deleteOriginalComputerCredential(computer.id)
+            credentialStore.deleteComputerSudoPassword(computer.id)
+            request.credential.clear()
+            sudoPassword?.fill('\u0000')
             throw error
         }
 
         return try {
             dao.updateComputerStatus(computer.id, ComputerStatus.PROBING.name, null)
             val capabilities = connectionPool.withConnection(computer) { connection ->
+                onProgress(ComputerSetupStage.INSPECTING_VPS)
                 probe.probe(connection, computer.port)
             }
             val status = if (
@@ -127,6 +141,7 @@ class ComputerRepository(
                 updatedAt = System.currentTimeMillis(),
             )
             dao.upsertComputer(computer.toEntity(json))
+            onProgress(ComputerSetupStage.SECURING_CONNECTION)
             computer = tryUpgradeToDedicatedKey(computer)
             recordAudit(computer.id, "COMPUTER_ADDED", "SUCCESS", null)
             computer
@@ -175,21 +190,38 @@ class ComputerRepository(
             }
             dao.updateComputerStatus(computerId, status.name, error.code)
             throw error
+        } catch (error: Throwable) {
+            // 页面退出、任务取消和未分类本地异常都不代表 VPS 离线，恢复探测前状态。
+            withContext(NonCancellable) {
+                dao.updateComputerStatus(computerId, current.status.name, current.lastErrorCode)
+            }
+            throw error
         }
     }
 
-    suspend fun provisionContainer(computerId: String, sudoPassword: CharArray?): Computer {
+    suspend fun provisionContainer(
+        computerId: String,
+        onProgress: suspend (ComputerSetupStage) -> Unit = {},
+    ): Computer {
         val current = requireComputer(computerId)
         if (current.runMode != ComputerRunMode.CONTAINER) {
-            sudoPassword?.fill('\u0000')
             throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "当前服务器使用 Direct 模式")
+        }
+        val sudoPassword = if (current.username == "root") {
+            null
+        } else {
+            resolveComputerProvisionPassword(
+                savedSudoPassword = credentialStore.loadComputerSudoPassword(computerId),
+                originalCredential = credentialStore.loadOriginalComputerCredential(computerId)
+                    ?: credentialStore.loadComputerCredential(computerId),
+            )
         }
         val foregroundActivity = acquireForegroundActivity()
         try {
             dao.updateComputerStatus(computerId, ComputerStatus.PROVISIONING.name, null)
             return try {
                 val result = withConnection(computerId, requireReady = false) { connection, computer ->
-                    provisioner.provision(connection, computer, sudoPassword)
+                    provisioner.provision(connection, computer, sudoPassword, onProgress)
                 }
                 val configured = current.copy(
                     bootstrapVersion = result.bootstrapVersion,
@@ -199,15 +231,200 @@ class ComputerRepository(
                     updatedAt = System.currentTimeMillis(),
                 )
                 dao.upsertComputer(configured.toEntity(json))
+                dao.updateContainerWorkspaceImage(computerId, result.sandboxImage)
                 recordAudit(computerId, "CONTAINER_PROVISION", "SUCCESS", null)
+                onProgress(ComputerSetupStage.VERIFYING)
                 refreshComputer(computerId)
+            } catch (error: CancellationException) {
+                withContext(NonCancellable) {
+                    connectionPool.disconnect(computerId)
+                    dao.updateComputerStatus(
+                        computerId,
+                        ComputerStatus.CONFIGURATION_REQUIRED.name,
+                        current.lastErrorCode,
+                    )
+                }
+                throw error
             } catch (error: ComputerException) {
-                dao.updateComputerStatus(computerId, ComputerStatus.CONFIGURATION_REQUIRED.name, error.code)
-                recordAudit(computerId, "CONTAINER_PROVISION", "FAILED", error.code)
+                val reportedError = if (
+                    error.code == ComputerErrorCodes.SUDO_REQUIRED &&
+                    current.username != "root" &&
+                    sudoPassword == null
+                ) {
+                    ComputerException(
+                        code = ComputerErrorCodes.SUDO_REQUIRED,
+                        message = "缺少可用的 sudo 密码，请先编辑服务器补充",
+                        retryable = true,
+                        action = "UPDATE_CREDENTIAL",
+                        cause = error,
+                    )
+                } else {
+                    error
+                }
+                dao.updateComputerStatus(computerId, ComputerStatus.CONFIGURATION_REQUIRED.name, reportedError.code)
+                recordAudit(computerId, "CONTAINER_PROVISION", "FAILED", reportedError.code)
+                throw reportedError
+            } catch (error: Throwable) {
+                withContext(NonCancellable) {
+                    connectionPool.disconnect(computerId)
+                    dao.updateComputerStatus(
+                        computerId,
+                        ComputerStatus.CONFIGURATION_REQUIRED.name,
+                        current.lastErrorCode,
+                    )
+                }
                 throw error
             }
         } finally {
+            sudoPassword?.fill('\u0000')
             foregroundActivity.close()
+        }
+    }
+
+    /** 修复页取消后立即关闭该服务器的 SSH Transport，让阻塞中的 Channel 尽快退出。 */
+    suspend fun cancelComputerOperation(computerId: String) {
+        val current = requireComputer(computerId)
+        connectionPool.disconnect(computerId)
+        if (current.status == ComputerStatus.PROVISIONING || current.status == ComputerStatus.VERIFYING) {
+            dao.updateComputerStatus(
+                computerId,
+                ComputerStatus.CONFIGURATION_REQUIRED.name,
+                current.lastErrorCode,
+            )
+        }
+    }
+
+    /**
+     * 编辑服务器参数前只探测候选地址的 Host Key。
+     * 用户确认后才会测试登录并替换现有记录，失败时旧参数与旧凭据保持不变。
+     */
+    suspend fun probeUpdatedComputerHostKey(request: UpdateComputerRequest): HostKeyProbeResult =
+        sshClient.probeHostKey(request.host, request.port)
+
+    suspend fun updateComputer(
+        request: UpdateComputerRequest,
+        confirmedHostKey: HostKeyProbeResult,
+        sudoPassword: CharArray?,
+        replaceSudoPassword: Boolean,
+    ): Computer {
+        var candidateCredential: ComputerCredential? = null
+        var previousDedicatedCredential: ComputerCredential? = null
+        try {
+            val current = requireComputer(request.id)
+            val endpoint = ComputerEndpointValidator.validate(request.host, request.port, request.username)
+            if (endpoint.host != confirmedHostKey.host || endpoint.port != confirmedHostKey.port) {
+                throw ComputerException(ComputerErrorCodes.HOST_KEY_CHANGED, "确认期间服务器地址发生变化")
+            }
+
+            val confirmedKeyBlob = Base64.getEncoder().encodeToString(confirmedHostKey.keyBlob)
+            val endpointChanged = current.host != endpoint.host ||
+                current.port != endpoint.port ||
+                current.username != endpoint.username.orEmpty() ||
+                current.hostKeyAlgorithm != confirmedHostKey.algorithm ||
+                current.hostKeyBlobBase64 != confirmedKeyBlob
+            val sameRemoteAccount = current.username == endpoint.username.orEmpty() &&
+                current.resolvedAddress == confirmedHostKey.resolvedAddress &&
+                current.hostKeyBlobBase64 == confirmedKeyBlob
+            val remoteAccountChanged = endpointChanged && !sameRemoteAccount
+            val suppliedCredential = request.credential != null
+            val credential = request.credential ?: if (remoteAccountChanged) {
+                credentialStore.loadOriginalComputerCredential(request.id)
+                    ?: credentialStore.loadComputerCredential(request.id)
+            } else {
+                credentialStore.loadComputerCredential(request.id)
+            }
+            candidateCredential = credential
+
+            val previousDedicatedKeyExpected =
+                remoteAccountChanged &&
+                    current.credentialState == ComputerCredentialState.DEDICATED_KEY
+            if (previousDedicatedKeyExpected) {
+                previousDedicatedCredential = runCatching {
+                    credentialStore.loadComputerCredential(current.id)
+                }.getOrNull()
+            }
+
+            val keepDedicatedConnection =
+                current.credentialState == ComputerCredentialState.DEDICATED_KEY && !remoteAccountChanged
+            val replaceActiveCredential = remoteAccountChanged || (suppliedCredential && !keepDedicatedConnection)
+            val candidate = current.copy(
+                displayName = request.displayName.trim().ifEmpty { endpoint.host },
+                host = endpoint.host,
+                port = endpoint.port,
+                username = endpoint.username.orEmpty(),
+                resolvedAddress = confirmedHostKey.resolvedAddress,
+                hostKeyAlgorithm = confirmedHostKey.algorithm,
+                hostKeyBlobBase64 = confirmedKeyBlob,
+                hostKeyFingerprint = confirmedHostKey.fingerprint,
+                authKind = if (suppliedCredential) credential.kind else current.authKind,
+                credentialState = when {
+                    keepDedicatedConnection -> ComputerCredentialState.DEDICATED_KEY
+                    replaceActiveCredential -> ComputerCredentialState.ORIGINAL_ENCRYPTED
+                    else -> current.credentialState
+                },
+                status = ComputerStatus.PROBING,
+                capabilities = null,
+                lastErrorCode = null,
+                updatedAt = System.currentTimeMillis(),
+            )
+            val credentialForTest = credential.copySecret()
+            val capabilities = sshClient.connect(candidate, credentialForTest).use { connection ->
+                probe.probe(connection, candidate.port)
+            }
+            if (suppliedCredential) {
+                credentialStore.saveOriginalComputerCredential(candidate.id, credential.copySecret())
+            }
+            if (replaceActiveCredential) {
+                credentialStore.saveComputerCredential(candidate.id, credential.copySecret())
+            }
+            if (replaceSudoPassword) {
+                credentialStore.saveComputerSudoPassword(candidate.id, sudoPassword)
+            } else {
+                sudoPassword?.fill('\u0000')
+            }
+            connectionPool.disconnect(candidate.id)
+
+            var updated = candidate.copy(
+                status = if (
+                    remoteAccountChanged ||
+                    !capabilities.dockerAvailable ||
+                    current.bootstrapVersion != COMPUTER_BOOTSTRAP_VERSION
+                ) {
+                    ComputerStatus.CONFIGURATION_REQUIRED
+                } else {
+                    ComputerStatus.READY
+                },
+                capabilities = capabilities,
+                bootstrapVersion = current.bootstrapVersion.takeUnless { remoteAccountChanged },
+                sandboxImage = current.sandboxImage.takeUnless { remoteAccountChanged },
+                lastConnectedAt = System.currentTimeMillis(),
+                updatedAt = System.currentTimeMillis(),
+            )
+            dao.upsertComputer(updated.toEntity(json))
+            if (remoteAccountChanged) dao.markComputerWorkspacesRecovering(updated.id)
+            if (replaceActiveCredential) updated = tryUpgradeToDedicatedKey(updated)
+
+            val oldDedicatedKeyRemoved = when {
+                !previousDedicatedKeyExpected -> true
+                previousDedicatedCredential == null -> false
+                else -> runCatching {
+                    sshClient.connect(current, previousDedicatedCredential).use { connection ->
+                        dedicatedKeyManager.removeForComputer(connection, current.id)
+                    }
+                }.isSuccess
+            }
+            recordAudit(
+                updated.id,
+                "COMPUTER_UPDATED",
+                if (oldDedicatedKeyRemoved) "SUCCESS" else "FALLBACK",
+                if (oldDedicatedKeyRemoved) null else "REMOTE_CLEANUP_PENDING",
+            )
+            return updated
+        } finally {
+            candidateCredential?.clear()
+            if (candidateCredential !== request.credential) request.credential?.clear()
+            previousDedicatedCredential?.clear()
+            sudoPassword?.fill('\u0000')
         }
     }
 
@@ -222,29 +439,6 @@ class ComputerRepository(
             )
         }
         dao.selectComputer(conversationId, computerId)
-    }
-
-    suspend fun replaceCredential(computerId: String, credential: ComputerCredential): Computer {
-        val current = requireComputer(computerId)
-        val credentialForTest = credential.copySecret()
-        try {
-            sshClient.connect(current, credentialForTest).use { }
-        } catch (error: Throwable) {
-            credential.clear()
-            throw error
-        }
-        credentialStore.saveComputerCredential(computerId, credential)
-        connectionPool.disconnect(computerId)
-        val updated = current.copy(
-            authKind = credential.kind,
-            credentialState = ComputerCredentialState.ORIGINAL_ENCRYPTED,
-            status = ComputerStatus.OFFLINE,
-            lastErrorCode = null,
-            updatedAt = System.currentTimeMillis(),
-        )
-        dao.upsertComputer(updated.toEntity(json))
-        recordAudit(computerId, "CREDENTIAL_REPLACED", "SUCCESS", null)
-        return tryUpgradeToDedicatedKey(refreshComputer(computerId))
     }
 
     suspend fun probeReplacementHostKey(computerId: String): HostKeyProbeResult {
@@ -278,6 +472,20 @@ class ComputerRepository(
         connectionPool.disconnect(computerId)
         dao.updateComputerStatus(computerId, ComputerStatus.DISCONNECTED.name, null)
         recordAudit(computerId, "DISCONNECT", "SUCCESS", null)
+    }
+
+    /** 权限模式只改变本地审批策略，不连接或修改 VPS。 */
+    suspend fun setPermissionMode(
+        computerId: String,
+        permissionMode: ComputerPermissionMode,
+    ): Computer {
+        val current = requireComputer(computerId)
+        dao.updatePermissionMode(computerId, permissionMode.name)
+        recordAudit(computerId, "PERMISSION_MODE", "SUCCESS", permissionMode.name)
+        return current.copy(
+            permissionMode = permissionMode,
+            updatedAt = System.currentTimeMillis(),
+        )
     }
 
     /** Container 模式允许用户在详情页显式调整是否访问 VPS 私有网络。 */
@@ -333,15 +541,35 @@ class ComputerRepository(
         }
         connectionPool.disconnect(computerId)
         credentialStore.deleteComputerCredential(computerId)
+        credentialStore.deleteOriginalComputerCredential(computerId)
+        credentialStore.deleteComputerSudoPassword(computerId)
         dao.deleteComputer(computerId)
         return ComputerDeleteResult(remoteKeyRemoved = remoteKeyRemoved)
     }
 
     suspend fun recoverLocalState() {
+        migrateLegacyDirectRecords()
         dao.markInterruptedExecutionsUnknown()
         dao.markPrivatePreviewsStopped()
+        dao.recoverInterruptedComputerOperations(COMPUTER_BOOTSTRAP_VERSION)
         dao.markOutdatedContainerConfiguration(COMPUTER_BOOTSTRAP_VERSION)
         connectionPool.closeIdle(maxIdleMillis = 0)
+    }
+
+    /**
+     * v2.0 的 Direct 服务器升级后统一进入混合模式。
+     * 这里只更新 Room，用户点击修复前绝不连接或修改 VPS。
+     */
+    private suspend fun migrateLegacyDirectRecords() {
+        dao.getLegacyDirectComputers().forEach { entity ->
+            val migratedComputer = migrateLegacyDirectComputer(entity.toModel(json))
+            dao.getWorkspacesForComputer(entity.id).forEach { workspaceEntity ->
+                dao.upsertWorkspace(
+                    migrateLegacyDirectWorkspace(workspaceEntity.toModel(), migratedComputer.sandboxImage).toEntity(),
+                )
+            }
+            dao.upsertComputer(migratedComputer.toEntity(json))
+        }
     }
 
     /** 手机网络发生切换时丢弃旧 Transport，下一次操作会重新解析并验证固定 Host Key。 */
@@ -422,6 +650,8 @@ class ComputerRepository(
             var authenticatedConnection: ComputerSshConnection? = null
             val dedicatedKey = connectionPool.withConnection(computer) { connection ->
                 authenticatedConnection = connection
+                // 重新配置同一账号时先移除旧标记 Key，避免 authorized_keys 累积失效授权。
+                dedicatedKeyManager.removeForComputer(connection, computer.id)
                 dedicatedKeyManager.installAndVerify(computer, connection)
             }
             try {
@@ -435,7 +665,6 @@ class ComputerRepository(
             }
             connectionPool.disconnect(computer.id)
             computer.copy(
-                authKind = ComputerAuthKind.PRIVATE_KEY,
                 credentialState = ComputerCredentialState.DEDICATED_KEY,
                 updatedAt = System.currentTimeMillis(),
             ).also { upgraded ->
@@ -454,9 +683,4 @@ class ComputerRepository(
         connectionStopListener.close()
         connectionPool.close()
     }
-}
-
-private fun ComputerCredential.copySecret(): ComputerCredential = when (this) {
-    is ComputerCredential.Password -> ComputerCredential.Password(password.copyOf())
-    is ComputerCredential.PrivateKey -> ComputerCredential.PrivateKey(privateKey.copyOf(), passphrase?.copyOf())
 }

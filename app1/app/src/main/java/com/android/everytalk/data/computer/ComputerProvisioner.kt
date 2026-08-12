@@ -6,7 +6,7 @@ import java.nio.CharBuffer
 import java.security.MessageDigest
 import java.util.EnumSet
 
-internal const val COMPUTER_BOOTSTRAP_VERSION = "3"
+internal const val COMPUTER_BOOTSTRAP_VERSION = "5"
 private const val SANDBOX_IMAGE = "everytalk-sandbox:1"
 private const val BOOTSTRAP_COMMAND_TIMEOUT_MILLIS = 20 * 60 * 1000L
 private const val BOOTSTRAP_OUTPUT_BYTES = 2 * 1024 * 1024
@@ -31,15 +31,19 @@ class ComputerProvisioner(private val context: Context) {
         connection: ComputerSshConnection,
         computer: Computer,
         sudoPassword: CharArray?,
+        onProgress: suspend (ComputerSetupStage) -> Unit = {},
     ): ComputerProvisionResult {
         require(computer.runMode == ComputerRunMode.CONTAINER) { "只有 Container 模式需要配置" }
         ComputerIdentifier.requireValid(computer.id, "Computer ID")
         val remoteDirectory = "/tmp/everytalk-bootstrap-${computer.id}"
         try {
+            onProgress(ComputerSetupStage.PREPARING_CONTAINER)
             prepareRemoteDirectory(connection, remoteDirectory)
             val hashes = uploadAssets(connection, remoteDirectory)
             verifyAssets(connection, remoteDirectory, hashes)
 
+            // 即使 Docker 已存在，也先展示同一个稳定阶段，界面步骤不会因服务器环境而跳号。
+            onProgress(ComputerSetupStage.PREPARING_DOCKER)
             if (computer.capabilities?.dockerAvailable != true) {
                 runRootCommand(
                     connection = connection,
@@ -51,6 +55,7 @@ class ComputerProvisioner(private val context: Context) {
                 )
             }
 
+            onProgress(ComputerSetupStage.INSTALLING_HELPER)
             runRootCommand(
                 connection = connection,
                 computer = computer,
@@ -59,7 +64,9 @@ class ComputerProvisioner(private val context: Context) {
                 errorCode = ComputerErrorCodes.HELPER_INTEGRITY_FAILED,
                 errorMessage = "Container Helper 安装失败",
             )
+            onProgress(ComputerSetupStage.BUILDING_IMAGE)
             runInstalledHelper(connection, computer, "build-image", sudoPassword)
+            onProgress(ComputerSetupStage.CONFIGURING_NETWORK)
             runInstalledHelper(
                 connection,
                 computer,

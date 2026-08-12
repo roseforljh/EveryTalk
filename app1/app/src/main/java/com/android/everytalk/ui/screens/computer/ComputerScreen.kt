@@ -3,6 +3,7 @@ package com.android.everytalk.ui.screens.computer
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -57,13 +58,14 @@ import com.android.everytalk.R
 import com.android.everytalk.data.computer.ComputerDiagnostics
 import com.android.everytalk.data.computer.ComputerFailureStage
 import com.android.everytalk.data.computer.ComputerRunMode
+import com.android.everytalk.data.computer.ComputerSetupStage
 import com.android.everytalk.data.computer.ComputerStatus
 import com.android.everytalk.navigation.Screen
 import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.statecontroller.addConfirmedComputer
 import com.android.everytalk.statecontroller.probeComputerHostKey
 import com.android.everytalk.statecontroller.provisionComputerContainer
-import com.android.everytalk.statecontroller.refreshComputer
+import com.android.everytalk.statecontroller.refreshComputerFromList
 import com.android.everytalk.statecontroller.showSnackbar
 import com.android.everytalk.ui.components.floatingEdgeGradient
 import com.android.everytalk.ui.screens.settings.SettingsTabMenu
@@ -85,7 +87,7 @@ fun ComputerScreen(
     var showTabMenu by remember { mutableStateOf(false) }
     var form by remember { mutableStateOf(ComputerAddFormState()) }
     var isBusy by remember { mutableStateOf(false) }
-    var progressText by remember { mutableStateOf<String?>(null) }
+    var setupStage by remember { mutableStateOf<ComputerSetupStage?>(null) }
     var errorText by remember { mutableStateOf<String?>(null) }
     var prepared by remember { mutableStateOf<PreparedComputerAdd?>(null) }
     var hostKey by remember { mutableStateOf<com.android.everytalk.data.computer.HostKeyProbeResult?>(null) }
@@ -105,7 +107,7 @@ fun ComputerScreen(
         prepared?.clear()
         prepared = null
         hostKey = null
-        progressText = null
+        setupStage = null
         errorText = null
         form = ComputerAddFormState()
         showAddCard = false
@@ -132,6 +134,16 @@ fun ComputerScreen(
         }
     }
 
+    /** 顶部返回键和系统返回手势都跳过配置页，直接回到聊天首页。 */
+    fun returnToChatHome() {
+        showTabMenu = false
+        if (!navController.popBackStack(Screen.CHAT_SCREEN, inclusive = false)) {
+            navController.navigate(Screen.CHAT_SCREEN) { launchSingleTop = true }
+        }
+    }
+
+    BackHandler(onBack = ::returnToChatHome)
+
     fun validationMessage(error: ComputerAddFormError): String = context.getString(
         when (error) {
             ComputerAddFormError.HOST_REQUIRED -> R.string.computer_validation_host
@@ -152,7 +164,7 @@ fun ComputerScreen(
         val current = form.prepare()
         prepared = current
         errorText = null
-        progressText = context.getString(R.string.computer_progress_reading_key)
+        setupStage = ComputerSetupStage.READING_HOST_KEY
         isBusy = true
         scope.launch {
             try {
@@ -167,7 +179,7 @@ fun ComputerScreen(
                     error.message ?: context.getString(R.string.unknown_error),
                 )
             } finally {
-                progressText = null
+                setupStage = null
                 isBusy = false
             }
         }
@@ -184,7 +196,7 @@ fun ComputerScreen(
         ) {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
-        progressText = context.getString(R.string.computer_progress_authenticating)
+        setupStage = ComputerSetupStage.AUTHENTICATING
         errorText = null
         isBusy = true
         scope.launch {
@@ -192,7 +204,12 @@ fun ComputerScreen(
             var failureStage = ComputerFailureStage.ADD_SERVER
             try {
                 val added = withContext(Dispatchers.IO) {
-                    viewModel.addConfirmedComputer(current.request, confirmed)
+                    viewModel.addConfirmedComputer(
+                        current.request,
+                        confirmed,
+                        current.sudoPassword?.copyOf(),
+                        onProgress = { stage -> withContext(Dispatchers.Main) { setupStage = stage } },
+                    )
                 }
                 addedComputer = added
                 if (
@@ -200,14 +217,16 @@ fun ComputerScreen(
                     added.status == ComputerStatus.CONFIGURATION_REQUIRED
                 ) {
                     failureStage = ComputerFailureStage.CONTAINER_PROVISION
-                    progressText = context.getString(R.string.computer_progress_provisioning)
                     withContext(Dispatchers.IO) {
-                        viewModel.provisionComputerContainer(added.id, current.sudoPassword)
+                        viewModel.provisionComputerContainer(
+                            added.id,
+                            onProgress = { stage -> withContext(Dispatchers.Main) { setupStage = stage } },
+                        )
                     }
                 }
                 viewModel.showSnackbar(context.getString(R.string.computer_add_success))
                 prepared = null
-                progressText = null
+                setupStage = null
                 errorText = null
                 form = ComputerAddFormState()
                 showAddCard = false
@@ -219,7 +238,7 @@ fun ComputerScreen(
                 val savedComputer = addedComputer
                 if (savedComputer != null) {
                     prepared = null
-                    progressText = null
+                    setupStage = null
                     errorText = null
                     form = ComputerAddFormState()
                     showAddCard = false
@@ -233,7 +252,7 @@ fun ComputerScreen(
             } finally {
                 current.clear()
                 if (prepared === current) prepared = null
-                progressText = null
+                setupStage = null
                 isBusy = false
             }
         }
@@ -250,6 +269,9 @@ fun ComputerScreen(
     )
     val topContentPadding =
         WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + topButtonSize + 24.dp
+    val cardAccentColors = remember(computers.map { it.id }) {
+        computerCardAccentColors(computers)
+    }
     Scaffold(
         modifier = modifier.fillMaxSize(),
         containerColor = MaterialTheme.colorScheme.background,
@@ -268,7 +290,7 @@ fun ComputerScreen(
                         painter = painterResource(R.drawable.ic_gpt_terminal),
                         contentDescription = null,
                         modifier = Modifier.size(44.dp),
-                        tint = MaterialTheme.colorScheme.primary,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Text(
                         text = stringResource(R.string.computer_screen_empty_title),
@@ -293,21 +315,9 @@ fun ComputerScreen(
                     items(computers, key = { it.id }) { computer ->
                         ComputerCard(
                             computer = computer,
+                            accentColor = cardAccentColors.getValue(computer.id),
                             onClick = { navController.navigate(Screen.computerDetail(computer.id)) },
-                            onRefresh = {
-                                scope.launch {
-                                    runCatching {
-                                        withContext(Dispatchers.IO) { viewModel.refreshComputer(computer.id) }
-                                    }.onFailure { error ->
-                                        ComputerDiagnostics.logFailure(ComputerFailureStage.SERVER_REFRESH, error)
-                                        viewModel.showSnackbar(
-                                            context.localizeUiMessage(
-                                                error.message ?: context.getString(R.string.unknown_error),
-                                            ),
-                                        )
-                                    }
-                                }
-                            },
+                            onRefresh = { viewModel.refreshComputerFromList(computer.id) },
                         )
                     }
                 }
@@ -324,7 +334,7 @@ fun ComputerScreen(
                     iconRes = R.drawable.ic_arrow_back,
                     contentDescription = stringResource(R.string.navigation_back),
                     modifier = Modifier.align(Alignment.CenterStart),
-                    onClick = { navController.popBackStack() },
+                    onClick = ::returnToChatHome,
                 )
                 Box(modifier = Modifier.align(Alignment.CenterEnd)) {
                     Row(
@@ -389,7 +399,8 @@ fun ComputerScreen(
         ComputerAddCard(
             form = form,
             isBusy = isBusy,
-            progressText = progressText,
+            progressText = setupStage?.let { stage -> context.getString(stage.labelRes()) },
+            progressDetailText = setupStage?.let { stage -> context.getString(stage.detailRes()) },
             errorText = errorText,
             onFormChange = { form = it; errorText = null },
             onSubmit = ::startHostKeyProbe,
@@ -406,6 +417,33 @@ fun ComputerScreen(
             prepared = null
         },
     )
+}
+
+/** 首次添加步骤与文案集中映射，后台只上报稳定的业务阶段。 */
+internal fun ComputerSetupStage.labelRes(): Int = when (this) {
+    ComputerSetupStage.READING_HOST_KEY -> R.string.computer_progress_reading_key
+    ComputerSetupStage.AUTHENTICATING -> R.string.computer_progress_authenticating
+    ComputerSetupStage.INSPECTING_VPS -> R.string.computer_progress_inspecting
+    ComputerSetupStage.SECURING_CONNECTION -> R.string.computer_progress_securing_connection
+    ComputerSetupStage.PREPARING_CONTAINER -> R.string.computer_progress_preparing_container
+    ComputerSetupStage.PREPARING_DOCKER -> R.string.computer_progress_preparing_docker
+    ComputerSetupStage.INSTALLING_HELPER -> R.string.computer_progress_installing_helper
+    ComputerSetupStage.BUILDING_IMAGE -> R.string.computer_progress_building_image
+    ComputerSetupStage.CONFIGURING_NETWORK -> R.string.computer_progress_configuring_network
+    ComputerSetupStage.VERIFYING -> R.string.computer_progress_verifying
+}
+
+internal fun ComputerSetupStage.detailRes(): Int = when (this) {
+    ComputerSetupStage.READING_HOST_KEY -> R.string.computer_progress_detail_host_key
+    ComputerSetupStage.AUTHENTICATING -> R.string.computer_progress_detail_authenticating
+    ComputerSetupStage.INSPECTING_VPS -> R.string.computer_progress_detail_inspecting
+    ComputerSetupStage.SECURING_CONNECTION -> R.string.computer_progress_detail_securing_connection
+    ComputerSetupStage.PREPARING_CONTAINER -> R.string.computer_progress_detail_preparing_container
+    ComputerSetupStage.PREPARING_DOCKER -> R.string.computer_progress_detail_preparing_docker
+    ComputerSetupStage.INSTALLING_HELPER -> R.string.computer_progress_detail_installing_helper
+    ComputerSetupStage.BUILDING_IMAGE -> R.string.computer_progress_detail_building_image
+    ComputerSetupStage.CONFIGURING_NETWORK -> R.string.computer_progress_detail_configuring_network
+    ComputerSetupStage.VERIFYING -> R.string.computer_progress_detail_verifying
 }
 
 @Composable

@@ -24,10 +24,12 @@ import com.android.everytalk.data.safety.AiContentReportSubmissionResult
 import com.android.everytalk.data.computer.AddComputerRequest
 import com.android.everytalk.data.computer.Computer
 import com.android.everytalk.data.computer.ComputerAuditEvent
-import com.android.everytalk.data.computer.ComputerCredential
 import com.android.everytalk.data.computer.ComputerDeleteResult
+import com.android.everytalk.data.computer.ComputerDiagnostics
+import com.android.everytalk.data.computer.ComputerFailureStage
 import com.android.everytalk.data.computer.ComputerPreview
 import com.android.everytalk.data.computer.ComputerPreviewOpenResult
+import com.android.everytalk.data.computer.ComputerPermissionMode
 import com.android.everytalk.data.computer.ComputerWorkspace
 import com.android.everytalk.data.computer.ComputerWorkspaceSecret
 import com.android.everytalk.data.computer.HostKeyProbeResult
@@ -479,7 +481,7 @@ import java.util.TimeZone
 
     /**
      * Agent 关闭立即生效并保留服务器选择与 Workspace。
-     * 开启前会验证当前模型、服务器和 Workspace，失败时保持关闭。
+     * 开启只做本地校验并立即更新 UI；Workspace 与 SSH 留给后台预热和发送前校验。
      */
     internal fun AppViewModel.setAgentEnabled(enabled: Boolean) {
         val generation = stateHolder.agentActionGeneration.incrementAndGet()
@@ -500,33 +502,38 @@ import java.util.TimeZone
             return
         }
 
-        stateHolder._isAgentPreparing.value = true
+        val conversationId = stateHolder._currentConversationId.value
+        try {
+            computerManager.requireSelectedReadyComputer(conversationId)
+        } catch (error: ComputerException) {
+            showSnackbar(error.message)
+            return
+        }
+        stateHolder.updateCurrentConversationFunctionToggleState { it.copy(agentEnabled = true) }
+        stateHolder._isAgentEnabled.value = true
+        stateHolder._isAgentPreparing.value = false
         viewModelScope.launch(Dispatchers.IO) {
+            persistenceManager.saveConversationFunctionToggleStates(
+                stateHolder.conversationFunctionToggleStates.value,
+            )
             try {
-                computerManager.prepareRequest(
-                    conversationId = stateHolder._currentConversationId.value,
-                    agentEnabled = true,
-                )
-                if (stateHolder.agentActionGeneration.get() != generation) return@launch
-                stateHolder.updateCurrentConversationFunctionToggleState { it.copy(agentEnabled = true) }
-                stateHolder._isAgentEnabled.value = true
-                persistenceManager.saveConversationFunctionToggleStates(
-                    stateHolder.conversationFunctionToggleStates.value,
-                )
+                computerManager.prepareRequest(conversationId, agentEnabled = true)
+            } catch (error: CancellationException) {
+                throw error
             } catch (error: ComputerException) {
-                if (stateHolder.agentActionGeneration.get() == generation) showSnackbar(error.message)
-            } catch (error: Exception) {
-                if (stateHolder.agentActionGeneration.get() == generation) showSnackbar("Agent 准备失败")
-                Log.e("AppViewModel", "Agent 准备失败", error)
-            } finally {
                 if (stateHolder.agentActionGeneration.get() == generation) {
-                    stateHolder._isAgentPreparing.value = false
+                    showSnackbar("Agent 已开启，服务器预热失败，发送时会重试：${error.message}")
                 }
+            } catch (error: Exception) {
+                if (stateHolder.agentActionGeneration.get() == generation) {
+                    showSnackbar("Agent 已开启，服务器预热失败，发送时会重试")
+                }
+                Log.e("AppViewModel", "Agent 后台预热失败", error)
             }
         }
     }
 
-    /** 长按选服使用；Agent 已开启时先准备目标 Workspace，失败后保留原选择。 */
+    /** 长按选服使用；选择落库后立即更新 Agent，Workspace 在后台准备。 */
     internal fun AppViewModel.selectComputerForCurrentConversation(
         computerId: String,
         enableAgentAfterSelection: Boolean = false,
@@ -537,34 +544,50 @@ import java.util.TimeZone
             showSnackbar("当前模型不支持 Agent Tool Call")
             return
         }
-        stateHolder._isAgentPreparing.value = shouldPrepareWorkspace
+        if (enableAgentAfterSelection) {
+            stateHolder.updateCurrentConversationFunctionToggleState { it.copy(agentEnabled = true) }
+            stateHolder._isAgentEnabled.value = true
+        }
+        stateHolder._isAgentPreparing.value = false
         viewModelScope.launch(Dispatchers.IO) {
             try {
                 val conversationId = stateHolder._currentConversationId.value
                 computerManager.selectComputer(conversationId, computerId, shouldPrepareWorkspace)
                 if (stateHolder.agentActionGeneration.get() != generation) return@launch
                 if (enableAgentAfterSelection) {
-                    stateHolder.updateCurrentConversationFunctionToggleState { it.copy(agentEnabled = true) }
-                    stateHolder._isAgentEnabled.value = true
                     persistenceManager.saveConversationFunctionToggleStates(
                         stateHolder.conversationFunctionToggleStates.value,
                     )
                 }
             } catch (error: ComputerException) {
-                if (stateHolder.agentActionGeneration.get() == generation) showSnackbar(error.message)
+                if (stateHolder.agentActionGeneration.get() == generation) {
+                    if (enableAgentAfterSelection) {
+                        stateHolder.updateCurrentConversationFunctionToggleState { it.copy(agentEnabled = false) }
+                        stateHolder._isAgentEnabled.value = false
+                    }
+                    showSnackbar(error.message)
+                }
             } catch (error: Exception) {
-                if (stateHolder.agentActionGeneration.get() == generation) showSnackbar("服务器选择失败")
+                if (stateHolder.agentActionGeneration.get() == generation) {
+                    if (enableAgentAfterSelection) {
+                        stateHolder.updateCurrentConversationFunctionToggleState { it.copy(agentEnabled = false) }
+                        stateHolder._isAgentEnabled.value = false
+                    }
+                    showSnackbar("服务器选择失败")
+                }
                 Log.e("AppViewModel", "服务器选择失败", error)
             } finally {
-                if (stateHolder.agentActionGeneration.get() == generation) {
-                    stateHolder._isAgentPreparing.value = false
-                }
+                if (stateHolder.agentActionGeneration.get() == generation) stateHolder._isAgentPreparing.value = false
             }
         }
     }
 
     internal fun AppViewModel.respondToComputerPublicPreview(approved: Boolean) {
         computerManager.respondToPublicPreview(approved)
+    }
+
+    internal fun AppViewModel.respondToComputerHostCommand(requestId: String, approved: Boolean) {
+        computerManager.respondToHostCommand(requestId, approved)
     }
 
     /** 服务器页面调用这些挂起函数，所有网络流量仍由 Android 本地 SSH 组件处理。 */
@@ -574,15 +597,59 @@ import java.util.TimeZone
     internal suspend fun AppViewModel.addConfirmedComputer(
         request: AddComputerRequest,
         confirmedHostKey: HostKeyProbeResult,
-    ): Computer = computerManager.addConfirmedComputer(request, confirmedHostKey)
+        sudoPassword: CharArray?,
+        onProgress: suspend (com.android.everytalk.data.computer.ComputerSetupStage) -> Unit = {},
+    ): Computer = computerManager.addConfirmedComputer(request, confirmedHostKey, sudoPassword, onProgress)
+
+    internal suspend fun AppViewModel.probeUpdatedComputerHostKey(
+        request: com.android.everytalk.data.computer.UpdateComputerRequest,
+    ): HostKeyProbeResult = computerManager.probeUpdatedComputerHostKey(request)
+
+    internal suspend fun AppViewModel.updateComputer(
+        request: com.android.everytalk.data.computer.UpdateComputerRequest,
+        confirmedHostKey: HostKeyProbeResult,
+        sudoPassword: CharArray?,
+        replaceSudoPassword: Boolean,
+    ): Computer = computerManager.updateComputer(
+        request,
+        confirmedHostKey,
+        sudoPassword,
+        replaceSudoPassword,
+    )
 
     internal suspend fun AppViewModel.provisionComputerContainer(
         computerId: String,
-        sudoPassword: CharArray?,
-    ): Computer = computerManager.provisionContainer(computerId, sudoPassword)
+        onProgress: suspend (com.android.everytalk.data.computer.ComputerSetupStage) -> Unit = {},
+    ): Computer = computerManager.provisionContainer(computerId, onProgress)
+
+    internal fun AppViewModel.cancelComputerOperation(computerId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { computerManager.cancelComputerOperation(computerId) }
+                .onFailure { error ->
+                    ComputerDiagnostics.logFailure(ComputerFailureStage.SERVER_DETAIL_ACTION, error)
+                }
+        }
+    }
 
     internal suspend fun AppViewModel.refreshComputer(computerId: String): Computer =
         computerManager.refreshComputer(computerId)
+
+    /**
+     * 列表卡片刷新交给 ViewModel 生命周期执行。
+     * 用户点完后立刻进入详情页时，SSH 探测仍会继续，禁止复用已经离开 Composition 的页面协程。
+     */
+    internal fun AppViewModel.refreshComputerFromList(computerId: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                computerManager.refreshComputer(computerId)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Throwable) {
+                ComputerDiagnostics.logFailure(ComputerFailureStage.SERVER_REFRESH, error)
+                showSnackbar(error.message ?: getApplication<Application>().getString(R.string.unknown_error))
+            }
+        }
+    }
 
     internal suspend fun AppViewModel.disconnectComputer(computerId: String) =
         computerManager.disconnect(computerId)
@@ -630,11 +697,6 @@ import java.util.TimeZone
     internal suspend fun AppViewModel.stopComputerPreview(previewId: String) =
         computerManager.stopPreview(previewId)
 
-    internal suspend fun AppViewModel.replaceComputerCredential(
-        computerId: String,
-        credential: ComputerCredential,
-    ): Computer = computerManager.replaceCredential(computerId, credential)
-
     internal suspend fun AppViewModel.probeComputerReplacementHostKey(computerId: String): HostKeyProbeResult =
         computerManager.probeReplacementHostKey(computerId)
 
@@ -647,6 +709,12 @@ import java.util.TimeZone
         computerId: String,
         allowed: Boolean,
     ): Computer = computerManager.setPrivateNetworkAllowed(computerId, allowed)
+
+    /** 权限模式只更新本地审批策略，不连接 VPS。 */
+    internal suspend fun AppViewModel.setComputerPermissionMode(
+        computerId: String,
+        permissionMode: ComputerPermissionMode,
+    ): Computer = computerManager.setPermissionMode(computerId, permissionMode)
 
     internal suspend fun AppViewModel.deleteComputerWorkspace(
         workspaceId: String,

@@ -592,10 +592,12 @@ class MainActivity : AppCompatActivity() {
                                         )
                                     },
                                 ) {
-                                    com.android.everytalk.ui.screens.computer.ComputerScreen(
-                                        viewModel = appViewModel,
-                                        navController = navController,
-                                    )
+                                    com.android.everytalk.ui.screens.computer.ComputerNeutralTheme {
+                                        com.android.everytalk.ui.screens.computer.ComputerScreen(
+                                            viewModel = appViewModel,
+                                            navController = navController,
+                                        )
+                                    }
                                 }
                                 composable(
                                     route = Screen.COMPUTER_DETAIL_SCREEN,
@@ -630,11 +632,13 @@ class MainActivity : AppCompatActivity() {
                                     },
                                 ) { entry ->
                                     val computerId = entry.arguments?.getString("computerId").orEmpty()
-                                    com.android.everytalk.ui.screens.computer.ComputerDetailScreen(
-                                        viewModel = appViewModel,
-                                        navController = navController,
-                                        computerId = computerId,
-                                    )
+                                    com.android.everytalk.ui.screens.computer.ComputerNeutralTheme {
+                                        com.android.everytalk.ui.screens.computer.ComputerDetailScreen(
+                                            viewModel = appViewModel,
+                                            navController = navController,
+                                            computerId = computerId,
+                                        )
+                                    }
                                 }
                                 composable(
                                     route = Screen.APP_INFO_SCREEN,
@@ -770,9 +774,11 @@ class MainActivity : AppCompatActivity() {
                                    )
                                }
                             }
-                            com.android.everytalk.ui.screens.computer.ComputerPublicPreviewConfirmationDialog(
-                                viewModel = appViewModel,
-                            )
+                            com.android.everytalk.ui.screens.computer.ComputerNeutralTheme {
+                                com.android.everytalk.ui.screens.computer.ComputerPublicPreviewConfirmationDialog(
+                                    viewModel = appViewModel,
+                                )
+                            }
                         }
                }
                     }

@@ -80,6 +80,7 @@ class ComputerPersistenceTest {
                 sftpAvailable = true,
             ),
             allowPrivateNetwork = true,
+            permissionMode = ComputerPermissionMode.SMART,
         )
 
         assertEquals(source, source.toEntity(json).toModel(json))
@@ -96,5 +97,48 @@ class ComputerPersistenceTest {
         assertEquals(ComputerRunMode.DIRECT, fallback.runMode)
         assertEquals(ComputerStatus.ERROR, fallback.status)
         assertNull(fallback.capabilities)
+    }
+
+    @Test
+    fun `preview room mapping keeps host target`() {
+        val source = ComputerPreview(
+            workspaceId = "ws-1",
+            remotePort = 8080,
+            target = ComputerExecTarget.HOST,
+        )
+
+        assertEquals(source, source.toEntity().toModel())
+    }
+
+    @Test
+    fun `修复优先使用已保存sudo密码`() {
+        val sudoPassword = "sudo-secret".toCharArray()
+        val sshCredential = ComputerCredential.Password("ssh-secret".toCharArray())
+
+        val selected = resolveComputerProvisionPassword(sudoPassword, sshCredential)
+
+        assertArrayEquals("sudo-secret".toCharArray(), selected)
+        assertTrue(sshCredential.password.all { it == '\u0000' })
+        selected?.fill('\u0000')
+    }
+
+    @Test
+    fun `未单独填写sudo密码时复用SSH密码`() {
+        val sshCredential = ComputerCredential.Password("same-secret".toCharArray())
+
+        val selected = resolveComputerProvisionPassword(null, sshCredential)
+
+        assertArrayEquals("same-secret".toCharArray(), selected)
+        selected?.fill('\u0000')
+    }
+
+    @Test
+    fun `私钥登录且未保存sudo密码时交给免密sudo处理`() {
+        val sshCredential = ComputerCredential.PrivateKey("private-key".toCharArray())
+
+        val selected = resolveComputerProvisionPassword(null, sshCredential)
+
+        assertNull(selected)
+        assertTrue(sshCredential.privateKey.all { it == '\u0000' })
     }
 }
