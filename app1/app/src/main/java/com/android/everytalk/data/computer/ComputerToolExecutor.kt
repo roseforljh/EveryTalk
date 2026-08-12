@@ -58,6 +58,7 @@ class ComputerToolExecutor(
             return errorEnvelope("", ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "Computer Tool 不存在"))
         }
         val workspace = requireRequestWorkspace(requestContext)
+        val currentRequestContext = requestContext.copy(conversationId = workspace.conversationId)
         val toolCallKey = ComputerToolRequestHasher.toolCallKey(toolCallId, requestContext)
         val requestHash = ComputerToolRequestHasher.requestHash(toolName, arguments, requestContext)
         completedResults[toolCallKey]?.let { return it }
@@ -117,7 +118,7 @@ class ComputerToolExecutor(
         return try {
             execution = execution.copy(status = ComputerExecutionStatus.RUNNING)
             dao.upsertExecution(execution.toEntity())
-            val data = dispatch(toolName, arguments, toolCallId, requestContext, workspace, execution.id)
+            val data = dispatch(toolName, arguments, toolCallId, currentRequestContext, workspace, execution.id)
             val response = successEnvelope(execution.id, data)
             execution = execution.copy(
                 status = ComputerExecutionStatus.SUCCEEDED,
@@ -428,11 +429,7 @@ class ComputerToolExecutor(
     private suspend fun requireRequestWorkspace(context: ComputerRequestContext): ComputerWorkspace {
         val workspace = repository.dao().getWorkspaceById(context.workspaceId)?.toModel()
             ?: throw ComputerException(ComputerErrorCodes.WORKSPACE_NOT_READY, "Workspace 不存在")
-        if (
-            workspace.computerId != context.computerId ||
-            workspace.conversationId != context.conversationId ||
-            workspace.status != ComputerWorkspaceStatus.READY
-        ) {
+        if (!workspace.matchesRequestContext(context)) {
             throw ComputerException(ComputerErrorCodes.WORKSPACE_NOT_READY, "Workspace 请求快照不匹配")
         }
         return workspace

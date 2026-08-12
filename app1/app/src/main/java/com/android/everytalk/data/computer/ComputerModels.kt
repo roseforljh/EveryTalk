@@ -212,6 +212,16 @@ data class ComputerRequestContext(
     val workspaceId: String,
 )
 
+/**
+ * 校验冻结请求仍指向同一服务器和 Workspace。
+ * 首条消息保存时会把临时会话 ID 迁移为稳定 ID，Workspace ID 在迁移前后保持不变，
+ * 因此这里不能用可变的 conversationId 拒绝仍在执行中的模型请求。
+ */
+internal fun ComputerWorkspace.matchesRequestContext(context: ComputerRequestContext): Boolean =
+    id == context.workspaceId &&
+        computerId == context.computerId &&
+        status == ComputerWorkspaceStatus.READY
+
 /** 一次模型请求启动时冻结的本地 Computer 信息，禁止序列化或发送给模型服务。 */
 data class PreparedComputerRequest(
     val context: ComputerRequestContext,

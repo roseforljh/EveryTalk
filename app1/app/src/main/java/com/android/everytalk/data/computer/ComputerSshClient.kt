@@ -4,6 +4,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import net.schmizz.sshj.SSHClient
 import net.schmizz.sshj.common.Buffer
@@ -17,6 +19,7 @@ import net.schmizz.sshj.transport.verification.HostKeyVerifier
 import net.schmizz.sshj.userauth.UserAuthException
 import net.schmizz.sshj.userauth.password.PasswordFinder
 import net.schmizz.sshj.userauth.password.PasswordUtils
+import org.bouncycastle.jce.provider.BouncyCastleProvider
 import java.io.ByteArrayOutputStream
 import java.io.Closeable
 import java.io.IOException
@@ -31,6 +34,7 @@ import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.security.MessageDigest
 import java.security.PublicKey
+import java.security.Security
 import java.util.Base64
 import java.util.concurrent.CopyOnWriteArraySet
 import java.util.concurrent.TimeUnit
@@ -43,6 +47,40 @@ private const val DEFAULT_READ_TIMEOUT_MILLIS = 30_000
 private const val DEFAULT_KEEPALIVE_SECONDS = 20
 private const val DEFAULT_COMMAND_TIMEOUT_MILLIS = 120_000L
 private const val DEFAULT_COMMAND_OUTPUT_BYTES = 4 * 1024 * 1024
+private val sshSecurityProviderLock = Any()
+
+/**
+ * 创建 SSHJ 客户端前确保进程内使用 App 打包的完整版 BouncyCastle。
+ *
+ * Android 自带一个同名为 BC 的精简 Provider。SSHJ 发现同名 Provider 后会继续按名称取用它，
+ * 导致 CHACHA 等算法在真机上无法加载。这里保留原 Provider 的顺序，只替换同名实现。
+ */
+private fun createDefaultSshClient(): SSHClient {
+    synchronized(sshSecurityProviderLock) {
+        val providerName = BouncyCastleProvider.PROVIDER_NAME
+        val currentProvider = Security.getProvider(providerName)
+        if (currentProvider !is BouncyCastleProvider) {
+            val originalPosition = Security.getProviders().indexOfFirst { it.name == providerName } + 1
+            if (currentProvider != null) Security.removeProvider(providerName)
+
+            val bundledProvider = BouncyCastleProvider()
+            val installedPosition = if (originalPosition > 0) {
+                Security.insertProviderAt(bundledProvider, originalPosition)
+            } else {
+                Security.addProvider(bundledProvider)
+            }
+            if (installedPosition <= 0 || Security.getProvider(providerName) !is BouncyCastleProvider) {
+                // 替换失败时恢复原 Provider，避免影响进程内其他加密功能。
+                Security.removeProvider(providerName)
+                if (currentProvider != null) {
+                    Security.insertProviderAt(currentProvider, originalPosition)
+                }
+                throw IllegalStateException("无法初始化 SSH 加密组件")
+            }
+        }
+    }
+    return SSHClient()
+}
 
 internal data class ValidatedComputerEndpoint(
     val host: String,
@@ -262,7 +300,7 @@ internal object ComputerBoundedOutputReader {
  * Android 本地 SSH 入口。首次探测只进行 Key Exchange；正式连接要求完整 Host Key 匹配后才认证。
  */
 class ComputerSshClient internal constructor(
-    private val clientFactory: () -> SSHClient = { SSHClient() },
+    private val clientFactory: () -> SSHClient = ::createDefaultSshClient,
     private val connectTimeoutMillis: Int = DEFAULT_CONNECT_TIMEOUT_MILLIS,
     private val readTimeoutMillis: Int = DEFAULT_READ_TIMEOUT_MILLIS,
 ) {
@@ -410,6 +448,7 @@ class ComputerSshConnection internal constructor(private val client: SSHClient) 
     private val resources = CopyOnWriteArraySet<Closeable>()
     private val closed = AtomicBoolean(false)
     private val startedChannels = AtomicLong(0)
+    private val runtimeWrapperCache = ComputerRuntimeWrapperCache()
 
     val isUsable: Boolean
         get() = !closed.get() && client.isConnected && client.isAuthenticated
@@ -469,18 +508,29 @@ class ComputerSshConnection internal constructor(private val client: SSHClient) 
         }
     }
 
-    suspend fun <T> withSftp(block: (SFTPClient) -> T): T = withContext(Dispatchers.IO) {
+    suspend fun <T> withSftp(block: suspend (SFTPClient) -> T): T = withContext(Dispatchers.IO) {
         val sftp = openChannel { client.newSFTPClient() }
         startedChannels.incrementAndGet()
-        sftp.use(block)
+        sftp.use { block(it) }
     }
+
+    /**
+     * 每条 SSH Transport 只安装一次相同版本的 Runtime Wrapper。
+     * 新连接拥有独立缓存，安装失败不会留下成功状态。
+     */
+    internal suspend fun ensureRuntimeWrapper(
+        expectedHash: ByteArray,
+        installer: suspend () -> Unit,
+    ): Boolean = runtimeWrapperCache.ensureInstalled(expectedHash, installer)
 
     suspend fun openPty(columns: Int = 120, rows: Int = 40): ComputerPtyHandle = withContext(Dispatchers.IO) {
         require(columns > 0 && rows > 0) { "PTY 尺寸必须大于 0" }
         val session = openChannel { client.startSession() }
         try {
-            session.allocatePTY("xterm-256color", columns, rows, 0, 0, emptyMap<PTYMode, Int>())
-            val shell = session.startShell()
+            openChannel {
+                session.allocatePTY("xterm-256color", columns, rows, 0, 0, emptyMap<PTYMode, Int>())
+            }
+            val shell = openChannel { session.startShell() }
             startedChannels.incrementAndGet()
             ComputerPtyHandle(session, shell) { handle -> resources.remove(handle) }
                 .also(resources::add)
@@ -506,10 +556,11 @@ class ComputerSshConnection internal constructor(private val client: SSHClient) 
         try {
             val localAddress = serverSocket.inetAddress.hostAddress
             val parameters = Parameters(localAddress, serverSocket.localPort, remoteHost, remotePort)
-            val forwarder = client.newLocalPortForwarder(parameters, serverSocket)
+            val forwarder = openChannel { client.newLocalPortForwarder(parameters, serverSocket) }
             ComputerPortForward(serverSocket, forwarder) { handle -> resources.remove(handle) }
                 .also(resources::add)
                 .also(ComputerPortForward::start)
+                .also { startedChannels.incrementAndGet() }
         } catch (error: Throwable) {
             runCatching { serverSocket.close() }
             throw error
@@ -539,6 +590,28 @@ class ComputerSshConnection internal constructor(private val client: SSHClient) 
         runCatching { client.close() }
     }
 
+}
+
+/**
+ * 保存单条 SSH 连接已经安装的 Runtime Wrapper 版本。
+ * 首次并发安装通过 Mutex 合并，成功后同版本调用走无锁快路径。
+ */
+internal class ComputerRuntimeWrapperCache {
+    private val installationMutex = Mutex()
+
+    @Volatile
+    private var installedHash: ByteArray? = null
+
+    /** 返回 true 表示本次调用实际完成了安装。 */
+    suspend fun ensureInstalled(expectedHash: ByteArray, installer: suspend () -> Unit): Boolean {
+        if (installedHash?.contentEquals(expectedHash) == true) return false
+        return installationMutex.withLock {
+            if (installedHash?.contentEquals(expectedHash) == true) return@withLock false
+            installer()
+            installedHash = expectedHash.copyOf()
+            true
+        }
+    }
 }
 
 internal class ComputerSshChannelOpenException(cause: Throwable) : IOException(

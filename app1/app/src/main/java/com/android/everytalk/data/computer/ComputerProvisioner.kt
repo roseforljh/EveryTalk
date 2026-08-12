@@ -6,7 +6,7 @@ import java.nio.CharBuffer
 import java.security.MessageDigest
 import java.util.EnumSet
 
-internal const val COMPUTER_BOOTSTRAP_VERSION = "2"
+internal const val COMPUTER_BOOTSTRAP_VERSION = "3"
 private const val SANDBOX_IMAGE = "everytalk-sandbox:1"
 private const val BOOTSTRAP_COMMAND_TIMEOUT_MILLIS = 20 * 60 * 1000L
 private const val BOOTSTRAP_OUTPUT_BYTES = 2 * 1024 * 1024

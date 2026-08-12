@@ -102,9 +102,8 @@ class ComputerWorkspaceManager(private val repository: ComputerRepository) {
                         )
                     }
                     ComputerRunMode.DIRECT -> {
-                        if (!deleteFiles) return@withConnection
                         connection.execute(
-                            command = directWorkspaceDeleteCommand(workspaceId),
+                            command = directWorkspaceDeleteCommand(workspaceId, deleteFiles),
                             timeoutMillis = WORKSPACE_COMMAND_TIMEOUT_MILLIS,
                             maxOutputBytes = 64 * 1024,
                         )
@@ -124,13 +123,65 @@ class ComputerWorkspaceManager(private val repository: ComputerRepository) {
         }
     }
 
-    private fun directWorkspaceDeleteCommand(workspaceId: String): String = """
+    private fun directWorkspaceDeleteCommand(workspaceId: String, deleteFiles: Boolean): String = """
         set -eu
         workspace="${'$'}HOME/.everytalk/workspaces/$workspaceId"
-        case "${'$'}workspace" in
-            */.everytalk/workspaces/ws_*) rm -rf -- "${'$'}workspace" ;;
-            *) exit 61 ;;
-        esac
+        background_root="${'$'}workspace/.everytalk/background"
+        if [ -d "${'$'}background_root" ] && [ ! -L "${'$'}background_root" ]; then
+            for process_dir in "${'$'}background_root"/process_*; do
+                [ -d "${'$'}process_dir" ] && [ ! -L "${'$'}process_dir" ] || continue
+                process_id="${'$'}{process_dir##*/}"
+                case "${'$'}process_id" in process_*[!A-Za-z0-9_-]*|process_) continue ;; esac
+                state_file="${'$'}process_dir/state"
+                [ -f "${'$'}state_file" ] && [ ! -L "${'$'}state_file" ] || continue
+                pid="${'$'}(awk -F= '${'$'}1 == "pid" { print ${'$'}2; exit }' "${'$'}state_file")"
+                start_ticks="${'$'}(awk -F= '${'$'}1 == "start_ticks" { print ${'$'}2; exit }' "${'$'}state_file")"
+                execution_id="${'$'}(awk -F= '${'$'}1 == "execution_id" { print ${'$'}2; exit }' "${'$'}state_file")"
+                status="${'$'}(awk -F= '${'$'}1 == "status" { print ${'$'}2; exit }' "${'$'}state_file")"
+                case "${'$'}pid" in ''|*[!0-9]*) pid=0 ;; esac
+                case "${'$'}start_ticks" in ''|*[!0-9]*) start_ticks=0 ;; esac
+                case "${'$'}execution_id" in ''|*[!A-Za-z0-9_-]*) execution_id=unknown ;; esac
+                if [ "${'$'}status" = RUNNING ] && [ "${'$'}pid" -gt 1 ] && [ -r "/proc/${'$'}pid/stat" ]; then
+                    actual_ticks="${'$'}(awk '{print ${'$'}22}' "/proc/${'$'}pid/stat" 2>/dev/null || true)"
+                    actual_sid="${'$'}(ps -o sid= -p "${'$'}pid" 2>/dev/null | tr -d ' ' || true)"
+                    wrapper_path="${'$'}HOME/.everytalk/bin/everytalk-runtime-wrapper"
+                    if [ "${'$'}actual_ticks" = "${'$'}start_ticks" ] && [ "${'$'}actual_sid" = "${'$'}pid" ] &&
+                        tr '\000' '\n' < "/proc/${'$'}pid/cmdline" | grep -Fqx -- "${'$'}wrapper_path" &&
+                        tr '\000' '\n' < "/proc/${'$'}pid/cmdline" | grep -Fqx -- "${'$'}process_dir"; then
+                        kill -TERM "-${'$'}pid" 2>/dev/null || true
+                        attempt=0
+                        while kill -0 "${'$'}pid" 2>/dev/null && [ "${'$'}attempt" -lt 50 ]; do
+                            sleep 0.1
+                            attempt="${'$'}((attempt + 1))"
+                        done
+                        if kill -0 "${'$'}pid" 2>/dev/null; then
+                            final_ticks="${'$'}(awk '{print ${'$'}22}' "/proc/${'$'}pid/stat" 2>/dev/null || true)"
+                            final_sid="${'$'}(ps -o sid= -p "${'$'}pid" 2>/dev/null | tr -d ' ' || true)"
+                            if [ "${'$'}final_ticks" = "${'$'}start_ticks" ] && [ "${'$'}final_sid" = "${'$'}pid" ]; then
+                                kill -KILL "-${'$'}pid" 2>/dev/null || true
+                            fi
+                        fi
+                    fi
+                fi
+                temporary_state="${'$'}process_dir/state.tmp.${'$'}${'$'}"
+                {
+                    printf 'process_id=%s\n' "${'$'}process_id"
+                    printf 'execution_id=%s\n' "${'$'}execution_id"
+                    printf 'pid=%s\n' "${'$'}pid"
+                    printf 'start_ticks=%s\n' "${'$'}start_ticks"
+                    printf 'status=STOPPED\n'
+                    printf 'updated_at=%s\n' "${'$'}(date +%s)"
+                } > "${'$'}temporary_state"
+                chmod 600 "${'$'}temporary_state"
+                mv -f "${'$'}temporary_state" "${'$'}state_file"
+            done
+        fi
+        if [ '$deleteFiles' = true ]; then
+            case "${'$'}workspace" in
+                */.everytalk/workspaces/ws_*) rm -rf -- "${'$'}workspace" ;;
+                *) exit 61 ;;
+            esac
+        fi
     """.trimIndent()
 
     private fun newWorkspace(computer: Computer, conversationId: String): ComputerWorkspace {

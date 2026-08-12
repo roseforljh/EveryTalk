@@ -47,6 +47,22 @@ class ComputerContainerHelperContractTest {
         assertFalse(source.contains("docker \$@"))
     }
 
+    @Test
+    fun `后台任务状态保存在VPS且删除Workspace前会停止任务`() {
+        val helper = helperSource()
+        val runtimeWrapper = runtimeWrapperSource()
+        val deleteWorkspaceBody = helper
+            .substringAfter("delete_workspace() {")
+            .substringBefore("\n}\n\nrequire_root")
+
+        assertTrue(helper.contains("VERSION=\"3\""))
+        assertTrue(deleteWorkspaceBody.contains("stop_workspace_backgrounds"))
+        assertTrue(runtimeWrapper.contains("status=RUNNING"))
+        assertTrue(runtimeWrapper.contains("start_ticks="))
+        assertTrue(runtimeWrapper.contains("status=SUCCEEDED"))
+        assertTrue(runtimeWrapper.contains("status=FAILED"))
+    }
+
     private fun helperSource(): String {
         val candidates = listOf(
             File("src/main/assets/computer/everytalk-containerctl.sh"),
@@ -55,6 +71,17 @@ class ComputerContainerHelperContractTest {
         )
         return requireNotNull(candidates.firstOrNull(File::isFile)) {
             "找不到 everytalk-containerctl.sh"
+        }.readText(Charsets.UTF_8)
+    }
+
+    private fun runtimeWrapperSource(): String {
+        val candidates = listOf(
+            File("src/main/assets/computer/runtime-wrapper.sh"),
+            File("app/src/main/assets/computer/runtime-wrapper.sh"),
+            File("app1/app/src/main/assets/computer/runtime-wrapper.sh"),
+        )
+        return requireNotNull(candidates.firstOrNull(File::isFile)) {
+            "找不到 runtime-wrapper.sh"
         }.readText(Charsets.UTF_8)
     }
 }

@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-VERSION="2"
+VERSION="3"
 HELPER_PATH="/usr/local/libexec/everytalk-containerctl"
 RUNTIME_WRAPPER_PATH="/usr/local/libexec/everytalk-runtime-wrapper"
 DOCKERFILE_PATH="/usr/local/share/everytalk/Dockerfile"
@@ -188,8 +188,25 @@ run_workspace_background() {
     logs="/workspace/.everytalk/background/$process_id"
     user_arguments=""
     [ "$root_mode" = true ] && user_arguments="--user 0:0"
-    script="umask 077; mkdir -p '$logs'; nohup setsid /usr/local/bin/everytalk-runtime-wrapper '$runtime' > '$logs/stdout.log' 2> '$logs/stderr.log' < /dev/null & printf 'pid=%s\\n' \"\$!\""
-    docker exec $user_arguments "$name" /bin/sh -c "$script"
+    # runtime 和 logs 作为位置参数传入固定脚本，禁止拼接为可执行 Shell 内容。
+    docker exec $user_arguments "$name" /bin/sh -c '
+        umask 077
+        runtime="$1"
+        logs="$2"
+        mkdir -p "$logs"
+        chmod 700 "$logs"
+        nohup setsid /usr/local/bin/everytalk-runtime-wrapper "$runtime" "$logs" > "$logs/stdout.log" 2> "$logs/stderr.log" < /dev/null &
+        pid="$!"
+        attempt=0
+        while [ ! -f "$logs/state" ] && [ "$attempt" -lt 30 ]; do
+            sleep 0.1
+            attempt="$((attempt + 1))"
+        done
+        [ -f "$logs/state" ] || { kill -TERM "-$pid" 2>/dev/null || true; exit 77; }
+        state_pid="$(awk -F= '$1 == "pid" { print $2; exit }' "$logs/state")"
+        [ "$state_pid" = "$pid" ] || { kill -TERM "-$pid" 2>/dev/null || true; exit 77; }
+        printf "pid=%s\n" "$pid"
+    ' everytalk-background "$runtime" "$logs"
     printf 'process_id=%s\nlogs=/workspace/.everytalk/background/%s\n' "$process_id" "$process_id"
 }
 
@@ -302,13 +319,64 @@ close_public_preview() {
     docker rm --force "$proxy" >/dev/null
 }
 
+state_value() {
+    state_file="$1"
+    state_key="$2"
+    awk -F= -v key="$state_key" '$1 == key { print $2; exit }' "$state_file"
+}
+
+mark_background_states_stopped() {
+    workspace_id="$1"
+    background_root="$(workspace_path "$workspace_id")/.everytalk/background"
+    [ -d "$background_root" ] && [ ! -L "$background_root" ] || return 0
+    for process_dir in "$background_root"/process_*; do
+        [ -d "$process_dir" ] && [ ! -L "$process_dir" ] || continue
+        process_id="${process_dir##*/}"
+        valid_id "$process_id" || continue
+        case "$process_id" in process_*) ;; *) continue ;; esac
+        state_file="$process_dir/state"
+        [ -f "$state_file" ] && [ ! -L "$state_file" ] || continue
+        pid="$(state_value "$state_file" pid)"
+        start_ticks="$(state_value "$state_file" start_ticks)"
+        execution_id="$(state_value "$state_file" execution_id)"
+        case "$pid" in ''|*[!0-9]*) pid=0 ;; esac
+        case "$start_ticks" in ''|*[!0-9]*) start_ticks=0 ;; esac
+        valid_id "$execution_id" || execution_id=unknown
+        temporary_state="$process_dir/state.tmp.$$"
+        {
+            printf 'process_id=%s\n' "$process_id"
+            printf 'execution_id=%s\n' "$execution_id"
+            printf 'pid=%s\n' "$pid"
+            printf 'start_ticks=%s\n' "$start_ticks"
+            printf 'status=STOPPED\n'
+            printf 'updated_at=%s\n' "$(date +%s)"
+        } > "$temporary_state"
+        chown --reference="$state_file" "$temporary_state"
+        chmod 600 "$temporary_state"
+        mv -f "$temporary_state" "$state_file"
+    done
+}
+
+stop_workspace_backgrounds() {
+    workspace_id="$1"
+    name="$2"
+    running="$(docker inspect -f '{{.State.Running}}' "$name")"
+    if [ "$running" = true ]; then
+        docker stop --time 5 "$name" >/dev/null
+    fi
+    mark_background_states_stopped "$workspace_id"
+}
+
 delete_workspace() {
     workspace_id="${1:-}"
     delete_files="${2:-false}"
     name="$(container_name "$workspace_id")"
     if docker container inspect "$name" >/dev/null 2>&1; then
         name="$(require_workspace_container "$workspace_id")"
+        stop_workspace_backgrounds "$workspace_id" "$name"
         docker rm --force "$name" >/dev/null
+    else
+        mark_background_states_stopped "$workspace_id"
     fi
     if [ "$delete_files" = true ]; then
         workspace="$(workspace_path "$workspace_id")"

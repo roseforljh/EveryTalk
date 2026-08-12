@@ -128,7 +128,7 @@ class ComputerRepository(
             )
             dao.upsertComputer(computer.toEntity(json))
             computer = tryUpgradeToDedicatedKey(computer)
-            recordAudit(computer.id, "COMPUTER_ADDED", "SUCCESS", "SSH 登录和本地能力探测成功")
+            recordAudit(computer.id, "COMPUTER_ADDED", "SUCCESS", null)
             computer
         } catch (error: ComputerException) {
             val status = when (error.code) {
@@ -199,7 +199,7 @@ class ComputerRepository(
                     updatedAt = System.currentTimeMillis(),
                 )
                 dao.upsertComputer(configured.toEntity(json))
-                recordAudit(computerId, "CONTAINER_PROVISION", "SUCCESS", "Container 环境配置完成")
+                recordAudit(computerId, "CONTAINER_PROVISION", "SUCCESS", null)
                 refreshComputer(computerId)
             } catch (error: ComputerException) {
                 dao.updateComputerStatus(computerId, ComputerStatus.CONFIGURATION_REQUIRED.name, error.code)
@@ -311,7 +311,7 @@ class ComputerRepository(
             updatedAt = System.currentTimeMillis(),
         )
         dao.upsertComputer(updated.toEntity(json))
-        recordAudit(computerId, "PRIVATE_NETWORK", "SUCCESS", if (allowed) "已允许" else "已阻止")
+        recordAudit(computerId, "PRIVATE_NETWORK", "SUCCESS", if (allowed) "ALLOWED" else "BLOCKED")
         return updated
     }
 
@@ -375,6 +375,19 @@ class ComputerRepository(
         return connectionPool.acquire(computer) to computer
     }
 
+    /** 建立需要跨调用持有的 PTY 或端口转发，并沿用统一的安全 Channel 重试边界。 */
+    internal suspend fun <T> acquireConnectionAndOpen(
+        computerId: String,
+        open: suspend (ComputerSshConnection) -> T,
+    ): Triple<ComputerConnectionLease, Computer, T> {
+        val computer = requireComputer(computerId)
+        if (computer.status != ComputerStatus.READY) {
+            throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "当前服务器不可用")
+        }
+        val (lease, resource) = connectionPool.acquireWithChannel(computer, open)
+        return Triple(lease, computer, resource)
+    }
+
     internal fun dao(): ComputerDao = dao
     internal fun credentialStore(): ComputerCredentialStore = credentialStore
 
@@ -432,7 +445,7 @@ class ComputerRepository(
         } catch (error: CancellationException) {
             throw error
         } catch (error: Throwable) {
-            recordAudit(computer.id, "DEDICATED_KEY_INSTALLED", "FALLBACK", "保留本地加密的原始凭据")
+            recordAudit(computer.id, "DEDICATED_KEY_INSTALLED", "FALLBACK", "ORIGINAL_CREDENTIAL_RETAINED")
             computer
         }
     }

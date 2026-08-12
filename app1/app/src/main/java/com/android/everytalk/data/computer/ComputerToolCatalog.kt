@@ -17,7 +17,7 @@ object ComputerToolCatalog {
     fun definitions(): List<Map<String, Any>> = listOf(
         function(
             name = ComputerToolNames.EXEC,
-            description = "Run a command in the current persistent /workspace on the user's selected server.",
+            description = "Run a command in the current persistent /workspace on the user's selected server. Combine related read-only diagnostics into one command when possible to avoid repeated remote round trips.",
             properties = mapOf(
                 "command" to string("Command or shell script to run."),
                 "cwd" to string("Working directory inside /workspace. Defaults to /workspace."),

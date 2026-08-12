@@ -50,13 +50,14 @@ internal class ComputerEnvelopeCipher(
             val dataKey = SecretKeySpec(dataKeyBytes, KeyProperties.KEY_ALGORITHM_AES)
             val nonce = ByteArray(GCM_NONCE_BYTES).also(secureRandom::nextBytes)
             val ciphertext = aesGcmEncrypt(dataKey, nonce, "computer-data:$context", plaintext)
-            val wrappedKeyNonce = ByteArray(GCM_NONCE_BYTES).also(secureRandom::nextBytes)
-            val wrappedKey = aesGcmEncrypt(
-                masterKey,
-                wrappedKeyNonce,
-                "computer-key:$context",
-                dataKeyBytes,
-            )
+
+            // Android Keystore 主密钥要求系统生成随机 IV。加密时不传 GCMParameterSpec，
+            // 再把 Keystore 生成的 IV 写入信封，解密时继续使用该 IV 即可兼容现有格式。
+            val wrappingCipher = Cipher.getInstance("AES/GCM/NoPadding")
+            wrappingCipher.init(Cipher.ENCRYPT_MODE, masterKey)
+            wrappingCipher.updateAAD("computer-key:$context".toByteArray(Charsets.UTF_8))
+            val wrappedKey = wrappingCipher.doFinal(dataKeyBytes)
+            val wrappedKeyNonce = wrappingCipher.iv.copyOf()
             ComputerEncryptedEnvelope(ciphertext, nonce, wrappedKey, wrappedKeyNonce)
         } finally {
             dataKeyBytes.fill(0)

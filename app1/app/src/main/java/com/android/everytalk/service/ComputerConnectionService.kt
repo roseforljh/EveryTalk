@@ -21,6 +21,7 @@ private const val CHANNEL_ID = "computer_connection"
 private const val NOTIFICATION_ID = 7301
 private const val ACTION_START = "com.android.everytalk.computer.START"
 private const val ACTION_STOP = "com.android.everytalk.computer.STOP"
+private const val ACTION_STOP_IF_IDLE = "com.android.everytalk.computer.STOP_IF_IDLE"
 
 /** 维护需要前台存活的本地 SSH 活动，不保存服务器身份或命令。 */
 object ComputerConnectionServiceController {
@@ -41,9 +42,14 @@ object ComputerConnectionServiceController {
             override fun close() {
                 if (!closed.compareAndSet(false, true)) return
                 activeTokens.remove(tokenId)
-                if (activeTokens.isEmpty()) appContext.stopService(
-                    Intent(appContext, ComputerConnectionService::class.java),
-                )
+                if (activeTokens.isEmpty()) {
+                    // 直接 stopService 可能取消尚未执行 onCreate 的前台服务，随后触发系统超时崩溃。
+                    // 把空闲停止排入同一个服务队列，确保服务先在 onCreate 中完成前台化。
+                    ContextCompat.startForegroundService(
+                        appContext,
+                        Intent(appContext, ComputerConnectionService::class.java).setAction(ACTION_STOP_IF_IDLE),
+                    )
+                }
             }
         }
     }
@@ -57,6 +63,8 @@ object ComputerConnectionServiceController {
         activeTokens.clear()
         stopListeners.forEach { listener -> runCatching(listener) }
     }
+
+    internal fun hasActiveTokens(): Boolean = activeTokens.isNotEmpty()
 }
 
 class ComputerConnectionService : Service() {
@@ -73,7 +81,13 @@ class ComputerConnectionService : Service() {
             stopSelf()
             return START_NOT_STICKY
         }
-        startForeground(NOTIFICATION_ID, buildNotification())
+
+        // ACTION_START 也要检查令牌。短任务可能在服务真正创建前已经结束，
+        // 此时 onCreate 已完成 startForeground，可以安全移除通知并停止服务。
+        if (!ComputerConnectionServiceController.hasActiveTokens()) {
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf(startId)
+        }
         return START_NOT_STICKY
     }
 

@@ -67,6 +67,38 @@ class ComputerConnectionPool(
         }
     }
 
+    /**
+     * 为 PTY、SFTP 以外的长生命周期 Channel 建立连接租约。
+     * 只有首次尝试尚未启动 Channel 时才换 Transport 重试一次，返回后由调用方持有并关闭 lease。
+     */
+    suspend fun <T> acquireWithChannel(
+        computer: Computer,
+        open: suspend (ComputerSshConnection) -> T,
+    ): Pair<ComputerConnectionLease, T> {
+        var lease = acquire(computer)
+        val startedBefore = lease.connection.startedChannelCount
+        try {
+            return lease to open(lease.connection)
+        } catch (error: ComputerSshChannelOpenException) {
+            if (!shouldRetryComputerChannelOpen(startedBefore, lease.connection.startedChannelCount)) {
+                lease.close()
+                throw error
+            }
+            lease.invalidate()
+            lease.close()
+            lease = acquire(computer)
+            return try {
+                lease to open(lease.connection)
+            } catch (retryError: Throwable) {
+                lease.close()
+                throw retryError
+            }
+        } catch (error: Throwable) {
+            lease.close()
+            throw error
+        }
+    }
+
     suspend fun disconnect(computerId: String) {
         val entry = entries[computerId] ?: return
         entry.mutex.withLock {

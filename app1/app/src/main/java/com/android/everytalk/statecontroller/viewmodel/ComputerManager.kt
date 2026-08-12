@@ -262,9 +262,7 @@ class ComputerManager(
             ?: throw ComputerException(ComputerErrorCodes.WORKSPACE_NOT_READY, "Workspace 不存在")
         toolExecutor.closeWorkspace(workspaceId)
         previewManager.stopByWorkspace(workspaceId)
-        if (workspace.runMode == com.android.everytalk.data.computer.ComputerRunMode.CONTAINER || deleteRemoteFiles) {
-            workspaceManager.deleteRemote(workspaceId, deleteRemoteFiles)
-        }
+        workspaceManager.deleteRemote(workspaceId, deleteRemoteFiles)
         secretManager.deleteAll(workspaceId)
         workspaceManager.deleteMapping(workspaceId)
         repository.recordAudit(workspace.computerId, "WORKSPACE_DELETED", "SUCCESS", null)

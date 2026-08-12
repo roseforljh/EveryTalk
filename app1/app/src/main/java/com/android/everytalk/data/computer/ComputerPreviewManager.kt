@@ -49,18 +49,30 @@ class ComputerPreviewManager(private val repository: ComputerRepository) : Close
         validatePortAndProtocol(port, protocol)
         val workspace = requireWorkspace(context)
         val foregroundActivity = repository.acquireForegroundActivity()
-        val (lease, computer) = try {
-            repository.acquireConnection(context.computerId)
+        val computer: Computer
+        val remoteHost: String
+        try {
+            computer = repository.getComputer(context.computerId)
+                ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
+            remoteHost = when (computer.runMode) {
+                ComputerRunMode.DIRECT -> "127.0.0.1"
+                ComputerRunMode.CONTAINER -> repository.withConnection(computer.id) { connection, _ ->
+                    resolveContainerAddress(connection, computer, workspace.id)
+                }
+            }
+        } catch (error: Throwable) {
+            foregroundActivity.close()
+            throw error
+        }
+        val (lease, _, forward) = try {
+            repository.acquireConnectionAndOpen(context.computerId) { connection ->
+                connection.openLocalPortForward(port, remoteHost)
+            }
         } catch (error: Throwable) {
             foregroundActivity.close()
             throw error
         }
         try {
-            val remoteHost = when (computer.runMode) {
-                ComputerRunMode.DIRECT -> "127.0.0.1"
-                ComputerRunMode.CONTAINER -> resolveContainerAddress(lease.connection, computer, workspace.id)
-            }
-            val forward = lease.connection.openLocalPortForward(port, remoteHost)
             val preview = ComputerPreview(
                 workspaceId = workspace.id,
                 remotePort = port,
@@ -70,7 +82,7 @@ class ComputerPreviewManager(private val repository: ComputerRepository) : Close
             )
             repository.dao().upsertPreview(preview.toEntity())
             activePrivatePreviews[preview.id] = ActivePrivatePreview(lease, forward, foregroundActivity)
-            repository.recordAudit(computer.id, "PRIVATE_PREVIEW_OPENED", "SUCCESS", "端口 $port")
+            repository.recordAudit(computer.id, "PRIVATE_PREVIEW_OPENED", "SUCCESS", port.toString())
             return ComputerPreviewOpenResult(preview, "$protocol://127.0.0.1:${forward.localPort}")
         } catch (error: Throwable) {
             lease.close()
@@ -108,7 +120,7 @@ class ComputerPreviewManager(private val repository: ComputerRepository) : Close
         )
         repository.dao().upsertPreview(preview.toEntity())
         scheduleExpiry(preview)
-        repository.recordAudit(computer.id, "PUBLIC_PREVIEW_OPENED", "SUCCESS", "端口 $publicPort")
+        repository.recordAudit(computer.id, "PUBLIC_PREVIEW_OPENED", "SUCCESS", publicPort.toString())
         val host = if (':' in computer.host) "[${computer.host}]" else computer.host
         return ComputerPreviewOpenResult(
             preview = preview,
@@ -156,7 +168,7 @@ class ComputerPreviewManager(private val repository: ComputerRepository) : Close
                             workspace.computerId,
                             previewAuditEvent(targetStatus),
                             "FAILED",
-                            "远端清理待重试",
+                            "REMOTE_CLEANUP_PENDING",
                         )
                         throw error
                     }
@@ -305,11 +317,7 @@ class ComputerPreviewManager(private val repository: ComputerRepository) : Close
     private suspend fun requireWorkspace(context: ComputerRequestContext): ComputerWorkspace {
         val workspace = repository.dao().getWorkspaceById(context.workspaceId)?.toModel()
             ?: throw ComputerException(ComputerErrorCodes.WORKSPACE_NOT_READY, "Workspace 不存在")
-        if (
-            workspace.computerId != context.computerId ||
-            workspace.conversationId != context.conversationId ||
-            workspace.status != ComputerWorkspaceStatus.READY
-        ) {
+        if (!workspace.matchesRequestContext(context)) {
             throw ComputerException(ComputerErrorCodes.WORKSPACE_NOT_READY, "Workspace 与当前请求不匹配")
         }
         return workspace

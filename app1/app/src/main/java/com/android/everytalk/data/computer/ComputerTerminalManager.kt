@@ -46,14 +46,15 @@ class ComputerTerminalManager(private val repository: ComputerRepository) : Clos
         rows: Int = 40,
     ): ComputerTerminalReadResult {
         val foregroundActivity = repository.acquireForegroundActivity()
-        val (lease, computer) = try {
-            repository.acquireConnection(requestContext.computerId)
+        val (lease, computer, pty) = try {
+            repository.acquireConnectionAndOpen(requestContext.computerId) { connection ->
+                connection.openPty(columns, rows)
+            }
         } catch (error: Throwable) {
             foregroundActivity.close()
             throw error
         }
         try {
-            val pty = lease.connection.openPty(columns, rows)
             val terminalId = "terminal_${UUID.randomUUID().toString().replace("-", "")}"
             val ringBuffer = TerminalRingBuffer(TERMINAL_BUFFER_CHARS)
             val lost = AtomicBoolean(false)

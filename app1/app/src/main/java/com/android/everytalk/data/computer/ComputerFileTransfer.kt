@@ -3,6 +3,7 @@ package com.android.everytalk.data.computer
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import net.schmizz.sshj.sftp.FileMode
+import net.schmizz.sshj.sftp.FileAttributes
 import net.schmizz.sshj.sftp.OpenMode
 import net.schmizz.sshj.sftp.RenameFlags
 import net.schmizz.sshj.sftp.Response
@@ -17,6 +18,9 @@ import java.util.concurrent.ConcurrentHashMap
 
 private const val MAX_READ_BYTES = 1024 * 1024
 private const val MAX_WRITE_BYTES = 8 * 1024 * 1024
+private val PRIVATE_FILE_ATTRIBUTES = FileAttributes.Builder().withPermissions(0b110000000).build()
+private val PRIVATE_EXECUTABLE_ATTRIBUTES = FileAttributes.Builder().withPermissions(0b111000000).build()
+private val PRIVATE_DIRECTORY_ATTRIBUTES = FileAttributes.Builder().withPermissions(0b111000000).build()
 
 enum class ComputerFileEncoding { UTF8, BASE64 }
 enum class ComputerFileWriteMode { OVERWRITE, APPEND }
@@ -242,8 +246,13 @@ class ComputerFileTransfer {
         sftp.open(
             remotePath,
             EnumSet.of(OpenMode.WRITE, OpenMode.CREAT, OpenMode.TRUNC),
+            if (executable) PRIVATE_EXECUTABLE_ATTRIBUTES else PRIVATE_FILE_ATTRIBUTES,
         ).use { file -> writeAll(file::write, bytes) }
-        sftp.chmod(remotePath, if (executable) 0b111000000 else 0b110000000)
+    }
+
+    /** 创建时直接设置 0700，避免高延迟 SSH 上再发一次 chmod 请求。 */
+    internal fun createPrivateDirectory(sftp: SFTPClient, remotePath: String) {
+        sftp.sftpEngine.makeDir(remotePath, PRIVATE_DIRECTORY_ATTRIBUTES)
     }
 
     internal fun resolveWorkspaceRoot(sftp: SFTPClient, workspace: ComputerWorkspace): String {
@@ -303,8 +312,7 @@ class ComputerFileTransfer {
             current = "$current/$component"
             val existing = lstatOrNull(sftp, current)
             if (existing == null) {
-                sftp.mkdir(current)
-                sftp.chmod(current, 0b111000000)
+                createPrivateDirectory(sftp, current)
             }
             val attributes = sftp.lstat(current)
             if (attributes.type != FileMode.Type.DIRECTORY) {
