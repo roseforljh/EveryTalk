@@ -86,29 +86,32 @@ internal fun ActiveFunctionTag(
     onLongClick: (() -> Unit)? = null,
 ) {
     val background = if (isSystemInDarkTheme()) Color(0xFF2A2A2A) else lightBackground
-    Row(
-        modifier = Modifier
-            .clip(RoundedCornerShape(percent = 50))
-            .background(background, RoundedCornerShape(percent = 50))
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 5.dp, vertical = 5.dp),
-        verticalAlignment = Alignment.CenterVertically,
+    Surface(
+        shape = RoundedCornerShape(percent = 50),
+        color = background,
     ) {
-        Icon(
-            painter = painterResource(iconRes),
-            contentDescription = null,
-            tint = tint,
-            modifier = Modifier.size(14.dp),
-        )
-        Spacer(Modifier.width(2.dp))
-        Text(text = label, fontSize = 13.sp, color = tint, maxLines = 1)
-        Spacer(Modifier.width(2.dp))
-        Icon(
-            painter = painterResource(R.drawable.ic_close),
-            contentDescription = closeContentDescription,
-            tint = tint,
-            modifier = Modifier.size(12.dp),
-        )
+        Row(
+            modifier = Modifier
+                .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                .padding(horizontal = 5.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                painter = painterResource(iconRes),
+                contentDescription = null,
+                tint = tint,
+                modifier = Modifier.size(14.dp),
+            )
+            Spacer(Modifier.width(2.dp))
+            Text(text = label, fontSize = 13.sp, color = tint, maxLines = 1)
+            Spacer(Modifier.width(2.dp))
+            Icon(
+                painter = painterResource(R.drawable.ic_close),
+                contentDescription = closeContentDescription,
+                tint = tint,
+                modifier = Modifier.size(12.dp),
+            )
+        }
     }
 }
 

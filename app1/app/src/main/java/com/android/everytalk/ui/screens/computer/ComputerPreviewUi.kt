@@ -56,6 +56,7 @@ import com.android.everytalk.data.computer.ComputerPreviewVisibility
 import com.android.everytalk.data.computer.ComputerRunMode
 import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.statecontroller.respondToComputerPublicPreview
+import com.android.everytalk.ui.components.dialog.AppDialogButtonShape
 import com.android.everytalk.ui.components.dialog.AppDialogShape
 import com.android.everytalk.ui.components.dialog.AppDialogTextFieldShape
 import com.android.everytalk.ui.components.dialog.appDialogBorderColor
@@ -192,6 +193,8 @@ internal fun ComputerPreviewCreateDialog(
                         )
                     }
                 },
+                modifier = Modifier.height(48.dp),
+                shape = AppDialogButtonShape,
             ) {
                 Text(
                     stringResource(
@@ -202,7 +205,12 @@ internal fun ComputerPreviewCreateDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !isBusy) {
+            TextButton(
+                onClick = onDismiss,
+                enabled = !isBusy,
+                modifier = Modifier.height(48.dp),
+                shape = AppDialogButtonShape,
+            ) {
                 Text(stringResource(R.string.action_cancel))
             }
         },
@@ -486,12 +494,20 @@ fun ComputerPublicPreviewConfirmationDialog(viewModel: AppViewModel) {
             }
         },
         confirmButton = {
-            Button(onClick = { viewModel.respondToComputerPublicPreview(true) }) {
+            Button(
+                onClick = { viewModel.respondToComputerPublicPreview(true) },
+                modifier = Modifier.height(48.dp),
+                shape = AppDialogButtonShape,
+            ) {
                 Text(stringResource(R.string.computer_preview_confirm_public))
             }
         },
         dismissButton = {
-            TextButton(onClick = { viewModel.respondToComputerPublicPreview(false) }) {
+            TextButton(
+                onClick = { viewModel.respondToComputerPublicPreview(false) },
+                modifier = Modifier.height(48.dp),
+                shape = AppDialogButtonShape,
+            ) {
                 Text(stringResource(R.string.action_cancel))
             }
         },

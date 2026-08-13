@@ -2,7 +2,6 @@ package com.android.everytalk.ui.screens.computer
 
 import androidx.compose.foundation.border
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -38,6 +37,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -360,10 +360,34 @@ fun ComputerDetailScreen(
                     verticalArrangement = Arrangement.spacedBy(14.dp),
                 ) {
                     item {
-                        ComputerOverviewCard(computer)
+                        ComputerOverviewCard(
+                            computer = computer,
+                            busyAction = busyAction,
+                            onEdit = {
+                                editForm = computer.toEditFormState()
+                                editErrorText = null
+                                editDialogVisible = true
+                            },
+                        )
                     }
                     item {
                         ComputerAgentUseCard(computer)
+                    }
+                    item {
+                        ComputerPermissionSettingsCard(
+                            computer = computer,
+                            busyAction = busyAction,
+                            onPermissionModeChange = { permissionMode ->
+                                if (permissionMode == computer.permissionMode) return@ComputerPermissionSettingsCard
+                                if (permissionMode == ComputerPermissionMode.FULL) {
+                                    pendingPermissionMode = permissionMode
+                                } else {
+                                    launchAction("permission-mode") {
+                                        viewModel.setComputerPermissionMode(computer.id, permissionMode)
+                                    }
+                                }
+                            },
+                        )
                     }
                     item {
                         ComputerSectionTitle(
@@ -387,12 +411,9 @@ fun ComputerDetailScreen(
                         }
                     }
                     item {
-                        ComputerMoreSettingsCard(
+                        ComputerMaintenanceCard(
                             computer = computer,
-                            audits = audits,
-                            expanded = moreSettingsExpanded,
                             busyAction = busyAction,
-                            onExpandedChange = { moreSettingsExpanded = it },
                             onRefresh = {
                                 launchAction("refresh") {
                                     viewModel.refreshComputer(computer.id)
@@ -405,35 +426,29 @@ fun ComputerDetailScreen(
                                 repairSetupStage = null
                                 repairDialogVisible = true
                             },
-                            onEdit = {
-                                editForm = computer.toEditFormState()
-                                editErrorText = null
-                                editDialogVisible = true
-                            },
-                            onReplaceHostKey = {
-                                launchAction("host-key-probe") {
-                                    val result = viewModel.probeComputerReplacementHostKey(computer.id)
-                                    withContext(Dispatchers.Main) { replacementHostKey = result }
-                                }
-                            },
                             onNetworkChange = { allowed ->
                                 launchAction("network") {
                                     viewModel.setComputerPrivateNetworkAllowed(computer.id, allowed)
                                 }
                             },
-                            onPermissionModeChange = { permissionMode ->
-                                if (permissionMode == computer.permissionMode) return@ComputerMoreSettingsCard
-                                if (permissionMode == ComputerPermissionMode.FULL) {
-                                    pendingPermissionMode = permissionMode
-                                } else {
-                                    launchAction("permission-mode") {
-                                        viewModel.setComputerPermissionMode(computer.id, permissionMode)
-                                    }
-                                }
-                            },
                             onDisconnect = {
                                 launchAction("disconnect") {
                                     viewModel.disconnectComputer(computer.id)
+                                }
+                            },
+                        )
+                    }
+                    item {
+                        ComputerMoreSettingsCard(
+                            computer = computer,
+                            audits = audits,
+                            expanded = moreSettingsExpanded,
+                            busyAction = busyAction,
+                            onExpandedChange = { moreSettingsExpanded = it },
+                            onReplaceHostKey = {
+                                launchAction("host-key-probe") {
+                                    val result = viewModel.probeComputerReplacementHostKey(computer.id)
+                                    withContext(Dispatchers.Main) { replacementHostKey = result }
                                 }
                             },
                             onDelete = { deleteDialogVisible = true },
@@ -603,7 +618,11 @@ private fun genericSuccessMessage(viewModel: AppViewModel, resourceId: Int): Str
     viewModel.getApplication<android.app.Application>().getString(resourceId)
 
 @Composable
-private fun ComputerOverviewCard(computer: Computer) {
+private fun ComputerOverviewCard(
+    computer: Computer,
+    busyAction: String?,
+    onEdit: () -> Unit,
+) {
     ComputerSectionCard {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Icon(
@@ -659,6 +678,17 @@ private fun ComputerOverviewCard(computer: Computer) {
                 modifier = Modifier.padding(top = 8.dp),
             )
         }
+        OutlinedButton(
+            onClick = onEdit,
+            enabled = busyAction == null,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 14.dp)
+                .height(48.dp),
+            shape = AppDialogButtonShape,
+        ) {
+            Text(stringResource(R.string.computer_action_edit))
+        }
     }
 }
 
@@ -676,19 +706,117 @@ private fun ComputerAgentUseCard(computer: Computer) {
 }
 
 @Composable
+private fun ComputerPermissionSettingsCard(
+    computer: Computer,
+    busyAction: String?,
+    onPermissionModeChange: (ComputerPermissionMode) -> Unit,
+) {
+    ComputerSectionCard {
+        Text(
+            text = stringResource(R.string.computer_permission_mode_title),
+            style = MaterialTheme.typography.titleMedium,
+        )
+        Text(
+            text = stringResource(R.string.computer_permission_mode_body),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 4.dp, bottom = 10.dp),
+        )
+        ComputerPermissionModeSelector(
+            selected = computer.permissionMode,
+            enabled = busyAction == null,
+            onSelect = onPermissionModeChange,
+        )
+        Text(
+            text = computerPermissionSummary(computer),
+            style = MaterialTheme.typography.bodySmall,
+            color = if (computer.username == "root") {
+                MaterialTheme.colorScheme.error
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+            modifier = Modifier.padding(top = 10.dp),
+        )
+    }
+}
+
+@Composable
+private fun ComputerMaintenanceCard(
+    computer: Computer,
+    busyAction: String?,
+    onRefresh: () -> Unit,
+    onRepair: () -> Unit,
+    onNetworkChange: (Boolean) -> Unit,
+    onDisconnect: () -> Unit,
+) {
+    ComputerSectionCard {
+        Text(
+            text = stringResource(R.string.computer_settings_maintenance),
+            style = MaterialTheme.typography.titleMedium,
+        )
+        FlowRow(
+            modifier = Modifier.padding(top = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Button(
+                onClick = onRefresh,
+                enabled = busyAction == null,
+                modifier = Modifier.height(48.dp),
+                shape = AppDialogButtonShape,
+            ) {
+                Text(stringResource(R.string.computer_action_reconnect_probe))
+            }
+            if (computer.runMode == ComputerRunMode.CONTAINER) {
+                OutlinedButton(
+                    onClick = onRepair,
+                    enabled = busyAction == null,
+                    modifier = Modifier.height(48.dp),
+                    shape = AppDialogButtonShape,
+                ) {
+                    Text(stringResource(R.string.computer_action_repair))
+                }
+            }
+            OutlinedButton(
+                onClick = onDisconnect,
+                enabled = busyAction == null,
+                modifier = Modifier.height(48.dp),
+                shape = AppDialogButtonShape,
+            ) {
+                Text(stringResource(R.string.computer_action_disconnect))
+            }
+        }
+        if (computer.runMode == ComputerRunMode.CONTAINER) {
+            Row(
+                modifier = Modifier.padding(top = 12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(stringResource(R.string.computer_private_network_title))
+                    Text(
+                        text = stringResource(R.string.computer_private_network_body),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Switch(
+                    checked = computer.allowPrivateNetwork,
+                    onCheckedChange = onNetworkChange,
+                    enabled = busyAction == null && computer.status == ComputerStatus.READY,
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun ComputerMoreSettingsCard(
     computer: Computer,
     audits: List<ComputerAuditEvent>,
     expanded: Boolean,
     busyAction: String?,
     onExpandedChange: (Boolean) -> Unit,
-    onRefresh: () -> Unit,
-    onRepair: () -> Unit,
-    onEdit: () -> Unit,
     onReplaceHostKey: () -> Unit,
-    onNetworkChange: (Boolean) -> Unit,
-    onPermissionModeChange: (ComputerPermissionMode) -> Unit,
-    onDisconnect: () -> Unit,
     onDelete: () -> Unit,
 ) {
     Card(
@@ -697,33 +825,36 @@ private fun ComputerMoreSettingsCard(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainerLow),
     ) {
         Column {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(18.dp))
-                    .clickable { onExpandedChange(!expanded) }
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically,
+            Surface(
+                onClick = { onExpandedChange(!expanded) },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(22.dp),
+                color = Color.Transparent,
             ) {
-                Column(Modifier.weight(1f)) {
-                    Text(stringResource(R.string.computer_more_settings), style = MaterialTheme.typography.titleMedium)
-                    Text(
-                        text = stringResource(R.string.computer_more_settings_body),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (busyAction != null && busyAction != "repair") {
-                    CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
-                } else {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_gpt_chevron_right),
-                        contentDescription = stringResource(if (expanded) R.string.action_collapse else R.string.action_expand),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier
-                            .size(20.dp)
-                            .rotate(if (expanded) 90f else 0f),
-                    )
+                Row(
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(stringResource(R.string.computer_more_settings), style = MaterialTheme.typography.titleMedium)
+                        Text(
+                            text = stringResource(R.string.computer_more_settings_body),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (busyAction != null && busyAction != "repair") {
+                        CircularProgressIndicator(Modifier.size(20.dp), strokeWidth = 2.dp)
+                    } else {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_gpt_chevron_right),
+                            contentDescription = stringResource(if (expanded) R.string.action_collapse else R.string.action_expand),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier
+                                .size(20.dp)
+                                .rotate(if (expanded) 90f else 0f),
+                        )
+                    }
                 }
             }
 
@@ -733,38 +864,10 @@ private fun ComputerMoreSettingsCard(
                     modifier = Modifier.padding(16.dp),
                     verticalArrangement = Arrangement.spacedBy(16.dp),
                 ) {
-                    ComputerSettingsGroup(stringResource(R.string.computer_settings_connection)) {
-                        ComputerDetailValue(stringResource(R.string.computer_detail_address), "${computer.host}:${computer.port}")
-                        ComputerDetailValue(stringResource(R.string.computer_detail_username), computer.username)
+                    ComputerSettingsGroup(stringResource(R.string.computer_settings_security)) {
                         ComputerDetailValue(
                             stringResource(R.string.computer_detail_last_connected),
                             formatComputerDate(computer.lastConnectedAt),
-                        )
-                        OutlinedButton(onClick = onEdit, enabled = busyAction == null) {
-                            Text(stringResource(R.string.computer_action_edit))
-                        }
-                    }
-
-                    HorizontalDivider()
-                    ComputerSettingsGroup(stringResource(R.string.computer_settings_security)) {
-                        Text(
-                            text = stringResource(R.string.computer_permission_mode_body),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                        ComputerPermissionModeSelector(
-                            selected = computer.permissionMode,
-                            enabled = busyAction == null,
-                            onSelect = onPermissionModeChange,
-                        )
-                        Text(
-                            text = computerPermissionSummary(computer),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (computer.username == "root") {
-                                MaterialTheme.colorScheme.error
-                            } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            },
                         )
                         ComputerDetailValue(
                             stringResource(R.string.computer_detail_credential),
@@ -781,7 +884,12 @@ private fun ComputerMoreSettingsCard(
                             computer.hostKeyFingerprint ?: "—",
                         )
                         if (computer.status == ComputerStatus.HOST_KEY_CHANGED) {
-                            OutlinedButton(onClick = onReplaceHostKey, enabled = busyAction == null) {
+                            OutlinedButton(
+                                onClick = onReplaceHostKey,
+                                enabled = busyAction == null,
+                                modifier = Modifier.height(48.dp),
+                                shape = AppDialogButtonShape,
+                            ) {
                                 Text(stringResource(R.string.computer_action_host_key))
                             }
                         }
@@ -793,49 +901,17 @@ private fun ComputerMoreSettingsCard(
                     }
 
                     HorizontalDivider()
-                    ComputerSettingsGroup(stringResource(R.string.computer_settings_maintenance)) {
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            Button(onClick = onRefresh, enabled = busyAction == null) {
-                                Text(stringResource(R.string.computer_action_reconnect_probe))
-                            }
-                            if (computer.runMode == ComputerRunMode.CONTAINER) {
-                                OutlinedButton(onClick = onRepair, enabled = busyAction == null) {
-                                    Text(stringResource(R.string.computer_action_repair))
-                                }
-                            }
-                            OutlinedButton(onClick = onDisconnect, enabled = busyAction == null) {
-                                Text(stringResource(R.string.computer_action_disconnect))
-                            }
-                        }
-                        if (computer.runMode == ComputerRunMode.CONTAINER) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Column(Modifier.weight(1f)) {
-                                    Text(stringResource(R.string.computer_private_network_title))
-                                    Text(
-                                        text = stringResource(R.string.computer_private_network_body),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                }
-                                Switch(
-                                    checked = computer.allowPrivateNetwork,
-                                    onCheckedChange = onNetworkChange,
-                                    enabled = busyAction == null && computer.status == ComputerStatus.READY,
-                                )
-                            }
-                        }
-                    }
-
-                    HorizontalDivider()
                     ComputerSettingsGroup(stringResource(R.string.computer_audit_title)) {
                         ComputerAuditContent(audits)
                     }
 
                     HorizontalDivider()
-                    TextButton(onClick = onDelete, enabled = busyAction == null) {
+                    TextButton(
+                        onClick = onDelete,
+                        enabled = busyAction == null,
+                        modifier = Modifier.height(48.dp),
+                        shape = AppDialogButtonShape,
+                    ) {
                         Text(
                             text = stringResource(R.string.computer_action_delete),
                             color = MaterialTheme.colorScheme.error,
@@ -868,44 +944,47 @@ private fun ComputerPermissionModeSelector(
         ComputerPermissionMode.entries.forEach { mode ->
             val isSelected = mode == selected
             val shape = RoundedCornerShape(18.dp)
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(shape)
-                    .background(
-                        if (isSelected) MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
-                        else Color.Transparent,
-                    )
-                    .border(
-                        width = 1.dp,
-                        color = MaterialTheme.colorScheme.onSurface.copy(
-                            alpha = if (isSelected) 0.18f else 0.08f,
-                        ),
-                        shape = shape,
-                    )
-                    .clickable(enabled = enabled) { onSelect(mode) }
-                    .padding(horizontal = 14.dp, vertical = 11.dp),
-                verticalAlignment = Alignment.CenterVertically,
+            Surface(
+                onClick = { onSelect(mode) },
+                enabled = enabled,
+                modifier = Modifier.fillMaxWidth(),
+                shape = shape,
+                color = if (isSelected) {
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+                } else {
+                    Color.Transparent
+                },
+                border = androidx.compose.foundation.BorderStroke(
+                    width = 1.dp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(
+                        alpha = if (isSelected) 0.18f else 0.08f,
+                    ),
+                ),
             ) {
-                Column(Modifier.weight(1f)) {
-                    Text(
-                        text = stringResource(mode.titleResource()),
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium,
-                    )
-                    Text(
-                        text = stringResource(mode.bodyResource()),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (isSelected) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_check),
-                        contentDescription = stringResource(R.string.state_selected),
-                        modifier = Modifier.size(18.dp),
-                        tint = MaterialTheme.colorScheme.onSurface,
-                    )
+                Row(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = stringResource(mode.titleResource()),
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.Medium,
+                        )
+                        Text(
+                            text = stringResource(mode.bodyResource()),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (isSelected) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_check),
+                            contentDescription = stringResource(R.string.state_selected),
+                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.onSurface,
+                        )
+                    }
                 }
             }
         }
@@ -1117,7 +1196,12 @@ private fun ComputerContainerRepairDialog(
             }
         },
         confirmButton = {
-            Button(onClick = onRepair, enabled = !isBusy) {
+            Button(
+                onClick = onRepair,
+                enabled = !isBusy,
+                modifier = Modifier.height(48.dp),
+                shape = AppDialogButtonShape,
+            ) {
                 Box(contentAlignment = Alignment.Center) {
                     Text(
                         text = stringResource(R.string.computer_action_repair),
@@ -1133,7 +1217,11 @@ private fun ComputerContainerRepairDialog(
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.height(48.dp),
+                shape = AppDialogButtonShape,
+            ) {
                 Text(stringResource(if (isBusy) R.string.action_stop else R.string.action_cancel))
             }
         },
@@ -1224,12 +1312,22 @@ private fun ComputerReplacementHostKeyDialog(
             }
         },
         confirmButton = {
-            Button(onClick = { onConfirm(replacement) }, enabled = !isBusy) {
+            Button(
+                onClick = { onConfirm(replacement) },
+                enabled = !isBusy,
+                modifier = Modifier.height(48.dp),
+                shape = AppDialogButtonShape,
+            ) {
                 Text(stringResource(R.string.computer_host_key_accept_new))
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !isBusy) {
+            TextButton(
+                onClick = onDismiss,
+                enabled = !isBusy,
+                modifier = Modifier.height(48.dp),
+                shape = AppDialogButtonShape,
+            ) {
                 Text(stringResource(R.string.action_cancel))
             }
         },
@@ -1314,12 +1412,19 @@ private fun ComputerDeleteDialog(
             Button(
                 onClick = { onDelete(cleanupContainers, deleteFiles) },
                 enabled = !isBusy && (!deleteFiles || confirmFiles),
+                modifier = Modifier.height(48.dp),
+                shape = AppDialogButtonShape,
             ) {
                 Text(stringResource(R.string.computer_action_delete))
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !isBusy) {
+            TextButton(
+                onClick = onDismiss,
+                enabled = !isBusy,
+                modifier = Modifier.height(48.dp),
+                shape = AppDialogButtonShape,
+            ) {
                 Text(stringResource(R.string.action_cancel))
             }
         },

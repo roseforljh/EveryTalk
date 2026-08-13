@@ -56,8 +56,14 @@ class FunctionPanelShadowAnimationRulesTest {
         assertTrue(inputSource.contains("Arrangement.spacedBy(2.dp)"))
         assertTrue(activeTagSource.contains(".padding(horizontal = 5.dp, vertical = 5.dp)"))
         assertTrue(activeTagSource.contains("fontSize = 13.sp"))
-        assertTrue(activeTagSource.contains(".clip(RoundedCornerShape(percent = 50))"))
-        assertTrue(panelSource.contains(".clip(RoundedCornerShape(16.dp))"))
+        assertTrue(activeTagSource.contains("Surface("))
+        assertTrue(activeTagSource.contains("shape = RoundedCornerShape(percent = 50)"))
+        assertTrue(activeTagSource.indexOf("Surface(") < activeTagSource.indexOf(".combinedClickable("))
+        val functionRowSource = panelSource.substringAfter("internal fun FunctionPanelRow(")
+            .substringBefore("internal fun ComputerSelectionCard(")
+        assertTrue(functionRowSource.contains("Surface("))
+        assertTrue(functionRowSource.contains("shape = RoundedCornerShape(18.dp)"))
+        assertTrue(functionRowSource.indexOf("Surface(") < functionRowSource.indexOf(".combinedClickable("))
     }
 
     private fun chatInputSource(): File {

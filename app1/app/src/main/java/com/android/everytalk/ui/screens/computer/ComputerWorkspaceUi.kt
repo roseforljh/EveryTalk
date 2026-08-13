@@ -1,7 +1,6 @@
 package com.android.everytalk.ui.screens.computer
 
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.FlowRow
@@ -35,7 +34,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -63,6 +61,7 @@ import com.android.everytalk.statecontroller.openComputerPublicPreview
 import com.android.everytalk.statecontroller.saveComputerWorkspaceSecret
 import com.android.everytalk.statecontroller.stopComputerPreview
 import com.android.everytalk.ui.components.dialog.AppDialogShape
+import com.android.everytalk.ui.components.dialog.AppDialogButtonShape
 import com.android.everytalk.ui.components.dialog.AppDialogTextFieldShape
 import com.android.everytalk.ui.components.dialog.appDialogBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogContainerColor
@@ -124,42 +123,48 @@ internal fun ComputerWorkspaceCard(
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(min = 48.dp)
-                    .clip(RoundedCornerShape(16.dp))
-                    .clickable { expanded = !expanded },
-                verticalAlignment = Alignment.CenterVertically,
+            Card(
+                onClick = { expanded = !expanded },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(18.dp),
+                colors = CardDefaults.cardColors(containerColor = androidx.compose.ui.graphics.Color.Transparent),
             ) {
-                Column(
-                    modifier = Modifier.weight(1f),
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 56.dp)
+                        .padding(horizontal = 12.dp, vertical = 6.dp),
+                    verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        text = displayName,
-                        style = MaterialTheme.typography.titleSmall,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Text(
-                        text = stringResource(
-                            R.string.computer_workspace_mode_status,
-                            workspaceStatusLabel(workspace.status),
-                            formatComputerDate(workspace.lastUsedAt),
-                        ),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-                if (busyAction != null) {
-                    CircularProgressIndicator(modifier = Modifier.height(22.dp), strokeWidth = 2.dp)
-                } else {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_gpt_chevron_right),
-                        contentDescription = stringResource(if (expanded) R.string.action_collapse else R.string.action_expand),
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.rotate(if (expanded) 90f else 0f),
-                    )
+                    Column(
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        Text(
+                            text = displayName,
+                            style = MaterialTheme.typography.titleSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Text(
+                            text = stringResource(
+                                R.string.computer_workspace_mode_status,
+                                workspaceStatusLabel(workspace.status),
+                                formatComputerDate(workspace.lastUsedAt),
+                            ),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (busyAction != null) {
+                        CircularProgressIndicator(modifier = Modifier.height(22.dp), strokeWidth = 2.dp)
+                    } else {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_gpt_chevron_right),
+                            contentDescription = stringResource(if (expanded) R.string.action_collapse else R.string.action_expand),
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.rotate(if (expanded) 90f else 0f),
+                        )
+                    }
                 }
             }
 
@@ -180,18 +185,24 @@ internal fun ComputerWorkspaceCard(
                     OutlinedButton(
                         onClick = { secretDialogVisible = true; dialogError = null },
                         enabled = busyAction == null,
+                        modifier = Modifier.height(48.dp),
+                        shape = AppDialogButtonShape,
                     ) {
                         Text(stringResource(R.string.computer_secret_add))
                     }
                     OutlinedButton(
                         onClick = { previewVisibility = ComputerPreviewVisibility.PRIVATE; dialogError = null },
                         enabled = busyAction == null && workspace.status == ComputerWorkspaceStatus.READY,
+                        modifier = Modifier.height(48.dp),
+                        shape = AppDialogButtonShape,
                     ) {
                         Text(stringResource(R.string.computer_preview_private_create))
                     }
                     OutlinedButton(
                         onClick = { previewVisibility = ComputerPreviewVisibility.PUBLIC; dialogError = null },
                         enabled = busyAction == null && workspace.status == ComputerWorkspaceStatus.READY,
+                        modifier = Modifier.height(48.dp),
+                        shape = AppDialogButtonShape,
                     ) {
                         Text(stringResource(R.string.computer_preview_public_create))
                     }
@@ -243,6 +254,8 @@ internal fun ComputerWorkspaceCard(
                 TextButton(
                     onClick = { deleteDialogVisible = true; dialogError = null },
                     enabled = busyAction == null,
+                    modifier = Modifier.height(48.dp),
+                    shape = AppDialogButtonShape,
                 ) {
                     Text(
                         text = stringResource(R.string.computer_workspace_delete),
@@ -411,12 +424,19 @@ private fun ComputerSecretEditorDialog(
                 onClick = {
                     if (name.isBlank() || value.isEmpty()) localError = invalidText else onSave(name.trim(), value)
                 },
+                modifier = Modifier.height(48.dp),
+                shape = AppDialogButtonShape,
             ) {
                 Text(stringResource(R.string.action_save))
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !isBusy) {
+            TextButton(
+                onClick = onDismiss,
+                enabled = !isBusy,
+                modifier = Modifier.height(48.dp),
+                shape = AppDialogButtonShape,
+            ) {
                 Text(stringResource(R.string.action_cancel))
             }
         },
@@ -486,12 +506,19 @@ private fun ComputerWorkspaceDeleteDialog(
             Button(
                 onClick = { onDelete(deleteFiles) },
                 enabled = !isBusy && (!deleteFiles || confirmedFiles),
+                modifier = Modifier.height(48.dp),
+                shape = AppDialogButtonShape,
             ) {
                 Text(stringResource(R.string.computer_workspace_delete))
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss, enabled = !isBusy) {
+            TextButton(
+                onClick = onDismiss,
+                enabled = !isBusy,
+                modifier = Modifier.height(48.dp),
+                shape = AppDialogButtonShape,
+            ) {
                 Text(stringResource(R.string.action_cancel))
             }
         },

@@ -470,12 +470,20 @@ internal fun ComputerHostKeyDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onConfirm) {
+            TextButton(
+                onClick = onConfirm,
+                modifier = Modifier.height(48.dp),
+                shape = AppDialogButtonShape,
+            ) {
                 Text(stringResource(R.string.computer_host_key_confirm))
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(
+                onClick = onDismiss,
+                modifier = Modifier.height(48.dp),
+                shape = AppDialogButtonShape,
+            ) {
                 Text(stringResource(R.string.action_cancel))
             }
         },

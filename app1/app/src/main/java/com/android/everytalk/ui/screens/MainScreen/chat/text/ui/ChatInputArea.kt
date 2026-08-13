@@ -498,7 +498,6 @@ fun ChatInputArea(
                 horizontalAlignment = Alignment.CenterHorizontally,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(start = 10.dp, end = 10.dp, top = 6.dp, bottom = 4.dp)
             ) {
                 ComputerHostCommandConfirmationCard(
                     request = pendingHostCommand?.takeIf { request ->
@@ -508,10 +507,12 @@ fun ChatInputArea(
                         viewModel.respondToComputerHostCommand(requestId, approved)
                     },
                 )
-// 使用优化的组件
+                // 普通输入附件继续沿用输入框的水平留白，权限卡片单独占满统一悬浮层宽度。
+                // 使用优化的组件。只给普通附件自身保留输入区的水平留白。
                 OptimizedMediaItemsList(
                     selectedMediaItems = selectedMediaItems,
-                    onRemoveMediaItemAtIndex = onRemoveMediaItemAtIndex
+                    onRemoveMediaItemAtIndex = onRemoveMediaItemAtIndex,
+                    modifier = Modifier.padding(horizontal = 10.dp),
                 )
 
                 val hasContent = localText.isNotEmpty() || selectedMediaItems.isNotEmpty()

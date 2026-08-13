@@ -225,9 +225,13 @@ class ComputerUiAlignmentRulesTest {
         assertTrue(detailSource.contains("ComputerMoreSettingsCard("))
         assertTrue(detailSource.contains("if (expanded)"))
         assertTrue(detailSource.contains("computer_more_settings"))
-        assertTrue(detailSource.contains("computer_settings_connection"))
-        assertTrue(detailSource.contains("computer_settings_security"))
-        assertTrue(detailSource.contains("computer_settings_maintenance"))
+        assertTrue(detailSource.contains("ComputerPermissionSettingsCard("))
+        assertTrue(detailSource.contains("ComputerMaintenanceCard("))
+        val moreSettingsSource = detailSource.substringAfter("private fun ComputerMoreSettingsCard(")
+            .substringBefore("private fun ComputerSettingsGroup(")
+        assertTrue(moreSettingsSource.contains("computer_settings_security"))
+        assertFalse("常用权限不得继续藏在更多设置", moreSettingsSource.contains("ComputerPermissionModeSelector("))
+        assertFalse("维护操作不得继续藏在更多设置", moreSettingsSource.contains("computer_settings_maintenance"))
         assertTrue(detailSource.indexOf("ComputerWorkspaceCard(") < detailSource.indexOf("ComputerMoreSettingsCard(", detailSource.indexOf("ComputerWorkspaceCard(")))
         assertTrue(workspaceSource.contains("var expanded by remember(workspace.id)"))
         assertTrue(workspaceSource.contains("text = displayName"))
@@ -311,10 +315,55 @@ class ComputerUiAlignmentRulesTest {
         assertTrue(panelSource.contains("agent_host_command_allow_once"))
         assertTrue(panelSource.contains("agent_host_command_reject"))
         assertFalse(panelSource.contains("agent_host_command_always"))
-        assertTrue(panelSource.contains("AppFloatingCardContainer("))
-        assertTrue(panelSource.contains("heightIn(max = 220.dp)"))
-        assertTrue(panelSource.contains("verticalScroll(rememberScrollState())"))
+        assertTrue(panelSource.contains("AppFloatingCardScaffold("))
+        assertTrue(panelSource.contains("header = {"))
+        assertTrue(panelSource.contains("content = {"))
+        assertTrue(panelSource.contains("footer = {"))
+        val footerSource = panelSource.substringAfter("footer = {")
+            .substringBefore("internal fun computerStatusLabelRes")
+        assertTrue(footerSource.contains(".fillMaxWidth()"))
         assertTrue(panelSource.contains("request.requestId"))
+    }
+
+    @Test
+    fun `服务器对话框按钮统一使用完整圆角按压区域`() {
+        val addSource = sourceFile("ui/screens/computer/ComputerAddCard.kt")
+            .readText(Charsets.UTF_8)
+        val previewSource = sourceFile("ui/screens/computer/ComputerPreviewUi.kt")
+            .readText(Charsets.UTF_8)
+        val hostKeyDialog = addSource.substringAfter("internal fun ComputerHostKeyDialog(")
+        val previewCreateDialog = previewSource.substringAfter("internal fun ComputerPreviewCreateDialog(")
+            .substringBefore("internal fun ComputerPreviewList(")
+        val publicPreviewDialog = previewSource.substringAfter("fun ComputerPublicPreviewConfirmationDialog(")
+
+        listOf(hostKeyDialog, previewCreateDialog, publicPreviewDialog).forEach { dialogSource ->
+            assertTrue(dialogSource.contains("modifier = Modifier.height(48.dp)"))
+            assertTrue(dialogSource.contains("shape = AppDialogButtonShape"))
+        }
+    }
+
+    @Test
+    fun `详情页主要交互使用完整圆角按压区域`() {
+        val detailSource = sourceFile("ui/screens/computer/ComputerDetailScreen.kt")
+            .readText(Charsets.UTF_8)
+        val workspaceSource = sourceFile("ui/screens/computer/ComputerWorkspaceUi.kt")
+            .readText(Charsets.UTF_8)
+
+        val permissionSource = detailSource.substringAfter("private fun ComputerPermissionModeSelector(")
+            .substringBefore("private fun ComputerPermissionMode.titleResource")
+        assertTrue(permissionSource.contains("Surface("))
+        assertTrue(permissionSource.contains("shape = shape"))
+        assertFalse(permissionSource.contains(".clickable("))
+
+        val moreSettingsSource = detailSource.substringAfter("private fun ComputerMoreSettingsCard(")
+            .substringBefore("private fun ComputerSettingsGroup(")
+        assertTrue(moreSettingsSource.contains("Surface("))
+        assertTrue(moreSettingsSource.contains("shape = RoundedCornerShape(22.dp)"))
+
+        val workspaceHeader = workspaceSource.substringAfter("Card(\n                onClick = { expanded = !expanded }")
+            .substringBefore("if (expanded)")
+        assertTrue(workspaceHeader.contains("shape = RoundedCornerShape(18.dp)"))
+        assertFalse(workspaceHeader.contains(".clickable("))
     }
 
     @Test

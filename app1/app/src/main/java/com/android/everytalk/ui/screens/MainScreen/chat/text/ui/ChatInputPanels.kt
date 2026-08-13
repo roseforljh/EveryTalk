@@ -109,7 +109,7 @@ import com.android.everytalk.data.computer.ComputerStatus
 import com.android.everytalk.data.computer.ComputerHostCommandConfirmationRequest
 import com.android.everytalk.ui.screens.computer.ComputerCardAccentPalette
 import com.android.everytalk.ui.screens.computer.computerCardAccentColorIndexes
-import com.android.everytalk.ui.components.popup.AppFloatingCardContainer
+import com.android.everytalk.ui.components.popup.AppFloatingCardScaffold
 import com.android.everytalk.ui.screens.mcp.McpServerListDialog
 import java.io.File
 import java.text.SimpleDateFormat
@@ -233,48 +233,53 @@ internal fun FunctionPanelRow(
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        color = Color.Transparent,
     ) {
-        Box(
+        Row(
             modifier = Modifier
-                .size(44.dp)
-                .background(iconBg, CircleShape),
-            contentAlignment = Alignment.Center
+                .fillMaxWidth()
+                .combinedClickable(onClick = onClick, onLongClick = onLongClick)
+                .padding(horizontal = 16.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Icon(
-                painter = painterResource(iconRes),
-                contentDescription = null,
-                tint = iconTint,
-                modifier = Modifier.size(22.dp)
+            Box(
+                modifier = Modifier
+                    .size(44.dp)
+                    .background(iconBg, CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    painter = painterResource(iconRes),
+                    contentDescription = null,
+                    tint = iconTint,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
+            Spacer(modifier = Modifier.width(14.dp))
+            Text(
+                text = label,
+                fontSize = 18.sp,
+                fontWeight = androidx.compose.ui.text.font.FontWeight.Normal,
+                color = textColor,
+                modifier = Modifier.weight(1f),
             )
-        }
-        Spacer(modifier = Modifier.width(14.dp))
-        Text(
-            text = label,
-            fontSize = 18.sp,
-            fontWeight = androidx.compose.ui.text.font.FontWeight.Normal,
-            color = textColor,
-            modifier = Modifier.weight(1f)
-        )
-        if (isLoading) {
-            CircularProgressIndicator(
-                modifier = Modifier.size(20.dp),
-                color = ChatAgentColor,
-                strokeWidth = 2.dp,
-            )
-        } else if (isChecked) {
-            Icon(
-                painter = painterResource(R.drawable.ic_check),
-                contentDescription = null,
-                tint = Color.White,
-                modifier = Modifier.size(22.dp)
-            )
+            if (isLoading) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp),
+                    color = ChatAgentColor,
+                    strokeWidth = 2.dp,
+                )
+            } else if (isChecked) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_check),
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
         }
     }
 }
@@ -388,15 +393,12 @@ internal fun ComputerHostCommandConfirmationCard(
     val buttonBackground = contentColor
     val buttonContent = if (isDark) Color(0xFF0D0D0D) else Color.White
 
-    AppFloatingCardContainer(
+    AppFloatingCardScaffold(
         visible = true,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(bottom = 8.dp),
+        modifier = Modifier.fillMaxWidth(),
         onExitAnimationFinished = {},
-    ) {
-        Column {
-            // 头部和底部保持固定，中间命令内容单独滚动。
+        header = {
+            // 头部和底部直接使用统一卡片背景，中间命令内容单独滚动。
             Column(
                 modifier = Modifier.padding(start = 18.dp, top = 16.dp, end = 18.dp, bottom = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(5.dp),
@@ -413,13 +415,10 @@ internal fun ComputerHostCommandConfirmationCard(
                     color = secondaryColor,
                 )
             }
-
+        },
+        content = {
             Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 220.dp)
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 18.dp),
+                modifier = Modifier.padding(horizontal = 18.dp),
                 verticalArrangement = Arrangement.spacedBy(9.dp),
             ) {
                 Text(
@@ -454,7 +453,8 @@ internal fun ComputerHostCommandConfirmationCard(
                     )
                 }
             }
-
+        },
+        footer = {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -463,7 +463,9 @@ internal fun ComputerHostCommandConfirmationCard(
             ) {
                 OutlinedButton(
                     onClick = { onDecision(request.requestId, false) },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp),
                     shape = RoundedCornerShape(percent = 50),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = contentColor),
                     border = BorderStroke(1.dp, contentColor.copy(alpha = 0.18f)),
@@ -472,7 +474,9 @@ internal fun ComputerHostCommandConfirmationCard(
                 }
                 Button(
                     onClick = { onDecision(request.requestId, true) },
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .height(48.dp),
                     shape = RoundedCornerShape(percent = 50),
                     colors = ButtonDefaults.buttonColors(
                         containerColor = buttonBackground,
@@ -482,8 +486,8 @@ internal fun ComputerHostCommandConfirmationCard(
                     Text(stringResource(R.string.agent_host_command_allow_once))
                 }
             }
-        }
-    }
+        },
+    )
 }
 
 internal fun computerStatusLabelRes(status: ComputerStatus): Int = when (status) {

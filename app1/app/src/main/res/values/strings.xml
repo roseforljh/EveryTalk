@@ -419,7 +419,7 @@
     <string name="computer_permission_full_warning_body">Agent will run server operations directly without asking. You accept responsibility for deleted files, stopped services, or system changes.</string>
     <string name="computer_permission_full_warning_confirm">I understand, enable it</string>
     <string name="computer_more_settings">More settings</string>
-    <string name="computer_more_settings_body">Login, security, and maintenance</string>
+    <string name="computer_more_settings_body">Host key, activity, and deletion</string>
     <string name="computer_settings_connection">Connection and login</string>
     <string name="computer_settings_security">Security</string>
     <string name="computer_settings_maintenance">Maintenance</string>

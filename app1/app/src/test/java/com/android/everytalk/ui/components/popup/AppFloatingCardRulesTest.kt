@@ -114,6 +114,29 @@ class AppFloatingCardRulesTest {
         assertTrue("AI 气泡悬浮卡片不得在退出前直接移除", !popupFunction.contains("if (!expanded) return"))
     }
 
+    @Test
+    fun `固定头尾悬浮卡片只绘制一层统一背景`() {
+        val popupSource = File(
+            mainSourceRoot(),
+            "ui/components/popup/AppFloatingCard.kt",
+        ).readText(Charsets.UTF_8)
+        val scaffoldSource = popupSource.substringAfter("fun AppFloatingCardScaffold(")
+            .substringBefore("fun AppFloatingCardPopup(")
+        val confirmationSource = File(
+            mainSourceRoot(),
+            "ui/screens/MainScreen/chat/text/ui/ChatInputPanels.kt",
+        ).readText(Charsets.UTF_8)
+            .substringAfter("internal fun ComputerHostCommandConfirmationCard(")
+            .substringBefore("internal fun computerStatusLabelRes")
+
+        assertTrue(scaffoldSource.contains("AppFloatingCardContainer("))
+        assertTrue(scaffoldSource.contains("heightIn(max = 220.dp)"))
+        assertTrue(scaffoldSource.contains("verticalScroll(rememberScrollState())"))
+        assertTrue(confirmationSource.contains("AppFloatingCardScaffold("))
+        assertTrue(confirmationSource.contains("header = {"))
+        assertTrue(confirmationSource.contains("footer = {"))
+    }
+
     private fun mainSourceRoot(): File {
         val candidates = listOf(
             File("src/main/java/com/android/everytalk"),

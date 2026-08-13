@@ -418,7 +418,7 @@
     <string name="computer_permission_full_warning_body">Agent 将直接执行服务器操作，不再请求确认。误删文件、停止服务或修改系统造成的后果由你承担。</string>
     <string name="computer_permission_full_warning_confirm">我清楚，继续开启</string>
     <string name="computer_more_settings">更多设置</string>
-    <string name="computer_more_settings_body">登录信息、安全与维护</string>
+    <string name="computer_more_settings_body">主机密钥、操作记录与删除</string>
     <string name="computer_settings_connection">连接与登录</string>
     <string name="computer_settings_security">安全</string>
     <string name="computer_settings_maintenance">维护</string>

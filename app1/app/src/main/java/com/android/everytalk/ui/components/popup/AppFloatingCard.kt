@@ -5,8 +5,15 @@ import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.border
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -139,6 +146,44 @@ fun AppFloatingCardContainer(
         color = appFloatingCardContainerColor(),
         content = content,
     )
+}
+
+/**
+ * 统一的固定头尾悬浮卡片布局。
+ * 外层只由 [AppFloatingCardContainer] 绘制一次背景，中间内容独立滚动，避免头尾再套 Surface 形成色块。
+ */
+@Composable
+fun AppFloatingCardScaffold(
+    visible: Boolean,
+    modifier: Modifier,
+    onExitAnimationFinished: () -> Unit,
+    header: @Composable ColumnScope.() -> Unit,
+    footer: @Composable RowScope.() -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    AppFloatingCardContainer(
+        visible = visible,
+        modifier = modifier,
+        onExitAnimationFinished = onExitAnimationFinished,
+    ) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                content = header,
+            )
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 220.dp)
+                    .verticalScroll(rememberScrollState()),
+                content = content,
+            )
+            androidx.compose.foundation.layout.Row(
+                modifier = Modifier.fillMaxWidth(),
+                content = footer,
+            )
+        }
+    }
 }
 
 @Composable
