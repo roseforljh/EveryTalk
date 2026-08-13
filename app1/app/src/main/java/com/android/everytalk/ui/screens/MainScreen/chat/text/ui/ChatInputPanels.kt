@@ -109,7 +109,8 @@ import com.android.everytalk.data.computer.ComputerStatus
 import com.android.everytalk.data.computer.ComputerHostCommandConfirmationRequest
 import com.android.everytalk.ui.screens.computer.ComputerCardAccentPalette
 import com.android.everytalk.ui.screens.computer.computerCardAccentColorIndexes
-import com.android.everytalk.ui.components.popup.AppFloatingCardScaffold
+import com.android.everytalk.ui.components.popup.AppFloatingCardScaffoldPopup
+import com.android.everytalk.ui.components.popup.appFloatingCardContainerColor
 import com.android.everytalk.ui.screens.mcp.McpServerListDialog
 import java.io.File
 import java.text.SimpleDateFormat
@@ -383,6 +384,7 @@ internal fun ComputerSelectionCard(
 @Composable
 internal fun ComputerHostCommandConfirmationCard(
     request: ComputerHostCommandConfirmationRequest?,
+    popupPositionProvider: PopupPositionProvider,
     onDecision: (requestId: String, approved: Boolean) -> Unit,
     onVisibilityChange: (Boolean) -> Unit = {},
 ) {
@@ -406,10 +408,19 @@ internal fun ComputerHostCommandConfirmationCard(
     val commandBackground = if (isDark) Color.White.copy(alpha = 0.07f) else Color.Black.copy(alpha = 0.045f)
     val buttonBackground = contentColor
     val buttonContent = if (isDark) Color(0xFF0D0D0D) else Color.White
+    val cardBackground = appFloatingCardContainerColor()
 
-    AppFloatingCardScaffold(
+    AppFloatingCardScaffoldPopup(
         visible = request != null,
-        modifier = Modifier.fillMaxWidth(),
+        popupPositionProvider = popupPositionProvider,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 6.dp),
+        properties = PopupProperties(
+            focusable = false,
+            dismissOnBackPress = false,
+            dismissOnClickOutside = false,
+        ),
         onExitAnimationFinished = {
             displayedRequest = null
             latestOnVisibilityChange(false)
@@ -417,7 +428,10 @@ internal fun ComputerHostCommandConfirmationCard(
         header = {
             // 头部和底部直接使用统一卡片背景，中间命令内容单独滚动。
             Column(
-                modifier = Modifier.padding(start = 18.dp, top = 16.dp, end = 18.dp, bottom = 12.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(cardBackground)
+                    .padding(start = 18.dp, top = 16.dp, end = 18.dp, bottom = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(5.dp),
             ) {
                 Text(
@@ -475,6 +489,7 @@ internal fun ComputerHostCommandConfirmationCard(
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .background(cardBackground)
                     .padding(12.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
@@ -484,7 +499,10 @@ internal fun ComputerHostCommandConfirmationCard(
                         .weight(1f)
                         .height(48.dp),
                     shape = RoundedCornerShape(percent = 50),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = contentColor),
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = Color.Transparent,
+                        contentColor = contentColor,
+                    ),
                     border = BorderStroke(1.dp, contentColor.copy(alpha = 0.18f)),
                 ) {
                     Text(stringResource(R.string.agent_host_command_reject))

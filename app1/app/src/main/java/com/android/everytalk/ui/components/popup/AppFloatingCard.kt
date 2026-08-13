@@ -166,35 +166,70 @@ fun AppFloatingCardScaffold(
     footer: @Composable RowScope.() -> Unit,
     content: @Composable ColumnScope.() -> Unit,
 ) {
-    val containerColor = appFloatingCardContainerColor()
     AppFloatingCardContainer(
         visible = visible,
         modifier = modifier,
         onExitAnimationFinished = onExitAnimationFinished,
     ) {
-        // Surface 负责圆角和阴影，这一层负责覆盖头、中、尾的全部实际内容区域。
-        // 两层使用同一颜色，固定区域不会再透出主题默认的白色 Surface。
+        AppFloatingCardScaffoldContent(header, footer, content)
+    }
+}
+
+/**
+ * 把固定头尾卡片放入真正的 Popup。
+ * Popup 不参与宿主布局测量，适合输入框上方这类不应推动消息列表的卡片。
+ */
+@Composable
+fun AppFloatingCardScaffoldPopup(
+    visible: Boolean,
+    popupPositionProvider: PopupPositionProvider,
+    modifier: Modifier,
+    onExitAnimationFinished: () -> Unit,
+    properties: PopupProperties = PopupProperties(),
+    header: @Composable ColumnScope.() -> Unit,
+    footer: @Composable RowScope.() -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    AppFloatingCardPopup(
+        visible = visible,
+        popupPositionProvider = popupPositionProvider,
+        onDismissRequest = null,
+        modifier = modifier,
+        properties = properties,
+        onExitAnimationFinished = onExitAnimationFinished,
+    ) {
+        AppFloatingCardScaffoldContent(header, footer, content)
+    }
+}
+
+@Composable
+private fun AppFloatingCardScaffoldContent(
+    header: @Composable ColumnScope.() -> Unit,
+    footer: @Composable RowScope.() -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val containerColor = appFloatingCardContainerColor()
+    // 卡片内部只有这一层背景，头部、滚动区和底部不再各自生成白色 Surface。
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(containerColor),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            content = header,
+        )
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .background(containerColor),
-        ) {
-            Column(
-                modifier = Modifier.fillMaxWidth(),
-                content = header,
-            )
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .heightIn(max = 220.dp)
-                    .verticalScroll(rememberScrollState()),
-                content = content,
-            )
-            androidx.compose.foundation.layout.Row(
-                modifier = Modifier.fillMaxWidth(),
-                content = footer,
-            )
-        }
+                .heightIn(max = 220.dp)
+                .verticalScroll(rememberScrollState()),
+            content = content,
+        )
+        androidx.compose.foundation.layout.Row(
+            modifier = Modifier.fillMaxWidth(),
+            content = footer,
+        )
     }
 }
 
@@ -206,6 +241,7 @@ fun AppFloatingCardPopup(
     alignment: Alignment = Alignment.TopStart,
     offset: IntOffset = IntOffset.Zero,
     properties: PopupProperties = PopupProperties(),
+    onExitAnimationFinished: () -> Unit = {},
     content: @Composable () -> Unit,
 ) {
     var shouldRender by remember { mutableStateOf(visible) }
@@ -222,7 +258,10 @@ fun AppFloatingCardPopup(
             AppFloatingCardContainer(
                 visible = visible,
                 modifier = modifier,
-                onExitAnimationFinished = { shouldRender = false },
+                onExitAnimationFinished = {
+                    shouldRender = false
+                    onExitAnimationFinished()
+                },
                 content = content,
             )
         }
@@ -236,6 +275,7 @@ fun AppFloatingCardPopup(
     onDismissRequest: (() -> Unit)?,
     modifier: Modifier = Modifier,
     properties: PopupProperties = PopupProperties(),
+    onExitAnimationFinished: () -> Unit = {},
     content: @Composable () -> Unit,
 ) {
     var shouldRender by remember { mutableStateOf(visible) }
@@ -251,7 +291,10 @@ fun AppFloatingCardPopup(
             AppFloatingCardContainer(
                 visible = visible,
                 modifier = modifier,
-                onExitAnimationFinished = { shouldRender = false },
+                onExitAnimationFinished = {
+                    shouldRender = false
+                    onExitAnimationFinished()
+                },
                 content = content,
             )
         }

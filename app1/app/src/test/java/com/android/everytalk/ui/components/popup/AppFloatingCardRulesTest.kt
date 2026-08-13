@@ -140,10 +140,12 @@ class AppFloatingCardRulesTest {
             .substringBefore("internal fun computerStatusLabelRes")
 
         assertTrue(scaffoldSource.contains("AppFloatingCardContainer("))
+        assertTrue(scaffoldSource.contains("fun AppFloatingCardScaffoldPopup("))
+        assertTrue(scaffoldSource.contains("AppFloatingCardPopup("))
         assertTrue(scaffoldSource.contains(".background(containerColor)"))
         assertTrue(scaffoldSource.contains("heightIn(max = 220.dp)"))
         assertTrue(scaffoldSource.contains("verticalScroll(rememberScrollState())"))
-        assertTrue(confirmationSource.contains("AppFloatingCardScaffold("))
+        assertTrue(confirmationSource.contains("AppFloatingCardScaffoldPopup("))
         assertTrue(confirmationSource.contains("header = {"))
         assertTrue(confirmationSource.contains("footer = {"))
         assertTrue("确认卡必须保留到统一退场动画完成", confirmationSource.contains("visible = request != null"))

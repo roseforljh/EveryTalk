@@ -471,6 +471,9 @@ fun ChatInputArea(
     val navInsets = WindowInsets.navigationBarsIgnoringVisibility
     val baseInsets = navInsets.add(WindowInsets(bottom = 12.dp))
     val targetInsets = WindowInsets.ime.union(baseInsets)
+    val hostCommandPopupPositionProvider = remember(chatInputContentHeightPx, density) {
+        chatInputPopupPositionProvider(chatInputContentHeightPx, density)
+    }
 
     Box(modifier = Modifier
         .fillMaxWidth()
@@ -489,6 +492,16 @@ fun ChatInputArea(
         }
         .windowInsetsPadding(targetInsets)
     ) {
+        // 权限卡使用 Popup 覆盖在输入区上方，不参与输入区高度和聊天列表测量。
+        ComputerHostCommandConfirmationCard(
+            request = hostCommandConfirmationRequest,
+            popupPositionProvider = hostCommandPopupPositionProvider,
+            onDecision = { requestId, approved ->
+                viewModel.respondToComputerHostCommand(requestId, approved)
+            },
+            onVisibilityChange = onHostCommandCardVisibilityChange,
+        )
+
         Column(
             modifier = Modifier
                 .fillMaxWidth(1f)
@@ -500,15 +513,6 @@ fun ChatInputArea(
                 modifier = Modifier
                     .fillMaxWidth()
             ) {
-                ComputerHostCommandConfirmationCard(
-                    request = hostCommandConfirmationRequest,
-                    onDecision = { requestId, approved ->
-                        viewModel.respondToComputerHostCommand(requestId, approved)
-                    },
-                    onVisibilityChange = { isVisible ->
-                        onHostCommandCardVisibilityChange(isVisible)
-                    },
-                )
                 // 普通输入附件继续沿用输入框的水平留白，权限卡片单独占满统一悬浮层宽度。
                 // 使用优化的组件。只给普通附件自身保留输入区的水平留白。
                 OptimizedMediaItemsList(
@@ -657,10 +661,6 @@ fun ChatInputArea(
                 val verticalPadding = ((4f - 1f * sizeProgress).coerceAtLeast(0f)).dp
                 val inputMinHeight = ((48f - 4f * sizeProgress).coerceIn(44f, 48f)).dp
 
-                val functionPanelPositionProvider = remember(chatInputContentHeightPx, density) {
-                    chatInputPopupPositionProvider(chatInputContentHeightPx, density)
-                }
-
                 val buttonBackgroundColor by animateColorAsState(
                     targetValue = if (isDarkTheme) Color.White else Color.Black,
                     animationSpec = tween(durationMillis = 200),
@@ -783,7 +783,7 @@ fun ChatInputArea(
 
                             AppFloatingCardPopup(
                                 visible = showFunctionPanel,
-                                popupPositionProvider = functionPanelPositionProvider,
+                                popupPositionProvider = hostCommandPopupPositionProvider,
                                 onDismissRequest = {
                                     lastFunctionPanelDismissAt = android.os.SystemClock.uptimeMillis()
                                     if (showFunctionPanel) showFunctionPanel = false
@@ -858,7 +858,7 @@ fun ChatInputArea(
 
                             AppFloatingCardPopup(
                                 visible = showComputerSelectionPopup,
-                                popupPositionProvider = functionPanelPositionProvider,
+                                popupPositionProvider = hostCommandPopupPositionProvider,
                                 onDismissRequest = { showComputerSelectionPopup = false },
                                 properties = PopupProperties(
                                     focusable = true,
