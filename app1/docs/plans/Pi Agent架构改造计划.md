@@ -1,12 +1,12 @@
 # EveryTalk Android Pi Agent 架构改造计划
 
-> 状态：实施中，统一运行、上下文主链和旧循环清理已完成  
-> 记录日期：2026-08-13  
-> 适用工程：app1/  
-> 参考项目：earendil-works/pi  
-> 参考提交：6f707eb36064e82af9c1320a7634f4dfad21049b  
-> 参考包：@earendil-works/pi-agent-core 0.84.1  
-> 许可证：MIT  
+> 状态：计划已完整实施，定向自动验证通过
+> 记录日期：2026-08-13
+> 适用工程：app1/
+> 参考项目：earendil-works/pi
+> 参考提交：6f707eb36064e82af9c1320a7634f4dfad21049b
+> 参考包：@earendil-works/pi-agent-core 0.84.1
+> 许可证：MIT
 > 改造性质：Android 本地架构重构，不新增 EveryTalk 后端
 
 ## 一、结论
@@ -35,7 +35,7 @@ EveryTalk 适合吸收 Pi 的架构语义，并使用 Kotlin、Coroutine、Flow 
 
 1. 普通聊天、MCP、联网搜索、VPS Agent 全部进入同一个 Kotlin `AgentLoop`。
 2. 四种协议只通过 `streamSingleTurn` 执行单次模型请求，工具循环和上下文推进由 AgentLoop 负责。
-3. Room 17 已保存 Run、Entry、Request、Usage、ContextSnapshot、Compaction 和 Provider continuation。
+3. Room 18 已保存 Run、Entry、Request、Usage、ContextSnapshot、Compaction、Provider continuation 和非敏感恢复快照。
 4. 上下文按完整工具原子组重建，压缩保留近期原文，支持超长单轮切分。
 5. 文本发送前的旧 `AutoContextCompression` 已退出正式路径，避免旧链与 AgentLoop 双重压缩；图片路径只保留窗口裁剪。
 6. OpenAI Responses、Anthropic、Gemini 和 OpenAI 兼容推理内容的当前 Run 连续状态已接入。
@@ -43,11 +43,31 @@ EveryTalk 适合吸收 Pi 的架构语义，并使用 Kotlin、Coroutine、Flow 
 8. 工具结果统一限制大小；用户取消会收尾活动请求；App 重启会把旧活动 Run 和 Request 标为 `INTERRUPTED`。
 9. SSE 已设置 30 分钟总上限、2 分钟 Socket 空闲上限和 120 秒首个有效事件上限。
 
-当前保留项：
+后续范围外项目：
 
-1. 审批中的 Run 目前按中断封存，尚未实现跨进程继续等待同一张审批卡片。
-2. UNKNOWN 写工具禁止自动重放，尚未实现用户选择后的恢复执行界面。
-3. Harness v2/v3 属于 Pi 实验路线，本次没有引入。
+1. Harness v2/v3 属于 Pi 实验路线，本次没有引入。
+
+本轮补齐：
+
+1. Room 18 保存不含 API Key 的恢复快照，`WAITING_APPROVAL` 跨进程保留。
+2. 审批请求、决定和剩余 Tool Call 从原 Run 恢复，同一 `approvalRequestId` 只能决策一次。
+3. 多会话审批以 Room 列表保存，界面只投影当前会话对应卡片。
+4. Host 命令、Public Preview 和 UNKNOWN 恢复统一进入持久化审批链。
+5. UNKNOWN 提供“重新执行 / 不重试”，只有明确选择重试才设置一次性凭证。
+6. Provider continuation 同时校验协议、配置、端点、模型、System Prompt、Tool Schema 和压缩点，损坏记录自动删除。
+7. 恢复 Run 继续沿用原内部 Assistant ID，整个 Run 合计最多 50 次模型请求。
+8. 删除 `MessageTokenUsageStore`，消息 Usage 直接从 `Message.tokenUsage` 做纯函数投影。
+9. ApprovalRequest 与 WAITING_APPROVAL、ApprovalDecision 与可恢复状态均通过 Room 事务原子写入。
+10. App 启动先整理 ComputerExecution，再恢复 UNKNOWN 审批和已决定但未消费的 Run。
+11. 单个 Run 限制 50 次模型请求、100 次连续工具调用，并在相同参数连续调用 3 次时终止。
+12. System Prompt 指纹使用 Provider 实际注入后的提示，Tool Schema 指纹复用规范化结构。
+13. 大型工具结果在模型截断前原子写入 App 私有目录，AgentEntry 保存本地引用；会话删除时同步清理。
+14. `ModelTurnTransport` 已成为 AgentLoop 的单请求边界；无调用方的 `AgentEvent` 抽象已删除。
+15. 恢复 Run 时按 AgentEntry sequence 重建 executionTrace。
+16. Executor 调用前保存 `TOOL_EXECUTION_STARTED`；App 中断后区分未开始、结果已保存、Computer 幂等完成、Computer UNKNOWN 和普通工具结果缺失。
+17. 同一 Assistant 的剩余 Tool Call 按原顺序续接；已保存结果跳过，未开始调用重新预检，普通工具已开始但结果缺失时写入明确错误并禁止盲目重放。
+18. 多个可恢复 Run 共用文本流并串行续接；任意前台文本 Run 收尾后自动扫描下一个。
+19. AgentEntry 追加由单一锁串行分配 sequence，避免并发状态事件占用同一序号。
 
 ### 1.1 与现有计划的关系
 
@@ -160,7 +180,7 @@ AgentLoop 是内部统一运行内核，不代表输入框中的 Agent 功能始
 | Tool Call 与 Tool Result 保持配对 | Context 原子组规则 |
 | Usage 保存在各次 Assistant 响应上 | AgentRequestUsage 一次请求一行 |
 | Usage 总量另行汇总 | Run 与 Conversation 查询聚合 |
-| Agent 事件按生命周期发出 | AgentEvent 流映射到现有执行过程 UI |
+| Agent 事件按生命周期发出 | AgentLoop 统一输出 AppStreamEvent，并映射到现有执行过程 UI |
 
 ### 3.2 按 Android 场景改写的部分
 
@@ -201,7 +221,7 @@ flowchart TD
     Tools --> Computer["Computer Tool<br/>SSH / Workspace / Container"]
 
     Store --> Room["Room<br/>Run / Entry / Request / Usage / Context / Compaction"]
-    Loop --> Events["AgentEvent Flow"]
+    Loop --> Events["AppStreamEvent Flow"]
     Events --> Controller
 ~~~
 
@@ -209,7 +229,7 @@ flowchart TD
 
 | 层 | 只负责什么 | 禁止承担什么 |
 | --- | --- | --- |
-| MessageSender / ApiHandler | 启动运行、取消、把 AgentEvent 投影到界面 | 自己计算工具循环、累计上下文 |
+| MessageSender / ApiHandler | 启动运行、取消、把 AppStreamEvent 投影到界面 | 自己计算工具循环、累计上下文 |
 | AgentLoop | 状态机、请求轮次、工具顺序、结束条件 | 拼接四家 Provider JSON |
 | AgentContextManager | 生成本次有效上下文、预算、压缩、快照 | 发网络请求、操作 UI |
 | AgentToolRuntime | 找工具、预检权限、执行、生成统一结果 | 修改模型上下文窗口 |
@@ -740,7 +760,7 @@ AgentCompactionEntry 保存：
 
 | 数据 | 保存位置 | 规则 |
 | --- | --- | --- |
-| 完整结果 | 现有工具结果来源或 App 私有结果文件 | 流式写入，受单文件和会话保留上限控制 |
+| 完整结果 | 现有工具结果来源或 App 私有结果文件 | 原子写入，单文件最多 8 MiB，会话删除时清理 |
 | 模型结果 | AgentEntry.ToolResult | 按统一 Token 预算截断 |
 | UI 摘要 | executionTrace | 只显示必要状态和摘要 |
 
@@ -750,7 +770,7 @@ AgentCompactionEntry 保存：
 * exit code。
 * stdout 与 stderr 是否被截断。
 * 原始字符数或字节数。
-* 获取完整结果的本地引用。
+* AgentEntry 保存完整结果的本地引用。
 
 禁止让一次无边界的诊断命令输出挤掉整个会话上下文。
 
@@ -797,8 +817,8 @@ ProviderContinuationState 的有效键包括：
 | --- | ---: | --- |
 | 建连超时 | 30 秒 | DNS、TCP、TLS 和请求建立 |
 | 首个有效事件超时 | 120 秒 | 从连接建立到首个内容、推理、工具或 Usage 事件 |
-| 流空闲超时 | 90 秒 | 两个有效事件之间允许的最长空白 |
-| 总流时长 | 不设固定上限 | 持续收到有效事件时允许长任务 |
+| 流空闲超时 | 120 秒 | 由 Ktor Socket 空闲超时执行 |
+| 总流时长 | 30 分钟 | 防止连接长期占用；持续任务需在上限内完成 |
 
 纯心跳可以维持底层连接，但不能无限延长“没有任何模型进展”的等待。Provider 有明确排队事件时，可以映射为有效状态并显示给用户。
 
@@ -818,6 +838,8 @@ ProviderContinuationState 的有效键包括：
 
 ### 12.3 自动重试边界
 
+当前 AgentLoop 对错误按终止处理，不自动重放模型请求。这样能确保出现部分输出、Tool Call 或状态未知工具时不产生重复副作用。以下规则保留为未来启用自动重试时的硬边界：
+
 只允许在以下条件全部满足时自动重试一次：
 
 1. 错误属于建连失败、可重试 5xx、429 或首包前断线。
@@ -827,7 +849,7 @@ ProviderContinuationState 的有效键包括：
 
 已经出现部分输出、完整 Tool Call 或状态未知的工具后，禁止自动重试。此时向用户显示明确错误，避免重复回答或重复修改 VPS。
 
-每次真正发到上游的尝试都创建独立 AgentRequest，并通过 retryOfRequestId 关联。
+当前不产生自动重试请求，`retryOfRequestId` 保留为空；未来启用时，每次真正发到上游的尝试都创建独立 AgentRequest 并关联来源。
 
 ## 十三、Android 生命周期与恢复
 
@@ -838,7 +860,7 @@ ProviderContinuationState 的有效键包括：
 * Run 创建。
 * Request 创建和开始。
 * Assistant 完整结束。
-* Tool Call 完整解析。
+* Assistant 完整结束，其中包含已解析的 Tool Call。
 * ApprovalRequest 创建。
 * ApprovalDecision 完成。
 * Tool 执行开始。
@@ -846,7 +868,7 @@ ProviderContinuationState 的有效键包括：
 * Compaction 完成。
 * Run 完成、失败、取消或中断。
 
-流式文字可以节流保存，AssistantCompleted 时必须强制写入最终内容。
+当前流式文字只投影到 UI 缓冲；Assistant 完整结束时写入 FINAL，失败时把已收到内容写入 PARTIAL。
 
 ### 13.2 App 重启后的处理
 
@@ -866,7 +888,7 @@ ProviderContinuationState 的有效键包括：
 1. 只有 FINAL Assistant 和 FINAL ToolResult 默认进入下一次请求。
 2. PARTIAL Assistant 保留给用户查看，不自动当作模型已完成回答。
 3. UNKNOWN 工具必须先解决状态，不能伪造成功或失败结果。
-4. 恢复动作本身写入 Status AgentEntry，便于界面解释发生了什么。
+4. 恢复动作通过持久 Run 状态、Approval Entry 和 ToolResult 表达；当前不额外写重复的 Status Entry。
 
 ## 十四、Room 数据模型
 
@@ -901,7 +923,7 @@ ProviderContinuationState 的有效键包括：
 | id | Entry ID |
 | runId | 所属 Run |
 | sequence | Run 内严格递增序号 |
-| kind | ASSISTANT、TOOL_RESULT、APPROVAL_REQUEST、APPROVAL_DECISION、STATUS |
+| kind | ASSISTANT、TOOL_EXECUTION_STARTED、TOOL_RESULT、APPROVAL_REQUEST、APPROVAL_DECISION、STATUS |
 | requestId | 来源请求，可空 |
 | toolCallId | 工具关联，可空 |
 | payloadJson | 对应密封类型内容 |
@@ -1052,7 +1074,7 @@ AgentEntry.Assistant、ToolResult、Approval 和 Status 按 sequence 投影到 e
 * 等待你的批准。
 * 正在继续分析。
 
-只由 AgentEvent 推进状态。收到 AssistantCompleted 但还有 Tool Call 时，停止按钮继续保留，状态不能看起来像已经结束。
+只由 AgentLoop 的 AppStreamEvent 推进状态。收到 Assistant 完成但还有 Tool Call 时，停止按钮继续保留，状态不能看起来像已经结束。
 
 ### 15.3 上下文统计弹窗
 
@@ -1095,11 +1117,11 @@ AgentEntry.Assistant、ToolResult、Approval 和 Status 按 sequence 投影到 e
 
 | 文件 | 职责 |
 | --- | --- |
-| data/agent/AgentModels.kt | AgentRun、AgentEntry、AgentEvent、状态和中立内容模型 |
+| data/agent/AgentModels.kt | AgentRun、AgentEntry、状态和中立内容模型 |
 | data/agent/AgentLoop.kt | 唯一 Agent 状态机 |
 | data/agent/AgentContextManager.kt | 上下文重建、预算、裁剪、压缩和快照 |
 | data/agent/AgentToolRuntime.kt | Tool Registry、权限预检、串行执行和结果归一化 |
-| data/agent/AgentToolResultStore.kt | 大型工具结果的 App 私有文件写入、读取和会话级清理 |
+| data/agent/AgentToolResultStore.kt | 大型工具结果的 App 私有文件写入和会话级清理 |
 | data/agent/AgentRunStore.kt | Room 事务、序号分配、恢复查询和聚合 |
 | data/network/llm/ModelTurnTransport.kt | Provider 单次请求接口和事件 |
 | data/database/entities/AgentEntities.kt | 七个新 Room Entity |
@@ -1112,13 +1134,13 @@ AgentEntry.Assistant、ToolResult、Approval 和 Status 按 sequence 投影到 e
 | 文件 | 改动 |
 | --- | --- |
 | MessageSenderSendFlow.kt | 启动 AgentLoop，移除对 Provider 内部工具循环的依赖 |
-| ApiHandler.kt | 接收统一 AgentEvent |
+| ApiHandler.kt | 接收统一 AppStreamEvent |
 | ApiHandlerStreamProcessor.kt | 只做 UI 投影和流式缓冲 |
 | OpenAIDirectClient.kt | 改为单次 OpenAI Chat Transport |
 | OpenAIResponsesClient.kt | 改为单次 Responses Transport |
 | AnthropicDirectClient.kt | 改为单次 Anthropic Transport |
 | GeminiDirectClient.kt | 改为单次 Gemini Transport |
-| AppStreamEvent.kt | 与 AgentEvent 建立清晰映射，移除 requestOrdinal 累计补丁 |
+| AppStreamEvent.kt | 承载统一 Agent 生命周期与 Provider 单轮事件，移除 requestOrdinal 累计补丁 |
 | RequestTokenEstimator.kt | 保留估算算法，由 AgentContextManager 统一调用 |
 | AutoContextCompression.kt | 压缩能力迁入 AgentContextManager，旧入口仅做过渡 |
 | MessageContextWindow.kt | 改为对中立 Transcript 原子组裁剪 |
@@ -1171,7 +1193,7 @@ AgentEntry.Assistant、ToolResult、Approval 和 Status 按 sequence 投影到 e
 
 ### 阶段 2：建立中立 Agent 模型和持久化
 
-当前状态：已完成主链与 Room 17 持久化，界面仍兼容读取原 executionTrace。
+当前状态：已完成主链与 Room 18 持久化；界面继续兼容原 executionTrace，并在 Run 恢复时从 AgentEntry 重建顺序。
 
 实施：
 
@@ -1232,7 +1254,7 @@ AgentEntry.Assistant、ToolResult、Approval 和 Status 按 sequence 投影到 e
 
 ### 阶段 5：权限和所有工具统一
 
-当前状态：工具 Registry、三档 Computer 权限和结果截断已进入统一调用路径。审批跨进程恢复未完成。
+当前状态：已完成。工具 Registry、三档 Computer 权限、结果截断、审批暂停和跨进程恢复均进入统一调用路径。
 
 实施：
 
@@ -1273,7 +1295,7 @@ AgentEntry.Assistant、ToolResult、Approval 和 Status 按 sequence 投影到 e
 
 ### 阶段 7：生命周期恢复
 
-当前状态：已实现用户取消收尾和 App 重启封存；审批续接与 UNKNOWN 写工具的用户恢复流程未完成。
+当前状态：已完成。用户取消、App 重启封存、审批续接、工具开始事实、同批剩余调用、UNKNOWN 用户决定、Computer 幂等补写和多 Run 串行恢复均已接入。
 
 实施：
 
@@ -1309,6 +1331,7 @@ AgentEntry.Assistant、ToolResult、Approval 和 Status 按 sequence 投影到 e
 3. Provider 只保留单次 Transport、Payload 构建、SSE 解析、Usage 和错误处理。
 4. 工具结果大小限制保留在统一 `AgentToolRuntime`，Provider 历史压缩函数及旧测试已删除。
 5. Responses 与 Anthropic 的原生压缩检查点会随当前 Run 连续状态跨工具轮传递，并按已覆盖的内部 Assistant ID 去重。
+6. `MessageTokenUsageStore` 已删除，最新请求 Usage 只保存在消息本身，Run 与会话累计只从 Agent 表查询。
 
 完成标准：
 
@@ -1344,13 +1367,14 @@ AgentEntry.Assistant、ToolResult、Approval 和 Status 按 sequence 投影到 e
 
 ### 18.3 Room Migration Test
 
-从版本 16 的真实 schema 升级，检查：
+从版本 16 依次升级到 17、18，检查：
 
 * 原会话和消息数量不变。
 * 新表与索引完整。
 * 旧 tokenUsage 仍可读取。
 * 新运行能写入七类实体。
 * 删除会话后相关 Agent 数据级联清理。
+* 17→18 保留旧 Agent 事实，并增加恢复快照和协议身份字段。
 
 ### 18.4 已知日志回归
 
@@ -1392,13 +1416,15 @@ AgentEntry.Assistant、ToolResult、Approval 和 Status 按 sequence 投影到 e
 7. 每轮请求前都执行上下文预算。
 8. 压缩保留摘要和最近完整上下文。
 9. Tool Call 与 Tool Result 永远配对。
-10. Tool 输出有统一边界，完整结果仍可本地查看。
+10. Tool 输出有统一边界，完整结果和本地引用可持久保存。
 11. 三档服务器权限全部经过统一 Tool 预检。
 12. 审批暂停和 App 重启不会重复执行工具。
 13. SSE 无有效事件时会在明确超时后结束。
 14. Provider 切换后可以从中立消息重建上下文。
 15. 旧聊天数据不丢失，旧累计 Usage 不再冒充当前上下文。
 16. TokenUsageAccumulator 和四套 Provider 工具循环完成清理。
+
+当前实施状态：以上 16 项均已落入正式 Android 本地路径。自动验证覆盖上下文、逐请求 Usage、恢复快照、Room 迁移、审批原子暂停与单次决策、工具执行中断分流、同批剩余调用、UNKNOWN 用户决定、Provider continuation 失效、模型与工具循环限制、工具结果私有归档；真机交互继续由用户验收。
 
 ## 二十、风险与取舍
 
@@ -1424,7 +1450,7 @@ AgentEntry.Assistant、ToolResult、Approval 和 Status 按 sequence 投影到 e
 
 ### 20.6 重构期间双路径复杂
 
-逐 Provider 迁移期间会短暂保留新旧路径。迁移开关只用于开发回退，阶段 8 必须删除，禁止长期维护两套 Agent Loop。
+Provider 迁移阶段曾短暂保留新旧路径；阶段 8 已删除旧工具循环。当前只维护统一 AgentLoop。
 
 ## 二十一、明确排除项
 
