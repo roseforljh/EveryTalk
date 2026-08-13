@@ -157,6 +157,20 @@ class ToolLoopContextGuardTest {
         assertEquals(listOf(AppStreamEvent.Content("最终结论")), emitted)
     }
 
+    @Test
+    fun `最终轮长正文在轮次结束前开始流式输出`() = runTest {
+        val emitted = mutableListOf<AppStreamEvent>()
+        val buffer = ToolRoundContentBuffer { emitted += it }
+        val first = AppStreamEvent.Content("a".repeat(40))
+        val second = AppStreamEvent.Content("b".repeat(40))
+
+        buffer.accept(first)
+        assertTrue(emitted.isEmpty())
+        buffer.accept(second)
+
+        assertEquals(listOf(first, second), emitted)
+    }
+
     private fun responseOutput(callId: String, output: String): JsonObject = JsonObject(
         mapOf(
             "type" to JsonPrimitive("function_call_output"),

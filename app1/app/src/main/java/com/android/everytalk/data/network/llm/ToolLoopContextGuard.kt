@@ -10,6 +10,7 @@ import kotlinx.serialization.json.jsonPrimitive
 
 internal const val TOOL_CONTEXT_COMPRESSION_STATUS = "正在压缩上下文"
 internal const val TRUNCATED_TOOL_OUTPUT_TEXT = "工具输出已为上下文窗口缩减，关键结论请参考后续回答"
+private const val TOOL_ROUND_CLASSIFICATION_WINDOW_CHARS = 64
 
 /**
  * 暂存单轮模型正文，等本轮是否调用工具明确后再决定去向。
@@ -21,6 +22,8 @@ internal class ToolRoundContentBuffer(
     private val pendingContent = mutableListOf<AppStreamEvent>()
     private var pendingFinalContent: AppStreamEvent.ContentFinal? = null
     private var toolCallObserved = false
+    private var contentCommitted = false
+    private var pendingContentChars = 0
 
     suspend fun accept(event: AppStreamEvent) {
         when (event) {
@@ -28,8 +31,17 @@ internal class ToolRoundContentBuffer(
             is AppStreamEvent.Text,
             -> if (toolCallObserved) {
                 emitAsReasoning(event)
+            } else if (contentCommitted) {
+                emitEvent(event)
             } else {
                 pendingContent += event
+                pendingContentChars += event.textLength()
+                // ponytail: 只保留 64 字符分类窗口。工具轮的常见短前导语仍进入执行过程，
+                // 长正文会尽快下发；若供应商先输出超长前导语再调工具，前 64 字符会作为正文。
+                if (pendingContentChars >= TOOL_ROUND_CLASSIFICATION_WINDOW_CHARS) {
+                    flushContent(asReasoning = false)
+                    contentCommitted = true
+                }
             }
             is AppStreamEvent.ContentFinal -> pendingFinalContent = event
             is AppStreamEvent.ToolCall -> {
@@ -53,6 +65,7 @@ internal class ToolRoundContentBuffer(
             if (asReasoning) emitAsReasoning(event) else emitEvent(event)
         }
         pendingContent.clear()
+        pendingContentChars = 0
     }
 
     private suspend fun emitAsReasoning(event: AppStreamEvent) {
@@ -62,6 +75,12 @@ internal class ToolRoundContentBuffer(
             else -> return
         }
         if (text.isNotEmpty()) emitEvent(AppStreamEvent.Reasoning(text))
+    }
+
+    private fun AppStreamEvent.textLength(): Int = when (this) {
+        is AppStreamEvent.Content -> text.length
+        is AppStreamEvent.Text -> text.length
+        else -> 0
     }
 }
 
