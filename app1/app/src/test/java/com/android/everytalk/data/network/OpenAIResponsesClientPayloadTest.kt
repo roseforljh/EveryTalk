@@ -205,6 +205,26 @@ class OpenAIResponsesClientPayloadTest {
     }
 
     @Test
+    fun `responses无原生continuation时保留中立reasoning`() {
+        val payload = Json.parseToJsonElement(
+            buildResponsesPayloadForTest(
+                request(
+                    messages = listOf(
+                        SimpleTextApiMessage(role = "user", content = "检查服务"),
+                        AgentAssistantApiMessage(
+                            reasoning = "分析",
+                            toolCalls = listOf(AgentToolCallApiPart("call-1", "exec", JsonObject(emptyMap()))),
+                        ),
+                    ),
+                ),
+            ),
+        ).jsonObject
+
+        val input = payload.getValue("input").jsonArray
+        assertEquals(1, input.count { it.jsonObject["content"]?.jsonPrimitive?.content == "分析" })
+    }
+
+    @Test
     fun `responses原生压缩后的下一轮不重复发送已覆盖历史`() {
         val compacted = """[{"id":"cmp-1","type":"compaction","encrypted_content":"opaque"},{"type":"function_call","call_id":"call-1","name":"exec","arguments":"{}"}]"""
         val request = request(

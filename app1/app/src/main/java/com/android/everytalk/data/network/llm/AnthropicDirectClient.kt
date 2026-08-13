@@ -446,6 +446,12 @@ object AnthropicDirectClient {
                 }
             }
             is AgentAssistantApiMessage -> buildJsonArray {
+                message.reasoning.takeIf(String::isNotBlank)?.let { reasoning ->
+                    addJsonObject {
+                        put("type", "text")
+                        put("text", reasoning)
+                    }
+                }
                 message.text.takeIf(String::isNotBlank)?.let { text ->
                     addJsonObject {
                         put("type", "text")

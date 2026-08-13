@@ -184,6 +184,26 @@ class AnthropicDirectClientTest {
     }
 
     @Test
+    fun `无原生continuation时保留中立reasoning`() {
+        val payload = Json.parseToJsonElement(
+            AnthropicDirectClient.buildAnthropicPayload(
+                request(
+                    messages = listOf(
+                        SimpleTextApiMessage(role = "user", content = "检查服务"),
+                        AgentAssistantApiMessage(
+                            reasoning = "分析",
+                            toolCalls = listOf(AgentToolCallApiPart("tool-1", "weather", JsonObject(emptyMap()))),
+                        ),
+                    ),
+                ),
+            ),
+        ).jsonObject
+        val assistant = payload.getValue("messages").jsonArray.last().jsonObject
+
+        assertEquals("分析", assistant.getValue("content").jsonArray.first().jsonObject.getValue("text").jsonPrimitive.content)
+    }
+
+    @Test
     fun `anthropic原生压缩后的下一轮只追加未覆盖工具结果`() {
         val request = request(
             messages = listOf(

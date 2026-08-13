@@ -396,6 +396,12 @@ object OpenAIResponsesClient {
                 }
             }
             is AgentAssistantApiMessage -> buildList {
+                if (reasoning.isNotBlank()) {
+                    add(buildJsonObject {
+                        put("role", "assistant")
+                        put("content", reasoning)
+                    })
+                }
                 if (text.isNotBlank()) {
                     add(buildJsonObject {
                         put("role", "assistant")

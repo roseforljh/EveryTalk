@@ -218,6 +218,9 @@ object GeminiDirectClient {
                                     }
                                 }
                                 is AgentAssistantApiMessage -> {
+                                    message.reasoning.takeIf(String::isNotBlank)?.let { reasoning ->
+                                        addJsonObject { put("text", reasoning) }
+                                    }
                                     message.text.takeIf(String::isNotBlank)?.let { text ->
                                         addJsonObject { put("text", text) }
                                     }
