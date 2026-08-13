@@ -131,6 +131,10 @@ fun ChatScreen(
     val isMcpEnabled by viewModel.stateHolder._isMcpEnabledForNextRequest.collectAsState()
     val isLoadingHistoryData by viewModel.isLoadingHistoryData.collectAsState()
     val conversationId by viewModel.currentConversationId.collectAsState()
+    val pendingHostCommand by viewModel.pendingComputerHostCommand.collectAsState()
+    val currentHostCommand = pendingHostCommand?.takeIf { request ->
+        request.context.conversationId == conversationId
+    }
     val systemPrompt by viewModel.systemPrompt.collectAsState()
     val isSystemPromptEngaged by viewModel.isSystemPromptEngaged.collectAsState()
     val isSystemPromptExpanded by remember(conversationId) {
@@ -146,6 +150,9 @@ fun ChatScreen(
         mutableLongStateOf(historyLoadGeneration)
     }
     var historyLoadingOverlayKey by remember { mutableStateOf<String?>(null) }
+    var isHostCommandCardRendered by remember(conversationId) { mutableStateOf(false) }
+    var wasAtBottomBeforeHostCommand by remember(conversationId) { mutableStateOf(true) }
+    var restoreBottomAfterHostCard by remember(conversationId) { mutableStateOf<Boolean?>(null) }
 
     LaunchedEffect(historyLoadGeneration) {
         if (shouldStartHistoryConversationLoadingOverlay(
@@ -237,6 +244,45 @@ fun ChatScreen(
         LazyListState(firstVisibleItemIndex = initialListIndex ?: 0)
     }
     val scrollStateManager = rememberChatScrollStateManager(listState, coroutineScope)
+
+    // 卡片未出现时持续保存真实滚动位置。请求进入组合后布局会立刻增高，
+    // 因此不能届时再读取 canScrollForward，否则拿到的已经是增高后的状态。
+    LaunchedEffect(scrollStateManager, currentHostCommand, isHostCommandCardRendered) {
+        if (currentHostCommand == null && !isHostCommandCardRendered) {
+            snapshotFlow { !listState.canScrollForward }
+                .distinctUntilChanged()
+                .collect { isAtBottom -> wasAtBottomBeforeHostCommand = isAtBottom }
+        }
+    }
+
+    // 只有卡片出现前就在底部时，关闭后才恢复到底部，避免打断主动向上浏览的用户。
+    LaunchedEffect(currentHostCommand?.requestId) {
+        if (currentHostCommand != null) {
+            restoreBottomAfterHostCard = wasAtBottomBeforeHostCommand
+        }
+    }
+
+    // 卡片完成自身退场并真正移出输入区后，再处理列表位置。
+    // 等布局提交两帧后主动钉住真实底部，按钮恢复时已经没有可见条件。
+    LaunchedEffect(isHostCommandCardRendered, currentHostCommand) {
+        val shouldRestoreBottom = restoreBottomAfterHostCard ?: return@LaunchedEffect
+        if (isHostCommandCardRendered || currentHostCommand != null) return@LaunchedEffect
+
+        repeat(2) { withFrameNanos { } }
+        if (shouldRestoreBottom && listState.layoutInfo.totalItemsCount > 0) {
+            scrollStateManager.pinToRealBottomUntilUserScroll()
+            snapshotFlow { !listState.canScrollForward }
+                .filter { it }
+                .first()
+            withFrameNanos { }
+        }
+        restoreBottomAfterHostCard = null
+    }
+
+    val suppressScrollButtonForHostCard =
+        currentHostCommand != null ||
+            isHostCommandCardRendered ||
+            restoreBottomAfterHostCard != null
 
     LaunchedEffect(scrollSessionKey, historyLoadGeneration) {
         initialListIndex = null
@@ -690,6 +736,10 @@ fun ChatScreen(
                 viewModel = viewModel,
                 onShowVoiceInput = { navController.navigate(Screen.VOICE_INPUT_SCREEN) },
                 onHeightChange = { height -> inputAreaHeightPx = height },
+                hostCommandConfirmationRequest = currentHostCommand,
+                onHostCommandCardVisibilityChange = { isVisible ->
+                    isHostCommandCardRendered = isVisible
+                },
                 // MCP 相关参数
                 mcpServerStates = mcpServerStates,
                 onAddMcpServer = { viewModel.addMcpServer(it) },
@@ -700,7 +750,8 @@ fun ChatScreen(
 
             ScrollToBottomButton(
                 scrollStateManager = scrollStateManager,
-                bottomPadding = inputAreaHeightDp + 12.dp
+                bottomPadding = inputAreaHeightDp + 12.dp,
+                suppressed = suppressScrollButtonForHostCard,
             )
             }
 

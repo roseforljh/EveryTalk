@@ -130,6 +130,8 @@ fun ChatInputArea(
     viewModel: com.android.everytalk.statecontroller.AppViewModel,
     onShowVoiceInput: () -> Unit,
     onHeightChange: (Int) -> Unit = {},
+    hostCommandConfirmationRequest: ComputerHostCommandConfirmationRequest? = null,
+    onHostCommandCardVisibilityChange: (Boolean) -> Unit = {},
     // MCP 相关参数
     mcpServerStates: Map<String, McpServerState> = emptyMap(),
     onAddMcpServer: (McpServerConfig) -> Unit = {},
@@ -156,7 +158,6 @@ fun ChatInputArea(
     val computerSelections by viewModel.computerSelections.collectAsState()
     val currentConversationId by viewModel.currentConversationId.collectAsState()
     val selectedComputerId = computerSelections[currentConversationId]
-    val pendingHostCommand by viewModel.pendingComputerHostCommand.collectAsState()
     val disclosureStore = remember(context) { ComputerDisclosureStore(context) }
     var pendingAgentAction by remember { mutableStateOf<PendingAgentAction?>(null) }
     var pendingAgentDisclosures by remember { mutableStateOf<Set<ComputerDisclosureKind>>(emptySet()) }
@@ -500,11 +501,12 @@ fun ChatInputArea(
                     .fillMaxWidth()
             ) {
                 ComputerHostCommandConfirmationCard(
-                    request = pendingHostCommand?.takeIf { request ->
-                        request.context.conversationId == currentConversationId
-                    },
+                    request = hostCommandConfirmationRequest,
                     onDecision = { requestId, approved ->
                         viewModel.respondToComputerHostCommand(requestId, approved)
+                    },
+                    onVisibilityChange = { isVisible ->
+                        onHostCommandCardVisibilityChange(isVisible)
                     },
                 )
                 // 普通输入附件继续沿用输入框的水平留白，权限卡片单独占满统一悬浮层宽度。

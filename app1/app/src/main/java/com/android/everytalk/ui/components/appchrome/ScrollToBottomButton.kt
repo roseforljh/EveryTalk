@@ -38,8 +38,9 @@ private const val ScrollToBottomFadeInMillis = 360
 
 internal fun shouldShowScrollToBottomButtonForFrame(
     baseVisible: Boolean,
+    suppressed: Boolean = false,
 ): Boolean {
-    return baseVisible
+    return baseVisible && !suppressed
 }
 
 internal fun scrollToBottomButtonFadeInMillis(): Int {
@@ -66,8 +67,13 @@ fun ScrollToBottomButton(
     scrollStateManager: ChatScrollStateManager,
     modifier: Modifier = Modifier,
     bottomPadding: Dp = 150.dp,
-    endPadding: Dp = 0.dp
+    endPadding: Dp = 0.dp,
+    suppressed: Boolean = false,
 ) {
+    // 权限卡退场时必须直接移除按钮。AnimatedVisibility 的退场图层会保留旧坐标，
+    // 输入区缩短后就会在页面中部闪现一次。
+    if (suppressed) return
+
     val baseVisible by scrollStateManager.showScrollToBottomButton
     val isScrollInProgress by scrollStateManager.isScrollInProgress
     val showButton = shouldShowScrollToBottomButtonForFrame(

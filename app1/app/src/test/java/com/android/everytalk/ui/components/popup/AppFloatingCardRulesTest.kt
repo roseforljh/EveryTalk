@@ -1,10 +1,19 @@
 package com.android.everytalk.ui.components.popup
 
 import java.io.File
+import com.android.everytalk.ui.theme.LightPopupBackground
+import androidx.compose.ui.graphics.Color
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AppFloatingCardRulesTest {
+    @Test
+    fun `统一悬浮卡片浅色背景为固定淡灰色`() {
+        assertEquals(LightPopupBackground, resolveAppFloatingCardContainerColor(isDarkTheme = false))
+        assertEquals(Color(0xFF212121), resolveAppFloatingCardContainerColor(isDarkTheme = true))
+    }
+
     @Test
     fun `所有自定义 Popup 使用统一动画悬浮卡片`() {
         val sourceFiles = mainSourceRoot()
@@ -66,6 +75,7 @@ class AppFloatingCardRulesTest {
         ).readText(Charsets.UTF_8)
 
         assertTrue(source.contains("AppFloatingCardShape = RoundedCornerShape(28.dp)"))
+        assertTrue("浅色悬浮卡片必须复用统一淡灰背景", source.contains("LightPopupBackground"))
         assertTrue(source.contains("fun AppFloatingCardContainer("))
         assertTrue(source.contains("AppFloatingCardElevation = 8.dp"))
         assertTrue("统一悬浮卡片必须从顶部同步展开", source.contains("TransformOrigin(0.5f, 0f)"))
@@ -130,11 +140,14 @@ class AppFloatingCardRulesTest {
             .substringBefore("internal fun computerStatusLabelRes")
 
         assertTrue(scaffoldSource.contains("AppFloatingCardContainer("))
+        assertTrue(scaffoldSource.contains(".background(containerColor)"))
         assertTrue(scaffoldSource.contains("heightIn(max = 220.dp)"))
         assertTrue(scaffoldSource.contains("verticalScroll(rememberScrollState())"))
         assertTrue(confirmationSource.contains("AppFloatingCardScaffold("))
         assertTrue(confirmationSource.contains("header = {"))
         assertTrue(confirmationSource.contains("footer = {"))
+        assertTrue("确认卡必须保留到统一退场动画完成", confirmationSource.contains("visible = request != null"))
+        assertTrue(confirmationSource.contains("onExitAnimationFinished = {"))
     }
 
     private fun mainSourceRoot(): File {

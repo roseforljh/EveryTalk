@@ -227,6 +227,9 @@ class ComputerUiAlignmentRulesTest {
         assertTrue(detailSource.contains("computer_more_settings"))
         assertTrue(detailSource.contains("ComputerPermissionSettingsCard("))
         assertTrue(detailSource.contains("ComputerMaintenanceCard("))
+        assertTrue(detailSource.contains("computer_workspace_container_count"))
+        assertTrue(detailSource.contains("val containerCount = remember(workspaces)"))
+        assertTrue(detailSource.contains("workspace.runMode == ComputerRunMode.CONTAINER"))
         val moreSettingsSource = detailSource.substringAfter("private fun ComputerMoreSettingsCard(")
             .substringBefore("private fun ComputerSettingsGroup(")
         assertTrue(moreSettingsSource.contains("computer_settings_security"))
@@ -307,11 +310,18 @@ class ComputerUiAlignmentRulesTest {
             .readText(Charsets.UTF_8)
         val panelSource = sourceFile("ui/screens/MainScreen/chat/text/ui/ChatInputPanels.kt")
             .readText(Charsets.UTF_8)
+        val chatScreenSource = sourceFile("ui/screens/MainScreen/chat/ChatScreen.kt")
+            .readText(Charsets.UTF_8)
         val confirmationIndex = inputSource.indexOf("ComputerHostCommandConfirmationCard(")
         val inputFieldIndex = inputSource.indexOf("BasicTextField(", confirmationIndex)
 
         assertTrue(confirmationIndex >= 0)
         assertTrue(inputFieldIndex > confirmationIndex)
+        assertTrue(chatScreenSource.contains("suppressScrollButtonForHostCard"))
+        assertTrue(chatScreenSource.contains("suppressed = suppressScrollButtonForHostCard"))
+        assertTrue(chatScreenSource.contains("wasAtBottomBeforeHostCommand"))
+        assertTrue(chatScreenSource.contains("snapshotFlow { !listState.canScrollForward }"))
+        assertTrue(chatScreenSource.contains("scrollStateManager.pinToRealBottomUntilUserScroll()"))
         assertTrue(panelSource.contains("agent_host_command_allow_once"))
         assertTrue(panelSource.contains("agent_host_command_reject"))
         assertFalse(panelSource.contains("agent_host_command_always"))
@@ -322,7 +332,7 @@ class ComputerUiAlignmentRulesTest {
         val footerSource = panelSource.substringAfter("footer = {")
             .substringBefore("internal fun computerStatusLabelRes")
         assertTrue(footerSource.contains(".fillMaxWidth()"))
-        assertTrue(panelSource.contains("request.requestId"))
+        assertTrue(panelSource.contains("currentRequest.requestId"))
     }
 
     @Test

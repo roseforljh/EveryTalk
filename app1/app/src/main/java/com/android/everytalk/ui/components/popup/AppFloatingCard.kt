@@ -4,6 +4,7 @@ import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.border
+import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -36,6 +37,7 @@ import androidx.compose.ui.unit.offset
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupPositionProvider
 import androidx.compose.ui.window.PopupProperties
+import com.android.everytalk.ui.theme.LightPopupBackground
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 
@@ -51,7 +53,10 @@ private const val AppFloatingCardExitDurationMillis = 80
 
 @Composable
 fun appFloatingCardContainerColor(): Color =
-    if (isSystemInDarkTheme()) Color(0xFF212121) else Color.White
+    resolveAppFloatingCardContainerColor(isSystemInDarkTheme())
+
+internal fun resolveAppFloatingCardContainerColor(isDarkTheme: Boolean): Color =
+    if (isDarkTheme) Color(0xFF212121) else LightPopupBackground
 
 @Composable
 fun appFloatingCardBorderColor(): Color =
@@ -161,12 +166,19 @@ fun AppFloatingCardScaffold(
     footer: @Composable RowScope.() -> Unit,
     content: @Composable ColumnScope.() -> Unit,
 ) {
+    val containerColor = appFloatingCardContainerColor()
     AppFloatingCardContainer(
         visible = visible,
         modifier = modifier,
         onExitAnimationFinished = onExitAnimationFinished,
     ) {
-        Column(modifier = Modifier.fillMaxWidth()) {
+        // Surface 负责圆角和阴影，这一层负责覆盖头、中、尾的全部实际内容区域。
+        // 两层使用同一颜色，固定区域不会再透出主题默认的白色 Surface。
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(containerColor),
+        ) {
             Column(
                 modifier = Modifier.fillMaxWidth(),
                 content = header,

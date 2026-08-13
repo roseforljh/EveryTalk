@@ -384,8 +384,22 @@ internal fun ComputerSelectionCard(
 internal fun ComputerHostCommandConfirmationCard(
     request: ComputerHostCommandConfirmationRequest?,
     onDecision: (requestId: String, approved: Boolean) -> Unit,
+    onVisibilityChange: (Boolean) -> Unit = {},
 ) {
-    if (request == null) return
+    var displayedRequest by remember { mutableStateOf(request) }
+    val latestOnVisibilityChange by rememberUpdatedState(onVisibilityChange)
+    LaunchedEffect(request) {
+        if (request != null) {
+            displayedRequest = request
+            latestOnVisibilityChange(true)
+        } else if (displayedRequest != null) {
+            latestOnVisibilityChange(true)
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose { latestOnVisibilityChange(false) }
+    }
+    val currentRequest = displayedRequest ?: return
     val isDark = isSystemInDarkTheme()
     val contentColor = if (isDark) Color.White else Color(0xFF0D0D0D)
     val secondaryColor = contentColor.copy(alpha = 0.62f)
@@ -394,9 +408,12 @@ internal fun ComputerHostCommandConfirmationCard(
     val buttonContent = if (isDark) Color(0xFF0D0D0D) else Color.White
 
     AppFloatingCardScaffold(
-        visible = true,
+        visible = request != null,
         modifier = Modifier.fillMaxWidth(),
-        onExitAnimationFinished = {},
+        onExitAnimationFinished = {
+            displayedRequest = null
+            latestOnVisibilityChange(false)
+        },
         header = {
             // 头部和底部直接使用统一卡片背景，中间命令内容单独滚动。
             Column(
@@ -410,7 +427,7 @@ internal fun ComputerHostCommandConfirmationCard(
                     color = contentColor,
                 )
                 Text(
-                    text = stringResource(R.string.agent_host_command_server, request.computerName),
+                    text = stringResource(R.string.agent_host_command_server, currentRequest.computerName),
                     style = MaterialTheme.typography.bodySmall,
                     color = secondaryColor,
                 )
@@ -422,7 +439,7 @@ internal fun ComputerHostCommandConfirmationCard(
                 verticalArrangement = Arrangement.spacedBy(9.dp),
             ) {
                 Text(
-                    text = request.reason,
+                    text = currentRequest.reason,
                     style = MaterialTheme.typography.bodyMedium,
                     color = contentColor,
                 )
@@ -433,7 +450,7 @@ internal fun ComputerHostCommandConfirmationCard(
                 ) {
                     SelectionContainer {
                         Text(
-                            text = request.command,
+                            text = currentRequest.command,
                             modifier = Modifier.padding(12.dp),
                             style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                             color = contentColor,
@@ -441,11 +458,11 @@ internal fun ComputerHostCommandConfirmationCard(
                     }
                 }
                 Text(
-                    text = stringResource(R.string.agent_host_command_cwd, request.cwd),
+                    text = stringResource(R.string.agent_host_command_cwd, currentRequest.cwd),
                     style = MaterialTheme.typography.labelSmall,
                     color = secondaryColor,
                 )
-                if (request.requestsPrivilege) {
+                if (currentRequest.requestsPrivilege) {
                     Text(
                         text = stringResource(R.string.agent_host_command_detail_privilege),
                         style = MaterialTheme.typography.labelSmall,
@@ -462,7 +479,7 @@ internal fun ComputerHostCommandConfirmationCard(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 OutlinedButton(
-                    onClick = { onDecision(request.requestId, false) },
+                    onClick = { onDecision(currentRequest.requestId, false) },
                     modifier = Modifier
                         .weight(1f)
                         .height(48.dp),
@@ -473,7 +490,7 @@ internal fun ComputerHostCommandConfirmationCard(
                     Text(stringResource(R.string.agent_host_command_reject))
                 }
                 Button(
-                    onClick = { onDecision(request.requestId, true) },
+                    onClick = { onDecision(currentRequest.requestId, true) },
                     modifier = Modifier
                         .weight(1f)
                         .height(48.dp),

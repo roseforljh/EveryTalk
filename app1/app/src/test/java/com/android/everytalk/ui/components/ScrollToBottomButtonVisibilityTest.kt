@@ -15,6 +15,16 @@ class ScrollToBottomButtonVisibilityTest {
     }
 
     @Test
+    fun `权限卡片显示和退场时不显示回到底部按钮`() {
+        assertFalse(
+            shouldShowScrollToBottomButtonForFrame(
+                baseVisible = true,
+                suppressed = true,
+            ),
+        )
+    }
+
+    @Test
     fun `dark theme uses explicit visible border color`() {
         assertEquals(Color.White.copy(alpha = 0.42f), scrollToBottomButtonDarkBorderColor())
         assertNull(scrollToBottomButtonBorder(isDarkTheme = false))
