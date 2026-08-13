@@ -16,7 +16,6 @@ internal class ApiHandlerResourceController(
     private val generatedImageSourceFingerprints: ConcurrentHashMap<String, MutableSet<String>>,
     private val promptLeakDetectors: ConcurrentHashMap<String, PromptLeakGuard.StreamingDetector>,
     private val retryCountMap: ConcurrentHashMap<String, Int>,
-    private val messageTokenUsageStore: MessageTokenUsageStore,
     private val logger: AppLogger.ComponentLogger,
     private val onAiMessageFullTextChanged: (messageId: String, currentFullText: String) -> Unit,
 ) {
@@ -26,7 +25,6 @@ internal class ApiHandlerResourceController(
         promptLeakDetectors.remove(messageId)
         generatedImageSourceFingerprints.remove(messageId)
         retryCountMap.remove(messageId)
-        messageTokenUsageStore.remove(messageId)
     }
 
     fun clearTextChatResources() {
@@ -57,7 +55,6 @@ internal class ApiHandlerResourceController(
             // 🛡️ 清理 prompt 泄露检测器
             promptLeakDetectors.remove(messageId)
             generatedImageSourceFingerprints.remove(messageId)
-            messageTokenUsageStore.remove(messageId)
         }
         
         // 清理已处理的消息ID集合
@@ -113,7 +110,6 @@ internal class ApiHandlerResourceController(
             // 🛡️ 清理 prompt 泄露检测器
             promptLeakDetectors.remove(messageId)
             generatedImageSourceFingerprints.remove(messageId)
-            messageTokenUsageStore.remove(messageId)
         }
         
         // 清理已处理的消息ID集合
@@ -204,7 +200,6 @@ internal class ApiHandlerResourceController(
                 }
                 promptLeakDetectors.remove(messageId)
                 generatedImageSourceFingerprints.remove(messageId)
-                messageTokenUsageStore.remove(messageId)
             }
             
             // 清理已处理的消息ID集合

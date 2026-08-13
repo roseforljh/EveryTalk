@@ -14,7 +14,6 @@ import org.junit.Test
 class ApiHandlerTokenUsageTest {
     @Test
     fun `usage按AI消息隔离并允许最终值晚于结束事件`() {
-        val store = MessageTokenUsageStore()
         val first = Message(
             id = "ai-1",
             text = "第一条",
@@ -32,19 +31,19 @@ class ApiHandlerTokenUsageTest {
         )
         val second = Message(id = "ai-2", text = "第二条", sender = Sender.AI)
 
-        val firstPartial = store.apply(
+        val firstPartial = applyMessageTokenUsage(
             first,
             AppStreamEvent.Usage(
                 TokenUsage(inputTokens = 100, isFinal = false, source = TokenUsageSource.ANTHROPIC)
             ),
         )
-        val secondFinal = store.apply(
+        val secondFinal = applyMessageTokenUsage(
             second,
             AppStreamEvent.Usage(
                 TokenUsage(inputTokens = 7, outputTokens = 2, isFinal = true, source = TokenUsageSource.OPENAI_CHAT)
             ),
         )
-        val firstFinalAfterFinish = store.apply(
+        val firstFinalAfterFinish = applyMessageTokenUsage(
             firstPartial,
             AppStreamEvent.Usage(
                 TokenUsage(outputTokens = 30, isFinal = true, source = TokenUsageSource.ANTHROPIC)
@@ -83,5 +82,37 @@ class ApiHandlerTokenUsageTest {
         assertEquals(TokenUsageSource.ESTIMATED, completed.tokenUsage?.source)
         assertEquals(true, completed.tokenUsage?.isFinal)
         assertNull(completed.tokenUsage?.totalTokens)
+    }
+
+    @Test
+    fun `新请求序号不会继承上一轮usage`() {
+        val previous = Message(
+            id = "ai-agent",
+            text = "",
+            sender = Sender.AI,
+            tokenUsage = TokenUsage(
+                inputTokens = 100,
+                outputTokens = 20,
+                isFinal = true,
+                source = TokenUsageSource.OPENAI_CHAT,
+                requestOrdinal = 1,
+            ),
+        )
+
+        val next = applyMessageTokenUsage(
+            previous,
+            AppStreamEvent.Usage(
+                TokenUsage(
+                    inputTokens = 110,
+                    isFinal = false,
+                    source = TokenUsageSource.OPENAI_CHAT,
+                    requestOrdinal = 2,
+                ),
+            ),
+        )
+
+        assertEquals(110L, next.tokenUsage?.inputTokens)
+        assertNull(next.tokenUsage?.outputTokens)
+        assertEquals(2, next.tokenUsage?.requestOrdinal)
     }
 }

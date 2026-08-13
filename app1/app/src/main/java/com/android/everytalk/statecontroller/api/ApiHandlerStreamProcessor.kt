@@ -443,7 +443,6 @@ internal class ApiHandlerStreamProcessor(
     private val generatedImageSourceFingerprints: ConcurrentHashMap<String, MutableSet<String>>,
     private val promptLeakDetectors: ConcurrentHashMap<String, PromptLeakGuard.StreamingDetector>,
     private val retryCountMap: ConcurrentHashMap<String, Int>,
-    private val messageTokenUsageStore: MessageTokenUsageStore,
     private val logger: AppLogger.ComponentLogger,
     private val onAiMessageFullTextChanged: (messageId: String, currentFullText: String) -> Unit,
     private val errorHandler: ApiHandlerErrorController,
@@ -737,7 +736,7 @@ internal class ApiHandlerStreamProcessor(
                     )
                 }
                 is AppStreamEvent.Usage -> {
-                    updatedMessage = messageTokenUsageStore.apply(latestMessageForUpdate(), appEvent)
+                    updatedMessage = applyMessageTokenUsage(latestMessageForUpdate(), appEvent)
                     val usage = updatedMessage.tokenUsage
                     logger.debug(
                         "Token usage: input=${usage?.inputTokens}, output=${usage?.outputTokens}, " +
@@ -755,7 +754,7 @@ internal class ApiHandlerStreamProcessor(
                     }
                 }
                 is AppStreamEvent.AgentUsage -> {
-                    updatedMessage = messageTokenUsageStore.apply(latestMessageForUpdate(), appEvent)
+                    updatedMessage = applyMessageTokenUsage(latestMessageForUpdate(), appEvent)
                     messageList[messageIndex] = updatedMessage
                     viewModelScope.launch(Dispatchers.IO) {
                         historyManager.saveCurrentChatToHistoryIfNeeded(
@@ -764,6 +763,8 @@ internal class ApiHandlerStreamProcessor(
                         )
                     }
                 }
+                // 审批事实和卡片由 AgentApprovalCoordinator 从 Room 投影，这里不改消息正文。
+                is AppStreamEvent.AgentApprovalRequired -> Unit
                 // ProviderContinuation 仅在 AgentLoop 内用于下一轮协议连续状态，不投影到界面。
                 is AppStreamEvent.ProviderContinuation -> Unit
                 is AppStreamEvent.NativeContextCompaction -> {
