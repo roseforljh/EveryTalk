@@ -70,7 +70,8 @@ internal object MarkdownContractValidator {
             return markdown
         }
 
-        val lines = splitSourceLines(markdown)
+        val containerRecovered = recoverBrokenContainerFenceIndentation(markdown)
+        val lines = splitSourceLines(containerRecovered)
         val repairOffsets = IntArray(lines.size) { -1 }
         val fences = MarkdownFenceTracker()
         var index = 0
@@ -98,9 +99,9 @@ internal object MarkdownContractValidator {
             index = closingIndex + 1
         }
 
-        if (repairOffsets.all { it < 0 }) return markdown
+        if (repairOffsets.all { it < 0 }) return containerRecovered
 
-        return buildString(markdown.length + lines.size) {
+        return buildString(containerRecovered.length + lines.size) {
             lines.forEachIndexed { lineIndex, line ->
                 val repairOffset = repairOffsets[lineIndex]
                 if (repairOffset >= 0) {
@@ -114,6 +115,130 @@ internal object MarkdownContractValidator {
             }
         }
     }
+
+    private data class ContainerFenceRepair(
+        val openingLine: Int,
+        val closingLine: Int,
+        val containers: List<MarkdownContainerToken>,
+    )
+
+    /**
+     * 模型偶尔只给列表内围栏和部分代码行添加列表缩进，导致代码中途退出容器，原关闭围栏
+     * 随后会被解析为新的开始围栏。确认同一容器中存在关闭围栏且正文已经越界后，将整块提升到
+     * 顶层；合法的列表、引用和顶层围栏保持原样。
+     */
+    private fun recoverBrokenContainerFenceIndentation(markdown: String): String {
+        val lines = splitSourceLines(markdown)
+        if (lines.size < 3) return markdown
+
+        val repairs = mutableListOf<ContainerFenceRepair>()
+        var activeListPaths = emptyList<List<MarkdownContainerToken>>()
+        var index = 0
+
+        while (index < lines.size) {
+            val line = lines[index].text
+            val opening = parseFenceOpeningLine(line, activeListPaths)
+            opening.listPaths?.let { activeListPaths = it }
+            val marker = opening.marker?.takeIf { candidate ->
+                candidate.containers.isNotEmpty() && hasFenceLanguage(line, candidate)
+            }
+            if (marker == null) {
+                index++
+                continue
+            }
+
+            var bodyLeftContainer = false
+            var closingLine = -1
+            var cursor = index + 1
+            while (cursor < lines.size) {
+                val line = lines[cursor].text
+                val closesInsideContainer = isFenceClosingLine(line, marker)
+                val closesOutsideContainer = isTopLevelFenceClosingLine(line, marker)
+                if (closesInsideContainer || closesOutsideContainer) {
+                    closingLine = cursor
+                    bodyLeftContainer = bodyLeftContainer || (!closesInsideContainer && closesOutsideContainer)
+                    break
+                }
+                if (parseFenceOpeningLine(line, emptyList()).marker?.let(::hasFenceLanguageAtTopLevel) == true) {
+                    break
+                }
+                if (line.isNotBlank() && !matchesFenceContainerPath(line, marker.containers)) {
+                    bodyLeftContainer = true
+                }
+                cursor++
+            }
+
+            if (bodyLeftContainer && closingLine >= 0) {
+                repairs += ContainerFenceRepair(index, closingLine, marker.containers)
+            }
+            index = if (closingLine >= 0) closingLine + 1 else index + 1
+        }
+
+        if (repairs.isEmpty()) return markdown
+
+        return buildString(markdown.length + repairs.size * 2) {
+            var lineIndex = 0
+            repairs.forEach { repair ->
+                while (lineIndex < repair.openingLine) {
+                    append(lines[lineIndex].text)
+                    append(lines[lineIndex].ending)
+                    lineIndex++
+                }
+
+                if (repair.openingLine > 0 && lines[repair.openingLine - 1].text.isNotBlank()) {
+                    append(preferredLineEnding(lines[repair.openingLine]))
+                }
+                while (lineIndex <= repair.closingLine) {
+                    val promoted = stripMarkdownContainers(lines[lineIndex].text, repair.containers)
+                    append(
+                        if (lineIndex == repair.openingLine || lineIndex == repair.closingLine) {
+                            promoted.trimStart(' ', '\t')
+                        } else {
+                            promoted
+                        }
+                    )
+                    append(lines[lineIndex].ending)
+                    lineIndex++
+                }
+                if (lineIndex < lines.size && lines[lineIndex].text.isNotBlank()) {
+                    append(preferredLineEnding(lines[repair.closingLine]))
+                }
+            }
+            while (lineIndex < lines.size) {
+                append(lines[lineIndex].text)
+                append(lines[lineIndex].ending)
+                lineIndex++
+            }
+        }
+    }
+
+    private fun isTopLevelFenceClosingLine(line: String, marker: FenceMarker): Boolean {
+        val contentStart = markdownContainerContentStart(line, emptyList()) ?: return false
+        if (contentStart >= line.length || line[contentStart] != marker.marker) return false
+        val length = countRun(line, contentStart, marker.marker)
+        return length >= marker.length && line.substring(contentStart + length).isBlank()
+    }
+
+    private fun hasFenceLanguageAtTopLevel(marker: FenceMarker): Boolean = marker.containers.isEmpty()
+
+    private fun hasFenceLanguage(line: String, marker: FenceMarker): Boolean {
+        val contentStart = markdownContainerContentStart(line, marker.containers) ?: return false
+        val markerLength = countRun(line, contentStart, marker.marker)
+        return line.substring(contentStart + markerLength).trim().isNotEmpty()
+    }
+
+    private fun stripMarkdownContainers(
+        line: String,
+        containers: List<MarkdownContainerToken>,
+    ): String {
+        var cursor = 0
+        containers.forEach { container ->
+            cursor = consumeMarkdownContainer(line, cursor, container) ?: return line
+        }
+        return line.substring(cursor)
+    }
+
+    private fun preferredLineEnding(line: SourceLine): String = line.ending.ifEmpty { "\n" }
 
     private data class EmbeddedFenceOpening(
         val offset: Int,

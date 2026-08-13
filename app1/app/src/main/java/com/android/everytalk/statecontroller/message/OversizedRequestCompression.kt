@@ -370,6 +370,7 @@ private fun AbstractApiMessage.compressionSourceText(): String = when (this) {
             ?.takeUnless { it.isAttachmentContext() }
             ?.let { "[文本段 ${index + 1}]\n${it.text}" }
     }.joinToString("\n\n")
+    else -> ""
 }
 
 private fun AbstractApiMessage.replaceCompressionText(text: String): AbstractApiMessage = when (this) {
@@ -394,6 +395,7 @@ private fun AbstractApiMessage.replaceCompressionText(text: String): AbstractApi
             if (!inserted && text.isNotEmpty()) add(0, ApiContentPart.Text(text))
         },
     )
+    else -> this
 }
 
 private fun ApiContentPart.Text.isAttachmentContext(): Boolean =

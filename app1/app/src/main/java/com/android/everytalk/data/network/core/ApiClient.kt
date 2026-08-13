@@ -127,6 +127,8 @@ object ApiClient {
                 polymorphic(com.android.everytalk.data.DataClass.AbstractApiMessage::class) {
                     subclass(com.android.everytalk.data.DataClass.SimpleTextApiMessage::class)
                     subclass(com.android.everytalk.data.DataClass.PartsApiMessage::class)
+                    subclass(com.android.everytalk.data.DataClass.AgentAssistantApiMessage::class)
+                    subclass(com.android.everytalk.data.DataClass.AgentToolResultApiMessage::class)
                 }
                 polymorphic(AppStreamEvent::class) {
                     subclass(AppStreamEvent.Text::class)
@@ -469,6 +471,26 @@ object ApiClient {
             android.util.Log.e("ApiClient", "Direct connection failed", e)
             send(AppStreamEvent.Error("Direct connection failed: ${NetworkUtils.sanitizeMessage(e.message)}", null))
             send(AppStreamEvent.Finish("direct_connection_failed"))
+        }
+    }
+
+    /** AgentLoop 专用的一次模型请求入口。这里不会执行工具或启动下一轮。 */
+    fun streamModelTurn(request: ChatRequest): Flow<AppStreamEvent> {
+        if (!isInitialized) {
+            return flowOf(
+                AppStreamEvent.Error("ApiClient 尚未初始化"),
+                AppStreamEvent.Finish("client_not_initialized"),
+            )
+        }
+        return when (com.android.everytalk.data.DataClass.modelParameterProtocol(request.channel)) {
+            com.android.everytalk.data.DataClass.ModelParameterProtocol.GEMINI ->
+                GeminiDirectClient.streamSingleTurn(client, request)
+            com.android.everytalk.data.DataClass.ModelParameterProtocol.ANTHROPIC ->
+                AnthropicDirectClient.streamSingleTurn(client, request)
+            com.android.everytalk.data.DataClass.ModelParameterProtocol.CODEX ->
+                OpenAIResponsesClient.streamSingleTurn(client, request)
+            com.android.everytalk.data.DataClass.ModelParameterProtocol.OPENAI_COMPATIBLE ->
+                OpenAIDirectClient.streamSingleTurn(client, request)
         }
     }
 

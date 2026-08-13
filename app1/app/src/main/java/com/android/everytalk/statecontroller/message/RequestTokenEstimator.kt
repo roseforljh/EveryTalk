@@ -8,6 +8,8 @@ import com.android.everytalk.data.DataClass.ModelTokenLimits
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.PartsApiMessage
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
+import com.android.everytalk.data.DataClass.AgentAssistantApiMessage
+import com.android.everytalk.data.DataClass.AgentToolResultApiMessage
 import com.android.everytalk.data.network.PromptCachePolicy
 
 internal const val REQUEST_OVERHEAD_TOKENS = 8L
@@ -78,6 +80,20 @@ internal object RequestTokenEstimator {
                             mediaTokens += mediaTokenEstimator(part).coerceAtLeast(0L)
                         }
                     }
+                }
+                is AgentAssistantApiMessage -> {
+                    addText(message.text)
+                    addText(message.reasoning)
+                    message.toolCalls.forEach { call ->
+                        addText(call.id)
+                        addText(call.name)
+                        addText(call.arguments.toString())
+                    }
+                }
+                is AgentToolResultApiMessage -> {
+                    addText(message.toolCallId)
+                    addText(message.toolName)
+                    addText(message.content.toString())
                 }
             }
         }

@@ -403,7 +403,12 @@ internal fun MessageSender.sendMessageInternal(
             // Workspace 快照已经冻结，此时再入库并迁移会话 ID，映射不会遗留在临时会话下。
             if (isNewTextChatFirstMessage || isNewImageChatFirstMessage) {
                 withContext(Dispatchers.IO) {
-                    historyManager.saveCurrentChatToHistoryIfNeeded(forceSave = true, isImageGeneration = isImageGeneration)
+                    // AgentRun 使用会话外键。首条消息必须等 chat_sessions 真正落库后再启动 Agent，
+                    // 不能只把保存命令放进队列，否则极快的模型请求会先插入 AgentRun 并触发外键错误。
+                    historyManager.saveCurrentChatToHistoryNow(
+                        forceSave = true,
+                        isImageGeneration = isImageGeneration,
+                    )
                 }
             }
 
@@ -665,9 +670,14 @@ internal fun MessageSender.sendMessageInternal(
                     maxOutputTokens = currentConfig.maxTokens,
                     maxContextTokens = currentConfig.modelParameters.maxContextTokens,
                 )
-                val restoredCompressionState = historyUiMessages.asReversed()
-                    .mapNotNull(UiMessage::contextCompressionState)
-                    .firstOrNull { it.matchesConfig(currentConfig) }
+                // 普通文本的历史与压缩检查点完全由 AgentLoop/Room 管理，旧消息字段只服务图片链路。
+                val restoredCompressionState = if (isImageGeneration) {
+                    historyUiMessages.asReversed()
+                        .mapNotNull(UiMessage::contextCompressionState)
+                        .firstOrNull { it.matchesConfig(currentConfig) }
+                } else {
+                    null
+                }
                 val calibrationSnapshot = historyUiMessages.asReversed().firstOrNull { message ->
                     message.sender == UiSender.AI &&
                         message.modelName.equals(currentConfig.model, ignoreCase = true) &&
@@ -717,24 +727,6 @@ internal fun MessageSender.sendMessageInternal(
                     ).coerceAtLeast(0L)
                 val nativeThroughMessageId = nativeResponsesState?.openAiResponsesThroughMessageId
                     ?: nativeAnthropicState?.anthropicThroughMessageId
-                suspend fun showCompressionStatus() {
-                    if (preCreatedAiMessageId == null) {
-                        preCreatedAiMessageId = apiHandler.prepareStreamingAiMessage(
-                            modelName = currentConfig.model,
-                            providerName = currentConfig.provider,
-                            isImageGeneration = false,
-                            afterUserMessageId = newUserMessageForUi.id,
-                            executionStatus = CONTEXT_COMPRESSION_RUNNING_STATUS,
-                            preparationJob = currentCoroutineContext()[Job],
-                        )
-                    } else {
-                        apiHandler.updatePreparedStreamingStatus(
-                            messageId = checkNotNull(preCreatedAiMessageId),
-                            status = CONTEXT_COMPRESSION_RUNNING_STATUS,
-                        )
-                    }
-                }
-
                 val finalCompressionApplication = try {
                     val genericAttachmentCount = attachmentsForApiClient.count {
                         it is SelectedMediaItem.GenericFile
@@ -791,65 +783,19 @@ internal fun MessageSender.sendMessageInternal(
                             }
                         }
                     } ?: messagesWithCurrentAttachments
-                    val compressionApplication = if (isImageGeneration) {
-                        AutoContextCompressionApplication(messagesForContextControl)
+                    // 文本请求由统一 AgentLoop 管理完整历史、原子工具组和压缩检查点。
+                    // 图片请求不进入 AgentLoop，只沿用现有上下文窗口裁剪。
+                    val compressionApplication = AutoContextCompressionApplication(messagesForContextControl)
+                    val fittedMessages = if (isImageGeneration) {
+                        trimMessagesToContextWindow(
+                            messages = compressionApplication.messages,
+                            limits = tokenLimits,
+                            tools = requestTools,
+                            inputTokenCalibration = inputTokenCalibration,
+                            additionalContextTokens = additionalContextTokens,
+                        )
                     } else {
-                        applyAutoContextCompressionIfNeeded(
-                            conversationId = stateHolder._currentConversationId.value,
-                            config = currentConfig,
-                            messages = messagesForContextControl,
-                            tools = requestTools,
-                            limits = tokenLimits,
-                            customModelParameters = customModelParameters.ifEmpty { null },
-                            restoredState = restoredCompressionState,
-                            inputTokenCalibration = inputTokenCalibration,
-                            additionalContextTokens = additionalContextTokens,
-                            onCompressionStarted = ::showCompressionStatus,
-                        )
-                    }
-                    val messagesAfterAutoCompression = compressionApplication.messages
-                    val trimmedMessages = trimMessagesToContextWindow(
-                        messages = messagesAfterAutoCompression,
-                        limits = tokenLimits,
-                        tools = requestTools,
-                        inputTokenCalibration = inputTokenCalibration,
-                        additionalContextTokens = additionalContextTokens,
-                    )
-                    val inputBudget = tokenLimits.maxContextTokens.toLong() - tokenLimits.maxOutputTokens.toLong()
-                    val estimatedInput = calibratedInputTokens(
-                        RequestTokenEstimator.estimate(
-                            trimmedMessages,
-                            requestTools,
-                            additionalContextTokens = additionalContextTokens,
-                        ),
-                        inputTokenCalibration.coerceAtLeast(0L),
-                    )
-                    val fittedMessages = when {
-                        isImageGeneration || estimatedInput <= inputBudget -> trimmedMessages
-                        !currentConfig.modelParameters.autoContextCompressionEnabled -> {
-                            throw ContextCompressionException("当前请求超出模型上下文窗口，自动压缩未开启")
-                        }
-                        else -> compressOversizedLatestUserTurnWithModel(
-                            config = currentConfig,
-                            messages = trimmedMessages,
-                            tools = requestTools,
-                            limits = tokenLimits,
-                            customModelParameters = customModelParameters.ifEmpty { null },
-                            inputTokenCalibration = inputTokenCalibration,
-                            additionalContextTokens = additionalContextTokens,
-                            onCompressionStarted = ::showCompressionStatus,
-                        )
-                    }
-                    val verifiedInput = calibratedInputTokens(
-                        RequestTokenEstimator.estimate(
-                            fittedMessages,
-                            requestTools,
-                            additionalContextTokens = additionalContextTokens,
-                        ),
-                        inputTokenCalibration.coerceAtLeast(0L),
-                    )
-                    if (!isImageGeneration && verifiedInput > inputBudget) {
-                        throw ContextCompressionException("压缩后请求仍超出模型上下文窗口")
+                        messagesForContextControl
                     }
                     compressionApplication.copy(messages = fittedMessages)
                 } catch (error: CancellationException) {
@@ -857,7 +803,16 @@ internal fun MessageSender.sendMessageInternal(
                 } catch (error: Exception) {
                     if (isImageGeneration) throw error
                     val failureText = contextCompressionFailureText(error)
-                    if (preCreatedAiMessageId == null) showCompressionStatus()
+                    if (preCreatedAiMessageId == null) {
+                        preCreatedAiMessageId = apiHandler.prepareStreamingAiMessage(
+                            modelName = currentConfig.model,
+                            providerName = currentConfig.provider,
+                            isImageGeneration = false,
+                            afterUserMessageId = newUserMessageForUi.id,
+                            executionStatus = failureText,
+                            preparationJob = currentCoroutineContext()[Job],
+                        )
+                    }
                     apiHandler.failPreparedStreamingAiMessage(
                         messageId = checkNotNull(preCreatedAiMessageId),
                         errorText = failureText,

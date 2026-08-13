@@ -635,9 +635,12 @@
     <string name="context_usage_estimated">估算</string>
     <string name="context_usage_unavailable">当前消息暂无用量数据</string>
     <string name="context_usage_turn">本轮会话消耗</string>
+    <string name="context_usage_request">当前模型请求</string>
+    <string name="context_usage_agent_run">本次 Agent · %1$d 次请求</string>
+    <string name="context_usage_total">合计</string>
     <string name="context_usage_input">输入</string>
     <string name="context_usage_output">输出</string>
-    <string name="context_usage_conversation_total">目前总消耗</string>
+    <string name="context_usage_conversation_total">会话总消耗</string>
     <string name="context_usage_window_total">总上下文</string>
     <string name="context_usage_unknown">未知</string>
     <string name="context_usage_tokens_description">%1$s令牌数</string>

@@ -42,4 +42,26 @@ class ContextUsageSnapshotTest {
         assertEquals(-5L, measured.inputEstimateDifferenceTokens)
         assertEquals(ContextUsageDataSource.MEASURED, measured.dataSource)
     }
+
+    @Test
+    fun `估算兜底不会显示为实测`() {
+        val snapshot = ContextUsageSnapshot(
+            messageId = "ai-1",
+            systemPromptTokens = 10,
+            conversationTextTokens = 20,
+            mediaTokens = 0,
+            toolSchemaTokens = 0,
+            protocolOverheadTokens = 5,
+            reservedOutputTokens = 10,
+            contextWindowTokens = 1_000,
+        ).withFinalUsage(
+            TokenUsage(
+                inputTokens = 35,
+                isFinal = true,
+                source = TokenUsageSource.ESTIMATED,
+            )
+        )
+
+        assertEquals(ContextUsageDataSource.ESTIMATED, snapshot.dataSource)
+    }
 }

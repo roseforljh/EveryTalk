@@ -385,7 +385,9 @@ internal data class OpenAiToolCallInfo(
 internal data class OpenAIParseResult(
     val hasToolCalls: Boolean,
     val fullText: String,
-    val reasoningContent: String = ""
+    val reasoningContent: String = "",
+    val usage: TokenUsage? = null,
+    val toolCalls: List<OpenAiToolCallInfo> = emptyList(),
 )
 
 

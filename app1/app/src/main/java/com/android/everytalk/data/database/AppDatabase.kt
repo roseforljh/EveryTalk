@@ -8,12 +8,19 @@ import androidx.room.TypeConverters
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.android.everytalk.data.database.daos.ApiConfigDao
+import com.android.everytalk.data.database.daos.AgentDao
 import com.android.everytalk.data.database.daos.ChatDao
 import com.android.everytalk.data.database.daos.ComputerDao
 import com.android.everytalk.data.database.daos.McpConfigDao
 import com.android.everytalk.data.database.daos.SettingsDao
 import com.android.everytalk.data.database.daos.VoiceConfigDao
 import com.android.everytalk.data.database.entities.ApiConfigEntity
+import com.android.everytalk.data.database.entities.AgentCompactionEntryEntity
+import com.android.everytalk.data.database.entities.AgentContextSnapshotEntity
+import com.android.everytalk.data.database.entities.AgentEntryEntity
+import com.android.everytalk.data.database.entities.AgentRequestEntity
+import com.android.everytalk.data.database.entities.AgentRequestUsageEntity
+import com.android.everytalk.data.database.entities.AgentRunEntity
 import com.android.everytalk.data.database.entities.ChatSessionEntity
 import com.android.everytalk.data.database.entities.ConversationGroupEntity
 import com.android.everytalk.data.database.entities.ComputerAuditEventEntity
@@ -26,6 +33,7 @@ import com.android.everytalk.data.database.entities.ExpandedGroupEntity
 import com.android.everytalk.data.database.entities.McpServerConfigEntity
 import com.android.everytalk.data.database.entities.MessageEntity
 import com.android.everytalk.data.database.entities.PinnedItemEntity
+import com.android.everytalk.data.database.entities.ProviderContinuationStateEntity
 import com.android.everytalk.data.database.entities.SystemSettingEntity
 import com.android.everytalk.data.database.entities.VoiceBackendConfigEntity
 import com.android.everytalk.data.database.entities.WorkspaceSecretMetadataEntity
@@ -48,8 +56,15 @@ import com.android.everytalk.data.database.entities.WorkspaceSecretMetadataEntit
         ComputerPreviewEntity::class,
         WorkspaceSecretMetadataEntity::class,
         ComputerAuditEventEntity::class,
+        AgentRunEntity::class,
+        AgentEntryEntity::class,
+        AgentRequestEntity::class,
+        AgentRequestUsageEntity::class,
+        AgentContextSnapshotEntity::class,
+        AgentCompactionEntryEntity::class,
+        ProviderContinuationStateEntity::class,
     ],
-    version = 16,
+    version = 17,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -60,6 +75,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun settingsDao(): SettingsDao
     abstract fun mcpConfigDao(): McpConfigDao
     abstract fun computerDao(): ComputerDao
+    abstract fun agentDao(): AgentDao
 
     companion object {
         @Volatile
@@ -90,6 +106,7 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_13_14,
                     MIGRATION_14_15,
                     MIGRATION_15_16,
+                    MIGRATION_16_17,
                 )
                 .build()
                 INSTANCE = instance
@@ -392,6 +409,166 @@ abstract class AppDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL(
                     "ALTER TABLE computers ADD COLUMN permissionMode TEXT NOT NULL DEFAULT 'MANUAL'",
+                )
+            }
+        }
+
+        val MIGRATION_16_17 = object : Migration(16, 17) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS agent_runs (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        sessionId TEXT NOT NULL,
+                        userMessageId TEXT NOT NULL,
+                        visibleAssistantMessageId TEXT NOT NULL,
+                        configIdSnapshot TEXT,
+                        status TEXT NOT NULL,
+                        currentRequestOrdinal INTEGER NOT NULL,
+                        terminalReason TEXT,
+                        createdAt INTEGER NOT NULL,
+                        updatedAt INTEGER NOT NULL,
+                        FOREIGN KEY(sessionId) REFERENCES chat_sessions(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_agent_runs_sessionId ON agent_runs(sessionId)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_agent_runs_visibleAssistantMessageId ON agent_runs(visibleAssistantMessageId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_agent_runs_status ON agent_runs(status)")
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS agent_entries (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        runId TEXT NOT NULL,
+                        sequence INTEGER NOT NULL,
+                        kind TEXT NOT NULL,
+                        requestId TEXT,
+                        toolCallId TEXT,
+                        payloadJson TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        finalizedAt INTEGER,
+                        FOREIGN KEY(runId) REFERENCES agent_runs(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_agent_entries_runId_sequence ON agent_entries(runId, sequence)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_agent_entries_requestId ON agent_entries(requestId)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_agent_entries_toolCallId ON agent_entries(toolCallId)")
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS agent_requests (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        runId TEXT NOT NULL,
+                        ordinal INTEGER NOT NULL,
+                        purpose TEXT NOT NULL,
+                        modelTurnOrdinal INTEGER,
+                        attempt INTEGER NOT NULL,
+                        retryOfRequestId TEXT,
+                        provider TEXT NOT NULL,
+                        endpoint TEXT,
+                        model TEXT NOT NULL,
+                        payloadFingerprint TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        finishReason TEXT,
+                        startedAt INTEGER,
+                        firstEventAt INTEGER,
+                        finishedAt INTEGER,
+                        FOREIGN KEY(runId) REFERENCES agent_runs(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_agent_requests_runId_ordinal ON agent_requests(runId, ordinal)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_agent_requests_runId_status ON agent_requests(runId, status)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_agent_requests_retryOfRequestId ON agent_requests(retryOfRequestId)")
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS agent_request_usage (
+                        requestId TEXT NOT NULL PRIMARY KEY,
+                        promptTokens INTEGER,
+                        freshInputTokens INTEGER,
+                        cacheReadTokens INTEGER,
+                        cacheWriteTokens INTEGER,
+                        outputTokens INTEGER,
+                        reasoningTokens INTEGER,
+                        requestTotalTokens INTEGER,
+                        providerTotalTokens INTEGER,
+                        source TEXT NOT NULL,
+                        quality TEXT NOT NULL,
+                        rawUsageJson TEXT,
+                        FOREIGN KEY(requestId) REFERENCES agent_requests(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS agent_context_snapshots (
+                        requestId TEXT NOT NULL PRIMARY KEY,
+                        systemPromptTokens INTEGER NOT NULL,
+                        conversationTextTokens INTEGER NOT NULL,
+                        mediaTokens INTEGER NOT NULL,
+                        toolSchemaTokens INTEGER NOT NULL,
+                        protocolOverheadTokens INTEGER NOT NULL,
+                        estimatedPromptTokens INTEGER NOT NULL,
+                        reservedOutputTokens INTEGER NOT NULL,
+                        contextWindowTokens INTEGER NOT NULL,
+                        activeContextTokens INTEGER NOT NULL,
+                        calibrationTokens INTEGER NOT NULL,
+                        compactionId TEXT,
+                        transcriptFingerprint TEXT NOT NULL,
+                        source TEXT NOT NULL,
+                        FOREIGN KEY(requestId) REFERENCES agent_requests(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_agent_context_snapshots_compactionId ON agent_context_snapshots(compactionId)")
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS agent_compactions (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        sessionId TEXT NOT NULL,
+                        configIdSnapshot TEXT,
+                        summary TEXT NOT NULL,
+                        summarizedThroughItemId TEXT NOT NULL,
+                        prefixFingerprint TEXT NOT NULL,
+                        retainedTailJson TEXT NOT NULL,
+                        tokensBefore INTEGER NOT NULL,
+                        estimatedTokensAfter INTEGER NOT NULL,
+                        summaryRequestId TEXT,
+                        status TEXT NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        FOREIGN KEY(sessionId) REFERENCES chat_sessions(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_agent_compactions_sessionId_createdAt ON agent_compactions(sessionId, createdAt)")
+
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS provider_continuation_states (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        sessionId TEXT NOT NULL,
+                        configId TEXT NOT NULL,
+                        provider TEXT NOT NULL,
+                        endpoint TEXT NOT NULL,
+                        model TEXT NOT NULL,
+                        systemPromptFingerprint TEXT NOT NULL,
+                        toolSchemaFingerprint TEXT NOT NULL,
+                        summarizedThroughItemId TEXT,
+                        opaqueStateJson TEXT NOT NULL,
+                        updatedAt INTEGER NOT NULL,
+                        FOREIGN KEY(sessionId) REFERENCES chat_sessions(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS index_provider_continuation_states_sessionId_configId_provider_endpoint_model " +
+                        "ON provider_continuation_states(sessionId, configId, provider, endpoint, model)",
                 )
             }
         }

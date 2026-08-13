@@ -5,6 +5,8 @@ import com.android.everytalk.data.DataClass.AbstractApiMessage
 import com.android.everytalk.data.DataClass.ApiContentPart
 import com.android.everytalk.data.DataClass.PartsApiMessage
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
+import com.android.everytalk.data.DataClass.AgentAssistantApiMessage
+import com.android.everytalk.data.DataClass.AgentToolResultApiMessage
 import java.net.URI
 import java.security.MessageDigest
 import kotlinx.serialization.json.JsonArray
@@ -132,6 +134,8 @@ internal object PromptCachePolicy {
         is PartsApiMessage -> message.parts
             .filterIsInstance<ApiContentPart.Text>()
             .joinToString("\n") { it.text }
+        is AgentAssistantApiMessage -> message.text
+        is AgentToolResultApiMessage -> message.content.toString()
     }
 
     private fun normalizeMap(map: Map<*, *>): Map<String, Any> = buildMap {

@@ -25,8 +25,6 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -50,7 +48,6 @@ class OpenAIResponsesCompactionTest {
 
     @After
     fun restoreState() {
-        OpenAIResponsesClient.setMcpToolExecutor(null)
         unmockkStatic(Log::class)
     }
 
@@ -79,50 +76,7 @@ class OpenAIResponsesCompactionTest {
             })
             assertEquals("cmp-1", native.compactionItemId)
             assertTrue(native.estimatedTokens > 0)
-            assertEquals("stop", events.filterIsInstance<AppStreamEvent.Finish>().single().reason)
-        }
-    }
-
-    @Test
-    fun `工具循环回传reasoning函数调用及工具结果并标记usage轮次`() = runBlocking {
-        val firstBody = buildString {
-            appendResponsesEvent(
-                """{"type":"response.completed","response":{"output":[{"id":"rs-1","type":"reasoning","summary":[]},{"id":"fc-1","type":"function_call","call_id":"call-1","name":"lookup","arguments":"{}","status":"completed"}],"usage":{"input_tokens":100,"output_tokens":20,"total_tokens":120}}}"""
-            )
-            append("data: [DONE]\n\n")
-        }
-        val secondBody = buildString {
-            appendResponsesEvent(
-                """{"type":"response.completed","response":{"output":[{"id":"msg-2","type":"message","role":"assistant","status":"completed","content":[]}],"usage":{"input_tokens":70,"output_tokens":10,"total_tokens":80}}}"""
-            )
-            append("data: [DONE]\n\n")
-        }
-        val requestCount = AtomicInteger()
-        var followUpPayload: String? = null
-        val client = withClient { requestData ->
-            if (requestCount.incrementAndGet() == 1) {
-                success(firstBody)
-            } else {
-                followUpPayload = (requestData.body as TextContent).text
-                success(secondBody)
-            }
-        }
-        OpenAIResponsesClient.setMcpToolExecutor { _, _, _ -> JsonPrimitive("工具结果") }
-
-        client.use {
-            val events = OpenAIResponsesClient.streamChatResponses(it, request()).toList()
-            val input = Json.parseToJsonElement(checkNotNull(followUpPayload))
-                .jsonObject.getValue("input").jsonArray
-            val types = input.mapNotNull { item ->
-                item.jsonObject["type"]?.jsonPrimitive?.content
-            }
-            val usageOrdinals = events.filterIsInstance<AppStreamEvent.Usage>()
-                .map { event -> event.usage.requestOrdinal }
-
-            assertTrue(types.indexOf("reasoning") < types.indexOf("function_call"))
-            assertTrue(types.indexOf("function_call") < types.indexOf("function_call_output"))
-            assertEquals(listOf(1, 2), usageOrdinals)
-            assertEquals(2, requestCount.get())
+            assertEquals("turn_complete", events.filterIsInstance<AppStreamEvent.Finish>().single().reason)
         }
     }
 

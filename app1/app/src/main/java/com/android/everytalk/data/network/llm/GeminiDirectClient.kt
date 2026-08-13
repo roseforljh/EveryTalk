@@ -4,6 +4,8 @@ import android.util.Log
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.DataClass.PartsApiMessage
+import com.android.everytalk.data.DataClass.AgentAssistantApiMessage
+import com.android.everytalk.data.DataClass.AgentToolResultApiMessage
 import com.android.everytalk.data.network.NetworkUtils.configureSSERequest
 import com.android.everytalk.util.AiContentSafetyPolicy
 import io.ktor.client.*
@@ -21,267 +23,64 @@ import java.util.UUID
 
 object GeminiDirectClient {
     private const val TAG = "GeminiDirectClient"
-    private const val MAX_TOOL_LOOPS = 5
-    
-    private var mcpToolExecutor: AppToolExecutor? = null
-    private var mcpToolExecutorOwner: Any? = null
-
-    @Synchronized
-    fun setMcpToolExecutor(
-        owner: Any,
-        executor: AppToolExecutor?,
-    ) {
-        mcpToolExecutorOwner = owner
-        mcpToolExecutor = executor
-    }
-
-    @Synchronized
-    fun setMcpToolExecutor(
-        executor: LegacyAppToolExecutor?,
-    ) {
-        mcpToolExecutorOwner = null
-        mcpToolExecutor = executor.toAppToolExecutor()
-    }
-
-    @Synchronized
-    fun clearMcpToolExecutor(owner: Any) {
-        if (mcpToolExecutorOwner === owner) {
-            mcpToolExecutorOwner = null
-            mcpToolExecutor = null
-        }
-    }
     
     @OptIn(ExperimentalCoroutinesApi::class)
-    suspend fun streamChatDirect(
+    internal fun streamSingleTurn(
         client: HttpClient,
-        request: ChatRequest
+        request: ChatRequest,
     ): Flow<AppStreamEvent> = channelFlow {
+        val baseUrl = request.apiAddress?.trimEnd('/')?.takeIf { it.isNotBlank() }
+            ?: com.android.everytalk.BuildConfig.GOOGLE_API_BASE_URL.trimEnd('/').takeIf { it.isNotBlank() }
+            ?: "https://generativelanguage.googleapis.com"
+        val url = "$baseUrl/v1beta/models/${request.model.trim()}:streamGenerateContent?key=${request.apiKey}&alt=sse"
         var terminalSent = false
         try {
-            Log.i(TAG, "🔄 启动 Gemini 直连模式")
-            
-            val baseUrl = request.apiAddress?.trimEnd('/')?.takeIf { it.isNotBlank() }
-                ?: com.android.everytalk.BuildConfig.GOOGLE_API_BASE_URL.trimEnd('/').takeIf { it.isNotBlank() }
-                ?: "https://generativelanguage.googleapis.com"
-            val model = request.model.trim()
-            val url = "$baseUrl/v1beta/models/$model:streamGenerateContent?key=${request.apiKey}&alt=sse"
-            
-            Log.d(TAG, "直连 URL: ${url.substringBefore("?key=")}")
-            
-            val conversationHistory = mutableListOf<JsonObject>()
-            var currentRequest = request
-            var loopCount = 0
-            var latestActiveUsage: TokenUsage? = null
-            
-            while (loopCount < MAX_TOOL_LOOPS) {
-                loopCount++
-                Log.i(TAG, "🔄 开始循环 #$loopCount, 历史记录数: ${conversationHistory.size}")
-                val payload = withContext(Dispatchers.Default) {
-                    buildGeminiPayloadWithHistory(currentRequest, conversationHistory)
+            client.preparePost(url) {
+                contentType(ContentType.Application.Json)
+                setBody(withContext(Dispatchers.Default) { buildGeminiPayload(request) })
+                configureSSERequest()
+            }.execute { response ->
+                if (!response.status.isSuccess()) {
+                    val result = NetworkUtils.handleApiError(response.status, response.readErrorTextAtMost(), "Gemini")
+                    terminalSent = true
+                    send(result.error)
+                    send(result.finish)
+                    return@execute
                 }
-                Log.d(TAG, "请求 payload 长度: ${payload.length}")
-                
-                var pendingToolCalls = mutableListOf<GeminiToolCall>()
-                var hasContent = false
-                
-                var parseResult: ParseResult? = null
-                val roundContentBuffer = ToolRoundContentBuffer { event ->
-                    send(event)
-                    kotlinx.coroutines.yield()
-                }
-                
-                client.preparePost(url) {
-                    contentType(ContentType.Application.Json)
-                    setBody(payload)
-                    configureSSERequest()
-                }.execute { response ->
-                    if (!response.status.isSuccess()) {
-                        val errorBody = response.readErrorTextAtMost()
-                        val result = NetworkUtils.handleApiError(response.status, errorBody, "Gemini")
-                        terminalSent = true
-                        send(result.error)
-                        send(result.finish)
-                        return@execute
-                    }
-
-                    Log.i(TAG, "✅ Gemini 直连成功 (loop $loopCount)，开始接收流")
-
-                    parseResult = parseGeminiSSEStreamWithToolCapture(
-                        channel = response.bodyAsChannel(),
-                        onToolCall = { toolCall ->
-                            Log.d(TAG, "回调捕获工具: ${toolCall.name}")
-                            pendingToolCalls.add(toolCall)
-                        },
-                        emitEvent = { event ->
-                            val orderedEvent = event.withRequestOrdinal(loopCount)
-                            if (orderedEvent is AppStreamEvent.Usage) {
-                                latestActiveUsage = orderedEvent.usage
-                            }
-                            when (orderedEvent) {
-                                is AppStreamEvent.Content -> {
-                                    hasContent = true
-                                    Log.d(TAG, "收到内容: ${orderedEvent.text.take(50)}...")
-                                }
-                                is AppStreamEvent.ToolCall -> {
-                                    Log.d(TAG, "流中收到 ToolCall: ${orderedEvent.name}")
-                                }
-                                is AppStreamEvent.Error -> {
-                                    Log.e(TAG, "收到错误事件: ${orderedEvent.message}")
-                                }
-                                else -> {}
-                            }
-                            roundContentBuffer.accept(orderedEvent)
-                        }
-                    )
-                }
-
-                if (terminalSent) return@channelFlow
-                roundContentBuffer.finish(
-                    hasToolCalls = parseResult?.hasToolCalls == true || pendingToolCalls.isNotEmpty(),
+                val parsed = parseGeminiSSEStreamWithToolCapture(
+                    channel = response.bodyAsChannel(),
+                    onToolCall = {},
+                    emitEvent = { send(it) },
                 )
-                
-                Log.i(TAG, "循环 #$loopCount 结束, pendingToolCalls=${pendingToolCalls.size}, hasContent=$hasContent, hasToolCalls=${parseResult?.hasToolCalls}")
-                
-                if (pendingToolCalls.isEmpty()) {
-                    Log.i(TAG, "🏁 没有待处理的工具调用，结束循环")
-                    break
-                }
-                
-                if (mcpToolExecutor == null) {
-                    Log.w(TAG, "⚠️ 有工具调用但没有设置执行器，跳过")
-                    break
-                }
-                
-                Log.i(TAG, "🔧 处理 ${pendingToolCalls.size} 个工具调用")
-                
-                val toolResponses = mutableListOf<JsonObject>()
-                for ((toolCallId, toolName, args) in pendingToolCalls) {
-                    try {
-                        Log.d(TAG, "🔧 开始执行工具: $toolName")
-                        val result = mcpToolExecutor!!.invoke(
-                            toolName,
-                            args,
-                            toolCallId,
-                            request.localComputerRequestContext,
-                        ) { status ->
-                            send(AppStreamEvent.ExecutionStatusUpdate(status))
-                        }
-                        Log.i(TAG, "🔧 工具 $toolName 执行成功: resultChars=${result.toString().length}")
-                        computerExecutionCompletedEvent(result, toolCallId)?.let { send(it) }
-
-                        val webResults = WebSearchToolResultExtractor.extract(toolName, result)
-                        if (webResults.isNotEmpty()) {
-                            send(AppStreamEvent.WebSearchResults(webResults))
-                        }
-
-                        val resultObject = result as? JsonObject
-                        val images = resultObject?.get("_images") as? JsonArray
-                        val textResult = if (images != null) {
-                            buildJsonObject {
-                                resultObject.entries.forEach { (k, v) ->
-                                    if (k != "_images") put(k, v)
-                                }
-                            }
-                        } else result
-                        val imageParts = images.orEmpty().mapNotNull { imgElement ->
-                            val imgObj = imgElement as? JsonObject ?: return@mapNotNull null
-                            val data = imgObj["base64"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
-                            val mimeType = imgObj["mimeType"]?.jsonPrimitive?.contentOrNull ?: "image/jpeg"
-                            mimeType to stripDataUriPrefix(data)
-                        }
-
-                        toolResponses.add(buildJsonObject {
-                            put("functionResponse", buildJsonObject {
-                                put("name", toolName)
-                                put("response", buildJsonObject {
-                                    put("result", textResult)
-                                })
-                                if (imageParts.isNotEmpty()) {
-                                    putJsonArray("parts") {
-                                        imageParts.forEach { (mimeType, data) ->
-                                            addJsonObject {
-                                                putJsonObject("inlineData") {
-                                                    put("mimeType", mimeType)
-                                                    put("data", data)
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            })
-                        })
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (e: Exception) {
-                        Log.e(TAG, "🔧 工具 $toolName 执行失败", e)
-                        toolResponses.add(buildJsonObject {
-                            put("functionResponse", buildJsonObject {
-                                put("name", toolName)
-                                put("response", buildJsonObject {
-                                    put("error", e.message ?: "Unknown error")
-                                })
-                            })
-                        })
-                    }
-                }
-                
-                conversationHistory.add(buildJsonObject {
-                    put("role", "model")
-                    putJsonArray("parts") {
-                        pendingToolCalls.forEach { (_, name, args) ->
-                            addJsonObject {
-                                put("functionCall", buildJsonObject {
-                                    put("name", name)
-                                    put("args", args)
-                                })
-                            }
-                        }
-                    }
-                })
-                
-                conversationHistory.add(buildJsonObject {
-                    put("role", "user")
-                    putJsonArray("parts") {
-                        toolResponses.forEach { add(it) }
-                    }
-                })
-                if (
-                    compactGeminiToolHistoryIfNeeded(
-                        history = conversationHistory,
-                        management = currentRequest.contextManagement,
-                        usage = latestActiveUsage,
+                parsed.assistantContent?.let { content ->
+                    send(
+                        AppStreamEvent.ProviderContinuation(
+                            protocol = com.android.everytalk.data.DataClass.ModelParameterProtocol.GEMINI.name,
+                            payloadJson = content.toString(),
+                        )
                     )
-                ) {
-                    send(AppStreamEvent.ExecutionStatusUpdate(TOOL_CONTEXT_COMPRESSION_STATUS))
                 }
-                
-                pendingToolCalls.clear()
             }
-            
-            Log.i(TAG, "🏁 工具循环完成，发送 Finish 事件")
-            if (!terminalSent) {
-                terminalSent = true
-                send(AppStreamEvent.Finish("stop"))
-            }
-            
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            if (!terminalSent) {
-                val result = NetworkUtils.handleConnectionError(e, "Gemini")
-                terminalSent = true
-                send(result.error)
-                send(result.finish)
-            }
+            if (!terminalSent) send(AppStreamEvent.Finish("turn_complete"))
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            val result = NetworkUtils.handleConnectionError(error, "Gemini")
+            send(result.error)
+            send(result.finish)
         }
-        
-        return@channelFlow
     }
+
+    /** 兼容旧调用名；工具轮次统一由 AgentLoop 推进。 */
+    suspend fun streamChatDirect(
+        client: HttpClient,
+        request: ChatRequest,
+    ): Flow<AppStreamEvent> = streamSingleTurn(client, request)
     
     /**
      * 构建 Gemini API 请求体
      */
-    private fun buildGeminiPayload(request: ChatRequest): String {
+    internal fun buildGeminiPayload(request: ChatRequest): String {
         // 首先注入系统提示词（如果消息中没有系统消息，则自动注入）
         val messagesWithSystemPrompt = SystemPromptInjector.smartInjectSystemPrompt(request.messages)
         
@@ -292,6 +91,8 @@ object GeminiDirectClient {
                 is SimpleTextApiMessage -> msg.content.takeIf { it.isNotBlank() }
                 is PartsApiMessage -> msg.parts.filterIsInstance<com.android.everytalk.data.DataClass.ApiContentPart.Text>()
                     .joinToString("\n") { it.text }.takeIf { it.isNotBlank() }
+                is AgentAssistantApiMessage -> msg.text.takeIf { it.isNotBlank() }
+                is AgentToolResultApiMessage -> null
             }
         }.joinToString("\n\n")
         
@@ -333,6 +134,12 @@ object GeminiDirectClient {
                 val lastRole = if (lastMsg?.role == "assistant") "model" else lastMsg?.role
 
                 if (lastMsg != null && currentRole == lastRole) {
+                    if (message is AgentAssistantApiMessage || message is AgentToolResultApiMessage ||
+                        lastMsg is AgentAssistantApiMessage || lastMsg is AgentToolResultApiMessage
+                    ) {
+                        mergedMessages.add(message)
+                        return@forEach
+                    }
                     // 合并到上一条消息
                     val mergedParts = mutableListOf<com.android.everytalk.data.DataClass.ApiContentPart>()
                     
@@ -340,12 +147,14 @@ object GeminiDirectClient {
                     when (lastMsg) {
                         is SimpleTextApiMessage -> mergedParts.add(com.android.everytalk.data.DataClass.ApiContentPart.Text(lastMsg.content))
                         is PartsApiMessage -> mergedParts.addAll(lastMsg.parts)
+                        else -> Unit
                     }
                     
                     // 提取当前消息的内容
                     when (message) {
                         is SimpleTextApiMessage -> mergedParts.add(com.android.everytalk.data.DataClass.ApiContentPart.Text(message.content))
                         is PartsApiMessage -> mergedParts.addAll(message.parts)
+                        else -> Unit
                     }
                     
                     // 替换上一条消息为合并后的 PartsApiMessage
@@ -360,9 +169,19 @@ object GeminiDirectClient {
                 }
             }
 
+            val nativeAssistantContent = request.localProviderContinuation
+                ?.takeIf { it.protocol == com.android.everytalk.data.DataClass.ModelParameterProtocol.GEMINI }
+                ?.payloadJson
+                ?.let { raw -> runCatching { Json.parseToJsonElement(raw) as? JsonObject }.getOrNull() }
+                ?.takeIf { it["parts"] is JsonArray }
+            val replacedAssistant = nativeAssistantContent?.let {
+                mergedMessages.filterIsInstance<AgentAssistantApiMessage>().lastOrNull()
+            }
             putJsonArray("contents") {
                 mergedMessages.forEach { message ->
-                    addJsonObject {
+                    if (message === replacedAssistant) {
+                        add(checkNotNull(nativeAssistantContent))
+                    } else addJsonObject {
                         put("role", if (message.role == "assistant") "model" else message.role)
                         putJsonArray("parts") {
                             // 处理 content
@@ -395,6 +214,28 @@ object GeminiDirectClient {
                                                     put("text", "[Image: ${part.uri}]")
                                                 }
                                             }
+                                        }
+                                    }
+                                }
+                                is AgentAssistantApiMessage -> {
+                                    message.text.takeIf(String::isNotBlank)?.let { text ->
+                                        addJsonObject { put("text", text) }
+                                    }
+                                    message.toolCalls.forEach { call ->
+                                        addJsonObject {
+                                            putJsonObject("functionCall") {
+                                                put("name", call.name)
+                                                put("args", call.arguments)
+                                            }
+                                        }
+                                    }
+                                }
+                                is AgentToolResultApiMessage -> addJsonObject {
+                                    putJsonObject("functionResponse") {
+                                        put("name", message.toolName)
+                                        putJsonObject("response") {
+                                            if (message.isError) put("error", message.content)
+                                            else put("result", message.content)
                                         }
                                     }
                                 }
@@ -515,6 +356,7 @@ object GeminiDirectClient {
                 lastUserMessage.parts.filterIsInstance<com.android.everytalk.data.DataClass.ApiContentPart.Text>()
                     .firstOrNull()?.text
             }
+            else -> null
         }
     }
     
@@ -647,30 +489,14 @@ object GeminiDirectClient {
         return sanitizeSchemaForGemini(rawElement)
     }
     
-    private fun buildGeminiPayloadWithHistory(
-        request: ChatRequest, 
-        toolHistory: List<JsonObject>
-    ): String {
-        val basePayload = Json.parseToJsonElement(buildGeminiPayload(request)).jsonObject.toMutableMap()
-        
-        if (toolHistory.isNotEmpty()) {
-            val existingContents = basePayload["contents"]?.jsonArray?.toMutableList() ?: mutableListOf()
-            toolHistory.forEach { historyItem ->
-                existingContents.add(historyItem)
-            }
-            basePayload["contents"] = JsonArray(existingContents)
-            Log.d(TAG, "添加 ${toolHistory.size} 条工具历史到 contents")
-        }
-        
-        return JsonObject(basePayload).toString()
-    }
-    
     /**
      * 解析结果，用于在工具循环中传递信息
      */
     private data class ParseResult(
         val hasToolCalls: Boolean,
-        val fullText: String
+        val fullText: String,
+        /** 原样保留模型 content，下一轮需要其中的 thoughtSignature。 */
+        val assistantContent: JsonObject? = null,
     )
 
     private fun parseGeminiTokenUsage(usage: JsonObject): TokenUsage? {
@@ -707,6 +533,7 @@ object GeminiDirectClient {
         var contentStarted = false
         var hasToolCalls = false
         var safetyBlocked = false
+        var latestAssistantContent: JsonObject? = null
         val thinkRouter = ThinkTagStreamRouter()
         
         try {
@@ -740,7 +567,14 @@ object GeminiDirectClient {
                                     ?.let { usage -> emitEvent(AppStreamEvent.Usage(usage)) }
                                 jsonChunk["candidates"]?.jsonArray?.firstOrNull()?.let { candidate ->
                                     val candidateObj = candidate.jsonObject
-                                    candidateObj["content"]?.jsonObject?.get("parts")?.jsonArray?.forEach { part ->
+                                    val candidateContent = candidateObj["content"] as? JsonObject
+                                    candidateContent?.let { content ->
+                                        latestAssistantContent = mergeGeminiAssistantContent(
+                                            current = latestAssistantContent,
+                                            incoming = content,
+                                        )
+                                    }
+                                    candidateContent?.get("parts")?.jsonArray?.forEach { part ->
                                         val partObj = part.jsonObject
                                         
                                         val isThought = partObj["thought"]?.jsonPrimitive?.booleanOrNull == true
@@ -842,7 +676,31 @@ object GeminiDirectClient {
             emitEvent(AppStreamEvent.ContentFinal(completedText))
         }
 
-        return ParseResult(hasToolCalls = hasToolCalls, fullText = completedText)
+        return ParseResult(
+            hasToolCalls = hasToolCalls,
+            fullText = completedText,
+            assistantContent = latestAssistantContent,
+        )
+    }
+
+    /**
+     * Gemini 会把同一条 model content 分成多个 SSE candidate。
+     * parts 按到达顺序合并，完整保留 thoughtSignature 和 functionCall 等协议字段。
+     */
+    private fun mergeGeminiAssistantContent(
+        current: JsonObject?,
+        incoming: JsonObject,
+    ): JsonObject {
+        if (current == null) return incoming
+        val role = incoming["role"] ?: current["role"] ?: JsonPrimitive("model")
+        val parts = buildJsonArray {
+            (current["parts"] as? JsonArray)?.forEach(::add)
+            (incoming["parts"] as? JsonArray)?.forEach(::add)
+        }
+        return buildJsonObject {
+            put("role", role)
+            put("parts", parts)
+        }
     }
 
 }

@@ -189,6 +189,7 @@ internal suspend fun buildDirectMultimodalRequest(
             .filterIsInstance<com.android.everytalk.data.DataClass.ApiContentPart.Text>()
             .mapTo(mutableSetOf()) { it.text }
         is com.android.everytalk.data.DataClass.SimpleTextApiMessage -> mutableSetOf(lastMsg.content)
+        else -> mutableSetOf()
     }
 
     // 构造文档文本部分
@@ -213,6 +214,7 @@ internal suspend fun buildDirectMultimodalRequest(
             list.addAll(inlineParts)
             list.toList()
         }
+        else -> return request
     }
 
     val upgraded = com.android.everytalk.data.DataClass.PartsApiMessage(

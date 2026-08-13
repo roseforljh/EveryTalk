@@ -351,6 +351,7 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
                     is ApiContentPart.FileUri -> "fileUri(${part.mimeType})"
                 }
             }
+            else -> "agentMessage(role=${message.role})"
         }
     }
 
@@ -368,6 +369,7 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
         return when (message) {
             is SimpleTextApiMessage -> message.content
             is PartsApiMessage -> message.parts.filterIsInstance<ApiContentPart.Text>().joinToString("\n") { it.text }
+            else -> ""
         }
     }
 
@@ -384,6 +386,7 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
                     is ApiContentPart.InlineData, is ApiContentPart.FileUri -> true
                 }
             }
+            else -> false
         }
         if (!hasUserContent) {
             return messages

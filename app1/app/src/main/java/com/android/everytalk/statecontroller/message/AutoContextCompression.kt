@@ -9,6 +9,8 @@ import com.android.everytalk.data.DataClass.MAX_AUTO_CONTEXT_COMPRESSION_THRESHO
 import com.android.everytalk.data.DataClass.ModelTokenLimits
 import com.android.everytalk.data.DataClass.PartsApiMessage
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
+import com.android.everytalk.data.DataClass.AgentAssistantApiMessage
+import com.android.everytalk.data.DataClass.AgentToolResultApiMessage
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.withLock
 import java.security.MessageDigest
@@ -423,6 +425,20 @@ private fun messageListFingerprint(messages: List<AbstractApiMessage>): String {
                     }
                 }
             }
+            is AgentAssistantApiMessage -> {
+                update(message.text)
+                update(message.reasoning)
+                message.toolCalls.forEach { call ->
+                    update(call.id)
+                    update(call.name)
+                    update(call.arguments.toString())
+                }
+            }
+            is AgentToolResultApiMessage -> {
+                update(message.toolCallId)
+                update(message.toolName)
+                update(message.content.toString())
+            }
         }
     }
     return digest.digest().joinToString("") { byte -> "%02x".format(byte) }
@@ -448,6 +464,15 @@ private fun AbstractApiMessage.summaryText(): String = when (this) {
             is ApiContentPart.InlineData -> "[内联附件：${part.mimeType}]"
         }
     }
+    is AgentAssistantApiMessage -> buildString {
+        if (reasoning.isNotBlank()) append("[思考] ").append(reasoning.escapeConversationBoundary()).append('\n')
+        if (text.isNotBlank()) append(text.escapeConversationBoundary()).append('\n')
+        toolCalls.forEach { call ->
+            append("[工具调用] ").append(call.name).append(' ')
+                .append(call.arguments.toString().escapeConversationBoundary()).append('\n')
+        }
+    }.trimEnd()
+    is AgentToolResultApiMessage -> "[工具结果 ${toolName}] ${content.toString().escapeConversationBoundary()}"
 }
 
 private fun String.escapeConversationBoundary(): String =

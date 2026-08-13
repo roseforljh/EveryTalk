@@ -7,6 +7,8 @@ import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.PartsApiMessage
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.DataClass.ReasoningMode
+import com.android.everytalk.data.DataClass.AgentAssistantApiMessage
+import com.android.everytalk.data.DataClass.AgentToolResultApiMessage
 import com.android.everytalk.data.network.NetworkUtils.configureSSERequest
 import io.ktor.client.HttpClient
 import io.ktor.client.request.header
@@ -47,249 +49,137 @@ object AnthropicDirectClient {
     private const val ANTHROPIC_VERSION = "2023-06-01"
     private const val DEFAULT_MAX_TOKENS = 8192
     private const val DEFAULT_THINKING_BUDGET = 1024
-    private const val MAX_TOOL_LOOPS = 50
     private const val COMPACTION_BETA = "compact-2026-01-12"
     private const val COMPACTION_EDIT_TYPE = "compact_20260112"
     private val unsupportedNativeCompaction = ConcurrentHashMap.newKeySet<String>()
 
-    private var mcpToolExecutor: AppToolExecutor? = null
-    private var mcpToolExecutorOwner: Any? = null
-
-    @Synchronized
-    fun setMcpToolExecutor(
-        owner: Any,
-        executor: AppToolExecutor?,
-    ) {
-        mcpToolExecutorOwner = owner
-        mcpToolExecutor = executor
-    }
-
-    @Synchronized
-    fun setMcpToolExecutor(
-        executor: LegacyAppToolExecutor?,
-    ) {
-        mcpToolExecutorOwner = null
-        mcpToolExecutor = executor.toAppToolExecutor()
-    }
-
-    @Synchronized
-    fun clearMcpToolExecutor(owner: Any) {
-        if (mcpToolExecutorOwner === owner) {
-            mcpToolExecutorOwner = null
-            mcpToolExecutor = null
-        }
-    }
 
     @OptIn(ExperimentalCoroutinesApi::class)
-    suspend fun streamChatDirect(
+    internal fun streamSingleTurn(
         client: HttpClient,
         request: ChatRequest,
     ): Flow<AppStreamEvent> = channelFlow {
         var terminalSent = false
         try {
-            val url = resolveMessagesUrl(request.apiAddress)
-            val continuationMessages = mutableListOf<JsonObject>()
-            var latestActiveUsage: TokenUsage? = null
             var nativeContextManagementEnabled = shouldUseNativeContextManagement(request)
-            var roundTripRestoredCompaction = hasRestoredAnthropicCompaction(request)
-            var nativeCompactionObserved = false
-            var resetNativeStateAfterCompletion = roundTripRestoredCompaction && !nativeContextManagementEnabled
-
-            repeat(MAX_TOOL_LOOPS) { loopIndex ->
-                var parseResult: AnthropicParseResult? = null
-                var retryWithoutNativeContextManagement: Boolean
-                val roundContentBuffer = ToolRoundContentBuffer { event ->
-                    send(event)
-                    yield()
-                }
-                do {
-                    retryWithoutNativeContextManagement = false
-                    val payload = buildAnthropicPayload(
-                        request = request,
-                        continuationMessages = continuationMessages,
-                        nativeContextManagementEnabled = nativeContextManagementEnabled,
-                        allowRestoredCompaction = nativeContextManagementEnabled || roundTripRestoredCompaction,
-                        includeRequestMessages = !nativeCompactionObserved,
-                    )
-
-                    client.preparePost(url) {
-                        contentType(ContentType.Application.Json)
-                        header("x-api-key", request.apiKey.filterNot(Char::isWhitespace))
-                        header("anthropic-version", ANTHROPIC_VERSION)
-                        if (nativeContextManagementEnabled || roundTripRestoredCompaction) {
-                            header("anthropic-beta", COMPACTION_BETA)
-                        }
-                        configureSSERequest()
-                        setBody(payload)
-                    }.execute { response ->
-                        if (!response.status.isSuccess()) {
-                            val errorBody = response.readErrorTextAtMost().orEmpty()
-                            if (
-                                nativeContextManagementEnabled &&
-                                isUnsupportedNativeContextManagement(response.status.value, errorBody)
-                            ) {
-                                Log.w(TAG, "服务端不支持 Anthropic 原生压缩，本轮关闭后重试")
-                                unsupportedNativeCompaction += nativeCompactionCapabilityKey(request)
-                                nativeContextManagementEnabled = false
-                                roundTripRestoredCompaction = hasRestoredAnthropicCompaction(request)
-                                resetNativeStateAfterCompletion = roundTripRestoredCompaction
-                                retryWithoutNativeContextManagement = true
-                                return@execute
-                            }
-                            val result = NetworkUtils.handleApiError(response.status, errorBody, "Anthropic")
-                            send(result.error)
-                            send(result.finish)
-                            terminalSent = true
-                            return@execute
-                        }
-
-                        parseResult = parseAnthropicSse(response.bodyAsChannel()) { event ->
-                            val orderedEvent = event.withRequestOrdinal(loopIndex + 1)
-                            roundContentBuffer.accept(orderedEvent)
-                        }
+            var preserveRestoredCompaction = hasRestoredAnthropicCompaction(request)
+            var resetNativeStateAfterCompletion = preserveRestoredCompaction && !nativeContextManagementEnabled
+            var parsed: AnthropicParseResult? = null
+            do {
+                var retryWithoutNativeContextManagement = false
+                client.preparePost(resolveMessagesUrl(request.apiAddress)) {
+                    contentType(ContentType.Application.Json)
+                    header("x-api-key", request.apiKey.filterNot(Char::isWhitespace))
+                    header("anthropic-version", ANTHROPIC_VERSION)
+                    if (nativeContextManagementEnabled || preserveRestoredCompaction) {
+                        header("anthropic-beta", COMPACTION_BETA)
                     }
-                    if (terminalSent) return@channelFlow
-                } while (retryWithoutNativeContextManagement)
-
-                val parsed = parseResult ?: error("Anthropic 流未返回解析结果")
-                roundContentBuffer.finish(hasToolCalls = parsed.toolCalls.isNotEmpty())
-                latestActiveUsage = parsed.activeUsage ?: latestActiveUsage
-                parsed.errorMessage?.let { message ->
-                    send(AppStreamEvent.Error("Anthropic API 错误: $message"))
-                    send(AppStreamEvent.Finish("api_error"))
-                    terminalSent = true
-                    return@channelFlow
-                }
-
-                val assistantMessage = buildJsonObject {
-                    put("role", "assistant")
-                    put("content", parsed.assistantContent)
-                }
-                if (parsed.hasSuccessfulCompaction()) {
-                    continuationMessages.clear()
-                    nativeCompactionObserved = true
-                }
-
-                if (parsed.toolCalls.isEmpty()) {
-                    if (nativeCompactionObserved) continuationMessages += assistantMessage
-                    if (parsed.fullText.isNotEmpty()) {
-                        send(AppStreamEvent.ContentFinal(parsed.fullText))
-                    }
-                    val management = request.contextManagement
-                    if (nativeCompactionObserved && management != null) {
-                        val canonicalMessages = JsonArray(continuationMessages)
-                        val activeTokens = latestActiveUsage?.let { usage ->
-                            safeTokenAdd(
-                                usage.inputTokens?.coerceAtLeast(0L) ?: 0L,
-                                usage.outputTokens?.coerceAtLeast(0L) ?: 0L,
-                            )
-                        }?.takeIf { it > 0L } ?: estimateToolLoopJsonTokens(canonicalMessages)
-                        send(
-                            AppStreamEvent.NativeContextCompaction(
-                                inputJson = canonicalMessages.toString(),
-                                configId = management.configId,
-                                provider = request.provider,
-                                channel = request.channel,
-                                model = request.model,
-                                compactionItemId = parsed.compactionIdentifier(),
-                                estimatedTokens = activeTokens,
-                                kind = NativeContextCompactionKind.ANTHROPIC_MESSAGES,
-                            ),
-                        )
-                    } else if (resetNativeStateAfterCompletion && management != null) {
-                        send(
-                            AppStreamEvent.NativeContextCompaction(
-                                inputJson = "",
-                                configId = management.configId,
-                                provider = request.provider,
-                                channel = request.channel,
-                                model = request.model,
-                                reset = true,
-                                kind = NativeContextCompactionKind.ANTHROPIC_MESSAGES,
-                            ),
-                        )
-                    }
-                    send(AppStreamEvent.Finish(parsed.stopReason ?: "stop"))
-                    terminalSent = true
-                    return@channelFlow
-                }
-
-                val executor = mcpToolExecutor
-                if (executor == null) {
-                    send(AppStreamEvent.Error("Anthropic 返回了工具调用，但工具执行器未初始化"))
-                    send(AppStreamEvent.Finish("tool_executor_unavailable"))
-                    terminalSent = true
-                    return@channelFlow
-                }
-
-                continuationMessages += assistantMessage
-
-                val toolResultBlocks = mutableListOf<JsonElement>()
-                for (toolCall in parsed.toolCalls) {
-                    send(
-                        AppStreamEvent.ToolCall(
-                            id = toolCall.id,
-                            name = toolCall.name,
-                            argumentsObj = toolCall.input,
+                    configureSSERequest()
+                    setBody(
+                        buildAnthropicPayload(
+                            request = request,
+                            nativeContextManagementEnabled = nativeContextManagementEnabled,
+                            allowRestoredCompaction = nativeContextManagementEnabled || preserveRestoredCompaction,
                         ),
                     )
-                    val execution = try {
-                        val result = executor(
-                            toolCall.name,
-                            toolCall.input,
-                            toolCall.id,
-                            request.localComputerRequestContext,
-                        ) { status ->
-                            send(AppStreamEvent.ExecutionStatusUpdate(status))
+                }.execute { response ->
+                    if (!response.status.isSuccess()) {
+                        val errorBody = response.readErrorTextAtMost().orEmpty()
+                        if (
+                            nativeContextManagementEnabled &&
+                            isUnsupportedNativeContextManagement(response.status.value, errorBody)
+                        ) {
+                            Log.w(TAG, "服务端不支持 Anthropic 原生压缩，本次请求关闭后重试")
+                            unsupportedNativeCompaction += nativeCompactionCapabilityKey(request)
+                            nativeContextManagementEnabled = false
+                            preserveRestoredCompaction = hasRestoredAnthropicCompaction(request)
+                            resetNativeStateAfterCompletion = preserveRestoredCompaction
+                            retryWithoutNativeContextManagement = true
+                            return@execute
                         }
-                        computerExecutionCompletedEvent(result, toolCall.id)?.let { send(it) }
-                        val webResults = WebSearchToolResultExtractor.extract(toolCall.name, result)
-                        if (webResults.isNotEmpty()) {
-                            send(AppStreamEvent.WebSearchResults(webResults))
-                        }
-                        ToolExecution(result = result, isError = false)
-                    } catch (error: CancellationException) {
-                        throw error
-                    } catch (error: Exception) {
-                        Log.e(TAG, "工具 ${toolCall.name} 执行失败", error)
-                        ToolExecution(
-                            result = JsonPrimitive("Error: ${error.message ?: "Unknown error"}"),
-                            isError = true,
-                        )
+                        val result = NetworkUtils.handleApiError(response.status, errorBody, "Anthropic")
+                        terminalSent = true
+                        send(result.error)
+                        send(result.finish)
+                        return@execute
                     }
-                    toolResultBlocks += buildToolResultBlock(toolCall.id, execution)
+                    parsed = parseAnthropicSse(response.bodyAsChannel()) { send(it) }
                 }
-                val toolResults = JsonArray(toolResultBlocks)
-                continuationMessages += buildJsonObject {
-                    put("role", "user")
-                    put("content", toolResults)
-                }
-                if (
-                    compactAnthropicToolHistoryIfNeeded(
-                        history = continuationMessages,
-                        management = request.contextManagement,
-                        usage = latestActiveUsage,
-                    )
-                ) {
-                    send(AppStreamEvent.ExecutionStatusUpdate(TOOL_CONTEXT_COMPRESSION_STATUS))
-                }
-                Log.d(TAG, "完成 Anthropic 工具循环 ${loopIndex + 1}")
-            }
+                if (terminalSent) return@channelFlow
+            } while (retryWithoutNativeContextManagement)
 
-            if (!terminalSent) {
-                send(AppStreamEvent.Error("Anthropic 工具调用超过 $MAX_TOOL_LOOPS 轮限制"))
-                send(AppStreamEvent.Finish("tool_loop_limit"))
+            val completed = parsed ?: error("Anthropic 流未返回解析结果")
+            completed.toolCalls.forEach { call ->
+                send(AppStreamEvent.ToolCall(call.id, call.name, call.input))
             }
+            completed.errorMessage?.let { message ->
+                terminalSent = true
+                send(AppStreamEvent.Error("Anthropic API 错误: $message"))
+                send(AppStreamEvent.Finish("api_error"))
+            }
+            if (!terminalSent && completed.fullText.isNotEmpty() && completed.toolCalls.isEmpty()) {
+                send(AppStreamEvent.ContentFinal(completed.fullText))
+            }
+            val management = request.contextManagement
+            val canonicalMessages = canonicalAnthropicContext(request, completed)
+            if (completed.assistantContent.isNotEmpty()) {
+                send(
+                    AppStreamEvent.ProviderContinuation(
+                        protocol = com.android.everytalk.data.DataClass.ModelParameterProtocol.ANTHROPIC.name,
+                        payloadJson = completed.assistantContent.toString(),
+                        compactedContextJson = canonicalMessages?.toString()
+                            ?: request.localProviderContinuation?.compactedContextJson,
+                    ),
+                )
+            }
+            when {
+                resetNativeStateAfterCompletion && management != null -> send(
+                    AppStreamEvent.NativeContextCompaction(
+                        inputJson = "",
+                        configId = management.configId,
+                        provider = request.provider,
+                        channel = request.channel,
+                        model = request.model,
+                        reset = true,
+                        kind = NativeContextCompactionKind.ANTHROPIC_MESSAGES,
+                    ),
+                )
+                canonicalMessages != null && management != null -> {
+                    val activeTokens = completed.activeUsage?.let { usage ->
+                        safeTokenAdd(
+                            usage.inputTokens?.coerceAtLeast(0L) ?: 0L,
+                            usage.outputTokens?.coerceAtLeast(0L) ?: 0L,
+                        )
+                    }?.takeIf { it > 0L } ?: estimateToolLoopJsonTokens(canonicalMessages)
+                    send(
+                        AppStreamEvent.NativeContextCompaction(
+                            inputJson = canonicalMessages.toString(),
+                            configId = management.configId,
+                            provider = request.provider,
+                            channel = request.channel,
+                            model = request.model,
+                            compactionItemId = completed.compactionIdentifier(),
+                            estimatedTokens = activeTokens,
+                            kind = NativeContextCompactionKind.ANTHROPIC_MESSAGES,
+                        ),
+                    )
+                }
+            }
+            if (!terminalSent) send(AppStreamEvent.Finish(completed.stopReason ?: "turn_complete"))
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
-            if (!terminalSent) {
-                val result = NetworkUtils.handleConnectionError(error, "Anthropic")
-                send(result.error)
-                send(result.finish)
-            }
+            val result = NetworkUtils.handleConnectionError(error, "Anthropic")
+            send(result.error)
+            send(result.finish)
         }
     }
+
+    /** 兼容旧调用名；工具轮次统一由 AgentLoop 推进。 */
+    suspend fun streamChatDirect(
+        client: HttpClient,
+        request: ChatRequest,
+    ): Flow<AppStreamEvent> = streamSingleTurn(client, request)
 
     internal fun resolveMessagesUrl(apiAddress: String?): String {
         val raw = apiAddress?.trim().orEmpty()
@@ -328,10 +218,13 @@ object AnthropicDirectClient {
             .mapNotNull(::messageText)
             .filter(String::isNotBlank)
             .joinToString("\n\n")
-        val messages = restoredAnthropicMessages(request, preparedMessages, allowRestoredCompaction)
-            ?: preparedMessages
+        val messages = (
+            restoredAnthropicMessages(request, preparedMessages, allowRestoredCompaction)
+                ?: preparedMessages
                 .filterNot { it.role.equals("system", ignoreCase = true) }
                 .mapNotNull(::toAnthropicMessage)
+            ).replaceLatestAssistantWithNativeContinuation(request)
+            .pruneBeforeLatestCompaction()
         val maxTokens = request.generationConfig?.maxOutputTokens
             ?.takeIf { it > 0 }
             ?: DEFAULT_MAX_TOKENS
@@ -399,6 +292,67 @@ object AnthropicDirectClient {
         is PartsApiMessage -> message.parts
             .filterIsInstance<ApiContentPart.Text>()
             .joinToString("\n") { it.text }
+        is AgentAssistantApiMessage -> message.text
+        is AgentToolResultApiMessage -> message.content.toString()
+    }
+
+    private fun List<JsonObject>.replaceLatestAssistantWithNativeContinuation(
+        request: ChatRequest,
+    ): List<JsonObject> {
+        val nativeContent = request.localProviderContinuation
+            ?.takeIf { it.protocol == com.android.everytalk.data.DataClass.ModelParameterProtocol.ANTHROPIC }
+            ?.payloadJson
+            ?.let { raw -> runCatching { Json.parseToJsonElement(raw) as? JsonArray }.getOrNull() }
+            ?.takeIf(JsonArray::isNotEmpty)
+            ?: return this
+        val index = indexOfLast { it["role"]?.jsonPrimitive?.contentOrNull == "assistant" }
+        if (index < 0) return this
+        return toMutableList().apply {
+            this[index] = buildJsonObject {
+                put("role", "assistant")
+                put("content", nativeContent)
+            }
+        }
+    }
+
+    /**
+     * Provider 原生压缩块出现后，它之前的消息已被摘要覆盖。
+     * AgentLoop 后续轮次只发送该压缩块及其后的工具结果和回答。
+     */
+    private fun List<JsonObject>.pruneBeforeLatestCompaction(): List<JsonObject> {
+        val index = indexOfLast { message ->
+            (message["content"] as? JsonArray).orEmpty().any { block ->
+                val objectBlock = block as? JsonObject ?: return@any false
+                objectBlock["type"]?.jsonPrimitive?.contentOrNull == "compaction" &&
+                    objectBlock["content"].nullableString()?.isNotBlank() == true
+            }
+        }
+        return if (index < 0) this else drop(index)
+    }
+
+    private fun canonicalAnthropicContext(
+        request: ChatRequest,
+        completed: AnthropicParseResult,
+    ): JsonArray? {
+        val currentAssistant = buildJsonObject {
+            put("role", "assistant")
+            put("content", completed.assistantContent)
+        }
+        if (completed.hasSuccessfulCompaction()) return JsonArray(listOf(currentAssistant))
+
+        val preparedMessages = SystemPromptInjector.smartInjectSystemPrompt(request.messages)
+        val messages = restoredAnthropicMessages(
+            request = request,
+            preparedMessages = preparedMessages,
+            allowRestoredCompaction = true,
+        ) ?: preparedMessages
+            .filterNot { it.role.equals("system", ignoreCase = true) }
+            .mapNotNull(::toAnthropicMessage)
+        val canonical = messages
+            .replaceLatestAssistantWithNativeContinuation(request)
+            .pruneBeforeLatestCompaction()
+        if (!containsSuccessfulCompaction(canonical)) return null
+        return JsonArray(canonical + currentAssistant)
     }
 
     private fun restoredAnthropicMessages(
@@ -407,6 +361,21 @@ object AnthropicDirectClient {
         allowRestoredCompaction: Boolean,
     ): List<JsonObject>? {
         if (!allowRestoredCompaction) return null
+        val runCanonical = request.localProviderContinuation
+            ?.takeIf { it.protocol == com.android.everytalk.data.DataClass.ModelParameterProtocol.ANTHROPIC }
+            ?.compactedContextJson
+            ?.let(::parseCanonicalAnthropicMessages)
+        if (runCanonical != null) {
+            val throughId = request.localProviderContinuation.compactedThroughMessageId
+            val throughIndex = throughId?.let { id -> preparedMessages.indexOfFirst { it.id == id } } ?: -1
+            if (throughIndex < 0) return null
+            return buildList {
+                addAll(runCanonical)
+                preparedMessages.drop(throughIndex + 1)
+                    .filterNot { it.role.equals("system", ignoreCase = true) }
+                    .mapNotNullTo(this, ::toAnthropicMessage)
+            }
+        }
         val management = request.contextManagement ?: return null
         val state = management.restoredState ?: return null
         if (
@@ -474,6 +443,30 @@ object AnthropicDirectClient {
                             put("text", "[附件: ${part.uri}]")
                         }
                     }
+                }
+            }
+            is AgentAssistantApiMessage -> buildJsonArray {
+                message.text.takeIf(String::isNotBlank)?.let { text ->
+                    addJsonObject {
+                        put("type", "text")
+                        put("text", text)
+                    }
+                }
+                message.toolCalls.forEach { call ->
+                    addJsonObject {
+                        put("type", "tool_use")
+                        put("id", call.id)
+                        put("name", call.name)
+                        put("input", call.arguments)
+                    }
+                }
+            }
+            is AgentToolResultApiMessage -> buildJsonArray {
+                addJsonObject {
+                    put("type", "tool_result")
+                    put("tool_use_id", message.toolCallId)
+                    put("content", message.content.toString())
+                    if (message.isError) put("is_error", true)
                 }
             }
         }
@@ -577,42 +570,6 @@ object AnthropicDirectClient {
         is Number -> JsonPrimitive(value)
         is Boolean -> JsonPrimitive(value)
         else -> JsonPrimitive(value.toString())
-    }
-
-    private fun buildToolResultBlock(toolUseId: String, execution: ToolExecution): JsonObject {
-        val resultObject = execution.result as? JsonObject
-        val images = resultObject?.get("_images") as? JsonArray
-        return buildJsonObject {
-            put("type", "tool_result")
-            put("tool_use_id", toolUseId)
-            if (execution.isError) put("is_error", true)
-            if (images.isNullOrEmpty()) {
-                put("content", execution.result.toString())
-            } else {
-                putJsonArray("content") {
-                    val textOnly = JsonObject(resultObject.filterKeys { it != "_images" })
-                    if (textOnly.isNotEmpty()) {
-                        addJsonObject {
-                            put("type", "text")
-                            put("text", textOnly.toString())
-                        }
-                    }
-                    images.forEach { image ->
-                        val imageObject = image as? JsonObject ?: return@forEach
-                        val data = imageObject["base64"]?.jsonPrimitive?.contentOrNull ?: return@forEach
-                        val mediaType = imageObject["mimeType"]?.jsonPrimitive?.contentOrNull ?: "image/jpeg"
-                        addJsonObject {
-                            put("type", "image")
-                            putJsonObject("source") {
-                                put("type", "base64")
-                                put("media_type", mediaType)
-                                put("data", stripDataUriPrefix(data))
-                            }
-                        }
-                    }
-                }
-            }
-        }
     }
 
     internal suspend fun parseAnthropicSse(
@@ -868,21 +825,6 @@ object AnthropicDirectClient {
         else -> null
     }
 
-    private fun AnthropicParseResult.hasSuccessfulCompaction(): Boolean =
-        assistantContent.any { element ->
-            val block = element as? JsonObject ?: return@any false
-            block["type"]?.jsonPrimitive?.contentOrNull == "compaction" &&
-                block["content"].nullableString()?.isNotBlank() == true
-        }
-
-    private fun AnthropicParseResult.compactionIdentifier(): String? {
-        val block = assistantContent.lastOrNull { element ->
-            (element as? JsonObject)?.get("type")?.jsonPrimitive?.contentOrNull == "compaction"
-        } as? JsonObject ?: return null
-        return block["encrypted_content"].nullableString()?.let { "anthropic:${it.hashCode()}" }
-            ?: block["content"].nullableString()?.let { "anthropic:${it.hashCode()}" }
-    }
-
     private data class AnthropicStreamBlock(
         val index: Int,
         val type: String,
@@ -943,10 +885,21 @@ object AnthropicDirectClient {
         ).any(normalized::contains)
     }
 
-    private data class ToolExecution(
-        val result: JsonElement,
-        val isError: Boolean,
-    )
+    private fun AnthropicParseResult.hasSuccessfulCompaction(): Boolean =
+        assistantContent.any { element ->
+            val block = element as? JsonObject ?: return@any false
+            block["type"]?.jsonPrimitive?.contentOrNull == "compaction" &&
+                block["content"].nullableString()?.isNotBlank() == true
+        }
+
+    private fun AnthropicParseResult.compactionIdentifier(): String? {
+        val block = assistantContent.lastOrNull { element ->
+            (element as? JsonObject)?.get("type")?.jsonPrimitive?.contentOrNull == "compaction"
+        } as? JsonObject ?: return null
+        return block["encrypted_content"].nullableString()?.let { "anthropic:${it.hashCode()}" }
+            ?: block["content"].nullableString()?.let { "anthropic:${it.hashCode()}" }
+    }
+
 }
 
 internal fun isOfficialAnthropicMessagesAddress(apiAddress: String?): Boolean =

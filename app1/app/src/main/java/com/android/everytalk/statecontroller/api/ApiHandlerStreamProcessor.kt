@@ -754,6 +754,18 @@ internal class ApiHandlerStreamProcessor(
                         }
                     }
                 }
+                is AppStreamEvent.AgentUsage -> {
+                    updatedMessage = messageTokenUsageStore.apply(latestMessageForUpdate(), appEvent)
+                    messageList[messageIndex] = updatedMessage
+                    viewModelScope.launch(Dispatchers.IO) {
+                        historyManager.saveCurrentChatToHistoryIfNeeded(
+                            forceSave = true,
+                            isImageGeneration = isImageGeneration,
+                        )
+                    }
+                }
+                // ProviderContinuation 仅在 AgentLoop 内用于下一轮协议连续状态，不投影到界面。
+                is AppStreamEvent.ProviderContinuation -> Unit
                 is AppStreamEvent.NativeContextCompaction -> {
                     val latestMessage = latestMessageForUpdate()
                     updatedMessage = mergeNativeContextCompaction(latestMessage, appEvent)
@@ -925,6 +937,7 @@ internal class ApiHandlerStreamProcessor(
             if ((
                     !stateHolder._isStreamingPaused.value ||
                         appEvent is AppStreamEvent.Usage ||
+                        appEvent is AppStreamEvent.AgentUsage ||
                         appEvent is AppStreamEvent.NativeContextCompaction
                     ) &&
                 updatedMessage != currentMessage

@@ -10,6 +10,11 @@ import com.android.everytalk.data.DataClass.ContextCompressionState
 import com.android.everytalk.ui.components.MarkdownPart
 import com.android.everytalk.ui.components.toRecoveredMarkdown
 import com.android.everytalk.data.network.AppStreamEvent
+import com.android.everytalk.data.agent.AgentLoop
+import com.android.everytalk.data.agent.AgentLoopRequest
+import com.android.everytalk.data.agent.AgentRunStore
+import com.android.everytalk.data.database.AppDatabase
+import com.android.everytalk.data.DataClass.resolvedModelTokenLimits
 import com.android.everytalk.data.DataClass.ApiContentPart
 import com.android.everytalk.data.network.ApiClient
 import com.android.everytalk.data.network.NetworkUtils
@@ -214,6 +219,11 @@ class ApiHandler(
     private val processedMessageIds = ConcurrentHashMap.newKeySet<String>()
     private val generatedImageSourceFingerprints = ConcurrentHashMap<String, MutableSet<String>>()
     private val messageTokenUsageStore = MessageTokenUsageStore()
+    private val agentLoop by lazy {
+        AgentLoop(
+            runStore = AgentRunStore(AppDatabase.getDatabase(context).agentDao()),
+        )
+    }
     
     // 🛡️ 防 prompt 泄露：为每个消息创建独立的流式检测器
     private val promptLeakDetectors = ConcurrentHashMap<String, PromptLeakGuard.StreamingDetector>()
@@ -526,6 +536,7 @@ class ApiHandler(
                 is com.android.everytalk.data.DataClass.PartsApiMessage -> message.parts
                     .filterIsInstance<ApiContentPart.Text>()
                     .joinToString(" ") { it.text }
+                else -> ""
             }.length
             logger.debug("requestMessage[$index]: role=${message.role}, textChars=$textChars")
         }
@@ -723,119 +734,34 @@ class ApiHandler(
                         // 不再调用 onRequestFailed，避免 Snackbar 弹出
                     }
                } else {
-                val finalAttachments = attachmentsToPassToApiClient.toMutableList()
-                if (audioBase64 != null) {
-                    finalAttachments.add(Audio(id = UUID.randomUUID().toString(), mimeType = mimeType ?: "audio/3gpp", data = audioBase64))
-                }
-                // 强制使用直连模式
-                var activeRequest = requestBody
-                var activeContextSnapshot = contextUsageSnapshot?.copy(messageId = aiMessageId)
-                val attemptedRecoveries = mutableSetOf<RequestErrorCategory>()
-                while (true) {
-                    var recoveryDecision: ContextRecoveryDecision? = null
-                    logger.debug("Stream started for message $aiMessageId")
-                    ApiClient.streamChatResponse(
-                        activeRequest,
-                        finalAttachments,
-                        applicationContextForApiClient
-                    ).takeWhile { appEvent ->
-                            val currentJob = if (isImageGeneration) stateHolder.imageApiJob else stateHolder.textApiJob
-                            val currentStreamingId = if (isImageGeneration)
-                                stateHolder._currentImageStreamingAiMessageId.value
-                            else
-                                stateHolder._currentTextStreamingAiMessageId.value
-                            if (currentJob != thisJob || currentStreamingId != aiMessageId) {
-                                thisJob?.cancel(CancellationException("API job 或 streaming ID 已更改，停止收集旧数据块"))
-                                return@takeWhile false
-                            }
-                            // 🎯 Task 11: Monitor memory usage during long streaming sessions
-                            // Check memory periodically to detect potential issues
-                            // Requirements: 1.4, 3.4
-                            stateHolder.checkMemoryUsage()
-                            // Record memory snapshot for session summary
-                            run {
-                                val rt = Runtime.getRuntime()
-                                val usedMB = ((rt.totalMemory() - rt.freeMemory()) / (1024 * 1024)).toInt()
-                                val maxMB = (rt.maxMemory() / (1024 * 1024)).toInt()
-                                PerformanceMonitor.recordMemory(aiMessageId, usedMB, maxMB)
-                            }
-
-                            if (appEvent is AppStreamEvent.Error) {
-                                val currentProcessor = messageProcessorMap[aiMessageId]
-                                val messageList = if (isImageGeneration) {
-                                    stateHolder.imageGenerationMessages
-                                } else {
-                                    stateHolder.messages
-                                }
-                                val currentMessage = messageList.firstOrNull { it.id == aiMessageId }
-                                val hasPartialOutput = !currentProcessor?.getCurrentText().isNullOrBlank() ||
-                                    !currentProcessor?.getCurrentReasoning().isNullOrBlank() ||
-                                    !currentMessage?.text.isNullOrBlank() ||
-                                    !currentMessage?.reasoning.isNullOrBlank()
-                                recoveryDecision = ContextRecoveryPolicy.recover(
-                                    request = activeRequest,
-                                    error = appEvent.toProviderErrorInfo(),
-                                    hasPartialOutput = hasPartialOutput,
-                                    attemptedCategories = attemptedRecoveries,
-                                )
-                                if (recoveryDecision != null) return@takeWhile false
-                            }
-
-                            processStreamEvent(appEvent, aiMessageId, isImageGeneration)
-                            appEvent !is AppStreamEvent.StreamEnd && appEvent !is AppStreamEvent.Error
-                        }.collect { }
-
-                    val decision = recoveryDecision ?: break
-                    attemptedRecoveries += decision.category
-                    activeRequest = decision.request
-                    val currentSnapshot = activeContextSnapshot
-                    val refreshedSnapshot = currentSnapshot?.let { snapshot ->
-                        RequestTokenEstimator.estimate(
-                            messages = activeRequest.messages,
-                            tools = activeRequest.tools,
-                        ).toContextUsageSnapshot(
-                            messageId = aiMessageId,
-                            configId = snapshot.configId,
-                            reservedOutputTokens = activeRequest.generationConfig?.maxOutputTokens
-                                ?.toLong()
-                                ?: snapshot.reservedOutputTokens,
-                            contextWindowTokens = decision.effectiveMaxContextTokens
-                                ?.toLong()
-                                ?: snapshot.contextWindowTokens,
-                        )
-                    }
-                    if (refreshedSnapshot != null) {
-                        activeContextSnapshot = refreshedSnapshot
-                        withContext(Dispatchers.Main.immediate) {
-                            val messageList = if (isImageGeneration) {
-                                stateHolder.imageGenerationMessages
-                            } else {
-                                stateHolder.messages
-                            }
-                            val index = messageList.indexOfFirst { it.id == aiMessageId }
-                            if (index >= 0) {
-                                messageList[index] = messageList[index].copy(
-                                    contextUsageSnapshot = refreshedSnapshot
-                                )
-                            }
-                        }
-                    }
-                    messageProcessorMap[aiMessageId]?.reset()
-                    stateHolder.updateMessageStatus(
-                        aiMessageId,
-                        when (decision.category) {
-                            RequestErrorCategory.INPUT_CONTEXT_TOO_LONG -> "正在缩减上下文并重试"
-                            RequestErrorCategory.OUTPUT_LIMIT_TOO_HIGH -> "正在调整输出上限并重试"
-                            else -> "正在重试"
-                        },
-                        isImageGeneration,
+                logger.debug("Agent run started for message $aiMessageId")
+                agentLoop.run(
+                    AgentLoopRequest(
+                        request = requestBody,
+                        sessionId = requestBody.conversationId
+                            ?.takeIf(String::isNotBlank)
+                            ?: error("会话 ID 为空，无法启动 Agent"),
+                        userMessageId = afterUserMessageId
+                            ?.takeIf(String::isNotBlank)
+                            ?: requestBody.messages.lastOrNull { it.role == "user" }?.id
+                            ?: error("用户消息 ID 为空，无法启动 Agent"),
+                        visibleAssistantMessageId = aiMessageId,
+                        tokenLimits = resolvedModelTokenLimits(
+                            maxOutputTokens = requestBody.generationConfig?.maxOutputTokens,
+                            maxContextTokens = requestBody.contextManagement?.maxContextTokens
+                                ?: com.android.everytalk.data.DataClass.DEFAULT_MAX_CONTEXT_TOKENS,
+                        ),
                     )
-                    logger.debug(
-                        "Context recovery retry: category=${decision.category}, " +
-                            "messages=${activeRequest.messages.size}, " +
-                            "maxOutput=${activeRequest.generationConfig?.maxOutputTokens}"
-                    )
-                }
+                ).takeWhile { appEvent ->
+                    val currentStreamingId = stateHolder._currentTextStreamingAiMessageId.value
+                    if (stateHolder.textApiJob != thisJob || currentStreamingId != aiMessageId) {
+                        thisJob?.cancel(CancellationException("API job 或 streaming ID 已更改，停止收集旧数据块"))
+                        return@takeWhile false
+                    }
+                    stateHolder.checkMemoryUsage()
+                    processStreamEvent(appEvent, aiMessageId, isImageGeneration = false)
+                    appEvent !is AppStreamEvent.StreamEnd && appEvent !is AppStreamEvent.Error
+                }.collect { }
                }
              } catch (e: CancellationException) {
                  val currentMessageProcessor = messageProcessorMap[aiMessageId] ?: MessageProcessor()

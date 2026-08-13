@@ -28,6 +28,11 @@ data class ContextUsageSnapshot(
     val measuredTotalTokens: Long? = null,
     val measuredUsageSource: TokenUsageSource? = null,
     val activeContextTokensOverride: Long? = null,
+    val agentRunInputTokens: Long? = null,
+    val agentRunOutputTokens: Long? = null,
+    val agentRunTotalTokens: Long? = null,
+    val agentRequestCount: Int? = null,
+    val conversationLifetimeTokens: Long? = null,
 ) {
     val uncalibratedEstimatedInputTokens: Long
         get() = safeSum(
@@ -56,7 +61,11 @@ data class ContextUsageSnapshot(
         get() = measuredInputTokens?.minus(estimatedInputTokens)
 
     val dataSource: ContextUsageDataSource
-        get() = if (measuredTotalTokens != null) {
+        get() = if (
+            measuredTotalTokens != null &&
+            measuredUsageSource != null &&
+            measuredUsageSource != TokenUsageSource.ESTIMATED
+        ) {
             ContextUsageDataSource.MEASURED
         } else {
             ContextUsageDataSource.ESTIMATED
@@ -78,6 +87,21 @@ data class ContextUsageSnapshot(
 
     fun withActiveContextOverride(tokens: Long?): ContextUsageSnapshot = copy(
         activeContextTokensOverride = tokens?.coerceAtLeast(0L),
+    )
+
+    fun withAgentUsage(
+        usage: TokenUsage,
+        runInputTokens: Long,
+        runOutputTokens: Long,
+        runTotalTokens: Long,
+        requestCount: Int,
+        conversationTotalTokens: Long,
+    ): ContextUsageSnapshot = withFinalUsage(usage).copy(
+        agentRunInputTokens = runInputTokens.coerceAtLeast(0L),
+        agentRunOutputTokens = runOutputTokens.coerceAtLeast(0L),
+        agentRunTotalTokens = runTotalTokens.coerceAtLeast(0L),
+        agentRequestCount = requestCount.coerceAtLeast(0),
+        conversationLifetimeTokens = conversationTotalTokens.coerceAtLeast(0L),
     )
 }
 

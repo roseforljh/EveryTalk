@@ -4,7 +4,10 @@ import android.app.Application
 import com.android.everytalk.data.DataClass.AbstractApiMessage
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.GenerationConfig
+import com.android.everytalk.data.DataClass.AgentAssistantApiMessage
+import com.android.everytalk.data.DataClass.AgentToolCallApiPart
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -94,13 +97,29 @@ class OpenAIDirectClientPayloadTest {
         assertTrue(payload.contains("\"enable_thinking\":true"))
     }
 
-    private fun buildPayload(request: ChatRequest): String {
-        val method = OpenAIDirectClient::class.java.getDeclaredMethod(
-            "buildOpenAIPayload",
-            ChatRequest::class.java,
+    @Test
+    fun `compatible agent history preserves reasoning content for next tool turn`() {
+        val payload = buildPayload(
+            request(
+                apiAddress = "https://api.deepseek.com/v1",
+                model = "deepseek-reasoner",
+                messages = listOf(
+                    SimpleTextApiMessage(role = "user", content = "检查服务"),
+                    AgentAssistantApiMessage(
+                        reasoning = "需要先读取状态",
+                        toolCalls = listOf(
+                            AgentToolCallApiPart("call-1", "exec", JsonObject(emptyMap())),
+                        ),
+                    ),
+                ),
+            )
         )
-        method.isAccessible = true
-        return method.invoke(OpenAIDirectClient, request) as String
+
+        assertTrue(payload.contains("\"reasoning_content\":\"需要先读取状态\""))
+    }
+
+    private fun buildPayload(request: ChatRequest): String {
+        return OpenAIDirectClient.buildOpenAIPayload(request)
     }
 
     private fun request(

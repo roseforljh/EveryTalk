@@ -20,6 +20,86 @@ import org.junit.Test
 class MarkdownRenderingContractTest {
 
     @Test
+    fun `列表内半缩进围栏提升为顶级代码块且不吞掉后续正文`() {
+        val source = """
+            3. 服务端返回：
+               ```json
+               {
+            "downloadUrl": "https://jmj.0penwor1d.com/downloads/jmj-bridge.exe"
+               }
+               ```
+            4. 用户点击下载按钮。
+            5. 安装并启动 Bridge。
+
+            ## 一个实际注意点
+
+            正文。
+
+            ```text
+            /downloads/jmj-bridge.exe
+            ```
+        """.trimIndent()
+
+        val prepared = StreamBlockParser.prepareMessage(
+            content = source,
+            messageId = "broken-list-fence-indent",
+            contentVersion = 52L,
+        )
+        val state = parseMarkdown(
+            prepared.markdown,
+            lookupLinks = false,
+            flavour = EveryTalkMarkdownFlavourDescriptor,
+        ) as State.Success
+        val codeFences = state.node.children.filter { it.type == MarkdownElementTypes.CODE_FENCE }
+        val codeFenceSources = codeFences.map { node ->
+            state.content.substring(node.startOffset, node.endOffset)
+        }
+
+        assertTrue(prepared.markdown.contains("\n```json\n{\n\"downloadUrl\""))
+        assertEquals(2, codeFences.size)
+        assertTrue(codeFenceSources.first().contains("\"downloadUrl\""))
+        assertFalse(codeFenceSources.first().contains("4. 用户点击下载按钮"))
+        assertTrue(state.node.children.any { it.type == MarkdownElementTypes.ATX_2 })
+    }
+
+    @Test
+    fun `合法容器围栏与无语言字面围栏保持原文`() {
+        val sources = listOf(
+            "- 示例\n  ```json\n  {\"ok\": true}\n  ```\n\n正文。",
+            "> ```text\n> 内容\n> ```\n\n正文。",
+            "- 列表中的字面围栏\n  ```\n正文仍保留。\n  ```",
+        )
+
+        sources.forEachIndexed { index, source ->
+            val prepared = StreamBlockParser.prepareMessage(
+                content = source,
+                messageId = "legal-container-fence-$index",
+                contentVersion = 53L + index,
+            )
+
+            assertEquals(source, prepared.markdown)
+        }
+    }
+
+    @Test
+    fun `只有关闭围栏退出列表缩进时仍恢复完整代码块`() {
+        val source = "- 示例\n  ```json\n  {\"ok\": true}\n```\n\n正文。"
+        val prepared = StreamBlockParser.prepareMessage(
+            content = source,
+            messageId = "broken-closing-fence-indent",
+            contentVersion = 56L,
+        )
+        val state = parseMarkdown(
+            prepared.markdown,
+            lookupLinks = false,
+            flavour = EveryTalkMarkdownFlavourDescriptor,
+        ) as State.Success
+
+        assertTrue(prepared.markdown.contains("- 示例\n\n```json\n{\"ok\": true}\n```\n\n正文。"))
+        assertEquals(1, state.node.children.count { it.type == MarkdownElementTypes.CODE_FENCE })
+    }
+
+    @Test
     fun `正文后粘连的代码围栏恢复边界且不吞掉后续Markdown`() {
         val source = """
             可以理解成下面这条流水线：```text

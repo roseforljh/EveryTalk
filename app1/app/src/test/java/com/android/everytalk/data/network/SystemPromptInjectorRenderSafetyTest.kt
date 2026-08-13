@@ -41,17 +41,21 @@ class SystemPromptInjectorRenderSafetyTest {
         val zhPrompt = SystemPromptInjector.getSystemPrompt("zh-CN")
         val enPrompt = SystemPromptInjector.getSystemPrompt("en")
 
-        assertTrue(zhPrompt.contains("表头、分隔行和所有数据行列数完全一致"))
+        assertTrue(zhPrompt.contains("表头、分隔行和所有数据行列数一致"))
         assertTrue(zhPrompt.contains("表格从独立行开始"))
         assertTrue(zhPrompt.contains("竖线写成 `\\|`"))
         assertTrue(zhPrompt.contains("禁止 `\\(...\\)`、`\\[...\\]`"))
-        assertTrue(zhPrompt.contains("代码块放在列表外层"))
+        assertTrue(zhPrompt.contains("禁止把代码围栏嵌入列表或引用"))
+        assertTrue(zhPrompt.contains("围栏必须从物理行第 1 列开始"))
+        assertTrue(zhPrompt.contains("围栏内只保留代码自身需要的缩进"))
 
-        assertTrue(enPrompt.contains("keep equal columns"))
-        assertTrue(enPrompt.contains("start tables on their own line"))
+        assertTrue(enPrompt.contains("Keep equal columns"))
+        assertTrue(enPrompt.contains("start on a new line"))
         assertTrue(enPrompt.contains("escape `|` as `\\|`"))
         assertTrue(enPrompt.contains("no `\\(...\\)`, `\\[...\\]`"))
-        assertTrue(enPrompt.contains("blocks outside lists"))
+        assertTrue(enPrompt.contains("column 1"))
+        assertTrue(enPrompt.contains("never nest fenced code inside lists or block quotes"))
+        assertTrue(enPrompt.contains("only indentation required by the code itself"))
     }
 
     @Test
@@ -59,15 +63,14 @@ class SystemPromptInjectorRenderSafetyTest {
         val zhPrompt = SystemPromptInjector.getSystemPrompt("zh-CN")
         val enPrompt = SystemPromptInjector.getSystemPrompt("en")
 
-        assertTrue(zhPrompt.contains("每个列表项只使用一个行首标记"))
-        assertTrue(zhPrompt.contains("禁止在同一物理行继续写第二个列表标记"))
+        assertTrue(zhPrompt.contains("每项只使用一个行首标记"))
+        assertTrue(zhPrompt.contains("禁止在同一物理行继续写第二个标记"))
         assertTrue(zhPrompt.contains("缩进到父项正文起始列"))
         assertTrue(zhPrompt.contains("改用同级列表或普通段落"))
 
-        assertTrue(enPrompt.contains("one leading list marker per physical line"))
-        assertTrue(enPrompt.contains("never append another list marker later on the same line"))
-        assertTrue(enPrompt.contains("parent item's content column"))
-        assertTrue(enPrompt.contains("use sibling items or prose"))
+        assertTrue(enPrompt.contains("one leading marker per physical line"))
+        assertTrue(enPrompt.contains("parent content column"))
+        assertTrue(enPrompt.contains("use siblings or prose"))
     }
 
     @Test

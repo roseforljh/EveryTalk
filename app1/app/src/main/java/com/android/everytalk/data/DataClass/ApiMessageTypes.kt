@@ -1,6 +1,8 @@
 package com.android.everytalk.data.DataClass
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 
 @Serializable
 sealed class AbstractApiMessage : IMessage {
@@ -38,4 +40,52 @@ data class PartsApiMessage(
 
     @SerialName("name")
     override val name: String? = null
+) : AbstractApiMessage()
+
+/**
+ * AgentLoop 使用的中立 Assistant 消息。它保存文本、推理和工具调用的真实顺序。
+ * 四种 Provider 在发请求时再把它转换成各自协议。
+ */
+@Serializable
+@SerialName("agent_assistant_message")
+data class AgentAssistantApiMessage(
+    @SerialName("id")
+    override val id: String = java.util.UUID.randomUUID().toString(),
+    @SerialName("role")
+    override val role: String = "assistant",
+    @SerialName("text")
+    val text: String = "",
+    @SerialName("reasoning")
+    val reasoning: String = "",
+    @SerialName("tool_calls")
+    val toolCalls: List<AgentToolCallApiPart> = emptyList(),
+    @SerialName("name")
+    override val name: String? = null,
+) : AbstractApiMessage()
+
+@Serializable
+data class AgentToolCallApiPart(
+    val id: String,
+    val name: String,
+    val arguments: JsonObject,
+)
+
+/** Tool Result 独立成消息，保证上下文裁剪时能和 Tool Call 成组处理。 */
+@Serializable
+@SerialName("agent_tool_result_message")
+data class AgentToolResultApiMessage(
+    @SerialName("id")
+    override val id: String = java.util.UUID.randomUUID().toString(),
+    @SerialName("role")
+    override val role: String = "tool",
+    @SerialName("tool_call_id")
+    val toolCallId: String,
+    @SerialName("tool_name")
+    val toolName: String,
+    @SerialName("content")
+    val content: JsonElement,
+    @SerialName("is_error")
+    val isError: Boolean = false,
+    @SerialName("name")
+    override val name: String? = toolName,
 ) : AbstractApiMessage()

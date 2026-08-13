@@ -56,9 +56,13 @@ private val InputUsageColor = Color(0xFF10A37F)
 private val OutputUsageColor = Color(0xFF6D5BD0)
 
 internal data class AiContextUsageSummary(
-    val inputTokens: Long,
-    val outputTokens: Long,
-    val turnTotalTokens: Long,
+    val requestInputTokens: Long,
+    val requestOutputTokens: Long,
+    val requestTotalTokens: Long,
+    val runInputTokens: Long,
+    val runOutputTokens: Long,
+    val runTotalTokens: Long,
+    val requestCount: Int,
     val contextWindowTokens: Long,
     val currentContextTokens: Long,
     val conversationTotalTokens: Long,
@@ -80,8 +84,17 @@ internal fun aiContextUsageSummary(
     val input = (usage?.inputTokens ?: snapshot?.measuredInputTokens
         ?: snapshot?.estimatedInputTokens ?: 0L).coerceAtLeast(0L)
     val output = (usage?.outputTokens ?: snapshot?.measuredOutputTokens ?: 0L).coerceAtLeast(0L)
-    val turnTotal = (usage?.totalTokens ?: safeTokenSum(input, output)).coerceAtLeast(0L)
-    val currentContext = (snapshot?.displayedUsedTokens ?: turnTotal).coerceAtLeast(0L)
+    val requestTotal = (usage?.totalTokens
+        ?: safeTokenSum(input, output)).coerceAtLeast(0L)
+    val runInput = (snapshot?.agentRunInputTokens ?: input).coerceAtLeast(0L)
+    val runOutput = (snapshot?.agentRunOutputTokens ?: output).coerceAtLeast(0L)
+    val runTotal = (snapshot?.agentRunTotalTokens ?: requestTotal).coerceAtLeast(0L)
+    // 上下文窗口只看当前请求的输入占用，不能把输出或 Run 累计消费塞进进度条。
+    val currentContext = (snapshot?.activeContextTokensOverride
+        ?: snapshot?.measuredInputTokens
+        ?: usage?.inputTokens
+        ?: snapshot?.estimatedInputTokens
+        ?: 0L).coerceAtLeast(0L)
     val isMeasured = snapshot?.dataSource == ContextUsageDataSource.MEASURED ||
         usage?.source?.let { it != TokenUsageSource.ESTIMATED } == true
 
@@ -91,12 +104,17 @@ internal fun aiContextUsageSummary(
         ?: 0L
 
     return AiContextUsageSummary(
-        inputTokens = input,
-        outputTokens = output,
-        turnTotalTokens = turnTotal,
+        requestInputTokens = input,
+        requestOutputTokens = output,
+        requestTotalTokens = requestTotal,
+        runInputTokens = runInput,
+        runOutputTokens = runOutput,
+        runTotalTokens = runTotal,
+        requestCount = snapshot?.agentRequestCount ?: 1,
         contextWindowTokens = contextWindowTokens,
         currentContextTokens = currentContext,
-        conversationTotalTokens = conversationTotalTokens.coerceAtLeast(0L),
+        conversationTotalTokens = (snapshot?.conversationLifetimeTokens
+            ?: conversationTotalTokens).coerceAtLeast(0L),
         isMeasured = isMeasured,
     )
 }
@@ -135,7 +153,9 @@ internal fun totalConversationTokenUsage(messages: Iterable<Message>): Long {
             val input = usage?.inputTokens ?: snapshot?.measuredInputTokens
                 ?: snapshot?.estimatedInputTokens ?: 0L
             val output = usage?.outputTokens ?: snapshot?.measuredOutputTokens ?: 0L
-            val turnTotal = (usage?.totalTokens ?: safeTokenSum(input, output)).coerceAtLeast(0L)
+            val turnTotal = (snapshot?.agentRunTotalTokens
+                ?: usage?.totalTokens
+                ?: safeTokenSum(input, output)).coerceAtLeast(0L)
             safeTokenSum(total, turnTotal)
         }
     }
@@ -150,9 +170,10 @@ internal fun totalMeasuredConversationTokenUsage(messages: Iterable<Message>): L
 
     var total = 0L
     latestMessagesById.values.forEach { message ->
+        val snapshot = message.contextUsageSnapshot
         val usage = message.tokenUsage ?: return null
         if (usage.source == TokenUsageSource.ESTIMATED) return null
-        val turnTotal = usage.totalTokens ?: when {
+        val turnTotal = snapshot?.agentRunTotalTokens ?: usage.totalTokens ?: when {
             usage.inputTokens == null -> usage.outputTokens
             usage.outputTokens == null -> usage.inputTokens
             else -> safeTokenSum(usage.inputTokens, usage.outputTokens)
@@ -301,7 +322,7 @@ private fun AiContextUsagePopupContent(summary: AiContextUsageSummary?) {
 
         Spacer(Modifier.height(16.dp))
         Text(
-            text = stringResource(R.string.context_usage_turn),
+            text = stringResource(R.string.context_usage_request),
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.62f),
         )
@@ -313,15 +334,48 @@ private fun AiContextUsagePopupContent(summary: AiContextUsageSummary?) {
             DirectionalUsage(
                 iconRes = R.drawable.ic_arrow_up,
                 label = stringResource(R.string.context_usage_input),
-                tokens = summary.inputTokens,
+                tokens = summary.requestInputTokens,
                 color = InputUsageColor,
                 modifier = Modifier.weight(1f),
             )
             DirectionalUsage(
                 iconRes = R.drawable.ic_gpt_arrow_down,
                 label = stringResource(R.string.context_usage_output),
-                tokens = summary.outputTokens,
+                tokens = summary.requestOutputTokens,
                 color = OutputUsageColor,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        HorizontalDivider(
+            modifier = Modifier.padding(vertical = 15.dp),
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f),
+        )
+        Text(
+            text = stringResource(R.string.context_usage_agent_run, summary.requestCount),
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.62f),
+        )
+        Spacer(Modifier.height(10.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(18.dp),
+        ) {
+            UsageTotal(
+                label = stringResource(R.string.context_usage_input),
+                value = formatUsageTokens(summary.runInputTokens),
+                color = InputUsageColor,
+                modifier = Modifier.weight(1f),
+            )
+            UsageTotal(
+                label = stringResource(R.string.context_usage_output),
+                value = formatUsageTokens(summary.runOutputTokens),
+                color = OutputUsageColor,
+                modifier = Modifier.weight(1f),
+            )
+            UsageTotal(
+                label = stringResource(R.string.context_usage_total),
+                value = formatUsageTokens(summary.runTotalTokens),
+                color = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.weight(1f),
             )
         }

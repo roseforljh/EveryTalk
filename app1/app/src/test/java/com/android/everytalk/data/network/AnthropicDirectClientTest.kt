@@ -10,6 +10,11 @@ import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.DataClass.ThinkingConfig
 import com.android.everytalk.data.DataClass.ReasoningMode
 import com.android.everytalk.data.DataClass.RequestContextManagement
+import com.android.everytalk.data.DataClass.AgentAssistantApiMessage
+import com.android.everytalk.data.DataClass.AgentToolCallApiPart
+import com.android.everytalk.data.DataClass.AgentToolResultApiMessage
+import com.android.everytalk.data.DataClass.ProviderTurnContinuation
+import com.android.everytalk.data.DataClass.ModelParameterProtocol
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -24,6 +29,7 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -149,6 +155,72 @@ class AnthropicDirectClientTest {
         assertEquals("北京", result.toolCalls.single().input.getValue("city").jsonPrimitive.content)
         assertEquals("sig", result.assistantContent.first().jsonObject.getValue("signature").jsonPrimitive.content)
         assertEquals("tool_use", result.stopReason)
+    }
+
+    @Test
+    fun `next tool turn restores native thinking signature`() {
+        val request = request(
+            messages = listOf(
+                SimpleTextApiMessage(role = "user", content = "检查服务"),
+                AgentAssistantApiMessage(
+                    reasoning = "分析",
+                    toolCalls = listOf(
+                        AgentToolCallApiPart("tool-1", "weather", JsonObject(emptyMap())),
+                    ),
+                ),
+            ),
+        ).copy(
+            localProviderContinuation = ProviderTurnContinuation(
+                protocol = ModelParameterProtocol.ANTHROPIC,
+                payloadJson = """[{"type":"thinking","thinking":"分析","signature":"sig"},{"type":"tool_use","id":"tool-1","name":"weather","input":{}}]""",
+            )
+        )
+
+        val payload = Json.parseToJsonElement(AnthropicDirectClient.buildAnthropicPayload(request)).jsonObject
+        val assistant = payload.getValue("messages").jsonArray.last().jsonObject
+        val thinking = assistant.getValue("content").jsonArray.first().jsonObject
+
+        assertEquals("sig", thinking.getValue("signature").jsonPrimitive.content)
+    }
+
+    @Test
+    fun `anthropic原生压缩后的下一轮只追加未覆盖工具结果`() {
+        val request = request(
+            messages = listOf(
+                SimpleTextApiMessage(role = "user", content = "检查服务"),
+                AgentAssistantApiMessage(
+                    id = "assistant:turn-1",
+                    toolCalls = listOf(AgentToolCallApiPart("tool-1", "exec", JsonObject(emptyMap()))),
+                ),
+                AgentToolResultApiMessage(
+                    toolCallId = "tool-1",
+                    toolName = "exec",
+                    content = JsonPrimitive("结果"),
+                ),
+            ),
+        ).copy(
+            localProviderContinuation = ProviderTurnContinuation(
+                protocol = ModelParameterProtocol.ANTHROPIC,
+                payloadJson = """[{"type":"compaction","content":"摘要","encrypted_content":"opaque"},{"type":"tool_use","id":"tool-1","name":"exec","input":{}}]""",
+                compactedContextJson = """[{"role":"assistant","content":[{"type":"compaction","content":"摘要","encrypted_content":"opaque"},{"type":"tool_use","id":"tool-1","name":"exec","input":{}}]}]""",
+                compactedThroughMessageId = "assistant:turn-1",
+            ),
+        )
+
+        val messages = Json.parseToJsonElement(AnthropicDirectClient.buildAnthropicPayload(request))
+            .jsonObject.getValue("messages").jsonArray
+
+        assertEquals(listOf("assistant", "user"), messages.map { it.jsonObject.getValue("role").jsonPrimitive.content })
+        assertEquals(
+            "compaction",
+            messages.first().jsonObject.getValue("content").jsonArray.first().jsonObject
+                .getValue("type").jsonPrimitive.content,
+        )
+        assertEquals(
+            "tool_result",
+            messages.last().jsonObject.getValue("content").jsonArray.single().jsonObject
+                .getValue("type").jsonPrimitive.content,
+        )
     }
 
     @Test
@@ -556,73 +628,6 @@ class AnthropicDirectClientTest {
             assertFalse(Json.parseToJsonElement(payloads.last()).jsonObject.containsKey("context_management"))
             assertTrue(cachedFallbackEvents.filterIsInstance<AppStreamEvent.NativeContextCompaction>().single().reset)
         } finally {
-            client.close()
-        }
-    }
-
-    @Test
-    fun `compaction tool loop carries only canonical compacted history`() = runTest {
-        val payloads = mutableListOf<String>()
-        var requestCount = 0
-        val firstBody = buildString {
-            event("""{"type":"content_block_start","index":0,"content_block":{"type":"compaction","content":"权威摘要","encrypted_content":"opaque-state"}}""")
-            event("""{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tool-1","name":"lookup","input":{}}}""")
-            event("""{"type":"message_delta","delta":{"stop_reason":"tool_use"}}""")
-            event("""{"type":"message_stop"}""")
-        }
-        val secondBody = buildString {
-            event("""{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"工具完成"}}""")
-            event("""{"type":"message_delta","delta":{"stop_reason":"end_turn"}}""")
-            event("""{"type":"message_stop"}""")
-        }
-        val engine = MockEngine { requestData ->
-            payloads += (requestData.body as TextContent).text
-            requestCount++
-            respond(
-                content = ByteReadChannel((if (requestCount == 1) firstBody else secondBody).toByteArray()),
-                status = HttpStatusCode.OK,
-                headers = Headers.build { append(HttpHeaders.ContentType, ContentType.Text.EventStream.toString()) },
-            )
-        }
-        val client = HttpClient(engine) {
-            expectSuccess = false
-            install(HttpTimeout)
-        }
-        AnthropicDirectClient.setMcpToolExecutor { _, _, _ -> JsonPrimitive("工具结果") }
-
-        try {
-            val events = AnthropicDirectClient.streamChatDirect(
-                client,
-                request(
-                    contextManagement = RequestContextManagement(
-                        configId = "config-1",
-                        maxContextTokens = 200_000,
-                        reservedOutputTokens = 8_192,
-                        compactThresholdTokens = 180_000,
-                        autoCompressionEnabled = true,
-                    ),
-                ),
-            ).toList()
-
-            assertEquals(2, requestCount)
-            val followUpMessages = Json.parseToJsonElement(payloads.last()).jsonObject
-                .getValue("messages").jsonArray
-            assertEquals(listOf("assistant", "user"), followUpMessages.map { it.jsonObject.getValue("role").jsonPrimitive.content })
-            val assistantTypes = followUpMessages.first().jsonObject.getValue("content").jsonArray
-                .map { it.jsonObject.getValue("type").jsonPrimitive.content }
-            assertEquals(listOf("compaction", "tool_use"), assistantTypes)
-            assertEquals(
-                "tool_result",
-                followUpMessages.last().jsonObject.getValue("content").jsonArray.single().jsonObject
-                    .getValue("type").jsonPrimitive.content,
-            )
-            val canonical = Json.parseToJsonElement(
-                events.filterIsInstance<AppStreamEvent.NativeContextCompaction>().single().inputJson,
-            ).jsonArray
-            assertEquals(listOf("assistant", "user", "assistant"), canonical.map { it.jsonObject.getValue("role").jsonPrimitive.content })
-            assertEquals("工具完成", events.filterIsInstance<AppStreamEvent.ContentFinal>().single().text)
-        } finally {
-            AnthropicDirectClient.setMcpToolExecutor(null)
             client.close()
         }
     }

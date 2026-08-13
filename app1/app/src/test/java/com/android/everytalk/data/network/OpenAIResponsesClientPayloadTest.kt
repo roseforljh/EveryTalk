@@ -9,8 +9,14 @@ import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.DataClass.ThinkingConfig
 import com.android.everytalk.data.DataClass.ContextCompressionState
 import com.android.everytalk.data.DataClass.RequestContextManagement
+import com.android.everytalk.data.DataClass.AgentAssistantApiMessage
+import com.android.everytalk.data.DataClass.AgentToolCallApiPart
+import com.android.everytalk.data.DataClass.ProviderTurnContinuation
+import com.android.everytalk.data.DataClass.ModelParameterProtocol
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -163,14 +169,83 @@ class OpenAIResponsesClientPayloadTest {
         assertEquals("user", input[1].jsonObject.getValue("role").jsonPrimitive.content)
     }
 
-    private fun buildResponsesPayloadForTest(request: ChatRequest): String {
-        val method = OpenAIResponsesClient::class.java.getDeclaredMethod(
-            "buildResponsesPayload",
-            ChatRequest::class.java,
-            List::class.java
+    @Test
+    fun `responses next tool turn restores native output items once`() {
+        val continuation = """[{"id":"rs-1","type":"reasoning","encrypted_content":"opaque"},{"type":"function_call","call_id":"call-1","name":"exec","arguments":"{}"}]"""
+        val payload = Json.parseToJsonElement(
+            buildResponsesPayloadForTest(
+                request(
+                    messages = listOf(
+                        SimpleTextApiMessage(role = "user", content = "检查服务"),
+                        AgentAssistantApiMessage(
+                            reasoning = "分析",
+                            toolCalls = listOf(
+                                AgentToolCallApiPart("call-1", "exec", JsonObject(emptyMap())),
+                            ),
+                        ),
+                    ),
+                ).copy(
+                    localProviderContinuation = ProviderTurnContinuation(
+                        protocol = ModelParameterProtocol.CODEX,
+                        payloadJson = continuation,
+                    )
+                )
+            )
+        ).jsonObject
+        val input = payload.getValue("input").jsonArray
+
+        assertEquals(1, input.count { it.jsonObject["id"]?.jsonPrimitive?.content == "rs-1" })
+        assertEquals(
+            1,
+            input.count {
+                it.jsonObject["type"]?.jsonPrimitive?.content == "function_call" &&
+                    it.jsonObject["call_id"]?.jsonPrimitive?.content == "call-1"
+            },
         )
-        method.isAccessible = true
-        return method.invoke(OpenAIResponsesClient, request, emptyList<JsonElement>()) as String
+    }
+
+    @Test
+    fun `responses原生压缩后的下一轮不重复发送已覆盖历史`() {
+        val compacted = """[{"id":"cmp-1","type":"compaction","encrypted_content":"opaque"},{"type":"function_call","call_id":"call-1","name":"exec","arguments":"{}"}]"""
+        val request = request(
+            messages = listOf(
+                SimpleTextApiMessage(role = "user", content = "检查服务"),
+                AgentAssistantApiMessage(
+                    id = "assistant:turn-1",
+                    toolCalls = listOf(AgentToolCallApiPart("call-1", "exec", JsonObject(emptyMap()))),
+                ),
+                com.android.everytalk.data.DataClass.AgentToolResultApiMessage(
+                    toolCallId = "call-1",
+                    toolName = "exec",
+                    content = kotlinx.serialization.json.JsonPrimitive("结果"),
+                ),
+            ),
+        ).copy(
+            localProviderContinuation = ProviderTurnContinuation(
+                protocol = ModelParameterProtocol.CODEX,
+                payloadJson = """[{"type":"function_call","call_id":"call-1","name":"exec","arguments":"{}"}]""",
+                compactedContextJson = compacted,
+                compactedThroughMessageId = "assistant:turn-1",
+            ),
+        )
+
+        val input = Json.parseToJsonElement(buildResponsesPayloadForTest(request))
+            .jsonObject.getValue("input").jsonArray
+
+        assertEquals(1, input.count { it.jsonObject["id"]?.jsonPrimitive?.content == "cmp-1" })
+        assertEquals(
+            1,
+            input.count {
+                it.jsonObject["type"]?.jsonPrimitive?.content == "function_call" &&
+                    it.jsonObject["call_id"]?.jsonPrimitive?.content == "call-1"
+            },
+        )
+        assertEquals(1, input.count { it.jsonObject["type"]?.jsonPrimitive?.content == "function_call_output" })
+        assertEquals(0, input.count { it.jsonObject["content"]?.jsonPrimitive?.contentOrNull == "检查服务" })
+    }
+
+    private fun buildResponsesPayloadForTest(request: ChatRequest): String {
+        return OpenAIResponsesClient.buildResponsesPayload(request, emptyList())
     }
 
     private fun request(

@@ -637,6 +637,9 @@
     <string name="context_usage_estimated">Estimated</string>
     <string name="context_usage_unavailable">No usage data is available for this message</string>
     <string name="context_usage_turn">This turn</string>
+    <string name="context_usage_request">Current model request</string>
+    <string name="context_usage_agent_run">This agent run · %1$d requests</string>
+    <string name="context_usage_total">Total</string>
     <string name="context_usage_input">Input</string>
     <string name="context_usage_output">Output</string>
     <string name="context_usage_conversation_total">Conversation total</string>

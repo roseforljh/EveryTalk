@@ -1,6 +1,7 @@
 package com.android.everytalk.data.network
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import com.android.everytalk.data.DataClass.ContextUsageSnapshot
 import com.android.everytalk.data.DataClass.WebSearchResult
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonElement
@@ -60,6 +61,29 @@ sealed class AppStreamEvent {
     @Serializable
     @SerialName("usage")
     data class Usage(val usage: TokenUsage) : AppStreamEvent()
+
+    /** 当前真实请求、当前 AgentRun、当前会话三套独立统计。 */
+    @Serializable
+    @SerialName("agent_usage")
+    data class AgentUsage(
+        val activeRequest: TokenUsage,
+        val activeContext: ContextUsageSnapshot? = null,
+        val runInputTokens: Long,
+        val runOutputTokens: Long,
+        val runTotalTokens: Long,
+        val requestCount: Int,
+        val conversationTotalTokens: Long,
+    ) : AppStreamEvent()
+
+    /** AgentLoop 内部消费的供应商原生 Assistant 数据，UI 不展示。 */
+    @Serializable
+    @SerialName("provider_continuation")
+    data class ProviderContinuation(
+        val protocol: String,
+        val payloadJson: String,
+        val compactedContextJson: String? = null,
+        val compactedThroughMessageId: String? = null,
+    ) : AppStreamEvent()
 
     @Serializable
     @SerialName("native_context_compaction")

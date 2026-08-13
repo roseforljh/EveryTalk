@@ -32,10 +32,12 @@ object PerformanceConfig {
     // ===== 网络超时配置 =====
     /** 连接超时（毫秒） */
     const val NETWORK_CONNECT_TIMEOUT_MS = 60_000L
-    /** SSE 流式请求超时（毫秒）- 使用 Long.MAX_VALUE 保持长连接 */
-    const val NETWORK_SSE_REQUEST_TIMEOUT_MS = Long.MAX_VALUE
-    /** SSE 流式 Socket 超时（毫秒） */
-    const val NETWORK_SSE_SOCKET_TIMEOUT_MS = Long.MAX_VALUE
+    /** SSE 整体允许长时间执行；仍设置有限上限，防止上游永久占住协程。 */
+    const val NETWORK_SSE_REQUEST_TIMEOUT_MS = 30L * 60L * 1000L
+    /** 两个网络数据包之间最多等待 2 分钟，覆盖长思考同时终止僵尸连接。 */
+    const val NETWORK_SSE_SOCKET_TIMEOUT_MS = 2L * 60L * 1000L
+    /** 模型连接建立后，首个有效内容、推理、工具或 Usage 事件的最大等待时间。 */
+    const val NETWORK_SSE_FIRST_EVENT_TIMEOUT_MS = 2L * 60L * 1000L
     /** 普通请求超时（毫秒） */
     const val NETWORK_DEFAULT_REQUEST_TIMEOUT_MS = 30_000L
     

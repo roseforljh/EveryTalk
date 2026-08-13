@@ -394,6 +394,49 @@ class AppDatabaseMigrationTest {
         migrateHelper.close()
     }
 
+    @Test
+    fun `migration 16 to 17 creates agent fact tables without changing chats`() {
+        val createHelper = openHelper(
+            version = 16,
+            onCreate = { db ->
+                db.execSQL("CREATE TABLE chat_sessions (id TEXT NOT NULL PRIMARY KEY)")
+                db.execSQL("INSERT INTO chat_sessions (id) VALUES ('chat-1')")
+            },
+        )
+        createHelper.writableDatabase.close()
+        createHelper.close()
+
+        val migrateHelper = openHelper(
+            version = 17,
+            onUpgrade = { db, oldVersion, newVersion ->
+                assertEquals(16, oldVersion)
+                assertEquals(17, newVersion)
+                AppDatabase.MIGRATION_16_17.migrate(db)
+            },
+        )
+        val db = migrateHelper.writableDatabase
+        val expectedTables = setOf(
+            "agent_runs",
+            "agent_entries",
+            "agent_requests",
+            "agent_request_usage",
+            "agent_context_snapshots",
+            "agent_compactions",
+            "provider_continuation_states",
+        )
+        val actualTables = mutableSetOf<String>()
+        db.query("SELECT name FROM sqlite_master WHERE type = 'table'").use { cursor ->
+            while (cursor.moveToNext()) actualTables += cursor.getString(0)
+        }
+        assertTrue(actualTables.containsAll(expectedTables))
+        db.query("SELECT id FROM chat_sessions").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("chat-1", cursor.getString(0))
+        }
+        db.close()
+        migrateHelper.close()
+    }
+
     private fun openHelper(
         version: Int,
         onCreate: (SupportSQLiteDatabase) -> Unit = {},

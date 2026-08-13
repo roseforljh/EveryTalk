@@ -48,13 +48,17 @@ class AiContextUsagePopupTest {
         )
 
         assertNotNull(summary)
-        assertEquals(100L, summary?.inputTokens)
-        assertEquals(20L, summary?.outputTokens)
-        assertEquals(120L, summary?.turnTotalTokens)
+        assertEquals(100L, summary?.requestInputTokens)
+        assertEquals(20L, summary?.requestOutputTokens)
+        assertEquals(120L, summary?.requestTotalTokens)
+        assertEquals(100L, summary?.runInputTokens)
+        assertEquals(20L, summary?.runOutputTokens)
+        assertEquals(120L, summary?.runTotalTokens)
+        assertEquals(1, summary?.requestCount)
         assertEquals(1_000L, summary?.contextWindowTokens)
-        assertEquals(120L, summary?.currentContextTokens)
+        assertEquals(100L, summary?.currentContextTokens)
         assertEquals(420L, summary?.conversationTotalTokens)
-        assertEquals(0.12f, summary?.fraction)
+        assertEquals(0.10f, summary?.fraction)
         assertTrue(summary?.isMeasured == true)
     }
 
@@ -161,9 +165,9 @@ class AiContextUsagePopupTest {
             }
         }
 
-        composeRule.onNodeWithContentDescription("查看上下文用量 12%").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("查看上下文用量 10%").assertIsDisplayed()
         composeRule.runOnIdle { updateContextWindow(2_000L) }
-        composeRule.onNodeWithContentDescription("查看上下文用量 6%").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("查看上下文用量 5%").assertIsDisplayed()
     }
 
     @Test
@@ -188,11 +192,10 @@ class AiContextUsagePopupTest {
             }
         }
 
-        composeRule.onNodeWithContentDescription("查看上下文用量 12%").performClick()
+        composeRule.onNodeWithContentDescription("查看上下文用量 10%").performClick()
         composeRule.onNodeWithText("上下文用量").assertIsDisplayed()
-        composeRule.onNodeWithText("本轮会话消耗").assertIsDisplayed()
-        composeRule.onNodeWithText("100").assertIsDisplayed()
-        composeRule.onNodeWithText("20").assertIsDisplayed()
+        composeRule.onNodeWithText("当前模型请求").assertIsDisplayed()
+        composeRule.onNodeWithText("本次 Agent · 1 次请求").assertIsDisplayed()
         composeRule.onNodeWithContentDescription(
             context.getString(
                 R.string.context_usage_tokens_description,
@@ -205,7 +208,7 @@ class AiContextUsagePopupTest {
                 context.getString(R.string.context_usage_output),
             ),
         ).assertIsDisplayed()
-        composeRule.onNodeWithText("目前总消耗").assertIsDisplayed()
+        composeRule.onNodeWithText("会话总消耗").assertIsDisplayed()
         composeRule.onNodeWithText("420").assertIsDisplayed()
         composeRule.onNodeWithText("总上下文").assertIsDisplayed()
         composeRule.onNodeWithText("1,000").assertIsDisplayed()

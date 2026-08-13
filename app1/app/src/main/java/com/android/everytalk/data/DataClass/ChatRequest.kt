@@ -115,4 +115,20 @@ data class ChatRequest(
     /** 仅供 Android 本地 Tool 路由，序列化时必须忽略，禁止发送给模型服务。 */
     @Transient
     val localComputerRequestContext: ComputerRequestContext? = null,
+
+    /**
+     * 当前 AgentRun 内上一轮模型返回的协议原生 Assistant 数据。
+     * 仅用于保留 reasoning signature、thought signature 等渠道必需字段，不参与序列化。
+     */
+    @Transient
+    val localProviderContinuation: ProviderTurnContinuation? = null,
+)
+
+data class ProviderTurnContinuation(
+    val protocol: ModelParameterProtocol,
+    val payloadJson: String,
+    /** 最近一次原生压缩后的权威输入，供同一 AgentRun 后续工具轮继续使用。 */
+    val compactedContextJson: String? = null,
+    /** 权威输入已覆盖到的内部 Assistant ID，避免后续轮再次发送同一段历史。 */
+    val compactedThroughMessageId: String? = null,
 )

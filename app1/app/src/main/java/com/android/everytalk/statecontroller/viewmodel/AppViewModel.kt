@@ -84,15 +84,12 @@ import com.android.everytalk.statecontroller.viewmodel.ComputerManager
 import com.android.everytalk.data.mcp.McpServerConfig
 import com.android.everytalk.data.mcp.McpServerState
 import com.android.everytalk.data.mcp.McpStatus
-import com.android.everytalk.data.network.GeminiDirectClient
+import com.android.everytalk.data.agent.AgentToolExecutorRegistry
 import com.android.everytalk.data.network.AppToolExecutor
-import com.android.everytalk.data.network.AnthropicDirectClient
 import com.android.everytalk.data.network.ExternalWebSearchProvider
 import com.android.everytalk.data.network.ExternalWebSearchProviderConfig
 import com.android.everytalk.data.network.ExternalWebSearchService
 import com.android.everytalk.data.network.JinaSearchService
-import com.android.everytalk.data.network.OpenAIDirectClient
-import com.android.everytalk.data.network.OpenAIResponsesClient
 import com.android.everytalk.data.network.WebSearchSupport
 import com.android.everytalk.data.network.WebFetchToolExecutor
 import com.android.everytalk.util.storage.readAtMost
@@ -615,10 +612,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 }
             )
          }
-         GeminiDirectClient.setMcpToolExecutor(mcpToolExecutorOwner, appToolExecutor)
-         OpenAIDirectClient.setMcpToolExecutor(mcpToolExecutorOwner, appToolExecutor)
-         OpenAIResponsesClient.setMcpToolExecutor(mcpToolExecutorOwner, appToolExecutor)
-         AnthropicDirectClient.setMcpToolExecutor(mcpToolExecutorOwner, appToolExecutor)
+         AgentToolExecutorRegistry.register(mcpToolExecutorOwner, appToolExecutor)
 
         viewModelScope.launch(Dispatchers.IO) {
             aiContentReportRepository.retryPendingReports()
@@ -885,10 +879,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      */
 
     override fun onCleared() {
-        GeminiDirectClient.clearMcpToolExecutor(mcpToolExecutorOwner)
-        OpenAIDirectClient.clearMcpToolExecutor(mcpToolExecutorOwner)
-        OpenAIResponsesClient.clearMcpToolExecutor(mcpToolExecutorOwner)
-        AnthropicDirectClient.clearMcpToolExecutor(mcpToolExecutorOwner)
+        AgentToolExecutorRegistry.clear(mcpToolExecutorOwner)
         // 清理消息内容控制器（若未来扩展内部资源）
         messageContentController.cleanup()
         // 统一的生命周期清理
