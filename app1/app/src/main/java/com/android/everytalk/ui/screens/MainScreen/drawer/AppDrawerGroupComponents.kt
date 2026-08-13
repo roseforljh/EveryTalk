@@ -34,6 +34,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
@@ -77,7 +78,10 @@ fun CollapsibleGroupHeader(
     // 为箭头图标添加旋转动画
     val arrowRotation by animateFloatAsState(
         targetValue = if (isExpanded) 90f else 0f,
-        animationSpec = tween(durationMillis = 200),
+        animationSpec = tween(
+            durationMillis = 220,
+            easing = FastOutSlowInEasing,
+        ),
         label = "arrowRotation"
     )
 
@@ -96,7 +100,7 @@ fun CollapsibleGroupHeader(
             verticalAlignment = Alignment.CenterVertically
         ) {
             Icon(
-                painter = painterResource(R.drawable.ic_arrow_end),
+                painter = painterResource(R.drawable.ic_gpt_chevron_right),
                 contentDescription = stringResource(
                     if (isExpanded) R.string.action_collapse else R.string.action_expand
                 ),
@@ -104,6 +108,7 @@ fun CollapsibleGroupHeader(
                 modifier = Modifier
                     .size(20.dp)
                     .graphicsLayer {
+                        transformOrigin = TransformOrigin.Center
                         rotationZ = arrowRotation
                     }
             )
