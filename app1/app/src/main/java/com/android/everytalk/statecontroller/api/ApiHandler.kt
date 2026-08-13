@@ -13,6 +13,11 @@ import com.android.everytalk.data.network.AppStreamEvent
 import com.android.everytalk.data.agent.AgentLoop
 import com.android.everytalk.data.agent.AgentLoopRequest
 import com.android.everytalk.data.agent.AgentRunStore
+import com.android.everytalk.data.agent.AgentApprovalDecision
+import com.android.everytalk.data.agent.AgentApprovalRecord
+import com.android.everytalk.data.agent.AgentToolResultStore
+import com.android.everytalk.data.computer.PendingComputerToolApproval
+import com.android.everytalk.data.database.entities.toApiConfig
 import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.data.DataClass.resolvedModelTokenLimits
 import com.android.everytalk.data.DataClass.ApiContentPart
@@ -35,8 +40,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import java.io.IOException
@@ -218,10 +228,18 @@ class ApiHandler(
     private val messageProcessorMap = ConcurrentHashMap<String, MessageProcessor>()
     private val processedMessageIds = ConcurrentHashMap.newKeySet<String>()
     private val generatedImageSourceFingerprints = ConcurrentHashMap<String, MutableSet<String>>()
-    private val messageTokenUsageStore = MessageTokenUsageStore()
+    private val agentRunStore by lazy { AgentRunStore(AppDatabase.getDatabase(context).agentDao()) }
+    private val _pendingAgentApprovals = MutableStateFlow<List<PendingComputerToolApproval>>(emptyList())
+    val pendingAgentApprovals: StateFlow<List<PendingComputerToolApproval>> = _pendingAgentApprovals.asStateFlow()
+    private val agentResumeMutex = Mutex()
+    private val resumingAgentRunIds = ConcurrentHashMap.newKeySet<String>()
     private val agentLoop by lazy {
         AgentLoop(
-            runStore = AgentRunStore(AppDatabase.getDatabase(context).agentDao()),
+            runStore = agentRunStore,
+            toolRuntime = com.android.everytalk.data.agent.AgentToolRuntime(
+                executorProvider = com.android.everytalk.data.agent.AgentToolExecutorRegistry::current,
+                resultStore = AgentToolResultStore(context),
+            ),
         )
     }
     
@@ -231,6 +249,157 @@ class ApiHandler(
     private val USER_CANCEL_PREFIX = "USER_CANCELLED:"
     private val NEW_STREAM_CANCEL_PREFIX = "NEW_STREAM_INITIATED:"
     private val retryCountMap = ConcurrentHashMap<String, Int>()
+
+    /** ViewModel 初始化后从 Room 恢复进程退出前的同一张权限卡。 */
+    suspend fun restorePendingAgentApproval(resumeDecided: Boolean = true) {
+        if (resumeDecided) {
+            agentRunStore.recoverUnknownComputerExecutions(AppDatabase.getDatabase(context).computerDao())
+            // 自动恢复扫描可能新建 UNKNOWN 卡片，先完成扫描再投影，避免卡片延迟到下次刷新。
+            resumeDecidedAgentRuns()
+        }
+        refreshPendingAgentApprovals()
+    }
+
+    private suspend fun refreshPendingAgentApprovals() {
+        _pendingAgentApprovals.value = agentRunStore.getWaitingApprovalRuns().mapNotNull { run ->
+            agentRunStore.pendingApproval(run.id)?.let { record ->
+                record.request?.let { request ->
+                    PendingComputerToolApproval(run.id, record.approvalRequestId, request)
+                }
+            }
+        }
+    }
+
+    /** 决定已经落库时无需再次显示卡片；恢复同一 Run 并由 Tool 幂等记录兜底。 */
+    private suspend fun resumeDecidedAgentRuns() {
+        val computerDao = AppDatabase.getDatabase(context).computerDao()
+        for ((run, record) in agentRunStore.resumableApprovalRuns(computerDao)) {
+            var started = false
+            if (resumingAgentRunIds.add(run.id)) {
+                try {
+                    started = resumeAgentRun(run.id, record)
+                } finally {
+                    resumingAgentRunIds.remove(run.id)
+                }
+            }
+            if (started || stateHolder.textApiJob?.isActive == true) break
+        }
+    }
+
+    fun respondToAgentApproval(
+        runId: String,
+        approvalRequestId: String,
+        decision: AgentApprovalDecision,
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val current = _pendingAgentApprovals.value.firstOrNull {
+                it.runId == runId && it.approvalRequestId == approvalRequestId
+            } ?: return@launch
+            val record = agentRunStore.decideApproval(runId, approvalRequestId, decision) ?: return@launch
+            _pendingAgentApprovals.value = _pendingAgentApprovals.value - current
+            var started = false
+            if (resumingAgentRunIds.add(runId)) {
+                try {
+                    started = resumeAgentRun(runId, record)
+                } finally {
+                    resumingAgentRunIds.remove(runId)
+                }
+            }
+            // 当前已有文本任务时决定仍保留在 Room；任务结束后统一扫描并串行续接。
+            if (started || stateHolder.textApiJob?.isActive == true) return@launch
+            resumeDecidedAgentRuns()
+        }
+    }
+
+    private suspend fun resumeAgentRun(runId: String, record: AgentApprovalRecord): Boolean =
+        agentResumeMutex.withLock {
+            if (stateHolder.textApiJob?.isActive == true) {
+                return@withLock false
+            }
+            startResumedAgentRun(runId, record)
+        }
+
+    /** 同一时刻只允许一个文本 Run 占用统一流状态，避免恢复覆盖正在进行的会话。 */
+    private suspend fun startResumedAgentRun(runId: String, record: AgentApprovalRecord): Boolean {
+        val run = agentRunStore.getRun(runId) ?: run {
+            restorePendingAgentApproval(resumeDecided = false)
+            return false
+        }
+        val configId = run.configIdSnapshot ?: run {
+            markApprovalResumeFailure(run, "原模型配置不存在")
+            return false
+        }
+        val config = AppDatabase.getDatabase(context).apiConfigDao().getTextConfig(configId)?.toApiConfig()
+            ?: run {
+                markApprovalResumeFailure(run, "原模型配置已删除")
+                return false
+            }
+        val request = agentRunStore.restoreChatRequest(run, config.key)
+            ?: run {
+                markApprovalResumeFailure(run, "Agent 恢复快照不可用")
+                return false
+            }
+        val limits = resolvedModelTokenLimits(
+            maxOutputTokens = request.generationConfig?.maxOutputTokens,
+            maxContextTokens = request.contextManagement?.maxContextTokens
+                ?: com.android.everytalk.data.DataClass.DEFAULT_MAX_CONTEXT_TOKENS,
+        )
+        withContext(Dispatchers.Main.immediate) {
+            val trace = agentRunStore.executionTrace(run.id)
+            val messageIndex = stateHolder.messages.indexOfFirst { it.id == run.visibleAssistantMessageId }
+            if (messageIndex >= 0 && trace.isNotEmpty()) {
+                stateHolder.messages[messageIndex] = stateHolder.messages[messageIndex].copy(executionTrace = trace)
+            }
+            messageProcessorMap.putIfAbsent(run.visibleAssistantMessageId, MessageProcessor())
+            stateHolder.createStreamingBuffer(run.visibleAssistantMessageId, isImageGeneration = false)
+            stateHolder._currentTextStreamingAiMessageId.value = run.visibleAssistantMessageId
+            stateHolder._isTextApiCalling.value = true
+        }
+        withContext(Dispatchers.Main.immediate) {
+            val job = viewModelScope.launch {
+                val thisJob = coroutineContext[Job]
+                try {
+                    agentLoop.run(
+                        AgentLoopRequest(
+                            request = request,
+                            sessionId = run.sessionId,
+                            userMessageId = run.userMessageId,
+                            visibleAssistantMessageId = run.visibleAssistantMessageId,
+                            tokenLimits = limits,
+                            existingRun = run,
+                            approvalDecision = record,
+                        ),
+                    ).collect { event ->
+                        processStreamEvent(event, run.visibleAssistantMessageId, isImageGeneration = false)
+                    }
+                } finally {
+                    stateHolder.syncStreamingMessageToList(run.visibleAssistantMessageId, false)
+                    stateHolder.clearStreamingBuffer(run.visibleAssistantMessageId)
+                    if (stateHolder.textApiJob == thisJob) {
+                        stateHolder.textApiJob = null
+                        stateHolder._isTextApiCalling.value = false
+                        stateHolder._currentTextStreamingAiMessageId.value = null
+                    }
+                    restorePendingAgentApproval()
+                }
+            }
+            stateHolder.textApiJob = job
+        }
+        return true
+    }
+
+    private suspend fun markApprovalResumeFailure(
+        run: com.android.everytalk.data.database.entities.AgentRunEntity,
+        reason: String,
+    ) {
+        agentRunStore.updateRunStatus(run, com.android.everytalk.data.agent.AgentRunStatus.FAILED, terminalReason = reason)
+        _pendingAgentApprovals.value = _pendingAgentApprovals.value.filterNot { it.runId == run.id }
+        withContext(Dispatchers.Main.immediate) {
+            updatePreparedMessageStatus(stateHolder.messages, run.visibleAssistantMessageId, reason)
+        }
+        restorePendingAgentApproval(resumeDecided = false)
+    }
+
 
     private val errorHandler by lazy {
         ApiHandlerErrorController(
@@ -254,7 +423,6 @@ class ApiHandler(
             generatedImageSourceFingerprints = generatedImageSourceFingerprints,
             promptLeakDetectors = promptLeakDetectors,
             retryCountMap = retryCountMap,
-            messageTokenUsageStore = messageTokenUsageStore,
             logger = logger,
             onAiMessageFullTextChanged = onAiMessageFullTextChanged,
             errorHandler = errorHandler,
@@ -270,7 +438,6 @@ class ApiHandler(
             generatedImageSourceFingerprints = generatedImageSourceFingerprints,
             promptLeakDetectors = promptLeakDetectors,
             retryCountMap = retryCountMap,
-            messageTokenUsageStore = messageTokenUsageStore,
             logger = logger,
             onAiMessageFullTextChanged = onAiMessageFullTextChanged,
         )
@@ -810,9 +977,9 @@ class ApiHandler(
                 promptLeakDetectors.remove(aiMessageId)
                 generatedImageSourceFingerprints.remove(aiMessageId)
                 retryCountMap.remove(aiMessageId)
-                messageTokenUsageStore.remove(aiMessageId)
 
                 val currentJob = if (isImageGeneration) stateHolder.imageApiJob else stateHolder.textApiJob
+                var clearedCurrentTextJob = false
                 if (currentJob == thisJob) {
                     if (isImageGeneration) {
                         stateHolder.imageApiJob = null
@@ -822,8 +989,10 @@ class ApiHandler(
                         stateHolder.textApiJob = null
                         stateHolder._isTextApiCalling.value = false
                         stateHolder._currentTextStreamingAiMessageId.value = null
+                        clearedCurrentTextJob = true
                     }
                 }
+                if (clearedCurrentTextJob) restorePendingAgentApproval()
             }
         }
     }
@@ -834,6 +1003,7 @@ class ApiHandler(
         isImageGeneration: Boolean = false,
     ) {
         streamProcessor.processStreamEvent(appEvent, aiMessageId, isImageGeneration)
+        if (appEvent is AppStreamEvent.AgentApprovalRequired) restorePendingAgentApproval()
     }
 
     private suspend fun updateMessageWithError(

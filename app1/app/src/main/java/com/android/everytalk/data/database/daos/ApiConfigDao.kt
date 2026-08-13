@@ -11,6 +11,9 @@ import com.android.everytalk.data.database.entities.VoiceBackendConfigEntity
 
 @Dao
 interface ApiConfigDao {
+    @Query("SELECT * FROM api_configs WHERE id = :id AND isImageGenConfig = 0 LIMIT 1")
+    suspend fun getTextConfig(id: String): ApiConfigEntity?
+
     @Query("SELECT * FROM api_configs WHERE isImageGenConfig = :isImageGen")
     suspend fun getConfigs(isImageGen: Boolean): List<ApiConfigEntity>
 

@@ -33,6 +33,7 @@ import com.android.everytalk.data.computer.ComputerPermissionMode
 import com.android.everytalk.data.computer.ComputerWorkspace
 import com.android.everytalk.data.computer.ComputerWorkspaceSecret
 import com.android.everytalk.data.computer.HostKeyProbeResult
+import com.android.everytalk.data.computer.isUnknownExecution
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
 import com.android.everytalk.ui.components.math.MathJaxSvgRenderer
@@ -583,11 +584,38 @@ import java.util.TimeZone
     }
 
     internal fun AppViewModel.respondToComputerPublicPreview(approved: Boolean) {
-        computerManager.respondToPublicPreview(approved)
+        val agent = pendingComputerAgentApproval.value
+        if (agent?.request is com.android.everytalk.data.computer.ComputerToolApprovalRequest.PublicPreview) {
+            apiHandler.respondToAgentApproval(
+                runId = agent.runId,
+                approvalRequestId = agent.approvalRequestId,
+                decision = if (approved) {
+                    com.android.everytalk.data.agent.AgentApprovalDecision.APPROVED
+                } else {
+                    com.android.everytalk.data.agent.AgentApprovalDecision.REJECTED
+                },
+            )
+        } else {
+            computerManager.respondToPublicPreview(approved)
+        }
     }
 
     internal fun AppViewModel.respondToComputerHostCommand(requestId: String, approved: Boolean) {
-        computerManager.respondToHostCommand(requestId, approved)
+        val agent = pendingComputerAgentApproval.value
+        if (agent?.approvalRequestId == requestId) {
+            apiHandler.respondToAgentApproval(
+                runId = agent.runId,
+                approvalRequestId = requestId,
+                decision = when {
+                    agent.isUnknownExecution && approved -> com.android.everytalk.data.agent.AgentApprovalDecision.RETRY
+                    agent.isUnknownExecution -> com.android.everytalk.data.agent.AgentApprovalDecision.KEEP_UNKNOWN
+                    approved -> com.android.everytalk.data.agent.AgentApprovalDecision.APPROVED
+                    else -> com.android.everytalk.data.agent.AgentApprovalDecision.REJECTED
+                },
+            )
+        } else {
+            computerManager.respondToHostCommand(requestId, approved)
+        }
     }
 
     /** 服务器页面调用这些挂起函数，所有网络流量仍由 Android 本地 SSH 组件处理。 */

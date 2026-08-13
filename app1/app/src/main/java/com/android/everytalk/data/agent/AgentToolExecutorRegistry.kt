@@ -1,6 +1,7 @@
 package com.android.everytalk.data.agent
 
 import com.android.everytalk.data.network.AppToolExecutor
+import com.android.everytalk.data.computer.ComputerToolApprovalProvider
 
 /**
  * App 内唯一的 Tool Executor 注册点。
@@ -11,21 +12,31 @@ import com.android.everytalk.data.network.AppToolExecutor
 object AgentToolExecutorRegistry {
     private var owner: Any? = null
     private var executor: AppToolExecutor? = null
+    private var approvalProvider: ComputerToolApprovalProvider? = null
 
     @Synchronized
-    fun register(owner: Any, executor: AppToolExecutor) {
+    fun register(
+        owner: Any,
+        executor: AppToolExecutor,
+        approvalProvider: ComputerToolApprovalProvider? = null,
+    ) {
         this.owner = owner
         this.executor = executor
+        this.approvalProvider = approvalProvider
     }
 
     @Synchronized
     fun current(): AppToolExecutor? = executor
 
     @Synchronized
+    fun currentApprovalProvider(): ComputerToolApprovalProvider? = approvalProvider
+
+    @Synchronized
     fun clear(owner: Any) {
         if (this.owner === owner) {
             this.owner = null
             executor = null
+            approvalProvider = null
         }
     }
 }

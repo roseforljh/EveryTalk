@@ -14,6 +14,7 @@ import com.android.everytalk.data.database.entities.toEntity
 import com.android.everytalk.data.database.entities.toMessage
 import com.android.everytalk.data.database.entities.toVoiceBackendConfig
 import com.android.everytalk.data.network.ExternalWebSearchProviderConfig
+import com.android.everytalk.data.agent.AgentToolResultStore
 import com.android.everytalk.util.ConversationNameHelper
 import kotlinx.coroutines.CancellationException
 import java.util.UUID
@@ -37,6 +38,7 @@ private val LAST_OPEN_SESSION_IDS = setOf(
 )
 
 class RoomDataSource(context: Context) {
+    private val applicationContext = context.applicationContext
     private val database = AppDatabase.getDatabase(context)
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val converters = Converters()
@@ -250,7 +252,12 @@ class RoomDataSource(context: Context) {
     }
 
     suspend fun deleteHistorySession(sessionId: String) {
-        if (sessionId !in LAST_OPEN_SESSION_IDS) chatDao.deleteSession(sessionId)
+        if (sessionId !in LAST_OPEN_SESSION_IDS) {
+            val runIds = database.agentDao().getRunsForSession(sessionId).map { it.id }
+            chatDao.deleteSession(sessionId)
+            val toolResultStore = AgentToolResultStore(applicationContext)
+            runIds.forEach { runId -> toolResultStore.deleteRun(runId) }
+        }
     }
 
     private suspend fun saveSessions(

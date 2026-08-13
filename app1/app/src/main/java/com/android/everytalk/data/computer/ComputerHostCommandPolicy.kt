@@ -1,5 +1,6 @@
 package com.android.everytalk.data.computer
 
+@kotlinx.serialization.Serializable
 enum class ComputerHostCommandRisk {
     HOST_WRITE,
     PRIVILEGE_ESCALATION,
@@ -16,6 +17,7 @@ data class ComputerHostCommandAssessment(
 )
 
 /** 输入框确认卡所需的冻结数据。Host 请求不接受环境变量、Secret、stdin 和后台参数。 */
+@kotlinx.serialization.Serializable
 data class ComputerHostCommandConfirmationRequest(
     val requestId: String,
     val context: ComputerRequestContext,
@@ -25,7 +27,14 @@ data class ComputerHostCommandConfirmationRequest(
     val requestsPrivilege: Boolean,
     val reason: String,
     val risks: Set<ComputerHostCommandRisk>,
+    val decisionMode: ComputerApprovalDecisionMode = ComputerApprovalDecisionMode.ALLOW_OR_REJECT,
 )
+
+@kotlinx.serialization.Serializable
+enum class ComputerApprovalDecisionMode {
+    ALLOW_OR_REJECT,
+    RETRY_OR_KEEP_UNKNOWN,
+}
 
 /**
  * 审批门只决定是否继续执行传入的同一个请求对象。

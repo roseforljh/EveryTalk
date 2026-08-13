@@ -590,6 +590,9 @@
     <string name="agent_host_command_reject">Reject</string>
     <string name="agent_host_command_allow_once">Allow once</string>
     <string name="agent_host_command_detail_privilege">Privilege request</string>
+    <string name="agent_unknown_keep">Do not retry</string>
+    <string name="agent_unknown_retry">Run again</string>
+    <string name="agent_unknown_title">Operation status unknown</string>
     <string name="thinking_preparing_server">Preparing server</string>
     <string name="chat_input_stop">Stop</string>
     <string name="chat_input_send">Send</string>

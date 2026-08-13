@@ -1,6 +1,9 @@
 package com.android.everytalk.data.agent
 
 import com.android.everytalk.data.computer.ComputerRequestContext
+import com.android.everytalk.data.computer.ComputerToolApprovalPhase
+import com.android.everytalk.data.computer.ComputerToolApprovalProvider
+import com.android.everytalk.data.computer.ComputerToolApprovalRequest
 import com.android.everytalk.data.network.AppStreamEvent
 import com.android.everytalk.data.network.AppToolExecutor
 import com.android.everytalk.data.network.WebSearchToolResultExtractor
@@ -18,11 +21,27 @@ private const val MAX_AGENT_TOOL_RESULT_TOKENS = 64_000L
  */
 class AgentToolRuntime(
     private val executorProvider: () -> AppToolExecutor?,
+    private val approvalProvider: () -> ComputerToolApprovalProvider? = AgentToolExecutorRegistry::currentApprovalProvider,
+    private val resultStore: AgentToolResultStore? = null,
 ) {
+    /** 审批预检不连接 VPS，也不创建 ComputerExecution。 */
+    suspend fun approvalRequest(
+        call: AgentContentBlock.ToolCall,
+        computerContext: ComputerRequestContext?,
+        phase: ComputerToolApprovalPhase = ComputerToolApprovalPhase.BEFORE_EXECUTION,
+    ): ComputerToolApprovalRequest? = approvalProvider()?.invoke(
+        call.name,
+        call.arguments,
+        call.id,
+        computerContext,
+        phase,
+    )
+
     suspend fun execute(
         call: AgentContentBlock.ToolCall,
         computerContext: ComputerRequestContext?,
         maxModelResultTokens: Long = MAX_AGENT_TOOL_RESULT_TOKENS,
+        runId: String? = null,
         emit: suspend (AppStreamEvent) -> Unit,
     ): AgentContentBlock.ToolResult {
         val executor = executorProvider()
@@ -43,8 +62,10 @@ class AgentToolRuntime(
             WebSearchToolResultExtractor.extract(call.name, raw)
                 .takeIf(List<*>::isNotEmpty)
                 ?.let { emit(AppStreamEvent.WebSearchResults(it)) }
+            val modelRaw = stripUiOnlyFields(raw)
+            val archive = runId?.let { resultStore?.archive(it, call.id, modelRaw) }
             val bounded = boundModelToolResult(
-                result = stripUiOnlyFields(raw),
+                result = modelRaw,
                 maxTokens = maxModelResultTokens.coerceIn(64L, MAX_AGENT_TOOL_RESULT_TOKENS),
             )
             AgentContentBlock.ToolResult(
@@ -52,6 +73,9 @@ class AgentToolRuntime(
                 toolName = call.name,
                 content = bounded.content,
                 truncated = bounded.truncated,
+                fullResultPath = archive?.relativePath,
+                fullResultBytes = archive?.byteCount,
+                fullResultSha256 = archive?.sha256,
             )
         } catch (error: kotlinx.coroutines.CancellationException) {
             throw error

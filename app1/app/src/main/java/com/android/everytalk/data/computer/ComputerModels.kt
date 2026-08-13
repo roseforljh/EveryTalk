@@ -2,6 +2,7 @@ package com.android.everytalk.data.computer
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.Transient
 import java.util.UUID
 
 @Serializable
@@ -309,11 +310,16 @@ data class UpdateComputerRequest(
     val credential: ComputerCredential?,
 )
 
+@Serializable
 data class ComputerRequestContext(
     val conversationId: String,
     val computerId: String,
     val workspaceId: String,
     val permissionMode: ComputerPermissionMode = ComputerPermissionMode.MANUAL,
+    /** 只在当前工具调用内有效，禁止写进请求快照。 */
+    @Transient val approvedToolCallId: String? = null,
+    /** 用户明确选择重试 UNKNOWN 工具后才设置，禁止写进请求快照。 */
+    @Transient val retryUnknownToolCallId: String? = null,
 )
 
 /**

@@ -9,9 +9,17 @@ import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.DataClass.ModelTokenLimits
 import com.android.everytalk.data.DataClass.ModelParameterProtocol
 import com.android.everytalk.data.DataClass.ProviderTurnContinuation
+import com.android.everytalk.data.computer.ComputerErrorCodes
+import com.android.everytalk.data.computer.ComputerRequestContext
+import com.android.everytalk.data.computer.ComputerToolApprovalPhase
+import com.android.everytalk.data.computer.ComputerToolApprovalRequest
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.database.entities.AgentRunEntity
 import com.android.everytalk.data.network.ApiClient
+import com.android.everytalk.data.network.ModelTurnRequest
+import com.android.everytalk.data.network.ModelTurnTransport
+import com.android.everytalk.data.network.PromptCachePolicy
+import com.android.everytalk.data.network.SystemPromptInjector
 import com.android.everytalk.data.network.AppStreamEvent
 import com.android.everytalk.data.network.TokenUsage
 import com.android.everytalk.data.network.TokenUsageSource
@@ -26,7 +34,9 @@ import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.produceIn
 import kotlinx.coroutines.withTimeout
 
-private const val MAX_AGENT_MODEL_TURNS = 50
+internal const val MAX_AGENT_MODEL_TURNS = 50
+internal const val MAX_AGENT_CONSECUTIVE_TOOL_CALLS = 100
+internal const val MAX_IDENTICAL_TOOL_CALLS = 3
 private const val MAX_AGENT_COMPACTIONS_PER_RUN = 8
 private const val COMPACTION_OUTPUT_TOKENS = 4_096
 
@@ -55,6 +65,9 @@ data class AgentLoopRequest(
     val userMessageId: String,
     val visibleAssistantMessageId: String,
     val tokenLimits: ModelTokenLimits,
+    /** 恢复审批时沿用原 Run，避免创建第二份事实记录。 */
+    val existingRun: AgentRunEntity? = null,
+    val approvalDecision: AgentApprovalRecord? = null,
 )
 
 /**
@@ -67,23 +80,100 @@ class AgentLoop(
     private val runStore: AgentRunStore,
     private val contextManager: AgentContextManager = AgentContextManager(),
     private val toolRuntime: AgentToolRuntime = AgentToolRuntime(AgentToolExecutorRegistry::current),
+    private val modelTransport: ModelTurnTransport = ModelTurnTransport { turn ->
+        ApiClient.streamModelTurn(turn.request)
+    },
 ) {
     fun run(input: AgentLoopRequest): Flow<AppStreamEvent> = flow {
         var run: AgentRunEntity? = null
         try {
-            run = runStore.createRun(
+            run = input.existingRun ?: runStore.createRun(
                 sessionId = input.sessionId,
                 userMessageId = input.userMessageId,
                 visibleAssistantMessageId = input.visibleAssistantMessageId,
                 configIdSnapshot = input.request.contextManagement?.configId,
+                request = input.request,
             )
             var transcript = runStore.expandTranscript(input.sessionId, input.request.messages)
+            if (input.existingRun != null) transcript = runStore.appendRunTranscript(checkNotNull(run).id, transcript)
             var providerContinuation: ProviderTurnContinuation? = null
             var activeCompaction = runStore.latestCompaction(input.sessionId)
-            var requestOrdinal = 0
-            var compactionCount = 0
+            var requestOrdinal = checkNotNull(run).currentRequestOrdinal
+            var compactionCount = runStore.completedCompactionCount(checkNotNull(run).id)
+            val firstModelTurnOrdinal = runStore.nextModelTurnOrdinal(checkNotNull(run).id)
+            val toolLoopGuard = ToolLoopGuard().apply {
+                runStore.finalExecutedToolCalls(checkNotNull(run).id).forEach(::recordHistorical)
+            }
 
-            for (modelTurnOrdinal in 1..MAX_AGENT_MODEL_TURNS) {
+            val resumedApproval = input.approvalDecision
+            if (resumedApproval != null) {
+                run = runStore.updateRunStatus(checkNotNull(run), AgentRunStatus.EXECUTING_TOOL)
+                val currentResultAlreadyPersisted = runStore.hasFinalToolResult(
+                    checkNotNull(run).id,
+                    resumedApproval.toolCall.id,
+                )
+                val resumedPendingCalls = if (resumedApproval.resumePendingToolCallsOnly) {
+                    resumedApproval.pendingToolCalls
+                } else if (resumedApproval.toolResultAlreadyPersisted) {
+                    emptyList()
+                } else if (currentResultAlreadyPersisted) {
+                    resumedApproval.pendingToolCalls
+                        .dropWhile { call -> call.id != resumedApproval.toolCall.id }
+                        .drop(1)
+                } else {
+                    if (resumedApproval.decision in setOf(AgentApprovalDecision.APPROVED, AgentApprovalDecision.RETRY)) {
+                        toolLoopGuard.record(resumedApproval.toolCall)?.let { reason -> throw AgentToolLoopException(reason) }
+                    }
+                    val handled = executeApprovedOrRejectedTool(
+                        run = checkNotNull(run),
+                        record = resumedApproval,
+                        baseContext = input.request.localComputerRequestContext,
+                        maxModelResultTokens = (input.tokenLimits.maxContextTokens.toLong() / 4L).coerceAtLeast(64L),
+                        emit = { event -> emit(event) },
+                    )
+                    if (handled.result.isUnknownExecution()) {
+                        val unknownApproval = toolRuntime.approvalRequest(
+                            resumedApproval.toolCall,
+                            input.request.localComputerRequestContext,
+                            ComputerToolApprovalPhase.RETRY_UNKNOWN,
+                        )
+                        if (unknownApproval != null) {
+                            val record = AgentApprovalRecord(
+                                approvalRequestId = UUID.randomUUID().toString(),
+                                requestId = resumedApproval.requestId,
+                                toolCall = resumedApproval.toolCall,
+                                pendingToolCalls = resumedApproval.pendingToolCalls,
+                                request = unknownApproval,
+                            )
+                            runStore.pauseForApproval(checkNotNull(run), record)
+                            emit(AppStreamEvent.ExecutionStatusUpdate("执行结果未知，等待你的决定"))
+                            emit(AppStreamEvent.AgentApprovalRequired(checkNotNull(run).id, record.approvalRequestId))
+                            return@flow
+                        }
+                    }
+                    runStore.appendToolResult(checkNotNull(run).id, resumedApproval.requestId, handled.result)
+                    transcript = transcript + handled.result.toApiMessage()
+                    resumedApproval.pendingToolCalls
+                        .dropWhile { call -> call.id != resumedApproval.toolCall.id }
+                        .drop(1)
+                }
+                val pause = executeToolCallsUntilApproval(
+                    run = checkNotNull(run),
+                    requestId = resumedApproval.requestId,
+                    calls = resumedPendingCalls,
+                    transcript = transcript,
+                    computerContext = input.request.localComputerRequestContext,
+                    maxModelResultTokens = (input.tokenLimits.maxContextTokens.toLong() / 4L).coerceAtLeast(64L),
+                    emit = { event -> emit(event) },
+                    toolLoopGuard = toolLoopGuard,
+                )
+                transcript = pause.transcript
+                if (pause.paused) return@flow
+                emit(AppStreamEvent.ExecutionStatusUpdate("正在分析工具结果"))
+            }
+
+            // modelTurnOrdinal 从 1 开始；恢复 Run 时只能使用剩余额度，不能重新获得 50 轮。
+            for (modelTurnOrdinal in remainingAgentModelTurnOrdinals(firstModelTurnOrdinal)) {
                 run = runStore.updateRunStatus(
                     run = checkNotNull(run),
                     status = AgentRunStatus.PREPARING_CONTEXT,
@@ -127,6 +217,18 @@ class AgentLoop(
                 }
                 requestOrdinal++
                 val ordinal = requestOrdinal
+                val toolSchemaFingerprint = agentToolSchemaFingerprint(input.request)
+                val systemPromptFingerprint = agentSystemPromptFingerprint(prepared.messages)
+                if (providerContinuation == null) {
+                    providerContinuation = runStore.loadContinuation(
+                        sessionId = input.sessionId,
+                        configId = checkNotNull(run).configIdSnapshot,
+                        request = input.request,
+                        systemPromptFingerprint = systemPromptFingerprint,
+                        toolSchemaFingerprint = toolSchemaFingerprint,
+                        compactionId = activeCompaction?.id,
+                    )
+                }
                 val turnRequest = input.request.copy(
                     messages = prepared.messages,
                     localProviderContinuation = providerContinuation,
@@ -160,7 +262,14 @@ class AgentLoop(
                 var nextProviderContinuation: ProviderTurnContinuation? = null
                 val roundContentBuffer = ToolRoundContentBuffer { event -> emit(event) }
 
-                ApiClient.streamModelTurn(turnRequest)
+                modelTransport.streamTurn(
+                    ModelTurnRequest(
+                        requestId = requestId,
+                        runId = checkNotNull(run).id,
+                        ordinal = ordinal,
+                        request = turnRequest,
+                    ),
+                )
                     .withFirstMeaningfulEventTimeout()
                     .collect { event ->
                     if (firstEventAt == null && event.isMeaningfulModelEvent()) {
@@ -274,6 +383,16 @@ class AgentLoop(
                 )
                 transcript = transcript + assistant.toApiMessage(requestId)
                 providerContinuation = nextProviderContinuation
+                nextProviderContinuation?.let { continuation ->
+                    runStore.saveContinuation(
+                        run = checkNotNull(run),
+                        request = input.request,
+                        continuation = continuation,
+                        systemPromptFingerprint = systemPromptFingerprint,
+                        toolSchemaFingerprint = toolSchemaFingerprint,
+                        compactionId = activeCompaction?.id,
+                    )
+                }
 
                 if (assistant.toolCalls.isEmpty()) {
                     runStore.updateRunStatus(
@@ -311,28 +430,34 @@ class AgentLoop(
                     return@flow
                 }
 
-                run = runStore.updateRunStatus(checkNotNull(run), AgentRunStatus.EXECUTING_TOOL, ordinal)
-                for (call in assistant.toolCalls) {
-                    val result = toolRuntime.execute(
-                        call = call,
-                        computerContext = input.request.localComputerRequestContext,
-                        maxModelResultTokens = (input.tokenLimits.maxContextTokens.toLong() / 4L)
-                            .coerceAtLeast(64L),
-                        emit = { event -> emit(event) },
-                    )
-                    runStore.appendToolResult(checkNotNull(run).id, requestId, result)
-                    transcript = transcript + result.toApiMessage()
-                }
+                run = runStore.updateRunStatus(checkNotNull(run), AgentRunStatus.CHECKING_PERMISSION, ordinal)
+                val toolOutcome = executeToolCallsUntilApproval(
+                    run = checkNotNull(run),
+                    requestId = requestId,
+                    calls = assistant.toolCalls,
+                    transcript = transcript,
+                    computerContext = input.request.localComputerRequestContext,
+                    maxModelResultTokens = (input.tokenLimits.maxContextTokens.toLong() / 4L).coerceAtLeast(64L),
+                    emit = { event -> emit(event) },
+                    toolLoopGuard = toolLoopGuard,
+                )
+                transcript = toolOutcome.transcript
+                if (toolOutcome.paused) return@flow
                 emit(AppStreamEvent.ExecutionStatusUpdate("正在分析工具结果"))
             }
 
+            val limitMessage = if (firstModelTurnOrdinal > MAX_AGENT_MODEL_TURNS) {
+                "该 Agent 已达到 $MAX_AGENT_MODEL_TURNS 轮模型请求上限"
+            } else {
+                "工具调用超过 $MAX_AGENT_MODEL_TURNS 轮限制"
+            }
             runStore.updateRunStatus(
                 run = checkNotNull(run),
                 status = AgentRunStatus.FAILED,
                 requestOrdinal = requestOrdinal,
-                terminalReason = "工具调用超过 $MAX_AGENT_MODEL_TURNS 轮限制",
+                terminalReason = limitMessage,
             )
-            emit(AppStreamEvent.Error("工具调用超过 $MAX_AGENT_MODEL_TURNS 轮限制"))
+            emit(AppStreamEvent.Error(limitMessage))
             emit(AppStreamEvent.Finish("tool_loop_limit"))
         } catch (error: CancellationException) {
             run?.let { activeRun ->
@@ -347,6 +472,92 @@ class AgentLoop(
             emit(AppStreamEvent.Error(error.message ?: "Agent 运行失败"))
             emit(AppStreamEvent.Finish("agent_failed"))
         }
+    }
+
+    private suspend fun executeToolCallsUntilApproval(
+        run: AgentRunEntity,
+        requestId: String,
+        calls: List<AgentContentBlock.ToolCall>,
+        transcript: List<com.android.everytalk.data.DataClass.AbstractApiMessage>,
+        computerContext: ComputerRequestContext?,
+        maxModelResultTokens: Long,
+        emit: suspend (AppStreamEvent) -> Unit,
+        toolLoopGuard: ToolLoopGuard,
+    ): ToolBatchOutcome {
+        var currentTranscript = transcript
+        for ((index, call) in calls.withIndex()) {
+            val approval = toolRuntime.approvalRequest(call, computerContext)
+            if (approval != null) {
+                val record = AgentApprovalRecord(
+                    approvalRequestId = UUID.randomUUID().toString(),
+                    requestId = requestId,
+                    toolCall = call,
+                    pendingToolCalls = calls.drop(index),
+                    request = approval,
+                )
+                runStore.pauseForApproval(run, record)
+                emit(AppStreamEvent.ExecutionStatusUpdate("等待你的批准"))
+                emit(AppStreamEvent.AgentApprovalRequired(run.id, record.approvalRequestId))
+                return ToolBatchOutcome(currentTranscript, paused = true)
+            }
+            toolLoopGuard.record(call)?.let { reason -> throw AgentToolLoopException(reason) }
+            runStore.appendToolExecutionStarted(run.id, requestId, call)
+            val result = toolRuntime.execute(call, computerContext, maxModelResultTokens, run.id, emit)
+            if (result.isUnknownExecution()) {
+                val unknownApproval = toolRuntime.approvalRequest(
+                    call,
+                    computerContext,
+                    ComputerToolApprovalPhase.RETRY_UNKNOWN,
+                )
+                if (unknownApproval != null) {
+                    val record = AgentApprovalRecord(
+                        approvalRequestId = UUID.randomUUID().toString(),
+                        requestId = requestId,
+                        toolCall = call,
+                        pendingToolCalls = calls.drop(index),
+                        request = unknownApproval,
+                    )
+                    runStore.pauseForApproval(run, record)
+                    emit(AppStreamEvent.ExecutionStatusUpdate("执行结果未知，等待你的决定"))
+                    emit(AppStreamEvent.AgentApprovalRequired(run.id, record.approvalRequestId))
+                    return ToolBatchOutcome(currentTranscript, paused = true)
+                }
+            }
+            runStore.appendToolResult(run.id, requestId, result)
+            currentTranscript = currentTranscript + result.toApiMessage()
+        }
+        return ToolBatchOutcome(currentTranscript, paused = false)
+    }
+
+    private suspend fun executeApprovedOrRejectedTool(
+        run: AgentRunEntity,
+        record: AgentApprovalRecord,
+        baseContext: ComputerRequestContext?,
+        maxModelResultTokens: Long,
+        emit: suspend (AppStreamEvent) -> Unit,
+    ): ResumedToolOutcome {
+        val decision = requireNotNull(record.decision)
+        if (decision == AgentApprovalDecision.REJECTED || decision == AgentApprovalDecision.KEEP_UNKNOWN) {
+            val message = if (decision == AgentApprovalDecision.REJECTED) "用户拒绝了本次操作" else "用户选择保留未知状态，不重新执行"
+            return ResumedToolOutcome(
+                AgentContentBlock.ToolResult(
+                    toolCallId = record.toolCall.id,
+                    toolName = record.toolCall.name,
+                    content = kotlinx.serialization.json.JsonPrimitive(message),
+                    isError = true,
+                ),
+            )
+        }
+        val approvedContext = baseContext?.copy(
+            approvedToolCallId = record.toolCall.id.takeIf {
+                decision == AgentApprovalDecision.APPROVED || decision == AgentApprovalDecision.RETRY
+            },
+            retryUnknownToolCallId = record.toolCall.id.takeIf { decision == AgentApprovalDecision.RETRY },
+        )
+        runStore.appendToolExecutionStarted(run.id, record.requestId, record.toolCall)
+        return ResumedToolOutcome(
+            toolRuntime.execute(record.toolCall, approvedContext, maxModelResultTokens, run.id, emit),
+        )
     }
 
     private fun AgentAssistantTurn.toApiMessage(requestId: String): AgentAssistantApiMessage =
@@ -499,6 +710,89 @@ class AgentLoop(
         )
     }
 }
+
+/** 恢复 Run 只消费尚未使用的模型轮次；已达到上限时返回空范围。 */
+internal fun remainingAgentModelTurnOrdinals(firstModelTurnOrdinal: Int): IntRange =
+    firstModelTurnOrdinal.coerceAtLeast(1)..MAX_AGENT_MODEL_TURNS
+
+private data class ToolBatchOutcome(
+    val transcript: List<com.android.everytalk.data.DataClass.AbstractApiMessage>,
+    val paused: Boolean,
+)
+
+private data class ResumedToolOutcome(val result: AgentContentBlock.ToolResult)
+
+private fun AgentContentBlock.ToolResult.isUnknownExecution(): Boolean {
+    val envelope = content as? kotlinx.serialization.json.JsonObject ?: return false
+    val error = envelope["error"] as? kotlinx.serialization.json.JsonObject ?: return false
+    return (error["code"] as? kotlinx.serialization.json.JsonPrimitive)?.content ==
+        ComputerErrorCodes.EXECUTION_UNKNOWN
+}
+
+internal fun agentToolSchemaFingerprint(request: ChatRequest): String = agentTranscriptFingerprint(
+    listOf(
+        PromptCachePolicy.normalizedToolSchemaJson(request.tools),
+        request.toolChoice?.let(::canonicalAgentValue).orEmpty(),
+    ),
+)
+
+internal fun agentSystemPromptFingerprint(
+    messages: List<com.android.everytalk.data.DataClass.AbstractApiMessage>,
+): String = PromptCachePolicy.systemFingerprint(SystemPromptInjector.smartInjectSystemPrompt(messages))
+
+private fun canonicalAgentValue(value: Any?): String = when (value) {
+    null -> "null"
+    is kotlinx.serialization.json.JsonObject -> value.entries.sortedBy(Map.Entry<String, kotlinx.serialization.json.JsonElement>::key)
+        .joinToString(prefix = "{", postfix = "}") { (key, item) ->
+            "${kotlinx.serialization.json.JsonPrimitive(key)}:${canonicalAgentValue(item)}"
+        }
+    is kotlinx.serialization.json.JsonArray -> value.joinToString(prefix = "[", postfix = "]") { canonicalAgentValue(it) }
+    is kotlinx.serialization.json.JsonElement -> value.toString()
+    is Map<*, *> -> value.entries
+        .mapNotNull { (key, item) -> (key as? String)?.let { it to item } }
+        .sortedBy(Pair<String, Any?>::first)
+        .joinToString(prefix = "{", postfix = "}") { (key, item) ->
+            "${kotlinx.serialization.json.JsonPrimitive(key)}:${canonicalAgentValue(item)}"
+        }
+    is Iterable<*> -> value.joinToString(prefix = "[", postfix = "]") { canonicalAgentValue(it) }
+    is Array<*> -> value.joinToString(prefix = "[", postfix = "]") { canonicalAgentValue(it) }
+    is String -> kotlinx.serialization.json.JsonPrimitive(value).toString()
+    else -> value.toString()
+}
+
+internal class ToolLoopGuard {
+    private var total = 0
+    private var lastFingerprint: String? = null
+    private var identicalCount = 0
+
+    fun recordHistorical(call: AgentContentBlock.ToolCall) {
+        total++
+        val fingerprint = agentTranscriptFingerprint(listOf(call.name, canonicalAgentValue(call.arguments)))
+        identicalCount = if (fingerprint == lastFingerprint) identicalCount + 1 else 1
+        lastFingerprint = fingerprint
+    }
+
+    fun resetConsecutivePattern() {
+        lastFingerprint = null
+        identicalCount = 0
+    }
+
+    fun record(call: AgentContentBlock.ToolCall): String? {
+        total++
+        val fingerprint = agentTranscriptFingerprint(listOf(call.name, canonicalAgentValue(call.arguments)))
+        identicalCount = if (fingerprint == lastFingerprint) identicalCount + 1 else 1
+        lastFingerprint = fingerprint
+        return when {
+            total > MAX_AGENT_CONSECUTIVE_TOOL_CALLS ->
+                "连续工具调用超过 $MAX_AGENT_CONSECUTIVE_TOOL_CALLS 次，已终止 Agent"
+            identicalCount >= MAX_IDENTICAL_TOOL_CALLS ->
+                "同一工具和参数连续调用 $MAX_IDENTICAL_TOOL_CALLS 次，已终止 Agent"
+            else -> null
+        }
+    }
+}
+
+private class AgentToolLoopException(message: String) : IllegalStateException(message)
 
 private fun MutableList<AgentContentBlock>.appendText(text: String) {
     if (text.isEmpty()) return

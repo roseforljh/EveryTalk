@@ -59,6 +59,45 @@ class ComputerToolExecutor(
         check(workspace.id == requestContext.workspaceId)
     }
 
+    /**
+     * 在创建 ComputerExecution 或连接 VPS 前冻结审批内容。
+     * 返回 null 代表当前权限档位允许直接执行。
+     */
+    suspend fun approvalRequest(
+        toolName: String,
+        arguments: JsonObject,
+        toolCallId: String,
+        requestContext: ComputerRequestContext,
+        phase: ComputerToolApprovalPhase,
+    ): ComputerToolApprovalRequest? {
+        if (toolName !in ComputerToolNames.all) return null
+        val workspace = requireRequestWorkspace(requestContext)
+        val context = requestContext.copy(conversationId = workspace.conversationId)
+        val computer = repository.getComputer(context.computerId)
+            ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
+
+        if (phase == ComputerToolApprovalPhase.RETRY_UNKNOWN) {
+            val key = ComputerToolRequestHasher.toolCallKey(toolCallId, context)
+            val existing = repository.dao().getExecutionByToolCallId(key)?.toModel()
+                ?.takeIf { it.status == ComputerExecutionStatus.UNKNOWN }
+                ?: return null
+            return ComputerToolApprovalRequest.UnknownExecution(
+                toolCallId = toolCallId,
+                context = context,
+                computerName = computer.displayName,
+                toolName = toolName,
+                detail = approvalDetail(toolName, arguments),
+                isWriteOperation = !isReadOnlyToolCall(toolName, arguments),
+            )
+        }
+
+        return when (toolName) {
+            ComputerToolNames.EXEC -> hostCommandApproval(arguments, toolCallId, context, computer)
+            ComputerToolNames.OPEN_PORT -> publicPreviewApproval(arguments, toolCallId, context, computer)
+            else -> null
+        }
+    }
+
     private suspend fun executeWhileActive(
         toolName: String,
         arguments: JsonObject,
@@ -70,8 +109,8 @@ class ComputerToolExecutor(
         }
         val workspace = requireRequestWorkspace(requestContext)
         val currentRequestContext = requestContext.copy(conversationId = workspace.conversationId)
-        val toolCallKey = ComputerToolRequestHasher.toolCallKey(toolCallId, requestContext)
-        val requestHash = ComputerToolRequestHasher.requestHash(toolName, arguments, requestContext)
+        val toolCallKey = ComputerToolRequestHasher.toolCallKey(toolCallId, currentRequestContext)
+        val requestHash = ComputerToolRequestHasher.requestHash(toolName, arguments, currentRequestContext)
         completedResults[toolCallKey]?.let { return it }
 
         val dao = repository.dao()
@@ -83,7 +122,12 @@ class ComputerToolExecutor(
                     ComputerException(ComputerErrorCodes.IDEMPOTENCY_CONFLICT, "Tool Call ID 与原请求不一致"),
                 )
             }
-            if (existing.status in setOf(
+            if (existing.status == ComputerExecutionStatus.UNKNOWN &&
+                currentRequestContext.retryUnknownToolCallId == toolCallId
+            ) {
+                // 用户明确选择重新执行后废弃旧 UNKNOWN 记录；toolCallId 唯一索引随后接管新执行。
+                dao.deleteExecution(existing.id)
+            } else if (existing.status in setOf(
                     ComputerExecutionStatus.QUEUED,
                     ComputerExecutionStatus.STARTING,
                     ComputerExecutionStatus.RUNNING,
@@ -98,8 +142,7 @@ class ComputerToolExecutor(
                         action = "CHECK_EXECUTION",
                     ),
                 )
-            }
-            return buildJsonObject {
+            } else return buildJsonObject {
                 put("ok", existing.status == ComputerExecutionStatus.SUCCEEDED)
                 put("execution_id", existing.id)
                 put("recovered", true)
@@ -117,8 +160,8 @@ class ComputerToolExecutor(
         var execution = ComputerExecution(
             id = "execution_${UUID.randomUUID().toString().replace("-", "")}",
             toolCallId = toolCallKey,
-            computerId = requestContext.computerId,
-            workspaceId = requestContext.workspaceId,
+            computerId = currentRequestContext.computerId,
+            workspaceId = currentRequestContext.workspaceId,
             toolName = toolName,
             requestHash = requestHash,
             status = ComputerExecutionStatus.STARTING,
@@ -180,62 +223,32 @@ class ComputerToolExecutor(
         workspace: ComputerWorkspace,
         executionId: String,
     ): JsonElement = when (toolName) {
-        ComputerToolNames.EXEC -> executeCommand(arguments, requestContext, workspace, executionId)
+        ComputerToolNames.EXEC -> executeCommand(arguments, toolCallId, requestContext, workspace, executionId)
         ComputerToolNames.READ_FILE -> readFile(arguments, requestContext, workspace)
         ComputerToolNames.WRITE_FILE -> writeFile(arguments, requestContext, workspace, executionId)
         ComputerToolNames.TERMINAL -> terminal(arguments, requestContext, workspace)
         ComputerToolNames.UPLOAD -> upload(arguments, requestContext, workspace, executionId)
         ComputerToolNames.DOWNLOAD -> download(arguments, requestContext, workspace)
-        ComputerToolNames.OPEN_PORT -> openPort(arguments, requestContext)
+        ComputerToolNames.OPEN_PORT -> openPort(arguments, toolCallId, requestContext)
         else -> throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "Computer Tool 不存在")
     }
 
     private suspend fun executeCommand(
         arguments: JsonObject,
+        toolCallId: String,
         context: ComputerRequestContext,
         workspace: ComputerWorkspace,
         executionId: String,
     ): JsonElement {
-        val environment = arguments.objectOrEmpty("env").mapValues { (name, value) ->
-            value.stringValue("env.$name")
-        }
-        val secretNames = arguments.stringList("secret_names")
-        val command = arguments.requiredString("command")
-        val target = when (arguments.optionalString("target") ?: "container") {
-            "container" -> ComputerExecTarget.CONTAINER
-            "host" -> ComputerExecTarget.HOST
-            else -> throw invalidArgument("target")
-        }
-        val cwd = arguments.optionalString("cwd") ?: if (target == ComputerExecTarget.HOST) "~" else "/workspace"
-        val stdin = arguments.optionalString("stdin")
-        val timeoutMillis = arguments.optionalLong("timeout_ms") ?: 120_000
-        val background = arguments.optionalBoolean("background") ?: false
-        val asRoot = arguments.optionalBoolean("as_root") ?: false
-        if (target == ComputerExecTarget.HOST && secretNames.isNotEmpty()) {
-            throw ComputerException(
-                ComputerErrorCodes.WORKSPACE_PATH_INVALID,
-                "VPS 主机命令不允许注入 Workspace Secret",
-            )
-        }
-        val secrets = secretManager.loadSelected(workspace.id, secretNames)
-        val request = ComputerExecRequest(
-            command = command,
-            cwd = cwd,
-            environment = environment,
-            secrets = secrets,
-            stdin = stdin,
-            timeoutMillis = timeoutMillis,
-            background = background,
-            asRoot = asRoot,
-            target = target,
-        )
+        val request = parseExecRequest(arguments, context, loadSecrets = true)
+        val secrets = request.secrets
         val result = try {
             val runRequest: suspend (ComputerExecRequest) -> ComputerExecResult = { frozenRequest ->
                 repository.withConnection(context.computerId) { connection, computer ->
                     runtimeEnvelope.execute(connection, computer, workspace, executionId, frozenRequest)
                 }
             }
-            if (target == ComputerExecTarget.HOST) {
+            if (request.target == ComputerExecTarget.HOST && context.approvedToolCallId != toolCallId) {
                 val computer = repository.getComputer(context.computerId)
                     ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
                 executeHostCommandWithConfirmation(
@@ -444,7 +457,11 @@ class ComputerToolExecutor(
         }
     }
 
-    private suspend fun openPort(arguments: JsonObject, context: ComputerRequestContext): JsonElement {
+    private suspend fun openPort(
+        arguments: JsonObject,
+        toolCallId: String,
+        context: ComputerRequestContext,
+    ): JsonElement {
         val port = (arguments.optionalLong("port") ?: throw invalidArgument("port")).toIntChecked("port")
         val protocol = arguments.optionalString("protocol") ?: "http"
         val visibility = arguments.optionalString("visibility") ?: "private"
@@ -469,7 +486,9 @@ class ComputerToolExecutor(
                         ?: throw invalidArgument("ask_user_approval")
                     ComputerPermissionMode.FULL -> false
                 }
-                if (requiresConfirmation && !publicPreviewConfirmer(request)) {
+                if (requiresConfirmation && context.approvedToolCallId != toolCallId &&
+                    !publicPreviewConfirmer(request)
+                ) {
                     throw ComputerException(
                         ComputerErrorCodes.PUBLIC_PORT_BLOCKED,
                         "用户未确认 Public Preview",
@@ -527,6 +546,124 @@ class ComputerToolExecutor(
         else -> "Computer Tool 已完成"
     }
 
+    private suspend fun hostCommandApproval(
+        arguments: JsonObject,
+        toolCallId: String,
+        context: ComputerRequestContext,
+        computer: Computer,
+    ): ComputerToolApprovalRequest? {
+        val request = parseExecRequest(arguments, context, loadSecrets = false)
+        if (request.target != ComputerExecTarget.HOST) return null
+        requireValidComputerExecRequest(request)
+        val assessment = ComputerHostCommandPolicy.assess(request)
+        val requiresConfirmation = when (context.permissionMode) {
+            ComputerPermissionMode.MANUAL -> assessment.requiresConfirmation
+            ComputerPermissionMode.SMART -> arguments.optionalBoolean("ask_user_approval")
+                ?: throw invalidArgument("ask_user_approval")
+            ComputerPermissionMode.FULL -> false
+        }
+        if (!requiresConfirmation) return null
+        return ComputerToolApprovalRequest.HostCommand(
+            toolCallId = toolCallId,
+            request = ComputerHostCommandConfirmationRequest(
+                requestId = toolCallId,
+                context = context,
+                computerName = computer.displayName,
+                command = request.command,
+                cwd = request.cwd,
+                requestsPrivilege = request.asRoot ||
+                    ComputerHostCommandRisk.PRIVILEGE_ESCALATION in assessment.risks,
+                reason = assessment.reason ?: "AI 请求确认这次 VPS 命令",
+                risks = assessment.risks,
+            ),
+        )
+    }
+
+    private fun publicPreviewApproval(
+        arguments: JsonObject,
+        toolCallId: String,
+        context: ComputerRequestContext,
+        computer: Computer,
+    ): ComputerToolApprovalRequest? {
+        if ((arguments.optionalString("visibility") ?: "private") != "public") return null
+        val requiresConfirmation = when (context.permissionMode) {
+            ComputerPermissionMode.MANUAL -> true
+            ComputerPermissionMode.SMART -> arguments.optionalBoolean("ask_user_approval")
+                ?: throw invalidArgument("ask_user_approval")
+            ComputerPermissionMode.FULL -> false
+        }
+        if (!requiresConfirmation) return null
+        val target = when (arguments.optionalString("target") ?: "container") {
+            "container" -> ComputerExecTarget.CONTAINER
+            "host" -> ComputerExecTarget.HOST
+            else -> throw invalidArgument("target")
+        }
+        return ComputerToolApprovalRequest.PublicPreview(
+            toolCallId = toolCallId,
+            computerName = computer.displayName,
+            request = ComputerPublicPreviewRequest(
+                context = context,
+                port = (arguments.optionalLong("port") ?: throw invalidArgument("port")).toIntChecked("port"),
+                protocol = arguments.optionalString("protocol") ?: "http",
+                expiresInSeconds = arguments.optionalLong("expires_in_seconds"),
+                target = target,
+            ),
+        )
+    }
+
+    private fun approvalDetail(toolName: String, arguments: JsonObject): String = when (toolName) {
+        ComputerToolNames.EXEC -> arguments.optionalString("command").orEmpty()
+        ComputerToolNames.READ_FILE, ComputerToolNames.WRITE_FILE -> arguments.optionalString("path").orEmpty()
+        ComputerToolNames.UPLOAD -> arguments.optionalString("destination_path").orEmpty()
+        ComputerToolNames.DOWNLOAD -> arguments.optionalString("path").orEmpty()
+        ComputerToolNames.OPEN_PORT -> arguments.optionalLong("port")?.toString().orEmpty()
+        else -> toolName
+    }
+
+    private fun isReadOnlyToolCall(toolName: String, arguments: JsonObject): Boolean = when (toolName) {
+        ComputerToolNames.READ_FILE, ComputerToolNames.DOWNLOAD -> true
+        ComputerToolNames.EXEC -> {
+            val request = parseExecRequestWithoutSecrets(arguments)
+            request.target == ComputerExecTarget.HOST && !ComputerHostCommandPolicy.assess(request).requiresConfirmation
+        }
+        else -> false
+    }
+
+    private suspend fun parseExecRequest(
+        arguments: JsonObject,
+        context: ComputerRequestContext,
+        loadSecrets: Boolean,
+    ): ComputerExecRequest {
+        val request = parseExecRequestWithoutSecrets(arguments)
+        if (!loadSecrets) return request
+        val secretNames = arguments.stringList("secret_names")
+        return request.copy(secrets = secretManager.loadSelected(context.workspaceId, secretNames))
+    }
+
+    /** 审批预检只解析参数，不读取 Keystore，避免用户批准前触碰 Secret。 */
+    private fun parseExecRequestWithoutSecrets(arguments: JsonObject): ComputerExecRequest {
+        val target = when (arguments.optionalString("target") ?: "container") {
+            "container" -> ComputerExecTarget.CONTAINER
+            "host" -> ComputerExecTarget.HOST
+            else -> throw invalidArgument("target")
+        }
+        val secretNames = arguments.stringList("secret_names")
+        if (target == ComputerExecTarget.HOST && secretNames.isNotEmpty()) {
+            throw ComputerException(ComputerErrorCodes.WORKSPACE_PATH_INVALID, "VPS 主机命令不允许注入 Workspace Secret")
+        }
+        return ComputerExecRequest(
+            command = arguments.requiredString("command"),
+            cwd = arguments.optionalString("cwd") ?: if (target == ComputerExecTarget.HOST) "~" else "/workspace",
+            environment = arguments.objectOrEmpty("env").mapValues { (name, value) -> value.stringValue("env.$name") },
+            secrets = emptyMap(),
+            stdin = arguments.optionalString("stdin"),
+            timeoutMillis = arguments.optionalLong("timeout_ms") ?: 120_000,
+            background = arguments.optionalBoolean("background") ?: false,
+            asRoot = arguments.optionalBoolean("as_root") ?: false,
+            target = target,
+        )
+    }
+
     /** 删除 Workspace 前关闭仍在本机进程中的 PTY，避免留下失效会话。 */
     fun closeWorkspace(workspaceId: String) {
         terminalManager.closeWorkspace(workspaceId)
@@ -542,7 +679,7 @@ class ComputerToolExecutor(
     }
 }
 
-internal object ComputerToolRequestHasher {
+object ComputerToolRequestHasher {
     fun toolCallKey(toolCallId: String, context: ComputerRequestContext): String {
         if (toolCallId.isBlank() || toolCallId.length > 1024 || toolCallId.any(Char::isISOControl)) {
             throw ComputerException(ComputerErrorCodes.IDEMPOTENCY_CONFLICT, "Tool Call ID 无效")

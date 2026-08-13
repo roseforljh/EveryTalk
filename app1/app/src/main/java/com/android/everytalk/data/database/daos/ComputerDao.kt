@@ -147,8 +147,14 @@ interface ComputerDao {
     @Query("SELECT * FROM computer_executions WHERE toolCallId = :toolCallId LIMIT 1")
     suspend fun getExecutionByToolCallId(toolCallId: String): ComputerExecutionEntity?
 
+    @Query("SELECT * FROM computer_executions WHERE status = 'UNKNOWN' ORDER BY finishedAt ASC")
+    suspend fun getUnknownExecutions(): List<ComputerExecutionEntity>
+
     @Upsert
     suspend fun upsertExecution(execution: ComputerExecutionEntity)
+
+    @Query("DELETE FROM computer_executions WHERE id = :executionId AND status = 'UNKNOWN'")
+    suspend fun deleteExecution(executionId: String)
 
     @Query("UPDATE computer_executions SET status = 'UNKNOWN', finishedAt = :finishedAt, errorCode = 'EXECUTION_UNKNOWN' WHERE status IN ('STARTING', 'RUNNING')")
     suspend fun markInterruptedExecutionsUnknown(finishedAt: Long = System.currentTimeMillis())

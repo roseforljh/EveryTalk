@@ -27,6 +27,7 @@ data class AgentRunEntity(
     val userMessageId: String,
     val visibleAssistantMessageId: String,
     val configIdSnapshot: String?,
+    val requestSnapshotJson: String?,
     val status: String,
     val currentRequestOrdinal: Int,
     val terminalReason: String?,
@@ -191,13 +192,14 @@ data class AgentCompactionEntryEntity(
         )
     ],
     indices = [
-        Index(value = ["sessionId", "configId", "provider", "endpoint", "model"], unique = true),
+        Index(value = ["sessionId", "configId", "protocol", "provider", "endpoint", "model"], unique = true),
     ],
 )
 data class ProviderContinuationStateEntity(
     @PrimaryKey val id: String,
     val sessionId: String,
     val configId: String,
+    val protocol: String,
     val provider: String,
     val endpoint: String,
     val model: String,

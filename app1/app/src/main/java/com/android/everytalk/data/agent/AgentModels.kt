@@ -1,10 +1,14 @@
 package com.android.everytalk.data.agent
 
-import com.android.everytalk.data.network.TokenUsage
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import com.android.everytalk.data.DataClass.AbstractApiMessage
+import com.android.everytalk.data.DataClass.GenerationConfig
+import com.android.everytalk.data.DataClass.RequestContextManagement
+import com.android.everytalk.data.computer.ComputerRequestContext
+import com.android.everytalk.data.computer.ComputerToolApprovalRequest
 
 /**
  * 一次用户输入对应一个 AgentRun。普通聊天同样创建 Run，通常只包含一次模型请求。
@@ -28,6 +32,7 @@ enum class AgentRunStatus {
 
 enum class AgentEntryKind {
     ASSISTANT,
+    TOOL_EXECUTION_STARTED,
     TOOL_RESULT,
     APPROVAL_REQUEST,
     APPROVAL_DECISION,
@@ -68,6 +73,60 @@ enum class AgentCompactionStatus {
     FAILED,
 }
 
+@Serializable
+enum class AgentApprovalDecision {
+    APPROVED,
+    REJECTED,
+    RETRY,
+    KEEP_UNKNOWN,
+}
+
+/**
+ * Run 跨进程恢复所需的非敏感请求快照。
+ * API Key 始终从本地 ApiConfig 读取，禁止写进 Agent 表。
+ */
+@Serializable
+data class AgentRequestSnapshot(
+    val messages: List<AbstractApiMessage>,
+    val provider: String,
+    val channel: String,
+    val apiAddress: String?,
+    val model: String,
+    val forceGoogleReasoningPrompt: Boolean? = null,
+    val useWebSearch: Boolean? = null,
+    val generationConfig: GenerationConfig? = null,
+    val toolsJson: JsonElement? = null,
+    val toolChoiceJson: JsonElement? = null,
+    val qwenEnableSearch: Boolean? = null,
+    val customModelParametersJson: JsonElement? = null,
+    val customExtraBodyJson: JsonElement? = null,
+    val enableCodeExecution: Boolean? = null,
+    val contextManagement: RequestContextManagement? = null,
+    val computerRequestContext: ComputerRequestContext? = null,
+)
+
+@Serializable
+data class AgentApprovalRecord(
+    val approvalRequestId: String,
+    val requestId: String,
+    val toolCall: AgentContentBlock.ToolCall,
+    val pendingToolCalls: List<AgentContentBlock.ToolCall>,
+    val request: ComputerToolApprovalRequest? = null,
+    val decision: AgentApprovalDecision? = null,
+    val decidedAt: Long? = null,
+    val toolResultAlreadyPersisted: Boolean = false,
+    /** 恢复批次时从 pendingToolCalls 重新进入正常预检，不直接处理 toolCall。 */
+    val resumePendingToolCallsOnly: Boolean = false,
+)
+
+/** 工具真正进入 Executor 前立即落库，重启时据此判断是否可能已经产生外部副作用。 */
+@Serializable
+data class AgentToolExecutionRecord(
+    val requestId: String,
+    val toolCall: AgentContentBlock.ToolCall,
+    val startedAt: Long,
+)
+
 /** Provider 中立的消息内容。协议转换只发生在各 Transport 内。 */
 @Serializable
 sealed class AgentContentBlock {
@@ -95,6 +154,9 @@ sealed class AgentContentBlock {
         val content: JsonElement,
         val isError: Boolean = false,
         val truncated: Boolean = false,
+        val fullResultPath: String? = null,
+        val fullResultBytes: Long? = null,
+        val fullResultSha256: String? = null,
     ) : AgentContentBlock()
 }
 
@@ -117,43 +179,3 @@ data class AgentUsageSummary(
     val requestCount: Int,
     val compactionRequestCount: Int,
 )
-
-/** AgentLoop 对界面和持久化层发出的生命周期事件。 */
-sealed interface AgentEvent {
-    val runId: String
-
-    data class RunStarted(override val runId: String) : AgentEvent
-    data class ContextPreparing(override val runId: String, val requestOrdinal: Int) : AgentEvent
-    data class ModelRequestStarted(
-        override val runId: String,
-        val requestId: String,
-        val requestOrdinal: Int,
-    ) : AgentEvent
-
-    data class StreamEvent(
-        override val runId: String,
-        val requestId: String,
-        val event: com.android.everytalk.data.network.AppStreamEvent,
-    ) : AgentEvent
-
-    data class ToolExecutionStarted(
-        override val runId: String,
-        val requestId: String,
-        val call: AgentContentBlock.ToolCall,
-    ) : AgentEvent
-
-    data class ToolExecutionCompleted(
-        override val runId: String,
-        val requestId: String,
-        val result: AgentContentBlock.ToolResult,
-    ) : AgentEvent
-
-    data class UsageFinalized(
-        override val runId: String,
-        val requestId: String,
-        val usage: TokenUsage,
-    ) : AgentEvent
-
-    data class RunCompleted(override val runId: String) : AgentEvent
-    data class RunFailed(override val runId: String, val message: String) : AgentEvent
-}

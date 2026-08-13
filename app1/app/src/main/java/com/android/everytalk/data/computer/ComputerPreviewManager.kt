@@ -22,6 +22,7 @@ data class ComputerPreviewOpenResult(
     val warning: String? = null,
 )
 
+@kotlinx.serialization.Serializable
 data class ComputerPublicPreviewRequest(
     val context: ComputerRequestContext,
     val port: Int,

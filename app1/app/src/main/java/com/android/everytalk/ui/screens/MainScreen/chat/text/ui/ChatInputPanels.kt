@@ -435,7 +435,13 @@ internal fun ComputerHostCommandConfirmationCard(
                 verticalArrangement = Arrangement.spacedBy(5.dp),
             ) {
                 Text(
-                    text = stringResource(R.string.agent_host_command_title),
+                    text = stringResource(
+                        if (currentRequest.decisionMode == com.android.everytalk.data.computer.ComputerApprovalDecisionMode.RETRY_OR_KEEP_UNKNOWN) {
+                            R.string.agent_unknown_title
+                        } else {
+                            R.string.agent_host_command_title
+                        }
+                    ),
                     style = MaterialTheme.typography.titleSmall,
                     fontWeight = FontWeight.SemiBold,
                     color = contentColor,
@@ -471,11 +477,13 @@ internal fun ComputerHostCommandConfirmationCard(
                         )
                     }
                 }
-                Text(
-                    text = stringResource(R.string.agent_host_command_cwd, currentRequest.cwd),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = secondaryColor,
-                )
+                if (currentRequest.cwd.isNotBlank()) {
+                    Text(
+                        text = stringResource(R.string.agent_host_command_cwd, currentRequest.cwd),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = secondaryColor,
+                    )
+                }
                 if (currentRequest.requestsPrivilege) {
                     Text(
                         text = stringResource(R.string.agent_host_command_detail_privilege),
@@ -505,7 +513,13 @@ internal fun ComputerHostCommandConfirmationCard(
                     ),
                     border = BorderStroke(1.dp, contentColor.copy(alpha = 0.18f)),
                 ) {
-                    Text(stringResource(R.string.agent_host_command_reject))
+                    Text(
+                        if (currentRequest.decisionMode == com.android.everytalk.data.computer.ComputerApprovalDecisionMode.RETRY_OR_KEEP_UNKNOWN) {
+                            stringResource(R.string.agent_unknown_keep)
+                        } else {
+                            stringResource(R.string.agent_host_command_reject)
+                        }
+                    )
                 }
                 Button(
                     onClick = { onDecision(currentRequest.requestId, true) },
@@ -518,7 +532,13 @@ internal fun ComputerHostCommandConfirmationCard(
                         contentColor = buttonContent,
                     ),
                 ) {
-                    Text(stringResource(R.string.agent_host_command_allow_once))
+                    Text(
+                        if (currentRequest.decisionMode == com.android.everytalk.data.computer.ComputerApprovalDecisionMode.RETRY_OR_KEEP_UNKNOWN) {
+                            stringResource(R.string.agent_unknown_retry)
+                        } else {
+                            stringResource(R.string.agent_host_command_allow_once)
+                        }
+                    )
                 }
             }
         },

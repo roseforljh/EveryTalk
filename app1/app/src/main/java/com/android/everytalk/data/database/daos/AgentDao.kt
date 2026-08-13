@@ -41,11 +41,17 @@ interface AgentDao {
     @Query("SELECT * FROM agent_runs WHERE status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED')")
     suspend fun getActiveRuns(): List<AgentRunEntity>
 
+    @Query("SELECT * FROM agent_runs WHERE status = 'WAITING_APPROVAL' ORDER BY updatedAt ASC")
+    suspend fun getWaitingApprovalRuns(): List<AgentRunEntity>
+
+    @Query("SELECT * FROM agent_runs WHERE status = 'INTERRUPTED' ORDER BY updatedAt ASC")
+    suspend fun getInterruptedRuns(): List<AgentRunEntity>
+
     @Query(
         """
         UPDATE agent_runs
         SET status = 'INTERRUPTED', terminalReason = :reason, updatedAt = :updatedAt
-        WHERE status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED')
+        WHERE status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED', 'WAITING_APPROVAL')
         """
     )
     suspend fun markActiveRunsInterrupted(reason: String, updatedAt: Long)
@@ -77,7 +83,7 @@ interface AgentDao {
     @Query(
         """
         SELECT * FROM provider_continuation_states
-        WHERE sessionId = :sessionId AND configId = :configId AND provider = :provider
+        WHERE sessionId = :sessionId AND configId = :configId AND protocol = :protocol AND provider = :provider
           AND endpoint = :endpoint AND model = :model
         LIMIT 1
         """
@@ -85,6 +91,7 @@ interface AgentDao {
     suspend fun getContinuationState(
         sessionId: String,
         configId: String,
+        protocol: String,
         provider: String,
         endpoint: String,
         model: String,
@@ -92,6 +99,9 @@ interface AgentDao {
 
     @Query("DELETE FROM provider_continuation_states WHERE sessionId = :sessionId")
     suspend fun deleteContinuationStates(sessionId: String)
+
+    @Query("DELETE FROM provider_continuation_states WHERE id = :stateId")
+    suspend fun deleteContinuationState(stateId: String)
 
     @Query("SELECT COALESCE(MAX(sequence), 0) + 1 FROM agent_entries WHERE runId = :runId")
     suspend fun nextEntrySequence(runId: String): Long
@@ -131,6 +141,27 @@ interface AgentDao {
         upsertRequest(request)
         upsertContextSnapshot(snapshot)
     }
+
+    /** 审批卡片及等待状态必须在同一事务出现，禁止留下界面无法发现的孤立请求。 */
+    @Transaction
+    suspend fun persistApprovalPause(
+        entry: AgentEntryEntity,
+        waitingRun: AgentRunEntity,
+    ) {
+        upsertEntry(entry)
+        upsertRun(waitingRun)
+    }
+
+    /** 决定写入后立刻把 Run 标成可续接状态，进程退出后仍能识别未消费决定。 */
+    @Transaction
+    suspend fun persistApprovalDecision(
+        entry: AgentEntryEntity,
+        interruptedRun: AgentRunEntity,
+    ) {
+        upsertEntry(entry)
+        upsertRun(interruptedRun)
+    }
+
 
     /** App 进程已经消失，旧 HTTP 流无法继续，统一封存为中断状态。 */
     @Transaction

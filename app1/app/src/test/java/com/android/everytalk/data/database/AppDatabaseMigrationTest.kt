@@ -437,6 +437,89 @@ class AppDatabaseMigrationTest {
         migrateHelper.close()
     }
 
+    @Test
+    fun `migration 17 to 18 adds recovery snapshot and protocol identity`() {
+        val createHelper = openHelper(
+            version = 17,
+            onCreate = { db ->
+                db.execSQL(
+                    """
+                    CREATE TABLE agent_runs (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        sessionId TEXT NOT NULL,
+                        userMessageId TEXT NOT NULL,
+                        visibleAssistantMessageId TEXT NOT NULL,
+                        configIdSnapshot TEXT,
+                        status TEXT NOT NULL,
+                        currentRequestOrdinal INTEGER NOT NULL,
+                        terminalReason TEXT,
+                        createdAt INTEGER NOT NULL,
+                        updatedAt INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE provider_continuation_states (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        sessionId TEXT NOT NULL,
+                        configId TEXT NOT NULL,
+                        provider TEXT NOT NULL,
+                        endpoint TEXT NOT NULL,
+                        model TEXT NOT NULL,
+                        systemPromptFingerprint TEXT NOT NULL,
+                        toolSchemaFingerprint TEXT NOT NULL,
+                        summarizedThroughItemId TEXT,
+                        opaqueStateJson TEXT NOT NULL,
+                        updatedAt INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE UNIQUE INDEX index_provider_continuation_states_sessionId_configId_provider_endpoint_model " +
+                        "ON provider_continuation_states(sessionId, configId, provider, endpoint, model)",
+                )
+                db.execSQL(
+                    "INSERT INTO agent_runs VALUES ('run-1', 'chat-1', 'user-1', 'assistant-1', 'config-1', " +
+                        "'COMPLETED', 1, NULL, 1, 1)",
+                )
+                db.execSQL(
+                    "INSERT INTO provider_continuation_states VALUES ('state-1', 'chat-1', 'config-1', 'OpenAI', " +
+                        "'https://example.test', 'model', 'system', 'tools', NULL, '{}', 1)",
+                )
+            },
+        )
+        createHelper.writableDatabase.close()
+        createHelper.close()
+
+        val migrateHelper = openHelper(
+            version = 18,
+            onUpgrade = { db, oldVersion, newVersion ->
+                assertEquals(17, oldVersion)
+                assertEquals(18, newVersion)
+                AppDatabase.MIGRATION_17_18.migrate(db)
+            },
+        )
+        val db = migrateHelper.writableDatabase
+        db.query("SELECT requestSnapshotJson FROM agent_runs WHERE id = 'run-1'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue(cursor.isNull(0))
+        }
+        db.query("SELECT protocol, opaqueStateJson FROM provider_continuation_states WHERE id = 'state-1'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("", cursor.getString(0))
+            assertEquals("{}", cursor.getString(1))
+        }
+        val indices = mutableSetOf<String>()
+        db.query("PRAGMA index_list(provider_continuation_states)").use { cursor ->
+            while (cursor.moveToNext()) indices += cursor.getString(1)
+        }
+        assertFalse(indices.contains("index_provider_continuation_states_sessionId_configId_provider_endpoint_model"))
+        assertTrue(indices.contains("index_provider_continuation_states_sessionId_configId_protocol_provider_endpoint_model"))
+        db.close()
+        migrateHelper.close()
+    }
+
     private fun openHelper(
         version: Int,
         onCreate: (SupportSQLiteDatabase) -> Unit = {},

@@ -85,6 +85,9 @@ import com.android.everytalk.data.mcp.McpServerConfig
 import com.android.everytalk.data.mcp.McpServerState
 import com.android.everytalk.data.mcp.McpStatus
 import com.android.everytalk.data.agent.AgentToolExecutorRegistry
+import com.android.everytalk.data.database.AppDatabase
+import com.android.everytalk.data.computer.hostConfirmationRequest
+import com.android.everytalk.data.computer.publicPreviewRequest
 import com.android.everytalk.data.network.AppToolExecutor
 import com.android.everytalk.data.network.ExternalWebSearchProvider
 import com.android.everytalk.data.network.ExternalWebSearchProviderConfig
@@ -424,8 +427,23 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         get() = stateHolder._isAgentPreparing.asStateFlow()
     val computers get() = computerManager.computers
     val computerSelections get() = computerManager.selections
-    val pendingComputerPublicPreview get() = computerManager.pendingPublicPreview
-    val pendingComputerHostCommand get() = computerManager.pendingHostCommand
+    val pendingComputerAgentApprovals = apiHandler.pendingAgentApprovals
+    val pendingComputerAgentApproval = kotlinx.coroutines.flow.combine(
+        apiHandler.pendingAgentApprovals,
+        stateHolder._currentConversationId,
+    ) { approvals, conversationId -> approvals.firstOrNull { it.request.context.conversationId == conversationId } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    val pendingComputerPublicPreview = kotlinx.coroutines.flow.combine(
+        computerManager.pendingPublicPreview,
+        pendingComputerAgentApproval,
+    ) { legacy, agent -> legacy ?: agent?.publicPreviewRequest() }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    val pendingComputerHostCommand = kotlinx.coroutines.flow.combine(
+        computerManager.pendingHostCommand,
+        pendingComputerAgentApproval,
+    ) { legacy, agent ->
+        legacy ?: agent?.hostConfirmationRequest()
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
     val showSourcesDialog: StateFlow<Boolean>
         get() = stateHolder._showSourcesDialog.asStateFlow()
     val sourcesForDialog: StateFlow<List<WebSearchResult>>
@@ -612,7 +630,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 }
             )
          }
-         AgentToolExecutorRegistry.register(mcpToolExecutorOwner, appToolExecutor)
+         AgentToolExecutorRegistry.register(
+             owner = mcpToolExecutorOwner,
+             executor = appToolExecutor,
+             approvalProvider = computerManager::approvalRequest,
+         )
+
+          viewModelScope.launch(Dispatchers.IO) {
+              computerManager.awaitLocalRecovery()
+              AppDatabase.getDatabase(getApplication()).agentDao().recoverInterruptedAgentRuns()
+              apiHandler.restorePendingAgentApproval()
+          }
 
         viewModelScope.launch(Dispatchers.IO) {
             aiContentReportRepository.retryPendingReports()

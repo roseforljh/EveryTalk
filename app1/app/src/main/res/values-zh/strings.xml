@@ -588,6 +588,9 @@
     <string name="agent_host_command_reject">拒绝</string>
     <string name="agent_host_command_allow_once">允许本次</string>
     <string name="agent_host_command_detail_privilege">请求提权</string>
+    <string name="agent_unknown_keep">不重试</string>
+    <string name="agent_unknown_retry">重新执行</string>
+    <string name="agent_unknown_title">操作结果无法确认</string>
     <string name="thinking_preparing_server">正在准备服务器</string>
     <string name="chat_input_stop">停止</string>
     <string name="chat_input_send">发送</string>

@@ -64,7 +64,7 @@ import com.android.everytalk.data.database.entities.WorkspaceSecretMetadataEntit
         AgentCompactionEntryEntity::class,
         ProviderContinuationStateEntity::class,
     ],
-    version = 17,
+    version = 18,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -107,6 +107,7 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_14_15,
                     MIGRATION_15_16,
                     MIGRATION_16_17,
+                    MIGRATION_17_18,
                 )
                 .build()
                 INSTANCE = instance
@@ -569,6 +570,19 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL(
                     "CREATE UNIQUE INDEX IF NOT EXISTS index_provider_continuation_states_sessionId_configId_provider_endpoint_model " +
                         "ON provider_continuation_states(sessionId, configId, provider, endpoint, model)",
+                )
+            }
+        }
+
+        /** 增加不含 API Key 的 Run 恢复快照，旧聊天和 Agent 事实原样保留。 */
+        val MIGRATION_17_18 = object : Migration(17, 18) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE agent_runs ADD COLUMN requestSnapshotJson TEXT")
+                db.execSQL("ALTER TABLE provider_continuation_states ADD COLUMN protocol TEXT NOT NULL DEFAULT ''")
+                db.execSQL("DROP INDEX IF EXISTS index_provider_continuation_states_sessionId_configId_provider_endpoint_model")
+                db.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS index_provider_continuation_states_sessionId_configId_protocol_provider_endpoint_model " +
+                        "ON provider_continuation_states(sessionId, configId, protocol, provider, endpoint, model)",
                 )
             }
         }

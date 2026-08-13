@@ -75,6 +75,14 @@ sealed class AppStreamEvent {
         val conversationTotalTokens: Long,
     ) : AppStreamEvent()
 
+    /** Run 已安全暂停，UI 通过 Room 中的 approvalRequestId 恢复对应权限卡。 */
+    @Serializable
+    @SerialName("agent_approval_required")
+    data class AgentApprovalRequired(
+        val runId: String,
+        val approvalRequestId: String,
+    ) : AppStreamEvent()
+
     /** AgentLoop 内部消费的供应商原生 Assistant 数据，UI 不展示。 */
     @Serializable
     @SerialName("provider_continuation")

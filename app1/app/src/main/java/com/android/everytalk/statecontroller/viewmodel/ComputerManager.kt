@@ -19,6 +19,8 @@ import com.android.everytalk.data.computer.ComputerPreviewManager
 import com.android.everytalk.data.computer.ComputerPreviewOpenResult
 import com.android.everytalk.data.computer.ComputerPermissionMode
 import com.android.everytalk.data.computer.ComputerPublicPreviewRequest
+import com.android.everytalk.data.computer.ComputerToolApprovalPhase
+import com.android.everytalk.data.computer.ComputerToolApprovalRequest
 import com.android.everytalk.data.computer.ComputerRepository
 import com.android.everytalk.data.computer.ComputerRequestContext
 import com.android.everytalk.data.computer.ComputerStatus
@@ -34,7 +36,6 @@ import com.android.everytalk.data.computer.UpdateComputerRequest
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.service.ComputerConnectionServiceController
 import com.android.everytalk.util.AppLogger
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -51,6 +52,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.async
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.CompletableDeferred
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
@@ -205,6 +207,7 @@ class ComputerManager(
     private val closed = AtomicBoolean(false)
     private val prewarmJobs = java.util.concurrent.ConcurrentHashMap<String, Job>()
     private val requestPreparations = java.util.concurrent.ConcurrentHashMap<String, Deferred<PreparedComputerRequest>>()
+    private val localRecovery = CompletableDeferred<Unit>()
     private val conversationIds = ComputerConversationIdCoordinator()
     private val connectivityManager = context.applicationContext
         .getSystemService(ConnectivityManager::class.java)
@@ -248,10 +251,19 @@ class ComputerManager(
     init {
         connectivityManager?.registerDefaultNetworkCallback(networkCallback)
         scope.launch(Dispatchers.IO) {
-            repository.recoverLocalState()
-            previewManager.reconcileExpirations()
+            try {
+                repository.recoverLocalState()
+                localRecovery.complete(Unit)
+                previewManager.reconcileExpirations()
+            } catch (error: Throwable) {
+                if (!localRecovery.isCompleted) localRecovery.completeExceptionally(error)
+                throw error
+            }
         }
     }
+
+    /** Agent 恢复前等待 ComputerExecution 从 RUNNING 收敛到 UNKNOWN。 */
+    suspend fun awaitLocalRecovery() = localRecovery.await()
 
     /** 当前四类文本 Provider 都走应用内置 Tool Loop；图像、音频和视频配置不开放 Agent。 */
     fun supportsToolCalls(config: ApiConfig?): Boolean = config != null &&
@@ -392,6 +404,8 @@ class ComputerManager(
         val currentContext = prepared.context.copy(
             conversationId = requestContext.conversationId,
             permissionMode = requestContext.permissionMode,
+            approvedToolCallId = requestContext.approvedToolCallId,
+            retryUnknownToolCallId = requestContext.retryUnknownToolCallId,
         )
         return toolExecutor.execute(
             toolName = toolName,
@@ -399,6 +413,18 @@ class ComputerManager(
             toolCallId = toolCallId,
             requestContext = currentContext,
         )
+    }
+
+    /** AgentLoop 的持久化审批入口；普通详情页操作继续使用原内存确认入口。 */
+    suspend fun approvalRequest(
+        toolName: String,
+        arguments: kotlinx.serialization.json.JsonObject,
+        toolCallId: String,
+        requestContext: ComputerRequestContext?,
+        phase: ComputerToolApprovalPhase,
+    ): ComputerToolApprovalRequest? {
+        val context = requestContext ?: return null
+        return toolExecutor.approvalRequest(toolName, arguments, toolCallId, context, phase)
     }
 
     suspend fun migrateConversationId(sourceConversationId: String, targetConversationId: String) {

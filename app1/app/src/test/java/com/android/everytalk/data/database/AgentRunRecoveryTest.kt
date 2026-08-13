@@ -46,6 +46,7 @@ class AgentRunRecoveryTest {
                 userMessageId = "user-1",
                 visibleAssistantMessageId = "assistant-1",
                 configIdSnapshot = "config-1",
+                requestSnapshotJson = null,
                 status = "WAITING_MODEL",
                 currentRequestOrdinal = 1,
                 terminalReason = null,
@@ -80,5 +81,54 @@ class AgentRunRecoveryTest {
         assertEquals("APP_PROCESS_RESTARTED", dao.getRun("run-1")?.terminalReason)
         assertEquals("INTERRUPTED", dao.getRequests("run-1").single().status)
         assertEquals(10L, dao.getRequests("run-1").single().finishedAt)
+    }
+
+    @Test
+    fun `App重启保留等待审批Run并封存已经结束的模型请求`() = runBlocking {
+        val dao = database.agentDao()
+        database.chatDao().insertSession(
+            ChatSessionEntity("session-approval", 1L, 1L, isImageGeneration = false),
+        )
+        dao.upsertRun(
+            AgentRunEntity(
+                id = "run-approval",
+                sessionId = "session-approval",
+                userMessageId = "user-approval",
+                visibleAssistantMessageId = "assistant-approval",
+                configIdSnapshot = "config-1",
+                requestSnapshotJson = "{}",
+                status = "WAITING_APPROVAL",
+                currentRequestOrdinal = 1,
+                terminalReason = null,
+                createdAt = 1L,
+                updatedAt = 1L,
+            ),
+        )
+        dao.upsertRequest(
+            AgentRequestEntity(
+                id = "request-approval",
+                runId = "run-approval",
+                ordinal = 1,
+                purpose = "AGENT_TURN",
+                modelTurnOrdinal = 1,
+                attempt = 1,
+                retryOfRequestId = null,
+                provider = "OpenAI",
+                endpoint = "https://example.test",
+                model = "model",
+                payloadFingerprint = "fingerprint",
+                status = "COMPLETED",
+                finishReason = "tool_calls",
+                startedAt = 1L,
+                firstEventAt = 2L,
+                finishedAt = 3L,
+            ),
+        )
+
+        dao.recoverInterruptedAgentRuns(timestamp = 10L)
+
+        assertEquals("WAITING_APPROVAL", dao.getRun("run-approval")?.status)
+        assertEquals(null, dao.getRun("run-approval")?.terminalReason)
+        assertEquals("COMPLETED", dao.getRequests("run-approval").single().status)
     }
 }

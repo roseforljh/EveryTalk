@@ -124,6 +124,7 @@ data class ChatRequest(
     val localProviderContinuation: ProviderTurnContinuation? = null,
 )
 
+@Serializable
 data class ProviderTurnContinuation(
     val protocol: ModelParameterProtocol,
     val payloadJson: String,
