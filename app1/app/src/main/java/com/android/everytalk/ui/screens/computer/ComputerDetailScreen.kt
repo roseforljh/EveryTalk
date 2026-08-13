@@ -59,6 +59,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -120,6 +121,11 @@ fun ComputerDetailScreen(
     val workspacesFlow = remember(computerId) { viewModel.observeComputerWorkspaces(computerId) }
     val auditFlow = remember(computerId) { viewModel.observeComputerAuditEvents(computerId) }
     val workspaces by workspacesFlow.collectAsState(initial = emptyList())
+    val containerCount = remember(workspaces) {
+        workspaces.count { workspace ->
+            workspace.runMode == ComputerRunMode.CONTAINER && workspace.containerName != null
+        }
+    }
     val audits by auditFlow.collectAsState(initial = emptyList())
     val historicalConversations by viewModel.historicalConversations.collectAsState()
     // 会话项目直接显示用户熟悉的会话名称，避免把内部 ID 暴露到界面。
@@ -392,6 +398,11 @@ fun ComputerDetailScreen(
                     item {
                         ComputerSectionTitle(
                             title = stringResource(R.string.computer_workspace_section),
+                            detail = pluralStringResource(
+                                R.plurals.computer_workspace_container_count,
+                                containerCount,
+                                containerCount,
+                            ),
                         )
                     }
                     if (workspaces.isEmpty()) {
@@ -1026,12 +1037,26 @@ private fun ComputerSectionCard(content: @Composable ColumnScope.() -> Unit) {
 }
 
 @Composable
-private fun ComputerSectionTitle(title: String) {
-    Text(
-        text = title,
-        style = MaterialTheme.typography.titleLarge,
-        modifier = Modifier.padding(start = 2.dp, top = 4.dp),
-    )
+private fun ComputerSectionTitle(title: String, detail: String? = null) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(start = 2.dp, top = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleLarge,
+            modifier = Modifier.weight(1f),
+        )
+        detail?.let {
+            Text(
+                text = it,
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
 }
 
 @Composable

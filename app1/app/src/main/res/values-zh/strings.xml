@@ -454,6 +454,9 @@
     <string name="computer_host_key_address_label">解析地址</string>
     <string name="computer_host_key_accept_new">接受新指纹</string>
     <string name="computer_workspace_section">会话项目</string>
+    <plurals name="computer_workspace_container_count">
+        <item quantity="other">%1$d 个会话容器</item>
+    </plurals>
     <string name="computer_workspace_section_body">每个会话在服务器上使用独立的项目目录。</string>
     <string name="computer_workspace_empty">还没有会话使用这台服务器。开启 Agent 后会自动创建项目。</string>
     <string name="computer_workspace_item_title">会话项目</string>

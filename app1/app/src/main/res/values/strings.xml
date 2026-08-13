@@ -455,6 +455,10 @@
     <string name="computer_host_key_address_label">Resolved address</string>
     <string name="computer_host_key_accept_new">Accept new fingerprint</string>
     <string name="computer_workspace_section">Conversation projects</string>
+    <plurals name="computer_workspace_container_count">
+        <item quantity="one">%1$d conversation container</item>
+        <item quantity="other">%1$d conversation containers</item>
+    </plurals>
     <string name="computer_workspace_section_body">Each conversation uses its own project folder on the server.</string>
     <string name="computer_workspace_empty">No conversation has used this server yet. A project is created automatically when Agent is enabled.</string>
     <string name="computer_workspace_item_title">Conversation project</string>
