@@ -187,13 +187,18 @@ class LauncherIconResourceTest {
         assertFalse("GIF splash must expose its first frame without crossfade", splashSourceText.contains(".crossfade("))
         assertTrue("GIF splash must play exactly once", splashSourceText.contains(".repeatCount(0)"))
         assertTrue("GIF splash must close from the decoder end callback", splashSourceText.contains(".onAnimationEnd"))
-        assertTrue(
-            "GIF request must be created only after the system splash exits",
-            splashSourceText.contains("startAnimation: Boolean") &&
-                splashSourceText.indexOf("if (!startAnimation)") in
-                0 until splashSourceText.indexOf("ImageRequest.Builder"),
+        assertFalse(
+            "GIF playback must not depend on an OEM system-splash callback",
+            splashSourceText.contains("startAnimation: Boolean") ||
+                splashSourceText.contains(".onAnimationStart"),
         )
-        assertTrue("GIF start must release the transparent system splash", splashSourceText.contains(".onAnimationStart"))
+        assertTrue(
+            "GIF splash must have a two-second fail-safe",
+            splashSourceText.contains("MAX_SPLASH_DISPLAY_MS = 2_000L") &&
+                splashSourceText.contains("delay(MAX_SPLASH_DISPLAY_MS)") &&
+                splashSourceText.contains("currentOnFinalFrameVisible.value()") &&
+                splashSourceText.contains("currentOnFinished.value()"),
+        )
         assertFalse("GIF playback must not use a fixed main-content delay", splashSourceText.contains("MAIN_CONTENT_START_DELAY_MS"))
         assertTrue(
             "Main UI warm-up must start only after the final animation frame is visible",
@@ -201,23 +206,25 @@ class LauncherIconResourceTest {
                 0 until splashSourceText.indexOf("delay(FINISHED_FRAME_HOLD_MS)"),
         )
         assertTrue("GIF splash must hold its finished frame for 0.2 seconds", splashSourceText.contains("200L"))
+        val normalCompletionBranch = splashSourceText
+            .substringAfter("LaunchedEffect(animationFinished.value)")
+            .substringBefore("Box(")
         assertTrue(
             "GIF splash must fade out after the final-frame hold",
             splashSourceText.contains("FADE_OUT_DURATION_MS = 200") &&
-                splashSourceText.indexOf("delay(FINISHED_FRAME_HOLD_MS)") in
-                0 until splashSourceText.indexOf("splashAlpha.animateTo") &&
-                splashSourceText.indexOf("splashAlpha.animateTo") in
-                0 until splashSourceText.indexOf("currentOnFinished.value()"),
+                normalCompletionBranch.indexOf("delay(FINISHED_FRAME_HOLD_MS)") in
+                0 until normalCompletionBranch.indexOf("splashAlpha.animateTo") &&
+                normalCompletionBranch.indexOf("splashAlpha.animateTo") in
+                0 until normalCompletionBranch.indexOf("finishSplash()"),
         )
         val mainActivityText = mainActivitySource.readText()
         val applicationText = applicationSource.readText()
         assertTrue("MainActivity must show the GIF splash directly", mainActivityText.contains("PixelPenguinSplash"))
-        assertTrue(
-            "Android 12 system splash must remain until GIF playback starts",
-            mainActivityText.contains("splashScreen.setOnExitAnimationListener") &&
-                mainActivityText.contains("pendingSystemSplashRemoval = {") &&
-                mainActivityText.contains("startAnimation = canStartAnimatedSplash.value") &&
-                mainActivityText.contains("onAnimationStarted = ::removeSystemSplash"),
+        assertFalse(
+            "MainActivity must not retain the Android system splash while waiting for OEM callbacks",
+            mainActivityText.contains("splashScreen.setOnExitAnimationListener") ||
+                mainActivityText.contains("pendingSystemSplashRemoval") ||
+                mainActivityText.contains("canStartAnimatedSplash"),
         )
         assertTrue(
             "Main content must start only after the splash becomes visible",

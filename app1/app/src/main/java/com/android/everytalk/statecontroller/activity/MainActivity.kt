@@ -3,7 +3,6 @@ package com.android.everytalk.statecontroller
 import android.app.Application
 import android.content.Intent
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import androidx.profileinstaller.ProfileInstaller
 import androidx.lifecycle.lifecycleScope
@@ -105,8 +104,6 @@ class MainActivity : AppCompatActivity() {
 
     private var fileContentToSave: String? = null
     private lateinit var appViewModel: AppViewModel
-    private val canStartAnimatedSplash = mutableStateOf(Build.VERSION.SDK_INT < Build.VERSION_CODES.S)
-    private var pendingSystemSplashRemoval: (() -> Unit)? = null
     private val createDocument = registerForActivityResult(ActivityResultContracts.CreateDocument("text/markdown")) { uri ->
         val content = fileContentToSave.also { fileContentToSave = null }
         if (uri != null && content != null) {
@@ -128,17 +125,6 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            splashScreen.setOnExitAnimationListener { splashScreenView ->
-                if (savedInstanceState == null) {
-                    pendingSystemSplashRemoval = { splashScreenView.remove() }
-                    canStartAnimatedSplash.value = true
-                } else {
-                    splashScreenView.remove()
-                }
-            }
-        }
         
         // 异步初始化ProfileInstaller
         lifecycleScope.launch(Dispatchers.IO) {
@@ -173,11 +159,8 @@ class MainActivity : AppCompatActivity() {
                     if (showAnimatedSplash) {
                         PixelPenguinSplash(
                             modifier = Modifier.zIndex(1f),
-                            startAnimation = canStartAnimatedSplash.value,
-                            onAnimationStarted = ::removeSystemSplash,
                             onFinalFrameVisible = { mainContentStarted = true },
                             onFinished = {
-                                removeSystemSplash()
                                 showAnimatedSplash = false
                                 mainContentStarted = true
                             },
@@ -786,17 +769,6 @@ class MainActivity : AppCompatActivity() {
            }
        }
    }
-
-    private fun removeSystemSplash() {
-        val removal = pendingSystemSplashRemoval
-        pendingSystemSplashRemoval = null
-        removal?.invoke()
-    }
-
-    override fun onDestroy() {
-        removeSystemSplash()
-        super.onDestroy()
-    }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
