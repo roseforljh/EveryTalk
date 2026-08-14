@@ -32,6 +32,9 @@ import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
+import java.security.GeneralSecurityException
+import java.security.KeyFactory
+import java.security.KeyStore
 import java.security.MessageDigest
 import java.security.PublicKey
 import java.security.Security
@@ -61,9 +64,18 @@ private fun createDefaultSshClient(): SSHClient {
         val currentProvider = Security.getProvider(providerName)
         if (currentProvider !is BouncyCastleProvider) {
             val originalPosition = Security.getProviders().indexOfFirst { it.name == providerName } + 1
-            if (currentProvider != null) Security.removeProvider(providerName)
-
             val bundledProvider = BouncyCastleProvider()
+
+            // 必须在触碰 Android 系统 Provider 前验证完整性。
+            // Release 混淆一旦误删动态算法，只允许 Agent 初始化失败，不能破坏全局 HTTPS。
+            try {
+                KeyFactory.getInstance("Ed25519", bundledProvider)
+                KeyStore.getInstance("BKS", bundledProvider)
+            } catch (error: GeneralSecurityException) {
+                throw IllegalStateException("SSH 加密组件不完整", error)
+            }
+
+            if (currentProvider != null) Security.removeProvider(providerName)
             val installedPosition = if (originalPosition > 0) {
                 Security.insertProviderAt(bundledProvider, originalPosition)
             } else {

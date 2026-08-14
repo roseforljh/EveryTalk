@@ -69,6 +69,17 @@
 -dontwarn org.bouncycastle.**
 -dontwarn org.openjsse.**
 
+# SSHJ 与 BouncyCastle 通过类名动态注册算法。Release 混淆后必须保留这些入口，
+# 否则 Ed25519 Host Key 会回退到 AndroidKeyStore 并触发 InvalidKeySpecException。
+-keep class org.bouncycastle.jce.provider.BouncyCastleProvider { *; }
+-keep class org.bouncycastle.jcajce.provider.digest.** { *; }
+-keep class org.bouncycastle.jcajce.provider.symmetric.** { *; }
+-keep class org.bouncycastle.jcajce.provider.asymmetric.** { *; }
+# App 创建 SSH 客户端后会用完整版 BC 替换 Android 精简版 BC。
+# Android HTTPS 信任管理器依赖 BKS，BC 还会按类名动态加载安全随机数实现。
+-keep class org.bouncycastle.jcajce.provider.keystore.** { *; }
+-keep class org.bouncycastle.jcajce.provider.drbg.** { *; }
+
 # ===== Coroutines (精简版) =====
 -keepnames class kotlinx.coroutines.internal.MainDispatcherFactory {}
 -keepnames class kotlinx.coroutines.CoroutineExceptionHandler {}
