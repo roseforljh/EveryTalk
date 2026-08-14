@@ -204,7 +204,9 @@ internal fun MessageSender.sendMessageInternal(
             val requestConversationId = stateHolder._currentConversationId.value
             // Workspace 准备和附件处理并行。用户消息无需等待 SSH，点击发送后立即进入消息列表。
             val computerPreparation = async(Dispatchers.IO) {
-                prepareComputerRequest(requestConversationId, isAgentEnabledForRequest)
+                captureComputerPreparation {
+                    prepareComputerRequest(requestConversationId, isAgentEnabledForRequest)
+                }
             }
             val enabledToolIdsForRequest = enabledMessageToolIdsForRequest(
                 isImageGeneration = isImageGeneration,
@@ -334,6 +336,18 @@ internal fun MessageSender.sendMessageInternal(
                         loadedHistoryIndex = stateHolder._loadedImageGenerationHistoryIndex.value,
                     )
 
+            // Agent 占位会把当前发送协程登记为 textApiJob，因此必须先取消上一条请求。
+            // 自动压缩也需要在读取消息快照前完成清理，避免旧流继续改写上下文。
+            val cancelledActiveTextRequestBeforeSnapshot = !isImageGeneration &&
+                (isAgentEnabledForRequest || currentConfig.modelParameters.autoContextCompressionEnabled)
+            if (cancelledActiveTextRequestBeforeSnapshot) {
+                apiHandler.cancelCurrentApiJob(
+                    reason = "发送新消息，预清理",
+                    isNewMessageSend = true,
+                    isImageGeneration = false,
+                )
+            }
+
             // Agent 冻结本地 Workspace 快照时立即显示 AI 加载占位，避免短暂准备阶段看起来毫无响应。
             var preCreatedAiMessageId: String? = if (isAgentEnabledForRequest) {
                 apiHandler.prepareStreamingAiMessage(
@@ -350,10 +364,12 @@ internal fun MessageSender.sendMessageInternal(
 
             // 这里只等待本地 Workspace 快照。远端 SSH 准备已在后台继续执行，不阻塞模型首轮响应。
             // 必须先冻结快照再触发首次会话迁移，否则迁移可能早于 Workspace 映射创建。
-            var preparedComputerRequest = try {
-                computerPreparation.await()
-            } catch (error: ComputerException) {
-                val failureText = error.message
+            val computerPreparationResult = computerPreparation.await()
+            val computerPreparationError = computerPreparationResult.exceptionOrNull()
+            if (computerPreparationError != null) {
+                val failureText = (computerPreparationError as? ComputerException)?.message
+                    ?: "Agent 准备失败，请重试"
+                Log.e("MessageSender", "Agent 服务器准备失败", computerPreparationError)
                 val failedMessageId = preCreatedAiMessageId ?: apiHandler.prepareStreamingAiMessage(
                     modelName = currentConfig.model,
                     providerName = currentConfig.provider,
@@ -365,6 +381,7 @@ internal fun MessageSender.sendMessageInternal(
                 showSnackbar(failureText)
                 return@launch
             }
+            var preparedComputerRequest = computerPreparationResult.getOrNull()
             if (isAgentEnabledForRequest && preparedComputerRequest == null) {
                 val failureText = "Agent 本地执行器未初始化"
                 val failedMessageId = preCreatedAiMessageId ?: apiHandler.prepareStreamingAiMessage(
@@ -413,15 +430,6 @@ internal fun MessageSender.sendMessageInternal(
             }
 
             withContext(Dispatchers.IO) {
-                val cancelledActiveTextRequestBeforeSnapshot = !isImageGeneration &&
-                    currentConfig.modelParameters.autoContextCompressionEnabled
-                if (cancelledActiveTextRequestBeforeSnapshot) {
-                    apiHandler.cancelCurrentApiJob(
-                        reason = "发送新消息，准备自动压缩",
-                        isNewMessageSend = true,
-                        isImageGeneration = false,
-                    )
-                }
                 val messagesInChatUiSnapshot = if (isImageGeneration) stateHolder.imageGenerationMessages.toList() else stateHolder.messages.toList()
                 logUiMessages("rawMessages", messagesInChatUiSnapshot)
                 val historyEndIndex = messagesInChatUiSnapshot.indexOfFirst { it.id == newUserMessageForUi.id }

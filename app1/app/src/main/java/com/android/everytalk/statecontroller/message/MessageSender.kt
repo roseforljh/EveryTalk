@@ -276,6 +276,20 @@ internal fun appendComputerTools(
     return tools + ComputerToolCatalog.definitions(permissionMode)
 }
 
+/**
+ * 捕获并行的服务器准备错误，避免 async 子任务先把整条消息发送协程取消。
+ * 用户主动取消仍需原样传播，确保停止按钮和页面退出能够立即终止发送。
+ */
+internal suspend fun captureComputerPreparation(
+    block: suspend () -> PreparedComputerRequest?,
+): Result<PreparedComputerRequest?> = try {
+    Result.success(block())
+} catch (error: CancellationException) {
+    throw error
+} catch (error: Exception) {
+    Result.failure(error)
+}
+
 internal fun addOrReplaceRegeneratedUserMessage(
     messageList: MutableList<UiMessage>,
     newUserMessage: UiMessage,

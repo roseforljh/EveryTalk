@@ -3,6 +3,9 @@ package com.android.everytalk.statecontroller
 import com.android.everytalk.data.DataClass.MessageToolIds
 import com.android.everytalk.data.computer.ComputerException
 import com.android.everytalk.data.computer.ComputerToolNames
+import kotlinx.coroutines.async
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -37,5 +40,19 @@ class MessageSenderComputerToolTest {
         val error = runCatching { appendComputerTools(conflicting, enabled = true) }.exceptionOrNull()
 
         assertTrue(error is ComputerException)
+    }
+
+    @Test
+    fun `服务器准备失败不会取消发送协程`() = runTest {
+        val preparation = async {
+            captureComputerPreparation {
+                throw ComputerException("TEST_FAILURE", "服务器准备失败")
+            }
+        }
+
+        val result = preparation.await()
+
+        assertTrue(result.exceptionOrNull() is ComputerException)
+        assertTrue("发送协程应能继续执行错误收尾", isActive)
     }
 }

@@ -43,7 +43,6 @@ class MessageSenderConversationTitleTest {
     fun `Agent先冻结Workspace快照再触发首次会话迁移`() {
         val source = messageSenderSendFlowSource()
         val sendBlock = source.substringAfter("val computerPreparation = async(Dispatchers.IO)")
-            .substringBefore("val cancelledActiveTextRequestBeforeSnapshot")
         val userMessageIndex = sendBlock.indexOf("addOrReplaceRegeneratedUserMessage(")
         val loadingMessageIndex = sendBlock.indexOf("apiHandler.prepareStreamingAiMessage(")
         val preparationAwaitIndex = sendBlock.indexOf("computerPreparation.await()")
@@ -52,6 +51,22 @@ class MessageSenderConversationTitleTest {
         assertTrue("用户消息应在等待 Workspace 前显示", userMessageIndex in 0 until preparationAwaitIndex)
         assertTrue("Agent 加载状态应在等待 Workspace 前显示", loadingMessageIndex in 0 until preparationAwaitIndex)
         assertTrue("Workspace 快照必须在首次历史保存迁移会话 ID 前冻结", preparationAwaitIndex in 0 until historySaveIndex)
+    }
+
+    @Test
+    fun `Agent预创建占位前取消旧请求且创建后不再取消当前发送任务`() {
+        val source = messageSenderSendFlowSource()
+        val preparationBlock = source
+            .substringAfter("val isNewImageChatFirstMessage")
+            .substringBefore("val computerPreparationResult")
+        val cancelIndex = preparationBlock.indexOf("apiHandler.cancelCurrentApiJob(")
+        val placeholderIndex = preparationBlock.indexOf("apiHandler.prepareStreamingAiMessage(")
+        val afterPlaceholderBlock = source
+            .substringAfter("val computerPreparationResult")
+            .substringBefore("val messagesInChatUiSnapshot")
+
+        assertTrue("必须在 Agent 占位登记当前任务前取消旧请求", cancelIndex in 0 until placeholderIndex)
+        assertFalse("Agent 占位登记当前任务后不能再次取消它", afterPlaceholderBlock.contains("apiHandler.cancelCurrentApiJob("))
     }
 
     private fun messageSenderSendFlowSource(): String {
