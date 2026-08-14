@@ -47,7 +47,7 @@ class MessageSenderConversationTitleTest {
         val userMessageIndex = sendBlock.indexOf("addOrReplaceRegeneratedUserMessage(")
         val loadingMessageIndex = sendBlock.indexOf("apiHandler.prepareStreamingAiMessage(")
         val preparationAwaitIndex = sendBlock.indexOf("computerPreparation.await()")
-        val historySaveIndex = sendBlock.indexOf("historyManager.saveCurrentChatToHistoryIfNeeded(")
+        val historySaveIndex = sendBlock.indexOf("historyManager.saveCurrentChatToHistoryNow(")
 
         assertTrue("用户消息应在等待 Workspace 前显示", userMessageIndex in 0 until preparationAwaitIndex)
         assertTrue("Agent 加载状态应在等待 Workspace 前显示", loadingMessageIndex in 0 until preparationAwaitIndex)

@@ -48,7 +48,7 @@ class ModelConfigFlowContractTest {
         assertTrue(imageSettings.contains("numInferenceSteps = numInferenceSteps"))
         assertTrue(imageSettings.contains("guidanceScale = guidanceScale"))
         assertTrue(selectionDialog.contains("LaunchedEffect(showDialog, models)"))
-        assertTrue(selectionDialog.contains("Text(\"手动输入模型\""))
+        assertTrue(selectionDialog.contains("stringResource(R.string.settings_enter_model_manually)"))
         assertTrue(settingsContent.contains("modelConfigGroupId(configsForKeyAndModality.first())"))
     }
 

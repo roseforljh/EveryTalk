@@ -12,7 +12,9 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.dp
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.android.everytalk.R
 import com.android.everytalk.ui.components.math.MathFormulaRenderState
 import com.android.everytalk.ui.components.math.MathJaxRenderRequest
 import com.android.everytalk.ui.components.math.MathJaxRenderResult
@@ -56,6 +58,8 @@ class InlineFormulaSafeInsetComposeTest {
             cacheKey = cacheKeyOf(request),
         )
         val metrics = inlineFormulaMetrics(state, request.fontSizePx)
+        val formulaDescription = ApplicationProvider.getApplicationContext<Application>()
+            .getString(R.string.math_formula, formula.latex)
 
         composeRule.setContent {
             MaterialTheme {
@@ -81,7 +85,7 @@ class InlineFormulaSafeInsetComposeTest {
             .fetchSemanticsNode("")
             .boundsInRoot
         val formulaBounds = composeRule
-            .onNodeWithContentDescription("数学公式：x", useUnmergedTree = true)
+            .onNodeWithContentDescription(formulaDescription, useUnmergedTree = true)
             .fetchSemanticsNode("")
             .boundsInRoot
         val topInset = formulaBounds.top - placeholderBounds.top

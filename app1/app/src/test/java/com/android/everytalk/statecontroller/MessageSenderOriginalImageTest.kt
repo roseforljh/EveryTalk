@@ -13,6 +13,7 @@ import com.android.everytalk.data.DataClass.PartsApiMessage
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
+import com.android.everytalk.util.image.ImageHandlingLimits
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.RandomAccessFile
@@ -127,8 +128,12 @@ class MessageSenderOriginalImageTest {
         )
 
         assertFalse(result.success)
-        assertTrue(snackbarMessages.single().contains("超过最大 16 MiB 限制"))
-        assertTrue(snackbarMessages.single().contains("too-large.png"))
+        val failureMessage = snackbarMessages.single()
+        assertTrue(failureMessage.contains(sourceFile.name))
+        val limitMiB = ImageHandlingLimits.USER_UPLOAD_MAX_BYTES / (1024L * 1024L)
+        assertTrue(
+            failureMessage.contains("$limitMiB MiB"),
+        )
     }
 
     @Test

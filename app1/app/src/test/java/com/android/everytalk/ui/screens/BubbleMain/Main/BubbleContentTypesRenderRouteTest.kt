@@ -24,7 +24,11 @@ class BubbleContentTypesRenderRouteTest {
         val source = bubbleContentTypesSource()
 
         assertTrue(source.contains("USER_BUBBLE_TEXT_OPTICAL_OFFSET = (-8).dp"))
-        assertTrue(source.contains("USER_BUBBLE_TEXT_OPTICAL_OFFSET\n"))
+        assertTrue(
+            source.lineSequence()
+                .map(String::trim)
+                .any { it == "USER_BUBBLE_TEXT_OPTICAL_OFFSET" },
+        )
     }
 
     @Test

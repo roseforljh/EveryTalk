@@ -10,7 +10,9 @@ import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.android.everytalk.R
 import com.android.everytalk.ui.components.streaming.PreparedMessage
 import com.mikepenz.markdown.compose.Markdown
 import com.mikepenz.markdown.compose.components.markdownComponents
@@ -78,6 +80,8 @@ class MarkdownLinkLogoLayoutTest {
             host = "x.com",
             faviconUrl = "https://www.google.com/s2/favicons?domain=x.com&sz=64",
         )
+        val logoDescription = ApplicationProvider.getApplicationContext<Application>()
+            .getString(R.string.link_logo, request.host)
         val logoFreeAnnotator = createPreparedMessageMarkdownAnnotator(
             preparedMessage = PreparedMessage(
                 markdown = content,
@@ -144,7 +148,7 @@ class MarkdownLinkLogoLayoutTest {
         composeRule.waitForIdle()
 
         val logoNode = composeRule
-            .onNodeWithContentDescription("链接 Logo：x.com")
+            .onNodeWithContentDescription(logoDescription)
             .fetchSemanticsNode("")
         val linkNode = composeRule
             .onNodeWithText(content, substring = true)

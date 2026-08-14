@@ -354,7 +354,7 @@ class MarkdownEngineOwnershipTest {
         assertTrue(adapter.contains("currentImageClickCallback.value"))
         assertTrue(adapter.contains(".markdownImageClick(model.content, onImageClick)"))
         assertTrue(adapter.contains("MarkdownImageLoading("))
-        assertTrue(adapter.contains("图片加载失败"))
+        assertTrue(adapter.contains("stringResource(R.string.image_load_failed)"))
         assertFalse(adapter.contains("headingStyle("))
         assertFalse(adapter.contains("FontStyle.Italic"))
         assertFalse(adapter.contains("image = {"))
