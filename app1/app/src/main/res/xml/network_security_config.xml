@@ -8,8 +8,8 @@
 
     <!-- Private Preview 只监听手机本机回环地址，不会暴露到局域网。 -->
     <domain-config cleartextTrafficPermitted="true">
-        <domain>127.0.0.1</domain>
-        <domain>localhost</domain>
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
     </domain-config>
     
     <!-- 证书固定配置 - 针对官方后端API -->
