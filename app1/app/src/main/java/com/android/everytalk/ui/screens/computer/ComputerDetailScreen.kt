@@ -52,7 +52,6 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.draw.shadow
@@ -97,6 +96,7 @@ import com.android.everytalk.ui.components.floatingEdgeGradient
 import com.android.everytalk.ui.components.EveryTalkTimedLoadingStatus
 import com.android.everytalk.ui.components.dialog.AppDialogShape
 import com.android.everytalk.ui.components.dialog.AppDialogButtonShape
+import com.android.everytalk.ui.components.dialog.AppDialogActionContent
 import com.android.everytalk.ui.components.dialog.appDialogBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
@@ -1227,18 +1227,11 @@ private fun ComputerContainerRepairDialog(
                 modifier = Modifier.height(48.dp),
                 shape = AppDialogButtonShape,
             ) {
-                Box(contentAlignment = Alignment.Center) {
-                    Text(
-                        text = stringResource(R.string.computer_action_repair),
-                        modifier = Modifier.alpha(if (isBusy) 0f else 1f),
-                    )
-                    if (isBusy) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(18.dp),
-                            strokeWidth = 2.dp,
-                        )
-                    }
-                }
+                AppDialogActionContent(
+                    label = stringResource(R.string.computer_action_repair),
+                    isLoading = isBusy,
+                    loadingContentDescription = stringResource(R.string.computer_action_working),
+                )
             }
         },
         dismissButton = {
@@ -1285,7 +1278,11 @@ private fun ComputerFullApprovalWarningDialog(
                     contentColor = appDialogContainerColor(),
                 ),
             ) {
-                Text(stringResource(R.string.computer_permission_full_warning_confirm))
+                AppDialogActionContent(
+                    label = stringResource(R.string.computer_permission_full_warning_confirm),
+                    isLoading = isBusy,
+                    loadingContentDescription = stringResource(R.string.computer_action_working),
+                )
             }
         },
         dismissButton = {
@@ -1343,7 +1340,11 @@ private fun ComputerReplacementHostKeyDialog(
                 modifier = Modifier.height(48.dp),
                 shape = AppDialogButtonShape,
             ) {
-                Text(stringResource(R.string.computer_host_key_accept_new))
+                AppDialogActionContent(
+                    label = stringResource(R.string.computer_host_key_accept_new),
+                    isLoading = isBusy,
+                    loadingContentDescription = stringResource(R.string.computer_action_working),
+                )
             }
         },
         dismissButton = {
@@ -1440,7 +1441,11 @@ private fun ComputerDeleteDialog(
                 modifier = Modifier.height(48.dp),
                 shape = AppDialogButtonShape,
             ) {
-                Text(stringResource(R.string.computer_action_delete))
+                AppDialogActionContent(
+                    label = stringResource(R.string.computer_action_delete),
+                    isLoading = isBusy,
+                    loadingContentDescription = stringResource(R.string.computer_action_working),
+                )
             }
         },
         dismissButton = {

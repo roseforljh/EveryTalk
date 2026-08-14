@@ -192,14 +192,43 @@ class ComputerUiAlignmentRulesTest {
             .readText(Charsets.UTF_8)
             .substringAfter("private fun ComputerContainerRepairDialog(")
             .substringBefore("private fun ComputerReplacementHostKeyDialog(")
+        val actionContentSource = sourceFile("ui/components/dialog/AppDialogStyle.kt")
+            .readText(Charsets.UTF_8)
 
         assertTrue("修复过程必须显示真实阶段", dialogSource.contains("setupStage.labelRes()"))
         assertTrue("修复过程必须显示阶段说明", dialogSource.contains("setupStage.detailRes()"))
         assertTrue("修复过程必须显示加载时间", dialogSource.contains("EveryTalkTimedLoadingStatus("))
         assertTrue("修复过程上方不显示加载圈", dialogSource.contains("showIndicator = false"))
-        assertTrue("按钮文字必须保留布局宽度", dialogSource.contains(".alpha(if (isBusy) 0f else 1f)"))
-        assertTrue("修复按钮忙碌时显示加载圈", dialogSource.contains("CircularProgressIndicator("))
+        assertTrue("修复按钮必须复用统一加载内容", dialogSource.contains("AppDialogActionContent("))
+        assertTrue("按钮文字必须保留布局宽度", actionContentSource.contains(".alpha(if (isLoading) 0f else 1f)"))
+        assertTrue("异步按钮忙碌时显示统一加载圈", actionContentSource.contains("EveryTalkLoadingIndicator("))
         assertFalse("修复按钮不得显示弹跳文案", dialogSource.contains("ComputerWorkingLabel"))
+    }
+
+    @Test
+    fun `服务器异步确认按钮统一使用固定尺寸加载内容`() {
+        val detailSource = sourceFile("ui/screens/computer/ComputerDetailScreen.kt")
+            .readText(Charsets.UTF_8)
+        val workspaceSource = sourceFile("ui/screens/computer/ComputerWorkspaceUi.kt")
+            .readText(Charsets.UTF_8)
+        val dialogSections = listOf(
+            detailSource.substringAfter("private fun ComputerContainerRepairDialog(")
+                .substringBefore("private fun ComputerFullApprovalWarningDialog("),
+            detailSource.substringAfter("private fun ComputerFullApprovalWarningDialog(")
+                .substringBefore("private fun ComputerReplacementHostKeyDialog("),
+            detailSource.substringAfter("private fun ComputerReplacementHostKeyDialog(")
+                .substringBefore("private fun ComputerDeleteDialog("),
+            detailSource.substringAfter("private fun ComputerDeleteDialog("),
+            workspaceSource.substringAfter("private fun ComputerSecretEditorDialog(")
+                .substringBefore("private fun ComputerWorkspaceDeleteDialog("),
+            workspaceSource.substringAfter("private fun ComputerWorkspaceDeleteDialog(")
+                .substringBefore("internal fun ComputerDetailValue("),
+        )
+
+        dialogSections.forEach { dialogSource ->
+            assertTrue(dialogSource.contains("AppDialogActionContent("))
+            assertTrue(dialogSource.contains("isLoading = isBusy"))
+        }
     }
 
     @Test

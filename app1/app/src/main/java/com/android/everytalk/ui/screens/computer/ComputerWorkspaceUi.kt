@@ -62,6 +62,7 @@ import com.android.everytalk.statecontroller.saveComputerWorkspaceSecret
 import com.android.everytalk.statecontroller.stopComputerPreview
 import com.android.everytalk.ui.components.dialog.AppDialogShape
 import com.android.everytalk.ui.components.dialog.AppDialogButtonShape
+import com.android.everytalk.ui.components.dialog.AppDialogActionContent
 import com.android.everytalk.ui.components.dialog.AppDialogTextFieldShape
 import com.android.everytalk.ui.components.dialog.appDialogBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogContainerColor
@@ -427,7 +428,11 @@ private fun ComputerSecretEditorDialog(
                 modifier = Modifier.height(48.dp),
                 shape = AppDialogButtonShape,
             ) {
-                Text(stringResource(R.string.action_save))
+                AppDialogActionContent(
+                    label = stringResource(R.string.action_save),
+                    isLoading = isBusy,
+                    loadingContentDescription = stringResource(R.string.computer_action_working),
+                )
             }
         },
         dismissButton = {
@@ -509,7 +514,11 @@ private fun ComputerWorkspaceDeleteDialog(
                 modifier = Modifier.height(48.dp),
                 shape = AppDialogButtonShape,
             ) {
-                Text(stringResource(R.string.computer_workspace_delete))
+                AppDialogActionContent(
+                    label = stringResource(R.string.computer_workspace_delete),
+                    isLoading = isBusy,
+                    loadingContentDescription = stringResource(R.string.computer_action_working),
+                )
             }
         },
         dismissButton = {
