@@ -1,7 +1,7 @@
 # EveryTalk Android Pi Agent 架构改造计划
 
-> 状态：计划已完整实施，定向自动验证通过
-> 记录日期：2026-08-13
+> 状态：核心实现已落地，定向自动验证通过，待真实 VPS 与真机验收
+> 记录日期：2026-08-15
 > 适用工程：app1/
 > 参考项目：earendil-works/pi
 > 参考提交：6f707eb36064e82af9c1320a7634f4dfad21049b
@@ -35,7 +35,7 @@ EveryTalk 适合吸收 Pi 的架构语义，并使用 Kotlin、Coroutine、Flow 
 
 1. 普通聊天、MCP、联网搜索、VPS Agent 全部进入同一个 Kotlin `AgentLoop`。
 2. 四种协议只通过 `streamSingleTurn` 执行单次模型请求，工具循环和上下文推进由 AgentLoop 负责。
-3. Room 18 已保存 Run、Entry、Request、Usage、ContextSnapshot、Compaction、Provider continuation 和非敏感恢复快照。
+3. Room 19 已保存 Run、Entry、Request、Usage、ContextSnapshot、Compaction、Provider continuation、非敏感恢复快照和 Computer 远端执行字段。
 4. 上下文按完整工具原子组重建，压缩保留近期原文，支持超长单轮切分。
 5. 文本发送前的旧 `AutoContextCompression` 已退出正式路径，避免旧链与 AgentLoop 双重压缩；图片路径只保留窗口裁剪。
 6. OpenAI Responses、Anthropic、Gemini 和 OpenAI 兼容推理内容的当前 Run 连续状态已接入。
@@ -49,7 +49,7 @@ EveryTalk 适合吸收 Pi 的架构语义，并使用 Kotlin、Coroutine、Flow 
 
 本轮补齐：
 
-1. Room 18 保存不含 API Key 的恢复快照，`WAITING_APPROVAL` 跨进程保留。
+1. Room 19 保存不含 API Key 的恢复快照，`WAITING_APPROVAL` 和 `WAITING_REMOTE_EXECUTION` 跨进程保留。
 2. 审批请求、决定和剩余 Tool Call 从原 Run 恢复，同一 `approvalRequestId` 只能决策一次。
 3. 多会话审批以 Room 列表保存，界面只投影当前会话对应卡片。
 4. Host 命令、Public Preview 和 UNKNOWN 恢复统一进入持久化审批链。
@@ -68,6 +68,14 @@ EveryTalk 适合吸收 Pi 的架构语义，并使用 Kotlin、Coroutine、Flow 
 17. 同一 Assistant 的剩余 Tool Call 按原顺序续接；已保存结果跳过，未开始调用重新预检，普通工具已开始但结果缺失时写入明确错误并禁止盲目重放。
 18. 多个可恢复 Run 共用文本流并串行续接；任意前台文本 Run 收尾后自动扫描下一个。
 19. AgentEntry 追加由单一锁串行分配 sequence，避免并发状态事件占用同一序号。
+
+远端 Computer 执行层同步结果：
+
+20. `ComputerExecution` 保存 `target`、`completionMode`、`remoteProcessId`、`remoteStatePath`、`remoteStatus`、`remoteExitCode` 和 `lastObservedAt`，通过 Room 18→19 迁移保留旧记录。
+21. 前台和后台 `exec` 都使用固定 Execution ID 启动 VPS 侧受管进程；Android 断线或重启后只查询、读取和取消原 Execution，禁止重复发出未知状态的写操作。
+22. Runtime V2 使用严格的 `execution_id`、`process_id`、`request_hash`、`target` 身份校验；明确的 `MISSING` 与协议损坏分别进入不同恢复分支。
+23. `ComputerExecutionReconciler` 只负责 VPS 状态对账，不直接创建 AgentEntry；终态结果由原 AgentRun 继续补写 Tool Result，活动后台任务以精简状态快照注入下一轮模型上下文。
+24. Wrapper 和 Container Helper 的状态目录、普通文件、符号链接、所有者、容器 UID 和日志读取范围均有固定校验；资源额度仍由用户自行承担。
 
 ### 1.1 与现有计划的关系
 
@@ -257,9 +265,11 @@ flowchart TD
              ├─ 拒绝 → 写入拒绝 Tool Result
              └─ 通过
                     ↓
-              EXECUTING_TOOL
-                    ↓
-              PERSISTING_RESULT
+    EXECUTING_TOOL
+          ├─ Computer 已交给 VPS → WAITING_REMOTE_EXECUTION
+          └─ 本地工具直接完成
+                     ↓
+               PERSISTING_RESULT
                     ↓
               PREPARING_CONTEXT
 
@@ -1193,7 +1203,7 @@ AgentEntry.Assistant、ToolResult、Approval 和 Status 按 sequence 投影到 e
 
 ### 阶段 2：建立中立 Agent 模型和持久化
 
-当前状态：已完成主链与 Room 18 持久化；界面继续兼容原 executionTrace，并在 Run 恢复时从 AgentEntry 重建顺序。
+当前状态：已完成主链与 Room 19 持久化；界面继续兼容原 executionTrace，并在 Run 恢复时从 AgentEntry 重建顺序。
 
 实施：
 
@@ -1367,14 +1377,16 @@ AgentEntry.Assistant、ToolResult、Approval 和 Status 按 sequence 投影到 e
 
 ### 18.3 Room Migration Test
 
-从版本 16 依次升级到 17、18，检查：
+从版本 16 依次升级到 17、18、19，检查：
 
 * 原会话和消息数量不变。
 * 新表与索引完整。
 * 旧 tokenUsage 仍可读取。
 * 新运行能写入七类实体。
 * 删除会话后相关 Agent 数据级联清理。
-* 17→18 保留旧 Agent 事实，并增加恢复快照和协议身份字段。
+* 17→18 保留旧 Agent 事实，并增加恢复快照和 Provider 协议身份字段。
+* 18→19 保留旧 ComputerExecution，并增加七个可空的远端执行字段。
+* Runtime V2 的成功、失败、取消、MISSING、协议损坏和网络不可用分支不互相误判。
 
 ### 18.4 已知日志回归
 

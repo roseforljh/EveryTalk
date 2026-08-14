@@ -4,15 +4,17 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 状态 | 已确认，实施中 |
+| 状态 | 核心实现已落地，自动验证通过，待真机与真实 VPS 验收 |
 | 版本 | v2.3 |
-| 日期 | 2026-08-12 |
+| 日期 | 2026-08-15 |
 | 目标仓库 | EveryTalk |
 | Android 工程 | `app1/` |
 | 核心架构 | Android 直接通过 SSH 连接用户 VPS |
 | 替代文档 | 本文完整替代 v1.1 独立控制面方案 |
 
 ### 当前实施状态
+
+远端长任务、断线恢复和 AgentRun 续接的细节以 [Agent 有状态执行架构改造计划.md](./Agent%20有状态执行架构改造计划.md) 为准。
 
 Android 本地直连主链路已经进入完整功能收尾阶段。当前代码已经包含多服务器管理、Host Key 固定、Keystore 本地凭据、统一 SSH 与 Container 混合模式、会话级选服、自动 Workspace、七个 Tool、服务器详情、Secret、Private Preview、Public Preview、删除与本地审计。
 
@@ -23,11 +25,11 @@ v2.3 已同步以下实现：
 3. 明确只读的 Host 命令自动执行。写入、提权、Shell 组合、敏感读取和未知命令会在输入框上方显示单次确认卡。
 4. Host 确认绑定不可变请求与 `requestId`。确认前完成完整参数校验，批准后只执行卡片展示的原命令和工作目录。
 5. Host 禁止隐藏环境变量、Workspace Secret、stdin、`background=true` 和 `as_root=true`。需要提权时必须在完整命令中显式写出 `sudo`。
-6. Runtime Wrapper 与 Container Helper 升级为 v5。命令、cwd、Container 环境变量和 stdin 通过同一个 SSH exec Channel 传输，Wrapper 按内容版本持久化。
+6. Runtime Wrapper 与 Container Helper 升级为 v6。命令、cwd、Container 环境变量和 stdin 通过同一个 SSH exec Channel 传输，前台与后台 Execution 都按内容版本持久化状态。
 7. 模型首轮思考期间并行预连接 SSH 并校验 Wrapper，避免每条命令重复握手、SFTP 建目录和多文件写入。
 8. `open_port.target` 同样支持 `container | host`，既能预览 Agent 创建的服务，也能预览 VPS 已有服务。
 9. 旧 Direct 记录只迁移本地路由字段并进入“需要配置”。迁移不连接 VPS，不删除凭据、Workspace 文件或服务。
-10. Room 升级至 15，Preview 持久化实际目标，旧 Direct Preview 迁移为 Host 目标。
+10. Room 已升级至 19，Preview 持久化实际目标，ComputerExecution 增加远端状态、进程和退出码字段，旧 Direct Preview 迁移为 Host 目标。
 
 以下项目仍属于发布验收，当前文档不把它们标记为完成：
 
@@ -294,7 +296,7 @@ ComputerConnection
 
 通知显示“Agent 正在使用服务器”，提供停止连接动作。全部活动结束后自动停止。只在命令执行和流式传输期间持有必要的局部 WakeLock。
 
-系统强制停止 App 后，SSH、PTY 和本地端口转发立即失效。只有通过 `exec(background=true)` 启动的后台任务、已经独立运行的服务和正在运行的 Container 可以继续。结果尚未确认的前台命令进入 `UNKNOWN`，禁止自动重放；原 PTY 返回 `TERMINAL_LOST`，Private Preview 进入 `STOPPED`。后台任务的 PID、日志和状态文件保存在 VPS，App 下次启动后重新连接并对账。
+系统强制停止 App 后，SSH、PTY 和本地端口转发立即失效。只有通过 `exec(background=true)` 启动的后台任务、已经独立运行的服务和正在运行的 Container 可以继续。结果尚未确认的前台命令由 Runtime V2 继续在 VPS 保存并执行。App 下次启动先按 Execution ID 对账，只有状态无法核验时才进入 `UNKNOWN`，禁止自动重放；原 PTY 返回 `TERMINAL_LOST`，Private Preview 进入 `STOPPED`。后台任务的 PID、日志和状态文件保存在 VPS。
 
 PTY 和 Private Preview 在新 Channel 尚未启动时允许丢弃旧 Transport 并安全重连一次。Channel 已启动后禁止自动重放。端口转发创建成功后计入连接的活跃 Channel，网络切换、Disconnect 和前台通知停止动作都会关闭旧转发。
 
@@ -479,7 +481,7 @@ QUEUED → STARTING → RUNNING
                         └── UNKNOWN
 ```
 
-远端命令已开始且手机在取得结果前断线时进入 `UNKNOWN`。App 禁止自动重复该命令。
+本地 Tool 状态与 VPS 远端状态分开保存。`background=true` 可以表现为本地 Tool `SUCCEEDED`、远端进程 `RUNNING`。远端命令已开始且手机在取得结果前断线时，App 先查询 VPS；只有状态文件损坏、归属不可信或远端不可核验时才进入 `UNKNOWN`，禁止自动重复该命令。
 
 ## 13. Probe 与统一混合运行模式
 
@@ -508,7 +510,7 @@ App 通过一次性 sudo 会话安装 root-owned helper：
 /usr/local/libexec/everytalk-containerctl
 ```
 
-helper v5 只允许 Probe、网络、镜像、Workspace Container、容器执行、后台任务停止、地址解析与 Public Preview 固定子命令。每个子命令强制准确参数数量，ID、Label、规范路径、端口、协议和镜像全部严格解析。所有 Container 操作先校验 EveryTalk Label 与 Workspace 归属，禁止接收任意 Docker 参数。安装完成后的 helper 拒绝再次执行安装入口。sudoers 只允许执行这个 root-owned 且普通用户不可写的 helper。helper 不监听端口，不保留常驻控制进程。
+helper v6 只允许 Probe、网络、镜像、Workspace Container、容器执行、Execution 状态/结果/取消、后台任务停止、地址解析与 Public Preview 固定子命令。每个子命令强制准确参数数量，ID、Label、规范路径、端口、协议和镜像全部严格解析。所有 Container 操作先校验 EveryTalk Label 与 Workspace 归属，Execution 状态还会校验固定目录、普通文件和允许的文件所有者，禁止接收任意 Docker 参数。安装完成后的 helper 拒绝再次执行安装入口。sudoers 只允许执行这个 root-owned 且普通用户不可写的 helper。helper 不监听端口，不保留常驻控制进程。
 
 ### 13.4 Container 安全边界
 
@@ -827,7 +829,7 @@ Agent 开启后只显示 `[终端图标 Agent ×]`。标签禁止显示服务器
 
 1. Room 恢复服务器、会话选择和 Workspace 映射。
 2. Keystore 恢复凭据解密能力。
-3. `RUNNING` 且无法从远端状态文件确认的 Execution 变为 `UNKNOWN`。
+3. `STARTING`、`RUNNING` 的 Execution 先按固定 Execution ID 查询 VPS；仍在运行则继续等待，已完成则读取结果，状态文件损坏或归属不可信时才变为 `UNKNOWN`。
 4. PTY 变为 `TERMINAL_LOST`。
 5. Private Preview 变为 `STOPPED`，用户打开时重建转发。
 6. Container 和远端后台进程按实际状态恢复。
