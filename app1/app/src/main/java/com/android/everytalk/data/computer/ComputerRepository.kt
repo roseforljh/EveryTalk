@@ -5,6 +5,7 @@ import com.android.everytalk.service.ComputerConnectionServiceController
 import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.data.database.daos.ComputerDao
 import com.android.everytalk.data.database.entities.ComputerAuditEventEntity
+import com.android.everytalk.data.database.entities.ComputerExecutionEntity
 import com.android.everytalk.data.database.entities.toEntity
 import com.android.everytalk.data.database.entities.toModel
 import kotlinx.coroutines.CancellationException
@@ -16,6 +17,17 @@ import kotlinx.serialization.json.Json
 import java.io.Closeable
 import java.util.Base64
 import java.util.UUID
+
+/**
+ * 恢复查询允许 READY 以及曾经配置成功但暂时断线的服务器。
+ * CONFIGURATION_REQUIRED、HOST_KEY_CHANGED 等状态必须先由用户修复，不能让后台
+ * 对账绕过配置流程或重新接受一把未知 Host Key。
+ */
+internal fun ComputerStatus.canAttemptExecutionRecovery(): Boolean = this in setOf(
+    ComputerStatus.READY,
+    ComputerStatus.OFFLINE,
+    ComputerStatus.DISCONNECTED,
+)
 
 /**
  * Computer 功能的本地统一入口。Room 保存非敏感状态，CredentialStore 保存加密凭据，SSH 直连用户 VPS。
@@ -32,6 +44,13 @@ class ComputerRepository(
     private val probe = ComputerProbe()
     private val dedicatedKeyManager = ComputerDedicatedKeyManager(sshClient)
     private val provisioner = ComputerProvisioner(applicationContext)
+    private val runtimeEnvelope = ComputerRuntimeEnvelope(applicationContext)
+    private val executionReconciler by lazy {
+        ComputerExecutionReconciler(
+            dao = dao,
+            gateway = ComputerRemoteExecutionGateway { execution -> queryRemoteExecution(execution) },
+        )
+    }
     private val connectionStopListener = ComputerConnectionServiceController.addStopListener(connectionPool::close)
 
     fun observeComputers(): Flow<List<Computer>> = dao.observeComputers().map { entities ->
@@ -549,11 +568,210 @@ class ComputerRepository(
 
     suspend fun recoverLocalState() {
         migrateLegacyDirectRecords()
-        dao.markInterruptedExecutionsUnknown()
+        // 普通工具无法从 VPS 续接；exec 保留原状态交给 ExecutionReconciler 查询。
+        dao.markInterruptedNonExecExecutionsUnknown()
         dao.markPrivatePreviewsStopped()
         dao.recoverInterruptedComputerOperations(COMPUTER_BOOTSTRAP_VERSION)
         dao.markOutdatedContainerConfiguration(COMPUTER_BOOTSTRAP_VERSION)
         connectionPool.closeIdle(maxIdleMillis = 0)
+    }
+
+    /** 供应用恢复入口再次刷新活动远端任务，查询失败只保留上次状态。 */
+    suspend fun reconcileRemoteExecutions(
+        conversationIds: Set<String> = emptySet(),
+    ): List<ComputerExecutionReconciliation> =
+        executionReconciler.reconcileForegroundActiveForConversations(conversationIds)
+
+    /** 读取当前 Workspace 的活动任务快照，供下一轮模型请求使用。 */
+    suspend fun getComputerSessionState(workspaceId: String): ComputerSessionState? {
+        if (dao.getWorkspaceById(workspaceId) == null) return null
+        val beforeRefresh = dao.getRemoteExecutionsForWorkspace(workspaceId)
+        if (beforeRefresh.any(ComputerExecutionEntity::shouldReconcileRemote)) {
+            // 只有当前 Workspace 确实有活动任务时才建立 SSH，普通模型轮次不增加连接开销。
+            executionReconciler.reconcileActiveForWorkspace(workspaceId)
+        }
+        val executions = dao.getRemoteExecutionsForWorkspace(workspaceId)
+        val active = executions.filter { execution ->
+            execution.shouldReconcileRemote() ||
+                execution.remoteStatus == ComputerRemoteStatus.UNKNOWN.name
+        }
+        val now = System.currentTimeMillis()
+        val tasks = active.take(8).map { execution ->
+            ComputerSessionTask(
+                executionId = execution.id,
+                target = execution.target?.let { runCatching { ComputerExecTarget.valueOf(it) }.getOrNull() }
+                    ?: ComputerExecTarget.CONTAINER,
+                status = execution.remoteStatus?.let {
+                    runCatching { ComputerRemoteStatus.valueOf(it) }.getOrNull()
+                } ?: ComputerRemoteStatus.UNKNOWN,
+                elapsedSeconds = ((now - (execution.startedAt ?: now)) / 1_000L).coerceAtLeast(0L),
+            )
+        }
+        return ComputerSessionState(
+            workspaceId = workspaceId,
+            activeTasks = tasks,
+            totalActiveTasks = active.size,
+        )
+    }
+
+    /**
+     * 取消一个仍在 VPS 上运行的受管 Execution。
+     *
+     * 停止按钮先取消远端进程，再由上层取消模型协程。这样 Android 协程结束后，VPS
+     * 仍会收到一次带身份校验的 cancel 请求，不会留下“本地已停、远端继续跑”的假状态。
+     */
+    suspend fun cancelRemoteExecution(executionId: String): ComputerRemoteExecutionSnapshot? {
+        val execution = dao.getExecutionById(executionId) ?: return null
+        val computer = dao.getComputer(execution.computerId)?.toModel(json) ?: return null
+        val workspace = dao.getWorkspaceById(execution.workspaceId)?.toModel() ?: return null
+        if (!computer.status.canAttemptExecutionRecovery()) {
+            throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "当前服务器状态不允许取消远端任务")
+        }
+        val target = execution.target?.let { runCatching { ComputerExecTarget.valueOf(it) }.getOrNull() }
+            ?: ComputerExecTarget.CONTAINER
+        val snapshot = withConnection(computer.id, requireReady = false) { connection, currentComputer ->
+            runtimeEnvelope.cancelExecution(
+                connection = connection,
+                computer = currentComputer,
+                workspace = workspace,
+                executionId = execution.id,
+                target = target,
+                expectedProcessId = execution.remoteProcessId,
+                expectedRequestHash = execution.requestHash,
+            )
+        }
+        markComputerReadyAfterRecovery(computer)
+        val terminal = snapshot.status in setOf(
+            ComputerRemoteStatus.SUCCEEDED,
+            ComputerRemoteStatus.FAILED,
+            ComputerRemoteStatus.TIMED_OUT,
+            ComputerRemoteStatus.CANCELLED,
+        )
+        val remoteStillActive = snapshot.status in setOf(
+            ComputerRemoteStatus.STARTING,
+            ComputerRemoteStatus.RUNNING,
+        )
+        val backgroundHandle = execution.completionMode == ComputerExecutionCompletionMode.RETURN_HANDLE.name
+        val localStatus = when {
+            backgroundHandle && execution.status in setOf(
+                ComputerExecutionStatus.SUCCEEDED.name,
+                ComputerExecutionStatus.FAILED.name,
+                ComputerExecutionStatus.TIMED_OUT.name,
+                ComputerExecutionStatus.CANCELLED.name,
+            ) -> null
+            snapshot.status == ComputerRemoteStatus.SUCCEEDED -> ComputerExecutionStatus.SUCCEEDED.name
+            snapshot.status == ComputerRemoteStatus.FAILED -> ComputerExecutionStatus.FAILED.name
+            snapshot.status == ComputerRemoteStatus.TIMED_OUT -> ComputerExecutionStatus.TIMED_OUT.name
+            snapshot.status == ComputerRemoteStatus.CANCELLED -> ComputerExecutionStatus.CANCELLED.name
+            remoteStillActive && execution.completionMode != ComputerExecutionCompletionMode.RETURN_HANDLE.name ->
+                ComputerExecutionStatus.CANCELLED.name
+            else -> ComputerExecutionStatus.UNKNOWN.name
+        }
+        dao.updateRemoteExecutionObservation(
+            executionId = execution.id,
+            target = target.name,
+            remoteProcessId = snapshot.processId,
+            remoteStatus = snapshot.status.name,
+            remoteExitCode = snapshot.exitCode,
+            observedAt = System.currentTimeMillis(),
+            localStatus = localStatus,
+            finishedAt = if (terminal) System.currentTimeMillis() else null,
+            localExitCode = if (terminal) snapshot.exitCode else null,
+            errorCode = when (snapshot.status) {
+                ComputerRemoteStatus.MISSING -> ComputerErrorCodes.EXECUTION_NOT_FOUND
+                ComputerRemoteStatus.UNKNOWN,
+                ComputerRemoteStatus.STOPPED,
+                -> ComputerErrorCodes.EXECUTION_UNKNOWN
+                ComputerRemoteStatus.STARTING,
+                ComputerRemoteStatus.RUNNING,
+                -> ComputerErrorCodes.EXECUTION_CANCEL_REQUESTED
+                else -> null
+            },
+        )
+        return snapshot
+    }
+
+    private suspend fun queryRemoteExecution(
+        execution: ComputerExecutionEntity,
+    ): ComputerRemoteExecutionQuery {
+        val computer = dao.getComputer(execution.computerId)?.toModel(json)
+            ?: return ComputerRemoteExecutionQuery.Missing
+        val workspace = dao.getWorkspaceById(execution.workspaceId)?.toModel()
+            ?: return ComputerRemoteExecutionQuery.Missing
+        if (!computer.status.canAttemptExecutionRecovery()) {
+            return ComputerRemoteExecutionQuery.Unavailable("当前服务器尚未处于可恢复连接状态")
+        }
+        val target = execution.target?.let { runCatching { ComputerExecTarget.valueOf(it) }.getOrNull() }
+            ?: ComputerExecTarget.CONTAINER
+        return try {
+            // 恢复查询允许 OFFLINE/DISCONNECTED 服务器受控重连；真正连接失败由 Unavailable 保留原状态。
+            val snapshot = withConnection(computer.id, requireReady = false) { connection, _ ->
+                runtimeEnvelope.queryExecutionStatus(
+                    connection = connection,
+                    computer = computer,
+                    workspace = workspace,
+                    executionId = execution.id,
+                    target = target,
+                    expectedProcessId = execution.remoteProcessId,
+                    expectedRequestHash = execution.requestHash,
+                )
+            }
+            markComputerReadyAfterRecovery(computer)
+            if (snapshot.status == ComputerRemoteStatus.MISSING) {
+                ComputerRemoteExecutionQuery.Missing
+            } else {
+                ComputerRemoteExecutionQuery.State(
+                    buildRemoteStatePayload(target, snapshot),
+                )
+            }
+        } catch (error: ComputerRemoteExecutionProtocolException) {
+            // 协议响应已到达但格式不可信，交给严格解析器写 UNKNOWN，不能伪装成网络暂时不可用。
+            ComputerRemoteExecutionQuery.State(error.payload)
+        } catch (error: ComputerException) {
+            if (error.code == ComputerErrorCodes.EXECUTION_NOT_FOUND) {
+                ComputerRemoteExecutionQuery.Missing
+            } else if (error.code == ComputerErrorCodes.EXECUTION_REQUEST_HASH_CONFLICT) {
+                ComputerRemoteExecutionQuery.Invalid(
+                    message = error.message,
+                    code = ComputerErrorCodes.EXECUTION_REQUEST_HASH_CONFLICT,
+                )
+            } else {
+                ComputerRemoteExecutionQuery.Unavailable(error.message)
+            }
+        } catch (error: Throwable) {
+            if (error is CancellationException) throw error
+            ComputerRemoteExecutionQuery.Unavailable(error.message)
+        }
+    }
+
+    /** RuntimeEnvelope 已完成严格解析，这里补上对账器需要的原始身份字段。 */
+    private fun buildRemoteStatePayload(
+        target: ComputerExecTarget,
+        snapshot: ComputerRemoteExecutionSnapshot,
+    ): String = buildString {
+        appendLine("protocol=2")
+        appendLine("execution_id=${snapshot.executionId}")
+        appendLine("process_id=${snapshot.processId}")
+        // 这里必须保留 VPS 实际返回的身份字段，让严格解析器能够发现篡改或串任务，
+        // 不能用本地值覆盖远端值后再进行“自证”。
+        appendLine("request_hash=${snapshot.requestHash.orEmpty()}")
+        appendLine("target=${snapshot.target?.name ?: target.name}")
+        appendLine("pid=${snapshot.pid ?: 0}")
+        appendLine("start_ticks=${snapshot.startTicks ?: 0}")
+        appendLine("status=${snapshot.status.name}")
+        appendLine("exit_code=${snapshot.exitCode ?: ""}")
+        val startedAt = snapshot.startedAt ?: 0L
+        appendLine("started_at=$startedAt")
+        appendLine("updated_at=${maxOf(startedAt, snapshot.updatedAt ?: startedAt)}")
+        appendLine("stdout_bytes=${snapshot.stdoutBytes}")
+        appendLine("stderr_bytes=${snapshot.stderrBytes}")
+    }
+
+    /** 状态查询已经证明 SSH、Helper 和固定 Runtime 可用时，解除网络断开造成的 READY 锁定。 */
+    private suspend fun markComputerReadyAfterRecovery(computer: Computer) {
+        if (computer.status == ComputerStatus.OFFLINE || computer.status == ComputerStatus.DISCONNECTED) {
+            dao.updateComputerStatus(computer.id, ComputerStatus.READY.name, null)
+        }
     }
 
     /**

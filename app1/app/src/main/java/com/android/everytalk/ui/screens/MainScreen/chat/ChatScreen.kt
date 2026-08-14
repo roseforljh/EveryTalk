@@ -110,6 +110,7 @@ fun ChatScreen(
     }
 
     val isApiCalling by viewModel.isTextApiCalling.collectAsState()
+    val isRemoteCancellationPending by viewModel.isRemoteCancellationPending.collectAsState()
     val currentStreamingAiMessageId by viewModel.currentTextStreamingAiMessageId.collectAsState()
     val isWebSearchEnabled by viewModel.isWebSearchEnabled.collectAsState()
     val isCodeExecutionEnabled by viewModel.isCodeExecutionEnabled.collectAsState()
@@ -661,6 +662,7 @@ fun ChatScreen(
                 onRemoveMediaItemAtIndex = { viewModel.removeMediaItemAtIndex(it) },
                 onClearMediaItems = { viewModel.clearMediaItems() },
                 isApiCalling = isApiCalling,
+                isRemoteCancellationPending = isRemoteCancellationPending,
                 isWebSearchEnabled = isWebSearchEnabled,
                 isWebSearchAvailable = canUseWebSearch,
                 onToggleWebSearch = {

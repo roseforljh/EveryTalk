@@ -64,7 +64,7 @@ import com.android.everytalk.data.database.entities.WorkspaceSecretMetadataEntit
         AgentCompactionEntryEntity::class,
         ProviderContinuationStateEntity::class,
     ],
-    version = 18,
+    version = 19,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -108,6 +108,7 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_15_16,
                     MIGRATION_16_17,
                     MIGRATION_17_18,
+                    MIGRATION_18_19,
                 )
                 .build()
                 INSTANCE = instance
@@ -584,6 +585,22 @@ abstract class AppDatabase : RoomDatabase() {
                     "CREATE UNIQUE INDEX IF NOT EXISTS index_provider_continuation_states_sessionId_configId_protocol_provider_endpoint_model " +
                         "ON provider_continuation_states(sessionId, configId, protocol, provider, endpoint, model)",
                 )
+            }
+        }
+
+        /**
+         * 为 ComputerExecution 增加远端执行事实。
+         * 所有列都允许为空，旧执行记录保持原有 Tool 状态，不在迁移阶段连接 VPS 或扫描旧目录。
+         */
+        val MIGRATION_18_19 = object : Migration(18, 19) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE computer_executions ADD COLUMN target TEXT")
+                db.execSQL("ALTER TABLE computer_executions ADD COLUMN completionMode TEXT")
+                db.execSQL("ALTER TABLE computer_executions ADD COLUMN remoteProcessId TEXT")
+                db.execSQL("ALTER TABLE computer_executions ADD COLUMN remoteStatePath TEXT")
+                db.execSQL("ALTER TABLE computer_executions ADD COLUMN remoteStatus TEXT")
+                db.execSQL("ALTER TABLE computer_executions ADD COLUMN remoteExitCode INTEGER")
+                db.execSQL("ALTER TABLE computer_executions ADD COLUMN lastObservedAt INTEGER")
             }
         }
     }

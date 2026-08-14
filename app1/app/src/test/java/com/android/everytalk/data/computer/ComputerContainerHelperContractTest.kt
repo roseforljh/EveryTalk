@@ -29,6 +29,11 @@ class ComputerContainerHelperContractTest {
             "container-address" to 1,
             "run" to 4,
             "run-background" to 4,
+            "start-execution" to 6,
+            "execution-status" to 3,
+            "execution-result" to 6,
+            "list-executions" to 1,
+            "cancel-execution" to 3,
             "terminal" to 1,
             "open-public" to 4,
             "preview-status" to 1,
@@ -42,6 +47,15 @@ class ComputerContainerHelperContractTest {
         }
         assertTrue(source.contains("Container 归属校验失败"))
         assertTrue(source.contains("Preview 归属校验失败"))
+        assertTrue(source.contains("container_allowed_owner_uids"))
+        assertTrue(source.contains("EVERYTALK_ALLOWED_OWNER_UIDS"))
+        assertTrue(source.contains("docker exec -i -e \"EVERYTALK_ALLOWED_OWNER_UIDS=\$owner_uids\""))
+        assertTrue(source.contains("root_real=\"$(realpath -e -- \"\$root\""))
+        assertTrue(source.contains("execution_real=\"$(realpath -e -- \"\$execution_dir\""))
+        assertTrue(source.contains("execution_owner=\"$(stat -c \"%u\" -- \"\$execution_dir\""))
+        assertTrue(source.contains("workspace_real=\"$(realpath -e -- \"\$workspace\""))
+        assertTrue(source.contains("executions_real=\"$(realpath -e -- \"\$executions\""))
+        assertFalse(source.contains("docker exec \"\$name\" mkdir -p /workspace/.everytalk/executions"))
         assertTrue(source.contains("已安装 helper 禁止重复 install"))
         assertTrue(source.contains("/usr/bin/timeout --signal=TERM"))
         assertFalse(source.contains("docker \$@"))
@@ -55,7 +69,7 @@ class ComputerContainerHelperContractTest {
             .substringAfter("delete_workspace() {")
             .substringBefore("\n}\n\nrequire_root")
 
-        assertTrue(helper.contains("VERSION=\"5\""))
+        assertTrue(helper.contains("VERSION=\"8\""))
         assertTrue(helper.contains("docker exec -i"))
         assertTrue(helper.contains("runtime_target=\"\$RUNTIME_WRAPPER_PATH-\$runtime_hash\""))
         assertTrue(helper.contains("ln -sfn"))
@@ -69,6 +83,17 @@ class ComputerContainerHelperContractTest {
         assertTrue(runtimeWrapper.contains("start_ticks="))
         assertTrue(runtimeWrapper.contains("status=SUCCEEDED"))
         assertTrue(runtimeWrapper.contains("status=FAILED"))
+        assertTrue(runtimeWrapper.contains("state_owner_allowed"))
+        assertTrue(runtimeWrapper.contains("execution_directory_safe"))
+        assertTrue(runtimeWrapper.contains("execution_parent_safe"))
+        assertTrue(runtimeWrapper.contains("if ! execution_parent_safe || ! execution_directory_safe"))
+        assertTrue(runtimeWrapper.contains("path_owner_allowed"))
+        assertTrue(runtimeWrapper.contains("state_has_expected_identity"))
+        assertTrue(runtimeWrapper.contains("process_group_owner_allowed"))
+        assertTrue(runtimeWrapper.contains("ensure_host_private_dir"))
+        assertTrue(runtimeWrapper.contains("root_real=\"$(realpath -e -- \"\$root\""))
+        assertTrue(runtimeWrapper.contains("write_v2_state UNKNOWN"))
+        assertTrue(runtimeWrapper.contains("request hash 冲突"))
     }
 
     @Test

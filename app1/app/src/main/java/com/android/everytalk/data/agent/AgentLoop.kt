@@ -13,6 +13,7 @@ import com.android.everytalk.data.computer.ComputerErrorCodes
 import com.android.everytalk.data.computer.ComputerRequestContext
 import com.android.everytalk.data.computer.ComputerToolApprovalPhase
 import com.android.everytalk.data.computer.ComputerToolApprovalRequest
+import com.android.everytalk.data.computer.ComputerToolNames
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.database.entities.AgentRunEntity
 import com.android.everytalk.data.network.ApiClient
@@ -80,6 +81,7 @@ class AgentLoop(
     private val runStore: AgentRunStore,
     private val contextManager: AgentContextManager = AgentContextManager(),
     private val toolRuntime: AgentToolRuntime = AgentToolRuntime(AgentToolExecutorRegistry::current),
+    private val computerSessionStateProvider: suspend (ComputerRequestContext?) -> String? = { null },
     private val modelTransport: ModelTurnTransport = ModelTurnTransport { turn ->
         ApiClient.streamModelTurn(turn.request)
     },
@@ -180,9 +182,19 @@ class AgentLoop(
                     requestOrdinal = requestOrdinal,
                 )
                 var requestId = UUID.randomUUID().toString()
+                val sessionStatePrompt = computerSessionStateProvider(input.request.localComputerRequestContext)
+                val contextTranscript = transcript + listOfNotNull(
+                    sessionStatePrompt?.takeIf(String::isNotBlank)?.let { prompt ->
+                        SimpleTextApiMessage(
+                            id = "computer-session-state",
+                            role = "system",
+                            content = prompt,
+                        )
+                    },
+                )
                 var prepared = contextManager.prepare(
                     requestId = requestId,
-                    request = input.request.copy(messages = transcript),
+                    request = input.request.copy(messages = contextTranscript),
                     limits = input.tokenLimits,
                     checkpoint = activeCompaction,
                 )
@@ -208,9 +220,19 @@ class AgentLoop(
                     // 摘要替代了早期中立历史，供应商上一轮的原生连续状态已不再对应新前缀。
                     providerContinuation = null
                     requestId = UUID.randomUUID().toString()
+                    val refreshedSessionStatePrompt = computerSessionStateProvider(input.request.localComputerRequestContext)
+                    val refreshedContextTranscript = transcript + listOfNotNull(
+                        refreshedSessionStatePrompt?.takeIf(String::isNotBlank)?.let { prompt ->
+                            SimpleTextApiMessage(
+                                id = "computer-session-state",
+                                role = "system",
+                                content = prompt,
+                            )
+                        },
+                    )
                     prepared = contextManager.prepare(
                         requestId = requestId,
-                        request = input.request.copy(messages = transcript),
+                        request = input.request.copy(messages = refreshedContextTranscript),
                         limits = input.tokenLimits,
                         checkpoint = activeCompaction,
                     )
@@ -502,6 +524,10 @@ class AgentLoop(
             }
             toolLoopGuard.record(call)?.let { reason -> throw AgentToolLoopException(reason) }
             runStore.appendToolExecutionStarted(run.id, requestId, call)
+            if (call.name in ComputerToolNames.all) {
+                // 先写等待状态，再让 Executor 连接 VPS。进程在此窗口退出时仍可恢复。
+                runStore.updateRunStatus(run, AgentRunStatus.WAITING_REMOTE_EXECUTION)
+            }
             val result = toolRuntime.execute(call, computerContext, maxModelResultTokens, run.id, emit)
             if (result.isUnknownExecution()) {
                 val unknownApproval = toolRuntime.approvalRequest(
@@ -522,6 +548,9 @@ class AgentLoop(
                     emit(AppStreamEvent.AgentApprovalRequired(run.id, record.approvalRequestId))
                     return ToolBatchOutcome(currentTranscript, paused = true)
                 }
+            }
+            if (call.name in ComputerToolNames.all) {
+                runStore.updateRunStatus(run, AgentRunStatus.PERSISTING_RESULT)
             }
             runStore.appendToolResult(run.id, requestId, result)
             currentTranscript = currentTranscript + result.toApiMessage()
@@ -555,8 +584,16 @@ class AgentLoop(
             retryUnknownToolCallId = record.toolCall.id.takeIf { decision == AgentApprovalDecision.RETRY },
         )
         runStore.appendToolExecutionStarted(run.id, record.requestId, record.toolCall)
+        if (record.toolCall.name in ComputerToolNames.all) {
+            // 审批卡片恢复后的远端调用也必须留下等待状态，进程退出时才能沿同一 Run 对账。
+            runStore.updateRunStatus(run, AgentRunStatus.WAITING_REMOTE_EXECUTION)
+        }
+        val result = toolRuntime.execute(record.toolCall, approvedContext, maxModelResultTokens, run.id, emit)
+        if (record.toolCall.name in ComputerToolNames.all) {
+            runStore.updateRunStatus(run, AgentRunStatus.PERSISTING_RESULT)
+        }
         return ResumedToolOutcome(
-            toolRuntime.execute(record.toolCall, approvedContext, maxModelResultTokens, run.id, emit),
+            result,
         )
     }
 

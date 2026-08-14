@@ -113,6 +113,7 @@ fun ChatInputArea(
     onRemoveMediaItemAtIndex: (Int) -> Unit,
     onClearMediaItems: () -> Unit,
     isApiCalling: Boolean,
+    isRemoteCancellationPending: Boolean = false,
     isWebSearchEnabled: Boolean,
     isWebSearchAvailable: Boolean,
     onToggleWebSearch: () -> Unit,
@@ -430,10 +431,12 @@ fun ChatInputArea(
 
     // 🎯 性能优化：发送时使用本地文本，确保发送最新内容
     val onSendClick =
-        remember(isApiCalling, localText, selectedMediaItems, selectedApiConfig, imeInsets, density) {
+        remember(isApiCalling, isRemoteCancellationPending, localText, selectedMediaItems, selectedApiConfig, imeInsets, density) {
             {
                 try {
-                    if (isApiCalling) {
+                    if (isRemoteCancellationPending) {
+                        // 远端取消尚未确认，固定按钮只展示加载，不重复发起取消或新消息。
+                    } else if (isApiCalling) {
                         onStopApiCall()
                     } else if (localText.isBlank() && selectedMediaItems.isEmpty()) {
                         onShowVoiceInput()
@@ -1025,6 +1028,7 @@ fun ChatInputArea(
                                     }
                                     Spacer(Modifier.width(8.dp))
                                     val buttonState = when {
+                                        isRemoteCancellationPending -> 3
                                         isApiCalling -> 2
                                         hasContent -> 1
                                         else -> 0
@@ -1053,19 +1057,27 @@ fun ChatInputArea(
                                             ),
                                             modifier = Modifier.size(36.dp)
                                         ) {
-                                            Icon(
-                                                painter = when (state) {
-                                                    2 -> painterResource(R.drawable.ic_stop)
-                                                    1 -> painterResource(R.drawable.ic_arrow_up)
-                                                    else -> painterResource(R.drawable.ic_voice_bold)
-                                                },
-                                                contentDescription = when (state) {
-                                                    2 -> stringResource(R.string.chat_input_stop)
-                                                    1 -> stringResource(R.string.chat_input_send)
-                                                    else -> stringResource(R.string.chat_input_voice)
-                                                },
-                                                modifier = Modifier.size(20.dp)
-                                            )
+                                            if (state == 3) {
+                                                CircularProgressIndicator(
+                                                    modifier = Modifier.size(18.dp),
+                                                    color = iconColor,
+                                                    strokeWidth = 2.dp,
+                                                )
+                                            } else {
+                                                Icon(
+                                                    painter = when (state) {
+                                                        2 -> painterResource(R.drawable.ic_stop)
+                                                        1 -> painterResource(R.drawable.ic_arrow_up)
+                                                        else -> painterResource(R.drawable.ic_voice_bold)
+                                                    },
+                                                    contentDescription = when (state) {
+                                                        2 -> stringResource(R.string.chat_input_stop)
+                                                        1 -> stringResource(R.string.chat_input_send)
+                                                        else -> stringResource(R.string.chat_input_voice)
+                                                    },
+                                                    modifier = Modifier.size(20.dp)
+                                                )
+                                            }
                                         }
                                     }
                                     }

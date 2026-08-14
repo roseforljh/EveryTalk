@@ -258,6 +258,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 historyManager,
                 onAiMessageFullTextChanged = ::onAiMessageFullTextChanged,
                 triggerScrollToBottom = ::triggerScrollToBottom,
+                 cancelComputerExecutions = { conversationId, onComplete ->
+                     computerManager.cancelActiveExecutions(conversationId, onComplete)
+                 },
+                computerSessionStateProvider = computerManager::computerSessionState,
         )
     }
     internal val configManager: ConfigManager by lazy {
@@ -318,6 +322,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         get() = stateHolder._selectedImageGenApiConfig.asStateFlow()
     val isTextApiCalling: StateFlow<Boolean>
         get() = stateHolder._isTextApiCalling.asStateFlow()
+    val isRemoteCancellationPending: StateFlow<Boolean>
+        get() = stateHolder._isRemoteCancellationPending.asStateFlow()
     val isImageApiCalling: StateFlow<Boolean>
         get() = stateHolder._isImageApiCalling.asStateFlow()
     val lastSentUserMessageId: StateFlow<String?>
@@ -622,8 +628,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 mcpWebFetchFallback = buildMcpWebFetchFallback(),
                 localWebSearchExecutor = buildLocalWebSearchExecutor(),
                 localAttachmentExecutor = buildLocalAttachmentExecutor(),
-                localComputerExecutor = { localToolName, localArguments, localToolCallId, requestContext ->
-                    computerManager.execute(localToolName, localArguments, localToolCallId, requestContext)
+                localComputerExecutor = { localToolName, localArguments, localToolCallId, requestContext, updateComputerStatus ->
+                    computerManager.execute(
+                        localToolName,
+                        localArguments,
+                        localToolCallId,
+                        requestContext,
+                        updateComputerStatus,
+                    )
                 },
                 fallbackExecutor = { fallbackToolName, fallbackArguments ->
                     mcpManager.callTool(fallbackToolName, fallbackArguments)
@@ -638,8 +650,79 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
           viewModelScope.launch(Dispatchers.IO) {
               computerManager.awaitLocalRecovery()
-              AppDatabase.getDatabase(getApplication()).agentDao().recoverInterruptedAgentRuns()
+              val agentDao = AppDatabase.getDatabase(getApplication()).agentDao()
+              agentDao.recoverInterruptedAgentRuns()
+              val recoverableConversationIds = mutableSetOf<String>().apply {
+                  stateHolder._currentConversationId.value.takeIf(String::isNotBlank)?.let(::add)
+                  agentDao.getWaitingRemoteExecutionRuns().forEach { run -> add(run.sessionId) }
+                  // App 可能在写入 ComputerExecution 前退出，AgentRun 会被启动恢复标为
+                  // INTERRUPTED。把这类 Run 也纳入按会话过滤的对账范围，避免远端任务永远
+                  // 停留在 RUNNING 而无法续接；没有活动 Execution 的旧中断 Run 不会建立 SSH。
+                  agentDao.getInterruptedRuns().forEach { run -> add(run.sessionId) }
+              }
+              if (recoverableConversationIds.isNotEmpty()) {
+                  apiHandler.updateRemoteRecoveryStatus(
+                      status = "正在恢复远端任务",
+                      conversationIds = recoverableConversationIds,
+                  )
+                  val initialReconciliations = computerManager.reconcileRemoteExecutions(recoverableConversationIds)
+                  apiHandler.updateRemoteRecoveryStatus(
+                      status = if (initialReconciliations.any { it.outcome == com.android.everytalk.data.computer.ComputerExecutionReconciliationOutcome.STILL_UNAVAILABLE }) {
+                           "等待服务器重连"
+                      } else {
+                           null
+                      },
+                      conversationIds = recoverableConversationIds,
+                  )
+              }
               apiHandler.restorePendingAgentApproval()
+              // 远端任务可能在 App 重启后仍处于 RUNNING；持续对账直到终态，再触发原 Run 续接。
+              var reconcileDelayMillis = 1_000L
+              while (true) {
+                  try {
+                      val conversationIds = mutableSetOf<String>().apply {
+                          stateHolder._currentConversationId.value.takeIf(String::isNotBlank)?.let(::add)
+                          agentDao.getWaitingRemoteExecutionRuns().forEach { run -> add(run.sessionId) }
+                          agentDao.getInterruptedRuns().forEach { run -> add(run.sessionId) }
+                      }
+                      if (conversationIds.isNotEmpty()) {
+                          apiHandler.updateRemoteRecoveryStatus(
+                              status = "正在恢复远端任务",
+                              conversationIds = conversationIds,
+                          )
+                      }
+                      val reconciliations = computerManager.reconcileRemoteExecutions(conversationIds)
+                      val reachedTerminalState = reconciliations.any { result ->
+                          result.outcome != com.android.everytalk.data.computer.ComputerExecutionReconciliationOutcome.STILL_UNAVAILABLE &&
+                              (result.outcome != com.android.everytalk.data.computer.ComputerExecutionReconciliationOutcome.UPDATED ||
+                                  result.state?.status !in setOf(
+                                      com.android.everytalk.data.computer.ComputerRemoteStatus.STARTING,
+                                      com.android.everytalk.data.computer.ComputerRemoteStatus.RUNNING,
+                                  ))
+                      }
+                      if (reachedTerminalState) {
+                          apiHandler.updateRemoteRecoveryStatus(
+                              status = null,
+                              conversationIds = conversationIds,
+                          )
+                          apiHandler.restorePendingAgentApproval()
+                      } else if (reconciliations.any {
+                              it.outcome == com.android.everytalk.data.computer.ComputerExecutionReconciliationOutcome.STILL_UNAVAILABLE
+                          }) {
+                          apiHandler.updateRemoteRecoveryStatus(
+                              status = "等待服务器重连",
+                              conversationIds = conversationIds,
+                          )
+                      }
+                      reconcileDelayMillis = if (reconciliations.isEmpty()) 5_000L else 1_000L
+                  } catch (error: CancellationException) {
+                      throw error
+                  } catch (error: Throwable) {
+                      Log.w("ComputerRuntime", "远端执行恢复轮询失败", error)
+                      reconcileDelayMillis = 5_000L
+                  }
+                  delay(reconcileDelayMillis)
+              }
           }
 
         viewModelScope.launch(Dispatchers.IO) {

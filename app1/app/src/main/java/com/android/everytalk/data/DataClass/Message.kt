@@ -208,7 +208,7 @@ fun hasReviewableExecutionProcess(
     executionSteps.isNotEmpty() ||
     executionTrace.isNotEmpty() ||
     !webSearchResults.isNullOrEmpty() ||
-    executionStatus?.startsWith("上下文压缩失败：") == true
+    !executionStatus.isNullOrBlank()
 
 fun Message.hasReviewableExecutionProcess(): Boolean = hasReviewableExecutionProcess(
     reasoningText = reasoning,

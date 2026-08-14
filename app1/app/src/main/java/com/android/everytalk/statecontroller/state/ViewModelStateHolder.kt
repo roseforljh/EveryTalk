@@ -97,6 +97,8 @@ import java.util.concurrent.atomic.AtomicLong
 
     // 分离的API状态
     val _isTextApiCalling = MutableStateFlow(false)
+    /** 停止按钮发出远端取消后，等待 VPS 确认期间保持固定尺寸加载状态。 */
+    val _isRemoteCancellationPending = MutableStateFlow(false)
     val _isImageApiCalling = MutableStateFlow(false)
     val _isMcpEnabledForNextRequest = MutableStateFlow(false)
     val _isAgentEnabled = MutableStateFlow(false)
@@ -196,6 +198,7 @@ val _isStreamingPaused = MutableStateFlow(false)
         messages.clear()
         selectedMediaItems.clear()
         _isTextApiCalling.value = false
+        _isRemoteCancellationPending.value = false
         textApiJob?.cancel()
         textApiJob = null
         _currentTextStreamingAiMessageId.value = null
@@ -748,6 +751,7 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
                 _currentTextStreamingAiMessageId.value = null
             }
             _isTextApiCalling.value = false
+            _isRemoteCancellationPending.value = false
         }
     }
 

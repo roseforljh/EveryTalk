@@ -44,6 +44,9 @@ interface AgentDao {
     @Query("SELECT * FROM agent_runs WHERE status = 'WAITING_APPROVAL' ORDER BY updatedAt ASC")
     suspend fun getWaitingApprovalRuns(): List<AgentRunEntity>
 
+    @Query("SELECT * FROM agent_runs WHERE status = 'WAITING_REMOTE_EXECUTION' ORDER BY updatedAt ASC")
+    suspend fun getWaitingRemoteExecutionRuns(): List<AgentRunEntity>
+
     @Query("SELECT * FROM agent_runs WHERE status = 'INTERRUPTED' ORDER BY updatedAt ASC")
     suspend fun getInterruptedRuns(): List<AgentRunEntity>
 
@@ -51,7 +54,7 @@ interface AgentDao {
         """
         UPDATE agent_runs
         SET status = 'INTERRUPTED', terminalReason = :reason, updatedAt = :updatedAt
-        WHERE status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED', 'WAITING_APPROVAL')
+        WHERE status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED', 'WAITING_APPROVAL', 'WAITING_REMOTE_EXECUTION')
         """
     )
     suspend fun markActiveRunsInterrupted(reason: String, updatedAt: Long)

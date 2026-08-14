@@ -82,6 +82,32 @@ enum class ComputerExecutionStatus {
     UNKNOWN,
 }
 
+/**
+ * VPS 侧受管进程的真实生命周期。
+ *
+ * ComputerExecutionStatus 描述本地 Tool Call，ComputerRemoteStatus 描述 VPS 上的进程；
+ * 两者必须分开保存，才能表达后台 Tool 已返回但 VPS 进程仍在运行的情况。
+ */
+@Serializable
+enum class ComputerRemoteStatus {
+    STARTING,
+    RUNNING,
+    SUCCEEDED,
+    FAILED,
+    TIMED_OUT,
+    CANCELLED,
+    STOPPED,
+    MISSING,
+    UNKNOWN,
+}
+
+/** Tool 是否等待 VPS 最终结果，还是拿到远端句柄后立即返回。 */
+@Serializable
+enum class ComputerExecutionCompletionMode {
+    WAIT_FOR_RESULT,
+    RETURN_HANDLE,
+}
+
 @Serializable
 enum class ComputerPreviewVisibility { PRIVATE, PUBLIC }
 
@@ -242,7 +268,89 @@ data class ComputerExecution(
     val exitCode: Int? = null,
     val errorCode: String? = null,
     val safeSummary: String? = null,
+    /** exec 的实际目标，旧记录为空。 */
+    val target: ComputerExecTarget? = null,
+    /** 前台等待结果，后台返回句柄。 */
+    val completionMode: ComputerExecutionCompletionMode? = null,
+    /** VPS 侧固定映射的受管进程 ID。 */
+    val remoteProcessId: String? = null,
+    /** 由 Android 推导的状态目录，仅用于本地展示和校验。 */
+    val remoteStatePath: String? = null,
+    /** 最近一次确认的 VPS 进程状态。 */
+    val remoteStatus: ComputerRemoteStatus? = null,
+    /** VPS 侧退出码，与 Tool 的 exitCode 分开保存。 */
+    val remoteExitCode: Int? = null,
+    /** 最近一次成功读取远端状态的时间。 */
+    val lastObservedAt: Long? = null,
 )
+
+/**
+ * VPS Runtime V2 的小型状态快照。
+ * 日志正文不放入状态文件，只通过 execution-result 按偏移读取。
+ */
+data class ComputerRemoteExecutionSnapshot(
+    val executionId: String,
+    val processId: String,
+    val status: ComputerRemoteStatus,
+    val target: ComputerExecTarget? = null,
+    val requestHash: String? = null,
+    val pid: Long? = null,
+    val startTicks: Long? = null,
+    val exitCode: Int? = null,
+    val startedAt: Long? = null,
+    val updatedAt: Long? = null,
+    val stdoutBytes: Long = 0,
+    val stderrBytes: Long = 0,
+)
+
+/** execution-result 的一次增量读取结果。 */
+data class ComputerRemoteExecutionResult(
+    val snapshot: ComputerRemoteExecutionSnapshot,
+    val stdoutOffset: Long,
+    val stderrOffset: Long,
+    val stdout: String,
+    val stderr: String,
+    val stdoutTruncated: Boolean = false,
+    val stderrTruncated: Boolean = false,
+)
+
+/**
+ * 注入下一轮模型请求的精简远端状态。
+ * 命令正文和日志不放进来，避免把状态轮询重新变成上下文膨胀来源。
+ */
+data class ComputerSessionTask(
+    val executionId: String,
+    val target: ComputerExecTarget,
+    val status: ComputerRemoteStatus,
+    val elapsedSeconds: Long,
+)
+
+data class ComputerSessionState(
+    val workspaceId: String,
+    val activeTasks: List<ComputerSessionTask>,
+    val totalActiveTasks: Int = activeTasks.size,
+) {
+    /** 固定边界标签，明确告诉模型这些是只读状态，不是用户指令。 */
+    fun toPrompt(): String = buildString {
+        appendLine("<computer-session-state>")
+        appendLine("当前 Workspace: $workspaceId")
+        if (activeTasks.isEmpty()) {
+            appendLine("当前没有活动的远端任务。")
+        } else {
+            appendLine("当前 Workspace 活动任务：")
+            activeTasks.forEach { task ->
+                append("- ").append(task.executionId)
+                    .append(", ").append(task.target.name.lowercase())
+                    .append(", ").append(task.status.name)
+                    .append(", 已运行 ").append(task.elapsedSeconds.coerceAtLeast(0L)).append(" 秒\n")
+            }
+            if (totalActiveTasks > activeTasks.size) {
+                append("- 其余活动任务：").append(totalActiveTasks - activeTasks.size).append(" 个\n")
+            }
+        }
+        appendLine("</computer-session-state>")
+    }
+}
 
 @Serializable
 data class ComputerPreview(
@@ -390,6 +498,14 @@ object ComputerErrorCodes {
     const val PUBLIC_PORT_BLOCKED = "PUBLIC_PORT_BLOCKED"
     const val HOST_COMMAND_REJECTED = "HOST_COMMAND_REJECTED"
     const val IDEMPOTENCY_CONFLICT = "IDEMPOTENCY_CONFLICT"
+    const val EXECUTION_PROTOCOL_MISMATCH = "EXECUTION_PROTOCOL_MISMATCH"
+    const val EXECUTION_REQUEST_HASH_CONFLICT = "EXECUTION_REQUEST_HASH_CONFLICT"
+    const val EXECUTION_STATE_INVALID = "EXECUTION_STATE_INVALID"
+    const val EXECUTION_RESULT_UNAVAILABLE = "EXECUTION_RESULT_UNAVAILABLE"
+    const val EXECUTION_NOT_FOUND = "EXECUTION_NOT_FOUND"
+    const val EXECUTION_CANCEL_FAILED = "EXECUTION_CANCEL_FAILED"
+    /** 已发出远端取消请求但尚未收到 VPS 确认，供 App 重启后继续对账。 */
+    const val EXECUTION_CANCEL_REQUESTED = "EXECUTION_CANCEL_REQUESTED"
     const val TOOL_NAME_CONFLICT = "TOOL_NAME_CONFLICT"
     const val VPS_DISK_FULL = "VPS_DISK_FULL"
     const val VPS_PROCESS_OOM = "VPS_PROCESS_OOM"

@@ -159,7 +159,7 @@ internal suspend fun executeSharedToolCall(
     mcpWebFetchFallback: (suspend (JsonObject) -> JsonElement)? = null,
     localWebSearchExecutor: (suspend (String) -> JsonElement)? = null,
     localAttachmentExecutor: (suspend (JsonObject) -> JsonElement)? = null,
-    localComputerExecutor: (suspend (String, JsonObject, String, ComputerRequestContext) -> JsonElement)? = null,
+    localComputerExecutor: (suspend (String, JsonObject, String, ComputerRequestContext, suspend (String?) -> Unit) -> JsonElement)? = null,
     localCurrentTimeExecutor: suspend () -> JsonElement = {
         val now = Date()
         val calendar = Calendar.getInstance()
@@ -266,7 +266,7 @@ internal suspend fun executeSharedToolCall(
         }
         updateStatus(status)
         return try {
-            executor(computerToolName, arguments, toolCallId, requestContext)
+            executor(computerToolName, arguments, toolCallId, requestContext, updateStatus)
         } finally {
             updateStatus(null)
         }

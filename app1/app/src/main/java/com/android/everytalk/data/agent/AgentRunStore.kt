@@ -78,7 +78,16 @@ class AgentRunStore(
 
     suspend fun getRun(runId: String): AgentRunEntity? = dao.getRun(runId)
 
+    suspend fun getRunByVisibleMessage(messageId: String): AgentRunEntity? =
+        dao.getRunByVisibleMessage(messageId)
+
     suspend fun getWaitingApprovalRuns(): List<AgentRunEntity> = dao.getWaitingApprovalRuns()
+
+    /** 远端执行期间不能被 App 重启流程改成 INTERRUPTED，恢复时再按 Execution 对账。 */
+    suspend fun getWaitingRemoteExecutionRuns(): List<AgentRunEntity> = dao.getWaitingRemoteExecutionRuns()
+
+    /** App 重启后仍可能关联远端 Execution 的中断 Run。 */
+    suspend fun getInterruptedRuns(): List<AgentRunEntity> = dao.getInterruptedRuns()
 
     suspend fun nextModelTurnOrdinal(runId: String): Int = dao.getRequests(runId)
         .mapNotNull(AgentRequestEntity::modelTurnOrdinal)
@@ -391,6 +400,10 @@ class AgentRunStore(
                     )
                 }
                 if (execution.status == ComputerExecutionStatus.UNKNOWN.name ||
+                    execution.remoteStatus in setOf(
+                        com.android.everytalk.data.computer.ComputerRemoteStatus.STARTING.name,
+                        com.android.everytalk.data.computer.ComputerRemoteStatus.RUNNING.name,
+                    ) ||
                     execution.status in setOf(
                         ComputerExecutionStatus.QUEUED.name,
                         ComputerExecutionStatus.STARTING.name,
@@ -459,7 +472,7 @@ class AgentRunStore(
 
     /** WAITING_APPROVAL 和 INTERRUPTED 都可能包含尚未消费的决定。 */
     suspend fun resumableApprovalRuns(computerDao: ComputerDao): List<Pair<AgentRunEntity, AgentApprovalRecord>> =
-        (dao.getWaitingApprovalRuns() + dao.getInterruptedRuns())
+        (dao.getWaitingApprovalRuns() + dao.getInterruptedRuns() + dao.getWaitingRemoteExecutionRuns())
             .distinctBy(AgentRunEntity::id)
             .mapNotNull { run ->
                 (decidedApprovalAwaitingResult(run.id) ?: recoverInterruptedToolBatch(run.id, computerDao))?.let { run to it }
@@ -470,7 +483,7 @@ class AgentRunStore(
      * 只处理尚未有 ToolResult/审批的调用，重复启动不会生成第二张卡片。
      */
     suspend fun recoverUnknownComputerExecutions(computerDao: ComputerDao) {
-        val interruptedRuns = dao.getInterruptedRuns()
+        val interruptedRuns = dao.getInterruptedRuns() + dao.getWaitingRemoteExecutionRuns()
         for (execution in computerDao.getUnknownExecutions()) {
             val candidate = interruptedRuns.firstNotNullOfOrNull { run ->
                 val snapshot = decodeRequestSnapshot(run) ?: return@firstNotNullOfOrNull null

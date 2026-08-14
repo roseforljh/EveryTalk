@@ -594,6 +594,11 @@
     <string name="agent_unknown_retry">Run again</string>
     <string name="agent_unknown_title">Operation status unknown</string>
     <string name="thinking_preparing_server">Preparing server</string>
+    <string name="thinking_restoring_remote_task">Restoring remote task</string>
+    <string name="thinking_waiting_server_reconnect">Waiting for server reconnection</string>
+    <string name="thinking_cancelling_remote_task">Cancelling remote task</string>
+    <string name="thinking_remote_cancel_failed">Remote cancellation failed; waiting for confirmation</string>
+    <string name="thinking_remote_task_cancelled">Remote task cancelled</string>
     <string name="chat_input_stop">Stop</string>
     <string name="chat_input_send">Send</string>
     <string name="chat_input_voice">Voice input</string>

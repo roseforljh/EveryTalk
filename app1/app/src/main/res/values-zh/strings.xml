@@ -592,6 +592,11 @@
     <string name="agent_unknown_retry">重新执行</string>
     <string name="agent_unknown_title">操作结果无法确认</string>
     <string name="thinking_preparing_server">正在准备服务器</string>
+    <string name="thinking_restoring_remote_task">正在恢复远端任务</string>
+    <string name="thinking_waiting_server_reconnect">等待服务器重连</string>
+    <string name="thinking_cancelling_remote_task">正在取消远端任务</string>
+    <string name="thinking_remote_cancel_failed">远端取消失败，等待恢复确认</string>
+    <string name="thinking_remote_task_cancelled">远端任务已取消</string>
     <string name="chat_input_stop">停止</string>
     <string name="chat_input_send">发送</string>
     <string name="chat_input_voice">语音输入</string>

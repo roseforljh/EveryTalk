@@ -520,6 +520,65 @@ class AppDatabaseMigrationTest {
         migrateHelper.close()
     }
 
+    @Test
+    fun `migration 18 to 19 preserves execution and adds nullable remote fields`() {
+        val createHelper = openHelper(
+            version = 18,
+            onCreate = { db ->
+                db.execSQL(
+                    """
+                    CREATE TABLE computer_executions (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        toolCallId TEXT NOT NULL,
+                        computerId TEXT NOT NULL,
+                        workspaceId TEXT NOT NULL,
+                        toolName TEXT NOT NULL,
+                        requestHash TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        startedAt INTEGER,
+                        finishedAt INTEGER,
+                        exitCode INTEGER,
+                        errorCode TEXT,
+                        safeSummary TEXT
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO computer_executions(
+                        id, toolCallId, computerId, workspaceId, toolName, requestHash,
+                        status, startedAt, finishedAt, exitCode, errorCode, safeSummary
+                    ) VALUES ('execution-1', 'tool-1', 'computer-1', 'workspace-1', 'exec', 'hash',
+                        'RUNNING', 10, NULL, NULL, NULL, 'old summary')
+                    """.trimIndent(),
+                )
+            },
+        )
+        createHelper.writableDatabase.close()
+        createHelper.close()
+
+        val migrateHelper = openHelper(
+            version = 19,
+            onUpgrade = { db, oldVersion, newVersion ->
+                assertEquals(18, oldVersion)
+                assertEquals(19, newVersion)
+                AppDatabase.MIGRATION_18_19.migrate(db)
+            },
+        )
+        val db = migrateHelper.writableDatabase
+        db.query(
+            "SELECT status, safeSummary, target, completionMode, remoteProcessId, remoteStatePath, " +
+                "remoteStatus, remoteExitCode, lastObservedAt FROM computer_executions WHERE id = 'execution-1'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("RUNNING", cursor.getString(0))
+            assertEquals("old summary", cursor.getString(1))
+            for (column in 2..8) assertTrue(cursor.isNull(column))
+        }
+        db.close()
+        migrateHelper.close()
+    }
+
     private fun openHelper(
         version: Int,
         onCreate: (SupportSQLiteDatabase) -> Unit = {},

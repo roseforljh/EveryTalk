@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-VERSION="5"
+VERSION="8"
 HELPER_PATH="/usr/local/libexec/everytalk-containerctl"
 RUNTIME_WRAPPER_PATH="/usr/local/libexec/everytalk-runtime-wrapper"
 RUNTIME_WRAPPER_VERSION_PATH="/usr/local/libexec/everytalk-runtime-wrapper.sha256"
@@ -20,6 +20,11 @@ valid_id() {
     value="${1:-}"
     [ -n "$value" ] && [ "${#value}" -le 128 ] || return 1
     case "$value" in *[!A-Za-z0-9_-]*) return 1 ;; esac
+}
+valid_request_hash() {
+    value="${1:-}"
+    case "$value" in ''|*[!0-9a-f]*) return 1 ;; esac
+    [ "${#value}" -eq 64 ]
 }
 target_user() {
     user="${SUDO_USER:-root}"
@@ -60,6 +65,16 @@ require_workspace_container() {
     owner="$(docker inspect -f '{{index .Config.Labels "com.everytalk.workspace"}}' "$name")"
     [ "$managed" = true ] && [ "$owner" = "$workspace_id" ] || fail 'Container 归属校验失败' 60
     printf '%s' "$name"
+}
+
+container_allowed_owner_uids() {
+    name="$1"
+    configured_user="$(docker inspect -f '{{.Config.User}}' "$name" 2>/dev/null || true)"
+    case "$configured_user" in
+        ''|*[!0-9:]) printf '0 0' ;;
+        *:*) printf '%s 0' "${configured_user%%:*}" ;;
+        *) printf '%s 0' "$configured_user" ;;
+    esac
 }
 
 ensure_network() {
@@ -234,6 +249,141 @@ run_workspace_background() {
     docker exec -i $user_arguments "$name" \
         /usr/local/bin/everytalk-runtime-wrapper "$runtime" "$logs" --envelope
     printf 'process_id=%s\nlogs=/workspace/.everytalk/background/%s\n' "$process_id" "$process_id"
+}
+
+run_workspace_execution() {
+    workspace_id="${1:-}"
+    runtime_id="${2:-}"
+    execution_id="${3:-}"
+    root_mode="${4:-false}"
+    timeout_seconds="${5:-120}"
+    request_hash="${6:-}"
+    valid_id "$workspace_id" || fail 'Workspace ID 无效' 54
+    valid_id "$runtime_id" || fail 'Runtime ID 无效' 64
+    case "$execution_id" in execution_[A-Za-z0-9_-]*) ;; *) fail 'Execution ID 无效' 67 ;; esac
+    [ "$root_mode" = true ] || [ "$root_mode" = false ] || fail 'root 参数无效' 65
+    case "$timeout_seconds" in ''|*[!0-9]*) fail 'timeout 参数无效' 66 ;; esac
+    [ "$timeout_seconds" -ge 0 ] && [ "$timeout_seconds" -le 3600 ] || fail 'timeout 参数越界' 66
+    case "$request_hash" in ''|*[!0-9a-f]*) fail 'request hash 无效' 67 ;; esac
+    [ "${#request_hash}" -eq 64 ] || fail 'request hash 无效' 67
+    name="$(require_workspace_container "$workspace_id")"
+    owner_uids="$(container_allowed_owner_uids "$name")"
+    # 先在容器内逐级确认固定根目录不是符号链接，再创建 executions。
+    # 不能直接使用 mkdir -p，否则用户可通过 Workspace 内的链接把状态目录引到其他路径。
+    docker exec "$name" /bin/sh -c '
+        workspace=/workspace
+        root="$workspace/.everytalk"
+        executions="$root/executions"
+        [ -d "$workspace" ] && [ ! -L "$workspace" ] || exit 46
+        workspace_real="$(realpath -e -- "$workspace" 2>/dev/null || true)"
+        [ "$workspace_real" = "$workspace" ] || exit 46
+        if [ -e "$root" ] || [ -L "$root" ]; then
+            [ -d "$root" ] && [ ! -L "$root" ] || exit 46
+        else
+            mkdir "$root" || exit 46
+        fi
+        root_real="$(realpath -e -- "$root" 2>/dev/null || true)"
+        [ "$root_real" = "$root" ] || exit 46
+        if [ -e "$executions" ] || [ -L "$executions" ]; then
+            [ -d "$executions" ] && [ ! -L "$executions" ] || exit 46
+        else
+            mkdir "$executions" || exit 46
+        fi
+        executions_real="$(realpath -e -- "$executions" 2>/dev/null || true)"
+        [ "$executions_real" = "$executions" ] || exit 46
+    '
+    runtime="/workspace/.everytalk/runtime/$runtime_id"
+    execution="/workspace/.everytalk/executions/$execution_id"
+    user_arguments=""
+    [ "$root_mode" = true ] && user_arguments="--user 0:0"
+    # Wrapper 负责读取 Envelope、创建状态文件并脱离当前 SSH Channel 执行。
+    docker exec -i -e "EVERYTALK_ALLOWED_OWNER_UIDS=$owner_uids" $user_arguments "$name" \
+        /usr/local/bin/everytalk-runtime-wrapper "$runtime" "$execution" --envelope-v2 "$timeout_seconds" "$request_hash"
+}
+
+execution_status() {
+    workspace_id="${1:-}"
+    execution_id="${2:-}"
+    request_hash="${3:-}"
+    valid_id "$workspace_id" || fail 'Workspace ID 无效' 54
+    case "$execution_id" in execution_[A-Za-z0-9_-]*) ;; *) fail 'Execution ID 无效' 67 ;; esac
+    valid_request_hash "$request_hash" || fail 'request hash 无效' 67
+    name="$(require_workspace_container "$workspace_id")"
+    owner_uids="$(container_allowed_owner_uids "$name")"
+    execution_dir="/workspace/.everytalk/executions/$execution_id"
+    docker exec --user 0:0 -e "EVERYTALK_ALLOWED_OWNER_UIDS=$owner_uids" "$name" /usr/local/bin/everytalk-runtime-wrapper \
+        "$execution_dir" '' --execution-status 0 "$request_hash"
+}
+
+execution_result() {
+    workspace_id="${1:-}"
+    execution_id="${2:-}"
+    stdout_offset="${3:-0}"
+    stderr_offset="${4:-0}"
+    max_bytes="${5:-2048}"
+    request_hash="${6:-}"
+    valid_id "$workspace_id" || fail 'Workspace ID 无效' 54
+    case "$execution_id" in execution_[A-Za-z0-9_-]*) ;; *) fail 'Execution ID 无效' 67 ;; esac
+    case "$stdout_offset" in ''|*[!0-9]*) fail 'stdout 偏移无效' 68 ;; esac
+    case "$stderr_offset" in ''|*[!0-9]*) fail 'stderr 偏移无效' 68 ;; esac
+    case "$max_bytes" in ''|*[!0-9]*) fail '日志读取长度无效' 68 ;; esac
+    [ "$max_bytes" -ge 1 ] && [ "$max_bytes" -le 262144 ] || fail '日志读取长度无效' 68
+    valid_request_hash "$request_hash" || fail 'request hash 无效' 67
+    name="$(require_workspace_container "$workspace_id")"
+    owner_uids="$(container_allowed_owner_uids "$name")"
+    execution_dir="/workspace/.everytalk/executions/$execution_id"
+    docker exec --user 0:0 -e "EVERYTALK_ALLOWED_OWNER_UIDS=$owner_uids" "$name" /usr/local/bin/everytalk-runtime-wrapper \
+        "$execution_dir" '' --execution-result "$stdout_offset" "$stderr_offset" "$max_bytes" "$request_hash"
+}
+
+list_executions() {
+    workspace_id="${1:-}"
+    valid_id "$workspace_id" || fail 'Workspace ID 无效' 54
+    name="$(require_workspace_container "$workspace_id")"
+    owner_uids="$(container_allowed_owner_uids "$name")"
+    # 路径由 Workspace ID 固定推导，只读取受管状态文件，不接受任意路径参数。
+    docker exec --user 0:0 -e "EVERYTALK_ALLOWED_OWNER_UIDS=$owner_uids" "$name" /bin/sh -c '
+        root=/workspace/.everytalk/executions
+        [ -d "$root" ] && [ ! -L "$root" ] || exit 0
+        root_real="$(realpath -e -- "$root" 2>/dev/null || true)"
+        [ "$root_real" = "$root" ] || exit 0
+        for state in "$root"/execution_*/state; do
+            [ -f "$state" ] && [ ! -L "$state" ] || continue
+            execution_dir="${state%/state}"
+            execution_real="$(realpath -e -- "$execution_dir" 2>/dev/null || true)"
+            [ "$execution_real" = "$execution_dir" ] || continue
+            execution_owner="$(stat -c "%u" -- "$execution_dir" 2>/dev/null || true)"
+            case "$execution_owner" in ''|*[!0-9]*) continue ;; esac
+            directory_allowed=false
+            for expected in ${EVERYTALK_ALLOWED_OWNER_UIDS:-0}; do
+                [ "$execution_owner" = "$expected" ] && directory_allowed=true && break
+            done
+            [ "$directory_allowed" = true ] || continue
+            owner="$(stat -c "%u" -- "$state" 2>/dev/null || true)"
+            allowed=false
+            for expected in ${EVERYTALK_ALLOWED_OWNER_UIDS:-0}; do
+                [ "$owner" = "$expected" ] && allowed=true && break
+            done
+            [ "$allowed" = true ] || continue
+            execution_id="$(awk -F= "\$1 == \"execution_id\" { print substr(\$0, length(\$1) + 2); exit }" "$state")"
+            [ "$execution_id" = "${execution_dir##*/}" ] || continue
+            cat -- "$state"
+        done
+    '
+}
+
+cancel_execution() {
+    workspace_id="${1:-}"
+    execution_id="${2:-}"
+    request_hash="${3:-}"
+    valid_id "$workspace_id" || fail 'Workspace ID 无效' 54
+    case "$execution_id" in execution_[A-Za-z0-9_-]*) ;; *) fail 'Execution ID 无效' 67 ;; esac
+    valid_request_hash "$request_hash" || fail 'request hash 无效' 67
+    name="$(require_workspace_container "$workspace_id")"
+    owner_uids="$(container_allowed_owner_uids "$name")"
+    execution_dir="/workspace/.everytalk/executions/$execution_id"
+    docker exec --user 0:0 -e "EVERYTALK_ALLOWED_OWNER_UIDS=$owner_uids" "$name" /usr/local/bin/everytalk-runtime-wrapper \
+        "$execution_dir" '' --execution-cancel 0 "$request_hash"
 }
 
 open_terminal() {
@@ -428,6 +578,11 @@ case "$command_name" in
     container-address) require_exact_args 1 "$@"; container_address "$@" ;;
     run) require_exact_args 4 "$@"; run_workspace "$@" ;;
     run-background) require_exact_args 4 "$@"; run_workspace_background "$@" ;;
+    start-execution) require_exact_args 6 "$@"; run_workspace_execution "$@" ;;
+    execution-status) require_exact_args 3 "$@"; execution_status "$@" ;;
+    execution-result) require_exact_args 6 "$@"; execution_result "$@" ;;
+    list-executions) require_exact_args 1 "$@"; list_executions "$@" ;;
+    cancel-execution) require_exact_args 3 "$@"; cancel_execution "$@" ;;
     terminal) require_exact_args 1 "$@"; open_terminal "$@" ;;
     open-public) require_exact_args 4 "$@"; open_public_preview "$@" ;;
     preview-status) require_exact_args 1 "$@"; preview_status "$@" ;;

@@ -22,6 +22,8 @@ enum class AgentRunStatus {
     CHECKING_PERMISSION,
     WAITING_APPROVAL,
     EXECUTING_TOOL,
+    /** Tool 已经交给 VPS，Android 只等待远端状态和结果。 */
+    WAITING_REMOTE_EXECUTION,
     PERSISTING_RESULT,
     RETRYING,
     COMPLETED,

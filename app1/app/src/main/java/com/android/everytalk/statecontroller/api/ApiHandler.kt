@@ -15,8 +15,10 @@ import com.android.everytalk.data.agent.AgentLoopRequest
 import com.android.everytalk.data.agent.AgentRunStore
 import com.android.everytalk.data.agent.AgentApprovalDecision
 import com.android.everytalk.data.agent.AgentApprovalRecord
+import com.android.everytalk.data.agent.AgentRunStatus
 import com.android.everytalk.data.agent.AgentToolResultStore
 import com.android.everytalk.data.computer.PendingComputerToolApproval
+import com.android.everytalk.data.computer.ComputerRequestContext
 import com.android.everytalk.data.database.entities.toApiConfig
 import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.data.DataClass.resolvedModelTokenLimits
@@ -220,6 +222,11 @@ class ApiHandler(
     private val historyManager: HistoryManager,
     private val onAiMessageFullTextChanged: (messageId: String, currentFullText: String) -> Unit,
     private val triggerScrollToBottom: () -> Unit,
+    private val cancelComputerExecutions: (String, (Boolean) -> Unit) -> Job = { _, onComplete ->
+        onComplete(true)
+        Job()
+    },
+    private val computerSessionStateProvider: suspend (ComputerRequestContext?) -> String? = { null },
 ) {
     private val context = context.applicationContext
     private val logger = AppLogger.forComponent("ApiHandler")
@@ -240,6 +247,7 @@ class ApiHandler(
                 executorProvider = com.android.everytalk.data.agent.AgentToolExecutorRegistry::current,
                 resultStore = AgentToolResultStore(context),
             ),
+            computerSessionStateProvider = computerSessionStateProvider,
         )
     }
     
@@ -258,6 +266,31 @@ class ApiHandler(
             resumeDecidedAgentRuns()
         }
         refreshPendingAgentApprovals()
+    }
+
+    /** 将远端恢复阶段投影到原 Assistant 消息，避免恢复时看起来像卡住。 */
+    suspend fun updateRemoteRecoveryStatus(
+        status: String?,
+        conversationIds: Set<String> = emptySet(),
+    ) {
+        val candidates = (
+            agentRunStore.getWaitingRemoteExecutionRuns() +
+                agentRunStore.getInterruptedRuns()
+            ).distinctBy { it.id }
+            .filter { run -> conversationIds.isEmpty() || run.sessionId in conversationIds }
+        val runs = if (status == null) {
+            candidates
+        } else {
+            val computerDao = AppDatabase.getDatabase(context).computerDao()
+            candidates.filter { run ->
+                computerDao.getActiveForegroundRemoteExecutionsForConversation(run.sessionId).isNotEmpty()
+            }
+        }
+        withContext(Dispatchers.Main.immediate) {
+            runs.forEach { run ->
+                updatePreparedMessageStatus(stateHolder.messages, run.visibleAssistantMessageId, status)
+            }
+        }
     }
 
     private suspend fun refreshPendingAgentApprovals() {
@@ -354,6 +387,7 @@ class ApiHandler(
             stateHolder.createStreamingBuffer(run.visibleAssistantMessageId, isImageGeneration = false)
             stateHolder._currentTextStreamingAiMessageId.value = run.visibleAssistantMessageId
             stateHolder._isTextApiCalling.value = true
+            stateHolder._isRemoteCancellationPending.value = false
         }
         withContext(Dispatchers.Main.immediate) {
             val job = viewModelScope.launch {
@@ -478,6 +512,7 @@ class ApiHandler(
             if (preparationJob != null) stateHolder.textApiJob = preparationJob
             stateHolder._currentTextStreamingAiMessageId.value = aiMessageId
             stateHolder._isTextApiCalling.value = true
+            stateHolder._isRemoteCancellationPending.value = false
             stateHolder.textReasoningCompleteMap[aiMessageId] = false
         }
 
@@ -610,6 +645,47 @@ class ApiHandler(
 
         if (messageIdBeingCancelled != null) {
             PerformanceMonitor.onAbort(messageIdBeingCancelled, reason = specificCancelReason)
+        }
+        // 先发出远端取消请求，再取消模型协程。DAO 查询会包含本地已先写成 CANCELLED 的记录，
+        // 因此即使两条协程并行，VPS 进程仍能收到取消请求。
+        if (!isImageGeneration) {
+            if (!isNewMessageSend) {
+                stateHolder._isRemoteCancellationPending.value = true
+            }
+            if (messageIdBeingCancelled != null) {
+                updateMessageExecutionStatus(messageIdBeingCancelled, "正在取消远端任务")
+            }
+            cancelComputerExecutions(stateHolder._currentConversationId.value) { success ->
+                messageIdBeingCancelled?.let { messageId ->
+                    updateMessageExecutionStatus(
+                        messageId,
+                        if (success) "远端任务已取消" else "远端取消失败，等待恢复确认",
+                    )
+                }
+                if (!isNewMessageSend) {
+                    stateHolder._isRemoteCancellationPending.value = false
+                }
+                if (!success && messageIdBeingCancelled != null) {
+                    // AgentLoop 可能已经把本地 Run 标成 CANCELLED，但远端仍无法确认。
+                    // 恢复为等待远端状态，轮询才能继续并为用户生成 UNKNOWN 决策卡。
+                    viewModelScope.launch(Dispatchers.IO) {
+                        agentRunStore.getRunByVisibleMessage(messageIdBeingCancelled)?.let { run ->
+                            if (run.status in setOf(
+                                    AgentRunStatus.CANCELLED.name,
+                                    AgentRunStatus.WAITING_REMOTE_EXECUTION.name,
+                                    AgentRunStatus.INTERRUPTED.name,
+                                )) {
+                                agentRunStore.updateRunStatus(
+                                    run,
+                                    AgentRunStatus.WAITING_REMOTE_EXECUTION,
+                                    terminalReason = null,
+                                )
+                            }
+                        }
+                        restorePendingAgentApproval()
+                    }
+                }
+            }
         }
         jobToCancel?.cancel(CancellationException(specificCancelReason))
 
@@ -757,6 +833,7 @@ class ApiHandler(
             } else {
                 stateHolder._currentTextStreamingAiMessageId.value = aiMessageId
                 stateHolder._isTextApiCalling.value = true
+                stateHolder._isRemoteCancellationPending.value = false
                 stateHolder.textReasoningCompleteMap[aiMessageId] = false
             }
             
@@ -1004,6 +1081,13 @@ class ApiHandler(
     ) {
         streamProcessor.processStreamEvent(appEvent, aiMessageId, isImageGeneration)
         if (appEvent is AppStreamEvent.AgentApprovalRequired) restorePendingAgentApproval()
+    }
+
+    /** 在任意线程安全地更新取消或恢复提示。 */
+    private fun updateMessageExecutionStatus(messageId: String, status: String?) {
+        viewModelScope.launch(Dispatchers.Main.immediate) {
+            updatePreparedMessageStatus(stateHolder.messages, messageId, status)
+        }
     }
 
     private suspend fun updateMessageWithError(

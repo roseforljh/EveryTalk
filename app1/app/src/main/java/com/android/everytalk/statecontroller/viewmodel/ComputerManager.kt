@@ -396,6 +396,7 @@ class ComputerManager(
         arguments: kotlinx.serialization.json.JsonObject,
         toolCallId: String,
         requestContext: ComputerRequestContext,
+        updateStatus: suspend (String?) -> Unit = {},
     ): kotlinx.serialization.json.JsonElement {
         // 首轮模型响应已经与 SSH 准备并行；模型真正调用工具时再确认远端 Workspace 已就绪。
         val computer = repository.getComputer(requestContext.computerId)
@@ -412,7 +413,45 @@ class ComputerManager(
             arguments = arguments,
             toolCallId = toolCallId,
             requestContext = currentContext,
+            updateStatus = updateStatus,
         )
+    }
+
+    /** 停止按钮使用当前会话的 Workspace 反查并取消仍等待结果的前台远端任务。 */
+    fun cancelActiveExecutions(
+        conversationId: String,
+        onComplete: (Boolean) -> Unit = {},
+    ): Job {
+        if (conversationId.isBlank()) return scope.launch { onComplete(true) }
+        return scope.launch(
+            context = Dispatchers.IO,
+            start = CoroutineStart.UNDISPATCHED,
+        ) {
+            var success = true
+            runCatching { toolExecutor.cancelActiveExecutions(conversationId) }
+                .onSuccess { remoteCancelSucceeded ->
+                    success = remoteCancelSucceeded
+                }
+                .onFailure { error ->
+                    success = false
+                    if (error !is kotlinx.coroutines.CancellationException) {
+                        AppLogger.warn("ComputerRuntime", "停止会话远端任务失败：${error.message}")
+                    }
+                }
+            onComplete(success)
+        }
+    }
+
+    /** 应用恢复轮询使用统一对账入口，网络不可用时保留本地最后状态。 */
+    suspend fun reconcileRemoteExecutions(
+        conversationIds: Set<String> = emptySet(),
+    ): List<com.android.everytalk.data.computer.ComputerExecutionReconciliation> =
+        repository.reconcileRemoteExecutions(conversationIds)
+
+    /** 每轮模型请求前注入精简的活动远端任务状态。 */
+    suspend fun computerSessionState(requestContext: ComputerRequestContext?): String? {
+        requestContext ?: return null
+        return repository.getComputerSessionState(requestContext.workspaceId)?.toPrompt()
     }
 
     /** AgentLoop 的持久化审批入口；普通详情页操作继续使用原内存确认入口。 */

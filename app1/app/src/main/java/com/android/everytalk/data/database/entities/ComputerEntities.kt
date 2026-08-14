@@ -12,12 +12,14 @@ import com.android.everytalk.data.computer.ComputerCapabilities
 import com.android.everytalk.data.computer.ComputerCredentialState
 import com.android.everytalk.data.computer.ComputerExecTarget
 import com.android.everytalk.data.computer.ComputerExecution
+import com.android.everytalk.data.computer.ComputerExecutionCompletionMode
 import com.android.everytalk.data.computer.ComputerExecutionStatus
 import com.android.everytalk.data.computer.ComputerPreview
 import com.android.everytalk.data.computer.ComputerPreviewStatus
 import com.android.everytalk.data.computer.ComputerPreviewVisibility
 import com.android.everytalk.data.computer.ComputerPermissionMode
 import com.android.everytalk.data.computer.ComputerRunMode
+import com.android.everytalk.data.computer.ComputerRemoteStatus
 import com.android.everytalk.data.computer.ComputerStatus
 import com.android.everytalk.data.computer.ComputerWorkspace
 import com.android.everytalk.data.computer.ComputerWorkspaceStatus
@@ -133,6 +135,20 @@ data class ComputerExecutionEntity(
     val exitCode: Int?,
     val errorCode: String?,
     val safeSummary: String?,
+    /** 执行目标。旧版本记录为空，升级后由新的 exec 流程补齐。 */
+    val target: String? = null,
+    /** WAIT_FOR_RESULT 或 RETURN_HANDLE。background 任务使用 RETURN_HANDLE。 */
+    val completionMode: String? = null,
+    /** VPS 受管进程 ID，不能由模型直接指定。 */
+    val remoteProcessId: String? = null,
+    /** Android 生成的远端状态目录，实际查询时仍需再次校验归属。 */
+    val remoteStatePath: String? = null,
+    /** 最近一次从 VPS 状态文件确认的远端状态。 */
+    val remoteStatus: String? = null,
+    /** VPS 记录的最终退出码，与本地 Tool 状态的 exitCode 分开保存。 */
+    val remoteExitCode: Int? = null,
+    /** 最近一次成功解析远端状态的时间。 */
+    val lastObservedAt: Long? = null,
 )
 
 @Entity(
@@ -295,6 +311,13 @@ fun ComputerExecutionEntity.toModel(): ComputerExecution = ComputerExecution(
     exitCode = exitCode,
     errorCode = errorCode,
     safeSummary = safeSummary,
+    target = target?.let { enumValueOrNull<ComputerExecTarget>(it) },
+    completionMode = completionMode?.let { enumValueOrNull<ComputerExecutionCompletionMode>(it) },
+    remoteProcessId = remoteProcessId,
+    remoteStatePath = remoteStatePath,
+    remoteStatus = remoteStatus?.let { enumValueOrNull<ComputerRemoteStatus>(it) },
+    remoteExitCode = remoteExitCode,
+    lastObservedAt = lastObservedAt,
 )
 
 fun ComputerExecution.toEntity(): ComputerExecutionEntity = ComputerExecutionEntity(
@@ -310,6 +333,13 @@ fun ComputerExecution.toEntity(): ComputerExecutionEntity = ComputerExecutionEnt
     exitCode = exitCode,
     errorCode = errorCode,
     safeSummary = safeSummary,
+    target = target?.name,
+    completionMode = completionMode?.name,
+    remoteProcessId = remoteProcessId,
+    remoteStatePath = remoteStatePath,
+    remoteStatus = remoteStatus?.name,
+    remoteExitCode = remoteExitCode,
+    lastObservedAt = lastObservedAt,
 )
 
 fun ComputerPreviewEntity.toModel(): ComputerPreview = ComputerPreview(
@@ -351,3 +381,6 @@ fun ComputerAuditEventEntity.toModel(): ComputerAuditEvent = ComputerAuditEvent(
 
 private inline fun <reified T : Enum<T>> enumValueOrDefault(value: String, default: T): T =
     enumValues<T>().firstOrNull { it.name == value } ?: default
+
+private inline fun <reified T : Enum<T>> enumValueOrNull(value: String): T? =
+    enumValues<T>().firstOrNull { it.name == value }
