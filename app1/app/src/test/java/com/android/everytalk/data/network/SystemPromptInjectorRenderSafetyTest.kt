@@ -48,14 +48,16 @@ class SystemPromptInjectorRenderSafetyTest {
         assertTrue(zhPrompt.contains("禁止把代码围栏嵌入列表或引用"))
         assertTrue(zhPrompt.contains("围栏必须从物理行第 1 列开始"))
         assertTrue(zhPrompt.contains("围栏内只保留代码自身需要的缩进"))
+        assertTrue(zhPrompt.contains("URL 不放在反引号中"))
+        assertTrue(zhPrompt.contains("备用参数另起一行"))
 
-        assertTrue(enPrompt.contains("Keep equal columns"))
-        assertTrue(enPrompt.contains("start on a new line"))
-        assertTrue(enPrompt.contains("escape `|` as `\\|`"))
-        assertTrue(enPrompt.contains("no `\\(...\\)`, `\\[...\\]`"))
+        assertTrue(enPrompt.contains("one row per line"))
+        assertTrue(enPrompt.contains("escape `|`"))
+        assertTrue(enPrompt.contains("no `\\(...\\)` or `\\[...\\]`"))
         assertTrue(enPrompt.contains("column 1"))
-        assertTrue(enPrompt.contains("never nest fenced code inside lists or block quotes"))
-        assertTrue(enPrompt.contains("only indentation required by the code itself"))
+        assertTrue(enPrompt.contains("never nest them in lists or quotes"))
+        assertTrue(enPrompt.contains("Never put URLs in backticks"))
+        assertTrue(enPrompt.contains("fallback parameters on a separate line"))
     }
 
     @Test
@@ -68,9 +70,9 @@ class SystemPromptInjectorRenderSafetyTest {
         assertTrue(zhPrompt.contains("缩进到父项正文起始列"))
         assertTrue(zhPrompt.contains("改用同级列表或普通段落"))
 
-        assertTrue(enPrompt.contains("one leading marker per physical line"))
-        assertTrue(enPrompt.contains("parent content column"))
-        assertTrue(enPrompt.contains("use siblings or prose"))
+        assertTrue(enPrompt.contains("one marker per physical line"))
+        assertTrue(enPrompt.contains("parent text column"))
+        assertTrue(enPrompt.contains("Use siblings or prose"))
     }
 
     @Test

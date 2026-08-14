@@ -2,6 +2,7 @@ package com.android.everytalk.ui.screens.BubbleMain.Main
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
 
@@ -47,6 +48,15 @@ class ThinkingUiTextTest {
                 emptyText = "暂无详细思考内容",
             )
         )
+    }
+
+    @Test
+    fun `终态执行提示保持静态，取消中和恢复中保持活动`() {
+        assertFalse(isExecutionStatusActive("远端任务已取消"))
+        assertFalse(isExecutionStatusActive("远端取消失败，等待恢复确认"))
+        assertFalse(isExecutionStatusActive("命令执行完成"))
+        assertTrue(isExecutionStatusActive("正在取消远端任务"))
+        assertTrue(isExecutionStatusActive("正在恢复远端任务"))
     }
 
     @Test

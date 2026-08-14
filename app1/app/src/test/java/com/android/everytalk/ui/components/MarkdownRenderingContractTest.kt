@@ -20,6 +20,73 @@ import org.junit.Test
 class MarkdownRenderingContractTest {
 
     @Test
+    fun `链接代码标记被恢复为清晰链接并隔离备用参数`() {
+        val source = """
+            ○ 直达下单链接：
+            `https://app.vmiss.com/cart.php?a=add&pid=78` （或备用 pid=73）
+            ○ 后台路径：Order New Services -> US -> Los Angeles
+
+            ○ 直达下单链接：
+            `https://app.vmiss.com/cart.php?a=add&pid=44` （或备用
+            pid=99/85）
+            ○ 后台路径：Order New Services -> US -> Los Angeles
+        """.trimIndent()
+
+        val prepared = StreamBlockParser.prepareMessage(
+            content = source,
+            messageId = "url-callout-recovery",
+            contentVersion = 59L,
+        )
+
+        assertEquals(
+            """
+                ○ 直达下单链接：
+
+                https://app.vmiss.com/cart.php?a=add&pid=78
+                （或备用 pid=73）
+
+                ○ 后台路径：Order New Services -> US -> Los Angeles
+
+                ○ 直达下单链接：
+
+                https://app.vmiss.com/cart.php?a=add&pid=44
+                （或备用 pid=99/85）
+
+                ○ 后台路径：Order New Services -> US -> Los Angeles
+            """.trimIndent(),
+            prepared.markdown,
+        )
+        assertFalse(prepared.markdown.contains('`'))
+        assertTrue(parseMarkdown(prepared.markdown) is State.Success)
+
+        val normalizedAgain = StreamBlockParser.prepareMessage(
+            content = prepared.markdown,
+            messageId = "url-callout-recovery-again",
+            contentVersion = 59L,
+        )
+        assertEquals(prepared.markdown, normalizedAgain.markdown)
+    }
+
+    @Test
+    fun `代码围栏和普通命令中的 URL 不被链接修复改写`() {
+        val source = """
+            执行 `curl https://example.com/install.sh`。
+
+            ```bash
+            curl https://example.com/install.sh
+            ```
+        """.trimIndent()
+
+        val prepared = StreamBlockParser.prepareMessage(
+            content = source,
+            messageId = "url-callout-protected",
+            contentVersion = 60L,
+        )
+
+        assertEquals(source, prepared.markdown)
+    }
+
+    @Test
     fun `列表内半缩进围栏提升为顶级代码块且不吞掉后续正文`() {
         val source = """
             3. 服务端返回：

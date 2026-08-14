@@ -81,6 +81,11 @@ internal fun localizedExecutionStatusText(status: String?): String? {
         text == "正在接收思考" -> stringResource(R.string.thinking_receiving)
         text == "已收到思考，等待正文" -> stringResource(R.string.thinking_received_waiting_content)
         text == "正在准备服务器" -> stringResource(R.string.thinking_preparing_server)
+        text == "正在恢复远端任务" -> stringResource(R.string.thinking_restoring_remote_task)
+        text == "等待服务器重连" -> stringResource(R.string.thinking_waiting_server_reconnect)
+        text == "正在取消远端任务" -> stringResource(R.string.thinking_cancelling_remote_task)
+        text == "远端取消失败，等待恢复确认" -> stringResource(R.string.thinking_remote_cancel_failed)
+        text == "远端任务已取消" -> stringResource(R.string.thinking_remote_task_cancelled)
         text == AGENT_LOOP_CONTINUING_STATUS -> stringResource(R.string.thinking_analyzing_tool_result)
         text == "搜索网页" -> stringResource(R.string.thinking_searching_web)
         text.startsWith("搜索网页 · ") -> stringResource(
@@ -147,6 +152,20 @@ internal fun executionSummaryText(
     }
     return "等待首个响应"
 }
+
+/** 只有仍在等待或执行中的状态才显示扫描高光，终态保留为静态可回看的文本。 */
+internal fun isExecutionStatusActive(status: String?): Boolean {
+    val text = status?.trim()?.takeIf(String::isNotEmpty) ?: return false
+    return TERMINAL_EXECUTION_STATUS_PREFIXES.none(text::startsWith)
+}
+
+private val TERMINAL_EXECUTION_STATUS_PREFIXES = listOf(
+    "远端任务已",
+    "远端取消失败",
+    "命令执行完成",
+    "命令执行失败",
+    "命令已取消",
+)
 
 internal fun latestReasoningSummary(reasoningText: String): String? {
     val line = reasoningText

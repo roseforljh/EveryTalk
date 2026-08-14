@@ -12,7 +12,9 @@ internal object MarkdownContractValidator {
         if (markdown.isBlank()) return markdown
 
         val fenceRecovered = recoverMalformedFenceBoundaries(markdown)
-        val normalizedLineBreaks = fenceRecovered.replace("\r\n", "\n")
+        val normalizedLineBreaks = normalizeLinkCallouts(
+            normalizeInlineUrlCodeSpans(fenceRecovered.replace("\r\n", "\n")),
+        )
         val lines = normalizedLineBreaks.split('\n')
         val fenceTracker = MarkdownFenceTracker()
         val output = ArrayList<String>(lines.size + 2)
@@ -58,7 +60,209 @@ internal object MarkdownContractValidator {
             index++
         }
 
-        return if (changed) output.joinToString("\n") else fenceRecovered
+        return if (changed) output.joinToString("\n") else normalizedLineBreaks
+    }
+
+    /**
+     * URL 被错误地包在行内代码反引号中时，渲染器会同时遇到代码和自动链接标记。
+     * 只处理内容完全是 HTTP(S) URL 的代码 span，普通命令和代码片段保持原样。
+     */
+    private fun normalizeInlineUrlCodeSpans(markdown: String): String {
+        val lines = splitSourceLines(markdown)
+        if (lines.isEmpty()) return markdown
+
+        val fences = MarkdownFenceTracker()
+        var changed = false
+        val output = buildString(markdown.length) {
+            lines.forEach { sourceLine ->
+                val line = sourceLine.text
+                val protectedLine = fences.isFenceLine(line)
+                val normalizedLine = if (protectedLine) line else stripInlineUrlCodeDelimiters(line)
+                if (normalizedLine != line) changed = true
+                append(normalizedLine)
+                append(sourceLine.ending)
+            }
+        }
+        return if (changed) output else markdown
+    }
+
+    private fun stripInlineUrlCodeDelimiters(line: String): String {
+        var cursor = 0
+        var copyStart = 0
+        var changed = false
+        val output = StringBuilder(line.length)
+
+        while (cursor < line.length) {
+            if (line[cursor] != '`' || isEscaped(line, cursor)) {
+                cursor++
+                continue
+            }
+
+            val runLength = countRun(line, cursor, '`')
+            val close = findInlineCodeClose(line, cursor + runLength, runLength)
+            if (close == null) {
+                cursor += runLength
+                continue
+            }
+
+            val bodyStart = cursor + runLength
+            val bodyEnd = close - runLength
+            val body = line.substring(bodyStart, bodyEnd)
+            val url = body.trim()
+            if (isCompleteHttpUrl(url)) {
+                output.append(line, copyStart, cursor)
+                output.append(body.take(body.indexOfFirst { !it.isWhitespace() }.coerceAtLeast(0)))
+                output.append(url)
+                output.append(body.takeLast(body.length - body.trimEnd().length))
+                copyStart = close
+                changed = true
+            }
+            cursor = close
+        }
+
+        if (!changed) return line
+        output.append(line, copyStart, line.length)
+        return output.toString()
+    }
+
+    private fun isCompleteHttpUrl(value: String): Boolean {
+        if (value.isBlank()) return false
+        val end = findPlainUrlEnd(value, 0) ?: return false
+        return end == value.length
+    }
+
+    /**
+     * 链接说明常被模型和备用参数挤在一行，窄屏换行后备用参数会脱离链接。
+     * 这里仅处理包含 HTTP(S) URL 的行，不触碰代码围栏中的原文。
+     */
+    private fun normalizeLinkCallouts(markdown: String): String {
+        val sourceLines = splitSourceLines(markdown).map { it.text }.toMutableList()
+        if (sourceLines.isEmpty()) return markdown
+
+        data class LinkCalloutLine(
+            val text: String,
+            val protected: Boolean,
+        )
+
+        val fences = MarkdownFenceTracker()
+        val splitLines = mutableListOf<LinkCalloutLine>()
+        sourceLines.forEach { line ->
+            val protected = fences.isFenceLine(line)
+            if (protected) {
+                splitLines += LinkCalloutLine(line, protected = true)
+                return@forEach
+            }
+            val fallbackStart = findFallbackStartAfterUrl(line)
+            if (fallbackStart < 0) {
+                splitLines += LinkCalloutLine(line, protected = false)
+            } else {
+                splitLines += LinkCalloutLine(
+                    line.substring(0, fallbackStart).trimEnd(),
+                    protected = false,
+                )
+                splitLines += LinkCalloutLine(
+                    line.substring(fallbackStart).trimStart(),
+                    protected = false,
+                )
+            }
+        }
+
+        val joinedLines = mutableListOf<LinkCalloutLine>()
+        var index = 0
+        while (index < splitLines.size) {
+            val line = splitLines[index]
+            if (!line.protected && isFallbackLine(line.text) && !hasClosingParenthesis(line.text)) {
+                val joined = StringBuilder(line.text.trimEnd())
+                var cursor = index + 1
+                while (cursor < splitLines.size && !hasClosingParenthesis(joined.toString())) {
+                    val next = splitLines[cursor]
+                    if (next.protected || next.text.isBlank() || isVisualBulletLine(next.text)) break
+                    joined.append(' ').append(next.text.trimStart())
+                    cursor++
+                }
+                joinedLines += LinkCalloutLine(joined.toString(), protected = false)
+                index = cursor
+            } else {
+                joinedLines += line
+                index++
+            }
+        }
+
+        val output = mutableListOf<String>()
+        var changed = false
+        index = 0
+        while (index < joinedLines.size) {
+            val line = joinedLines[index]
+            if (line.protected) {
+                output += line.text
+                index++
+                continue
+            }
+            val next = joinedLines.getOrNull(index + 1)
+            if (isLinkHeading(line.text) && next != null && !next.protected &&
+                isUrlLine(next.text) && next.text.isNotBlank()
+            ) {
+                output += line.text
+                if (output.lastOrNull()?.isNotBlank() == true) output += ""
+                changed = true
+                index++
+                continue
+            }
+
+            output += line.text
+            val following = joinedLines.getOrNull(index + 1)
+            if (isFallbackLine(line.text) && following != null && !following.protected &&
+                following.text.isNotBlank() &&
+                (isVisualBulletLine(following.text) || following.text.contains("后台路径：") ||
+                    following.text.contains("后台路径:"))
+            ) {
+                output += ""
+                changed = true
+            }
+            index++
+        }
+
+        return if (changed || output.size != sourceLines.size) output.joinToString("\n") else markdown
+    }
+
+    private fun findFallbackStartAfterUrl(line: String): Int {
+        val urlStart = findHttpUrlStart(line)
+        if (urlStart < 0) return -1
+        val urlEnd = findPlainUrlEnd(line, urlStart) ?: return -1
+        return listOf("（或备用", "(或备用")
+            .mapNotNull { marker -> line.indexOf(marker, urlEnd).takeIf { it >= 0 } }
+            .minOrNull()
+            ?: -1
+    }
+
+    private fun findHttpUrlStart(line: String): Int {
+        val https = line.indexOf("https://", ignoreCase = true)
+        val http = line.indexOf("http://", ignoreCase = true)
+        return when {
+            https < 0 -> http
+            http < 0 -> https
+            else -> minOf(https, http)
+        }
+    }
+
+    private fun isUrlLine(line: String): Boolean = findHttpUrlStart(line) >= 0
+
+    private fun isLinkHeading(line: String): Boolean {
+        val trimmed = line.trim()
+        return trimmed.endsWith("链接：") || trimmed.endsWith("链接:")
+    }
+
+    private fun isFallbackLine(line: String): Boolean {
+        val trimmed = line.trimStart()
+        return trimmed.startsWith("（或备用") || trimmed.startsWith("(或备用")
+    }
+
+    private fun hasClosingParenthesis(line: String): Boolean =
+        line.contains('）') || line.contains(')')
+
+    private fun isVisualBulletLine(line: String): Boolean {
+        val marker = line.trimStart().firstOrNull() ?: return false
+        return marker in setOf('○', '●', '•', '◦', '◉')
     }
 
     /**

@@ -32,6 +32,7 @@ object SystemPromptInjector {
         # Markdown 契约
         - 列表：从独立行开始，每项只使用一个行首标记，禁止在同一物理行继续写第二个标记。子列表另起一行并缩进到父项正文起始列；无法保证合法嵌套时改用同级列表或普通段落。
         - 表格：正文与表头之间留空行，表格从独立行开始；表头、分隔行和所有数据行列数一致，每行独占一行，单元格中的竖线写成 `\|`；无法保证合法表格时改用列表。
+        - 链接：使用 `[链接文本](URL)` 或裸 URL；URL 不放在反引号中，不在 URL 内手动换行；备用参数另起一行。
         - 代码块：禁止把代码围栏嵌入列表或引用。起止围栏必须从物理行第 1 列开始，各占一行并标注语言。步骤需要代码时先结束列表，空一行输出代码块，再继续编号。围栏内只保留代码自身需要的缩进。
         - 公式：真实公式使用 `${'$'}...${'$'}` 或独立行 `${'$'}${'$'}...${'$'}${'$'}`，禁止 `\(...\)`、`\[...\]`。
     """.trimIndent().trim()
@@ -46,10 +47,11 @@ object SystemPromptInjector {
         ${AiContentSafetyPolicy.systemInstruction("en")}
 
         # Markdown contract
-        - Lists: start on new lines with one leading marker per physical line. Put nested items on new lines at the parent content column; use siblings or prose when uncertain.
-        - Tables: leave a blank line after prose and start on a new line. Keep equal columns across the header, separator, and rows; use one line per row; escape `|` as `\|`; use a list if validity is uncertain.
-        - Code blocks: never nest fenced code inside lists or block quotes. Both fences must start at column 1 on separate lines and include a language. End the list before a block, then resume numbering. Inside, keep only indentation required by the code itself.
-        - Formulas: use `${'$'}...${'$'}` or standalone `${'$'}${'$'}...${'$'}${'$'}` for real formulas; no `\(...\)`, `\[...\]`.
+        - Lists: one marker per physical line; nested items start at the parent text column. Use siblings or prose when unsure.
+        - Tables: start after a blank line; one row per line with equal columns; escape `|`; use a list if unsure.
+        - Links: use `[label](URL)` or a bare URL. Never put URLs in backticks or split them with line breaks. Put fallback parameters on a separate line.
+        - Code: fences start at column 1 on separate lines and require a language; never nest them in lists or quotes. End lists before code.
+        - Formulas: use `${'$'}...${'$'}` or standalone `${'$'}${'$'}...${'$'}${'$'}` only; no `\(...\)` or `\[...\]`.
     """.trimIndent().trim()
 
     fun detectUserLanguage(text: String): String {

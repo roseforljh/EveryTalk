@@ -179,7 +179,7 @@ internal fun ReasoningToggleAndContent(
     var visibilityNotified by remember(currentMessageId) { mutableStateOf(false) }
 
     val processIsActive = !messageIsError &&
-        (isReasoningStreaming || !activityStatusText.isNullOrBlank())
+        (isReasoningStreaming || isExecutionStatusActive(activityStatusText))
     val hasReviewableProcess = hasReviewableExecutionProcess(
         reasoningText = displayedReasoningText,
         executionSteps = executionSteps,
