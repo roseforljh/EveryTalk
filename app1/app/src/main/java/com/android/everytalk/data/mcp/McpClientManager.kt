@@ -18,13 +18,17 @@ import io.modelcontextprotocol.kotlin.sdk.types.ToolSchema
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -42,6 +46,7 @@ import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.time.Duration.Companion.seconds
 
 private const val TAG = "McpClientManager"
@@ -101,8 +106,16 @@ private fun classifyFailureType(error: Throwable): McpFailureType {
 }
 
 class McpClientManager(
-    private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
+    private val connectClient: suspend (Client, AbstractTransport) -> Unit = { client, transport ->
+        client.connect(transport)
+    },
 ) {
+    private data class ActiveConnection(
+        val generation: Long,
+        val job: Job,
+    )
+
     private val okHttpClient: OkHttpClient = OkHttpClient.Builder()
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.MINUTES)
@@ -127,6 +140,8 @@ class McpClientManager(
     private val configs = ConcurrentHashMap<String, McpServerConfig>()
     // ponytail: 服务器数量很小，按 ID 保留轻量锁比引用计数锁池更稳；关闭时统一释放。
     private val operationLocks = ConcurrentHashMap<String, Mutex>()
+    private val operationGenerations = ConcurrentHashMap<String, AtomicLong>()
+    private val activeConnections = ConcurrentHashMap<String, ActiveConnection>()
     private val closed = AtomicBoolean(false)
 
     private val _serverStates = MutableStateFlow<Map<String, McpServerState>>(emptyMap())
@@ -149,7 +164,7 @@ class McpClientManager(
                 try {
                     if (client.transport == null) {
                         Log.d(TAG, "callTool: reconnecting...")
-                        client.connect(getTransport(config))
+                        connectClient(client, getTransport(config))
                     }
 
                     Log.d(TAG, "callTool: sending request...")
@@ -208,9 +223,21 @@ class McpClientManager(
         }
     }
 
-    suspend fun addServer(config: McpServerConfig) = withContext(Dispatchers.IO) {
-        withServerLock(config.id) {
-            addServerLocked(config)
+    suspend fun addServer(config: McpServerConfig) {
+        val generation = nextServerOperation(config.id)
+        withContext(Dispatchers.IO) {
+            withServerLock(config.id) {
+                val activeConnection = ActiveConnection(generation, currentCoroutineContext().job)
+                activeConnections[config.id] = activeConnection
+                try {
+                    // 数据库监听和显式开关可能同时触发连接。只允许最后一次操作真正执行。
+                    if (isCurrentServerOperation(config.id, generation)) {
+                        addServerLocked(config)
+                    }
+                } finally {
+                    activeConnections.remove(config.id, activeConnection)
+                }
+            }
         }
     }
 
@@ -242,7 +269,7 @@ class McpClientManager(
                 McpServerState(config = config, status = McpStatus.Connecting)
             }
 
-            client.connect(transport)
+            connectClient(client, transport)
             check(!closed.get()) { "McpClientManager is closed" }
             syncToolsLocked(config)
 
@@ -286,7 +313,7 @@ class McpClientManager(
         val client = clients[config.id] ?: return
 
         if (client.transport == null) {
-            client.connect(getTransport(config))
+            connectClient(client, getTransport(config))
         }
 
         val serverTools = client.listTools().tools
@@ -316,9 +343,15 @@ class McpClientManager(
 
     }
 
-    suspend fun removeServer(serverId: String) = withContext(Dispatchers.IO) {
-        withServerLock(serverId) {
-            removeServerLocked(serverId)
+    suspend fun removeServer(serverId: String) {
+        val generation = nextServerOperation(serverId)
+        cancelActiveConnection(serverId)
+        withContext(Dispatchers.IO) {
+            withServerLock(serverId) {
+                if (isCurrentServerOperation(serverId, generation)) {
+                    removeServerLocked(serverId)
+                }
+            }
         }
     }
 
@@ -341,15 +374,25 @@ class McpClientManager(
         closeCancellation?.let { throw it }
     }
 
-    suspend fun disconnectServer(serverId: String) = withContext(Dispatchers.IO) {
-        withServerLock(serverId) {
-            disconnectServerLocked(serverId)
+    suspend fun disconnectServer(serverId: String) {
+        val generation = nextServerOperation(serverId)
+        val fallbackConfig = configs[serverId] ?: _serverStates.value[serverId]?.config
+        cancelActiveConnection(serverId)
+        withContext(Dispatchers.IO) {
+            withServerLock(serverId) {
+                if (isCurrentServerOperation(serverId, generation)) {
+                    disconnectServerLocked(serverId, fallbackConfig)
+                }
+            }
         }
     }
 
-    private suspend fun disconnectServerLocked(serverId: String) {
+    private suspend fun disconnectServerLocked(
+        serverId: String,
+        fallbackConfig: McpServerConfig? = null,
+    ) {
         val client = clients.remove(serverId)
-        val config = configs[serverId]
+        val config = configs[serverId] ?: fallbackConfig
         var closeCancellation: CancellationException? = null
 
         try {
@@ -387,6 +430,22 @@ class McpClientManager(
         }
     }
 
+    private fun nextServerOperation(serverId: String): Long {
+        return operationGenerations.computeIfAbsent(serverId) { AtomicLong() }.incrementAndGet()
+    }
+
+    private fun isCurrentServerOperation(serverId: String, generation: Long): Boolean {
+        return operationGenerations[serverId]?.get() == generation
+    }
+
+    /**
+     * 关闭开关时先取消仍在握手或同步工具的连接协程。
+     * 否则关闭操作会在同一把服务器锁后等待完整连接超时，界面看起来像点击无效。
+     */
+    private suspend fun cancelActiveConnection(serverId: String) {
+        activeConnections[serverId]?.job?.cancelAndJoin()
+    }
+
     private suspend fun <T> withServerLock(serverId: String, block: suspend () -> T): T {
         return operationLocks.computeIfAbsent(serverId) { Mutex() }.withLock {
             check(!closed.get()) { "McpClientManager is closed" }
@@ -396,6 +455,7 @@ class McpClientManager(
 
     fun close() {
         if (!closed.compareAndSet(false, true)) return
+        activeConnections.values.forEach { it.job.cancel() }
         scope.launch {
             withContext(NonCancellable) {
                 try {
@@ -406,6 +466,8 @@ class McpClientManager(
                     clients.clear()
                     configs.clear()
                     _serverStates.value = emptyMap()
+                    activeConnections.clear()
+                    operationGenerations.clear()
                     operationLocks.clear()
                     httpClient.close()
                 } finally {

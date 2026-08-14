@@ -455,7 +455,13 @@ fun SettingsScreen(
                                     Spacer(Modifier.height(topContentPadding))
                                     McpServerListContent(
                                         serverStates = allMcpConfigs.mapValues { (id, persistedState) ->
-                                            mcpServerStates[id] ?: persistedState
+                                            val runtimeState = mcpServerStates[id]
+                                            if (persistedState.config.enabled) {
+                                                runtimeState ?: persistedState
+                                            } else {
+                                                // 关闭操作已经写入数据库时立即显示关闭，避免旧连接态覆盖开关。
+                                                persistedState.copy(tools = runtimeState?.tools.orEmpty())
+                                            }
                                         },
                                         onAddServer = { config -> 
                                             viewModel.addMcpServer(config) 

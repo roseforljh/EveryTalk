@@ -102,8 +102,11 @@ import com.android.everytalk.data.mcp.McpServerState
 import com.android.everytalk.data.mcp.McpServerConfig
 import com.android.everytalk.data.computer.Computer
 import com.android.everytalk.data.computer.ComputerDisclosureKind
+import com.android.everytalk.ui.components.dialog.AppDialogButtonShape
 import com.android.everytalk.ui.components.dialog.AppDialogShape
 import com.android.everytalk.ui.components.dialog.appDialogBorderColor
+import com.android.everytalk.ui.components.dialog.appDialogContainerColor
+import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.screens.mcp.McpServerListDialog
 import java.io.File
 import java.text.SimpleDateFormat
@@ -159,19 +162,22 @@ internal fun AgentDisclosureDialog(
         onDismissRequest = onDismiss,
         modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
         shape = AppDialogShape,
+        containerColor = appDialogContainerColor(),
+        titleContentColor = appDialogContentColor(),
+        textContentColor = appDialogContentColor(),
         title = { Text(stringResource(R.string.agent_disclosure_title)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 if (ComputerDisclosureKind.MODEL_DATA_FLOW in disclosures) {
                     Text(
                         text = stringResource(R.string.agent_disclosure_model_data),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = appDialogContentColor().copy(alpha = 0.72f),
                     )
                 }
                 if (ComputerDisclosureKind.DIRECT_SSH_PERMISSION in disclosures) {
                     Text(
                         text = stringResource(R.string.agent_disclosure_direct_permission),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = appDialogContentColor().copy(alpha = 0.72f),
                     )
                 }
                 if (ComputerDisclosureKind.ROOT_SSH_PERMISSION in disclosures) {
@@ -183,12 +189,25 @@ internal fun AgentDisclosureDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onConfirm) {
+            Button(
+                onClick = onConfirm,
+                shape = AppDialogButtonShape,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = appDialogContentColor(),
+                    contentColor = appDialogContainerColor(),
+                ),
+            ) {
                 Text(stringResource(R.string.agent_disclosure_confirm))
             }
         },
         dismissButton = {
-            TextButton(onClick = onDismiss) {
+            TextButton(
+                onClick = onDismiss,
+                shape = AppDialogButtonShape,
+                colors = ButtonDefaults.textButtonColors(
+                    contentColor = appDialogContentColor(),
+                ),
+            ) {
                 Text(stringResource(R.string.action_cancel))
             }
         },

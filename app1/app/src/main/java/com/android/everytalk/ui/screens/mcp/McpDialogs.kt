@@ -400,9 +400,9 @@ private fun McpServerItem(
                         checkedThumbColor = Color.White,
                         checkedTrackColor = iconColor,
                         checkedBorderColor = Color.Transparent,
-                        uncheckedThumbColor = Color.White,
-                        uncheckedTrackColor = MaterialTheme.colorScheme.surfaceContainerHigh,
-                        uncheckedBorderColor = Color.White.copy(alpha = 0.4f)
+                        uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        uncheckedTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        uncheckedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.7f)
                     )
                 )
             }
