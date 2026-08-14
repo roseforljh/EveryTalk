@@ -196,12 +196,6 @@ internal fun isHistoryConversationReadyForInitialBottom(
     if (isLoadingHistory || isLoadingHistoryData) return false
     if (requireMatchingScrollSession && currentConversationId != scrollSessionKey) return false
 
-    val expectedMessageIds = messages
-        .dropWhile { message ->
-            message.sender == Sender.System && !message.isPlaceholderName && message.text.isNotBlank()
-        }
-        .filter { message -> message.sender != Sender.Tool || message.isError }
-        .mapTo(mutableSetOf()) { message -> message.id }
     val renderedMessageIds = chatItems.mapNotNullTo(mutableSetOf()) { item ->
         when (item) {
             is ChatListItem.UserMessage -> item.messageId
@@ -220,6 +214,20 @@ internal fun isHistoryConversationReadyForInitialBottom(
             is ChatListItem.LoadingBubblePlaceholder -> null
         }
     }
+    val expectedMessageIds = messages
+        .filterNot { message -> message.sender == Sender.System && message.isPlaceholderName }
+        .dropWhile { message -> message.sender == Sender.System && message.text.isNotBlank() }
+        .filter { message -> message.sender != Sender.Tool || message.isError }
+        .filter { message ->
+            // 已取消的空白 AI 占位不会生成 ChatListItem，不能让首页永远等待它。
+            // 活跃占位已经存在于 renderedMessageIds，仍会参与本轮同步校验。
+            message.sender != Sender.AI ||
+                message.isError ||
+                message.contentStarted ||
+                message.text.isNotBlank() ||
+                message.id in renderedMessageIds
+        }
+        .mapTo(mutableSetOf()) { message -> message.id }
 
     return expectedMessageIds == renderedMessageIds &&
         (!requireLaidOutItemCount || laidOutItemCount >= chatItems.size)

@@ -147,6 +147,40 @@ class ChatScreenScrollSessionTest {
     }
 
     @Test
+    fun `inactive blank Agent placeholder does not block initial bottom`() {
+        val userMessage = Message(id = "agent-user", text = "查看服务器配置", sender = Sender.User)
+        val blankAgentPlaceholder = Message(
+            id = "agent-ai-placeholder",
+            text = "",
+            sender = Sender.AI,
+            executionStatus = "正在准备服务器",
+        )
+        val messages = listOf(userMessage, blankAgentPlaceholder)
+        val userItem = ChatListItem.UserMessage(userMessage.id, userMessage.text, emptyList())
+
+        assertTrue(
+            isHistoryConversationReadyForInitialBottom(
+                currentConversationId = userMessage.id,
+                scrollSessionKey = userMessage.id,
+                isLoadingHistory = false,
+                messages = messages,
+                chatItems = listOf(userItem),
+                laidOutItemCount = 1,
+            )
+        )
+        assertTrue(
+            isHistoryConversationReadyForInitialBottom(
+                currentConversationId = userMessage.id,
+                scrollSessionKey = userMessage.id,
+                isLoadingHistory = false,
+                messages = messages,
+                chatItems = listOf(userItem, ChatListItem.AiMessageReasoning(blankAgentPlaceholder)),
+                laidOutItemCount = 2,
+            )
+        )
+    }
+
+    @Test
     fun `conversation content can be ready before the message list is composed`() {
         val messages = listOf(
             Message(id = "ready-user", text = "已准备", sender = Sender.User),
