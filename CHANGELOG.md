@@ -1,5 +1,34 @@
 # Changelog
 
+## [1.27.0](https://github.com/roseforljh/EveryTalk/compare/v1.26.0...v1.27.0) (2026-08-14)
+
+
+### Features
+
+* Pi Agent 审批跨进程恢复与工具结果归档 ([24bde32](https://github.com/roseforljh/EveryTalk/commit/24bde32f5a839c1730d2ac2e2851b59e304dca11))
+* VPS Agent 主机命令审批、权限模式与运行态增强 ([1a13820](https://github.com/roseforljh/EveryTalk/commit/1a138209900ea2bb63a27e0d43c4651d9053734f))
+* 三种协议续写保留中立 reasoning 内容 ([2d07798](https://github.com/roseforljh/EveryTalk/commit/2d07798dbfac88d670f886883a06ca58d43f680f))
+* 完善 Agent 执行链与过程展示 ([f859e58](https://github.com/roseforljh/EveryTalk/commit/f859e589b903d3b3c2908b2fb7f4a0bfd6037055))
+* 完善 VPS Agent 交互与服务器管理 ([dc6d3d8](https://github.com/roseforljh/EveryTalk/commit/dc6d3d85dd4280c2828c456d7bf3a00c5d0457f6))
+* 完善 VPS Agent 服务器详情与工作区管理 ([ba52093](https://github.com/roseforljh/EveryTalk/commit/ba5209357183b25b98a2083b2143707b73d2d442))
+* 实现 Android 本地直连 VPS Agent 核心能力 ([a2715cb](https://github.com/roseforljh/EveryTalk/commit/a2715cb2f94a2e7ea2d7b4754707da27d21bc158))
+* 服务器详情展示会话容器数量 ([738b95a](https://github.com/roseforljh/EveryTalk/commit/738b95a8f04e95f87b87005a4eebd9ba05faf70c))
+
+
+### Bug Fixes
+
+* MCP 连接取消与开关对话框主题统一 ([29928c9](https://github.com/roseforljh/EveryTalk/commit/29928c966c6ce96f948b5f80b98eefee2d5a93cc))
+* Release 保留 BC 动态算法并关闭 KSP 增量 ([d136b4d](https://github.com/roseforljh/EveryTalk/commit/d136b4d9f8e6d7fddea8260912538416d84a6df8))
+* 主机命令确认卡退场期间屏蔽回到底部按钮 ([283ef57](https://github.com/roseforljh/EveryTalk/commit/283ef57d5dbf4987684e7e8a9156f00f53beb75d))
+* 发送流程服务器准备错误不取消发送协程 ([d620760](https://github.com/roseforljh/EveryTalk/commit/d620760d9a8dca8d7908ced441af50e198126b66))
+* 启动屏移除系统 Splash 依赖并增加两秒超时兜底 ([5d6f7a4](https://github.com/roseforljh/EveryTalk/commit/5d6f7a4bf0946b10abbd1ff5104706403a2967eb))
+* 恢复 Agent 最终回答流式输出 ([f64257d](https://github.com/roseforljh/EveryTalk/commit/f64257df05b18ddf2867534d9a6c6befa3887b06))
+* 提升 VPS Agent 连接与任务可靠性 ([32833ba](https://github.com/roseforljh/EveryTalk/commit/32833badf7e034414e440251361d404279c492f6))
+* 空白 Agent 占位不阻塞首页定位 ([a141fcc](https://github.com/roseforljh/EveryTalk/commit/a141fcc9924c6f0b6fe58a2447c0163140c8dded))
+* 统一服务器异步按钮加载状态 ([6bf894c](https://github.com/roseforljh/EveryTalk/commit/6bf894cefcaed87f90c4c5b50b5f6f7d839beb06))
+* 统一服务器管理界面与诊断反馈 ([17b266b](https://github.com/roseforljh/EveryTalk/commit/17b266b75745c4a2590dacad071e11546eb44db7))
+* 调整 Agent 权限卡悬浮交互 ([0f8fe59](https://github.com/roseforljh/EveryTalk/commit/0f8fe59127546de6312770853841805c072b7270))
+
 ## [1.26.0](https://github.com/roseforljh/EveryTalk/compare/v1.25.0...v1.26.0) (2026-08-09)
 
 
