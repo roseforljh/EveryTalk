@@ -1,0 +1,15 @@
+{
+  "name": "everytalk-skills-proxy",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check api/index.js && node --test test/index.test.js"
+  },
+  "dependencies": {
+    "@vercel/oidc": "^3.8.4",
+    "fflate": "^0.8.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
