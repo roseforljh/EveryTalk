@@ -7,7 +7,49 @@ import org.junit.Test
 /** 验证任务监听已经真正归前台服务所有，不再依赖页面 ViewModel 存活。 */
 class AgentBackgroundPlanServiceContractTest {
     private val service = AgentBackgroundPlanTestFiles.source("service/ComputerConnectionService.kt")
+    private val serviceCode = AgentBackgroundPlanTestFiles.code("service/ComputerConnectionService.kt")
     private val viewModel = AgentBackgroundPlanTestFiles.source("statecontroller/viewmodel/AppViewModel.kt")
+    private val apiHandlerCode = AgentBackgroundPlanTestFiles.code("statecontroller/api/ApiHandler.kt")
+
+    @Test
+    fun `AgentLoop不能继续由ViewModel协程持有`() {
+        val uiOwnedAgentLoops = AgentBackgroundPlanTestFiles
+            .codeBlocksAfter(apiHandlerCode, "viewModelScope.launch")
+            .filter { block -> block.contains("agentLoop.run(") }
+
+        assertTrue(
+            "AgentLoop 仍挂在 viewModelScope；切换 App 或页面重建后模型连接无法由前台服务恢复",
+            uiOwnedAgentLoops.isEmpty(),
+        )
+    }
+
+    @Test
+    fun `前台服务必须真实调用AgentRun续写而不是只写注释`() {
+        val realContinuationCalls = listOf(
+            "agentLoop.run(",
+            "agentRunCoordinator.resume(",
+            "agentRunCoordinator.resumeRun(",
+            "backgroundRuntime.resume(",
+            "backgroundRuntime.resumeRun(",
+            "resumePendingContinuationRuns(",
+        )
+        assertTrue(
+            "ComputerConnectionService 没有任何真实模型续写调用；注释中的 resume 或 continueRun 不算实现",
+            realContinuationCalls.any(serviceCode::contains),
+        )
+    }
+
+    @Test
+    fun `前台服务只能把当前进程真实运行的AgentRun算作活动任务`() {
+        assertTrue(
+            "服务没有读取当前进程真实运行的 AgentRun 数量",
+            serviceCode.contains("activeAgentRunCount("),
+        )
+        assertFalse(
+            "Room 中可能残留旧 Run，禁止把所有未结束 Run 直接显示成正在运行",
+            serviceCode.contains("agentDao.getActiveRuns("),
+        )
+    }
 
     @Test
     fun `前台服务恢复入口必须启动真实任务监听器`() {

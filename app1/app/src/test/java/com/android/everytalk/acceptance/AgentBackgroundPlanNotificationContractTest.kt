@@ -1,7 +1,12 @@
 package com.android.everytalk.acceptance
 
+import android.Manifest
+import android.app.Application
+import android.app.Notification
 import android.app.NotificationManager
+import android.content.Context
 import com.android.everytalk.service.ComputerConnectionService
+import com.android.everytalk.util.AgentNotificationManager
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -12,8 +17,10 @@ import org.junit.runner.RunWith
 import org.koin.core.context.stopKoin
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.Shadows.shadowOf
+import java.util.UUID
 
 /** 验证通知权限硬门槛和通知只承担状态展示、会话跳转。 */
 @RunWith(RobolectricTestRunner::class)
@@ -32,6 +39,62 @@ class AgentBackgroundPlanNotificationContractTest {
     @After
     fun clearKoinAfterTest() {
         stopKoin()
+    }
+
+    @Test
+    fun `任务成功后必须撤销同一Execution的旧断线通知`() {
+        val context = notificationContext()
+        val executionId = UUID.randomUUID().toString()
+
+        notify(context, executionId, "CONNECTION_LOST", "SSH 连接断开")
+        notify(context, executionId, "SUCCEEDED", "任务完成")
+
+        val notifications = notifications(context)
+        assertEquals("终态到达后只能保留终态通知", 1, notifications.size)
+        assertEquals("任务完成", notifications.single().extras.getCharSequence(Notification.EXTRA_TITLE)?.toString())
+    }
+
+    @Test
+    fun `任务已经成功时必须丢弃迟到的断线事件`() {
+        val context = notificationContext()
+        val executionId = UUID.randomUUID().toString()
+
+        notify(context, executionId, "SUCCEEDED", "任务完成")
+        notify(context, executionId, "CONNECTION_LOST", "SSH 连接断开")
+
+        val notifications = notifications(context)
+        assertEquals("成功后的迟到断线事件不能生成第二条通知", 1, notifications.size)
+        assertEquals("任务完成", notifications.single().extras.getCharSequence(Notification.EXTRA_TITLE)?.toString())
+    }
+
+    @Test
+    fun `从未通知断线时禁止单独发送重新连接通知`() {
+        val context = notificationContext()
+
+        notify(context, UUID.randomUUID().toString(), "RECONNECTED", "SSH 连接已恢复")
+
+        assertTrue("没有 CONNECTION_LOST 状态时，RECONNECTED 属于假通知", notifications(context).isEmpty())
+    }
+
+    @Test
+    fun `自动重试期间同一Execution只发送一次断线通知`() {
+        val context = notificationContext()
+        val executionId = UUID.randomUUID().toString()
+
+        notify(context, executionId, "CONNECTION_LOST", "SSH 连接断开")
+        notify(context, executionId, "CONNECTION_LOST", "SSH 连接断开")
+
+        assertEquals("同一任务的重复重连不能刷出多条通知", 1, notifications(context).size)
+    }
+
+    @Test
+    fun `服务重建会清除旧断线通知`() {
+        val context = notificationContext()
+        notify(context, UUID.randomUUID().toString(), "CONNECTION_LOST", "SSH 连接断开")
+
+        AgentNotificationManager.clearConnectionFailureNotifications(context)
+
+        assertTrue("旧断线通知必须被清掉", notifications(context).isEmpty())
     }
 
     @Test
@@ -113,5 +176,28 @@ class AgentBackgroundPlanNotificationContractTest {
         val notificationBuilder = serviceSource.substringAfter("private fun buildNotification", "")
         assertTrue("通知 Builder 禁止 addAction", !notificationBuilder.contains(".addAction("))
         assertTrue("通知点击只能使用 setContentIntent", notificationBuilder.contains("setContentIntent"))
+    }
+
+    private fun notificationContext(): Context {
+        val application = RuntimeEnvironment.getApplication()
+        shadowOf(application).grantPermissions(Manifest.permission.POST_NOTIFICATIONS)
+        application.getSystemService(NotificationManager::class.java).cancelAll()
+        AgentNotificationManager.ensureEventChannel(application)
+        return application
+    }
+
+    private fun notifications(context: Context): List<Notification> = shadowOf(
+        context.getSystemService(NotificationManager::class.java),
+    ).allNotifications.toList()
+
+    private fun notify(context: Context, executionId: String, eventType: String, title: String) {
+        AgentNotificationManager.notifyTaskEvent(
+            context = context,
+            conversationId = "conversation-1",
+            executionId = executionId,
+            eventType = eventType,
+            title = title,
+            message = title,
+        )
     }
 }

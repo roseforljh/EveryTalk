@@ -6,8 +6,11 @@ import android.content.ContextWrapper
 import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
+import org.junit.After
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.koin.core.context.stopKoin
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
@@ -15,6 +18,18 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class ComputerConnectionServiceControllerTest {
+    @Before
+    fun setUp() {
+        stopKoin()
+        ComputerConnectionServiceController.stopAll()
+    }
+
+    @After
+    fun tearDown() {
+        ComputerConnectionServiceController.stopAll()
+        stopKoin()
+    }
+
     @Test
     fun `releasing last token queues an idle stop instead of cancelling service creation`() {
         val context = RecordingServiceContext(ApplicationProvider.getApplicationContext())
@@ -23,6 +38,17 @@ class ComputerConnectionServiceControllerTest {
 
         assertEquals(0, context.directStopCount)
         assertEquals(2, context.foregroundStartActions.size)
+    }
+
+    @Test
+    fun `Agent运行令牌关闭后不再计入运行中任务`() {
+        val context = RecordingServiceContext(ApplicationProvider.getApplicationContext())
+
+        val token = ComputerConnectionServiceController.acquireAgentRun(context)
+        assertEquals(1, ComputerConnectionServiceController.activeAgentRunCount())
+
+        token.close()
+        assertEquals(0, ComputerConnectionServiceController.activeAgentRunCount())
     }
 
     /** 只记录服务调度方式，不创建真实 Android Service。 */

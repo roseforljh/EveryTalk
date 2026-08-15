@@ -7,6 +7,7 @@ import io.mockk.coVerify
 import io.mockk.mockk
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -83,10 +84,26 @@ class ComputerExecutionReconcilerTest {
         val execution = execution(status = "RUNNING", completionMode = "WAIT_FOR_RESULT")
         coEvery { dao.getExecutionById(executionId) } returns execution
 
-        val result = reconciler(ComputerRemoteExecutionQuery.Unavailable("offline")).reconcile(execution)
+        val result = reconciler(
+            ComputerRemoteExecutionQuery.Unavailable("offline", connectionFailure = true),
+        ).reconcile(execution)
 
         assertEquals(ComputerExecutionReconciliationOutcome.STILL_UNAVAILABLE, result.outcome)
+        assertTrue(result.connectionFailure)
         coVerify(exactly = 0) { dao.updateRemoteExecutionObservation(any(), any(), any(), any(), any(), any(), any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `配置错误不可伪装成SSH断线`() = runBlocking {
+        val execution = execution(status = "RUNNING", completionMode = "WAIT_FOR_RESULT")
+        coEvery { dao.getExecutionById(executionId) } returns execution
+
+        val result = reconciler(
+            ComputerRemoteExecutionQuery.Unavailable("容器环境未配置", connectionFailure = false),
+        ).reconcile(execution)
+
+        assertEquals(ComputerExecutionReconciliationOutcome.STILL_UNAVAILABLE, result.outcome)
+        assertFalse(result.connectionFailure)
     }
 
     @Test

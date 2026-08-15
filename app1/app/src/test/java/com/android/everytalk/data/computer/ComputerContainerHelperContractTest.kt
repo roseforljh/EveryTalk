@@ -9,6 +9,18 @@ import java.io.File
 /** 锁定 root helper 的关键安全边界，防止后续修改重新放开 Docker 控制权。 */
 class ComputerContainerHelperContractTest {
     @Test
+    fun `上传Shell资产前必须转成Linux换行`() {
+        listOf(
+            shellAssetFile("everytalk-containerctl.sh"),
+            shellAssetFile("runtime-wrapper.sh"),
+        ).forEach { file ->
+            val normalized = normalizeComputerShellAsset(file.readBytes())
+            assertFalse("${file.name} 仍包含 CR 字节", normalized.any { it == '\r'.code.toByte() })
+            assertTrue(String(normalized, Charsets.UTF_8).startsWith("#!/bin/sh\n"))
+        }
+    }
+
+    @Test
     fun `Workspace 和 Preview Container 都禁止自动重启`() {
         val source = helperSource()
 
@@ -134,5 +146,14 @@ class ComputerContainerHelperContractTest {
         return requireNotNull(candidates.firstOrNull(File::isFile)) {
             "找不到 runtime-wrapper.sh"
         }.readText(Charsets.UTF_8)
+    }
+
+    private fun shellAssetFile(name: String): File {
+        val candidates = listOf(
+            File("src/main/assets/computer/$name"),
+            File("app/src/main/assets/computer/$name"),
+            File("app1/app/src/main/assets/computer/$name"),
+        )
+        return requireNotNull(candidates.firstOrNull(File::isFile)) { "找不到 $name" }
     }
 }

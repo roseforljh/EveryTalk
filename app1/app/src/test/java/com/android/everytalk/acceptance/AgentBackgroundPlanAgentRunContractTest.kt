@@ -10,6 +10,7 @@ class AgentBackgroundPlanAgentRunContractTest {
     private val dao = AgentBackgroundPlanTestFiles.source("data/database/daos/AgentDao.kt")
     private val runStore = AgentBackgroundPlanTestFiles.source("data/agent/AgentRunStore.kt")
     private val allSources = AgentBackgroundPlanTestFiles.allProductionKotlin()
+    private val allCode = AgentBackgroundPlanTestFiles.allProductionCode()
 
     @Test
     fun `模型待续写状态必须存在且有真实写入方`() {
@@ -52,13 +53,21 @@ class AgentBackgroundPlanAgentRunContractTest {
 
     @Test
     fun `远端终态必须先持久化ToolResult再调用模型`() {
-        val continuationSource = allSources
+        val continuationSource = allCode
             .filter { (_, text) -> text.contains("MODEL_CONTINUATION_PENDING") }
             .joinToString("\n") { it.second }
         assertTrue("缺少远端结果写入 AgentRun 的逻辑", continuationSource.contains("appendToolResult"))
-        assertTrue("缺少恢复原 AgentRun 的逻辑", continuationSource.contains("resume") || continuationSource.contains("continueRun"))
+        val continuationCalls = listOf(
+            "agentLoop.run(",
+            "agentRunCoordinator.resume(",
+            "agentRunCoordinator.resumeRun(",
+            "backgroundRuntime.resume(",
+            "backgroundRuntime.resumeRun(",
+            "resumePendingContinuationRuns(",
+        )
+        assertTrue("缺少恢复原 AgentRun 的真实函数调用", continuationCalls.any(continuationSource::contains))
         val resultIndex = continuationSource.indexOf("appendToolResult")
-        val resumeIndex = listOf(continuationSource.indexOf("resume"), continuationSource.indexOf("continueRun"))
+        val resumeIndex = continuationCalls.map(continuationSource::indexOf)
             .filter { it >= 0 }
             .minOrNull() ?: -1
         assertTrue("必须先保存 ToolResult，再进行模型续写", resultIndex >= 0 && resumeIndex > resultIndex)
@@ -66,7 +75,7 @@ class AgentBackgroundPlanAgentRunContractTest {
 
     @Test
     fun `模型续写失败必须保留待续写状态而不是标记Run失败`() {
-        val continuationSource = allSources
+        val continuationSource = allCode
             .filter { (_, text) -> text.contains("MODEL_CONTINUATION_PENDING") }
             .joinToString("\n") { it.second }
         assertTrue("续写异常必须重新保存 MODEL_CONTINUATION_PENDING", continuationSource.contains("catch") && continuationSource.contains("MODEL_CONTINUATION_PENDING"))
