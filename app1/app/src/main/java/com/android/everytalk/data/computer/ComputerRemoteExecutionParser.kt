@@ -23,6 +23,7 @@ data class ParsedRemoteExecutionState(
     val updatedAt: Long,
     val stdoutBytes: Long,
     val stderrBytes: Long,
+    val terminationReason: String? = null,
 )
 
 /** 受控结果查询返回的日志片段。完整日志仍留在 VPS，不随状态查询全部回传。 */
@@ -84,6 +85,13 @@ object ComputerRemoteExecutionParser {
         "stderr_offset",
         "stdout_truncated",
         "stderr_truncated",
+        "event_type",
+        "event_seq",
+        "stdout_cursor",
+        "stderr_cursor",
+        "observed_at",
+        "boot_id",
+        "termination_reason",
     )
 
     /** 解析状态查询输出，并验证它确实属于本地期待的 Execution。 */
@@ -137,6 +145,10 @@ object ComputerRemoteExecutionParser {
         val updatedAt = fields.requiredLong("updated_at", min = 0)
         val stdoutBytes = fields.requiredLong("stdout_bytes", min = 0)
         val stderrBytes = fields.requiredLong("stderr_bytes", min = 0)
+        val terminationReason = fields["termination_reason"]?.takeIf(String::isNotBlank)
+        if (terminationReason != null && terminationReason !in setOf("VPS_RESTARTED", "REMOTE_PROCESS_TERMINATED")) {
+            invalid("termination_reason 无效")
+        }
         if (updatedAt < startedAt) invalid("updated_at 早于 started_at")
 
         return ParsedRemoteExecutionState(
@@ -153,6 +165,7 @@ object ComputerRemoteExecutionParser {
             updatedAt = updatedAt,
             stdoutBytes = stdoutBytes,
             stderrBytes = stderrBytes,
+            terminationReason = terminationReason,
         )
     }
 
@@ -204,6 +217,61 @@ object ComputerRemoteExecutionParser {
             stderrOffset = stderrOffset,
             stdoutTruncated = stdoutTruncated,
             stderrTruncated = stderrTruncated,
+        )
+    }
+
+    /** 解析长轮询事件；事件元数据和日志状态使用同一份受校验响应。 */
+    fun parseWatchEvent(
+        payload: String,
+        expectedExecutionId: String? = null,
+        expectedProcessId: String? = null,
+        expectedRequestHash: String? = null,
+        expectedTarget: ComputerExecTarget? = null,
+    ): ComputerRemoteExecutionWatchEvent {
+        val fields = parseFields(payload)
+        val result = parseResult(
+            payload = payload,
+            expectedExecutionId = expectedExecutionId,
+            expectedProcessId = expectedProcessId,
+            expectedRequestHash = expectedRequestHash,
+            expectedTarget = expectedTarget,
+        )
+        val eventType = fields.required("event_type")
+        if (eventType !in setOf("PROGRESS", "TERMINAL", "HEARTBEAT")) invalid("event_type 无效")
+        val stdoutCursor = fields.requiredLong("stdout_cursor", min = 0)
+        val stderrCursor = fields.requiredLong("stderr_cursor", min = 0)
+        if (stdoutCursor < result.stdoutOffset || stderrCursor < result.stderrOffset) {
+            invalid("日志游标发生倒退")
+        }
+        return ComputerRemoteExecutionWatchEvent(
+            result = ComputerRemoteExecutionResult(
+                snapshot = ComputerRemoteExecutionSnapshot(
+                    executionId = result.state.executionId,
+                    processId = result.state.processId,
+                    status = result.state.status,
+                    target = result.state.target,
+                    requestHash = result.state.requestHash,
+                    pid = result.state.pid,
+                    startTicks = result.state.startTicks,
+                    exitCode = result.state.exitCode,
+                    startedAt = result.state.startedAt,
+                    updatedAt = result.state.updatedAt,
+                    stdoutBytes = result.state.stdoutBytes,
+                    stderrBytes = result.state.stderrBytes,
+                    terminationReason = result.state.terminationReason,
+                ),
+                stdoutOffset = result.stdoutOffset,
+                stderrOffset = result.stderrOffset,
+                stdout = result.stdout,
+                stderr = result.stderr,
+                stdoutTruncated = result.stdoutTruncated,
+                stderrTruncated = result.stderrTruncated,
+            ),
+            eventType = eventType,
+            eventSequence = fields.requiredLong("event_seq", min = 1),
+            stdoutCursor = stdoutCursor,
+            stderrCursor = stderrCursor,
+            observedAt = fields.requiredLong("observed_at", min = 0),
         )
     }
 

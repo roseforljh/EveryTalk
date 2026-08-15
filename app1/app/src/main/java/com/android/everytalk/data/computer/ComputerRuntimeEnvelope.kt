@@ -579,6 +579,76 @@ class ComputerRuntimeEnvelope(
         )
     }
 
+    /**
+     * 在一个独立 SSH Channel 上等待远端进度、终态或心跳。
+     * Wrapper 最多等待约 25 秒，因此网络设备不会把连接误判为空闲连接。
+     */
+    suspend fun watchExecution(
+        connection: ComputerSshConnection,
+        computer: Computer,
+        workspace: ComputerWorkspace,
+        executionId: String,
+        stdoutCursor: Long,
+        stderrCursor: Long,
+        maxBytes: Int = COMPUTER_EXEC_OUTPUT_BYTES,
+        target: ComputerExecTarget = ComputerExecTarget.CONTAINER,
+        expectedProcessId: String? = null,
+        expectedRequestHash: String? = null,
+    ): ComputerRemoteExecutionWatchEvent {
+        ComputerIdentifier.requireValid(executionId, "Execution ID")
+        require(stdoutCursor >= 0 && stderrCursor >= 0) { "日志游标无效" }
+        require(maxBytes in 1..MAX_REMOTE_READ_BYTES) { "日志读取长度无效" }
+        if (target == ComputerExecTarget.HOST || computer.runMode == ComputerRunMode.DIRECT) {
+            ensureDirectRuntimeWrapper(connection)
+        }
+        val command = executionQueryCommand(
+            computer = computer,
+            workspace = workspace,
+            executionId = executionId,
+            target = target,
+            kind = QueryKind.WATCH,
+            stdoutOffset = stdoutCursor,
+            stderrOffset = stderrCursor,
+            maxBytes = maxBytes,
+            expectedRequestHash = expectedRequestHash,
+        )
+        val response = connection.execute(
+            command = command,
+            timeoutMillis = 35_000,
+            maxOutputBytes = (maxBytes * 3).coerceAtMost(512 * 1024),
+        )
+        if (response.timedOut || response.exitCode?.let { it != 0 } == true) {
+            if (response.exitCode == 49) {
+                throw ComputerException(
+                    ComputerErrorCodes.EXECUTION_REQUEST_HASH_CONFLICT,
+                    "远端 Execution 请求身份冲突",
+                )
+            }
+            throw ComputerException(
+                ComputerErrorCodes.EXECUTION_RESULT_UNAVAILABLE,
+                "远端 Execution 监听暂时中断",
+                retryable = true,
+            )
+        }
+        val isMissing = isMissingSnapshotPayload(response.stdout)
+        return try {
+            ComputerRemoteExecutionParser.parseWatchEvent(
+                payload = response.stdout,
+                expectedExecutionId = executionId,
+                expectedProcessId = expectedProcessId.takeUnless { isMissing },
+                expectedRequestHash = expectedRequestHash.takeUnless { isMissing },
+                expectedTarget = target,
+            )
+        } catch (error: ComputerRemoteExecutionParseException) {
+            throw ComputerRemoteExecutionProtocolException(
+                payload = response.stdout,
+                message = error.message ?: "远端监听事件格式无效",
+                protocolCode = error.code,
+                cause = error,
+            )
+        }
+    }
+
     /** 取消固定 Execution，Helper/Wrapper 会再次校验 PID 与启动标记。 */
     suspend fun cancelExecution(
         connection: ComputerSshConnection,
@@ -621,7 +691,7 @@ class ComputerRuntimeEnvelope(
         )
     }
 
-    private enum class QueryKind { STATUS, RESULT, CANCEL }
+    private enum class QueryKind { STATUS, RESULT, WATCH, CANCEL }
 
     private fun managedStartCommand(
         computer: Computer,
@@ -664,6 +734,7 @@ class ComputerRuntimeEnvelope(
         val action = when (kind) {
             QueryKind.STATUS -> "status"
             QueryKind.RESULT -> "result"
+            QueryKind.WATCH -> "watch"
             QueryKind.CANCEL -> "cancel"
         }
         if (target == ComputerExecTarget.HOST) {
@@ -675,6 +746,7 @@ class ComputerRuntimeEnvelope(
             val arguments = when (kind) {
                 QueryKind.STATUS -> "\"$executionDirectory\" '' --execution-status 0 \"${expectedRequestHash.orEmpty()}\""
                 QueryKind.RESULT -> "\"$executionDirectory\" '' --execution-result $stdoutOffset $stderrOffset $maxBytes \"${expectedRequestHash.orEmpty()}\""
+                QueryKind.WATCH -> "\"$executionDirectory\" '' --watch-execution $stdoutOffset $stderrOffset $maxBytes \"${expectedRequestHash.orEmpty()}\""
                 QueryKind.CANCEL -> "\"$executionDirectory\" '' --execution-cancel 0 \"${expectedRequestHash.orEmpty()}\""
             }
             return "\"$wrapper\" $arguments"
@@ -682,6 +754,7 @@ class ComputerRuntimeEnvelope(
         val subcommand = when (kind) {
             QueryKind.STATUS -> "execution-status ${workspace.id} $executionId ${expectedRequestHash.orEmpty()}"
             QueryKind.RESULT -> "execution-result ${workspace.id} $executionId $stdoutOffset $stderrOffset $maxBytes ${expectedRequestHash.orEmpty()}"
+            QueryKind.WATCH -> "watch-execution ${workspace.id} $executionId $stdoutOffset $stderrOffset $maxBytes ${expectedRequestHash.orEmpty()}"
             QueryKind.CANCEL -> "cancel-execution ${workspace.id} $executionId ${expectedRequestHash.orEmpty()}"
         }
         return "${helperPrefix(computer)} $subcommand"
@@ -700,6 +773,7 @@ class ComputerRuntimeEnvelope(
         return when (action) {
             "status" -> "\"$wrapper\" \"$executionId\" '' --host-execution-status 0 \"${expectedRequestHash.orEmpty()}\""
             "result" -> "\"$wrapper\" \"$executionId\" '' --host-execution-result $stdoutOffset $stderrOffset $maxBytes \"${expectedRequestHash.orEmpty()}\""
+            "watch" -> "\"$wrapper\" \"$executionId\" '' --host-watch-execution $stdoutOffset $stderrOffset $maxBytes \"${expectedRequestHash.orEmpty()}\""
             "cancel" -> "\"$wrapper\" \"$executionId\" '' --host-execution-cancel 0 \"${expectedRequestHash.orEmpty()}\""
             else -> error("未知远端查询类型")
         }
@@ -749,6 +823,7 @@ class ComputerRuntimeEnvelope(
             updatedAt = updatedAt,
             stdoutBytes = stdoutBytes,
             stderrBytes = stderrBytes,
+            terminationReason = terminationReason,
         )
 
     private fun validateRequest(computer: Computer, executionId: String, request: ComputerExecRequest) {

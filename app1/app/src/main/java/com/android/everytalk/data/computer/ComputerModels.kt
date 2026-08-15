@@ -315,6 +315,8 @@ data class ComputerRemoteExecutionSnapshot(
     val updatedAt: Long? = null,
     val stdoutBytes: Long = 0,
     val stderrBytes: Long = 0,
+    /** STOPPED 时用于区分 VPS 重启和进程被外部终止。 */
+    val terminationReason: String? = null,
 )
 
 /** execution-result 的一次增量读取结果。 */
@@ -326,6 +328,16 @@ data class ComputerRemoteExecutionResult(
     val stderr: String,
     val stdoutTruncated: Boolean = false,
     val stderrTruncated: Boolean = false,
+)
+
+/** 长轮询 Channel 返回的一次增量事件。游标由 VPS 按日志字节数计算。 */
+data class ComputerRemoteExecutionWatchEvent(
+    val result: ComputerRemoteExecutionResult,
+    val eventType: String,
+    val eventSequence: Long,
+    val stdoutCursor: Long,
+    val stderrCursor: Long,
+    val observedAt: Long,
 )
 
 /**

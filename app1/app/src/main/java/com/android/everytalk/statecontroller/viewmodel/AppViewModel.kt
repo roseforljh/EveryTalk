@@ -217,9 +217,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     onHistoryModified = {
                         conversationPreviewController.clearAllCaches()
                     },
-                    scope = viewModelScope,
-                    onConversationIdMigrated = computerManager::migrateConversationId,
-            )
+                     scope = viewModelScope,
+                     onConversationIdMigrated = computerManager::migrateConversationId,
+                     deleteConversationWorkspaces = { conversationId ->
+                         computerManager.deleteWorkspacesForConversation(
+                             conversationId = conversationId,
+                             deleteRemoteFiles = true,
+                         )
+                     },
+             )
 
     val simpleModeManager = SimpleModeManager(stateHolder, historyManager, viewModelScope)
 
@@ -258,9 +264,13 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 historyManager,
                 onAiMessageFullTextChanged = ::onAiMessageFullTextChanged,
                 triggerScrollToBottom = ::triggerScrollToBottom,
-                 cancelComputerExecutions = { conversationId, onComplete ->
-                     computerManager.cancelActiveExecutions(conversationId = conversationId, onComplete = onComplete)
-                 },
+                 cancelComputerExecutions = { conversationId, runId, onComplete ->
+                     computerManager.cancelActiveExecutions(
+                         conversationId = conversationId,
+                         runId = runId,
+                         onComplete = onComplete,
+                     )
+                  },
                 computerSessionStateProvider = computerManager::computerSessionState,
         )
     }

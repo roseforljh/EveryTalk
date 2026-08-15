@@ -25,6 +25,19 @@ object AgentToolExecutorRegistry {
         this.approvalProvider = approvalProvider
     }
 
+    /** 前台服务进程恢复时只补空缺，不覆盖 AppViewModel 已注册的完整执行器。 */
+    @Synchronized
+    fun registerIfAbsent(
+        owner: Any,
+        executor: AppToolExecutor,
+        approvalProvider: ComputerToolApprovalProvider? = null,
+    ) {
+        if (this.executor != null) return
+        this.owner = owner
+        this.executor = executor
+        this.approvalProvider = approvalProvider
+    }
+
     @Synchronized
     fun current(): AppToolExecutor? = executor
 

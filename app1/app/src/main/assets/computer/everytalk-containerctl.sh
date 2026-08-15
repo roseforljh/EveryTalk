@@ -353,7 +353,8 @@ watch_exec_helper() {
     name="$(require_workspace_container "$workspace_id")"
     owner_uids="$(container_allowed_owner_uids "$name")"
     execution_dir="/workspace/.everytalk/executions/$execution_id"
-    docker exec --user 0:0 -e "EVERYTALK_ALLOWED_OWNER_UIDS=$owner_uids" "$name" /usr/local/bin/everytalk-runtime-wrapper         "$execution_dir" '' --watch-exec "$stdout_cursor" "$stderr_cursor" "$max_bytes" "$request_hash"
+    docker exec --user 0:0 -e "EVERYTALK_ALLOWED_OWNER_UIDS=$owner_uids" "$name" /usr/local/bin/everytalk-runtime-wrapper \
+        "$execution_dir" '' --watch-execution "$stdout_cursor" "$stderr_cursor" "$max_bytes" "$request_hash"
 }
 
 list_executions() {

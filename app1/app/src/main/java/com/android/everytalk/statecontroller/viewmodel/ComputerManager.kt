@@ -606,17 +606,27 @@ class ComputerManager(
     }
 
     /** 删除会话时，先取消该会话所有远端任务并清理对应 Workspace。 */
-    suspend fun deleteWorkspacesForConversation(conversationId: String, deleteRemoteFiles: Boolean = false) {
-        if (conversationId.isBlank()) return
-        toolExecutor.cancelActiveExecutions(conversationId)
+    suspend fun deleteWorkspacesForConversation(
+        conversationId: String,
+        deleteRemoteFiles: Boolean = false,
+    ): Boolean {
+        if (conversationId.isBlank()) return true
+        if (!toolExecutor.cancelActiveExecutions(conversationId)) return false
         val workspaces = repository.dao().getWorkspacesForConversation(conversationId)
-        workspaces.forEach { entity ->
-            val workspace = entity.toModel()
-            toolExecutor.closeWorkspace(workspace.id)
-            runCatching { previewManager.stopByWorkspace(workspace.id) }
-            runCatching { workspaceManager.deleteRemote(workspace.id, deleteRemoteFiles) }
-            secretManager.deleteAll(workspace.id)
-            workspaceManager.deleteMapping(workspace.id)
+        return try {
+            workspaces.forEach { entity ->
+                val workspace = entity.toModel()
+                toolExecutor.closeWorkspace(workspace.id)
+                previewManager.stopByWorkspace(workspace.id)
+                workspaceManager.deleteRemote(workspace.id, deleteRemoteFiles)
+                secretManager.deleteAll(workspace.id)
+                workspaceManager.deleteMapping(workspace.id)
+            }
+            true
+        } catch (error: Throwable) {
+            if (error is kotlinx.coroutines.CancellationException) throw error
+            AppLogger.warn("ComputerRuntime", "删除会话 Workspace 失败：${error.message}")
+            false
         }
     }
 

@@ -227,7 +227,7 @@ class ApiHandler(
     private val historyManager: HistoryManager,
     private val onAiMessageFullTextChanged: (messageId: String, currentFullText: String) -> Unit,
     private val triggerScrollToBottom: () -> Unit,
-    private val cancelComputerExecutions: (String, (Boolean) -> Unit) -> Job = { _, onComplete ->
+    private val cancelComputerExecutions: (String, String?, (Boolean) -> Unit) -> Job = { _, _, onComplete ->
         onComplete(true)
         Job()
     },
@@ -245,7 +245,6 @@ class ApiHandler(
     val pendingAgentApprovals: StateFlow<List<PendingComputerToolApproval>> = _pendingAgentApprovals.asStateFlow()
     private val agentResumeMutex = Mutex()
     private val resumingAgentRunIds = ConcurrentHashMap.newKeySet<String>()
-    private val agentRunCoordinator by lazy { com.android.everytalk.data.agent.AgentRunCoordinator(context) }
     private val agentLoop by lazy {
         AgentLoop(
             runStore = agentRunStore,
@@ -255,6 +254,21 @@ class ApiHandler(
             ),
             computerSessionStateProvider = computerSessionStateProvider,
         )
+    }
+    private val agentRunCoordinator by lazy {
+        com.android.everytalk.data.agent.AgentRunCoordinator.shared(
+            context = context,
+            injectedAgentLoop = agentLoop,
+        )
+    }
+
+    init {
+        // 页面 Collector 离开后，应用级 Agent 继续运行；回到进程后仍把事件写回原消息。
+        viewModelScope.launch {
+            agentRunCoordinator.events.collect { (messageId, event) ->
+                processStreamEvent(event, messageId, isImageGeneration = false)
+            }
+        }
     }
     
     // 🛡️ 防 prompt 泄露：为每个消息创建独立的流式检测器
@@ -701,36 +715,34 @@ class ApiHandler(
         if (messageIdBeingCancelled != null) {
             PerformanceMonitor.onAbort(messageIdBeingCancelled, reason = specificCancelReason)
         }
-        // 用户点击停止必须先写 USER_STOP，再写取消意图，再发 SSH 取消请求
-        if (!isImageGeneration) {
-            if (!isNewMessageSend) {
-                stateHolder._isRemoteCancellationPending.value = true
-                if (messageIdBeingCancelled != null) {
-                    viewModelScope.launch(Dispatchers.IO) {
-                        agentRunStore.getRunByVisibleMessage(messageIdBeingCancelled)?.let { run ->
-                            agentRunStore.updateRunStatus(
-                                run,
-                                AgentRunStatus.CANCELLED,
-                                terminalReason = AgentTerminalReasons.USER_STOP,
-                            )
-                        }
-                    }
+        // 只有用户手动点击停止才取消远端任务。发送新消息只断开旧 UI 收集，
+        // 应用级 AgentRun 和已经转交 VPS 的任务继续运行。
+        if (!isImageGeneration && !isNewMessageSend && messageIdBeingCancelled != null) {
+            stateHolder._isRemoteCancellationPending.value = true
+            updateMessageExecutionStatus(messageIdBeingCancelled, "正在取消远端任务")
+            viewModelScope.launch(Dispatchers.IO) {
+                val run = agentRunStore.getRunByVisibleMessage(messageIdBeingCancelled)
+                if (run != null) {
+                    // 必须先持久化 USER_STOP，再取消本地 Agent Job 和远端 Execution。
+                    agentRunStore.updateRunStatus(
+                        run,
+                        AgentRunStatus.CANCELLED,
+                        terminalReason = AgentTerminalReasons.USER_STOP,
+                    )
+                    agentRunCoordinator.cancelVisibleRun(messageIdBeingCancelled)
                 }
-            }
-            if (messageIdBeingCancelled != null) {
-                updateMessageExecutionStatus(messageIdBeingCancelled, "正在取消远端任务")
-            }
-            cancelComputerExecutions(stateHolder._currentConversationId.value) { success ->
+                cancelComputerExecutions(
+                    stateHolder._currentConversationId.value,
+                    run?.id,
+                ) { success ->
                 messageIdBeingCancelled?.let { messageId ->
                     updateMessageExecutionStatus(
                         messageId,
                         if (success) "远端任务已取消" else "远端取消失败，等待恢复确认",
                     )
                 }
-                if (!isNewMessageSend) {
-                    stateHolder._isRemoteCancellationPending.value = false
-                }
-                if (!success && messageIdBeingCancelled != null) {
+                stateHolder._isRemoteCancellationPending.value = false
+                if (!success) {
                     // AgentLoop 可能已经把本地 Run 标成 CANCELLED，但远端仍无法确认。
                     // 恢复为等待远端状态，轮询才能继续并为用户生成 UNKNOWN 决策卡。
                     viewModelScope.launch(Dispatchers.IO) {
@@ -749,6 +761,7 @@ class ApiHandler(
                         }
                         restorePendingAgentApproval()
                     }
+                }
                 }
             }
         }

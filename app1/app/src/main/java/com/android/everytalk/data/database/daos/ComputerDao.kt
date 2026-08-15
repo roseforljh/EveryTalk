@@ -494,6 +494,29 @@ interface ComputerDao {
         errorCode: String?,
     )
 
+    /** 合并一次 Runtime Watch 事件。日志正文仍留在 VPS，只保存已消费字节游标和状态事实。 */
+    @Query(
+        """
+        UPDATE computer_executions
+        SET stdoutCursor = CASE WHEN :stdoutCursor > stdoutCursor THEN :stdoutCursor ELSE stdoutCursor END,
+            stderrCursor = CASE WHEN :stderrCursor > stderrCursor THEN :stderrCursor ELSE stderrCursor END,
+            lastEventAt = :eventAt,
+            lastObservedAt = :observedAt,
+            remoteStatus = :remoteStatus,
+            remoteExitCode = :remoteExitCode
+        WHERE id = :executionId
+        """,
+    )
+    suspend fun updateRemoteExecutionProgress(
+        executionId: String,
+        stdoutCursor: Long,
+        stderrCursor: Long,
+        eventAt: Long,
+        observedAt: Long,
+        remoteStatus: String,
+        remoteExitCode: Int?,
+    )
+
     /** 状态协议损坏或查询结果无法核实时，只保留 UNKNOWN，不猜测远端成功或失败。 */
     @Query(
         """

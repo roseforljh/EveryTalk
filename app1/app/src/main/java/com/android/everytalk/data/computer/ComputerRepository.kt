@@ -46,7 +46,7 @@ class ComputerRepository(
     private val dao: ComputerDao = AppDatabase.getDatabase(applicationContext).computerDao()
     private val credentialStore = ComputerCredentialStore(applicationContext)
     private val sshClient = ComputerSshClient()
-    private val connectionPool = ComputerConnectionPool(sshClient, credentialStore)
+    private val connectionPool = ComputerConnectionPoolRegistry.get(sshClient, credentialStore)
     private val probe = ComputerProbe()
     private val dedicatedKeyManager = ComputerDedicatedKeyManager(sshClient)
     private val provisioner = ComputerProvisioner(applicationContext)
@@ -57,7 +57,9 @@ class ComputerRepository(
             gateway = ComputerRemoteExecutionGateway { execution -> queryRemoteExecution(execution) },
         )
     }
-    private val connectionStopListener = ComputerConnectionServiceController.addStopListener(connectionPool::close)
+    private val connectionStopListener = ComputerConnectionServiceController.addStopListener {
+        ComputerConnectionPoolRegistry.closeAll("service_controller_stop")
+    }
 
     fun observeComputers(): Flow<List<Computer>> = dao.observeComputers().map { entities ->
         entities.map { it.toModel(json) }
@@ -625,6 +627,51 @@ class ComputerRepository(
     }
 
     /**
+     * 为单个活动任务打开一次长轮询 Channel。
+     * Transport 仍由连接池按 computerId 复用，返回后立即把游标写入 Room。
+     */
+    suspend fun watchRemoteExecution(executionId: String): ComputerRemoteExecutionWatchEvent {
+        val execution = dao.getExecutionById(executionId)
+            ?: throw ComputerException(ComputerErrorCodes.EXECUTION_NOT_FOUND, "远端任务不存在")
+        val computer = dao.getComputer(execution.computerId)?.toModel(json)
+            ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
+        val workspace = dao.getWorkspaceById(execution.workspaceId)?.toModel()
+            ?: throw ComputerException(ComputerErrorCodes.WORKSPACE_NOT_READY, "Workspace 不存在")
+        val target = execution.target?.let { runCatching { ComputerExecTarget.valueOf(it) }.getOrNull() }
+            ?: ComputerExecTarget.CONTAINER
+        val event = withConnection(computer.id, requireReady = false) { connection, currentComputer ->
+            runtimeEnvelope.watchExecution(
+                connection = connection,
+                computer = currentComputer,
+                workspace = workspace,
+                executionId = execution.id,
+                stdoutCursor = execution.stdoutCursor,
+                stderrCursor = execution.stderrCursor,
+                target = target,
+                expectedProcessId = execution.remoteProcessId,
+                expectedRequestHash = execution.requestHash,
+            )
+        }
+
+        val now = System.currentTimeMillis()
+        dao.updateRemoteExecutionProgress(
+            executionId = execution.id,
+            stdoutCursor = event.stdoutCursor,
+            stderrCursor = event.stderrCursor,
+            eventAt = now,
+            observedAt = now,
+            remoteStatus = event.result.snapshot.status.name,
+            remoteExitCode = event.result.snapshot.exitCode,
+        )
+        markComputerReadyAfterRecovery(computer)
+        return event
+    }
+
+    /** 长轮询收到终态后只对账对应任务，避免重新扫描其他 VPS。 */
+    suspend fun reconcileRemoteExecution(executionId: String): ComputerExecutionReconciliation? =
+        executionReconciler.reconcile(executionId)
+
+    /**
      * 取消一个仍在 VPS 上运行的受管 Execution。
      *
      * 停止按钮先取消远端进程，再由上层取消模型协程。这样 Android 协程结束后，VPS
@@ -946,6 +993,6 @@ class ComputerRepository(
 
     override fun close() {
         connectionStopListener.close()
-        connectionPool.closeWithReason("repository_closed")
+        // 连接池属于整个 App 进程。关闭某个 Repository 不能切断前台服务正在监听的任务。
     }
 }

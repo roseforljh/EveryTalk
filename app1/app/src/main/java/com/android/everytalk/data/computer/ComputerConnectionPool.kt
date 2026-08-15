@@ -14,6 +14,25 @@ import java.util.concurrent.atomic.AtomicLong
 private const val DEFAULT_IDLE_CONNECTION_MILLIS = 5 * 60 * 1000L
 
 /**
+ * App 进程内唯一 SSH 连接池。ComputerManager 与前台 Service 共用它，
+ * 同一 VPS 才不会因为两个 Repository 各建一条 Transport。
+ */
+internal object ComputerConnectionPoolRegistry {
+    @Volatile private var sharedPool: ComputerConnectionPool? = null
+
+    fun get(
+        sshClient: ComputerSshClient,
+        credentialStore: ComputerCredentialStore,
+    ): ComputerConnectionPool = sharedPool ?: synchronized(this) {
+        sharedPool ?: ComputerConnectionPool(sshClient, credentialStore).also { sharedPool = it }
+    }
+
+    fun closeAll(reason: String) {
+        sharedPool?.closeWithReason(reason)
+    }
+}
+
+/**
  * 按 Computer ID 复用已认证 SSH 连接。池内只保存进程内连接对象，凭据每次从本地加密文件短暂读取。
  */
 class ComputerConnectionPool(

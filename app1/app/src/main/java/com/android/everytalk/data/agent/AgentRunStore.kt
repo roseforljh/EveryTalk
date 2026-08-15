@@ -12,6 +12,7 @@ import com.android.everytalk.data.DataClass.AbstractApiMessage
 import com.android.everytalk.data.DataClass.AgentAssistantApiMessage
 import com.android.everytalk.data.DataClass.AgentToolCallApiPart
 import com.android.everytalk.data.DataClass.AgentToolResultApiMessage
+import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.DataClass.ExecutionStep
 import com.android.everytalk.data.DataClass.ExecutionStepType
 import com.android.everytalk.data.DataClass.ExecutionTraceEvent
@@ -40,6 +41,10 @@ import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.double
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.long
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import kotlinx.coroutines.sync.withLock
 
 /**
@@ -118,6 +123,52 @@ class AgentRunStore(
             entry.kind == AgentEntryKind.TOOL_RESULT.name &&
                 entry.status == AgentEntryStatus.FINAL.name &&
                 entry.toolCallId == toolCallId
+        }
+
+    /**
+     * 保存需要让模型知道的手机生命周期或 SSH 事件。
+     * 同一 Run、Execution、事件类型只写一次，重连循环不会重复污染上下文。
+     */
+    suspend fun appendStatusEvent(
+        runId: String,
+        reason: String,
+        message: String,
+        executionId: String? = null,
+    ): Boolean = entryAppendLock.withLock {
+        val eventKey = "$reason:${executionId.orEmpty()}"
+        val existing = dao.getEntries(runId).any { entry ->
+            entry.kind == AgentEntryKind.STATUS.name &&
+                runCatching {
+                    json.parseToJsonElement(entry.payloadJson).jsonObject["event_key"]?.jsonPrimitive?.content == eventKey
+                }.getOrDefault(false)
+        }
+        if (existing) return@withLock false
+        val now = System.currentTimeMillis()
+        dao.upsertEntry(
+            newEntry(
+                runId = runId,
+                sequence = dao.nextEntrySequence(runId),
+                kind = AgentEntryKind.STATUS,
+                requestId = null,
+                toolCallId = null,
+                payloadJson = buildJsonObject {
+                    put("event_key", eventKey)
+                    put("reason", reason)
+                    put("message", message)
+                    executionId?.let { put("execution_id", it) }
+                }.toString(),
+                status = AgentEntryStatus.FINAL,
+                now = now,
+            ),
+        )
+        true
+    }
+
+    /** 根据持久化 Assistant Entry 找回原 Tool Call，供远端完成后读取真实结果。 */
+    suspend fun findToolCall(runId: String, toolCallId: String): AgentContentBlock.ToolCall? =
+        dao.getEntries(runId).asReversed().firstNotNullOfOrNull { entry ->
+            if (entry.kind != AgentEntryKind.ASSISTANT.name) return@firstNotNullOfOrNull null
+            decodeAssistantToolCalls(entry).firstOrNull { it.id == toolCallId }
         }
 
     fun decodeRequestSnapshot(run: AgentRunEntity): AgentRequestSnapshot? = run.requestSnapshotJson
@@ -802,6 +853,7 @@ class AgentRunStore(
             when (entry.kind) {
                 AgentEntryKind.ASSISTANT.name -> decodeAssistantEntry(entry)
                 AgentEntryKind.TOOL_RESULT.name -> decodeToolResultEntry(entry)
+                AgentEntryKind.STATUS.name -> decodeStatusEntry(entry)
                 else -> null
             }
         }
@@ -843,6 +895,23 @@ class AgentRunStore(
                 isError = result.isError,
             )
         }.getOrNull()
+
+    /** 状态事件作为内部 system 消息进入恢复请求，让 AI 解释现状且禁止重复执行。 */
+    private fun decodeStatusEntry(entry: AgentEntryEntity): SimpleTextApiMessage? = runCatching {
+        val payload = json.parseToJsonElement(entry.payloadJson).jsonObject
+        val reason = payload["reason"]?.jsonPrimitive?.content ?: return@runCatching null
+        val message = payload["message"]?.jsonPrimitive?.content.orEmpty()
+        val executionId = payload["execution_id"]?.jsonPrimitive?.content
+        SimpleTextApiMessage(
+            id = "status:${entry.id}",
+            role = "system",
+            content = buildString {
+                append("[EveryTalk Agent 状态] ").append(reason).append(": ").append(message)
+                executionId?.let { append("，execution_id=").append(it) }
+                append("。这是已有任务的状态，禁止重复创建或重跑命令。")
+            },
+        )
+    }.getOrNull()
 
     private fun decodeApproval(payloadJson: String): AgentApprovalRecord? = runCatching {
         json.decodeFromString(AgentApprovalRecord.serializer(), payloadJson)

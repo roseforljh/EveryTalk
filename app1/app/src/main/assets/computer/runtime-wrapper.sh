@@ -240,6 +240,9 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
         state_pid="${3:-${state_pid:-}}"
         state_ticks="${4:-${state_ticks:-}}"
         state_started="${5:-${state_started:-}}"
+        state_termination_reason="${6:-}"
+        state_boot_id="$(state_value "$state_file" boot_id 2>/dev/null || true)"
+        [ -n "$state_boot_id" ] || state_boot_id="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || printf 'unknown')"
         state_tmp="$state_file.tmp.$$"
         stdout_bytes="$(wc -c < "$stdout_log" 2>/dev/null || printf '0')"
         stderr_bytes="$(wc -c < "$stderr_log" 2>/dev/null || printf '0')"
@@ -257,6 +260,8 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
             printf 'updated_at=%s\n' "$(date +%s)"
             printf 'stdout_bytes=%s\n' "$stdout_bytes"
             printf 'stderr_bytes=%s\n' "$stderr_bytes"
+            printf 'boot_id=%s\n' "$state_boot_id"
+            printf 'termination_reason=%s\n' "$state_termination_reason"
         } > "$state_tmp"
         chmod 600 "$state_tmp"
         mv -f "$state_tmp" "$state_file"
@@ -282,12 +287,16 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
             current_status="$(state_value "$state_file" status)"
             if [ "$current_status" = RUNNING ] || [ "$current_status" = STARTING ]; then
                 if ! state_has_valid_process; then
-                    # VPS 重启或进程被外部终止后，不能把旧 RUNNING 永久当成活动任务。
+                    # boot_id 改变表示 VPS 重启；boot_id 相同表示进程被外部终止。
                     request_hash="$(state_value "$state_file" request_hash)"
                     existing_target="$(state_value "$state_file" target)"
                     [ -n "$existing_target" ] && state_target="$existing_target"
+                    original_boot_id="$(state_value "$state_file" boot_id)"
+                    current_boot_id="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || printf 'unknown')"
+                    termination_reason=REMOTE_PROCESS_TERMINATED
+                    [ -n "$original_boot_id" ] && [ "$original_boot_id" != "$current_boot_id" ] && termination_reason=VPS_RESTARTED
                     write_v2_state STOPPED 143 "$(state_value "$state_file" pid)" \
-                        "$(state_value "$state_file" start_ticks)" "$(state_value "$state_file" started_at)"
+                        "$(state_value "$state_file" start_ticks)" "$(state_value "$state_file" started_at)" "$termination_reason"
                 fi
             fi
             cat "$state_file"
@@ -383,24 +392,66 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
         fi
         if [ "$input_mode" = --host-watch-execution ] || [ "$input_mode" = --watch-execution ] || \
            [ "$input_mode" = --host-watch-executions ] || [ "$input_mode" = --watch-executions ]; then
-            curr_stdout_cursor="$stdout_cursor"
-            curr_stderr_cursor="$stderr_cursor"
+            # 一个 Channel 最多等待约 25 秒。有新增日志或进入终态时立即返回，
+            # 没有变化时返回心跳，让 Android 保持监听但不制造假进度。
+            watch_attempt=0
+            stdout_total=0
+            stderr_total=0
+            while [ "$watch_attempt" -lt 84 ]; do
+                st_val="$(state_value "$state_file" status 2>/dev/null || printf 'UNKNOWN')"
+                if [ -f "$stdout_log" ] && [ ! -L "$stdout_log" ] && state_owner_allowed "$stdout_log"; then
+                    stdout_total="$(wc -c < "$stdout_log" | tr -d ' ')"
+                fi
+                if [ -f "$stderr_log" ] && [ ! -L "$stderr_log" ] && state_owner_allowed "$stderr_log"; then
+                    stderr_total="$(wc -c < "$stderr_log" | tr -d ' ')"
+                fi
+                if [ "$st_val" != RUNNING ] && [ "$st_val" != STARTING ]; then break; fi
+                if [ "$stdout_total" -gt "$stdout_cursor" ] || [ "$stderr_total" -gt "$stderr_cursor" ]; then
+                    # 首个新增字节出现后再合并约 300ms，避免高频输出每一行都写一次 Room。
+                    sleep 0.3
+                    if [ -f "$stdout_log" ] && [ ! -L "$stdout_log" ] && state_owner_allowed "$stdout_log"; then
+                        stdout_total="$(wc -c < "$stdout_log" | tr -d ' ')"
+                    fi
+                    if [ -f "$stderr_log" ] && [ ! -L "$stderr_log" ] && state_owner_allowed "$stderr_log"; then
+                        stderr_total="$(wc -c < "$stderr_log" | tr -d ' ')"
+                    fi
+                    break
+                fi
+                sleep 0.3
+                watch_attempt="$((watch_attempt + 1))"
+            done
+
+            stdout_count="$((stdout_total - stdout_cursor))"
+            stderr_count="$((stderr_total - stderr_cursor))"
+            [ "$stdout_count" -ge 0 ] || stdout_count=0
+            [ "$stderr_count" -ge 0 ] || stderr_count=0
+            [ "$stdout_count" -le "$max_bytes" ] || stdout_count="$max_bytes"
+            [ "$stderr_count" -le "$max_bytes" ] || stderr_count="$max_bytes"
+            curr_stdout_cursor="$((stdout_cursor + stdout_count))"
+            curr_stderr_cursor="$((stderr_cursor + stderr_count))"
             print_v2_state
             st_val="$(state_value "$state_file" status 2>/dev/null || printf 'UNKNOWN')"
             if [ "$st_val" = RUNNING ] || [ "$st_val" = STARTING ]; then
-                event_type="PROGRESS"
+                if [ "$stdout_count" -gt 0 ] || [ "$stderr_count" -gt 0 ]; then
+                    event_type="PROGRESS"
+                else
+                    event_type="HEARTBEAT"
+                fi
             else
                 event_type="TERMINAL"
             fi
-            printf 'event_type=%s\nevent_seq=1\nstdout_cursor=%s\nstderr_cursor=%s\nobserved_at=%s\n' \
-                "$event_type" "$curr_stdout_cursor" "$curr_stderr_cursor" "$(date +%s)"
+            observed_at="$(date +%s)"
+            event_seq="$((observed_at * 1000000 + curr_stdout_cursor + curr_stderr_cursor))"
+            printf 'event_type=%s\nevent_seq=%s\nstdout_offset=%s\nstderr_offset=%s\nstdout_cursor=%s\nstderr_cursor=%s\nobserved_at=%s\n' \
+                "$event_type" "$event_seq" "$stdout_cursor" "$stderr_cursor" \
+                "$curr_stdout_cursor" "$curr_stderr_cursor" "$observed_at"
             if [ -f "$stdout_log" ] && [ ! -L "$stdout_log" ] && state_owner_allowed "$stdout_log"; then
-                stdout_chunk="$(tail -c +$((curr_stdout_cursor + 1)) "$stdout_log" 2>/dev/null | head -c "$max_bytes" | base64 2>/dev/null | tr -d '\n' || true)"
+                stdout_chunk="$(tail -c +$((stdout_cursor + 1)) "$stdout_log" 2>/dev/null | head -c "$stdout_count" | base64 2>/dev/null | tr -d '\n' || true)"
             else
                 stdout_chunk=""
             fi
             if [ -f "$stderr_log" ] && [ ! -L "$stderr_log" ] && state_owner_allowed "$stderr_log"; then
-                stderr_chunk="$(tail -c +$((curr_stderr_cursor + 1)) "$stderr_log" 2>/dev/null | head -c "$max_bytes" | base64 2>/dev/null | tr -d '\n' || true)"
+                stderr_chunk="$(tail -c +$((stderr_cursor + 1)) "$stderr_log" 2>/dev/null | head -c "$stderr_count" | base64 2>/dev/null | tr -d '\n' || true)"
             else
                 stderr_chunk=""
             fi
