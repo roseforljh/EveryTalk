@@ -674,6 +674,8 @@ fun ChatMessagesList(
                                     isReasoningComplete = isReasoningComplete,
                                     messageIsError = item.message.isError,
                                     mainContentHasStarted = item.message.contentStarted,
+                                    executionStartedAtMillis = item.message.timestamp,
+                                    executionFinishedAtMillis = item.message.executionFinishedAt,
                                     reasoningTextColor = MaterialTheme.chatColors.reasoningText,
                                     reasoningToggleDotColor = MaterialTheme.colorScheme.onSurface,
                                     onVisibilityChanged = { }

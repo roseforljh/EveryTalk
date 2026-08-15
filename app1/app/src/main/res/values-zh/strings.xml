@@ -974,6 +974,17 @@
     <string name="thinking_collapse_execution">收起执行过程</string>
     <string name="thinking_execution_failed">执行失败</string>
     <string name="thinking_complete">完成</string>
+    <string name="thinking_processing_duration">正在处理 · %1$s</string>
+    <string name="thinking_elapsed_duration">耗时 %1$s</string>
+    <string name="thinking_failed_duration">执行异常 · %1$s</string>
+    <string name="thinking_duration_seconds">%1$d秒</string>
+    <string name="thinking_duration_minutes_seconds">%1$d分%2$d秒</string>
+    <string name="thinking_duration_hours_minutes">%1$d小时%2$d分</string>
+    <string name="thinking_server_actions_count">执行了 %1$d 项服务器操作</string>
+    <string name="thinking_tool_actions_count">调用了 %1$d 个工具</string>
+    <string name="thinking_search_actions_count">搜索了 %1$d 次网页</string>
+    <string name="thinking_web_actions_count">读取了 %1$d 个网页</string>
+    <string name="thinking_mixed_actions_count">执行了 %1$d 项操作</string>
     <plurals name="thinking_remaining_sources">
         <item quantity="other">其余 %1$d 个</item>
     </plurals>

@@ -627,6 +627,8 @@ fun ImageGenerationMessagesList(
                                 isReasoningComplete = reasoningCompleteMap[item.message.id] ?: false,
                                 messageIsError = item.message.isError,
                                 mainContentHasStarted = item.message.contentStarted,
+                                executionStartedAtMillis = item.message.timestamp,
+                                executionFinishedAtMillis = item.message.executionFinishedAt,
                                 reasoningTextColor = MaterialTheme.chatColors.reasoningText,
                                 reasoningToggleDotColor = MaterialTheme.colorScheme.onSurface,
                                 onVisibilityChanged = {},

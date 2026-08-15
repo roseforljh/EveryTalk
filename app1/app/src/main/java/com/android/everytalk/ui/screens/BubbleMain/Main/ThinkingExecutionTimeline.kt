@@ -182,7 +182,7 @@ internal fun latestReasoningSummary(reasoningText: String): String? {
         .takeIf { it.isNotEmpty() }
 }
 
-private fun isGenericExecutionStatus(text: String): Boolean = text in setOf(
+internal fun isGenericExecutionStatus(text: String): Boolean = text in setOf(
     "等待首个响应",
     "正在接收思考",
     "已收到思考，等待正文",
@@ -198,6 +198,17 @@ internal sealed interface OrderedExecutionItem {
     data class Step(val entry: ExecutionTimelineEntry) : OrderedExecutionItem
 }
 
+/**
+ * 聊天主界面里的执行过程分段。
+ *
+ * 过程文字保持原始位置；两段过程文字之间连续发生的工具调用合并为一个工具段。
+ * 这里只负责分组，不改写事件顺序，也不生成模型没有返回的思考内容。
+ */
+internal sealed interface ExecutionProcessSection {
+    data class Narrative(val text: String) : ExecutionProcessSection
+    data class ToolGroup(val entries: List<ExecutionTimelineEntry>) : ExecutionProcessSection
+}
+
 private fun continuesSameTool(previous: ExecutionTimelineEntry?, step: ExecutionStep): Boolean {
     val previousToolName = previous?.step?.labels?.singleOrNull()?.trim().orEmpty()
     val toolName = step.labels.singleOrNull()?.trim().orEmpty()
@@ -205,6 +216,20 @@ private fun continuesSameTool(previous: ExecutionTimelineEntry?, step: Execution
         previous?.step?.type == step.type &&
         toolName.isNotEmpty() &&
         toolName == previousToolName
+}
+
+private fun appendTimelineEntry(
+    entries: List<ExecutionTimelineEntry>,
+    incoming: ExecutionTimelineEntry,
+): List<ExecutionTimelineEntry> {
+    val previous = entries.lastOrNull()
+    if (!continuesSameTool(previous, incoming.step)) return entries + incoming
+    return entries.dropLast(1) + previous!!.copy(
+        step = incoming.step,
+        invocationCount = (previous.invocationCount.toLong() + incoming.invocationCount)
+            .coerceAtMost(Int.MAX_VALUE.toLong())
+            .toInt(),
+    )
 }
 
 internal fun executionTimelineEntries(steps: List<ExecutionStep>): List<ExecutionTimelineEntry> =
@@ -295,6 +320,40 @@ internal fun orderedExecutionItems(
     trailingReasoning
         .takeIf(String::isNotBlank)
         ?.let { add(OrderedExecutionItem.Reasoning(it)) }
+}
+
+/**
+ * 把有序事件转换成主界面的多段执行过程。
+ * 连续工具只合并容器，容器内部仍保留每个工具及其真实顺序。
+ */
+internal fun executionProcessSections(
+    reasoningText: String,
+    executionSteps: List<ExecutionStep>,
+    executionTrace: List<ExecutionTraceEvent> = emptyList(),
+): List<ExecutionProcessSection> = buildList {
+    orderedExecutionItems(reasoningText, executionSteps, executionTrace).forEach { item ->
+        when (item) {
+            is OrderedExecutionItem.Reasoning -> {
+                val previous = lastOrNull() as? ExecutionProcessSection.Narrative
+                if (previous == null) {
+                    add(ExecutionProcessSection.Narrative(item.text))
+                } else {
+                    this[lastIndex] = previous.copy(text = previous.text + item.text)
+                }
+            }
+
+            is OrderedExecutionItem.Step -> {
+                val previous = lastOrNull() as? ExecutionProcessSection.ToolGroup
+                if (previous == null) {
+                    add(ExecutionProcessSection.ToolGroup(listOf(item.entry)))
+                } else {
+                    this[lastIndex] = previous.copy(
+                        entries = appendTimelineEntry(previous.entries, item.entry),
+                    )
+                }
+            }
+        }
+    }
 }
 
 @Composable

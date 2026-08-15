@@ -980,6 +980,17 @@
     <string name="thinking_collapse_execution">Collapse execution process</string>
     <string name="thinking_execution_failed">Execution failed</string>
     <string name="thinking_complete">Complete</string>
+    <string name="thinking_processing_duration">Processing · %1$s</string>
+    <string name="thinking_elapsed_duration">Took %1$s</string>
+    <string name="thinking_failed_duration">Execution failed · %1$s</string>
+    <string name="thinking_duration_seconds">%1$d sec</string>
+    <string name="thinking_duration_minutes_seconds">%1$d min %2$d sec</string>
+    <string name="thinking_duration_hours_minutes">%1$d hr %2$d min</string>
+    <string name="thinking_server_actions_count">Ran %1$d server actions</string>
+    <string name="thinking_tool_actions_count">Called %1$d tools</string>
+    <string name="thinking_search_actions_count">Ran %1$d searches</string>
+    <string name="thinking_web_actions_count">Read %1$d web pages</string>
+    <string name="thinking_mixed_actions_count">Completed %1$d actions</string>
     <plurals name="thinking_remaining_sources">
         <item quantity="one">%1$d more source</item>
         <item quantity="other">%1$d more sources</item>

@@ -16,23 +16,30 @@ import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -58,6 +65,7 @@ import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.ExecutionStep
+import com.android.everytalk.data.DataClass.ExecutionStepType
 import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.data.DataClass.hasReviewableExecutionProcess
@@ -71,6 +79,7 @@ import com.android.everytalk.ui.components.streaming.UnifiedMarkdownNodesRendere
 import com.android.everytalk.ui.components.streaming.contentVersionForRendering
 import com.mikepenz.markdown.model.State
 import com.mikepenz.markdown.model.parseMarkdown
+import kotlinx.coroutines.delay
 
 internal fun reasoningSheetTallHeightFraction(): Float = AppModalBottomSheetMaximumHeightFraction
 
@@ -166,6 +175,8 @@ internal fun ReasoningToggleAndContent(
     isReasoningComplete: Boolean,
     messageIsError: Boolean,
     mainContentHasStarted: Boolean,
+    executionStartedAtMillis: Long? = null,
+    executionFinishedAtMillis: Long? = null,
     reasoningTextColor: Color,
     reasoningToggleDotColor: Color,
     modifier: Modifier = Modifier,
@@ -175,11 +186,19 @@ internal fun ReasoningToggleAndContent(
     val focusManager = LocalFocusManager.current
     val view = LocalView.current
     var showReasoningSheet by remember(currentMessageId) { mutableStateOf(false) }
-    var executionChainExpanded by remember(currentMessageId) { mutableStateOf(false) }
     var visibilityNotified by remember(currentMessageId) { mutableStateOf(false) }
 
     val processIsActive = !messageIsError &&
         (isReasoningStreaming || isExecutionStatusActive(activityStatusText))
+    var executionChainExpanded by remember(currentMessageId) { mutableStateOf(processIsActive) }
+    var nowMillis by remember(currentMessageId) { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(processIsActive, currentMessageId) {
+        executionChainExpanded = processIsActive
+        while (processIsActive) {
+            nowMillis = System.currentTimeMillis()
+            delay(1_000L)
+        }
+    }
     val hasReviewableProcess = hasReviewableExecutionProcess(
         reasoningText = displayedReasoningText,
         executionSteps = executionSteps,
@@ -187,38 +206,30 @@ internal fun ReasoningToggleAndContent(
         webSearchResults = webSearchResults,
         executionStatus = activityStatusText,
     )
-    val inlineStatusText = localizedExecutionStatusText(executionSummaryText(
-        reasoningText = displayedReasoningText,
-        activityStatusText = activityStatusText,
-        executionSteps = executionSteps,
-    )).orEmpty()
     val shouldShowExecutionChain = processIsActive || hasReviewableProcess ||
         (!mainContentHasStarted && displayedReasoningText.isNotBlank())
+    val sections = remember(displayedReasoningText, executionSteps, executionTrace) {
+        executionProcessSections(
+            reasoningText = displayedReasoningText,
+            executionSteps = executionSteps,
+            executionTrace = executionTrace,
+        )
+    }
+    val elapsedMillis = executionStartedAtMillis?.let { startedAt ->
+        val endedAt = executionFinishedAtMillis ?: nowMillis.takeIf { processIsActive }
+        endedAt?.minus(startedAt)?.coerceAtLeast(0L)
+    }
+    val elapsedText = elapsedMillis?.let { localizedExecutionDuration(it) }
     val executionChainTitle = when {
-        processIsActive -> inlineStatusText
+        processIsActive && elapsedText != null ->
+            stringResource(R.string.thinking_processing_duration, elapsedText)
+        processIsActive -> stringResource(R.string.computer_action_working).trimEnd('…')
+        messageIsError && elapsedText != null ->
+            stringResource(R.string.thinking_failed_duration, elapsedText)
         messageIsError -> stringResource(R.string.thinking_execution_failed)
-        isReasoningComplete || !isReasoningStreaming || mainContentHasStarted ->
-            stringResource(R.string.thinking_process)
-        else -> inlineStatusText
+        elapsedText != null -> stringResource(R.string.thinking_elapsed_duration, elapsedText)
+        else -> stringResource(R.string.thinking_process)
     }
-    val latestStep = executionSteps.lastOrNull()
-    val latestStepTitle = latestStep?.let { step ->
-        localizedExecutionStatusText(step.title) ?: step.title
-    }
-    val latestStepSummary = latestStep?.let { step ->
-        listOfNotNull(latestStepTitle, step.labels.firstOrNull()).joinToString(" · ")
-    }
-    val executionSummaryFallback = stringResource(R.string.thinking_execution)
-    val completionSummaryFallback = stringResource(R.string.thinking_complete)
-    val expandedSummaryText = listOf(
-        inlineStatusText,
-        latestReasoningSummary(displayedReasoningText),
-        latestStepSummary,
-        localizedExecutionStatusText(activityStatusText),
-    ).filterNotNull().firstOrNull { candidate ->
-        candidate.isNotBlank() && candidate != executionChainTitle
-    } ?: executionSummaryFallback.takeIf { it != executionChainTitle }
-        ?: completionSummaryFallback
     val openReasoningSheet = {
         focusManager.clearFocus()
         showReasoningSheet = true
@@ -239,37 +250,48 @@ internal fun ReasoningToggleAndContent(
                 shrinkTowards = Alignment.Top,
             ),
         ) {
-            Column {
-                ExecutionChainHeader(
-                    text = executionChainTitle,
-                    active = processIsActive,
-                    expanded = executionChainExpanded,
-                    textColor = reasoningTextColor,
-                    iconColor = reasoningToggleDotColor,
-                    onClick = { executionChainExpanded = !executionChainExpanded },
-                    modifier = Modifier.onSizeChanged {
+            Surface(
+                shape = RoundedCornerShape(16.dp),
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.52f),
+                contentColor = MaterialTheme.colorScheme.onSurface,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("reasoning-process-container")
+                    .onSizeChanged {
                         if (it.height > 0 && !visibilityNotified) {
                             view.post { onVisibilityChanged() }
                             visibilityNotified = true
                         }
                     },
-                )
-                AnimatedVisibility(
-                    visible = executionChainExpanded,
-                    enter = fadeIn(tween(140)) + expandVertically(
-                        animationSpec = tween(200),
-                        expandFrom = Alignment.Top,
-                    ),
-                    exit = fadeOut(tween(120)) + shrinkVertically(
-                        animationSpec = tween(180),
-                        shrinkTowards = Alignment.Top,
-                    ),
-                ) {
-                    ExecutionChainSummaryList(
-                        text = expandedSummaryText,
+            ) {
+                Column {
+                    ExecutionChainHeader(
+                        text = executionChainTitle,
                         active = processIsActive,
-                        onOpenSheet = openReasoningSheet,
+                        expanded = executionChainExpanded,
+                        textColor = reasoningTextColor,
+                        iconColor = reasoningToggleDotColor,
+                        onClick = { executionChainExpanded = !executionChainExpanded },
                     )
+                    AnimatedVisibility(
+                        visible = executionChainExpanded,
+                        enter = fadeIn(tween(140)) + expandVertically(
+                            animationSpec = tween(200),
+                            expandFrom = Alignment.Top,
+                        ),
+                        exit = fadeOut(tween(120)) + shrinkVertically(
+                            animationSpec = tween(180),
+                            shrinkTowards = Alignment.Top,
+                        ),
+                    ) {
+                        ExecutionProcessContent(
+                            sections = sections,
+                            activityStatusText = activityStatusText,
+                            active = processIsActive,
+                            messageIsError = messageIsError,
+                            onOpenDetails = openReasoningSheet,
+                        )
+                    }
                 }
             }
         }
@@ -307,6 +329,7 @@ private fun ExecutionChainHeader(
     )
     Row(
         modifier = modifier
+            .fillMaxWidth()
             .testTag("reasoning-inline-status")
             .semantics(mergeDescendants = true) {
                 contentDescription = text
@@ -317,8 +340,8 @@ private fun ExecutionChainHeader(
                 interactionSource = remember { MutableInteractionSource() },
                 onClick = onClick,
             )
-            .height(32.dp)
-            .padding(horizontal = 8.dp),
+            .height(44.dp)
+            .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (active) {
@@ -327,7 +350,7 @@ private fun ExecutionChainHeader(
                 textColor = textColor,
                 useSmallStyle = false,
                 modifier = Modifier
-                    .widthIn(max = 260.dp)
+                    .weight(1f)
                     .testTag("reasoning-inline-status-text"),
             )
         } else {
@@ -339,7 +362,7 @@ private fun ExecutionChainHeader(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
-                    .widthIn(max = 260.dp)
+                    .weight(1f)
                     .testTag("reasoning-inline-status-text"),
             )
         }
@@ -358,42 +381,191 @@ private fun ExecutionChainHeader(
 }
 
 @Composable
-private fun ExecutionChainSummaryList(
-    text: String,
+private fun ExecutionProcessContent(
+    sections: List<ExecutionProcessSection>,
+    activityStatusText: String?,
     active: Boolean,
-    onOpenSheet: () -> Unit,
+    messageIsError: Boolean,
+    onOpenDetails: () -> Unit,
 ) {
+    val hasPendingTool = sections.any { section ->
+        section is ExecutionProcessSection.ToolGroup && section.entries.any { !it.step.completed }
+    }
+    val hasSpecificActivity = !activityStatusText.isNullOrBlank() &&
+        !isGenericExecutionStatus(activityStatusText)
+    val showStandaloneStatus = active && !hasPendingTool && (
+        sections.isEmpty() ||
+            sections.lastOrNull() !is ExecutionProcessSection.Narrative ||
+            hasSpecificActivity
+        )
     Column(
         modifier = Modifier
-            .padding(start = 8.dp)
+            .fillMaxWidth()
+            .padding(start = 12.dp, end = 12.dp, bottom = 12.dp)
             .testTag("reasoning-chain-summaries"),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        ExecutionChainSummaryRow(
-            text = text,
-            active = active,
-            onClick = onOpenSheet,
-            modifier = Modifier.testTag("reasoning-chain-summary-0"),
-        )
+        sections.forEachIndexed { sectionIndex, section ->
+            when (section) {
+                is ExecutionProcessSection.Narrative -> {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(
+                                indication = null,
+                                interactionSource = remember { MutableInteractionSource() },
+                                onClick = onOpenDetails,
+                            )
+                            .testTag("reasoning-chain-summary-$sectionIndex"),
+                    ) {
+                        ReasoningMarkdownBlock(
+                            text = section.text,
+                            index = sectionIndex,
+                            tagPrefix = "reasoning-inline",
+                        )
+                    }
+                }
+
+                is ExecutionProcessSection.ToolGroup -> {
+                    ExecutionToolGroup(
+                        group = section,
+                        active = active && section.entries.any { !it.step.completed },
+                        groupIndex = sectionIndex,
+                        onOpenDetails = onOpenDetails,
+                    )
+                }
+            }
+        }
+
+        if (showStandaloneStatus) {
+            val status = localizedExecutionStatusText(activityStatusText)
+                ?: stringResource(R.string.thinking_waiting_first_response)
+            ScanningHighlightText(
+                text = status,
+                textColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                useSmallStyle = false,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("reasoning-chain-live-status"),
+            )
+        } else if (messageIsError) {
+            Text(
+                text = stringResource(R.string.thinking_execution_failed),
+                color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.testTag("reasoning-chain-error-status"),
+            )
+        }
     }
 }
 
 @Composable
-private fun ExecutionChainSummaryRow(
-    text: String,
+private fun ExecutionToolGroup(
+    group: ExecutionProcessSection.ToolGroup,
     active: Boolean,
-    onClick: () -> Unit,
+    groupIndex: Int,
+    onOpenDetails: () -> Unit,
+) {
+    val stableKey = remember(group.entries) { group.entries.joinToString("|") { it.step.id } }
+    var expanded by remember(stableKey) { mutableStateOf(active) }
+    LaunchedEffect(active) { expanded = active }
+    val arrowRotation by animateFloatAsState(
+        targetValue = if (expanded) 180f else 0f,
+        animationSpec = tween(180, easing = FastOutSlowInEasing),
+        label = "executionGroupArrow",
+    )
+    val summary = executionToolGroupSummary(group.entries)
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.52f))
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("reasoning-chain-summary-$groupIndex")
+                .clickable(
+                    indication = null,
+                    interactionSource = remember { MutableInteractionSource() },
+                    onClick = { expanded = !expanded },
+                )
+                .padding(vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (active) {
+                ScanningHighlightText(
+                    text = summary,
+                    textColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    useSmallStyle = false,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("reasoning-chain-summary-scanning"),
+                )
+            } else {
+                Text(
+                    text = summary,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyMedium,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .weight(1f)
+                        .testTag("reasoning-chain-summary-static"),
+                )
+            }
+            Spacer(Modifier.width(6.dp))
+            Icon(
+                imageVector = Icons.Filled.KeyboardArrowDown,
+                contentDescription = stringResource(
+                    if (expanded) R.string.thinking_collapse_execution else R.string.thinking_expand_execution
+                ),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+                modifier = Modifier
+                    .size(18.dp)
+                    .graphicsLayer { rotationZ = arrowRotation },
+            )
+        }
+        AnimatedVisibility(
+            visible = expanded,
+            enter = fadeIn(tween(120)) + expandVertically(tween(180), expandFrom = Alignment.Top),
+            exit = fadeOut(tween(100)) + shrinkVertically(tween(160), shrinkTowards = Alignment.Top),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                group.entries.forEachIndexed { stepIndex, entry ->
+                    InlineExecutionStep(
+                        entry = entry,
+                        active = active && !entry.step.completed,
+                        onOpenDetails = onOpenDetails,
+                        modifier = Modifier.testTag("reasoning-chain-tool-$groupIndex-$stepIndex"),
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun InlineExecutionStep(
+    entry: ExecutionTimelineEntry,
+    active: Boolean,
+    onOpenDetails: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val step = entry.step
+    val title = localizedExecutionStatusText(step.title) ?: step.title
+    val label = step.labels.firstOrNull()?.trim().orEmpty()
+    val text = buildString {
+        append(title)
+        if (label.isNotEmpty()) append(" · ").append(label)
+        if (entry.invocationCount > 1) append("  × ").append(entry.invocationCount)
+    }
     Row(
         modifier = modifier
             .fillMaxWidth()
             .clickable(
                 indication = null,
                 interactionSource = remember { MutableInteractionSource() },
-                onClick = onClick,
+                onClick = onOpenDetails,
             )
-            .height(32.dp)
-            .padding(start = 8.dp, end = 8.dp, bottom = 4.dp),
+            .padding(horizontal = 8.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (active) {
@@ -403,7 +575,7 @@ private fun ExecutionChainSummaryRow(
                 useSmallStyle = false,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .testTag("reasoning-chain-summary-scanning"),
+                    .testTag("reasoning-chain-tool-scanning"),
             )
         } else {
             Text(
@@ -414,9 +586,38 @@ private fun ExecutionChainSummaryRow(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .testTag("reasoning-chain-summary-static"),
+                    .testTag("reasoning-chain-tool-static"),
             )
         }
+    }
+}
+
+@Composable
+private fun executionToolGroupSummary(entries: List<ExecutionTimelineEntry>): String {
+    val count = entries.sumOf { it.invocationCount.toLong() }
+        .coerceAtMost(Int.MAX_VALUE.toLong())
+        .toInt()
+    val types = entries.map { it.step.type }.toSet()
+    val resource = when {
+        types == setOf(ExecutionStepType.Agent) -> R.string.thinking_server_actions_count
+        types == setOf(ExecutionStepType.Tool) -> R.string.thinking_tool_actions_count
+        types == setOf(ExecutionStepType.Search) -> R.string.thinking_search_actions_count
+        types == setOf(ExecutionStepType.Web) -> R.string.thinking_web_actions_count
+        else -> R.string.thinking_mixed_actions_count
+    }
+    return stringResource(resource, count)
+}
+
+@Composable
+private fun localizedExecutionDuration(durationMillis: Long): String {
+    val totalSeconds = (durationMillis / 1_000L).coerceAtLeast(0L)
+    val hours = totalSeconds / 3_600L
+    val minutes = (totalSeconds % 3_600L) / 60L
+    val seconds = totalSeconds % 60L
+    return when {
+        hours > 0L -> stringResource(R.string.thinking_duration_hours_minutes, hours, minutes)
+        minutes > 0L -> stringResource(R.string.thinking_duration_minutes_seconds, minutes, seconds)
+        else -> stringResource(R.string.thinking_duration_seconds, seconds)
     }
 }
 
@@ -542,13 +743,17 @@ private fun ReasoningBottomSheet(
 
 /** 每段思考在自己的时间线节点内渲染，避免工具与整段文本被拆成两个区域。 */
 @Composable
-private fun ReasoningMarkdownBlock(text: String, index: Int) {
+private fun ReasoningMarkdownBlock(
+    text: String,
+    index: Int,
+    tagPrefix: String = "reasoning-sheet",
+) {
     if (text.isBlank()) return
     val normalizedMarkdown = remember(text) { normalizeReasoningMarkdown(text) }
     val preparedMessage = remember(normalizedMarkdown, index) {
         StreamBlockParser.prepareMessage(
             content = normalizedMarkdown,
-            messageId = "reasoning-sheet-$index",
+            messageId = "$tagPrefix-$index",
             contentVersion = contentVersionForRendering(normalizedMarkdown),
         )
     }
@@ -565,7 +770,7 @@ private fun ReasoningMarkdownBlock(text: String, index: Int) {
     }
     val markdownModifier = Modifier
         .fillMaxWidth()
-        .testTag(if (index == 0) "reasoning-sheet-markdown" else "reasoning-sheet-markdown-$index")
+        .testTag(if (index == 0) "$tagPrefix-markdown" else "$tagPrefix-markdown-$index")
     if (preparedDocument != null) {
         UnifiedMarkdownNodesRenderer(
             preparedMessage = preparedMessage,
