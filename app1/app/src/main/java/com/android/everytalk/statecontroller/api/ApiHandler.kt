@@ -245,6 +245,7 @@ class ApiHandler(
     val pendingAgentApprovals: StateFlow<List<PendingComputerToolApproval>> = _pendingAgentApprovals.asStateFlow()
     private val agentResumeMutex = Mutex()
     private val resumingAgentRunIds = ConcurrentHashMap.newKeySet<String>()
+    private val agentRunCoordinator by lazy { com.android.everytalk.data.agent.AgentRunCoordinator(context) }
     private val agentLoop by lazy {
         AgentLoop(
             runStore = agentRunStore,
@@ -447,7 +448,7 @@ class ApiHandler(
             val job = viewModelScope.launch {
                 val thisJob = coroutineContext[Job]
                 try {
-                    agentLoop.run(
+                    agentRunCoordinator.run(
                         AgentLoopRequest(
                             request = request,
                             sessionId = run.sessionId,
@@ -1043,7 +1044,7 @@ class ApiHandler(
                     }
                } else {
                 logger.debug("Agent run started for message $aiMessageId")
-                agentLoop.run(
+                agentRunCoordinator.run(
                     AgentLoopRequest(
                         request = requestBody,
                         sessionId = requestBody.conversationId

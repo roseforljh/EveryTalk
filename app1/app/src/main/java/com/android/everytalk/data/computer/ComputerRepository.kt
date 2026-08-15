@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import com.android.everytalk.util.AppLogger
 import java.io.Closeable
 import java.util.Base64
 import java.util.UUID
@@ -25,9 +26,14 @@ import java.util.UUID
  */
 internal fun ComputerStatus.canAttemptExecutionRecovery(): Boolean = this in setOf(
     ComputerStatus.READY,
+    ComputerStatus.CONFIGURATION_REQUIRED,
     ComputerStatus.OFFLINE,
     ComputerStatus.DISCONNECTED,
 )
+
+/** 容器待修复只影响隔离环境，已经确认过身份的基础 SSH 仍然可用。 */
+internal fun ComputerStatus.canUseSshTools(): Boolean = this == ComputerStatus.READY ||
+    this == ComputerStatus.CONFIGURATION_REQUIRED
 
 /**
  * Computer 功能的本地统一入口。Room 保存非敏感状态，CredentialStore 保存加密凭据，SSH 直连用户 VPS。
@@ -580,7 +586,11 @@ class ComputerRepository(
     suspend fun reconcileRemoteExecutions(
         conversationIds: Set<String> = emptySet(),
     ): List<ComputerExecutionReconciliation> =
-        executionReconciler.reconcileForegroundActiveForConversations(conversationIds)
+        if (conversationIds.isEmpty()) {
+            executionReconciler.reconcileActive()
+        } else {
+            executionReconciler.reconcileForegroundActiveForConversations(conversationIds)
+        }
 
     /** 读取当前 Workspace 的活动任务快照，供下一轮模型请求使用。 */
     suspend fun getComputerSessionState(workspaceId: String): ComputerSessionState? {
@@ -728,6 +738,9 @@ class ComputerRepository(
             // 协议响应已到达但格式不可信，交给严格解析器写 UNKNOWN，不能伪装成网络暂时不可用。
             ComputerRemoteExecutionQuery.State(error.payload)
         } catch (error: ComputerException) {
+            if (error.retryable) {
+                invalidateRemoteQueryConnection(computer.id, error)
+            }
             if (error.code == ComputerErrorCodes.EXECUTION_NOT_FOUND) {
                 ComputerRemoteExecutionQuery.Missing
             } else if (error.code == ComputerErrorCodes.EXECUTION_REQUEST_HASH_CONFLICT) {
@@ -736,11 +749,35 @@ class ComputerRepository(
                     code = ComputerErrorCodes.EXECUTION_REQUEST_HASH_CONFLICT,
                 )
             } else {
-                ComputerRemoteExecutionQuery.Unavailable(error.message)
+                ComputerRemoteExecutionQuery.Unavailable(
+                    message = error.message,
+                    connectionFailure = error.code == ComputerErrorCodes.SSH_TIMEOUT ||
+                        error.code == ComputerErrorCodes.HOST_RESOLUTION_FAILED,
+                )
             }
         } catch (error: Throwable) {
             if (error is CancellationException) throw error
-            ComputerRemoteExecutionQuery.Unavailable(error.message)
+            invalidateRemoteQueryConnection(computer.id, error)
+            ComputerRemoteExecutionQuery.Unavailable(
+                message = error.message,
+                connectionFailure = isComputerConnectionFailure(error),
+            )
+        }
+    }
+
+    /**
+     * Runtime 已经把网络异常转换成业务异常后，连接池看不到原始异常，无法自动清理坏连接。
+     * 这里在返回 Unavailable 前主动丢弃当前 Transport，下一轮查询或用户命令才会重新认证。
+     */
+    private suspend fun invalidateRemoteQueryConnection(computerId: String, error: Throwable) {
+        if (error is ComputerException && !error.retryable) return
+        if (error is ComputerException || isComputerConnectionFailure(error)) {
+            val code = (error as? ComputerException)?.code ?: error::class.java.simpleName
+            AppLogger.warn(
+                "ComputerSsh",
+                "远端状态查询失败，丢弃 SSH Transport computer=$computerId code=$code message=${error.message}",
+            )
+            connectionPool.disconnect(computerId, reason = "remote_query_failed:$code")
         }
     }
 
@@ -792,7 +829,7 @@ class ComputerRepository(
 
     /** 手机网络发生切换时丢弃旧 Transport，下一次操作会重新解析并验证固定 Host Key。 */
     suspend fun handleNetworkChanged() {
-        connectionPool.close()
+        connectionPool.closeWithReason("network_changed")
         dao.markPrivatePreviewsStopped()
     }
 
@@ -807,7 +844,7 @@ class ComputerRepository(
         block: suspend (ComputerSshConnection, Computer) -> T,
     ): T {
         val computer = requireComputer(computerId)
-        if (requireReady && computer.status != ComputerStatus.READY) {
+        if (requireReady && !computer.status.canUseSshTools()) {
             throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "当前服务器不可用")
         }
         return connectionPool.withConnection(computer) { connection -> block(connection, computer) }
@@ -835,6 +872,16 @@ class ComputerRepository(
     }
 
     internal fun dao(): ComputerDao = dao
+
+    /**
+     * 丢弃当前服务器的 SSH Transport。
+     *
+     * 远端 Channel 在执行过程中断开时，底层 Transport 仍可能短暂显示为可用。
+     * 只读命令恢复前必须主动丢弃它，下一次调用才会重新建立 SSH 连接。
+     */
+    internal suspend fun invalidateConnection(computerId: String) {
+        connectionPool.disconnect(computerId)
+    }
     internal fun credentialStore(): ComputerCredentialStore = credentialStore
 
     /** 活跃 SSH 操作持有该令牌，全部令牌释放后 Android 前台服务自动停止。 */
@@ -899,6 +946,6 @@ class ComputerRepository(
 
     override fun close() {
         connectionStopListener.close()
-        connectionPool.close()
+        connectionPool.closeWithReason("repository_closed")
     }
 }

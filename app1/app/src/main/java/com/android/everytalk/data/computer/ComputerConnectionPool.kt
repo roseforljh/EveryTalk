@@ -1,8 +1,11 @@
 package com.android.everytalk.data.computer
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import com.android.everytalk.util.AppLogger
 import java.io.Closeable
+import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -54,14 +57,31 @@ class ComputerConnectionPool(
         val startedBefore = lease.connection.startedChannelCount
         return try {
             block(lease.connection)
-        } catch (error: ComputerSshChannelOpenException) {
-            if (!shouldRetryComputerChannelOpen(startedBefore, lease.connection.startedChannelCount)) {
+        } catch (error: Throwable) {
+            if (error is CancellationException) throw error
+            if (!isComputerConnectionFailure(error)) throw error
+            if (shouldRetryComputerChannelOpen(startedBefore, lease.connection.startedChannelCount)) {
+                lease.invalidate()
+                lease.close()
+                lease = acquire(computer)
+                try {
+                    block(lease.connection)
+                } catch (retryError: Throwable) {
+                    // 第二次连接也失败时，无论底层具体是 SSHJ Transport 还是 Channel 包装异常，
+                    // 都必须销毁它。否则下一次命令会继续拿到这条已经失效的连接。
+                    if (isComputerConnectionFailure(retryError)) lease.invalidate()
+                    throw retryError
+                }
+            } else {
+                // Channel 已经启动后不能安全重放命令，但必须销毁坏 Transport，
+                // 否则连接池会在下一条命令中继续复用这条已断开的连接。
+                AppLogger.warn(
+                    "ComputerSsh",
+                    "SSH Transport 异常 computer=${computer.id} type=${error::class.java.simpleName} message=${error.message}",
+                )
+                lease.invalidate()
                 throw error
             }
-            lease.invalidate()
-            lease.close()
-            lease = acquire(computer)
-            block(lease.connection)
         } finally {
             lease.close()
         }
@@ -90,6 +110,7 @@ class ComputerConnectionPool(
             return try {
                 lease to open(lease.connection)
             } catch (retryError: Throwable) {
+                if (isComputerConnectionFailure(retryError)) lease.invalidate()
                 lease.close()
                 throw retryError
             }
@@ -99,8 +120,12 @@ class ComputerConnectionPool(
         }
     }
 
-    suspend fun disconnect(computerId: String) {
+    suspend fun disconnect(computerId: String, reason: String = "explicit") {
         val entry = entries[computerId] ?: return
+        AppLogger.warn(
+            "ComputerSsh",
+            "关闭 SSH Transport computer=$computerId reason=$reason activeLeases=${entry.activeLeases.get()}",
+        )
         entry.mutex.withLock {
             entry.connection?.close()
             entry.connection = null
@@ -123,10 +148,21 @@ class ComputerConnectionPool(
     }
 
     override fun close() {
+        closeWithReason("owner_closed")
+    }
+
+    fun closeWithReason(reason: String) {
+        AppLogger.warn("ComputerSsh", "关闭全部 SSH Transport reason=$reason entries=${entries.size}")
         entries.values.forEach { entry -> entry.connection?.close() }
         entries.clear()
     }
 }
+
+/** 判断异常是否代表当前 SSH Transport 或 Channel 已经不能继续复用。 */
+internal fun isComputerConnectionFailure(error: Throwable): Boolean =
+    error is IOException ||
+        error is net.schmizz.sshj.transport.TransportException ||
+        error is net.schmizz.sshj.connection.ConnectionException
 
 /** 只有本次 block 尚未成功启动任何 Channel 时，重连重试才不会重放远端副作用。 */
 internal fun shouldRetryComputerChannelOpen(startedBefore: Long, startedAfter: Long): Boolean =

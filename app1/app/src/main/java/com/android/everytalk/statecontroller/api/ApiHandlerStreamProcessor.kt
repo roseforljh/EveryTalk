@@ -907,20 +907,27 @@ internal class ApiHandlerStreamProcessor(
                     PerformanceMonitor.onFinish(aiMessageId)
                 }
                 is AppStreamEvent.Error -> {
-                    // 🎯 错误事件会触发 updateMessageWithError，它会自动刷新和清理 buffer
+                    // 🎯 错误事件处理：如果是可重试网络错误（等待恢复中），更新执行状态为提示语，禁止标记 isError 导致消息失败
                     PerformanceMonitor.recordEvent(aiMessageId, "Error", 0)
-                    val isSafetyBlock = appEvent.type == AI_CONTENT_SAFETY_ERROR_TYPE
-                    val error = if (isSafetyBlock) {
-                        AiContentSafetyBlockedException(appEvent.code)
+                    if (appEvent.type == "retryable_network" || appEvent.code == "connection_aborted") {
+                        val latestMessage = latestMessageForUpdate()
+                        updatedMessage = latestMessage.copy(
+                            executionStatus = "任务已完成，正在恢复回复...",
+                        )
                     } else {
-                        IOException(appEvent.message)
+                        val isSafetyBlock = appEvent.type == AI_CONTENT_SAFETY_ERROR_TYPE
+                        val error = if (isSafetyBlock) {
+                            AiContentSafetyBlockedException(appEvent.code)
+                        } else {
+                            IOException(appEvent.message)
+                        }
+                        updateMessageWithError(
+                            messageId = aiMessageId,
+                            error = error,
+                            isImageGeneration = isImageGeneration,
+                            allowRetry = !isSafetyBlock,
+                        )
                     }
-                    updateMessageWithError(
-                        messageId = aiMessageId,
-                        error = error,
-                        isImageGeneration = isImageGeneration,
-                        allowRetry = !isSafetyBlock,
-                    )
                 }
                 is AppStreamEvent.ToolCall -> {
                     logger.debug("Received ToolCall event: ${appEvent.name}")

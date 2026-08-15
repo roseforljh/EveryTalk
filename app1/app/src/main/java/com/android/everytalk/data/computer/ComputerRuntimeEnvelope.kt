@@ -320,7 +320,9 @@ class ComputerRuntimeEnvelope(
 ) {
     /** Wrapper 内容随 APK 固定，进程内只读取和计算一次版本摘要。 */
     private val directRuntimeWrapper: DirectRuntimeWrapper by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
-        val bytes = context.assets.open(RUNTIME_WRAPPER_ASSET_PATH).use { it.readBytes() }
+        val source = context.assets.open(RUNTIME_WRAPPER_ASSET_PATH).use { it.readBytes() }
+        val bytes = normalizeComputerShellAsset(source)
+        source.fill(0)
         val digest = sha256(bytes)
         DirectRuntimeWrapper(bytes = bytes, sha256 = digest, version = digest.toHex())
     }
@@ -430,7 +432,7 @@ class ComputerRuntimeEnvelope(
                 timeoutMillis = 30_000,
                 maxOutputBytes = 8 * 1024,
             )
-            if (result.timedOut || result.exitCode != 0) {
+            if (result.timedOut || result.exitCode?.let { it != 0 } == true) {
                 if (result.exitCode == 49) {
                     throw ComputerException(
                         ComputerErrorCodes.EXECUTION_REQUEST_HASH_CONFLICT,
@@ -487,7 +489,7 @@ class ComputerRuntimeEnvelope(
                 "远端 Execution 请求身份冲突",
             )
         }
-        if (result.exitCode != 0 && result.stdout.isBlank()) {
+        if (result.exitCode?.let { it != 0 } == true && result.stdout.isBlank()) {
             throw ComputerException(ComputerErrorCodes.EXECUTION_UNKNOWN, "远端 Execution 状态无法确认", retryable = true)
         }
         // MISSING 没有可信的 request_hash，先只校验固定 Execution 身份和目标，
@@ -540,7 +542,7 @@ class ComputerRuntimeEnvelope(
             timeoutMillis = 20_000,
             maxOutputBytes = (maxBytes * 2.0).toInt().coerceAtMost(512 * 1024),
         )
-        if (result.timedOut || result.exitCode != 0) {
+        if (result.timedOut || result.exitCode?.let { it != 0 } == true) {
             if (result.exitCode == 49) {
                 throw ComputerException(
                     ComputerErrorCodes.EXECUTION_REQUEST_HASH_CONFLICT,
@@ -600,7 +602,7 @@ class ComputerRuntimeEnvelope(
             expectedRequestHash = expectedRequestHash,
         )
         val result = connection.execute(command, timeoutMillis = 15_000, maxOutputBytes = 8 * 1024)
-        if (result.timedOut || result.exitCode != 0) {
+        if (result.timedOut || result.exitCode?.let { it != 0 } == true) {
             if (result.exitCode == 49) {
                 throw ComputerException(
                     ComputerErrorCodes.EXECUTION_REQUEST_HASH_CONFLICT,

@@ -11,6 +11,26 @@ private const val SANDBOX_IMAGE = "everytalk-sandbox:1"
 private const val BOOTSTRAP_COMMAND_TIMEOUT_MILLIS = 20 * 60 * 1000L
 private const val BOOTSTRAP_OUTPUT_BYTES = 2 * 1024 * 1024
 
+/** APK 可能由 Windows 工作区构建，上传 VPS 前统一把 CRLF/CR 转成 POSIX Shell 需要的 LF。 */
+internal fun normalizeComputerShellAsset(source: ByteArray): ByteArray {
+    val normalized = ByteArray(source.size)
+    var sourceIndex = 0
+    var targetIndex = 0
+    while (sourceIndex < source.size) {
+        val current = source[sourceIndex]
+        if (current == '\r'.code.toByte()) {
+            normalized[targetIndex++] = '\n'.code.toByte()
+            if (sourceIndex + 1 < source.size && source[sourceIndex + 1] == '\n'.code.toByte()) {
+                sourceIndex++
+            }
+        } else {
+            normalized[targetIndex++] = current
+        }
+        sourceIndex++
+    }
+    return normalized.copyOf(targetIndex)
+}
+
 data class ComputerProvisionResult(
     val bootstrapVersion: String,
     val sandboxImage: String,
@@ -63,6 +83,7 @@ class ComputerProvisioner(private val context: Context) {
                 sudoPassword = sudoPassword,
                 errorCode = ComputerErrorCodes.HELPER_INTEGRITY_FAILED,
                 errorMessage = "Container Helper 安装失败",
+                successMarker = "version=$COMPUTER_BOOTSTRAP_VERSION",
             )
             onProgress(ComputerSetupStage.BUILDING_IMAGE)
             runInstalledHelper(connection, computer, "build-image", sudoPassword)
@@ -104,7 +125,12 @@ class ComputerProvisioner(private val context: Context) {
         val hashes = linkedMapOf<String, String>()
         connection.withSftp { sftp ->
             assets.forEach { asset ->
-                val bytes = context.assets.open(asset.assetName).use { it.readBytes() }
+                val source = context.assets.open(asset.assetName).use { it.readBytes() }
+                val bytes = if (asset.remoteName.endsWith(".sh")) {
+                    normalizeComputerShellAsset(source)
+                } else {
+                    source.copyOf()
+                }
                 try {
                     val remotePath = "$remoteDirectory/${asset.remoteName}"
                     sftp.open(
@@ -121,6 +147,7 @@ class ComputerProvisioner(private val context: Context) {
                     sftp.chmod(remotePath, if (asset.executable) 0b111000000 else 0b110000000)
                     hashes[asset.remoteName] = sha256(bytes)
                 } finally {
+                    source.fill(0)
                     bytes.fill(0)
                 }
             }
@@ -172,6 +199,7 @@ class ComputerProvisioner(private val context: Context) {
         sudoPassword: CharArray?,
         errorCode: String,
         errorMessage: String,
+        successMarker: String? = null,
     ) {
         val input = if (computer.username == "root" || sudoPassword == null) {
             null
@@ -190,7 +218,10 @@ class ComputerProvisioner(private val context: Context) {
                 timeoutMillis = BOOTSTRAP_COMMAND_TIMEOUT_MILLIS,
                 maxOutputBytes = BOOTSTRAP_OUTPUT_BYTES,
             )
-            if (result.timedOut || result.exitCode != 0) {
+            val completedByMarker = successMarker != null && result.stdout.lineSequence().any {
+                it.trim() == successMarker
+            }
+            if (result.timedOut || (result.exitCode != 0 && !completedByMarker)) {
                 val code = if (
                     computer.username != "root" &&
                     (result.stderr.contains("password", ignoreCase = true) || result.stderr.contains("sudo", ignoreCase = true))
@@ -199,11 +230,29 @@ class ComputerProvisioner(private val context: Context) {
                 } else {
                     errorCode
                 }
-                throw ComputerException(code, errorMessage, retryable = true, action = "RETRY_PROVISION")
+                throw ComputerException(
+                    code,
+                    commandFailureMessage(errorMessage, result),
+                    retryable = true,
+                    action = "RETRY_PROVISION",
+                )
             }
         } finally {
             input?.fill(0)
         }
+    }
+
+    /** 修复失败必须告诉用户 VPS 返回了什么，同时限制长度并清掉控制字符。 */
+    private fun commandFailureMessage(base: String, result: ComputerSshCommandResult): String {
+        if (result.timedOut) return "$base：执行超时"
+        val detail = result.stderr.lineSequence()
+            .map(String::trim)
+            .lastOrNull(String::isNotEmpty)
+            ?.map { character -> if (character.isISOControl()) ' ' else character }
+            ?.joinToString("")
+            ?.take(240)
+        val exit = result.exitCode?.toString() ?: "未返回"
+        return if (detail.isNullOrBlank()) "$base：退出码 $exit" else "$base：$detail（退出码 $exit）"
     }
 
     private fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256")

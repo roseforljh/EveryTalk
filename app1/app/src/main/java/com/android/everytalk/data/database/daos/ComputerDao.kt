@@ -154,26 +154,41 @@ interface ComputerDao {
      * 找出需要和 VPS 对账的执行。
      *
      * 旧记录没有 remoteStatus，因此在本地仍处于 STARTING/RUNNING 时也必须纳入恢复，
-     * 否则升级后第一轮已经发出的命令会被遗漏。
+     * 否则升级后第一轮已经发出的命令会被遗漏。前台执行还必须关联等待远端结果的
+     * AgentRun；已结束 Run 遗留的 RUNNING 快照不能继续启动服务或发送断线通知。
+     * RETURN_HANDLE 和尚未确认的取消请求仍由服务持续监听。
      */
     @Query(
         """
-        SELECT * FROM computer_executions
-        WHERE toolName = 'exec' AND (
-                remoteStatus IN ('STARTING', 'RUNNING')
+        SELECT execution.* FROM computer_executions AS execution
+        INNER JOIN computer_workspaces AS workspace ON workspace.id = execution.workspaceId
+        WHERE execution.toolName = 'exec' AND (
+                execution.remoteStatus IN ('STARTING', 'RUNNING')
                 AND (
-                    status IN ('QUEUED', 'STARTING', 'RUNNING', 'CANCELLED')
-                    OR completionMode = 'RETURN_HANDLE'
-                    OR (status = 'UNKNOWN' AND errorCode IN (
+                    execution.status IN ('QUEUED', 'STARTING', 'RUNNING', 'CANCELLED')
+                    OR (execution.completionMode = 'RETURN_HANDLE' AND execution.status = 'SUCCEEDED')
+                    OR (execution.status = 'UNKNOWN' AND execution.errorCode IN (
                         'EXECUTION_CANCEL_FAILED', 'EXECUTION_RESULT_UNAVAILABLE', 'EXECUTION_UNKNOWN'
                     ))
                 )
-           OR (remoteStatus IS NULL AND status IN ('QUEUED', 'STARTING', 'RUNNING', 'CANCELLED'))
-           OR (remoteStatus = 'UNKNOWN' AND status = 'UNKNOWN' AND errorCode IN (
+           OR (execution.remoteStatus IS NULL AND execution.status IN ('QUEUED', 'STARTING', 'RUNNING', 'CANCELLED'))
+           OR (execution.remoteStatus = 'UNKNOWN' AND execution.status = 'UNKNOWN' AND execution.errorCode IN (
                 'EXECUTION_CANCEL_FAILED', 'EXECUTION_RESULT_UNAVAILABLE', 'EXECUTION_UNKNOWN'
               ))
               )
-        ORDER BY COALESCE(lastObservedAt, startedAt, 0) ASC
+          AND (
+                execution.completionMode = 'RETURN_HANDLE'
+                OR execution.errorCode IN ('EXECUTION_CANCEL_REQUESTED', 'EXECUTION_CANCEL_FAILED')
+                OR EXISTS (
+                    SELECT 1 FROM agent_runs AS run
+                    WHERE run.status IN ('WAITING_REMOTE_EXECUTION', 'INTERRUPTED')
+                      AND (
+                            run.id = execution.runId
+                            OR (execution.runId IS NULL AND run.sessionId = workspace.conversationId)
+                          )
+                )
+              )
+        ORDER BY COALESCE(execution.lastObservedAt, execution.startedAt, 0) ASC
         """,
     )
     suspend fun getActiveRemoteExecutions(): List<ComputerExecutionEntity>
@@ -243,7 +258,7 @@ interface ComputerDao {
                 (remoteStatus IN ('STARTING', 'RUNNING')
                  AND (
                     status IN ('QUEUED', 'STARTING', 'RUNNING', 'CANCELLED')
-                    OR completionMode = 'RETURN_HANDLE'
+                    OR (completionMode = 'RETURN_HANDLE' AND status = 'SUCCEEDED')
                     OR (status = 'UNKNOWN' AND errorCode IN (
                         'EXECUTION_CANCEL_FAILED', 'EXECUTION_RESULT_UNAVAILABLE', 'EXECUTION_UNKNOWN'
                     ))

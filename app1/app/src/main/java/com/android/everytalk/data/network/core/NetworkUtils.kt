@@ -92,16 +92,34 @@ object NetworkUtils {
         apiName: String
     ): ErrorWithFinish {
         Log.e(TAG, "$apiName 连接失败", exception)
-        
+
+        val isAborted = exception is java.net.SocketException &&
+            exception.message?.contains("Software caused connection abort", ignoreCase = true) == true
+
+        val (errorCode, errorType) = when {
+            isAborted -> "connection_aborted" to "retryable_network"
+            exception is java.net.SocketTimeoutException -> "connection_timeout" to "retryable_network"
+            exception is java.net.UnknownHostException -> "unknown_host" to "retryable_network"
+            exception is java.net.ConnectException -> "connection_refused" to "retryable_network"
+            exception is java.net.SocketException -> "socket_error" to "retryable_network"
+            else -> null to null
+        }
+
         val errorMessage = when {
+            isAborted -> "$apiName 连接中断: Software caused connection abort"
             exception is java.net.UnknownHostException -> "$apiName: 无法连接服务器，请检查网络"
             exception is java.net.SocketTimeoutException -> "$apiName: 连接超时，请检查网络"
             exception is javax.net.ssl.SSLException -> "$apiName: SSL 连接失败，请检查网络安全设置"
             else -> "$apiName 连接失败: ${sanitizeMessage(exception.message)}"
         }
-        
+
         return ErrorWithFinish(
-            AppStreamEvent.Error(errorMessage, null),
+            AppStreamEvent.Error(
+                message = errorMessage,
+                upstreamStatus = null,
+                code = errorCode,
+                type = errorType,
+            ),
             AppStreamEvent.Finish("connection_failed")
         )
     }

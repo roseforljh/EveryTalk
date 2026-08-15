@@ -45,23 +45,6 @@ class ComputerWorkspaceManager(private val repository: ComputerRepository) {
             val computerId = existing.computerId
             if (existing.status == ComputerWorkspaceStatus.READY) {
                 val restored = existing.copy(lastUsedAt = System.currentTimeMillis())
-                if (existing.runMode == ComputerRunMode.CONTAINER) {
-                    val computer = repository.getComputer(computerId)
-                        ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
-                    try {
-                        // Container 禁止自动重启。会话真正使用它时，才通过受限 helper 主动恢复。
-                        repository.withConnection(computerId) { connection, _ ->
-                            ensureContainerWorkspace(connection, computer, existing.id)
-                        }
-                    } catch (error: Throwable) {
-                        dao.updateWorkspaceRuntimeState(
-                            workspaceId = existing.id,
-                            hostPath = existing.hostPath,
-                            status = ComputerWorkspaceStatus.ERROR.name,
-                        )
-                        throw error
-                    }
-                }
                 dao.updateWorkspaceRuntimeState(
                     workspaceId = existing.id,
                     hostPath = restored.hostPath,
@@ -71,8 +54,6 @@ class ComputerWorkspaceManager(private val repository: ComputerRepository) {
                 return@withLock dao.getWorkspaceById(existing.id)?.toModel() ?: restored
             }
 
-            val computer = repository.getComputer(computerId)
-                ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
             dao.updateWorkspaceRuntimeState(
                 workspaceId = existing.id,
                 hostPath = existing.hostPath,
@@ -82,9 +63,6 @@ class ComputerWorkspaceManager(private val repository: ComputerRepository) {
             try {
                 val ready = repository.withConnection(computerId) { connection, _ ->
                     val hostPath = ensureHostWorkspace(connection, existing.id)
-                    if (existing.runMode == ComputerRunMode.CONTAINER) {
-                        ensureContainerWorkspace(connection, computer, existing.id)
-                    }
                     existing.copy(
                         hostPath = hostPath,
                         status = ComputerWorkspaceStatus.READY,
@@ -105,6 +83,30 @@ class ComputerWorkspaceManager(private val repository: ComputerRepository) {
                     status = ComputerWorkspaceStatus.ERROR.name,
                 )
                 throw error
+            }
+        }
+    }
+
+    /** 只有模型明确选择 CONTAINER 时才启动或创建容器，Host SSH 不受容器故障影响。 */
+    suspend fun prepareContainer(workspaceId: String) {
+        ComputerIdentifier.requireValid(workspaceId, "Workspace ID")
+        workspaceLocks.computeIfAbsent(workspaceId) { Mutex() }.withLock {
+            val workspace = repository.dao().getWorkspaceById(workspaceId)?.toModel()
+                ?: throw ComputerException(ComputerErrorCodes.WORKSPACE_NOT_READY, "Workspace 不存在")
+            if (workspace.runMode != ComputerRunMode.CONTAINER) {
+                throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "当前服务器没有配置隔离环境")
+            }
+            val computer = repository.getComputer(workspace.computerId)
+                ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
+            if (computer.status != ComputerStatus.READY) {
+                throw ComputerException(
+                    ComputerErrorCodes.HELPER_INTEGRITY_FAILED,
+                    "隔离环境尚未就绪，请先修复运行环境",
+                    action = "REPAIR_COMPUTER",
+                )
+            }
+            repository.withConnection(workspace.computerId) { connection, _ ->
+                ensureContainerWorkspace(connection, computer, workspace.id)
             }
         }
     }

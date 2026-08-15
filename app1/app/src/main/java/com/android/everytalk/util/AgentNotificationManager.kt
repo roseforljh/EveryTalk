@@ -1,6 +1,7 @@
 package com.android.everytalk.util
 
 import android.Manifest
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
@@ -20,6 +21,8 @@ import java.util.concurrent.ConcurrentHashMap
 object AgentNotificationManager {
     const val CHANNEL_EVENTS_ID = "agent_events_channel"
     private val notifiedEvents = ConcurrentHashMap<String, Long>()
+    private val executionTerminalStates = ConcurrentHashMap<String, String>()
+    private val lostConnections = ConcurrentHashMap.newKeySet<String>()
 
     /**
      * 统一通知可用性检查：运行时权限、全局开关、渠道三者必须同时判断。
@@ -72,6 +75,21 @@ object AgentNotificationManager {
         }
     }
 
+    /** 服务重建时清掉上个版本遗留的断线通知，真实故障会在本轮对账后重新生成一条。 */
+    fun clearConnectionFailureNotifications(context: Context) {
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            manager.activeNotifications.forEach { statusBarNotification ->
+                val title = statusBarNotification.notification.extras
+                    .getCharSequence(Notification.EXTRA_TITLE)
+                    ?.toString()
+                if (title == "SSH 连接断开") manager.cancel(statusBarNotification.id)
+            }
+        }
+        lostConnections.clear()
+        notifiedEvents.keys.filter { it.endsWith("_CONNECTION_LOST") }.forEach(notifiedEvents::remove)
+    }
+
     /**
      * 任务事件通知必须覆盖完成、失败、审批、断线和恢复，并按 executionId + eventType 去重。
      */
@@ -79,11 +97,36 @@ object AgentNotificationManager {
         context: Context,
         conversationId: String,
         executionId: String,
-        eventType: String, // "SUCCEEDED", "FAILED", "WAITING_APPROVAL", "CONNECTION_LOST", "RECONNECTED"
+        eventType: String, // "SUCCEEDED", "FAILED", "CANCELLED", "TIMED_OUT", "WAITING_APPROVAL", "CONNECTION_LOST", "RECONNECTED"
         title: String,
         message: String,
     ) {
         if (!canUseAgentNotifications(context)) return
+
+        val isTerminal = eventType == "SUCCEEDED" || eventType == "FAILED" || eventType == "CANCELLED" || eventType == "TIMED_OUT"
+
+        // 1. 任务已经处于终态时，丢弃迟到的非终态事件（如 CONNECTION_LOST、RECONNECTED、WAITING_APPROVAL）
+        val terminal = executionTerminalStates[executionId]
+        if (terminal != null && !isTerminal) {
+            return
+        }
+
+        // 2. 从未通知断线时禁止单独发送重新连接通知
+        if (eventType == "RECONNECTED" && !lostConnections.contains(executionId)) {
+            return
+        }
+
+        if (eventType == "CONNECTION_LOST") {
+            // 同一 Execution 的自动重试只允许发第一次断线通知，恢复前不再每分钟刷屏。
+            if (!lostConnections.add(executionId)) return
+        } else if (eventType == "RECONNECTED") {
+            lostConnections.remove(executionId)
+        }
+
+        if (isTerminal) {
+            executionTerminalStates[executionId] = eventType
+            lostConnections.remove(executionId)
+        }
 
         val dedupKey = "${executionId}_${eventType}"
         val now = System.currentTimeMillis()
@@ -95,6 +138,14 @@ object AgentNotificationManager {
 
         ensureEventChannel(context)
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
+
+        // 终态到达后，撤销同一 Execution 的旧非终态通知（如 CONNECTION_LOST / RECONNECTED / WAITING_APPROVAL）
+        if (isTerminal) {
+            listOf("CONNECTION_LOST", "RECONNECTED", "WAITING_APPROVAL").forEach { prevEvent ->
+                val prevId = ((executionId.hashCode() xor prevEvent.hashCode()).let { if (it < 0) -it else it } % 100000) + 10000
+                manager.cancel(prevId)
+            }
+        }
 
         val intent = Intent(context, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
@@ -116,7 +167,8 @@ object AgentNotificationManager {
             .setOnlyAlertOnce(true)
             .build()
 
-        val notificationId = (executionId.hashCode() xor eventType.hashCode()).let { if (it < 0) -it else it } + 10000
+        // 终态通知和过程通知使用统一的 ID (基于 executionId)，同一任务的状态更新直接覆盖旧通知，避免堆叠
+        val notificationId = (executionId.hashCode().let { if (it < 0) -it else it } % 100000) + 10000
         manager.notify(notificationId, notification)
     }
 }

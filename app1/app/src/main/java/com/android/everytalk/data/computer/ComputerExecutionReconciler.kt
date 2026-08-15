@@ -21,7 +21,11 @@ sealed interface ComputerRemoteExecutionQuery {
     object Missing : ComputerRemoteExecutionQuery
 
     /** SSH/网络暂时不可用，本轮不修改远端状态。 */
-    data class Unavailable(val message: String? = null) : ComputerRemoteExecutionQuery
+    data class Unavailable(
+        val message: String? = null,
+        /** 只有网络或 SSH Transport 故障才能显示“SSH 连接断开”。 */
+        val connectionFailure: Boolean = false,
+    ) : ComputerRemoteExecutionQuery
 }
 
 /**
@@ -46,6 +50,7 @@ data class ComputerExecutionReconciliation(
     val execution: ComputerExecutionEntity?,
     val state: ParsedRemoteExecutionState? = null,
     val message: String? = null,
+    val connectionFailure: Boolean = false,
 )
 
 private val ACTIVE_LOCAL_EXECUTION_STATUSES = setOf("QUEUED", "STARTING", "RUNNING")
@@ -68,7 +73,7 @@ internal fun ComputerExecutionEntity.shouldReconcileRemote(): Boolean {
         return toolName == ComputerToolNames.EXEC && (
             status in ACTIVE_LOCAL_EXECUTION_STATUSES ||
                 status == ComputerExecutionStatus.CANCELLED.name ||
-                completionMode == "RETURN_HANDLE" ||
+                (completionMode == "RETURN_HANDLE" && status == ComputerExecutionStatus.SUCCEEDED.name) ||
                 (status == ComputerExecutionStatus.UNKNOWN.name && errorCode in RETRYABLE_REMOTE_ERROR_CODES)
             )
     }
@@ -144,6 +149,11 @@ class ComputerExecutionReconciler(
                 outcome = ComputerExecutionReconciliationOutcome.STILL_UNAVAILABLE,
                 execution = execution,
                 message = error.message,
+                connectionFailure = isComputerConnectionFailure(error) ||
+                    (error is ComputerException && (
+                        error.code == ComputerErrorCodes.SSH_TIMEOUT ||
+                            error.code == ComputerErrorCodes.HOST_RESOLUTION_FAILED
+                        )),
             )
         }
 
@@ -162,6 +172,7 @@ class ComputerExecutionReconciler(
                     outcome = ComputerExecutionReconciliationOutcome.STILL_UNAVAILABLE,
                     execution = execution,
                     message = query.message,
+                    connectionFailure = query.connectionFailure,
                 )
             }
 

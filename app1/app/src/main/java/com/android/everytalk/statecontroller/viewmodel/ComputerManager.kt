@@ -216,11 +216,20 @@ class ComputerManager(
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             val previous = activeNetwork.getAndSet(network)
-            if (previous != null && previous != network) handleNetworkChanged()
+            if (previous != null && previous != network) {
+                AppLogger.warn(
+                    "ComputerNetwork",
+                    "默认网络发生变化 previous=$previous current=$network，主动关闭旧 SSH",
+                )
+                handleNetworkChanged()
+            }
         }
 
         override fun onLost(network: Network) {
-            if (activeNetwork.compareAndSet(network, null)) handleNetworkChanged()
+            if (activeNetwork.compareAndSet(network, null)) {
+                AppLogger.warn("ComputerNetwork", "默认网络丢失 network=$network，主动关闭 SSH")
+                handleNetworkChanged()
+            }
         }
 
         private fun handleNetworkChanged() {

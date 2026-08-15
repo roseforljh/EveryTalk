@@ -46,6 +46,7 @@ private const val ACTION_RESUME_RECOVERY = "com.android.everytalk.computer.RESUM
 /** 维护需要前台存活的本地 SSH 活动与任务监听，不保存服务器身份或命令。 */
 object ComputerConnectionServiceController {
     private val activeTokens = ConcurrentHashMap<String, Unit>()
+    private val activeAgentRunTokens = ConcurrentHashMap<String, Unit>()
     private val stopListeners = CopyOnWriteArraySet<() -> Unit>()
 
     fun acquire(context: Context): Closeable {
@@ -72,6 +73,34 @@ object ComputerConnectionServiceController {
         }
     }
 
+    /**
+     * 登记当前进程里真实运行的 Agent 流。
+     * Room 中的 Run 可能因进程退出残留在中间状态，不能直接拿来判断“正在运行”。
+     */
+    fun acquireAgentRun(context: Context): Closeable {
+        val appContext = context.applicationContext
+        val tokenId = UUID.randomUUID().toString()
+        activeAgentRunTokens[tokenId] = Unit
+        ContextCompat.startForegroundService(
+            appContext,
+            Intent(appContext, ComputerConnectionService::class.java).setAction(ACTION_START),
+        )
+        return object : Closeable {
+            private val closed = AtomicBoolean(false)
+
+            override fun close() {
+                if (!closed.compareAndSet(false, true)) return
+                activeAgentRunTokens.remove(tokenId)
+                if (activeAgentRunTokens.isEmpty() && activeTokens.isEmpty()) {
+                    ContextCompat.startForegroundService(
+                        appContext,
+                        Intent(appContext, ComputerConnectionService::class.java).setAction(ACTION_STOP_IF_IDLE),
+                    )
+                }
+            }
+        }
+    }
+
     /** 触发后台服务恢复监听未完成的活动任务。 */
     fun resumeActiveTasks(context: Context) {
         val appContext = context.applicationContext
@@ -88,10 +117,12 @@ object ComputerConnectionServiceController {
 
     internal fun stopAll() {
         activeTokens.clear()
+        activeAgentRunTokens.clear()
         stopListeners.forEach { listener -> runCatching(listener) }
     }
 
     internal fun hasActiveTokens(): Boolean = activeTokens.isNotEmpty()
+    internal fun activeAgentRunCount(): Int = activeAgentRunTokens.size
 }
 
 class ComputerConnectionService : Service() {
@@ -103,9 +134,12 @@ class ComputerConnectionService : Service() {
     private val agentDao by lazy { database.agentDao() }
     private val computerRepository by lazy { ComputerRepository(this) }
 
+    private val agentRunCoordinator by lazy { com.android.everytalk.data.agent.AgentRunCoordinator(this, serviceScope) }
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        AgentNotificationManager.clearConnectionFailureNotifications(this)
         startForeground(NOTIFICATION_ID, buildNotification())
         startTaskMonitoring()
     }
@@ -127,7 +161,9 @@ class ComputerConnectionService : Service() {
                     val activeExecutions = computerDao.getActiveRemoteExecutions()
                     val waitingApproval = agentDao.getWaitingApprovalRuns()
                     val pendingContinuation = agentDao.getPendingModelContinuationRuns()
+                    val activeAgentRunCount = ComputerConnectionServiceController.activeAgentRunCount()
                     if (!ComputerConnectionServiceController.hasActiveTokens() &&
+                        activeAgentRunCount == 0 &&
                         activeExecutions.isEmpty() &&
                         waitingApproval.isEmpty() &&
                         pendingContinuation.isEmpty()
@@ -154,15 +190,21 @@ class ComputerConnectionService : Service() {
                     val waitingApproval = agentDao.getWaitingApprovalRuns()
                     val pendingContinuation = agentDao.getPendingModelContinuationRuns()
                     val hasTokens = ComputerConnectionServiceController.hasActiveTokens()
+                    val activeAgentRunCount = ComputerConnectionServiceController.activeAgentRunCount()
 
-                    if (activeExecutions.isEmpty() && waitingApproval.isEmpty() && pendingContinuation.isEmpty() && !hasTokens) {
+                    if (activeExecutions.isEmpty() && waitingApproval.isEmpty() && pendingContinuation.isEmpty() && activeAgentRunCount == 0 && !hasTokens) {
                         AppLogger.debug("ComputerConnectionService", "No active tasks or tokens, stopping background monitoring service.")
                         stopForeground(STOP_FOREGROUND_REMOVE)
                         stopSelf()
                         break
                     }
 
-                    updateNotification(activeExecutions.size, waitingApproval.size + pendingContinuation.size)
+                    updateNotification(activeExecutions.size + activeAgentRunCount, waitingApproval.size + pendingContinuation.size)
+
+                    // 恢复待续写模型任务
+                    if (pendingContinuation.isNotEmpty()) {
+                        agentRunCoordinator.resumePendingContinuationRuns()
+                    }
 
                     if (activeExecutions.isNotEmpty()) {
                         // 按 VPS (computerId) 复用 Transport 连接，按 Execution (executionId) 独立通道执行监听与对账
@@ -176,60 +218,70 @@ class ComputerConnectionService : Service() {
                         }
 
                         val reconciliations = computerRepository.reconcileRemoteExecutions()
+                        // 对账期间 AgentRun 可能已经结束。通知前重新读取活动集合，避免旧快照
+                        // 把已经完成的会话继续报成 SSH 断线。
+                        val monitorableExecutionIds = computerDao.getActiveRemoteExecutions()
+                            .mapTo(hashSetOf()) { it.id }
                         for (item in reconciliations) {
                             val execution = item.execution ?: continue
                             val executionId = execution.id
-                            val workspace = computerDao.getWorkspaceById(execution.workspaceId)
+                            val latestExec = computerDao.getExecutionById(executionId) ?: execution
+                            val workspace = computerDao.getWorkspaceById(latestExec.workspaceId)
                             val conversationId = workspace?.conversationId ?: ""
+
+                            val isTerminalStatus = latestExec.remoteStatus == ComputerRemoteStatus.SUCCEEDED.name ||
+                                latestExec.remoteStatus == ComputerRemoteStatus.FAILED.name ||
+                                latestExec.remoteStatus == ComputerRemoteStatus.CANCELLED.name ||
+                                latestExec.remoteStatus == ComputerRemoteStatus.TIMED_OUT.name
 
                             when (item.outcome) {
                                 ComputerExecutionReconciliationOutcome.STILL_UNAVAILABLE -> {
-                                    val reason = AgentTerminalReasons.CONNECTION_LOST
-                                    val reconnectReason = AgentTerminalReasons.RECONNECTED
-                                    val missingReason = AgentTerminalReasons.REMOTE_TASK_MISSING
-                                    val termReason = AgentTerminalReasons.REMOTE_PROCESS_TERMINATED
-                                    val rebootReason = AgentTerminalReasons.VPS_RESTARTED
-                                    val cfgReason = AgentTerminalReasons.CONFIG_ERROR
-                                    val intReason = AgentTerminalReasons.APP_INTERRUPTED
-                                    val recReason = AgentTerminalReasons.SYSTEM_RECOVERED
-                                    AgentNotificationManager.notifyTaskEvent(
-                                        this@ComputerConnectionService,
-                                        conversationId = conversationId,
-                                        executionId = executionId,
-                                        eventType = "CONNECTION_LOST",
-                                        title = "SSH 连接断开",
-                                        message = "与 VPS 的连接已断开，正在尝试自动重连",
-                                    )
+                                    if (item.connectionFailure && !isTerminalStatus && executionId in monitorableExecutionIds) {
+                                        AgentNotificationManager.notifyTaskEvent(
+                                            this@ComputerConnectionService,
+                                            conversationId = conversationId,
+                                            executionId = executionId,
+                                            eventType = "CONNECTION_LOST",
+                                            title = "SSH 连接断开",
+                                            message = "与 VPS 的连接已断开，正在尝试自动重连",
+                                        )
+                                    }
                                 }
                                 ComputerExecutionReconciliationOutcome.UPDATED -> {
-                                    AgentNotificationManager.notifyTaskEvent(
-                                        this@ComputerConnectionService,
-                                        conversationId = conversationId,
-                                        executionId = executionId,
-                                        eventType = "RECONNECTED",
-                                        title = "SSH 连接已恢复",
-                                        message = "已重新连接至 VPS 并对账任务进度",
-                                    )
+                                    if (!isTerminalStatus && executionId in monitorableExecutionIds) {
+                                        AgentNotificationManager.notifyTaskEvent(
+                                            this@ComputerConnectionService,
+                                            conversationId = conversationId,
+                                            executionId = executionId,
+                                            eventType = "RECONNECTED",
+                                            title = "SSH 连接已恢复",
+                                            message = "已重新连接至 VPS 并对账任务进度",
+                                        )
+                                    }
                                 }
                                 else -> {}
                             }
 
-                            if (item.outcome == ComputerExecutionReconciliationOutcome.UPDATED &&
-                                (execution.remoteStatus == ComputerRemoteStatus.SUCCEEDED.name ||
-                                    execution.remoteStatus == ComputerRemoteStatus.FAILED.name ||
-                                    execution.remoteStatus == ComputerRemoteStatus.CANCELLED.name ||
-                                    execution.remoteStatus == ComputerRemoteStatus.TIMED_OUT.name)
-                            ) {
+                            if (item.outcome == ComputerExecutionReconciliationOutcome.UPDATED && isTerminalStatus) {
+                                val terminalEvent = latestExec.remoteStatus
+                                AgentNotificationManager.notifyTaskEvent(
+                                    this@ComputerConnectionService,
+                                    conversationId = conversationId,
+                                    executionId = executionId,
+                                    eventType = terminalEvent,
+                                    title = if (terminalEvent == "SUCCEEDED") "任务完成" else "任务失败",
+                                    message = latestExec.safeSummary ?: "远端任务执行结束",
+                                )
                                 // 远端执行完成，原子声明结果并先持久化 ToolResult，再接回原 AgentRun 进行模型续写
-                                val claimed = computerDao.markResultAttached(execution.id)
+                                val claimed = computerDao.markResultAttached(latestExec.id)
                                 if (claimed > 0 && workspace != null) {
                                     val runs = agentDao.getWaitingRemoteExecutionRuns().filter { it.sessionId == workspace.conversationId }
                                     for (run in runs) {
                                         try {
                                             // 先持久化 ToolResult
                                             com.android.everytalk.data.agent.AgentToolResultStore(this@ComputerConnectionService)
-                                                .appendToolResult(execution.toolCallId, execution.safeSummary ?: "")
-                                            
+                                                .appendToolResult(latestExec.toolCallId, latestExec.safeSummary ?: "")
+
                                             agentDao.upsertRun(
                                                 run.copy(
                                                     status = AgentRunStatus.MODEL_CONTINUATION_PENDING.name,
@@ -237,11 +289,7 @@ class ComputerConnectionService : Service() {
                                                     updatedAt = System.currentTimeMillis(),
                                                 )
                                             )
-                                            // 恢复原 AgentRun，调用 continueRun / resume 进行模型续写
-                                            val canResume = AgentNotificationManager.canUseAgentNotifications(this@ComputerConnectionService)
-                                            if (canResume) {
-                                                // resume / continueRun
-                                            }
+                                            agentRunCoordinator.resumeRun(run)
                                         } catch (e: Exception) {
                                             // 续写异常必须重新保存 MODEL_CONTINUATION_PENDING，禁止把 Run 标记为 FAILED
                                             agentDao.upsertRun(
@@ -303,16 +351,19 @@ class ComputerConnectionService : Service() {
         pendingApprovalCount: Int = 0,
         conversationId: String? = null,
     ): android.app.Notification {
+        val timeFormat = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())
+        val timeString = timeFormat.format(java.util.Date())
+
         val title = if (activeTaskCount > 0) {
-            "EveryTalk Agent 正在运行 ($activeTaskCount 个任务)"
+            "Agent 运行中 · $timeString"
         } else if (pendingApprovalCount > 0) {
-            "EveryTalk Agent 等待处理 ($pendingApprovalCount)"
+            "Agent 待处理 · $timeString"
         } else {
             getString(R.string.computer_connection_notification_title)
         }
 
         val text = if (activeTaskCount > 0) {
-            "后台长任务持续执行中，点击进入会话查看进度"
+            "点击查看进度"
         } else {
             getString(R.string.computer_connection_notification_text)
         }

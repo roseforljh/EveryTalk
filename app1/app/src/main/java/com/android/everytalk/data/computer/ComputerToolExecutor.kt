@@ -14,6 +14,7 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
+import java.io.IOException
 import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -374,6 +375,11 @@ class ComputerToolExecutor(
                     cause = error,
                 )
             }
+            AppLogger.warn(
+                "ComputerRuntime",
+                "Execution 失败 execution=${execution.id} code=${computerError.code} " +
+                    "type=${error::class.java.simpleName} message=${error.message}",
+            )
             val status = if (computerError.code in setOf(
                     ComputerErrorCodes.EXECUTION_UNKNOWN,
                     ComputerErrorCodes.EXECUTION_RESULT_UNAVAILABLE,
@@ -435,9 +441,21 @@ class ComputerToolExecutor(
     ): JsonElement {
         val request = parseExecRequest(arguments, context, loadSecrets = true)
         val secrets = request.secrets
+        val readOnlyRequest = ComputerToolCallSafety.isReadOnly(ComputerToolNames.EXEC, arguments)
         val result = try {
+            if (request.target == ComputerExecTarget.CONTAINER) {
+                workspaceManager.prepareContainer(workspace.id)
+            }
             val runRequest: suspend (ComputerExecRequest) -> ComputerExecResult = { frozenRequest ->
-                executeManagedRequest(context, workspace, executionId, requestHash, frozenRequest, updateStatus)
+                executeManagedRequestWithRecovery(
+                    context = context,
+                    workspace = workspace,
+                    executionId = executionId,
+                    requestHash = requestHash,
+                    request = frozenRequest,
+                    readOnlyRequest = readOnlyRequest,
+                    updateStatus = updateStatus,
+                )
             }
             if (request.target == ComputerExecTarget.HOST && context.approvedToolCallId != toolCallId) {
                 val computer = repository.getComputer(context.computerId)
@@ -489,6 +507,48 @@ class ComputerToolExecutor(
                 put("log_path", it)
                 put("log_reference", it)
             }
+        }
+    }
+
+    /**
+     * 只读命令的单次断线恢复。
+     *
+     * Wrapper 使用固定 Execution ID 和 request hash 做幂等判断，因此恢复时重新接入
+     * 同一 Execution 只会读取已有状态，不会再次创建一条命令。写操作不进入这里的自动重试。
+     */
+    private suspend fun executeManagedRequestWithRecovery(
+        context: ComputerRequestContext,
+        workspace: ComputerWorkspace,
+        executionId: String,
+        requestHash: String,
+        request: ComputerExecRequest,
+        readOnlyRequest: Boolean,
+        updateStatus: suspend (String?) -> Unit,
+    ): ComputerExecResult {
+        try {
+            return executeManagedRequest(
+                context = context,
+                workspace = workspace,
+                executionId = executionId,
+                requestHash = requestHash,
+                request = request,
+                updateStatus = updateStatus,
+            )
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Throwable) {
+            if (!shouldRetryReadOnlyExecution(readOnlyRequest, error)) throw error
+            updateStatus("SSH 连接中断，正在恢复命令")
+            // 连接可能仍被池误判为可用，先丢弃旧 Transport，再用同一 Execution ID 接回。
+            repository.invalidateConnection(context.computerId)
+            return executeManagedRequest(
+                context = context,
+                workspace = workspace,
+                executionId = executionId,
+                requestHash = requestHash,
+                request = request,
+                updateStatus = updateStatus,
+            )
         }
     }
 
@@ -1196,6 +1256,16 @@ class ComputerToolExecutor(
     override fun close() {
         terminalManager.close()
         completedResults.clear()
+    }
+}
+
+/** 只读执行最多自动恢复一次；写操作和协议错误必须交给上层处理。 */
+internal fun shouldRetryReadOnlyExecution(readOnlyRequest: Boolean, error: Throwable): Boolean {
+    if (!readOnlyRequest || error is CancellationException) return false
+    return when (error) {
+        is ComputerException -> error.retryable
+        is IOException -> true
+        else -> false
     }
 }
 

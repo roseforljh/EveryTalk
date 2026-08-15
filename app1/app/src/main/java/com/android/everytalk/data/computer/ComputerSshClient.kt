@@ -355,6 +355,12 @@ class ComputerSshClient internal constructor(
             try {
                 client.connect(endpoint.host, endpoint.port)
                 authenticate(client, endpoint.username.orEmpty(), credential)
+                runCatching {
+                    client.socket?.apply {
+                        keepAlive = true
+                        tcpNoDelay = true
+                    }
+                }
                 client.connection.keepAlive.keepAliveInterval = DEFAULT_KEEPALIVE_SECONDS
                 ComputerSshConnection(client)
             } catch (error: Throwable) {
@@ -505,10 +511,22 @@ class ComputerSshConnection internal constructor(private val client: SSHClient) 
 
                     val stdoutResult = stdout.await()
                     val stderrResult = stderr.await()
+                    val exitCode = remoteCommand.exitStatus
+                    if (isUnexpectedSshChannelClosure(
+                            timedOut = timedOut,
+                            exitCode = exitCode,
+                            exitSignalPresent = remoteCommand.exitSignal != null,
+                            transportConnected = client.isConnected,
+                        )
+                    ) {
+                        // 只有 Transport 本身已经断开，且没有退出码或退出信号时，才认定是连接异常。
+                        // SSHJ 在远端信号退出或退出码包晚到时也会返回 null，不能因此误杀可复用的 SSH。
+                        throw IOException("SSH Transport closed before exit status")
+                    }
                     ComputerSshCommandResult(
                         stdout = stdoutResult.bytes.toString(Charsets.UTF_8),
                         stderr = stderrResult.bytes.toString(Charsets.UTF_8),
-                        exitCode = remoteCommand.exitStatus,
+                        exitCode = exitCode,
                         timedOut = timedOut,
                         stdoutTruncated = stdoutResult.truncated,
                         stderrTruncated = stderrResult.truncated,
@@ -630,6 +648,15 @@ internal class ComputerSshChannelOpenException(cause: Throwable) : IOException(
     "SSH Channel 建立失败",
     cause,
 )
+
+/** 没有超时却没有退出码，说明 SSH 命令通道异常结束。 */
+internal fun isUnexpectedSshChannelClosure(
+    timedOut: Boolean,
+    exitCode: Int?,
+    exitSignalPresent: Boolean = false,
+    transportConnected: Boolean = true,
+): Boolean =
+    !timedOut && exitCode == null && !exitSignalPresent && !transportConnected
 
 class ComputerPtyHandle internal constructor(
     private val session: Session,

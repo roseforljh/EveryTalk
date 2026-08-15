@@ -371,21 +371,51 @@ class AgentLoop(
                         )
                     }
                     usage?.let { runStore.saveUsage(requestId, it.copy(requestOrdinal = ordinal)) }
-                    runStore.updateRequest(
-                        request = requestFact,
-                        status = AgentRequestStatus.FAILED,
-                        finishReason = finishReason ?: turnFailure.code ?: "error",
-                        firstEventAt = firstEventAt,
-                        finishedAt = finishedAt,
-                    )
-                    runStore.updateRunStatus(
-                        run = checkNotNull(run),
-                        status = AgentRunStatus.FAILED,
-                        requestOrdinal = ordinal,
-                        terminalReason = turnFailure.message,
-                    )
-                    emit(turnFailure)
-                    return@flow
+
+                    val isRetryable = turnFailure.type == "retryable_network" ||
+                        turnFailure.code == "connection_aborted" ||
+                        finishReason == "connection_failed"
+
+                    if (isRetryable) {
+                        runStore.updateRequest(
+                            request = requestFact,
+                            status = AgentRequestStatus.INTERRUPTED,
+                            finishReason = finishReason ?: turnFailure.code ?: "connection_failed",
+                            firstEventAt = firstEventAt,
+                            finishedAt = finishedAt,
+                        )
+                        run = runStore.updateRunStatus(
+                            run = checkNotNull(run),
+                            status = AgentRunStatus.MODEL_CONTINUATION_PENDING,
+                            requestOrdinal = ordinal,
+                            terminalReason = AgentTerminalReasons.MODEL_CONTINUATION_PENDING,
+                        )
+                        // 可重试网络中断时，发送等待恢复状态事件，禁止直接 emit 永久性 Failure 导致 UI 标记执行失败
+                        emit(
+                            AppStreamEvent.Error(
+                                message = "任务已完成，网络中断正在尝试恢复...",
+                                code = turnFailure.code ?: "connection_aborted",
+                                type = "retryable_network",
+                            )
+                        )
+                        return@flow
+                    } else {
+                        runStore.updateRequest(
+                            request = requestFact,
+                            status = AgentRequestStatus.FAILED,
+                            finishReason = finishReason ?: turnFailure.code ?: "error",
+                            firstEventAt = firstEventAt,
+                            finishedAt = finishedAt,
+                        )
+                        runStore.updateRunStatus(
+                            run = checkNotNull(run),
+                            status = AgentRunStatus.FAILED,
+                            requestOrdinal = ordinal,
+                            terminalReason = turnFailure.message,
+                        )
+                        emit(turnFailure)
+                        return@flow
+                    }
                 }
 
                 runStore.appendAssistant(checkNotNull(run).id, requestId, assistant)
