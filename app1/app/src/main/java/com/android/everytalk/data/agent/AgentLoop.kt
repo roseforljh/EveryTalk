@@ -508,7 +508,8 @@ class AgentLoop(
     ): ToolBatchOutcome {
         var currentTranscript = transcript
         for ((index, call) in calls.withIndex()) {
-            val approval = toolRuntime.approvalRequest(call, computerContext)
+            val contextualComputerContext = computerContext?.copy(runId = run.id)
+            val approval = toolRuntime.approvalRequest(call, contextualComputerContext)
             if (approval != null) {
                 val record = AgentApprovalRecord(
                     approvalRequestId = UUID.randomUUID().toString(),
@@ -528,11 +529,11 @@ class AgentLoop(
                 // 先写等待状态，再让 Executor 连接 VPS。进程在此窗口退出时仍可恢复。
                 runStore.updateRunStatus(run, AgentRunStatus.WAITING_REMOTE_EXECUTION)
             }
-            val result = toolRuntime.execute(call, computerContext, maxModelResultTokens, run.id, emit)
+            val result = toolRuntime.execute(call, contextualComputerContext, maxModelResultTokens, run.id, emit)
             if (result.isUnknownExecution()) {
                 val unknownApproval = toolRuntime.approvalRequest(
                     call,
-                    computerContext,
+                    contextualComputerContext,
                     ComputerToolApprovalPhase.RETRY_UNKNOWN,
                 )
                 if (unknownApproval != null) {
@@ -578,6 +579,7 @@ class AgentLoop(
             )
         }
         val approvedContext = baseContext?.copy(
+            runId = run.id,
             approvedToolCallId = record.toolCall.id.takeIf {
                 decision == AgentApprovalDecision.APPROVED || decision == AgentApprovalDecision.RETRY
             },

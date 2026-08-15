@@ -259,7 +259,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 onAiMessageFullTextChanged = ::onAiMessageFullTextChanged,
                 triggerScrollToBottom = ::triggerScrollToBottom,
                  cancelComputerExecutions = { conversationId, onComplete ->
-                     computerManager.cancelActiveExecutions(conversationId, onComplete)
+                     computerManager.cancelActiveExecutions(conversationId = conversationId, onComplete = onComplete)
                  },
                 computerSessionStateProvider = computerManager::computerSessionState,
         )
@@ -676,53 +676,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                   )
               }
               apiHandler.restorePendingAgentApproval()
-              // 远端任务可能在 App 重启后仍处于 RUNNING；持续对账直到终态，再触发原 Run 续接。
-              var reconcileDelayMillis = 1_000L
-              while (true) {
-                  try {
-                      val conversationIds = mutableSetOf<String>().apply {
-                          stateHolder._currentConversationId.value.takeIf(String::isNotBlank)?.let(::add)
-                          agentDao.getWaitingRemoteExecutionRuns().forEach { run -> add(run.sessionId) }
-                          agentDao.getInterruptedRuns().forEach { run -> add(run.sessionId) }
-                      }
-                      if (conversationIds.isNotEmpty()) {
-                          apiHandler.updateRemoteRecoveryStatus(
-                              status = "正在恢复远端任务",
-                              conversationIds = conversationIds,
-                          )
-                      }
-                      val reconciliations = computerManager.reconcileRemoteExecutions(conversationIds)
-                      val reachedTerminalState = reconciliations.any { result ->
-                          result.outcome != com.android.everytalk.data.computer.ComputerExecutionReconciliationOutcome.STILL_UNAVAILABLE &&
-                              (result.outcome != com.android.everytalk.data.computer.ComputerExecutionReconciliationOutcome.UPDATED ||
-                                  result.state?.status !in setOf(
-                                      com.android.everytalk.data.computer.ComputerRemoteStatus.STARTING,
-                                      com.android.everytalk.data.computer.ComputerRemoteStatus.RUNNING,
-                                  ))
-                      }
-                      if (reachedTerminalState) {
-                          apiHandler.updateRemoteRecoveryStatus(
-                              status = null,
-                              conversationIds = conversationIds,
-                          )
-                          apiHandler.restorePendingAgentApproval()
-                      } else if (reconciliations.any {
-                              it.outcome == com.android.everytalk.data.computer.ComputerExecutionReconciliationOutcome.STILL_UNAVAILABLE
-                          }) {
-                          apiHandler.updateRemoteRecoveryStatus(
-                              status = "等待服务器重连",
-                              conversationIds = conversationIds,
-                          )
-                      }
-                      reconcileDelayMillis = if (reconciliations.isEmpty()) 5_000L else 1_000L
-                  } catch (error: CancellationException) {
-                      throw error
-                  } catch (error: Throwable) {
-                      Log.w("ComputerRuntime", "远端执行恢复轮询失败", error)
-                      reconcileDelayMillis = 5_000L
-                  }
-                  delay(reconcileDelayMillis)
-              }
+              // 启动后台服务以恢复并监听持久化活动任务，避免在 ViewModel 中无限轮询
+              com.android.everytalk.service.ComputerConnectionServiceController.resumeActiveTasks(getApplication())
           }
 
         viewModelScope.launch(Dispatchers.IO) {

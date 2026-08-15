@@ -282,6 +282,20 @@ data class ComputerExecution(
     val remoteExitCode: Int? = null,
     /** 最近一次成功读取远端状态的时间。 */
     val lastObservedAt: Long? = null,
+    /** 关联的 AgentRun ID */
+    val runId: String? = null,
+    /** 增量 stdout 日志游标 */
+    val stdoutCursor: Long = 0L,
+    /** 增量 stderr 日志游标 */
+    val stderrCursor: Long = 0L,
+    /** 最近事件发生时间 */
+    val lastEventAt: Long? = null,
+    /** 取消请求发起时间 */
+    val cancelRequestedAt: Long? = null,
+    /** 取消完成确认时间 */
+    val cancelCompletedAt: Long? = null,
+    /** 结果接回原 AgentRun 的时间戳（null 表示尚未接回） */
+    val resultAttachedAt: Long? = null,
 )
 
 /**
@@ -424,6 +438,8 @@ data class ComputerRequestContext(
     val computerId: String,
     val workspaceId: String,
     val permissionMode: ComputerPermissionMode = ComputerPermissionMode.MANUAL,
+    /** 当前关联的 AgentRun ID */
+    val runId: String? = null,
     /** 只在当前工具调用内有效，禁止写进请求快照。 */
     @Transient val approvedToolCallId: String? = null,
     /** 用户明确选择重试 UNKNOWN 工具后才设置，禁止写进请求快照。 */

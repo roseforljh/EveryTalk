@@ -1,5 +1,7 @@
 package com.android.everytalk.statecontroller
 
+import com.android.everytalk.util.AgentNotificationManager.canUseAgentNotifications
+
 import android.app.Application
 import android.util.Log
 import androidx.annotation.Keep
@@ -495,6 +497,11 @@ import java.util.TimeZone
                     stateHolder.conversationFunctionToggleStates.value,
                 )
             }
+            return
+        }
+
+        if (!canUseAgentNotifications(getApplication())) {
+            showSnackbar("Agent 需要通知权限以在后台继续运行并提醒结果")
             return
         }
 

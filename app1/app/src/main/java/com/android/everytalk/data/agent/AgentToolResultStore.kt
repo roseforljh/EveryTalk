@@ -56,7 +56,12 @@ class AgentToolResultStore(context: Context) {
         }
     }
 
+
     private fun sha256(value: String): String = sha256(value.toByteArray(Charsets.UTF_8))
+
+    suspend fun appendToolResult(toolCallId: String, content: String) = withContext(Dispatchers.IO) {
+        archive("continuation", toolCallId, kotlinx.serialization.json.JsonPrimitive(content))
+    }
 
     private fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256")
         .digest(bytes)

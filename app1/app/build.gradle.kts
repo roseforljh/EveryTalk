@@ -236,6 +236,8 @@ android {
         unitTests {
             isIncludeAndroidResources = true
             all { test ->
+                // 源码契约测试必须从真实工程读取文件，不能依赖被重定向的 Gradle buildDir。
+                test.systemProperty("everytalk.project.root", rootProject.projectDir.absolutePath)
                 if (System.getenv("CI") != "true") {
                     test.systemProperty(
                         "robolectric.dependency.repo.url",

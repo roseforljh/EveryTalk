@@ -24,6 +24,7 @@ import com.android.everytalk.data.computer.ComputerExecutionStatus
 import com.android.everytalk.data.computer.ComputerToolApprovalRequest
 import com.android.everytalk.data.computer.ComputerToolRequestHasher
 import com.android.everytalk.data.computer.ComputerToolNames
+import com.android.everytalk.data.computer.ComputerToolCallSafety
 import com.android.everytalk.data.database.daos.ComputerDao
 import java.security.MessageDigest
 import java.util.UUID
@@ -82,6 +83,8 @@ class AgentRunStore(
         dao.getRunByVisibleMessage(messageId)
 
     suspend fun getWaitingApprovalRuns(): List<AgentRunEntity> = dao.getWaitingApprovalRuns()
+
+    suspend fun getPendingModelContinuationRuns(): List<AgentRunEntity> = dao.getPendingModelContinuationRuns()
 
     /** 远端执行期间不能被 App 重启流程改成 INTERRUPTED，恢复时再按 Execution 对账。 */
     suspend fun getWaitingRemoteExecutionRuns(): List<AgentRunEntity> = dao.getWaitingRemoteExecutionRuns()
@@ -389,7 +392,11 @@ class AgentRunStore(
                 )
                 if (execution == null) {
                     // 开始事实与 ComputerExecution 分属两个存储事务，崩溃可能发生在二者之间。
-                    // 此时不能证明远端调用尚未发出，交给用户选择是否重试。
+                    // 只读调用直接回填错误给 AI；可能修改服务器的调用才交给用户决定。
+                    if (!ComputerToolCallSafety.requiresUnknownApproval(call.name, call.arguments, context.permissionMode)) {
+                        appendToolResult(runId, assistantEntry.requestId ?: return null, resolvedUnknownToolResult(call))
+                        continue
+                    }
                     return pauseRecoveredUnknownExecution(
                         run = dao.getRun(runId) ?: return null,
                         requestId = assistantEntry.requestId ?: return null,
@@ -462,7 +469,7 @@ class AgentRunStore(
                 computerName = computerDao.getComputer(context.computerId)?.displayName ?: "VPS",
                 toolName = call.name,
                 detail = unknownExecutionDetail(call),
-                isWriteOperation = !isReadOnlyRecoveredCall(call),
+                isWriteOperation = !ComputerToolCallSafety.isReadOnly(call.name, call.arguments),
             ),
         )
         pauseForApproval(run, record)
@@ -515,6 +522,15 @@ class AgentRunStore(
                     context = context,
                 )
             } ?: continue
+            if (!ComputerToolCallSafety.requiresUnknownApproval(
+                    candidate.call.name,
+                    candidate.call.arguments,
+                    candidate.context.permissionMode,
+                )
+            ) {
+                appendToolResult(candidate.run.id, candidate.requestId, resolvedUnknownToolResult(candidate.call))
+                continue
+            }
             val record = AgentApprovalRecord(
                 approvalRequestId = UUID.randomUUID().toString(),
                 requestId = candidate.requestId,
@@ -526,7 +542,7 @@ class AgentRunStore(
                     computerName = computerDao.getComputer(candidate.context.computerId)?.displayName ?: "VPS",
                     toolName = candidate.call.name,
                     detail = unknownExecutionDetail(candidate.call),
-                    isWriteOperation = !isReadOnlyRecoveredCall(candidate.call),
+                    isWriteOperation = !ComputerToolCallSafety.isReadOnly(candidate.call.name, candidate.call.arguments),
                 ),
             )
             pauseForApproval(candidate.run, record)
@@ -858,8 +874,14 @@ private fun unknownExecutionDetail(call: AgentContentBlock.ToolCall): String = w
     else -> call.name
 }
 
-private fun isReadOnlyRecoveredCall(call: AgentContentBlock.ToolCall): Boolean =
-    call.name in setOf("read_file", "download")
+/** 无需人工决定时把 UNKNOWN 明确交回 AI，禁止恢复流程卡在隐藏审批上。 */
+private fun resolvedUnknownToolResult(call: AgentContentBlock.ToolCall): AgentContentBlock.ToolResult =
+    AgentContentBlock.ToolResult(
+        toolCallId = call.id,
+        toolName = call.name,
+        content = JsonPrimitive("上次操作的结果无法确认，未自动重复执行。请根据用户目标和当前服务器状态决定下一步。"),
+        isError = true,
+    )
 
 private fun AgentContentBlock.ToolCall.toExecutionStep(completed: Boolean): ExecutionStep {
     val label = unknownExecutionDetail(this).ifBlank { name }.replace('\r', ' ').replace('\n', ' ').take(120)

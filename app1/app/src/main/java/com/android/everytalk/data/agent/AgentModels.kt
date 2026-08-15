@@ -1,3 +1,4 @@
+/** 远端完成先保存 appendToolResult，再恢复模型 continueRun */
 package com.android.everytalk.data.agent
 
 import kotlinx.serialization.SerialName
@@ -24,12 +25,32 @@ enum class AgentRunStatus {
     EXECUTING_TOOL,
     /** Tool 已经交给 VPS，Android 只等待远端状态和结果。 */
     WAITING_REMOTE_EXECUTION,
+    /** VPS 命令已完成，等待模型调用以续写最终 AI 回复。 */
+    MODEL_CONTINUATION_PENDING,
     PERSISTING_RESULT,
     RETRYING,
     COMPLETED,
     FAILED,
     CANCELLED,
     INTERRUPTED,
+}
+
+/**
+ * 记录 AgentRun 状态变更或生命周期中断的具体原因。
+ */
+object AgentTerminalReasons {
+    const val USER_STOP = "USER_STOP"
+    const val APP_INTERRUPTED = "APP_INTERRUPTED"
+    const val FORCE_STOP_RECOVERED = "FORCE_STOP_RECOVERED"
+    const val SYSTEM_RECOVERED = "SYSTEM_RECOVERED"
+    const val CONNECTION_LOST = "CONNECTION_LOST"
+    const val RECONNECTED = "RECONNECTED"
+    const val PERMISSION_WAITING = "PERMISSION_WAITING"
+    const val MODEL_CONTINUATION_PENDING = "MODEL_CONTINUATION_PENDING"
+    const val VPS_RESTARTED = "VPS_RESTARTED"
+    const val REMOTE_TASK_MISSING = "REMOTE_TASK_MISSING"
+    const val REMOTE_PROCESS_TERMINATED = "REMOTE_PROCESS_TERMINATED"
+    const val CONFIG_ERROR = "CONFIG_ERROR"
 }
 
 enum class AgentEntryKind {

@@ -1,6 +1,10 @@
 package com.android.everytalk.statecontroller
 
+import com.android.everytalk.util.AgentNotificationManager.canUseAgentNotifications
+
 import android.app.Application
+import android.os.Build
+import com.android.everytalk.R
 import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
@@ -201,6 +205,14 @@ internal fun MessageSender.sendMessageInternal(
             val webSearchEnabledForRequest = !isImageGeneration && stateHolder._isWebSearchEnabled.value
             val isMcpEnabledForRequest = !isImageGeneration && stateHolder._isMcpEnabledForNextRequest.value
             val isAgentEnabledForRequest = !isImageGeneration && stateHolder._isAgentEnabled.value
+            if (isAgentEnabledForRequest) {
+                if (!canUseAgentNotifications(application)) {
+                    withContext(Dispatchers.Main.immediate) {
+                        showSnackbar(application.getString(R.string.agent_notification_permission_required))
+                    }
+                    return@launch
+                }
+            }
             val requestConversationId = stateHolder._currentConversationId.value
             // Workspace 准备和附件处理并行。用户消息无需等待 SSH，点击发送后立即进入消息列表。
             val computerPreparation = async(Dispatchers.IO) {

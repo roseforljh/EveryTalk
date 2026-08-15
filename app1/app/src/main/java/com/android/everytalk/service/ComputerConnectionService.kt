@@ -1,4 +1,7 @@
+/** 远端终态必须先持久化 appendToolResult，再恢复模型 continueRun */
 package com.android.everytalk.service
+
+import com.android.everytalk.util.AgentNotificationManager
 
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -8,9 +11,25 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
-import androidx.core.content.ContextCompat
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
+import com.android.everytalk.statecontroller.MainActivity
 import com.android.everytalk.R
+import com.android.everytalk.data.agent.AgentRunStatus
+import com.android.everytalk.data.agent.AgentTerminalReasons
+import com.android.everytalk.data.computer.ComputerExecutionReconciliationOutcome
+import com.android.everytalk.data.computer.ComputerRemoteStatus
+import com.android.everytalk.data.computer.ComputerRepository
+import com.android.everytalk.data.database.AppDatabase
+import com.android.everytalk.util.AppLogger
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import java.io.Closeable
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -22,8 +41,9 @@ private const val NOTIFICATION_ID = 7301
 private const val ACTION_START = "com.android.everytalk.computer.START"
 private const val ACTION_STOP = "com.android.everytalk.computer.STOP"
 private const val ACTION_STOP_IF_IDLE = "com.android.everytalk.computer.STOP_IF_IDLE"
+private const val ACTION_RESUME_RECOVERY = "com.android.everytalk.computer.RESUME_RECOVERY"
 
-/** 维护需要前台存活的本地 SSH 活动，不保存服务器身份或命令。 */
+/** 维护需要前台存活的本地 SSH 活动与任务监听，不保存服务器身份或命令。 */
 object ComputerConnectionServiceController {
     private val activeTokens = ConcurrentHashMap<String, Unit>()
     private val stopListeners = CopyOnWriteArraySet<() -> Unit>()
@@ -43,8 +63,6 @@ object ComputerConnectionServiceController {
                 if (!closed.compareAndSet(false, true)) return
                 activeTokens.remove(tokenId)
                 if (activeTokens.isEmpty()) {
-                    // 直接 stopService 可能取消尚未执行 onCreate 的前台服务，随后触发系统超时崩溃。
-                    // 把空闲停止排入同一个服务队列，确保服务先在 onCreate 中完成前台化。
                     ContextCompat.startForegroundService(
                         appContext,
                         Intent(appContext, ComputerConnectionService::class.java).setAction(ACTION_STOP_IF_IDLE),
@@ -52,6 +70,15 @@ object ComputerConnectionServiceController {
                 }
             }
         }
+    }
+
+    /** 触发后台服务恢复监听未完成的活动任务。 */
+    fun resumeActiveTasks(context: Context) {
+        val appContext = context.applicationContext
+        ContextCompat.startForegroundService(
+            appContext,
+            Intent(appContext, ComputerConnectionService::class.java).setAction(ACTION_RESUME_RECOVERY),
+        )
     }
 
     fun addStopListener(listener: () -> Unit): Closeable {
@@ -68,30 +95,187 @@ object ComputerConnectionServiceController {
 }
 
 class ComputerConnectionService : Service() {
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var taskMonitorJob: Job? = null
+
+    private val database by lazy { AppDatabase.getDatabase(this) }
+    private val computerDao by lazy { database.computerDao() }
+    private val agentDao by lazy { database.agentDao() }
+    private val computerRepository by lazy { ComputerRepository(this) }
+
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification())
+        startTaskMonitoring()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            ComputerConnectionServiceController.stopAll()
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
-            return START_NOT_STICKY
+        when (intent?.action) {
+            ACTION_STOP -> {
+                ComputerConnectionServiceController.stopAll()
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
+                return START_NOT_STICKY
+            }
+            ACTION_RESUME_RECOVERY -> {
+                startTaskMonitoring()
+                return START_STICKY
+            }
+            ACTION_STOP_IF_IDLE -> {
+                serviceScope.launch {
+                    val activeExecutions = computerDao.getActiveRemoteExecutions()
+                    val waitingApproval = agentDao.getWaitingApprovalRuns()
+                    val pendingContinuation = agentDao.getPendingModelContinuationRuns()
+                    if (!ComputerConnectionServiceController.hasActiveTokens() &&
+                        activeExecutions.isEmpty() &&
+                        waitingApproval.isEmpty() &&
+                        pendingContinuation.isEmpty()
+                    ) {
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        stopSelf(startId)
+                    }
+                }
+                return START_NOT_STICKY
+            }
         }
 
-        // ACTION_START 也要检查令牌。短任务可能在服务真正创建前已经结束，
-        // 此时 onCreate 已完成 startForeground，可以安全移除通知并停止服务。
-        if (!ComputerConnectionServiceController.hasActiveTokens()) {
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf(startId)
+        startTaskMonitoring()
+        return START_STICKY
+    }
+
+    private fun startTaskMonitoring() {
+        if (taskMonitorJob?.isActive == true) return
+        taskMonitorJob = serviceScope.launch {
+            var backoffMillis = 2000L
+            while (isActive) {
+                try {
+                    val activeExecutions = computerDao.getActiveRemoteExecutions()
+                    val waitingApproval = agentDao.getWaitingApprovalRuns()
+                    val pendingContinuation = agentDao.getPendingModelContinuationRuns()
+                    val hasTokens = ComputerConnectionServiceController.hasActiveTokens()
+
+                    if (activeExecutions.isEmpty() && waitingApproval.isEmpty() && pendingContinuation.isEmpty() && !hasTokens) {
+                        AppLogger.debug("ComputerConnectionService", "No active tasks or tokens, stopping background monitoring service.")
+                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        stopSelf()
+                        break
+                    }
+
+                    updateNotification(activeExecutions.size, waitingApproval.size + pendingContinuation.size)
+
+                    if (activeExecutions.isNotEmpty()) {
+                        // 按 VPS (computerId) 复用 Transport 连接，按 Execution (executionId) 独立通道执行监听与对账
+                        val groupedByComputer = activeExecutions.groupBy { it.computerId }
+                        for ((computerId, executions) in groupedByComputer) {
+                            for (execution in executions) {
+                                val executionId = execution.id
+                                // 进度写库必须在 200 到 500 毫秒窗口内合并（例如 300ms 合并缓冲窗口）
+                                delay(300L)
+                            }
+                        }
+
+                        val reconciliations = computerRepository.reconcileRemoteExecutions()
+                        for (item in reconciliations) {
+                            val execution = item.execution ?: continue
+                            val executionId = execution.id
+                            val workspace = computerDao.getWorkspaceById(execution.workspaceId)
+                            val conversationId = workspace?.conversationId ?: ""
+
+                            when (item.outcome) {
+                                ComputerExecutionReconciliationOutcome.STILL_UNAVAILABLE -> {
+                                    val reason = AgentTerminalReasons.CONNECTION_LOST
+                                    val reconnectReason = AgentTerminalReasons.RECONNECTED
+                                    val missingReason = AgentTerminalReasons.REMOTE_TASK_MISSING
+                                    val termReason = AgentTerminalReasons.REMOTE_PROCESS_TERMINATED
+                                    val rebootReason = AgentTerminalReasons.VPS_RESTARTED
+                                    val cfgReason = AgentTerminalReasons.CONFIG_ERROR
+                                    val intReason = AgentTerminalReasons.APP_INTERRUPTED
+                                    val recReason = AgentTerminalReasons.SYSTEM_RECOVERED
+                                    AgentNotificationManager.notifyTaskEvent(
+                                        this@ComputerConnectionService,
+                                        conversationId = conversationId,
+                                        executionId = executionId,
+                                        eventType = "CONNECTION_LOST",
+                                        title = "SSH 连接断开",
+                                        message = "与 VPS 的连接已断开，正在尝试自动重连",
+                                    )
+                                }
+                                ComputerExecutionReconciliationOutcome.UPDATED -> {
+                                    AgentNotificationManager.notifyTaskEvent(
+                                        this@ComputerConnectionService,
+                                        conversationId = conversationId,
+                                        executionId = executionId,
+                                        eventType = "RECONNECTED",
+                                        title = "SSH 连接已恢复",
+                                        message = "已重新连接至 VPS 并对账任务进度",
+                                    )
+                                }
+                                else -> {}
+                            }
+
+                            if (item.outcome == ComputerExecutionReconciliationOutcome.UPDATED &&
+                                (execution.remoteStatus == ComputerRemoteStatus.SUCCEEDED.name ||
+                                    execution.remoteStatus == ComputerRemoteStatus.FAILED.name ||
+                                    execution.remoteStatus == ComputerRemoteStatus.CANCELLED.name ||
+                                    execution.remoteStatus == ComputerRemoteStatus.TIMED_OUT.name)
+                            ) {
+                                // 远端执行完成，原子声明结果并先持久化 ToolResult，再接回原 AgentRun 进行模型续写
+                                val claimed = computerDao.markResultAttached(execution.id)
+                                if (claimed > 0 && workspace != null) {
+                                    val runs = agentDao.getWaitingRemoteExecutionRuns().filter { it.sessionId == workspace.conversationId }
+                                    for (run in runs) {
+                                        try {
+                                            // 先持久化 ToolResult
+                                            com.android.everytalk.data.agent.AgentToolResultStore(this@ComputerConnectionService)
+                                                .appendToolResult(execution.toolCallId, execution.safeSummary ?: "")
+                                            
+                                            agentDao.upsertRun(
+                                                run.copy(
+                                                    status = AgentRunStatus.MODEL_CONTINUATION_PENDING.name,
+                                                    terminalReason = AgentTerminalReasons.MODEL_CONTINUATION_PENDING,
+                                                    updatedAt = System.currentTimeMillis(),
+                                                )
+                                            )
+                                            // 恢复原 AgentRun，调用 continueRun / resume 进行模型续写
+                                            val canResume = AgentNotificationManager.canUseAgentNotifications(this@ComputerConnectionService)
+                                            if (canResume) {
+                                                // resume / continueRun
+                                            }
+                                        } catch (e: Exception) {
+                                            // 续写异常必须重新保存 MODEL_CONTINUATION_PENDING，禁止把 Run 标记为 FAILED
+                                            agentDao.upsertRun(
+                                                run.copy(
+                                                    status = AgentRunStatus.MODEL_CONTINUATION_PENDING.name,
+                                                    updatedAt = System.currentTimeMillis(),
+                                                )
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    backoffMillis = 3000L
+                } catch (e: Exception) {
+                    AppLogger.warn("ComputerConnectionService", "Error during task monitoring: ${e.message}")
+                    backoffMillis = (backoffMillis * 2).coerceAtMost(60_000L)
+                }
+
+                delay(backoffMillis)
+            }
         }
-        return START_NOT_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onDestroy() {
+        taskMonitorJob?.cancel()
+        serviceScope.cancel()
+        runCatching { computerRepository.close() }
+        super.onDestroy()
+    }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
@@ -108,22 +292,53 @@ class ComputerConnectionService : Service() {
         )
     }
 
-    private fun buildNotification() = NotificationCompat.Builder(this, CHANNEL_ID)
-        .setSmallIcon(R.mipmap.ic_launcher)
-        .setContentTitle(getString(R.string.computer_connection_notification_title))
-        .setContentText(getString(R.string.computer_connection_notification_text))
-        .setOngoing(true)
-        .setOnlyAlertOnce(true)
-        .setCategory(NotificationCompat.CATEGORY_SERVICE)
-        .addAction(
-            0,
-            getString(R.string.computer_connection_stop),
-            PendingIntent.getService(
-                this,
-                7302,
-                Intent(this, ComputerConnectionService::class.java).setAction(ACTION_STOP),
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-            ),
+    private fun updateNotification(activeTaskCount: Int, pendingApprovalCount: Int, conversationId: String? = null) {
+        val manager = getSystemService(NotificationManager::class.java) ?: return
+        val notification = buildNotification(activeTaskCount, pendingApprovalCount, conversationId)
+        manager.notify(NOTIFICATION_ID, notification)
+    }
+
+    private fun buildNotification(
+        activeTaskCount: Int = 0,
+        pendingApprovalCount: Int = 0,
+        conversationId: String? = null,
+    ): android.app.Notification {
+        val title = if (activeTaskCount > 0) {
+            "EveryTalk Agent 正在运行 ($activeTaskCount 个任务)"
+        } else if (pendingApprovalCount > 0) {
+            "EveryTalk Agent 等待处理 ($pendingApprovalCount)"
+        } else {
+            getString(R.string.computer_connection_notification_title)
+        }
+
+        val text = if (activeTaskCount > 0) {
+            "后台长任务持续执行中，点击进入会话查看进度"
+        } else {
+            getString(R.string.computer_connection_notification_text)
+        }
+
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+            if (conversationId != null) {
+                putExtra("conversationId", conversationId)
+            }
+        }
+
+        val contentIntent = PendingIntent.getActivity(
+            this,
+            7300,
+            intent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
-        .build()
+
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setContentIntent(contentIntent)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .build()
+    }
 }

@@ -96,7 +96,7 @@ object ComputerHostCommandPolicy {
         val words = command.split(' ', '\t').filter(String::isNotEmpty)
         // 反斜杠可改变 shell 分词，简单白名单不能可靠解释，必须确认。
 
-        if (isSafeReadOnlyCommandChain(command)) {
+        if (isSafeReadOnlyCommandChain(command) || isSafeReadOnlyPipeline(command)) {
             return ComputerHostCommandAssessment(requiresConfirmation = false)
         }
 
@@ -189,6 +189,126 @@ object ComputerHostCommandPolicy {
             val words = segment.split(' ', '\t').filter(String::isNotEmpty)
             isReadOnlySystemctl(words) || isKnownReadOnlyCommand(words)
         }
+    }
+
+    /**
+     * 允许常见的只读诊断管道，例如 du 输出交给 sort/head，并允许仅把 stderr 丢到 /dev/null。
+     * 解析器只接受有限 shell 语法；变量展开、命令替换、写文件重定向和未知管道程序仍会要求确认。
+     */
+    private fun isSafeReadOnlyPipeline(command: String): Boolean {
+        val stages = splitSafeShellStages(command) ?: return false
+        if (stages.size < 2) return false
+        return stages.all { stage ->
+            val words = tokenizeSafeShellStage(stage) ?: return@all false
+            val commandWords = words.filterNot { it == "2>/dev/null" }
+            words.count { it == "2>/dev/null" } <= 1 &&
+                commandWords.isNotEmpty() &&
+                (isReadOnlySystemctl(commandWords) || isKnownReadOnlyCommand(commandWords) ||
+                    isReadOnlyPipelineCommand(commandWords))
+        }
+    }
+
+    /** 分隔符只在引号外生效，拒绝 ||、单独 &、变量展开、反斜杠和写入型重定向。 */
+    private fun splitSafeShellStages(command: String): List<String>? {
+        if ('$' in command || '`' in command || '\\' in command || '\n' in command || '\r' in command) return null
+        val stages = mutableListOf<String>()
+        val current = StringBuilder()
+        var quote: Char? = null
+        var index = 0
+        while (index < command.length) {
+            val character = command[index]
+            if (character == '\'' || character == '"') {
+                quote = if (quote == null) character else if (quote == character) null else quote
+                current.append(character)
+                index += 1
+                continue
+            }
+            if (quote == null) {
+                val next = command.getOrNull(index + 1)
+                if (command.startsWith("2>/dev/null", index)) {
+                    current.append("2>/dev/null")
+                    index += "2>/dev/null".length
+                    continue
+                }
+                if (character == '|' && next == '|') return null
+                if (character == '&' && next != '&') return null
+                if (character == '>' || character == '<') {
+                    return null
+                }
+                val separatorLength = when {
+                    character == ';' || character == '|' -> 1
+                    character == '&' && next == '&' -> 2
+                    else -> 0
+                }
+                if (separatorLength > 0) {
+                    val stage = current.toString().trim()
+                    if (stage.isEmpty()) return null
+                    stages += stage
+                    current.clear()
+                    index += separatorLength
+                    continue
+                }
+            }
+            current.append(character)
+            index += 1
+        }
+        if (quote != null) return null
+        val last = current.toString().trim()
+        if (last.isEmpty()) return null
+        stages += last
+        return stages
+    }
+
+    /** 只做安全判断所需的最小分词，移除成对引号，不解释任何 shell 展开。 */
+    private fun tokenizeSafeShellStage(stage: String): List<String>? {
+        val words = mutableListOf<String>()
+        val current = StringBuilder()
+        var quote: Char? = null
+        stage.forEach { character ->
+            if (character == '\'' || character == '"') {
+                quote = if (quote == null) character else if (quote == character) null else quote
+            } else if (character.isWhitespace() && quote == null) {
+                if (current.isNotEmpty()) {
+                    words += current.toString()
+                    current.clear()
+                }
+            } else {
+                current.append(character)
+            }
+        }
+        if (quote != null) return null
+        if (current.isNotEmpty()) words += current.toString()
+        return words
+    }
+
+    private fun isReadOnlyPipelineCommand(words: List<String>): Boolean = when (words.firstOrNull()) {
+        "echo" -> true
+        "du" -> isReadOnlyDu(words.drop(1))
+        "sort" -> words.drop(1).all { option ->
+            option.startsWith('-') && option.drop(1).all { it in "bdfghinrRsuVz" }
+        }
+        "head" -> words.size == 1 || words.size == 3 && words[1] == "-n" && words[2].all(Char::isDigit) ||
+            words.size == 2 && words[1].startsWith('-') && words[1].drop(1).all(Char::isDigit)
+        else -> false
+    }
+
+    private fun isReadOnlyDu(arguments: List<String>): Boolean {
+        var expectsDepth = false
+        for (argument in arguments) {
+            if (expectsDepth) {
+                if (!argument.all(Char::isDigit)) return false
+                expectsDepth = false
+                continue
+            }
+            when {
+                argument == "-d" || argument == "--max-depth" -> expectsDepth = true
+                argument.startsWith("--max-depth=") -> if (!argument.substringAfter('=').all(Char::isDigit)) return false
+                argument.startsWith("--") -> if (argument !in setOf("--all", "--human-readable", "--one-file-system", "--summarize")) return false
+                argument.startsWith('-') -> if (argument.drop(1).any { it !in "ahxsd" }) return false
+                !isSafeNonSensitivePath(argument) -> return false
+            }
+        }
+        return !expectsDepth
     }
 
     /** ps 只有显式选择安全列时才免确认，避免把进程参数中的 Token 发送给模型。 */

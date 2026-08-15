@@ -64,7 +64,7 @@ import com.android.everytalk.data.database.entities.WorkspaceSecretMetadataEntit
         AgentCompactionEntryEntity::class,
         ProviderContinuationStateEntity::class,
     ],
-    version = 19,
+    version = 20,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -109,6 +109,7 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_16_17,
                     MIGRATION_17_18,
                     MIGRATION_18_19,
+                    MIGRATION_19_20,
                 )
                 .build()
                 INSTANCE = instance
@@ -601,6 +602,22 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE computer_executions ADD COLUMN remoteStatus TEXT")
                 db.execSQL("ALTER TABLE computer_executions ADD COLUMN remoteExitCode INTEGER")
                 db.execSQL("ALTER TABLE computer_executions ADD COLUMN lastObservedAt INTEGER")
+            }
+        }
+
+        /**
+         * 为 ComputerExecution 补齐后台持续执行、Run 关联与结果对账消费字段。
+         */
+        val MIGRATION_19_20 = object : Migration(19, 20) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE computer_executions ADD COLUMN runId TEXT")
+                db.execSQL("ALTER TABLE computer_executions ADD COLUMN stdoutCursor INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE computer_executions ADD COLUMN stderrCursor INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE computer_executions ADD COLUMN lastEventAt INTEGER")
+                db.execSQL("ALTER TABLE computer_executions ADD COLUMN cancelRequestedAt INTEGER")
+                db.execSQL("ALTER TABLE computer_executions ADD COLUMN cancelCompletedAt INTEGER")
+                db.execSQL("ALTER TABLE computer_executions ADD COLUMN resultAttachedAt INTEGER")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_computer_executions_runId ON computer_executions(runId)")
             }
         }
     }

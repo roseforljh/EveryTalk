@@ -290,13 +290,29 @@ interface ComputerDao {
         conversationId: String,
     ): List<ComputerExecutionEntity>
 
-    /** 停止按钮使用该查询，兼容本地协程已经先写成 CANCELLED 的竞争窗口。 */
+    /** 停止按钮使用该查询，取消指定 AgentRun 下创建的全部前台与后台 VPS 任务。 */
+    @Query(
+        """
+        SELECT * FROM computer_executions
+        WHERE runId = :runId
+          AND toolName = 'exec'
+          AND (
+                remoteStatus IN ('STARTING', 'RUNNING')
+                OR (remoteStatus IS NULL AND status IN ('QUEUED', 'STARTING', 'RUNNING', 'CANCELLED'))
+              )
+        ORDER BY COALESCE(lastObservedAt, startedAt, 0) ASC
+        """,
+    )
+    suspend fun getCancellableRemoteExecutionsForRun(
+        runId: String,
+    ): List<ComputerExecutionEntity>
+
+    /** 停止按钮备用查询，取消该会话下当前所有仍在运行的前台和后台受管任务。 */
     @Query(
         """
         SELECT execution.* FROM computer_executions AS execution
         INNER JOIN computer_workspaces AS workspace ON workspace.id = execution.workspaceId
         WHERE workspace.conversationId = :conversationId
-          AND (execution.completionMode IS NULL OR execution.completionMode != 'RETURN_HANDLE')
           AND execution.toolName = 'exec'
           AND (
                 execution.remoteStatus IN ('STARTING', 'RUNNING')
@@ -314,6 +330,7 @@ interface ComputerDao {
         """
         UPDATE computer_executions
         SET errorCode = 'EXECUTION_CANCEL_REQUESTED',
+            cancelRequestedAt = :observedAt,
             lastObservedAt = :observedAt
         WHERE id = :executionId
           AND toolName = 'exec'
@@ -327,6 +344,73 @@ interface ComputerDao {
         executionId: String,
         observedAt: Long = System.currentTimeMillis(),
     )
+
+    /** 按 AgentRun 查询全部活动 Execution。 */
+    @Query(
+        """
+        SELECT * FROM computer_executions
+        WHERE runId = :runId
+          AND toolName = 'exec'
+          AND (
+                remoteStatus IN ('STARTING', 'RUNNING')
+                OR (remoteStatus IS NULL AND status IN ('QUEUED', 'STARTING', 'RUNNING', 'CANCELLED'))
+          )
+        ORDER BY COALESCE(lastObservedAt, startedAt, 0) ASC
+        """,
+    )
+    suspend fun getActiveExecutionsForAgentRun(runId: String): List<ComputerExecutionEntity>
+
+    /** 原子声明结果已接回原 AgentRun，防止重复续写（UPDATE ... WHERE resultAttachedAt IS NULL）。返回更新行数。 */
+    @Query(
+        """
+        UPDATE computer_executions
+        SET resultAttachedAt = :attachedAt,
+            lastObservedAt = :attachedAt
+        WHERE id = :executionId
+          AND resultAttachedAt IS NULL
+        """,
+    )
+    suspend fun claimResult(
+        executionId: String,
+        attachedAt: Long = System.currentTimeMillis(),
+    ): Int
+
+    @Query(
+        """
+        UPDATE computer_executions
+        SET resultAttachedAt = :attachedAt,
+            lastObservedAt = :attachedAt
+        WHERE id = :executionId
+          AND resultAttachedAt IS NULL
+        """,
+    )
+    suspend fun markResultAttached(
+        executionId: String,
+        attachedAt: Long = System.currentTimeMillis(),
+    ): Int
+
+    /** 标记结果已接回原 AgentRun，防止重复消费。 */
+    @Query("UPDATE computer_executions SET resultAttachedAt = :observedAt, lastObservedAt = :observedAt WHERE id = :executionId AND resultAttachedAt IS NULL")
+    suspend fun markExecutionResultConsumed(
+        executionId: String,
+        observedAt: Long = System.currentTimeMillis(),
+    )
+
+    /** 查询指定 Run 下已完成但尚未接回结果的 Execution。 */
+    @Query(
+        """
+        SELECT * FROM computer_executions
+        WHERE runId = :runId
+          AND toolName = 'exec'
+          AND resultAttachedAt IS NULL
+          AND (
+                remoteStatus IN ('SUCCEEDED', 'FAILED', 'TIMED_OUT', 'CANCELLED', 'STOPPED')
+                OR status IN ('SUCCEEDED', 'FAILED', 'TIMED_OUT', 'CANCELLED')
+          )
+        ORDER BY COALESCE(finishedAt, lastObservedAt, 0) ASC
+        """,
+    )
+    suspend fun getUnconsumedCompletedExecutionsForRun(runId: String): List<ComputerExecutionEntity>
 
     @Query(
         """
@@ -347,6 +431,7 @@ interface ComputerDao {
             remoteProcessId = :remoteProcessId,
             remoteStatePath = :remoteStatePath,
             remoteStatus = :remoteStatus,
+            runId = COALESCE(:runId, runId),
             lastObservedAt = :observedAt
         WHERE id = :executionId
         """,
@@ -358,6 +443,7 @@ interface ComputerDao {
         remoteProcessId: String?,
         remoteStatePath: String?,
         remoteStatus: String?,
+        runId: String? = null,
         observedAt: Long = System.currentTimeMillis(),
     )
 

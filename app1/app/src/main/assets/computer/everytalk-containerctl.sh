@@ -336,6 +336,26 @@ execution_result() {
         "$execution_dir" '' --execution-result "$stdout_offset" "$stderr_offset" "$max_bytes" "$request_hash"
 }
 
+watch_exec_helper() {
+    workspace_id="${1:-}"
+    execution_id="${2:-}"
+    stdout_cursor="${3:-0}"
+    stderr_cursor="${4:-0}"
+    max_bytes="${5:-2048}"
+    request_hash="${6:-}"
+    valid_id "$workspace_id" || fail 'Workspace ID 无效' 54
+    case "$execution_id" in execution_[A-Za-z0-9_-]*) ;; *) fail 'Execution ID 无效' 67 ;; esac
+    case "$stdout_cursor" in ''|*[!0-9]*) fail 'stdout 游标无效' 68 ;; esac
+    case "$stderr_cursor" in ''|*[!0-9]*) fail 'stderr 游标无效' 68 ;; esac
+    case "$max_bytes" in ''|*[!0-9]*) fail '日志读取长度无效' 68 ;; esac
+    [ "$max_bytes" -ge 1 ] && [ "$max_bytes" -le 262144 ] || fail '日志读取长度无效' 68
+    valid_request_hash "$request_hash" || fail 'request hash 无效' 67
+    name="$(require_workspace_container "$workspace_id")"
+    owner_uids="$(container_allowed_owner_uids "$name")"
+    execution_dir="/workspace/.everytalk/executions/$execution_id"
+    docker exec --user 0:0 -e "EVERYTALK_ALLOWED_OWNER_UIDS=$owner_uids" "$name" /usr/local/bin/everytalk-runtime-wrapper         "$execution_dir" '' --watch-exec "$stdout_cursor" "$stderr_cursor" "$max_bytes" "$request_hash"
+}
+
 list_executions() {
     workspace_id="${1:-}"
     valid_id "$workspace_id" || fail 'Workspace ID 无效' 54
@@ -583,6 +603,8 @@ case "$command_name" in
     execution-result) require_exact_args 6 "$@"; execution_result "$@" ;;
     list-executions) require_exact_args 1 "$@"; list_executions "$@" ;;
     cancel-execution) require_exact_args 3 "$@"; cancel_execution "$@" ;;
+    watch-execution) require_exact_args 6 "$@"; watch_exec_helper "$@" ;;
+    watch-executions) require_exact_args 6 "$@"; watch_exec_helper "$@" ;;
     terminal) require_exact_args 1 "$@"; open_terminal "$@" ;;
     open-public) require_exact_args 4 "$@"; open_public_preview "$@" ;;
     preview-status) require_exact_args 1 "$@"; preview_status "$@" ;;

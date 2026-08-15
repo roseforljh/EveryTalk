@@ -120,6 +120,7 @@ data class ConversationComputerSelectionEntity(
         Index(value = ["computerId"]),
         Index(value = ["workspaceId"]),
         Index(value = ["toolCallId"], unique = true),
+        Index(value = ["runId"]),
     ],
 )
 data class ComputerExecutionEntity(
@@ -149,6 +150,20 @@ data class ComputerExecutionEntity(
     val remoteExitCode: Int? = null,
     /** 最近一次成功解析远端状态的时间。 */
     val lastObservedAt: Long? = null,
+    /** 关联的 AgentRun ID */
+    val runId: String? = null,
+    /** 增量 stdout 日志游标 */
+    @ColumnInfo(defaultValue = "0") val stdoutCursor: Long = 0L,
+    /** 增量 stderr 日志游标 */
+    @ColumnInfo(defaultValue = "0") val stderrCursor: Long = 0L,
+    /** 最近事件发生时间 */
+    val lastEventAt: Long? = null,
+    /** 取消请求发起时间 */
+    val cancelRequestedAt: Long? = null,
+    /** 取消完成确认时间 */
+    val cancelCompletedAt: Long? = null,
+    /** 结果接回原 AgentRun 的时间戳（null 表示尚未接回） */
+    val resultAttachedAt: Long? = null,
 )
 
 @Entity(
@@ -318,6 +333,13 @@ fun ComputerExecutionEntity.toModel(): ComputerExecution = ComputerExecution(
     remoteStatus = remoteStatus?.let { enumValueOrNull<ComputerRemoteStatus>(it) },
     remoteExitCode = remoteExitCode,
     lastObservedAt = lastObservedAt,
+    runId = runId,
+    stdoutCursor = stdoutCursor,
+    stderrCursor = stderrCursor,
+    lastEventAt = lastEventAt,
+    cancelRequestedAt = cancelRequestedAt,
+    cancelCompletedAt = cancelCompletedAt,
+    resultAttachedAt = resultAttachedAt,
 )
 
 fun ComputerExecution.toEntity(): ComputerExecutionEntity = ComputerExecutionEntity(
@@ -340,6 +362,13 @@ fun ComputerExecution.toEntity(): ComputerExecutionEntity = ComputerExecutionEnt
     remoteStatus = remoteStatus?.name,
     remoteExitCode = remoteExitCode,
     lastObservedAt = lastObservedAt,
+    runId = runId,
+    stdoutCursor = stdoutCursor,
+    stderrCursor = stderrCursor,
+    lastEventAt = lastEventAt,
+    cancelRequestedAt = cancelRequestedAt,
+    cancelCompletedAt = cancelCompletedAt,
+    resultAttachedAt = resultAttachedAt,
 )
 
 fun ComputerPreviewEntity.toModel(): ComputerPreview = ComputerPreview(

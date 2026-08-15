@@ -23,6 +23,7 @@ import com.android.everytalk.data.computer.ComputerToolApprovalPhase
 import com.android.everytalk.data.computer.ComputerToolApprovalRequest
 import com.android.everytalk.data.computer.ComputerRepository
 import com.android.everytalk.data.computer.ComputerRequestContext
+import com.android.everytalk.data.database.entities.toModel
 import com.android.everytalk.data.computer.ComputerStatus
 import com.android.everytalk.data.computer.ComputerToolExecutor
 import com.android.everytalk.data.computer.ComputerToolNames
@@ -255,6 +256,8 @@ class ComputerManager(
                 repository.recoverLocalState()
                 localRecovery.complete(Unit)
                 previewManager.reconcileExpirations()
+                // 冷启动后，若有未完成的后台任务，拉起前台服务保持监听
+                ComputerConnectionServiceController.resumeActiveTasks(context)
             } catch (error: Throwable) {
                 if (!localRecovery.isCompleted) localRecovery.completeExceptionally(error)
                 throw error
@@ -417,18 +420,19 @@ class ComputerManager(
         )
     }
 
-    /** 停止按钮使用当前会话的 Workspace 反查并取消仍等待结果的前台远端任务。 */
+    /** 停止按钮取消当前 AgentRun 的全部前台和后台受管远端任务。 */
     fun cancelActiveExecutions(
         conversationId: String,
+        runId: String? = null,
         onComplete: (Boolean) -> Unit = {},
     ): Job {
-        if (conversationId.isBlank()) return scope.launch { onComplete(true) }
+        if (conversationId.isBlank() && runId.isNullOrBlank()) return scope.launch { onComplete(true) }
         return scope.launch(
             context = Dispatchers.IO,
             start = CoroutineStart.UNDISPATCHED,
         ) {
             var success = true
-            runCatching { toolExecutor.cancelActiveExecutions(conversationId) }
+            runCatching { toolExecutor.cancelActiveExecutions(conversationId, runId) }
                 .onSuccess { remoteCancelSucceeded ->
                     success = remoteCancelSucceeded
                 }
@@ -582,6 +586,7 @@ class ComputerManager(
     suspend fun deleteWorkspace(workspaceId: String, deleteRemoteFiles: Boolean): ComputerWorkspace {
         val workspace = repository.getWorkspace(workspaceId)
             ?: throw ComputerException(ComputerErrorCodes.WORKSPACE_NOT_READY, "Workspace 不存在")
+        toolExecutor.cancelActiveExecutions(workspace.conversationId)
         toolExecutor.closeWorkspace(workspaceId)
         previewManager.stopByWorkspace(workspaceId)
         workspaceManager.deleteRemote(workspaceId, deleteRemoteFiles)
@@ -589,6 +594,21 @@ class ComputerManager(
         workspaceManager.deleteMapping(workspaceId)
         repository.recordAudit(workspace.computerId, "WORKSPACE_DELETED", "SUCCESS", null)
         return workspace
+    }
+
+    /** 删除会话时，先取消该会话所有远端任务并清理对应 Workspace。 */
+    suspend fun deleteWorkspacesForConversation(conversationId: String, deleteRemoteFiles: Boolean = false) {
+        if (conversationId.isBlank()) return
+        toolExecutor.cancelActiveExecutions(conversationId)
+        val workspaces = repository.dao().getWorkspacesForConversation(conversationId)
+        workspaces.forEach { entity ->
+            val workspace = entity.toModel()
+            toolExecutor.closeWorkspace(workspace.id)
+            runCatching { previewManager.stopByWorkspace(workspace.id) }
+            runCatching { workspaceManager.deleteRemote(workspace.id, deleteRemoteFiles) }
+            secretManager.deleteAll(workspace.id)
+            workspaceManager.deleteMapping(workspace.id)
+        }
     }
 
     suspend fun disconnect(computerId: String) {

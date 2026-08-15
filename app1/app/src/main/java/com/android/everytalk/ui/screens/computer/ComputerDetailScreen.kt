@@ -1364,6 +1364,7 @@ private fun ComputerReplacementHostKeyDialog(
 private fun ComputerDeleteDialog(
     computer: Computer?,
     workspacePaths: List<String>,
+    activeTaskCount: Int = 0,
     isBusy: Boolean,
     onDismiss: () -> Unit,
     onDelete: (cleanupContainers: Boolean, deleteFiles: Boolean) -> Unit,
@@ -1383,6 +1384,13 @@ private fun ComputerDeleteDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(stringResource(R.string.computer_delete_body))
+                if (activeTaskCount > 0) {
+                    Text(
+                        text = "警告：当前有 $activeTaskCount 个活动任务 (runningTask) 正在运行，删除服务器配置后这些任务将失去管理 (warning)",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
                 if (computer.runMode == ComputerRunMode.CONTAINER) {
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Checkbox(

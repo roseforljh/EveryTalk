@@ -49,12 +49,12 @@ case "$input_mode" in
     esac
     chmod 700 "$HOME/.everytalk" "$HOME/.everytalk/host-runtime"
     ;;
---host-execution-status|--host-execution-result|--host-execution-cancel)
+--host-execution-status|--host-execution-result|--host-execution-cancel|--host-watch-execution|--host-watch-executions)
     host_mode=true
     ensure_host_private_dir host-executions || { printf '%s\n' 'Host Execution 目录无效' >&2; exit 46; }
     chmod 700 "$HOME/.everytalk/host-executions"
     ;;
---execution-status|--execution-result|--execution-cancel)
+--execution-status|--execution-result|--execution-cancel|--watch-execution|--watch-executions)
     case "$runtime_dir" in
         /workspace/.everytalk/executions/execution_*|"$HOME"/.everytalk/workspaces/ws_*/.everytalk/executions/execution_*) ;;
         *) printf '%s\n' 'Execution 目录无效' >&2; exit 40 ;;
@@ -77,7 +77,7 @@ working_directory_file="$runtime_dir/cwd"
 
 if [ "$host_mode" = true ]; then
     workspace="$HOME"
-elif [ "$input_mode" = --execution-status ] || [ "$input_mode" = --execution-result ] || [ "$input_mode" = --execution-cancel ]; then
+elif [ "$input_mode" = --execution-status ] || [ "$input_mode" = --execution-result ] || [ "$input_mode" = --execution-cancel ] || [ "$input_mode" = --watch-execution ] || [ "$input_mode" = --watch-executions ]; then
     workspace="${runtime_dir%%/.everytalk/executions/*}"
     workspace="$(cd "$workspace" && pwd -P)"
 else
@@ -88,11 +88,12 @@ fi
 if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] || \
    [ "$input_mode" = --managed-v2 ] || [ "$input_mode" = --host-managed-v2 ] || \
    [ "$input_mode" = --host-execution-status ] || [ "$input_mode" = --host-execution-result ] || \
-   [ "$input_mode" = --host-execution-cancel ] || [ "$input_mode" = --execution-status ] || \
-   [ "$input_mode" = --execution-result ] || [ "$input_mode" = --execution-cancel ]; then
+   [ "$input_mode" = --host-execution-cancel ] || [ "$input_mode" = --host-watch-execution ] || [ "$input_mode" = --host-watch-executions ] || \
+   [ "$input_mode" = --execution-status ] || [ "$input_mode" = --execution-result ] || [ "$input_mode" = --execution-cancel ] || \
+   [ "$input_mode" = --watch-execution ] || [ "$input_mode" = --watch-executions ]; then
     v2_host=false
     case "$input_mode" in
-        --host-envelope-v2|--host-managed-v2|--host-execution-status|--host-execution-result|--host-execution-cancel)
+        --host-envelope-v2|--host-managed-v2|--host-execution-status|--host-execution-result|--host-execution-cancel|--host-watch-execution|--host-watch-executions)
             v2_host=true ;;
     esac
 
@@ -183,7 +184,7 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
         valid_execution_id "$execution_id" || { printf '%s\n' 'Execution ID 无效' >&2; exit 40; }
         execution_dir="$HOME/.everytalk/host-executions/$execution_id"
         v2_workspace="$HOME"
-    elif [ "$input_mode" = --execution-status ] || [ "$input_mode" = --execution-result ] || [ "$input_mode" = --execution-cancel ]; then
+    elif [ "$input_mode" = --execution-status ] || [ "$input_mode" = --execution-result ] || [ "$input_mode" = --execution-cancel ] || [ "$input_mode" = --watch-execution ] || [ "$input_mode" = --watch-executions ]; then
         execution_id="${runtime_dir##*/}"
         valid_execution_id "$execution_id" || { printf '%s\n' 'Execution ID 无效' >&2; exit 40; }
         execution_dir="$runtime_dir"
@@ -206,7 +207,9 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
     timeout_seconds="${4:-120}"
     # status/cancel 的请求哈希在第 5 个参数，result 还要先接收三个日志分页参数。
     # 统一从第 7 个参数读取 result 的哈希，避免把 stderr offset 当成身份校验值。
-    if [ "$input_mode" = --host-execution-result ] || [ "$input_mode" = --execution-result ]; then
+    if [ "$input_mode" = --host-execution-result ] || [ "$input_mode" = --execution-result ] || \
+       [ "$input_mode" = --host-watch-execution ] || [ "$input_mode" = --watch-execution ] || \
+       [ "$input_mode" = --host-watch-executions ] || [ "$input_mode" = --watch-executions ]; then
         request_hash="${7:-}"
     else
         request_hash="${5:-}"
@@ -298,8 +301,9 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
     }
 
     if [ "$input_mode" = --host-execution-status ] || [ "$input_mode" = --host-execution-result ] || \
-       [ "$input_mode" = --host-execution-cancel ] || [ "$input_mode" = --execution-status ] || \
-       [ "$input_mode" = --execution-result ] || [ "$input_mode" = --execution-cancel ]; then
+       [ "$input_mode" = --host-execution-cancel ] || [ "$input_mode" = --host-watch-execution ] || [ "$input_mode" = --host-watch-executions ] || \
+       [ "$input_mode" = --execution-status ] || [ "$input_mode" = --execution-result ] || \
+       [ "$input_mode" = --execution-cancel ] || [ "$input_mode" = --watch-execution ] || [ "$input_mode" = --watch-executions ]; then
         if [ -f "$state_file" ] && [ ! -L "$state_file" ] && execution_parent_safe && execution_directory_safe && state_owner_allowed "$state_file" && \
            [ -n "$expected_request_hash" ]; then
             existing_hash="$(state_value "$state_file" request_hash)"
@@ -308,11 +312,15 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
                 exit 49
             fi
         fi
-        if [ "$input_mode" = --host-execution-result ] || [ "$input_mode" = --execution-result ]; then
-            stdout_offset="${4:-0}"
-            stderr_offset="${5:-0}"
+        if [ "$input_mode" = --host-execution-result ] || [ "$input_mode" = --execution-result ] || \
+           [ "$input_mode" = --host-watch-execution ] || [ "$input_mode" = --watch-execution ] || \
+           [ "$input_mode" = --host-watch-executions ] || [ "$input_mode" = --watch-executions ]; then
+            stdout_cursor="${4:-0}"
+            stderr_cursor="${5:-0}"
+            stdout_offset="$stdout_cursor"
+            stderr_offset="$stderr_cursor"
             max_bytes="${6:-2048}"
-            valid_decimal "$stdout_offset" && valid_decimal "$stderr_offset" && valid_decimal "$max_bytes" || {
+            valid_decimal "$stdout_cursor" && valid_decimal "$stderr_cursor" && valid_decimal "$max_bytes" || {
                 printf '%s\n' '日志读取参数无效' >&2; exit 48;
             }
             [ "$max_bytes" -ge 1 ] && [ "$max_bytes" -le 262144 ] || { printf '%s\n' '日志读取长度无效' >&2; exit 48; }
@@ -373,10 +381,40 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
             fi
           fi
         fi
-        if [ "$input_mode" = --host-execution-result ] || [ "$input_mode" = --execution-result ]; then
+        if [ "$input_mode" = --host-watch-execution ] || [ "$input_mode" = --watch-execution ] || \
+           [ "$input_mode" = --host-watch-executions ] || [ "$input_mode" = --watch-executions ]; then
+            curr_stdout_cursor="$stdout_cursor"
+            curr_stderr_cursor="$stderr_cursor"
+            print_v2_state
+            st_val="$(state_value "$state_file" status 2>/dev/null || printf 'UNKNOWN')"
+            if [ "$st_val" = RUNNING ] || [ "$st_val" = STARTING ]; then
+                event_type="PROGRESS"
+            else
+                event_type="TERMINAL"
+            fi
+            printf 'event_type=%s\nevent_seq=1\nstdout_cursor=%s\nstderr_cursor=%s\nobserved_at=%s\n' \
+                "$event_type" "$curr_stdout_cursor" "$curr_stderr_cursor" "$(date +%s)"
+            if [ -f "$stdout_log" ] && [ ! -L "$stdout_log" ] && state_owner_allowed "$stdout_log"; then
+                stdout_chunk="$(tail -c +$((curr_stdout_cursor + 1)) "$stdout_log" 2>/dev/null | head -c "$max_bytes" | base64 2>/dev/null | tr -d '\n' || true)"
+            else
+                stdout_chunk=""
+            fi
+            if [ -f "$stderr_log" ] && [ ! -L "$stderr_log" ] && state_owner_allowed "$stderr_log"; then
+                stderr_chunk="$(tail -c +$((curr_stderr_cursor + 1)) "$stderr_log" 2>/dev/null | head -c "$max_bytes" | base64 2>/dev/null | tr -d '\n' || true)"
+            else
+                stderr_chunk=""
+            fi
+            printf 'stdout_base64=%s\n' "$stdout_chunk"
+            printf 'stderr_base64=%s\n' "$stderr_chunk"
+        elif [ "$input_mode" = --host-execution-result ] || [ "$input_mode" = --execution-result ]; then
             print_v2_state
             printf 'stdout_offset=%s\n' "$stdout_offset"
             printf 'stderr_offset=%s\n' "$stderr_offset"
+            printf 'stdout_cursor=%s\n' "$stdout_offset"
+            printf 'stderr_cursor=%s\n' "$stderr_offset"
+            printf 'event_seq=1\n'
+            printf 'event_type=TERMINAL\n'
+            printf 'observed_at=%s\n' "$(date +%s)"
             if [ -f "$stdout_log" ] && [ ! -L "$stdout_log" ] && state_owner_allowed "$stdout_log"; then
                 stdout_chunk="$(tail -c +$((stdout_offset + 1)) "$stdout_log" 2>/dev/null | head -c "$max_bytes" | base64 2>/dev/null | tr -d '\n' || true)"
             else

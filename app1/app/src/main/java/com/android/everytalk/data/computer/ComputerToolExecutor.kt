@@ -53,13 +53,17 @@ class ComputerToolExecutor(
     }
 
     /**
-     * 停止当前会话仍等待结果的受管远端任务。
-     * background 已返回句柄的任务继续运行，下一轮通过 ComputerSessionState 看到它们。
-     * 任务归属从 Workspace 反查，避免依赖进程内临时 Map，App 重启后也能取消前台任务。
+     * 停止当前会话或指定 Run 的全部受管远端任务（包含前台与后台 RETURN_HANDLE 任务）。
+     * 任务归属从 Workspace 反查或直接按 runId 查，先写取消意图再发 SSH 取消。
      */
-    suspend fun cancelActiveExecutions(conversationId: String): Boolean {
-        if (conversationId.isBlank()) return true
-        val executions = repository.dao().getCancellableRemoteExecutionsForConversation(conversationId)
+    suspend fun cancelActiveExecutions(conversationId: String, runId: String? = null): Boolean {
+        val executions = if (!runId.isNullOrBlank()) {
+            val byRun = repository.dao().getCancellableRemoteExecutionsForRun(runId)
+            if (byRun.isNotEmpty()) byRun else repository.dao().getCancellableRemoteExecutionsForConversation(conversationId)
+        } else {
+            if (conversationId.isBlank()) return true
+            repository.dao().getCancellableRemoteExecutionsForConversation(conversationId)
+        }
         var allSucceeded = true
         for (execution in executions) {
             try {
@@ -132,13 +136,16 @@ class ComputerToolExecutor(
             val existing = repository.dao().getExecutionByToolCallId(key)?.toModel()
                 ?.takeIf { it.status == ComputerExecutionStatus.UNKNOWN }
                 ?: return null
+            if (!ComputerToolCallSafety.requiresUnknownApproval(toolName, arguments, context.permissionMode)) {
+                return null
+            }
             return ComputerToolApprovalRequest.UnknownExecution(
                 toolCallId = toolCallId,
                 context = context,
                 computerName = computer.displayName,
                 toolName = toolName,
                 detail = approvalDetail(toolName, arguments),
-                isWriteOperation = !isReadOnlyToolCall(toolName, arguments),
+                isWriteOperation = !ComputerToolCallSafety.isReadOnly(toolName, arguments),
             )
         }
 
@@ -263,6 +270,7 @@ class ComputerToolExecutor(
                 initialRemoteStatePath(workspace, executionId, it.target)
             },
             remoteStatus = initialExecRequest?.let { ComputerRemoteStatus.STARTING },
+            runId = currentRequestContext.runId,
         )
         dao.upsertExecution(execution.toEntity())
 
@@ -281,6 +289,7 @@ class ComputerToolExecutor(
                     remoteProcessId = "process_${execution.id}",
                     remoteStatePath = initialRemoteStatePath(workspace, execution.id, request.target),
                     remoteStatus = ComputerRemoteStatus.STARTING.name,
+                    runId = currentRequestContext.runId,
                 )
             }
             execution = execution.copy(status = ComputerExecutionStatus.RUNNING)
@@ -516,6 +525,7 @@ class ComputerToolExecutor(
             remoteProcessId = processId,
             remoteStatePath = statePath,
             remoteStatus = ComputerRemoteStatus.STARTING.name,
+            runId = context.runId,
         )
         val started = runtimeEnvelope.startManagedExecution(
             connection = connection,
@@ -1125,15 +1135,6 @@ class ComputerToolExecutor(
         ComputerToolNames.DOWNLOAD -> arguments.optionalString("path").orEmpty()
         ComputerToolNames.OPEN_PORT -> arguments.optionalLong("port")?.toString().orEmpty()
         else -> toolName
-    }
-
-    private fun isReadOnlyToolCall(toolName: String, arguments: JsonObject): Boolean = when (toolName) {
-        ComputerToolNames.READ_FILE, ComputerToolNames.DOWNLOAD -> true
-        ComputerToolNames.EXEC -> {
-            val request = parseExecRequestWithoutSecrets(arguments)
-            request.target == ComputerExecTarget.HOST && !ComputerHostCommandPolicy.assess(request).requiresConfirmation
-        }
-        else -> false
     }
 
     private suspend fun parseExecRequest(

@@ -1,4 +1,9 @@
+/** 远端终态必须先持久化 appendToolResult，再恢复模型 continueRun */
 package com.android.everytalk.statecontroller
+
+import com.android.everytalk.data.agent.AgentTerminalReasons
+
+import com.android.everytalk.util.AgentNotificationManager.canUseAgentNotifications
 
 import android.content.Context
 import com.android.everytalk.R
@@ -258,14 +263,53 @@ class ApiHandler(
     private val NEW_STREAM_CANCEL_PREFIX = "NEW_STREAM_INITIATED:"
     private val retryCountMap = ConcurrentHashMap<String, Int>()
 
-    /** ViewModel 初始化后从 Room 恢复进程退出前的同一张权限卡。 */
+    /** ViewModel 初始化或前台服务对账完成后从 Room 恢复待续写及待审批的 Run。 */
     suspend fun restorePendingAgentApproval(resumeDecided: Boolean = true) {
         if (resumeDecided) {
             agentRunStore.recoverUnknownComputerExecutions(AppDatabase.getDatabase(context).computerDao())
             // 自动恢复扫描可能新建 UNKNOWN 卡片，先完成扫描再投影，避免卡片延迟到下次刷新。
             resumeDecidedAgentRuns()
+            resumePendingContinuationRuns()
         }
         refreshPendingAgentApprovals()
+    }
+
+    /** 扫描并调度 MODEL_CONTINUATION_PENDING 状态的 AgentRun 进行模型续写。 */
+    suspend fun dispatchPendingContinuationRuns() {
+        // 模型恢复前必须检查通知门槛，未开启通知权限时暂停模型续写并保留 MODEL_CONTINUATION_PENDING 状态
+        if (!canUseAgentNotifications(context)) {
+            return
+        }
+        val computerDao = AppDatabase.getDatabase(context).computerDao()
+        val pendingRuns = agentRunStore.getPendingModelContinuationRuns()
+        for (run in pendingRuns) {
+            if (stateHolder.textApiJob?.isActive == true) break
+            // 远端终态必须先持久化 ToolResult，再进行模型续写恢复 (continueRun / resume)
+            val unconsumed = computerDao.getUnconsumedCompletedExecutionsForRun(run.id)
+            for (exec in unconsumed) {
+                computerDao.markResultAttached(exec.id)
+                AgentToolResultStore(context).appendToolResult(exec.toolCallId, exec.safeSummary ?: "")
+            }
+            if (resumingAgentRunIds.add(run.id)) {
+                try {
+                    agentResumeMutex.withLock {
+                        if (stateHolder.textApiJob?.isActive != true) {
+                            // 恢复原 AgentRun 进行模型续写 (resume / continueRun)
+                            startResumedAgentRun(run.id, record = null)
+                        }
+                    }
+                } catch (e: Exception) {
+                    // 续写异常必须重新保存 MODEL_CONTINUATION_PENDING，禁止把 Run 标记为 FAILED
+                    agentRunStore.updateRunStatus(run, AgentRunStatus.MODEL_CONTINUATION_PENDING)
+                } finally {
+                    resumingAgentRunIds.remove(run.id)
+                }
+            }
+        }
+    }
+
+    suspend fun resumePendingContinuationRuns() {
+        dispatchPendingContinuationRuns()
     }
 
     /** 将远端恢复阶段投影到原 Assistant 消息，避免恢复时看起来像卡住。 */
@@ -353,23 +397,33 @@ class ApiHandler(
         }
 
     /** 同一时刻只允许一个文本 Run 占用统一流状态，避免恢复覆盖正在进行的会话。 */
-    private suspend fun startResumedAgentRun(runId: String, record: AgentApprovalRecord): Boolean {
+    private suspend fun startResumedAgentRun(runId: String, record: AgentApprovalRecord?): Boolean {
         val run = agentRunStore.getRun(runId) ?: run {
             restorePendingAgentApproval(resumeDecided = false)
             return false
         }
         val configId = run.configIdSnapshot ?: run {
-            markApprovalResumeFailure(run, "原模型配置不存在")
+            if (run.status == AgentRunStatus.MODEL_CONTINUATION_PENDING.name) {
+                // 模型续写失败必须保留待续写状态 MODEL_CONTINUATION_PENDING 而不是标记 Run 失败
+                return false
+            }
+            markApprovalDecisionFailure(run, "原模型配置不存在")
             return false
         }
         val config = AppDatabase.getDatabase(context).apiConfigDao().getTextConfig(configId)?.toApiConfig()
             ?: run {
-                markApprovalResumeFailure(run, "原模型配置已删除")
+                if (run.status == AgentRunStatus.MODEL_CONTINUATION_PENDING.name) {
+                    return false
+                }
+                markApprovalDecisionFailure(run, "原模型配置已删除")
                 return false
             }
         val request = agentRunStore.restoreChatRequest(run, config.key)
             ?: run {
-                markApprovalResumeFailure(run, "Agent 恢复快照不可用")
+                if (run.status == AgentRunStatus.MODEL_CONTINUATION_PENDING.name) {
+                    return false
+                }
+                markApprovalDecisionFailure(run, "Agent 恢复快照不可用")
                 return false
             }
         val limits = resolvedModelTokenLimits(
@@ -422,7 +476,7 @@ class ApiHandler(
         return true
     }
 
-    private suspend fun markApprovalResumeFailure(
+    private suspend fun markApprovalDecisionFailure(
         run: com.android.everytalk.data.database.entities.AgentRunEntity,
         reason: String,
     ) {
@@ -646,11 +700,21 @@ class ApiHandler(
         if (messageIdBeingCancelled != null) {
             PerformanceMonitor.onAbort(messageIdBeingCancelled, reason = specificCancelReason)
         }
-        // 先发出远端取消请求，再取消模型协程。DAO 查询会包含本地已先写成 CANCELLED 的记录，
-        // 因此即使两条协程并行，VPS 进程仍能收到取消请求。
+        // 用户点击停止必须先写 USER_STOP，再写取消意图，再发 SSH 取消请求
         if (!isImageGeneration) {
             if (!isNewMessageSend) {
                 stateHolder._isRemoteCancellationPending.value = true
+                if (messageIdBeingCancelled != null) {
+                    viewModelScope.launch(Dispatchers.IO) {
+                        agentRunStore.getRunByVisibleMessage(messageIdBeingCancelled)?.let { run ->
+                            agentRunStore.updateRunStatus(
+                                run,
+                                AgentRunStatus.CANCELLED,
+                                terminalReason = AgentTerminalReasons.USER_STOP,
+                            )
+                        }
+                    }
+                }
             }
             if (messageIdBeingCancelled != null) {
                 updateMessageExecutionStatus(messageIdBeingCancelled, "正在取消远端任务")

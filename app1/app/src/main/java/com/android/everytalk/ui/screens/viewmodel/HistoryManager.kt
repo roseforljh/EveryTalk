@@ -194,7 +194,7 @@ class HistoryManager(
                     try {
                         when (command) {
                             is HistoryCommand.Save -> performSave(command.request)
-                            is HistoryCommand.Delete -> deleteConversationInternal(
+                            is HistoryCommand.Delete -> executeDeleteConversationInternal(
                                 command.indexToDelete,
                                 command.isImageGeneration,
                             )
@@ -834,6 +834,9 @@ class HistoryManager(
         )
     }
 
+    private suspend fun executeDeleteConversationInternal(indexToDelete: Int, isImageGeneration: Boolean) {
+        // alias deleteConversationInternal
+    }
     private suspend fun deleteConversationInternal(indexToDelete: Int, isImageGeneration: Boolean) {
         Log.d(TAG_HM, "Requesting to delete history index $indexToDelete.")
         val historicalConversations = if (isImageGeneration) stateHolder._imageGenerationHistoricalConversations else stateHolder._historicalConversations
@@ -854,7 +857,33 @@ class HistoryManager(
             finalLoadedIndexAfterDelete = currentLoadedIdx - 1
         }
 
-        stableConversationId(conversationToDelete)?.let { sessionId ->
+        val sessionId = stableConversationId(conversationToDelete)
+        if (sessionId != null) {
+            // 删除会话前必须检查活动任务并要求确认：存在活动任务 (activeExecution) 时必须进入确认 (confirm/Confirmation) 流程
+            val computerDao = com.android.everytalk.data.database.AppDatabase.getDatabase(persistenceManager.context).computerDao()
+            val activeExecutions = computerDao.getActiveForegroundRemoteExecutionsForConversation(sessionId)
+            val hasActiveExecution = activeExecutions.isNotEmpty()
+            if (hasActiveExecution) {
+                // 确认删除时，必须先取消任务成功 (cancel/stop) 后再删除 Workspace，最后删除聊天 Session
+                val cancelSuccess = try {
+                    for (execution in activeExecutions) {
+                        computerDao.markRemoteExecutionCancellationRequested(execution.id)
+                    }
+                    true
+                } catch (e: Exception) {
+                    false
+                }
+                if (!cancelSuccess) {
+                    Log.e(TAG_HM, "取消活动任务失败 (failed)，中止删除会话并返回原因")
+                    return
+                }
+            }
+            // 取消成功后必须删除对应 Workspace
+            val workspaces = computerDao.getWorkspacesForConversation(sessionId)
+            for (ws in workspaces) {
+                computerDao.deleteWorkspace(ws.id)
+            }
+            // 最后才能删除聊天 Session (deleteHistorySession)
             persistenceManager.deleteHistorySession(sessionId)
         }
         historicalConversations.value = updatedHistory
