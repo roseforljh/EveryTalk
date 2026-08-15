@@ -6,6 +6,8 @@ import android.app.Notification
 import android.app.NotificationManager
 import android.content.Context
 import com.android.everytalk.service.ComputerConnectionService
+import com.android.everytalk.service.agentNotificationElapsedText
+import com.android.everytalk.data.agent.AgentRunStatus
 import com.android.everytalk.util.AgentNotificationManager
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -34,11 +36,55 @@ class AgentBackgroundPlanNotificationContractTest {
     @Before
     fun clearKoinBeforeTest() {
         stopKoin()
+        AgentNotificationManager.onAppBackground()
     }
 
     @After
     fun clearKoinAfterTest() {
+        AgentNotificationManager.onAppBackground()
         stopKoin()
+    }
+
+    @Test
+    fun `前台不展示Agent事件且返回前台清除已有事件通知`() {
+        val context = notificationContext()
+
+        notify(context, UUID.randomUUID().toString(), "CONNECTION_LOST", "SSH 连接断开")
+        assertEquals(1, notifications(context).size)
+
+        AgentNotificationManager.onAppForeground(context)
+        assertTrue("返回前台后必须清除 Agent 事件通知", notifications(context).isEmpty())
+
+        notify(context, UUID.randomUUID().toString(), "CONNECTION_LOST", "SSH 连接断开")
+        assertTrue("App 在前台时禁止弹 Agent 事件通知", notifications(context).isEmpty())
+    }
+
+    @Test
+    fun `单个AgentRun只发一次终态通知且不同Run分别通知`() {
+        val context = notificationContext()
+        val firstRunId = UUID.randomUUID().toString()
+        val secondRunId = UUID.randomUUID().toString()
+
+        AgentNotificationManager.notifyAgentRunTerminal(
+            context = context,
+            conversationId = "conversation-1",
+            runId = firstRunId,
+            status = AgentRunStatus.COMPLETED,
+        )
+        AgentNotificationManager.notifyAgentRunTerminal(
+            context = context,
+            conversationId = "conversation-1",
+            runId = firstRunId,
+            status = AgentRunStatus.COMPLETED,
+        )
+        AgentNotificationManager.notifyAgentRunTerminal(
+            context = context,
+            conversationId = "conversation-2",
+            runId = secondRunId,
+            status = AgentRunStatus.COMPLETED,
+        )
+
+        assertEquals(2, notifications(context).size)
     }
 
     @Test
@@ -145,6 +191,15 @@ class AgentBackgroundPlanNotificationContractTest {
         assertTrue("通知不得拼接 command", !serviceSource.contains("execution.command"))
         assertTrue("通知不得拼接 stdout", !serviceSource.contains("stdout"))
         assertTrue("通知不得拼接 stderr", !serviceSource.contains("stderr"))
+    }
+
+    @Test
+    fun `前台服务通知每秒显示运行时长而非钟表时间`() {
+        assertEquals("1s", agentNotificationElapsedText(1_000L, 2_000L))
+        assertEquals("2s", agentNotificationElapsedText(1_000L, 3_000L))
+        assertTrue("通知时长必须每秒刷新", serviceSource.contains("delay(1_000L)"))
+        assertTrue("通知禁止继续显示系统钟表时间", serviceSource.contains("setShowWhen(false)"))
+        assertTrue("禁止恢复 HH:mm:ss 钟表文本", !serviceSource.contains("HH:mm:ss"))
     }
 
     @Test

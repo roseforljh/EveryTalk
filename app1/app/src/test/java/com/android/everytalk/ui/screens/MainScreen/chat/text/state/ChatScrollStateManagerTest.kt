@@ -36,14 +36,21 @@ class ChatScrollStateManagerTest {
     }
 
     @Test
-    fun `manual scroll away from bottom keeps auto scroll locked`() {
+    fun `自动跟随抵达真实内容底部后必须停止补偿`() {
+        assertEquals(BottomCorrection.None, resolveContentFollowCorrection(remainingPx = 0))
+        assertEquals(BottomCorrection.ScrollBy, resolveContentFollowCorrection(remainingPx = 1))
+        assertEquals(BottomCorrection.AnchorLastItem, resolveContentFollowCorrection(remainingPx = null))
+    }
+
+    @Test
+    fun `内容增长离开底部不会擅自锁住自动跟随`() {
         val locked = resolvePreventAutoScroll(
             currentValue = false,
             isProgrammaticScroll = false,
-            isStrictlyAtBottom = false
+            isWithinBottomRange = false,
         )
 
-        assertTrue(locked)
+        assertFalse(locked)
     }
 
     @Test
@@ -51,7 +58,7 @@ class ChatScrollStateManagerTest {
         val locked = resolvePreventAutoScroll(
             currentValue = true,
             isProgrammaticScroll = false,
-            isStrictlyAtBottom = true
+            isWithinBottomRange = true,
         )
 
         assertFalse(locked)
@@ -62,10 +69,18 @@ class ChatScrollStateManagerTest {
         val locked = resolvePreventAutoScroll(
             currentValue = true,
             isProgrammaticScroll = true,
-            isStrictlyAtBottom = true
+            isWithinBottomRange = true,
         )
 
         assertTrue(locked)
+    }
+
+    @Test
+    fun `底部48dp内保持跟随超出后显示返回入口`() {
+        assertTrue(isWithinBottomActivationRange(remainingPx = 48, canScrollForward = true, activationRangePx = 48))
+        assertFalse(isWithinBottomActivationRange(remainingPx = 49, canScrollForward = true, activationRangePx = 48))
+        assertFalse(isWithinBottomActivationRange(remainingPx = null, canScrollForward = true, activationRangePx = 48))
+        assertTrue(isWithinBottomActivationRange(remainingPx = 0, canScrollForward = false, activationRangePx = 48))
     }
 
     @Test

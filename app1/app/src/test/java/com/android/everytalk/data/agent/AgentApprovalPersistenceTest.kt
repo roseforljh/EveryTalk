@@ -100,6 +100,25 @@ class AgentApprovalPersistenceTest {
     }
 
     @Test
+    fun `Agent开启申请跨进程保留原因和Skill范围`() = runBlocking {
+        seedRun()
+        val call = toolCall("request-agent", AgentControlToolNames.REQUEST_AGENT)
+        val record = AgentApprovalRecord(
+            approvalRequestId = "approval-agent",
+            requestId = "request-agent",
+            toolCall = call,
+            pendingToolCalls = listOf(call),
+            agentRequest = AgentPauseRequest.EnableAgent("需要执行脚本", listOf("skill-a")),
+        )
+
+        store.pauseForApproval(requireNotNull(store.getRun("run-1")), record)
+        val restored = requireNotNull(store.pendingApproval("run-1"))
+
+        assertEquals(record.agentRequest, restored.agentRequest)
+        assertEquals(record.toolCall, restored.toolCall)
+    }
+
+    @Test
     fun `并发追加Entry仍保持严格递增序号`() = runBlocking {
         seedRun()
         coroutineScope {

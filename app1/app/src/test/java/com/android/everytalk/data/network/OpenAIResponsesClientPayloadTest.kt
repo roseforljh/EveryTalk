@@ -77,7 +77,7 @@ class OpenAIResponsesClientPayloadTest {
     }
 
     @Test
-    fun `responses payload keeps user history unchanged and exposes capability protocol`() {
+    fun `responses payload keeps user history unchanged and exposes skill protocol`() {
         val messages = listOf(
             SimpleTextApiMessage(id = "u1", role = "user", content = "第一轮财报分析"),
             SimpleTextApiMessage(id = "a1", role = "assistant", content = "第一轮回答"),
@@ -87,7 +87,7 @@ class OpenAIResponsesClientPayloadTest {
 
         assertTrue(payload.contains("第一轮财报分析"))
         assertTrue(payload.contains("第一轮回答"))
-        assertTrue(payload.contains("everytalk_select_capabilities"))
+        assertTrue(payload.contains("load_skill"))
         assertFalse(payload.contains("ETD v="))
     }
 

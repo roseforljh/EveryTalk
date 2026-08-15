@@ -94,6 +94,36 @@ class AgentContextManagerTest {
         assertTrue(summary.content.contains("旧任务摘要"))
     }
 
+    @Test
+    fun `只有最新用户消息达到阈值时明确失败且不压缩该消息`() {
+        val error = runCatching {
+            manager.prepare(
+                requestId = "request-latest",
+                request = ChatRequest(
+                    messages = listOf(
+                        SimpleTextApiMessage(id = "latest-user", role = "user", content = "最新消息".repeat(200)),
+                    ),
+                    provider = "OpenAI",
+                    channel = "OpenAI",
+                    apiAddress = "https://example.test",
+                    apiKey = "test",
+                    model = "model",
+                    contextManagement = RequestContextManagement(
+                        configId = "config-1",
+                        maxContextTokens = 1_000,
+                        reservedOutputTokens = 100,
+                        compactThresholdTokens = 1,
+                        autoCompressionEnabled = true,
+                    ),
+                ),
+                limits = ModelTokenLimits(maxOutputTokens = 100, maxContextTokens = 1_000),
+            )
+        }.exceptionOrNull()
+
+        assertTrue(error is AgentContextWindowException)
+        assertTrue(error?.message.orEmpty().contains("没有可压缩"))
+    }
+
     private fun assistantWithCalls(vararg ids: String): AgentAssistantApiMessage =
         AgentAssistantApiMessage(
             id = "assistant-1",

@@ -18,6 +18,7 @@ import androidx.compose.ui.platform.UriHandler
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.assertHasClickAction
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
@@ -91,6 +92,63 @@ class ThinkingUiScrollComposeTest {
         ) {
             composeRule.onNodeWithTag("reasoning-chain-tool-0-0").performClick()
         }
+    }
+
+    @Test
+    fun `只有最新思考段扫描并显示最新三行`() {
+        composeRule.mainClock.autoAdvance = false
+        composeRule.setContent {
+            MaterialTheme {
+                ReasoningToggleAndContent(
+                    currentMessageId = "reasoning-preview",
+                    displayedReasoningText = "历史思考\n第一行\n第二行\n第三行\n第四行\n第五行\n第六行",
+                    executionTrace = listOf(
+                        ExecutionTraceEvent.Reasoning("历史思考"),
+                        ExecutionTraceEvent.Tool(
+                            ExecutionStep(
+                                id = "done-tool",
+                                type = ExecutionStepType.Agent,
+                                title = "执行命令",
+                                completed = true,
+                            ),
+                        ),
+                        ExecutionTraceEvent.Reasoning(
+                            "第一行\n第二行\n第三行\n第四行\n第五行\n第六行",
+                        ),
+                    ),
+                    isReasoningStreaming = true,
+                    isReasoningComplete = false,
+                    messageIsError = false,
+                    mainContentHasStarted = false,
+                    reasoningTextColor = Color.Black,
+                    reasoningToggleDotColor = Color.Black,
+                    onVisibilityChanged = {},
+                )
+            }
+        }
+
+        composeRule.mainClock.advanceTimeBy(600L)
+        composeRule.waitForIdle()
+
+        assertEquals(
+            1,
+            composeRule.onAllNodesWithTag(
+                "reasoning-chain-narrative-scanning",
+                useUnmergedTree = true,
+            ).fetchSemanticsNodes().size,
+        )
+        assertEquals(
+            1,
+            composeRule.onAllNodesWithTag(
+                "reasoning-chain-narrative-static",
+                useUnmergedTree = true,
+            ).fetchSemanticsNodes().size,
+        )
+        composeRule.onNodeWithTag(
+            "reasoning-chain-narrative-scanning",
+            useUnmergedTree = true,
+        ).assertTextEquals("第四行\n第五行\n第六行")
+        composeRule.onNodeWithTag("reasoning-chain-summary-2").assertHasClickAction()
     }
 
     @Test
@@ -188,7 +246,10 @@ class ThinkingUiScrollComposeTest {
         )
 
         composeRule.onNodeWithTag("reasoning-inline-status").performClick()
-        composeRule.mainClock.advanceTimeBy(250L)
+        composeRule.mainClock.advanceTimeBy(120L)
+        composeRule.waitForIdle()
+        assertTrue(composeRule.onAllNodesWithTag("reasoning-chain-summaries").fetchSemanticsNodes().isNotEmpty())
+        composeRule.mainClock.advanceTimeBy(200L)
         composeRule.waitForIdle()
         assertTrue(composeRule.onAllNodesWithTag("reasoning-chain-summaries").fetchSemanticsNodes().isEmpty())
     }
@@ -262,7 +323,7 @@ class ThinkingUiScrollComposeTest {
         )
 
         composeRule.runOnIdle { appendExecutionTrace() }
-        composeRule.mainClock.advanceTimeByFrame()
+        composeRule.mainClock.advanceTimeBy(250L)
         composeRule.waitForIdle()
 
         val grownHeight = composeRule

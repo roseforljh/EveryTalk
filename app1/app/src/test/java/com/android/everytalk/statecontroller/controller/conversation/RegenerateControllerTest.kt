@@ -74,7 +74,7 @@ class RegenerateControllerTest {
             onDeleteMediaFor = { groups ->
                 cleanupIds.addAll(groups.flatten().map { it.id })
             }
-        ) { text, _, _, isImageGeneration, manualMessageId ->
+        ) { text, _, _, isImageGeneration, manualMessageId, _ ->
             sentManualId = manualMessageId
             val target = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
             userKeyPresentBeforeResend = target.any { it.id == manualMessageId }
@@ -112,7 +112,7 @@ class RegenerateControllerTest {
 
         val sentLatch = CountDownLatch(1)
         var userKeyPresentBeforeResend = false
-        val controller = createController(stateHolder) { text, _, _, isImageGeneration, manualMessageId ->
+        val controller = createController(stateHolder) { text, _, _, isImageGeneration, manualMessageId, _ ->
             val target = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
             userKeyPresentBeforeResend = target.any { it.id == manualMessageId }
             val userMessage = Message(id = manualMessageId ?: "user-new", text = text, sender = Sender.User)
@@ -172,7 +172,7 @@ class RegenerateControllerTest {
         var sentManualId: String? = null
         var userKeyPresentBeforeResend = false
         val sentLatch = CountDownLatch(1)
-        val controller = createController(stateHolder) { text, _, _, isImageGeneration, manualMessageId ->
+        val controller = createController(stateHolder) { text, _, _, isImageGeneration, manualMessageId, _ ->
             sentManualId = manualMessageId
             val target = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
             userKeyPresentBeforeResend = target.any { it.id == manualMessageId }
@@ -224,7 +224,8 @@ class RegenerateControllerTest {
             isFromRegeneration: Boolean,
             attachments: List<SelectedMediaItem>,
             isImageGeneration: Boolean,
-            manualMessageId: String?
+            manualMessageId: String?,
+            contentParts: List<com.android.everytalk.data.DataClass.MessageContentPart>,
         ) -> Unit,
     ): RegenerateController {
         return RegenerateController(

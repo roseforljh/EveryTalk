@@ -117,6 +117,19 @@ class ComputerRemoteExecutionParserTest {
         assertEquals(ComputerErrorCodes.EXECUTION_REQUEST_HASH_CONFLICT, error.code)
     }
 
+    @Test
+    fun `旧Wrapper的全零身份不能误报成请求哈希冲突`() {
+        val error = assertThrows(ComputerRemoteExecutionParseException::class.java) {
+            ComputerRemoteExecutionParser.parseState(
+                payload = payload(status = "RUNNING")
+                    .replace("request_hash=$requestHash", "request_hash=${"0".repeat(64)}"),
+                expectedRequestHash = requestHash,
+            )
+        }
+
+        assertEquals(ComputerErrorCodes.EXECUTION_STATE_INVALID, error.code)
+    }
+
     private fun payload(status: String): String = buildString {
         appendLine("protocol=2")
         appendLine("execution_id=$executionId")

@@ -26,6 +26,22 @@ class ThinkingExecutionTimelineGroupingTest {
     val composeRule = createComposeRule()
 
     @Test
+    fun `思考预览清理Markdown空行和多余空格`() {
+        val preview = reasoningPreviewPlainText(
+            """
+            # **检查配置**
+
+            - 运行   `uname -a`
+            ```text
+            [查看结果](https://example.com)
+            ```
+            """.trimIndent(),
+        )
+
+        assertEquals("检查配置\n运行 uname -a\n查看结果", preview)
+    }
+
+    @Test
     fun `连续同名工具合并并在胶囊右侧显示次数`() {
         val steps = List(9) { index -> toolStep("tool-$index", "read_attachment") }
 

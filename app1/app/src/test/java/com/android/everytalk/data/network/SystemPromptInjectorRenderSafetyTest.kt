@@ -26,12 +26,12 @@ class SystemPromptInjectorRenderSafetyTest {
     }
 
     @Test
-    fun `stable prompt should include capability catalog and selection protocol`() {
+    fun `stable prompt should include dynamic skill protocol`() {
         val prompt = SystemPromptInjector.getSystemPrompt("zh-CN")
 
-        assertTrue(prompt.contains("everytalk_select_capabilities"))
-        assertTrue(prompt.contains("markdown-table:"))
-        assertTrue(prompt.contains("financial-caution:"))
+        assertTrue(prompt.contains("load_skill"))
+        assertTrue(prompt.contains("read_skill_file"))
+        assertTrue(prompt.contains("完整 Skill 目录"))
         assertTrue(prompt.contains("# AI 内容安全"))
         assertTrue(prompt.contains("非自愿私密内容"))
     }

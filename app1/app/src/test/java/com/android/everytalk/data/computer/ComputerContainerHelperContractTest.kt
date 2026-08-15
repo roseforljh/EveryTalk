@@ -34,6 +34,7 @@ class ComputerContainerHelperContractTest {
         val source = helperSource()
         val expectedArgumentCounts = mapOf(
             "install" to 2,
+            "install-runtime" to 1,
             "version" to 0,
             "build-image" to 0,
             "set-network" to 1,
@@ -61,6 +62,11 @@ class ComputerContainerHelperContractTest {
         assertTrue(source.contains("Preview 归属校验失败"))
         assertTrue(source.contains("container_allowed_owner_uids"))
         assertTrue(source.contains("EVERYTALK_ALLOWED_OWNER_UIDS"))
+        assertTrue("必须读取容器实际运行 UID", source.contains("docker exec \"\$name\" id -u"))
+        assertFalse(
+            "不能再从可能为用户名的 Config.User 猜 UID",
+            source.contains("docker inspect -f '{{.Config.User}}'"),
+        )
         assertTrue(source.contains("docker exec -i -e \"EVERYTALK_ALLOWED_OWNER_UIDS=\$owner_uids\""))
         assertTrue(source.contains("root_real=\"$(realpath -e -- \"\$root\""))
         assertTrue(source.contains("execution_real=\"$(realpath -e -- \"\$execution_dir\""))
@@ -81,7 +87,7 @@ class ComputerContainerHelperContractTest {
             .substringAfter("delete_workspace() {")
             .substringBefore("\n}\n\nrequire_root")
 
-        assertTrue(helper.contains("VERSION=\"8\""))
+        assertTrue(helper.contains("VERSION=\"9\""))
         assertTrue(helper.contains("docker exec -i"))
         assertTrue(helper.contains("runtime_target=\"\$RUNTIME_WRAPPER_PATH-\$runtime_hash\""))
         assertTrue(helper.contains("ln -sfn"))
@@ -98,7 +104,8 @@ class ComputerContainerHelperContractTest {
         assertTrue(runtimeWrapper.contains("state_owner_allowed"))
         assertTrue(runtimeWrapper.contains("execution_directory_safe"))
         assertTrue(runtimeWrapper.contains("execution_parent_safe"))
-        assertTrue(runtimeWrapper.contains("if ! execution_parent_safe || ! execution_directory_safe"))
+        assertTrue(runtimeWrapper.contains("execution_parent_safe || reject_untrusted_state"))
+        assertTrue(runtimeWrapper.contains("execution_directory_safe || reject_untrusted_state"))
         assertTrue(runtimeWrapper.contains("path_owner_allowed"))
         assertTrue(runtimeWrapper.contains("state_has_expected_identity"))
         assertTrue(runtimeWrapper.contains("process_group_owner_allowed"))
@@ -148,11 +155,35 @@ class ComputerContainerHelperContractTest {
         }.readText(Charsets.UTF_8)
     }
 
+    @Test
+    fun `轻量升级只替换Helper和Wrapper`() {
+        val helper = helperSource().replace("\r\n", "\n")
+        val runtimeInstallBody = helper
+            .substringAfter("install_runtime() {")
+            .substringBefore("\n}\n\nbuild_image")
+        val provisioner = sourceFile("ComputerProvisioner.kt").readText(Charsets.UTF_8)
+
+        assertTrue(runtimeInstallBody.contains("install_runtime_helper"))
+        assertFalse(runtimeInstallBody.contains("DOCKERFILE_PATH"))
+        assertTrue(provisioner.contains("install-runtime \$remoteDirectory/runtime-wrapper.sh"))
+        assertTrue(provisioner.contains("if (!runtimeOnly)"))
+        assertTrue(provisioner.contains("runInstalledHelper(connection, computer, \"build-image\""))
+    }
+
     private fun shellAssetFile(name: String): File {
         val candidates = listOf(
             File("src/main/assets/computer/$name"),
             File("app/src/main/assets/computer/$name"),
             File("app1/app/src/main/assets/computer/$name"),
+        )
+        return requireNotNull(candidates.firstOrNull(File::isFile)) { "找不到 $name" }
+    }
+
+    private fun sourceFile(name: String): File {
+        val candidates = listOf(
+            File("src/main/java/com/android/everytalk/data/computer/$name"),
+            File("app/src/main/java/com/android/everytalk/data/computer/$name"),
+            File("app1/app/src/main/java/com/android/everytalk/data/computer/$name"),
         )
         return requireNotNull(candidates.firstOrNull(File::isFile)) { "找不到 $name" }
     }

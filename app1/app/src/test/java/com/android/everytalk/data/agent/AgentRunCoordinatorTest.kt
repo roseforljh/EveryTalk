@@ -40,4 +40,12 @@ class AgentRunCoordinatorTest {
             )
         )
     }
+
+    @Test
+    fun `只有使用过VPS且整个Run终止才发送最终通知`() {
+        assertTrue(shouldNotifyAgentRunTerminal(AgentRunStatus.COMPLETED, computerExecutionCount = 2))
+        assertTrue(shouldNotifyAgentRunTerminal(AgentRunStatus.FAILED, computerExecutionCount = 1))
+        assertFalse(shouldNotifyAgentRunTerminal(AgentRunStatus.COMPLETED, computerExecutionCount = 0))
+        assertFalse(shouldNotifyAgentRunTerminal(AgentRunStatus.WAITING_MODEL, computerExecutionCount = 1))
+    }
 }

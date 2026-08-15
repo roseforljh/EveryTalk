@@ -117,6 +117,13 @@ class AgentBackgroundPlanServiceContractTest {
     }
 
     @Test
+    fun `远端协议异常只能结束单条监听不能结束App`() {
+        assertTrue("Repository 必须把 Watch 协议异常转成业务错误", repository.contains("catch (error: ComputerRemoteExecutionProtocolException)"))
+        assertTrue("单条 Watch 必须保留最终异常保护", serviceCode.contains("catch (error: Throwable)"))
+        assertTrue("确定无法恢复时必须对账收尾", serviceCode.contains("handleTerminalExecution(executionId, null)"))
+    }
+
+    @Test
     fun `进度写库必须在二百到五百毫秒窗口内合并`() {
         assertTrue("Wrapper 必须用约 300ms 的采样窗口合并密集输出", wrapper.contains("sleep 0.3"))
         assertTrue("Repository 必须真实提交进度游标", repository.contains("updateRemoteExecutionProgress("))

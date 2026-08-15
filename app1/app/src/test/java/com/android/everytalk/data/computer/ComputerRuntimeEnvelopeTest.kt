@@ -50,6 +50,13 @@ class ComputerRuntimeEnvelopeTest {
         assertTrue(source.contains("wrapper_version"))
     }
 
+    @Test
+    fun `DirectWorkspace提前创建受管Execution目录`() {
+        val source = sourceFile("ComputerWorkspaceManager.kt")
+
+        assertTrue(source.contains("\${'$'}workspace/.everytalk/executions"))
+    }
+
     private fun sourceFile(name: String): String {
         val candidates = listOf(
             java.io.File("src/main/java/com/android/everytalk/data/computer/$name"),

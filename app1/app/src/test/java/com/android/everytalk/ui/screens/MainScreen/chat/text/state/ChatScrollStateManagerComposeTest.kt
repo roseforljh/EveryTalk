@@ -97,6 +97,10 @@ class ChatScrollStateManagerComposeTest {
         }
         composeRule.runOnIdle {
             assertFalse(scrollStateManager.showScrollToBottomButton.value)
+            scrollStateManager.nestedScrollConnection.onPreScroll(
+                available = Offset(0f, -1f),
+                source = NestedScrollSource.UserInput,
+            )
             coroutineScope.launch { listState.scrollBy(-180f) }
         }
         composeRule.waitUntil(timeoutMillis = 5_000L) {
@@ -258,6 +262,57 @@ class ChatScrollStateManagerComposeTest {
             val field = ChatScrollStateManager::class.java.getDeclaredField("isProgrammaticScroll")
             field.isAccessible = true
             assertFalse(field.getBoolean(scrollStateManager))
+        }
+    }
+
+    @Test
+    fun `底部内容增长自动跟随且用户拖动后停止`() {
+        lateinit var listState: androidx.compose.foundation.lazy.LazyListState
+        lateinit var scrollStateManager: ChatScrollStateManager
+        lateinit var coroutineScope: CoroutineScope
+        var messageHeight by mutableIntStateOf(300)
+
+        composeRule.setContent {
+            coroutineScope = rememberCoroutineScope()
+            listState = rememberLazyListState()
+            scrollStateManager = rememberChatScrollStateManager(listState, coroutineScope)
+
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.height(320.dp),
+            ) {
+                item(key = "streaming-message") {
+                    Spacer(Modifier.height(messageHeight.dp))
+                }
+            }
+        }
+
+        composeRule.waitUntil(timeoutMillis = 5_000L) {
+            listState.layoutInfo.totalItemsCount == 1 && !listState.canScrollForward
+        }
+        composeRule.runOnIdle {
+            messageHeight = 600
+        }
+        composeRule.waitUntil(timeoutMillis = 5_000L) { !listState.canScrollForward }
+        composeRule.runOnIdle {
+            scrollStateManager.updateStreamingState(true)
+            messageHeight = 900
+        }
+        composeRule.waitUntil(timeoutMillis = 5_000L) { !listState.canScrollForward }
+
+        composeRule.runOnIdle {
+            scrollStateManager.nestedScrollConnection.onPreScroll(
+                available = Offset(0f, -1f),
+                source = NestedScrollSource.UserInput,
+            )
+            coroutineScope.launch { listState.scrollBy(-180f) }
+        }
+        composeRule.waitUntil(timeoutMillis = 5_000L) { listState.canScrollForward }
+        composeRule.runOnIdle { messageHeight = 1_200 }
+        composeRule.waitForIdle()
+
+        composeRule.runOnIdle {
+            assertTrue(listState.canScrollForward)
         }
     }
 

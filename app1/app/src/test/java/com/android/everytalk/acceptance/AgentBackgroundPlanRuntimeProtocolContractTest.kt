@@ -85,4 +85,18 @@ class AgentBackgroundPlanRuntimeProtocolContractTest {
             backgroundBranch.contains("0L") || backgroundBranch.contains("timeoutSeconds = 0") || backgroundBranch.contains("timeoutMillis = 0"),
         )
     }
+
+    @Test
+    fun `不可信状态必须独立报错且禁止伪造请求哈希`() {
+        val rejectBlock = wrapper.substringAfter("reject_untrusted_state() {", "")
+            .substringBefore("\n    }", "")
+        assertTrue("不可信状态必须使用独立退出码", rejectBlock.contains("exit 47"))
+        assertFalse("不可信状态不能伪造 request_hash", rejectBlock.contains("request_hash="))
+        assertTrue("Android 必须识别状态不可信退出码", runtimeEnvelope.contains("47 -> throw ComputerException"))
+        assertTrue("状态不可信必须使用独立错误码", runtimeEnvelope.contains("EXECUTION_STATE_INVALID"))
+        val queryBlock = wrapper.substringAfter("查询前先完成信任校验", "")
+            .substringBefore("if [ -f \"\$state_file\" ]", "")
+        assertTrue("长监听读取状态前必须先校验归属", queryBlock.contains("state_owner_allowed"))
+        assertTrue("长监听读取状态前必须先校验身份", queryBlock.contains("state_has_expected_identity"))
+    }
 }
