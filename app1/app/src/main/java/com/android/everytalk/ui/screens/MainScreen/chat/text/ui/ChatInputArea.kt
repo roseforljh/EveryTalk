@@ -67,6 +67,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.window.PopupProperties
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.type
 import androidx.core.content.ContextCompat
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.computer.Computer
@@ -93,6 +98,20 @@ import com.android.everytalk.data.mcp.McpServerConfig
 import com.android.everytalk.ui.screens.mcp.McpServerListDialog
 import java.io.File
 import java.util.UUID
+import com.android.everytalk.data.DataClass.MessageContentPart
+import com.android.everytalk.data.skill.MessageSkillReference
+import com.android.everytalk.data.skill.SkillSourceType
+import com.android.everytalk.data.skill.SkillRepository
+import com.android.everytalk.data.agent.PendingAgentEnableApproval
+import com.android.everytalk.data.agent.PendingSkillSecretApproval
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import com.android.everytalk.ui.screens.MainScreen.chat.text.skill.SkillTagVisualTransformation
+import com.android.everytalk.ui.screens.MainScreen.chat.text.skill.buildSkillContentParts
+import com.android.everytalk.ui.screens.MainScreen.chat.text.skill.displaySkillEditorText
+import com.android.everytalk.ui.screens.MainScreen.chat.text.skill.findSkillSlashQuery
+import com.android.everytalk.ui.screens.MainScreen.chat.text.skill.insertSkillReference
+import com.android.everytalk.ui.screens.MainScreen.chat.text.skill.normalizeSkillEdit
+import com.android.everytalk.ui.screens.MainScreen.chat.text.skill.rankSkillCandidates
 
 private data class PendingAgentAction(
     val computer: Computer,
@@ -100,6 +119,8 @@ private data class PendingAgentAction(
     val selectComputer: Boolean,
     val enableAgentAfterSelection: Boolean,
     val requiresDisclosure: Boolean,
+    val onCompleted: (() -> Unit)? = null,
+    val onFailed: (() -> Unit)? = null,
 )
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -107,7 +128,7 @@ private data class PendingAgentAction(
 fun ChatInputArea(
     text: String,
     onTextChange: (String) -> Unit,
-    onSendMessageRequest: (messageText: String, isKeyboardVisible: Boolean, attachments: List<SelectedMediaItem>, mimeType: String?) -> Unit,
+    onSendMessageRequest: (messageText: String, isKeyboardVisible: Boolean, attachments: List<SelectedMediaItem>, mimeType: String?, contentParts: List<MessageContentPart>) -> Unit,
     selectedMediaItems: List<SelectedMediaItem>,
     onAddMediaItem: (SelectedMediaItem) -> Unit,
     onRemoveMediaItemAtIndex: (Int) -> Unit,
@@ -132,6 +153,9 @@ fun ChatInputArea(
     onShowVoiceInput: () -> Unit,
     onHeightChange: (Int) -> Unit = {},
     hostCommandConfirmationRequest: ComputerHostCommandConfirmationRequest? = null,
+    agentEnableApprovalRequest: PendingAgentEnableApproval? = null,
+    skillSecretApprovalRequest: PendingSkillSecretApproval? = null,
+    onOpenComputerSettings: () -> Unit = {},
     onHostCommandCardVisibilityChange: (Boolean) -> Unit = {},
     // MCP 相关参数
     mcpServerStates: Map<String, McpServerState> = emptyMap(),
@@ -141,6 +165,8 @@ fun ChatInputArea(
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
+    val skillRepository = remember(context) { SkillRepository(context) }
+    val installedSkills by skillRepository.observeAll().collectAsState(initial = emptyList())
 
     var pendingMessageTextForSend by remember { mutableStateOf<String?>(null) }
     var showImageSelectionPanel by remember { mutableStateOf(false) }
@@ -162,6 +188,7 @@ fun ChatInputArea(
     val disclosureStore = remember(context) { ComputerDisclosureStore(context) }
     var pendingAgentAction by remember { mutableStateOf<PendingAgentAction?>(null) }
     var pendingAgentDisclosures by remember { mutableStateOf<Set<ComputerDisclosureKind>>(emptySet()) }
+    var pendingApprovalForComputerSelection by remember { mutableStateOf<PendingAgentEnableApproval?>(null) }
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -186,9 +213,12 @@ fun ChatInputArea(
             viewModel.selectComputerForCurrentConversation(
                 computerId = action.computer.id,
                 enableAgentAfterSelection = action.enableAgentAfterSelection,
+                onReady = action.onCompleted,
+                onFailure = action.onFailed,
             )
         } else {
             viewModel.setAgentEnabled(true)
+            if (viewModel.isAgentEnabled.value) action.onCompleted?.invoke() else action.onFailed?.invoke()
         }
     }
 
@@ -362,6 +392,7 @@ fun ChatInputArea(
     var localTextFieldValue by remember {
         mutableStateOf(TextFieldValue(text, TextRange(text.length)))
     }
+    var skillReferences by remember { mutableStateOf<List<MessageSkillReference>>(emptyList()) }
     
     // 防抖同步 Job，用于取消上一次未完成的同步
     var syncJob by remember { mutableStateOf<Job?>(null) }
@@ -374,11 +405,44 @@ fun ChatInputArea(
             lastExternalText = text
             // 更新 TextFieldValue，保持光标在末尾
             localTextFieldValue = TextFieldValue(text, TextRange(text.length))
+            skillReferences = emptyList()
         }
     }
     
     // 防抖同步到 ViewModel（使用 PerformanceConfig 中定义的延迟）
     val localText = localTextFieldValue.text
+    val slashQuery = findSkillSlashQuery(localTextFieldValue)
+    var dismissedSlashSignature by remember { mutableStateOf<String?>(null) }
+    val slashSignature = slashQuery?.let { "${it.start}:${it.end}:${it.query}" }
+    val activeSlashQuery = slashQuery?.takeUnless { slashSignature == dismissedSlashSignature }
+    val skillCandidates = remember(installedSkills, activeSlashQuery?.query) {
+        activeSlashQuery?.let { rankSkillCandidates(installedSkills, it.query) }.orEmpty()
+    }
+    var selectedSkillCandidateIndex by remember { mutableIntStateOf(0) }
+    LaunchedEffect(slashSignature, skillCandidates.size) {
+        selectedSkillCandidateIndex = selectedSkillCandidateIndex.coerceIn(0, (skillCandidates.size - 1).coerceAtLeast(0))
+    }
+
+    fun selectSkillCandidate(index: Int) {
+        val query = activeSlashQuery ?: return
+        val skill = skillCandidates.getOrNull(index) ?: return
+        val reference = MessageSkillReference(
+            skillId = skill.skillId,
+            displayName = skill.name,
+            sourceType = runCatching { SkillSourceType.valueOf(skill.sourceType) }.getOrDefault(SkillSourceType.LOCAL_IMPORT),
+            sourceRepository = skill.sourceRepository,
+            sourcePath = skill.sourcePath,
+            contentHash = skill.currentHash,
+        )
+        val next = insertSkillReference(localTextFieldValue, skillReferences, query, reference)
+        localTextFieldValue = next.value
+        skillReferences = next.references
+        dismissedSlashSignature = null
+    }
+
+    BackHandler(enabled = activeSlashQuery != null) {
+        dismissedSlashSignature = slashSignature
+    }
     LaunchedEffect(localText) {
         // 取消上一次的同步任务
         syncJob?.cancel()
@@ -444,9 +508,17 @@ fun ChatInputArea(
                         val audioItem = selectedMediaItems.firstOrNull { it is SelectedMediaItem.Audio } as? SelectedMediaItem.Audio
                         val mimeType = audioItem?.mimeType
                         // 使用本地文本发送消息
-                        onSendMessageRequest(localText, false, selectedMediaItems.toList(), mimeType)
+                        val contentParts = buildSkillContentParts(localText, skillReferences)
+                        onSendMessageRequest(
+                            displaySkillEditorText(localText, skillReferences),
+                            false,
+                            selectedMediaItems.toList(),
+                            mimeType,
+                            contentParts,
+                        )
                         // 同时清空本地状态和 ViewModel 状态
                         localTextFieldValue = TextFieldValue("", TextRange(0))
+                        skillReferences = emptyList()
                         lastExternalText = ""
                         onTextChange("")
                         onClearMediaItems()
@@ -536,6 +608,7 @@ fun ChatInputArea(
                 }
                 BackHandler(enabled = showComputerSelectionPopup) {
                     showComputerSelectionPopup = false
+                    pendingApprovalForComputerSelection = null
                 }
 
                 fun openComputerSelection(enableAgentAfterSelection: Boolean) {
@@ -559,7 +632,7 @@ fun ChatInputArea(
                         AgentToggleAction.ENABLE_SELECTED -> {
                             val computer = requireNotNull(selectedComputer)
                             if (computer.status != ComputerStatus.READY) {
-                                val status = context.getString(computerStatusLabelRes(computer.status))
+                                val status = context.getString(computerStatusLabelRes(computer))
                                 onShowSnackbar(context.getString(R.string.agent_server_cannot_select, status))
                                 return
                             }
@@ -578,11 +651,12 @@ fun ChatInputArea(
 
                 fun selectComputer(computer: Computer) {
                     if (computer.status != ComputerStatus.READY) {
-                        val status = context.getString(computerStatusLabelRes(computer.status))
+                        val status = context.getString(computerStatusLabelRes(computer))
                         onShowSnackbar(context.getString(R.string.agent_server_cannot_select, status))
                         return
                     }
                     val enableAfterSelection = enableAgentAfterComputerSelection
+                    val approval = pendingApprovalForComputerSelection
                     showComputerSelectionPopup = false
                     requestAgentAction(
                         PendingAgentAction(
@@ -591,6 +665,17 @@ fun ChatInputArea(
                             selectComputer = true,
                             enableAgentAfterSelection = enableAfterSelection,
                             requiresDisclosure = enableAfterSelection || isAgentEnabled,
+                            onCompleted = approval?.let { pending ->
+                                {
+                                    pendingApprovalForComputerSelection = null
+                                    viewModel.respondToAgentEnableApproval(
+                                        pending.runId,
+                                        pending.approvalRequestId,
+                                        approved = true,
+                                    )
+                                }
+                            },
+                            onFailed = approval?.let { { pendingApprovalForComputerSelection = null } },
                         ),
                     )
                 }
@@ -785,6 +870,46 @@ fun ChatInputArea(
                             }
 
                             AppFloatingCardPopup(
+                                visible = activeSlashQuery != null && skillCandidates.isNotEmpty(),
+                                popupPositionProvider = hostCommandPopupPositionProvider,
+                                onDismissRequest = { dismissedSlashSignature = slashSignature },
+                                properties = PopupProperties(
+                                    focusable = false,
+                                    dismissOnBackPress = false,
+                                    dismissOnClickOutside = true,
+                                ),
+                                modifier = Modifier.widthIn(min = 240.dp, max = 340.dp),
+                            ) {
+                                Column(modifier = Modifier.padding(vertical = 6.dp)) {
+                                    skillCandidates.forEachIndexed { index, skill ->
+                                        val selected = index == selectedSkillCandidateIndex
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .background(
+                                                    if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
+                                                    else Color.Transparent,
+                                                )
+                                                .clickable { selectSkillCandidate(index) }
+                                                .padding(horizontal = 14.dp, vertical = 10.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(skill.name, style = MaterialTheme.typography.bodyMedium)
+                                                Text(
+                                                    skill.description,
+                                                    style = MaterialTheme.typography.bodySmall,
+                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                    maxLines = 1,
+                                                )
+                                            }
+                                            Text("/", color = MaterialTheme.colorScheme.primary)
+                                        }
+                                    }
+                                }
+                            }
+
+                            AppFloatingCardPopup(
                                 visible = showFunctionPanel,
                                 popupPositionProvider = hostCommandPopupPositionProvider,
                                 onDismissRequest = {
@@ -808,6 +933,7 @@ fun ChatInputArea(
                                     hasContent = hasContent,
                                     onClearContent = {
                                         localTextFieldValue = TextFieldValue("", TextRange(0))
+                                        skillReferences = emptyList()
                                         lastExternalText = ""
                                         onTextChange("")
                                         onClearMediaItems()
@@ -862,7 +988,10 @@ fun ChatInputArea(
                             AppFloatingCardPopup(
                                 visible = showComputerSelectionPopup,
                                 popupPositionProvider = hostCommandPopupPositionProvider,
-                                onDismissRequest = { showComputerSelectionPopup = false },
+                                onDismissRequest = {
+                                    showComputerSelectionPopup = false
+                                    pendingApprovalForComputerSelection = null
+                                },
                                 properties = PopupProperties(
                                     focusable = true,
                                     dismissOnBackPress = true,
@@ -878,6 +1007,11 @@ fun ChatInputArea(
                                     selectedComputerId = selectedComputerId,
                                     onSelect = ::selectComputer,
                                     onUnavailable = ::selectComputer,
+                                    onAddComputer = {
+                                        showComputerSelectionPopup = false
+                                        pendingApprovalForComputerSelection = null
+                                        onOpenComputerSettings()
+                                    },
                                 )
                             }
 
@@ -931,9 +1065,42 @@ fun ChatInputArea(
 
                         BasicTextField(
                             value = localTextFieldValue,
-                            onValueChange = { newValue -> localTextFieldValue = newValue },
+                            onValueChange = { newValue ->
+                                val next = normalizeSkillEdit(localTextFieldValue, newValue, skillReferences)
+                                localTextFieldValue = next.value
+                                skillReferences = next.references
+                                dismissedSlashSignature = null
+                            },
+                            visualTransformation = SkillTagVisualTransformation(
+                                references = skillReferences,
+                                textColor = if (isDarkTheme) Color(0xFF99CEFF) else Color(0xFF026FC2),
+                                backgroundColor = if (isDarkTheme) Color(0xFF173B59) else Color(0xFFDDEEFF),
+                            ),
                             modifier = shadowedInputModifier
                                 .focusRequester(focusRequester)
+                                .onPreviewKeyEvent { event ->
+                                    if (event.type != KeyEventType.KeyDown || activeSlashQuery == null) return@onPreviewKeyEvent false
+                                    when (event.key) {
+                                        Key.DirectionDown -> {
+                                            selectedSkillCandidateIndex = (selectedSkillCandidateIndex + 1)
+                                                .coerceAtMost((skillCandidates.size - 1).coerceAtLeast(0))
+                                            true
+                                        }
+                                        Key.DirectionUp -> {
+                                            selectedSkillCandidateIndex = (selectedSkillCandidateIndex - 1).coerceAtLeast(0)
+                                            true
+                                        }
+                                        Key.Enter, Key.NumPadEnter -> {
+                                            selectSkillCandidate(selectedSkillCandidateIndex)
+                                            true
+                                        }
+                                        Key.Escape -> {
+                                            dismissedSlashSignature = slashSignature
+                                            true
+                                        }
+                                        else -> false
+                                    }
+                                }
                                 .onFocusChanged { focusState ->
                                     isFocused = focusState.isFocused
                                     if (!focusState.isFocused) onFocusChange(false)
@@ -1117,8 +1284,112 @@ fun ChatInputArea(
             }
         },
         onDismiss = {
+            if (pendingAgentAction?.onCompleted != null) pendingApprovalForComputerSelection = null
             pendingAgentAction = null
             pendingAgentDisclosures = emptySet()
         },
     )
+
+    agentEnableApprovalRequest?.takeIf { pendingApprovalForComputerSelection == null }?.let { request ->
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("开启 Agent？") },
+            text = { Text(request.reason) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        val selectedComputer = computers.firstOrNull { it.id == selectedComputerId }
+                            ?.takeIf { it.status == ComputerStatus.READY }
+                        if (selectedComputer == null) {
+                            pendingApprovalForComputerSelection = request
+                            enableAgentAfterComputerSelection = true
+                            showComputerSelectionPopup = true
+                        } else {
+                            requestAgentAction(
+                                PendingAgentAction(
+                                    computer = selectedComputer,
+                                    conversationId = currentConversationId,
+                                    selectComputer = false,
+                                    enableAgentAfterSelection = true,
+                                    requiresDisclosure = true,
+                                    onCompleted = {
+                                        viewModel.respondToAgentEnableApproval(
+                                            request.runId,
+                                            request.approvalRequestId,
+                                            approved = true,
+                                        )
+                                    },
+                                    onFailed = { pendingApprovalForComputerSelection = null },
+                                ),
+                            )
+                        }
+                    },
+                ) { Text("允许") }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        pendingApprovalForComputerSelection = null
+                        viewModel.respondToAgentEnableApproval(
+                            request.runId,
+                            request.approvalRequestId,
+                            approved = false,
+                        )
+                    },
+                ) { Text("拒绝") }
+            },
+        )
+    }
+
+    skillSecretApprovalRequest?.let { request ->
+        var secret by remember(request.approvalRequestId) { mutableStateOf("") }
+        var rememberSecret by remember(request.approvalRequestId) { mutableStateOf(true) }
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("提供 Skill 密钥？") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("${request.skillName} 申请 ${request.name}")
+                    Text(request.reason, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    OutlinedTextField(
+                        value = secret,
+                        onValueChange = { secret = it },
+                        label = { Text(request.name) },
+                        singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(),
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Checkbox(checked = rememberSecret, onCheckedChange = { rememberSecret = it })
+                        Text("记住此密钥")
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    enabled = secret.isNotEmpty(),
+                    onClick = {
+                        val chars = secret.toCharArray()
+                        secret = ""
+                        viewModel.respondToSkillSecretApproval(
+                            request.runId,
+                            request.approvalRequestId,
+                            chars,
+                            rememberSecret,
+                        )
+                    },
+                ) { Text("继续") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    secret = ""
+                    viewModel.respondToSkillSecretApproval(
+                        request.runId,
+                        request.approvalRequestId,
+                        null,
+                        false,
+                    )
+                }) { Text("拒绝") }
+            },
+        )
+    }
 }

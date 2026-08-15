@@ -648,7 +648,7 @@ private fun ComputerOverviewCard(
                     .weight(1f),
             ) {
                 Text(
-                    text = stringResource(computerStatusLabelRes(computer.status)),
+                    text = stringResource(computerStatusLabelRes(computer)),
                     color = if (computer.status == ComputerStatus.READY) {
                         MaterialTheme.colorScheme.onSurface
                     } else {

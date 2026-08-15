@@ -133,6 +133,8 @@ fun ChatScreen(
     val isLoadingHistoryData by viewModel.isLoadingHistoryData.collectAsState()
     val conversationId by viewModel.currentConversationId.collectAsState()
     val pendingHostCommand by viewModel.pendingComputerHostCommand.collectAsState()
+    val pendingAgentEnableApproval by viewModel.pendingAgentEnableApproval.collectAsState()
+    val pendingSkillSecretApproval by viewModel.pendingSkillSecretApproval.collectAsState()
     val currentHostCommand = pendingHostCommand?.takeIf { request ->
         request.context.conversationId == conversationId
     }
@@ -652,9 +654,15 @@ fun ChatScreen(
                 onTextChange = {
                     viewModel.onTextChange(it)
                 },
-                onSendMessageRequest = { messageText, _, attachments, mimeType ->
+                onSendMessageRequest = { messageText, _, attachments, mimeType, contentParts ->
                     scrollStateManager.lockAutoScroll()
-                    viewModel.onSendMessage(messageText = messageText, attachments = attachments, audioBase64 = null, mimeType = mimeType)
+                    viewModel.onSendMessage(
+                        messageText = messageText,
+                        attachments = attachments,
+                        audioBase64 = null,
+                        mimeType = mimeType,
+                        contentParts = contentParts,
+                    )
                     keyboardController?.hide()
                 },
                 selectedMediaItems = selectedMediaItems,
@@ -702,6 +710,9 @@ fun ChatScreen(
                 onShowVoiceInput = { navController.navigate(Screen.VOICE_INPUT_SCREEN) },
                 onHeightChange = { height -> inputAreaHeightPx = height },
                 hostCommandConfirmationRequest = currentHostCommand,
+                agentEnableApprovalRequest = pendingAgentEnableApproval,
+                skillSecretApprovalRequest = pendingSkillSecretApproval,
+                onOpenComputerSettings = { navController.navigate(Screen.COMPUTER_SCREEN) },
                 onHostCommandCardVisibilityChange = { isVisible ->
                     isHostCommandCardRendered = isVisible
                 },

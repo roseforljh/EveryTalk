@@ -64,6 +64,10 @@ import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.foundation.text.InlineTextContent
+import androidx.compose.foundation.text.appendInlineContent
+import androidx.compose.ui.text.Placeholder
+import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.style.Hyphens
@@ -77,6 +81,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.PopupProperties
 import com.android.everytalk.data.DataClass.Message
+import com.android.everytalk.data.DataClass.MessageContentPart
 import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.models.SelectedMediaItem
@@ -312,6 +317,11 @@ internal fun UserOrErrorMessageContent(
                                     .align(Alignment.Center)
                                     .offset(y = (-6).dp)
                             )
+                        } else if (
+                            message.sender == Sender.User &&
+                            message.contentParts.any { it is MessageContentPart.SkillReference }
+                        ) {
+                            UserMessageWithSkillTags(message.contentParts, contentColor)
                         } else if (renderText.isNotBlank() || isError) {
                             UnifiedMarkdownRenderer(
                                 preparedMessage = preparedMessage,
@@ -365,6 +375,64 @@ internal fun UserOrErrorMessageContent(
         }
 
     }
+}
+
+/** 历史消息按原位置显示一次性 Skill 标签，引用本身仍由 contentParts 持久化。 */
+@Composable
+private fun UserMessageWithSkillTags(
+    parts: List<MessageContentPart>,
+    contentColor: Color,
+) {
+    val inlineContent = remember(parts, contentColor) {
+        buildMap<String, InlineTextContent> {
+            parts.filterIsInstance<MessageContentPart.SkillReference>().forEachIndexed { index, part ->
+                val key = "skill-$index"
+                val name = part.reference.displayName
+                put(
+                    key,
+                    InlineTextContent(
+                        placeholder = Placeholder(
+                            width = (name.length.coerceIn(1, 24) * 8 + 22).sp,
+                            height = 24.sp,
+                            placeholderVerticalAlign = PlaceholderVerticalAlign.TextCenter,
+                        ),
+                    ) {
+                        Surface(
+                            shape = RoundedCornerShape(percent = 50),
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
+                        ) {
+                            Text(
+                                text = name,
+                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 2.dp),
+                                color = contentColor,
+                                fontSize = 13.sp,
+                                maxLines = 1,
+                            )
+                        }
+                    },
+                )
+            }
+        }
+    }
+    val text = remember(parts) {
+        AnnotatedString.Builder().apply {
+            var skillIndex = 0
+            parts.forEach { part ->
+                when (part) {
+                    is MessageContentPart.Text -> append(part.text)
+                    is MessageContentPart.SkillReference -> {
+                        appendInlineContent("skill-${skillIndex++}", "/${part.reference.displayName}")
+                    }
+                }
+            }
+        }.toAnnotatedString()
+    }
+    Text(
+        text = text,
+        inlineContent = inlineContent,
+        color = contentColor,
+        style = MaterialTheme.typography.bodyLarge,
+    )
 }
 
 @OptIn(ExperimentalLayoutApi::class)

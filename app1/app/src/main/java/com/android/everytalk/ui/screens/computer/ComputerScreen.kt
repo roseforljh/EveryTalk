@@ -387,6 +387,7 @@ fun ComputerScreen(
                         onTabSelected = { index -> returnToSettings(tabIndex = index) },
                         onImportExport = { returnToSettings(openImportExport = true) },
                         onOpenComputers = { showTabMenu = false },
+                        onOpenSkills = { navController.navigate(Screen.SKILL_SCREEN) { launchSingleTop = true } },
                         isComputerSelected = true,
                         onDismiss = { showTabMenu = false },
                     )

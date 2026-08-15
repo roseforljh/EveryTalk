@@ -417,6 +417,15 @@ private suspend fun runTopAnchorCorrectionLoop(
                 previousUserControlledTrailingIndex = -1
                 shrinkReserveIfPossible(state, snapshot, currentTrailingIndex, config)
             }
+            if (
+                state.runtime.phase == TopAnchorPhase.AnchoredRunning &&
+                reserveRepresentedBySnapshot > 0 &&
+                state.reservePx == 0
+            ) {
+                // 回答内容已完全填满置顶时创建的空白，交还给聊天列表继续向下跟随。
+                state.clearRuntime()
+                return
+            }
             previousLoopSnapshot = snapshot
             previousLoopReservePx = reserveRepresentedBySnapshot
             previousLoopTrailingIndex = currentTrailingIndex

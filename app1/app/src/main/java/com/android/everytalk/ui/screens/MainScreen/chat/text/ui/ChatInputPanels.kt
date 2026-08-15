@@ -107,6 +107,7 @@ import com.android.everytalk.data.mcp.McpServerConfig
 import com.android.everytalk.data.computer.Computer
 import com.android.everytalk.data.computer.ComputerStatus
 import com.android.everytalk.data.computer.ComputerHostCommandConfirmationRequest
+import com.android.everytalk.data.computer.needsContainerRuntimeUpgrade
 import com.android.everytalk.ui.screens.computer.ComputerCardAccentPalette
 import com.android.everytalk.ui.screens.computer.computerCardAccentColorIndexes
 import com.android.everytalk.ui.components.popup.AppFloatingCardScaffoldPopup
@@ -292,6 +293,7 @@ internal fun ComputerSelectionCard(
     selectedComputerId: String?,
     onSelect: (Computer) -> Unit,
     onUnavailable: (Computer) -> Unit,
+    onAddComputer: () -> Unit = {},
 ) {
     val accentColorIndexes = remember(computers.map { it.id }) {
         computerCardAccentColorIndexes(computers)
@@ -312,67 +314,72 @@ internal fun ComputerSelectionCard(
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
-            return@Column
-        }
-
-        computers.chunked(3).forEach { computerRow ->
-            // 每行最多三个。宽度只设上限，短名称仍按内容收紧，长名称会在胶囊内省略。
-            val maxItemWidth = when (computerRow.size) {
-                1 -> 184.dp
-                2 -> 146.dp
-                else -> 94.dp
+            Button(onClick = onAddComputer, modifier = Modifier.fillMaxWidth()) {
+                Text("添加服务器")
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                computerRow.forEach { computer ->
-                val isReady = computer.status == ComputerStatus.READY
-                val isSelected = selectedComputerId == computer.id
-                val accentColor = ComputerCardAccentPalette[accentColorIndexes.getValue(computer.id)]
+        } else {
+            computers.chunked(3).forEach { computerRow ->
+                // 每行最多三个。宽度只设上限，短名称仍按内容收紧，长名称会在胶囊内省略。
+                val maxItemWidth = when (computerRow.size) {
+                    1 -> 184.dp
+                    2 -> 146.dp
+                    else -> 94.dp
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    computerRow.forEach { computer ->
+                        val isReady = computer.status == ComputerStatus.READY
+                        val isSelected = selectedComputerId == computer.id
+                        val accentColor = ComputerCardAccentPalette[accentColorIndexes.getValue(computer.id)]
                 Surface(
                     onClick = {
-                        if (isReady) onSelect(computer) else onUnavailable(computer)
-                    },
-                    modifier = Modifier
-                        .widthIn(min = 72.dp, max = maxItemWidth)
-                        .height(48.dp),
-                    shape = RoundedCornerShape(percent = 50),
-                    color = if (isSelected) {
-                        accentColor.copy(alpha = if (isSystemInDarkTheme()) 0.18f else 0.11f)
-                    } else {
-                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.52f)
-                    },
-                    border = if (isSelected) BorderStroke(1.dp, accentColor) else null,
-                ) {
-                    Row(
-                        modifier = Modifier.padding(horizontal = 11.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(
-                            painter = painterResource(R.drawable.ic_gpt_terminal),
-                            contentDescription = null,
-                            tint = if (isReady) accentColor else accentColor.copy(alpha = 0.42f),
-                            modifier = Modifier.size(21.dp),
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            text = computer.displayName,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.Medium,
-                            color = if (isReady) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                        )
-                        if (isSelected) {
-                            Spacer(Modifier.width(7.dp))
-                            Icon(
-                                painter = painterResource(R.drawable.ic_check),
-                                contentDescription = stringResource(R.string.state_selected),
-                                tint = accentColor,
-                                modifier = Modifier.size(16.dp),
-                            )
+                                if (isReady) onSelect(computer) else onUnavailable(computer)
+                            },
+                            modifier = Modifier
+                                .widthIn(min = 72.dp, max = maxItemWidth)
+                                .height(48.dp),
+                            shape = RoundedCornerShape(percent = 50),
+                            color = if (isSelected) {
+                                accentColor.copy(alpha = if (isSystemInDarkTheme()) 0.18f else 0.11f)
+                            } else {
+                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.52f)
+                            },
+                            border = if (isSelected) BorderStroke(1.dp, accentColor) else null,
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 11.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_gpt_terminal),
+                                    contentDescription = null,
+                                    tint = if (isReady) accentColor else accentColor.copy(alpha = 0.42f),
+                                    modifier = Modifier.size(21.dp),
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(
+                                    text = computer.displayName,
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium,
+                                    color = if (isReady) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                )
+                                if (isSelected) {
+                                    Spacer(Modifier.width(7.dp))
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_check),
+                                        contentDescription = stringResource(R.string.state_selected),
+                                        tint = accentColor,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                }
+                            }
                         }
                     }
                 }
             }
+            TextButton(onClick = onAddComputer, modifier = Modifier.align(Alignment.End)) {
+                Text("管理服务器")
             }
         }
     }
@@ -544,6 +551,13 @@ internal fun ComputerHostCommandConfirmationCard(
         },
     )
 }
+
+internal fun computerStatusLabelRes(computer: Computer): Int =
+    if (computer.needsContainerRuntimeUpgrade()) {
+        R.string.agent_server_upgrade_required
+    } else {
+        computerStatusLabelRes(computer.status)
+    }
 
 internal fun computerStatusLabelRes(status: ComputerStatus): Int = when (status) {
     ComputerStatus.READY -> R.string.agent_server_ready

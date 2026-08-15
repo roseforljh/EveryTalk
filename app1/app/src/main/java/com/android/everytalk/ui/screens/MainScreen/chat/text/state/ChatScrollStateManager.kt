@@ -6,6 +6,7 @@ import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.animation.core.AnimationState
 import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.Easing
+import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.LinearEasing
 import androidx.compose.animation.core.animateTo
 import androidx.compose.animation.core.tween
@@ -16,6 +17,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Velocity
 import com.android.everytalk.ui.topanchor.BottomScrollReason
 import com.android.everytalk.ui.topanchor.shouldAllowBottomScroll
@@ -32,6 +35,11 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sign
+
+private val BottomAutoFollowRange = 48.dp
+private const val POST_STREAMING_BOTTOM_GUARD_MS = 600L
+private const val STREAMING_FOLLOW_ANIMATION_MS = 140
+private const val MAX_CONTENT_FOLLOW_PASSES = 3
 
 internal enum class BottomCorrection {
     None,
@@ -55,8 +63,11 @@ fun rememberChatScrollStateManager(
     listState: LazyListState,
     coroutineScope: CoroutineScope
 ): ChatScrollStateManager {
-    val manager = remember(listState, coroutineScope) {
-        ChatScrollStateManager(listState, coroutineScope)
+    val bottomActivationRangePx = with(LocalDensity.current) {
+        BottomAutoFollowRange.roundToPx()
+    }
+    val manager = remember(listState, coroutineScope, bottomActivationRangePx) {
+        ChatScrollStateManager(listState, coroutineScope, bottomActivationRangePx)
     }
     DisposableEffect(manager) {
         onDispose { manager.dispose() }
@@ -66,11 +77,15 @@ fun rememberChatScrollStateManager(
 
 class ChatScrollStateManager(
     private val listState: LazyListState,
-    private val coroutineScope: CoroutineScope
+    private val coroutineScope: CoroutineScope,
+    private val bottomActivationRangePx: Int,
 ) {
     private val logger = AppLogger.forComponent("ChatScrollStateManager")
 
     private var autoScrollJob: Job? = null
+    private var contentFollowJob: Job? = null
+    private var contentFollowGeneration = 0L
+    private var postStreamingGuardJob: Job? = null
     
     private var hideButtonJob: Job? = null
     private var isStreaming by mutableStateOf(false)
@@ -90,6 +105,9 @@ class ChatScrollStateManager(
     val showScrollToBottomButton: State<Boolean> = _showScrollToBottomButton
 
     private var preventAutoScroll = false
+    private var contentFollowArmed = false
+    private var userScrollInterrupted = false
+    private var leftBottomRangeAfterInterrupt = false
     private var isProgrammaticScroll = false
     private var isStopBottomPinActive = false
     private var stopBottomPinGeneration = 0L
@@ -98,6 +116,7 @@ class ChatScrollStateManager(
     private var topAnchorUserScrollReleaser: (() -> Unit)? = null
     private var lastLoggedStrictBottom: Boolean? = null
     private val stateObserverJob: Job
+    private val contentObserverJob: Job
 
     val nestedScrollConnection = object : NestedScrollConnection {
         override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
@@ -109,13 +128,26 @@ class ChatScrollStateManager(
                         "preventAutoScroll=$preventAutoScroll, ${scrollDebugSnapshot()}"
                 )
             }
-            if (source == NestedScrollSource.UserInput && isStopBottomPinActive) {
-                cancelAutoScrollJob()
+            if (source == NestedScrollSource.UserInput && available.y != 0f) {
+                cancelContentFollowJob()
                 preventAutoScroll = true
-                logger.debug(
-                    "User scroll took control from bottom pin: generation=$stopBottomPinGeneration, " +
-                        scrollDebugSnapshot()
-                )
+                contentFollowArmed = false
+                userScrollInterrupted = true
+                if (!isWithinBottomActivationRange(
+                        remainingPx = remainingDistanceToBottomPx(),
+                        canScrollForward = listState.canScrollForward,
+                        activationRangePx = bottomActivationRangePx,
+                    )
+                ) {
+                    leftBottomRangeAfterInterrupt = true
+                }
+                if (isStopBottomPinActive) {
+                    cancelAutoScrollJob()
+                    logger.debug(
+                        "User scroll took control from bottom pin: generation=$stopBottomPinGeneration, " +
+                            scrollDebugSnapshot()
+                    )
+                }
             }
             if (source == NestedScrollSource.UserInput && suppressTopAnchorBottomScroll) {
                 topAnchorUserScrollReleaser?.invoke()
@@ -133,11 +165,18 @@ class ChatScrollStateManager(
                 val totalItems = layoutInfo.totalItemsCount
                 val lastVisibleItem = layoutInfo.visibleItemsInfo.lastOrNull()
                 
+                val remainingPx = remainingDistanceToBottomPx(layoutInfo)
                 val isStrictlyAtBottom = !listState.canScrollForward || totalItems == 0
+                val isWithinBottomRange = isWithinBottomActivationRange(
+                    remainingPx = remainingPx,
+                    canScrollForward = listState.canScrollForward,
+                    activationRangePx = bottomActivationRangePx,
+                )
 
                 ScrollSnapshot(
                     isScrollInProgress = listState.isScrollInProgress,
                     isStrictlyAtBottom = isStrictlyAtBottom,
+                    isWithinBottomRange = isWithinBottomRange,
                     totalItems = totalItems,
                     lastIndex = lastVisibleItem?.index ?: 0,
                     lastSize = lastVisibleItem?.size ?: 0,
@@ -147,7 +186,7 @@ class ChatScrollStateManager(
         }.collect { snapshot ->
                 _isScrollInProgress.value = snapshot.isScrollInProgress
                 _showScrollToBottomButton.value =
-                    !snapshot.isStrictlyAtBottom && !isStopBottomPinActive
+                    !snapshot.isWithinBottomRange && !isStopBottomPinActive
 
                 if (lastLoggedStrictBottom != snapshot.isStrictlyAtBottom) {
                     lastLoggedStrictBottom = snapshot.isStrictlyAtBottom
@@ -163,7 +202,7 @@ class ChatScrollStateManager(
                 val now = System.currentTimeMillis()
                 val inFreezeWindow = now - lastStreamingTransitionTime < STREAMING_TRANSITION_FREEZE_MS
                 
-                if (snapshot.isStrictlyAtBottom && !inFreezeWindow) {
+                if (snapshot.isWithinBottomRange && !inFreezeWindow) {
                     consecutiveBottomFrames++
                 } else {
                     consecutiveBottomFrames = 0
@@ -171,11 +210,35 @@ class ChatScrollStateManager(
                 
                 val confirmedAtBottom = consecutiveBottomFrames >= BOTTOM_DETECTION_THRESHOLD && !inFreezeWindow
                 _isAtBottom.value = confirmedAtBottom
-                preventAutoScroll = resolvePreventAutoScroll(
-                    currentValue = preventAutoScroll,
-                    isProgrammaticScroll = isProgrammaticScroll,
-                    isStrictlyAtBottom = snapshot.isStrictlyAtBottom
-                )
+                if (!snapshot.isScrollInProgress) {
+                    if (userScrollInterrupted) {
+                        if (!snapshot.isWithinBottomRange) leftBottomRangeAfterInterrupt = true
+                        if (
+                            snapshot.isStrictlyAtBottom ||
+                            (snapshot.isWithinBottomRange && leftBottomRangeAfterInterrupt)
+                        ) {
+                            userScrollInterrupted = false
+                            leftBottomRangeAfterInterrupt = false
+                            preventAutoScroll = false
+                            contentFollowArmed = snapshot.totalItems > 0
+                            requestContentFollow()
+                        }
+                    } else {
+                        preventAutoScroll = resolvePreventAutoScroll(
+                            currentValue = preventAutoScroll,
+                            isProgrammaticScroll = isProgrammaticScroll,
+                            isWithinBottomRange = snapshot.isWithinBottomRange,
+                        )
+                        if (
+                            snapshot.totalItems > 0 &&
+                            snapshot.isWithinBottomRange &&
+                            !isProgrammaticScroll
+                        ) {
+                            contentFollowArmed = true
+                            requestContentFollow()
+                        }
+                    }
+                }
 
                 if (confirmedAtBottom) {
                     cancelHideButtonJob()
@@ -183,11 +246,19 @@ class ChatScrollStateManager(
                 }
             }
         }
+        contentObserverJob = coroutineScope.launch {
+            snapshotFlow { bottomContentRevision() }
+                .distinctUntilChanged()
+                .collect {
+                    if (!isProgrammaticScroll) requestContentFollow()
+                }
+        }
     }
 
     private data class ScrollSnapshot(
         val isScrollInProgress: Boolean,
         val isStrictlyAtBottom: Boolean,
+        val isWithinBottomRange: Boolean,
         val totalItems: Int,
         val lastIndex: Int,
         val lastSize: Int,
@@ -213,14 +284,27 @@ class ChatScrollStateManager(
     }
     
     fun updateStreamingState(streaming: Boolean) {
-        if (isStreaming && !streaming) {
+        val wasStreaming = isStreaming
+        if (wasStreaming && !streaming) {
             lastStreamingTransitionTime = System.currentTimeMillis()
             consecutiveBottomFrames = 0
+            postStreamingGuardJob?.cancel()
+            postStreamingGuardJob = coroutineScope.launch {
+                requestContentFollow()
+                delay(POST_STREAMING_BOTTOM_GUARD_MS)
+                postStreamingGuardJob = null
+            }
         }
         isStreaming = streaming
+        if (streaming && !wasStreaming) {
+            postStreamingGuardJob?.cancel()
+            postStreamingGuardJob = null
+            requestContentFollow()
+        }
     }
 
     fun updateTopAnchorBottomScrollSuppression(suppressed: Boolean) {
+        val wasSuppressed = suppressTopAnchorBottomScroll
         if (suppressTopAnchorBottomScroll != suppressed) {
             logger.debug(
                 "Top-anchor bottom-scroll suppression changed: $suppressTopAnchorBottomScroll -> $suppressed, " +
@@ -228,7 +312,16 @@ class ChatScrollStateManager(
             )
         }
         suppressTopAnchorBottomScroll = suppressed
-        if (suppressed) cancelAutoScrollJob()
+        if (suppressed) {
+            cancelContentFollowJob()
+        } else if (wasSuppressed && (isStreaming || postStreamingGuardJob != null)) {
+            // 回答已经填满“问题置顶”留下的空间，恢复本轮的向下跟随。
+            preventAutoScroll = false
+            contentFollowArmed = true
+            userScrollInterrupted = false
+            leftBottomRangeAfterInterrupt = false
+            requestContentFollow()
+        }
     }
 
     fun setTopAnchorRuntimeClearer(clearer: (() -> Unit)?) {
@@ -242,10 +335,14 @@ class ChatScrollStateManager(
     fun lockAutoScroll() {
         cancelAutoScrollJob()
         preventAutoScroll = true
+        contentFollowArmed = false
+        userScrollInterrupted = false
+        leftBottomRangeAfterInterrupt = false
         logger.debug("Auto-scroll locked: generation=$stopBottomPinGeneration, ${scrollDebugSnapshot()}")
     }
 
     private fun cancelAutoScrollJob() {
+        cancelContentFollowJob()
         val hadActivePin = isStopBottomPinActive
         val hadJob = autoScrollJob != null
         val previousGeneration = stopBottomPinGeneration
@@ -259,6 +356,71 @@ class ChatScrollStateManager(
                 "Auto-scroll job cancelled: generation=$previousGeneration->$stopBottomPinGeneration, " +
                     "hadPin=$hadActivePin, ${scrollDebugSnapshot()}"
             )
+        }
+    }
+
+    private fun cancelContentFollowJob() {
+        contentFollowGeneration++
+        contentFollowJob?.cancel()
+        contentFollowJob = null
+        isProgrammaticScroll = false
+    }
+
+    /**
+     * 流式内容、展开动画或输入区高度变化后平滑补到底部。
+     * 同一时刻只保留一个补偿任务；用户一旦拖动，nestedScrollConnection 会立即取消它。
+     */
+    private fun requestContentFollow() {
+        if (!shouldFollowContent() || contentFollowJob?.isActive == true) return
+        val generation = ++contentFollowGeneration
+        contentFollowJob = coroutineScope.launch {
+            try {
+                repeat(MAX_CONTENT_FOLLOW_PASSES) {
+                    if (!shouldFollowContent()) return@launch
+                    smoothCorrectToBottom()
+                    withFrameNanos { }
+                    val after = bottomContentRevision()
+                    if (resolveContentFollowCorrection(after.remainingPx) == BottomCorrection.None) {
+                        return@launch
+                    }
+                }
+            } finally {
+                if (generation == contentFollowGeneration) contentFollowJob = null
+            }
+        }
+    }
+
+    private fun shouldFollowContent(): Boolean =
+        (isStreaming || postStreamingGuardJob != null || contentFollowArmed) &&
+            !preventAutoScroll &&
+            !suppressTopAnchorBottomScroll &&
+            !isStopBottomPinActive
+
+    private suspend fun smoothCorrectToBottom() {
+        val remainingPx = remainingDistanceToBottomPx()
+        val correction = resolveContentFollowCorrection(remainingPx)
+        if (correction == BottomCorrection.None) return
+
+        isProgrammaticScroll = true
+        try {
+            when (correction) {
+                BottomCorrection.None -> Unit
+                BottomCorrection.AnchorLastItem -> {
+                    val lastIndex = listState.layoutInfo.totalItemsCount - 1
+                    if (lastIndex >= 0) listState.animateScrollToItem(lastIndex)
+                }
+                BottomCorrection.ScrollBy -> {
+                    listState.animateScrollBy(
+                        value = requireNotNull(remainingPx).toFloat(),
+                        animationSpec = tween(
+                            durationMillis = STREAMING_FOLLOW_ANIMATION_MS,
+                            easing = FastOutSlowInEasing,
+                        ),
+                    )
+                }
+            }
+        } finally {
+            isProgrammaticScroll = false
         }
     }
 
@@ -339,6 +501,9 @@ class ChatScrollStateManager(
     fun pinToRealBottomUntilUserScroll(clearTopAnchorRuntime: Boolean = false) {
         cancelAutoScrollJob()
         preventAutoScroll = false
+        contentFollowArmed = true
+        userScrollInterrupted = false
+        leftBottomRangeAfterInterrupt = false
         suppressTopAnchorBottomScroll = false
         val pinGeneration = ++stopBottomPinGeneration
         isStopBottomPinActive = true
@@ -466,7 +631,10 @@ class ChatScrollStateManager(
     fun dispose() {
         cancelAutoScrollJob()
         cancelHideButtonJob()
+        postStreamingGuardJob?.cancel()
+        postStreamingGuardJob = null
         stateObserverJob.cancel()
+        contentObserverJob.cancel()
         topAnchorRuntimeClearer = null
         topAnchorUserScrollReleaser = null
     }
@@ -601,7 +769,7 @@ class ChatScrollStateManager(
 
     // Kept for compatibility
     fun handleStreamingScroll() {
-        // No-op: logic is now fully reactive in init block
+        requestContentFollow()
     }
 
     private fun cancelHideButtonJob() {
@@ -735,8 +903,23 @@ private fun computeScrollDurationMs(
 internal fun resolvePreventAutoScroll(
     currentValue: Boolean,
     isProgrammaticScroll: Boolean,
-    isStrictlyAtBottom: Boolean
+    isWithinBottomRange: Boolean,
 ): Boolean {
     if (isProgrammaticScroll) return currentValue
-    return !isStrictlyAtBottom
+    return if (isWithinBottomRange) false else currentValue
+}
+
+internal fun isWithinBottomActivationRange(
+    remainingPx: Int?,
+    canScrollForward: Boolean,
+    activationRangePx: Int,
+): Boolean = !canScrollForward || (
+    remainingPx != null && remainingPx <= activationRangePx.coerceAtLeast(0)
+)
+
+/** 自动跟随只修正真实可见距离，避免 LazyList 的瞬时 canScrollForward 触发无限锚定。 */
+internal fun resolveContentFollowCorrection(remainingPx: Int?): BottomCorrection = when {
+    remainingPx == null -> BottomCorrection.AnchorLastItem
+    remainingPx > 0 -> BottomCorrection.ScrollBy
+    else -> BottomCorrection.None
 }

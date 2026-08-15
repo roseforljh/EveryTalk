@@ -17,6 +17,7 @@ import androidx.compose.foundation.ScrollState
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -38,7 +39,6 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,10 +46,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
@@ -57,9 +61,12 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R
@@ -80,6 +87,14 @@ import com.android.everytalk.ui.components.streaming.contentVersionForRendering
 import com.mikepenz.markdown.model.State
 import com.mikepenz.markdown.model.parseMarkdown
 import kotlinx.coroutines.delay
+
+private const val EXECUTION_CONTAINER_COLLAPSE_MS = 280
+private const val EXECUTION_SECTION_HEIGHT_MS = 240
+private const val EXECUTION_SECTION_EXPAND_FADE_MS = 160
+private const val EXECUTION_SECTION_COLLAPSE_FADE_MS = 120
+private const val EXECUTION_ARROW_ROTATION_MS = 200
+private const val REASONING_PREVIEW_MAX_LINES = 3
+private const val REASONING_PREVIEW_SOURCE_CHAR_LIMIT = 2_000
 
 internal fun reasoningSheetTallHeightFraction(): Float = AppModalBottomSheetMaximumHeightFraction
 
@@ -163,6 +178,105 @@ private fun separateAdjacentStrongSections(line: String): String {
     return result.toString()
 }
 
+/**
+ * 把思考内容转成小容器中的干净文字。
+ * 完整 Markdown 仍保留在抽屉，这里只移除预览中会显得杂乱的标记。
+ */
+internal fun reasoningPreviewPlainText(markdown: String): String {
+    // ponytail: 预览只显示末尾三行，限制源文本避免长思考输出时反复测量全文。
+    val source = markdown.takeLast(REASONING_PREVIEW_SOURCE_CHAR_LIMIT)
+    return source.lineSequence()
+        .filterNot { reasoningFenceMarker(it) != null }
+        .map(::cleanReasoningPreviewLine)
+        .filter(String::isNotBlank)
+        .joinToString("\n")
+}
+
+private fun cleanReasoningPreviewLine(source: String): String {
+    var start = source.indexOfFirst { !it.isWhitespace() }.takeIf { it >= 0 } ?: return ""
+    while (start < source.length) {
+        val marker = source[start]
+        val next = source.getOrNull(start + 1)
+        when {
+            marker == '#' || marker == '>' -> {
+                while (start < source.length && source[start] == marker) start++
+                while (start < source.length && source[start].isWhitespace()) start++
+            }
+            marker in charArrayOf('-', '+', '*') && next?.isWhitespace() == true -> {
+                start += 2
+                while (start < source.length && source[start].isWhitespace()) start++
+            }
+            marker.isDigit() -> {
+                var end = start
+                while (end < source.length && source[end].isDigit()) end++
+                val orderedMarker = source.getOrNull(end)
+                if (
+                    (orderedMarker == '.' || orderedMarker == ')') &&
+                    source.getOrNull(end + 1)?.isWhitespace() == true
+                ) {
+                    start = end + 2
+                    while (start < source.length && source[start].isWhitespace()) start++
+                } else {
+                    break
+                }
+            }
+            else -> break
+        }
+    }
+    return stripInlineReasoningMarkdown(source.substring(start))
+}
+
+private fun stripInlineReasoningMarkdown(source: String): String = buildString(source.length) {
+    var index = 0
+    var pendingSpace = false
+    while (index < source.length) {
+        val character = source[index]
+        when {
+            character == '\\' && index + 1 < source.length -> {
+                if (pendingSpace && isNotEmpty()) append(' ')
+                pendingSpace = false
+                append(source[index + 1])
+                index += 2
+            }
+            character == '!' && source.getOrNull(index + 1) == '[' -> index++
+            character == '[' -> {
+                val labelEnd = source.indexOf(']', startIndex = index + 1)
+                val destinationStart = labelEnd + 1
+                if (labelEnd > index && source.getOrNull(destinationStart) == '(') {
+                    val destinationEnd = source.indexOf(')', startIndex = destinationStart + 1)
+                    if (destinationEnd > destinationStart) {
+                        if (pendingSpace && isNotEmpty()) append(' ')
+                        pendingSpace = false
+                        append(stripInlineReasoningMarkdown(source.substring(index + 1, labelEnd)))
+                        index = destinationEnd + 1
+                    } else {
+                        append(character)
+                        index++
+                    }
+                } else {
+                    append(character)
+                    index++
+                }
+            }
+            character == '*' || character == '`' || character == '~' -> index++
+            character == '_' && (
+                source.getOrNull(index - 1)?.isLetterOrDigit() != true ||
+                    source.getOrNull(index + 1)?.isLetterOrDigit() != true
+                ) -> index++
+            character.isWhitespace() -> {
+                pendingSpace = true
+                index++
+            }
+            else -> {
+                if (pendingSpace && isNotEmpty()) append(' ')
+                pendingSpace = false
+                append(character)
+                index++
+            }
+        }
+    }
+}.trim()
+
 @Composable
 internal fun ReasoningToggleAndContent(
     currentMessageId: String,
@@ -241,12 +355,12 @@ internal fun ReasoningToggleAndContent(
     ) {
         AnimatedVisibility(
             visible = shouldShowExecutionChain,
-            enter = fadeIn(tween(150)) + expandVertically(
-                animationSpec = tween(220),
+            enter = fadeIn(tween(EXECUTION_SECTION_EXPAND_FADE_MS)) + expandVertically(
+                animationSpec = tween(EXECUTION_SECTION_HEIGHT_MS, easing = FastOutSlowInEasing),
                 expandFrom = Alignment.Top,
             ),
-            exit = fadeOut(tween(180)) + shrinkVertically(
-                animationSpec = tween(240, easing = FastOutSlowInEasing),
+            exit = fadeOut(tween(EXECUTION_SECTION_COLLAPSE_FADE_MS)) + shrinkVertically(
+                animationSpec = tween(EXECUTION_CONTAINER_COLLAPSE_MS, easing = FastOutSlowInEasing),
                 shrinkTowards = Alignment.Top,
             ),
         ) {
@@ -275,12 +389,12 @@ internal fun ReasoningToggleAndContent(
                     )
                     AnimatedVisibility(
                         visible = executionChainExpanded,
-                        enter = fadeIn(tween(140)) + expandVertically(
-                            animationSpec = tween(200),
+                        enter = fadeIn(tween(EXECUTION_SECTION_EXPAND_FADE_MS)) + expandVertically(
+                            animationSpec = tween(EXECUTION_SECTION_HEIGHT_MS, easing = FastOutSlowInEasing),
                             expandFrom = Alignment.Top,
                         ),
-                        exit = fadeOut(tween(120)) + shrinkVertically(
-                            animationSpec = tween(180),
+                        exit = fadeOut(tween(EXECUTION_SECTION_COLLAPSE_FADE_MS)) + shrinkVertically(
+                            animationSpec = tween(EXECUTION_CONTAINER_COLLAPSE_MS, easing = FastOutSlowInEasing),
                             shrinkTowards = Alignment.Top,
                         ),
                     ) {
@@ -288,6 +402,7 @@ internal fun ReasoningToggleAndContent(
                             sections = sections,
                             activityStatusText = activityStatusText,
                             active = processIsActive,
+                            reasoningActive = isReasoningStreaming,
                             messageIsError = messageIsError,
                             onOpenDetails = openReasoningSheet,
                         )
@@ -324,7 +439,7 @@ private fun ExecutionChainHeader(
 ) {
     val arrowRotation by animateFloatAsState(
         targetValue = if (expanded) 180f else 0f,
-        animationSpec = tween(180, easing = FastOutSlowInEasing),
+        animationSpec = tween(EXECUTION_ARROW_ROTATION_MS, easing = FastOutSlowInEasing),
         label = "executionChainArrow",
     )
     Row(
@@ -385,6 +500,7 @@ private fun ExecutionProcessContent(
     sections: List<ExecutionProcessSection>,
     activityStatusText: String?,
     active: Boolean,
+    reasoningActive: Boolean,
     messageIsError: Boolean,
     onOpenDetails: () -> Unit,
 ) {
@@ -398,6 +514,13 @@ private fun ExecutionProcessContent(
             sections.lastOrNull() !is ExecutionProcessSection.Narrative ||
             hasSpecificActivity
         )
+    val activeNarrativeIndex = if (
+        reasoningActive && sections.lastOrNull() is ExecutionProcessSection.Narrative
+    ) {
+        sections.lastIndex
+    } else {
+        -1
+    }
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -408,22 +531,12 @@ private fun ExecutionProcessContent(
         sections.forEachIndexed { sectionIndex, section ->
             when (section) {
                 is ExecutionProcessSection.Narrative -> {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable(
-                                indication = null,
-                                interactionSource = remember { MutableInteractionSource() },
-                                onClick = onOpenDetails,
-                            )
-                            .testTag("reasoning-chain-summary-$sectionIndex"),
-                    ) {
-                        ReasoningMarkdownBlock(
-                            text = section.text,
-                            index = sectionIndex,
-                            tagPrefix = "reasoning-inline",
-                        )
-                    }
+                    ReasoningPreviewCard(
+                        text = section.text,
+                        sectionIndex = sectionIndex,
+                        active = sectionIndex == activeNarrativeIndex,
+                        onOpenDetails = onOpenDetails,
+                    )
                 }
 
                 is ExecutionProcessSection.ToolGroup -> {
@@ -459,6 +572,98 @@ private fun ExecutionProcessContent(
     }
 }
 
+/** 每段连续思考都有独立小容器，工具调用仍保持在它们之间。 */
+@Composable
+private fun ReasoningPreviewCard(
+    text: String,
+    sectionIndex: Int,
+    active: Boolean,
+    onOpenDetails: () -> Unit,
+) {
+    val plainText = remember(text) { reasoningPreviewPlainText(text) }
+    if (plainText.isBlank()) return
+    var visible by remember(sectionIndex) { mutableStateOf(false) }
+    LaunchedEffect(sectionIndex) { visible = true }
+    AnimatedVisibility(
+        visible = visible,
+        enter = fadeIn(tween(EXECUTION_SECTION_EXPAND_FADE_MS)) + expandVertically(
+            animationSpec = tween(EXECUTION_SECTION_HEIGHT_MS, easing = FastOutSlowInEasing),
+            expandFrom = Alignment.Top,
+        ),
+    ) {
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+            modifier = Modifier
+                .fillMaxWidth()
+                .testTag("reasoning-chain-summary-$sectionIndex")
+                .clickable(
+                    indication = null,
+                    interactionSource = remember { MutableInteractionSource() },
+                    onClick = onOpenDetails,
+                ),
+        ) {
+            LatestReasoningPreviewText(
+                text = plainText,
+                active = active,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 10.dp, vertical = 9.dp),
+            )
+        }
+    }
+}
+
+/** 按当前容器宽度测量换行，只取实际显示的最新三行。 */
+@Composable
+private fun LatestReasoningPreviewText(
+    text: String,
+    active: Boolean,
+    modifier: Modifier = Modifier,
+) {
+    val textStyle = MaterialTheme.typography.bodyMedium
+    val density = LocalDensity.current
+    val textMeasurer = rememberTextMeasurer()
+    BoxWithConstraints(modifier = modifier) {
+        val maxWidthPx = with(density) { maxWidth.roundToPx() }.coerceAtLeast(1)
+        val previewText = remember(text, textStyle, maxWidthPx) {
+            val layout = textMeasurer.measure(
+                text = AnnotatedString(text),
+                style = textStyle,
+                constraints = Constraints(maxWidth = maxWidthPx),
+            )
+            val start = if (layout.lineCount > REASONING_PREVIEW_MAX_LINES) {
+                layout.getLineStart(layout.lineCount - REASONING_PREVIEW_MAX_LINES)
+            } else {
+                0
+            }
+            text.substring(start).trimStart()
+        }
+        if (active) {
+            ScanningHighlightText(
+                text = previewText,
+                textColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                useSmallStyle = false,
+                maxLines = REASONING_PREVIEW_MAX_LINES,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("reasoning-chain-narrative-scanning"),
+            )
+        } else {
+            Text(
+                text = previewText,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = textStyle,
+                maxLines = REASONING_PREVIEW_MAX_LINES,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("reasoning-chain-narrative-static"),
+            )
+        }
+    }
+}
+
 @Composable
 private fun ExecutionToolGroup(
     group: ExecutionProcessSection.ToolGroup,
@@ -466,12 +671,20 @@ private fun ExecutionToolGroup(
     groupIndex: Int,
     onOpenDetails: () -> Unit,
 ) {
-    val stableKey = remember(group.entries) { group.entries.joinToString("|") { it.step.id } }
+    val stableKey = group.entries.firstOrNull()?.step?.id ?: "group-$groupIndex"
     var expanded by remember(stableKey) { mutableStateOf(active) }
-    LaunchedEffect(active) { expanded = active }
+    var wasActive by remember(stableKey) { mutableStateOf(active) }
+    var userControlledAfterCompletion by remember(stableKey) { mutableStateOf(false) }
+    LaunchedEffect(active) {
+        if (!userControlledAfterCompletion) {
+            if (active && !wasActive) expanded = true
+            if (!active && wasActive) expanded = false
+        }
+        wasActive = active
+    }
     val arrowRotation by animateFloatAsState(
         targetValue = if (expanded) 180f else 0f,
-        animationSpec = tween(180, easing = FastOutSlowInEasing),
+        animationSpec = tween(EXECUTION_ARROW_ROTATION_MS, easing = FastOutSlowInEasing),
         label = "executionGroupArrow",
     )
     val summary = executionToolGroupSummary(group.entries)
@@ -485,7 +698,10 @@ private fun ExecutionToolGroup(
                 .clickable(
                     indication = null,
                     interactionSource = remember { MutableInteractionSource() },
-                    onClick = { expanded = !expanded },
+                    onClick = {
+                        expanded = !expanded
+                        if (!active) userControlledAfterCompletion = true
+                    },
                 )
                 .padding(vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -525,8 +741,14 @@ private fun ExecutionToolGroup(
         }
         AnimatedVisibility(
             visible = expanded,
-            enter = fadeIn(tween(120)) + expandVertically(tween(180), expandFrom = Alignment.Top),
-            exit = fadeOut(tween(100)) + shrinkVertically(tween(160), shrinkTowards = Alignment.Top),
+            enter = fadeIn(tween(EXECUTION_SECTION_EXPAND_FADE_MS)) + expandVertically(
+                animationSpec = tween(EXECUTION_SECTION_HEIGHT_MS, easing = FastOutSlowInEasing),
+                expandFrom = Alignment.Top,
+            ),
+            exit = fadeOut(tween(EXECUTION_SECTION_COLLAPSE_FADE_MS)) + shrinkVertically(
+                animationSpec = tween(EXECUTION_SECTION_HEIGHT_MS, easing = FastOutSlowInEasing),
+                shrinkTowards = Alignment.Top,
+            ),
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 group.entries.forEachIndexed { stepIndex, entry ->
@@ -627,9 +849,10 @@ internal fun ScanningHighlightText(
     textColor: Color,
     modifier: Modifier = Modifier,
     useSmallStyle: Boolean = true,
+    maxLines: Int = 1,
 ) {
     val transition = rememberInfiniteTransition(label = "scanningHighlightText")
-    val shimmerProgress by transition.animateFloat(
+    val shimmerProgress = transition.animateFloat(
         initialValue = -0.55f,
         targetValue = 1.55f,
         animationSpec = infiniteRepeatable(
@@ -638,29 +861,36 @@ internal fun ScanningHighlightText(
         ),
         label = "scanningHighlightProgress",
     )
-    var textWidthPx by remember { mutableFloatStateOf(1f) }
-    val shimmerCenter = shimmerProgress * textWidthPx
     val baseColor = textColor.copy(alpha = 0.58f)
     val highlightColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.98f)
-    val shimmerBrush = Brush.linearGradient(
-        colorStops = arrayOf(
-            0f to baseColor,
-            0.34f to baseColor,
-            0.5f to highlightColor,
-            0.66f to baseColor,
-            1f to baseColor,
-        ),
-        start = Offset(shimmerCenter - textWidthPx * 0.65f, 0f),
-        end = Offset(shimmerCenter + textWidthPx * 0.65f, 0f),
-    )
 
     Text(
         text = text,
         style = (if (useSmallStyle) MaterialTheme.typography.bodySmall else MaterialTheme.typography.bodyMedium)
-            .copy(brush = shimmerBrush),
-        maxLines = 1,
+            .copy(color = baseColor),
+        maxLines = maxLines,
         overflow = TextOverflow.Ellipsis,
-        modifier = modifier.onSizeChanged { textWidthPx = it.width.coerceAtLeast(1).toFloat() },
+        modifier = modifier
+            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+            .drawWithContent {
+                drawContent()
+                val textWidthPx = size.width.coerceAtLeast(1f)
+                val shimmerCenter = shimmerProgress.value * textWidthPx
+                drawRect(
+                    brush = Brush.linearGradient(
+                        colorStops = arrayOf(
+                            0f to Color.Transparent,
+                            0.34f to Color.Transparent,
+                            0.5f to highlightColor,
+                            0.66f to Color.Transparent,
+                            1f to Color.Transparent,
+                        ),
+                        start = Offset(shimmerCenter - textWidthPx * 0.65f, 0f),
+                        end = Offset(shimmerCenter + textWidthPx * 0.65f, 0f),
+                    ),
+                    blendMode = BlendMode.SrcAtop,
+                )
+            },
     )
 }
 

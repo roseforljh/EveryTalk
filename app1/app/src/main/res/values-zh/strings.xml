@@ -575,6 +575,7 @@
     <string name="agent_server_ready">可用</string>
     <string name="agent_server_offline">离线</string>
     <string name="agent_server_action_required">需要处理</string>
+    <string name="agent_server_upgrade_required">需要升级</string>
     <string name="agent_server_unavailable">不可用</string>
     <string name="agent_server_cannot_select">无法选择这台服务器：%1$s</string>
     <string name="agent_conversation_changed">会话已经切换，请重新打开 Agent</string>

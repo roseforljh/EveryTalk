@@ -82,7 +82,7 @@ internal fun ComputerCard(
             R.string.computer_mode_direct
         },
     )
-    val status = stringResource(computerStatusLabelRes(computer.status))
+    val status = stringResource(computerStatusLabelRes(computer))
     Card(
         onClick = onClick,
         modifier = Modifier.fillMaxWidth(),

@@ -577,6 +577,7 @@
     <string name="agent_server_ready">Ready</string>
     <string name="agent_server_offline">Offline</string>
     <string name="agent_server_action_required">Action required</string>
+    <string name="agent_server_upgrade_required">Upgrade required</string>
     <string name="agent_server_unavailable">Unavailable</string>
     <string name="agent_server_cannot_select">This server cannot be selected: %1$s</string>
     <string name="agent_conversation_changed">The conversation changed. Open Agent again.</string>

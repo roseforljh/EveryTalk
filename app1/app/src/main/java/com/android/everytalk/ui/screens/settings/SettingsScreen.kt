@@ -598,6 +598,10 @@ fun SettingsScreen(
                                     showTabMenu = false
                                     navController.navigate(Screen.COMPUTER_SCREEN) { launchSingleTop = true }
                                 },
+                                onOpenSkills = {
+                                    showTabMenu = false
+                                    navController.navigate(Screen.SKILL_SCREEN) { launchSingleTop = true }
+                                },
                                 onDismiss = { showTabMenu = false }
                             )
                         }
@@ -657,6 +661,10 @@ fun SettingsScreen(
                                 onOpenComputers = {
                                     showTabMenu = false
                                     navController.navigate(Screen.COMPUTER_SCREEN) { launchSingleTop = true }
+                                },
+                                onOpenSkills = {
+                                    showTabMenu = false
+                                    navController.navigate(Screen.SKILL_SCREEN) { launchSingleTop = true }
                                 },
                                 onDismiss = { showTabMenu = false }
                             )
@@ -927,7 +935,9 @@ internal fun SettingsTabMenu(
     onTabSelected: (Int) -> Unit,
     onImportExport: () -> Unit,
     onOpenComputers: () -> Unit,
+    onOpenSkills: () -> Unit,
     isComputerSelected: Boolean = false,
+    isSkillSelected: Boolean = false,
     onDismiss: () -> Unit
 ) {
     val isDark = isSystemInDarkTheme()
@@ -1004,6 +1014,34 @@ internal fun SettingsTabMenu(
                         modifier = Modifier
                             .align(Alignment.CenterStart)
                             .size(12.dp),
+                    )
+                }
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(38.dp)
+                    .clickable {
+                        onOpenSkills()
+                        onDismiss()
+                    }
+                    .padding(horizontal = 14.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                Text(
+                    text = "技能",
+                    fontSize = 16.sp,
+                    fontWeight = if (isSkillSelected) FontWeight.SemiBold else FontWeight.Medium,
+                    color = textColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (isSkillSelected) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_check),
+                        contentDescription = null,
+                        tint = textColor,
+                        modifier = Modifier.align(Alignment.CenterStart).size(12.dp),
                     )
                 }
             }
