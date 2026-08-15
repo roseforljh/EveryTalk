@@ -9,6 +9,7 @@ import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.network.AppStreamEvent
 import com.android.everytalk.data.network.AI_CONTENT_SAFETY_ERROR_TYPE
+import com.android.everytalk.data.agent.AGENT_INTERNAL_ERROR_TYPE
 import com.android.everytalk.data.network.AiContentSafetyBlockedException
 import com.android.everytalk.data.network.NativeContextCompactionKind
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
@@ -340,6 +341,7 @@ internal fun applyToolCallEventToMessage(
     return message.copy(
         currentWebSearchStage = toolStatus.takeIf { it.isNotBlank() },
         executionStatus = null,
+        executionFinishedAt = null,
         executionSteps = mergeExecutionStep(
             message.executionSteps,
             executionStepForToolCall(
@@ -398,6 +400,7 @@ internal fun applyActiveReasoningChunk(currentMessage: Message, reasoningChunk: 
     return applyReasoningChunk(currentMessage, reasoningChunk).copy(
         currentWebSearchStage = null,
         executionStatus = null,
+        executionFinishedAt = null,
         executionTrace = reduceExecutionTrace(
             currentMessage.executionTrace,
             AppStreamEvent.Reasoning(reasoningChunk),
@@ -870,6 +873,7 @@ internal class ApiHandlerStreamProcessor(
                     ).copy(
                         executionSteps = messageList[messageIndex].executionSteps.completeAllSteps(),
                         executionTrace = messageList[messageIndex].executionTrace.completeAllTraceTools(),
+                        executionFinishedAt = System.currentTimeMillis(),
                         currentWebSearchStage = null,
                         executionStatus = null,
                     )
@@ -916,16 +920,13 @@ internal class ApiHandlerStreamProcessor(
                         )
                     } else {
                         val isSafetyBlock = appEvent.type == AI_CONTENT_SAFETY_ERROR_TYPE
-                        val error = if (isSafetyBlock) {
-                            AiContentSafetyBlockedException(appEvent.code)
-                        } else {
-                            IOException(appEvent.message)
-                        }
+                        val isAgentInternal = appEvent.type == AGENT_INTERNAL_ERROR_TYPE
+                        val error = streamEventErrorThrowable(appEvent)
                         updateMessageWithError(
                             messageId = aiMessageId,
                             error = error,
                             isImageGeneration = isImageGeneration,
-                            allowRetry = !isSafetyBlock,
+                            allowRetry = !isSafetyBlock && !isAgentInternal,
                         )
                     }
                 }
@@ -990,4 +991,11 @@ internal class ApiHandlerStreamProcessor(
         }
         return PersistedGeneratedImageUrlsResult(out, failures)
     }
+}
+
+/** 保留错误来源。Agent 内部异常走“处理失败”，只有供应商/传输错误才走网络错误。 */
+internal fun streamEventErrorThrowable(event: AppStreamEvent.Error): Throwable = when (event.type) {
+    AI_CONTENT_SAFETY_ERROR_TYPE -> AiContentSafetyBlockedException(event.code)
+    AGENT_INTERNAL_ERROR_TYPE -> IllegalStateException(event.message)
+    else -> IOException(event.message)
 }

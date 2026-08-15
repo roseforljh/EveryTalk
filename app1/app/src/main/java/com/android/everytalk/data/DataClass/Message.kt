@@ -101,6 +101,8 @@ data class Message(
     val executionStatus: String? = null,
     val executionSteps: List<ExecutionStep> = emptyList(),
     val executionTrace: List<ExecutionTraceEvent> = emptyList(),
+    /** 执行过程结束时间。用于历史消息准确显示耗时；null 表示仍在执行或旧消息没有记录。 */
+    val executionFinishedAt: Long? = null,
     val enabledToolIds: List<String> = emptyList(),
     /** 记录本条消息发送时实际使用的服务器，只用于历史展示与本地审计。 */
     val computerIdSnapshot: String? = null,

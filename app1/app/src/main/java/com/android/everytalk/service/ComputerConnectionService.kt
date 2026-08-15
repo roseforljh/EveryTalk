@@ -438,6 +438,15 @@ class ComputerConnectionService : Service() {
                     .firstOrNull { it.sessionId == currentWorkspace.conversationId }
             }
             ?: return
+        // 原 AgentLoop 仍在等同一条远端命令时，由它读取结果并继续模型请求。
+        // 此处抢先恢复会让两套循环使用相同 request ordinal，最终触发 Room 外键错误。
+        if (agentRunCoordinator.isRunActive(run)) {
+            AppLogger.debug(
+                "ComputerConnectionService",
+                "Agent run ${run.id} is still active; keeping terminal result for the original loop",
+            )
+            return
+        }
         val pendingRun = run.copy(
             status = AgentRunStatus.MODEL_CONTINUATION_PENDING.name,
             terminalReason = AgentTerminalReasons.MODEL_CONTINUATION_PENDING,

@@ -165,6 +165,7 @@ class SettingsController(
         val sender: String,
         val reasoning: String? = null,
         val executionTrace: List<ExecutionTraceEvent> = emptyList(),
+        val executionFinishedAt: Long? = null,
         val timestamp: Long,
         val isError: Boolean = false,
         val imageUrls: List<String>? = null
@@ -359,6 +360,7 @@ class SettingsController(
                     sender = msg.sender.name,
                     reasoning = msg.reasoning,
                     executionTrace = msg.executionTrace,
+                    executionFinishedAt = msg.executionFinishedAt,
                     timestamp = msg.timestamp,
                     isError = msg.isError,
                     // 过滤本地文件路径，只保留可访问的URL

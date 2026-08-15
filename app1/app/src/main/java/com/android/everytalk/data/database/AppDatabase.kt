@@ -64,7 +64,7 @@ import com.android.everytalk.data.database.entities.WorkspaceSecretMetadataEntit
         AgentCompactionEntryEntity::class,
         ProviderContinuationStateEntity::class,
     ],
-    version = 20,
+    version = 21,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -110,6 +110,7 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_17_18,
                     MIGRATION_18_19,
                     MIGRATION_19_20,
+                    MIGRATION_20_21,
                 )
                 .build()
                 INSTANCE = instance
@@ -618,6 +619,13 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL("ALTER TABLE computer_executions ADD COLUMN cancelCompletedAt INTEGER")
                 db.execSQL("ALTER TABLE computer_executions ADD COLUMN resultAttachedAt INTEGER")
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_computer_executions_runId ON computer_executions(runId)")
+            }
+        }
+
+        /** 保存执行过程结束时间，让历史消息重进会话后仍能显示准确耗时。 */
+        val MIGRATION_20_21 = object : Migration(20, 21) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN executionFinishedAt INTEGER")
             }
         }
     }

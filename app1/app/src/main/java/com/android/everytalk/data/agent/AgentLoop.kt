@@ -26,6 +26,7 @@ import com.android.everytalk.data.network.TokenUsage
 import com.android.everytalk.data.network.TokenUsageSource
 import com.android.everytalk.data.network.ToolRoundContentBuffer
 import com.android.everytalk.config.PerformanceConfig
+import java.io.IOException
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
@@ -521,7 +522,13 @@ class AgentLoop(
             run?.let { activeRun ->
                 runStore.updateRunStatus(activeRun, AgentRunStatus.FAILED, terminalReason = error.message)
             }
-            emit(AppStreamEvent.Error(error.message ?: "Agent 运行失败"))
+            emit(
+                AppStreamEvent.Error(
+                    message = error.message ?: "Agent 运行失败",
+                    // Provider 传输层仍可能直接抛 IOException；保留其网络错误语义。
+                    type = if (error is IOException) null else AGENT_INTERNAL_ERROR_TYPE,
+                )
+            )
             emit(AppStreamEvent.Finish("agent_failed"))
         }
     }

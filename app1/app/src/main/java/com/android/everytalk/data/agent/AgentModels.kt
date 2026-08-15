@@ -53,6 +53,9 @@ object AgentTerminalReasons {
     const val CONFIG_ERROR = "CONFIG_ERROR"
 }
 
+/** Agent 编排、状态或持久化失败，禁止在 UI 层伪装成网络错误。 */
+const val AGENT_INTERNAL_ERROR_TYPE = "agent_internal"
+
 enum class AgentEntryKind {
     ASSISTANT,
     TOOL_EXECUTION_STARTED,

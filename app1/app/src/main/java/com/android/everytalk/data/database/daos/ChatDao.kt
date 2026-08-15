@@ -45,6 +45,7 @@ interface ChatDao {
                outputType, parts AS partsJson, executionStatus,
                executionSteps AS executionStepsJson,
                executionTrace AS executionTraceJson,
+               executionFinishedAt,
                enabledToolIds AS enabledToolIdsJson, computerIdSnapshot, workspaceIdSnapshot,
                modelName, providerName,
                tokenUsage AS tokenUsageJson,

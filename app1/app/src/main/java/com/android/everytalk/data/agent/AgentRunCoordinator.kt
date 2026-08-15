@@ -81,7 +81,11 @@ class AgentRunCoordinator(
         )
     }
 
-    fun isRunActive(runId: String): Boolean = activeJobs["run:$runId"]?.isActive == true
+    /**
+     * 首次启动时 Run 还没创建，只能按可见消息 ID 登记 Job；恢复启动才按 Run ID 登记。
+     * 两种登记都代表同一个 Run 正在执行，恢复器必须同时检查，避免重复驱动同一轮请求。
+     */
+    fun isRunActive(run: AgentRunEntity): Boolean = isAgentRunActive(activeJobs, run)
 
     /**
      * AgentLoop 由应用级 scope 执行。页面停止收集事件只会断开 UI，不会取消任务。
@@ -118,7 +122,7 @@ class AgentRunCoordinator(
 
     suspend fun resumeRun(run: AgentRunEntity): Boolean = resumeMutex.withLock {
         val jobKey = "run:${run.id}"
-        if (activeJobs[jobKey]?.isActive == true) return false
+        if (isRunActive(run)) return false
         if (!AgentNotificationManager.canUseAgentNotifications(appContext)) {
             AppLogger.warn("AgentRunCoordinator", "Notification permission not available, skipping resume for run ${run.id}")
             return false
@@ -237,3 +241,10 @@ class AgentRunCoordinator(
         return true
     }
 }
+
+/** 同时识别首次启动的 message 键和恢复启动的 run 键。 */
+internal fun isAgentRunActive(
+    activeJobs: Map<String, Job>,
+    run: AgentRunEntity,
+): Boolean = activeJobs["run:${run.id}"]?.isActive == true ||
+    activeJobs["message:${run.visibleAssistantMessageId}"]?.isActive == true

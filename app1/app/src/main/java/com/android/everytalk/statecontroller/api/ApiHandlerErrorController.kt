@@ -116,7 +116,8 @@ internal class ApiHandlerErrorController(
                         },
                         parts = if (safetyBlocked) emptyList() else msg.parts,
                         currentWebSearchStage = null,
-                        executionStatus = null
+                        executionStatus = null,
+                        executionFinishedAt = System.currentTimeMillis(),
                     )
                     messageList[idx] = errorMsg
                     val animationMap = if (isImageGeneration) stateHolder.imageMessageAnimationStates else stateHolder.textMessageAnimationStates
