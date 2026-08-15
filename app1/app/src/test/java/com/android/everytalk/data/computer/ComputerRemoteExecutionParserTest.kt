@@ -43,6 +43,48 @@ class ComputerRemoteExecutionParserTest {
     }
 
     @Test
+    fun `监听事件必须解码增量日志并推进游标`() {
+        val event = ComputerRemoteExecutionParser.parseWatchEvent(
+            payload = payload(status = "RUNNING") +
+                "event_type=PROGRESS\n" +
+                "event_seq=2000005\n" +
+                "stdout_offset=3\n" +
+                "stderr_offset=1\n" +
+                "stdout_cursor=8\n" +
+                "stderr_cursor=1\n" +
+                "observed_at=2\n" +
+                "stdout_base64=aGVsbG8=\n" +
+                "stderr_base64=\n",
+            expectedExecutionId = executionId,
+            expectedRequestHash = requestHash,
+            expectedTarget = ComputerExecTarget.CONTAINER,
+        )
+
+        assertEquals("PROGRESS", event.eventType)
+        assertEquals("hello", event.result.stdout)
+        assertEquals(8L, event.stdoutCursor)
+        assertEquals(1L, event.stderrCursor)
+    }
+
+    @Test
+    fun `监听事件游标倒退必须拒绝`() {
+        assertThrows(ComputerRemoteExecutionParseException::class.java) {
+            ComputerRemoteExecutionParser.parseWatchEvent(
+                payload = payload(status = "RUNNING") +
+                    "event_type=HEARTBEAT\n" +
+                    "event_seq=1\n" +
+                    "stdout_offset=5\n" +
+                    "stderr_offset=0\n" +
+                    "stdout_cursor=4\n" +
+                    "stderr_cursor=0\n" +
+                    "observed_at=2\n" +
+                    "stdout_base64=\n" +
+                    "stderr_base64=\n",
+            )
+        }
+    }
+
+    @Test
     fun `缺少身份字段或身份不匹配都拒绝`() {
         assertThrows(ComputerRemoteExecutionParseException::class.java) {
             ComputerRemoteExecutionParser.parseState(

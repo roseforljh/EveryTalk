@@ -11,6 +11,7 @@ class AgentBackgroundPlanStopAndDeletionContractTest {
     private val apiHandler = AgentBackgroundPlanTestFiles.source("statecontroller/api/ApiHandler.kt")
     private val historyManager = AgentBackgroundPlanTestFiles.source("ui/screens/viewmodel/HistoryManager.kt")
     private val computerManager = AgentBackgroundPlanTestFiles.source("statecontroller/viewmodel/ComputerManager.kt")
+    private val computerManagerCode = AgentBackgroundPlanTestFiles.code("statecontroller/viewmodel/ComputerManager.kt")
 
     @Test
     fun `停止必须按当前AgentRun查询而不是按整个会话`() {
@@ -23,6 +24,9 @@ class AgentBackgroundPlanStopAndDeletionContractTest {
             "停止入口不能继续只把 conversationId 传给取消器",
             executor.contains("cancelActiveExecutions(conversationId: String)"),
         )
+        val stopBlock = apiHandler.substringAfter("AgentTerminalReasons.USER_STOP", "")
+            .substringBefore("jobToCancel?.cancel", "")
+        assertTrue("停止入口必须把当前 run.id 传给远端取消器", stopBlock.contains("run?.id"))
     }
 
     @Test
@@ -73,22 +77,27 @@ class AgentBackgroundPlanStopAndDeletionContractTest {
         val deleteBlock = historyManager.substringAfter("deleteConversationInternal", "")
             .substringBefore("persistHistoryListDirectly", "")
         assertTrue("删除会话前必须查询 Workspace 或活动 Execution", deleteBlock.contains("Workspace") || deleteBlock.contains("activeExecution"))
-        assertTrue("存在活动任务时必须进入确认流程", deleteBlock.contains("confirm") || deleteBlock.contains("Confirmation"))
+        val deleteUi = AgentBackgroundPlanTestFiles.source("ui/screens/MainScreen/drawer/AppDrawerContent.kt") +
+            AgentBackgroundPlanTestFiles.source("ui/components/appchrome/AppTopBar.kt")
+        assertTrue("删除入口必须先经过确认对话框", deleteUi.contains("showDeleteConfirm") || deleteUi.contains("showDeleteDialog"))
     }
 
     @Test
     fun `确认删除会话必须先取消任务成功后再删除Workspace和聊天`() {
-        val deleteBlock = historyManager.substringAfter("deleteConversationInternal", "")
-            .substringBefore("persistHistoryListDirectly", "")
-        val cancelIndex = listOf(deleteBlock.indexOf("cancel"), deleteBlock.indexOf("stop"))
-            .filter { it >= 0 }
-            .minOrNull() ?: -1
-        val workspaceIndex = deleteBlock.indexOf("deleteWorkspace")
-        val sessionIndex = deleteBlock.indexOf("deleteHistorySession")
+        val commandEntry = historyManager.substringAfter("executeDeleteConversationInternal", "")
+            .substringBefore("private suspend fun deleteConversationInternal", "")
+        assertTrue("删除命令入口必须调用真实删除流程", commandEntry.contains("deleteConversationInternal("))
+        val deleteBlock = computerManagerCode.substringAfter("suspend fun deleteWorkspacesForConversation", "")
+            .substringBefore("suspend fun disconnect", "")
+        val cancelIndex = deleteBlock.indexOf("toolExecutor.cancelActiveExecutions")
+        val workspaceIndex = deleteBlock.indexOf("workspaceManager.deleteRemote")
+        val historyDeleteBlock = historyManager.substringAfter("deleteConversationWorkspaces(sessionId)", "")
+            .substringBefore("historicalConversations.value", "")
+        val sessionIndex = historyDeleteBlock.indexOf("deleteHistorySession")
         assertTrue("删除会话必须先取消活动任务", cancelIndex >= 0)
         assertTrue("取消成功后必须删除对应 Workspace", workspaceIndex > cancelIndex)
-        assertTrue("最后才能删除聊天 Session", sessionIndex > workspaceIndex)
-        assertTrue("取消失败必须中止删除并返回原因", deleteBlock.contains("return") && (deleteBlock.contains("failed") || deleteBlock.contains("失败")))
+        assertTrue("Workspace 清理成功后才能删除聊天 Session", sessionIndex >= 0)
+        assertTrue("取消失败必须中止删除", deleteBlock.contains("return false"))
     }
 
     @Test

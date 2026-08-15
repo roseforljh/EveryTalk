@@ -10,6 +10,9 @@ class AgentBackgroundPlanServiceContractTest {
     private val serviceCode = AgentBackgroundPlanTestFiles.code("service/ComputerConnectionService.kt")
     private val viewModel = AgentBackgroundPlanTestFiles.source("statecontroller/viewmodel/AppViewModel.kt")
     private val apiHandlerCode = AgentBackgroundPlanTestFiles.code("statecontroller/api/ApiHandler.kt")
+    private val wrapper = AgentBackgroundPlanTestFiles.asset("runtime-wrapper.sh")
+    private val repository = AgentBackgroundPlanTestFiles.source("data/computer/ComputerRepository.kt")
+    private val dao = AgentBackgroundPlanTestFiles.source("data/database/daos/ComputerDao.kt")
 
     @Test
     fun `AgentLoop不能继续由ViewModel协程持有`() {
@@ -108,17 +111,18 @@ class AgentBackgroundPlanServiceContractTest {
             .joinToString("\n") { it.second }
         assertTrue("必须按 computerId 复用 Transport", monitorAndPool.contains("computerId"))
         assertTrue("必须按 executionId 管理任务 Channel", monitorAndPool.contains("executionId") || monitorAndPool.contains("execution_id"))
+        val repositorySource = AgentBackgroundPlanTestFiles.source("data/computer/ComputerRepository.kt")
+        assertTrue("Service 与 ComputerManager 的 Repository 必须共用进程级连接池", repositorySource.contains("ComputerConnectionPoolRegistry.get"))
+        assertTrue("每条活动任务必须启动独立 Watch Job", service.contains("startExecutionWatch(execution.id)"))
     }
 
     @Test
     fun `进度写库必须在二百到五百毫秒窗口内合并`() {
-        val monitorSources = AgentBackgroundPlanTestFiles.allProductionKotlin()
-            .filter { (_, text) -> text.contains("executionMonitor") || text.contains("backgroundRuntime") || text.contains("taskMonitor") }
-            .joinToString("\n") { it.second }
-        val supportedWindow = (200L..500L).any { millis ->
-            monitorSources.contains("${millis}L") || monitorSources.contains("$millis.milliseconds")
-        }
-        assertTrue("后台监听必须把密集进度按 200 到 500 毫秒合并写库", supportedWindow)
+        assertTrue("Wrapper 必须用约 300ms 的采样窗口合并密集输出", wrapper.contains("sleep 0.3"))
+        assertTrue("Repository 必须真实提交进度游标", repository.contains("updateRemoteExecutionProgress("))
+        assertTrue("DAO 必须原子推进 stdout 游标", dao.contains("stdoutCursor = CASE WHEN"))
+        assertTrue("DAO 必须原子推进 stderr 游标", dao.contains("stderrCursor = CASE WHEN"))
+        assertFalse("Service 不能再用空 delay 冒充进度监听", serviceCode.contains("delay(300L)"))
     }
 
     @Test

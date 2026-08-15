@@ -24,8 +24,12 @@ class AgentBackgroundPlanRuntimeProtocolContractTest {
             "Container helper 缺少监听命令白名单",
             helper.contains("watch-execution") || helper.contains("watch-executions"),
         )
-        val commandBranch = helper.substringAfter("watch-execution", "").take(300)
+        val commandBranch = helper.lineSequence()
+            .firstOrNull { it.trimStart().startsWith("watch-execution)") }
+            .orEmpty()
         assertTrue("监听命令必须使用固定参数数量校验", commandBranch.contains("require_exact_args"))
+        assertTrue("Helper 必须调用 Wrapper 冻结后的 --watch-execution", helper.contains("--watch-execution"))
+        assertFalse("旧的 --watch-exec 会导致 Wrapper 拒绝请求", helper.contains("--watch-exec \""))
     }
 
     @Test
@@ -36,6 +40,7 @@ class AgentBackgroundPlanRuntimeProtocolContractTest {
         assertTrue("缺少 stderr_cursor", protocol.contains("stderr_cursor"))
         assertTrue("缺少事件时间 observed_at 或 updated_at", protocol.contains("observed_at") || protocol.contains("updated_at"))
         assertTrue("缺少 execution_id", protocol.contains("execution_id"))
+        assertFalse("event_seq 不能永远固定为 1", wrapper.contains("event_seq=1\\nstdout_cursor"))
     }
 
     @Test
@@ -57,6 +62,8 @@ class AgentBackgroundPlanRuntimeProtocolContractTest {
         assertTrue("Runtime 必须接受 stderr 游标", wrapper.contains("stderr_cursor") || wrapper.contains("stderr_offset"))
         assertTrue("日志读取必须限制单次字节数", wrapper.contains("max_bytes"))
         assertFalse("监听协议不能每次输出无界完整日志", wrapper.contains("cat \"\$stdout_log\""))
+        assertTrue("返回游标必须按实际读取字节推进", wrapper.contains("stdout_cursor + stdout_count"))
+        assertTrue("Android 必须真实发起 Watch Channel", runtimeEnvelope.contains("suspend fun watchExecution("))
     }
 
     @Test

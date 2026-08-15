@@ -52,6 +52,13 @@ class AgentBackgroundPlanAgentRunContractTest {
     }
 
     @Test
+    fun `状态事件必须写入AgentEntry并进入模型恢复上下文`() {
+        assertTrue("缺少状态事件持久化入口", runStore.contains("appendStatusEvent("))
+        assertTrue("STATUS Entry 没有还原进模型 Transcript", runStore.contains("AgentEntryKind.STATUS.name -> decodeStatusEntry"))
+        assertTrue("状态事件必须明确禁止模型重复执行", runStore.contains("禁止重复创建或重跑命令"))
+    }
+
+    @Test
     fun `远端终态必须先持久化ToolResult再调用模型`() {
         val continuationSource = allCode
             .filter { (_, text) -> text.contains("MODEL_CONTINUATION_PENDING") }
@@ -71,6 +78,8 @@ class AgentBackgroundPlanAgentRunContractTest {
             .filter { it >= 0 }
             .minOrNull() ?: -1
         assertTrue("必须先保存 ToolResult，再进行模型续写", resultIndex >= 0 && resumeIndex > resultIndex)
+        assertTrue("恢复结果必须重新读取 VPS stdout stderr，不能只拼数据库摘要", continuationSource.contains("recoveryToolRuntime.execute"))
+        assertTrue("恢复必须找回原 Tool Call，禁止创建新命令", continuationSource.contains("findToolCall"))
     }
 
     @Test
