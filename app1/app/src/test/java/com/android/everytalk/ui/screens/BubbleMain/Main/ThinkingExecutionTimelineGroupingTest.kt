@@ -96,6 +96,57 @@ class ThinkingExecutionTimelineGroupingTest {
     }
 
     @Test
+    fun `连续工具合并为一段且过程文字会切开工具段`() {
+        val sections = executionProcessSections(
+            reasoningText = "",
+            executionSteps = emptyList(),
+            executionTrace = listOf(
+                ExecutionTraceEvent.Reasoning("先检查配置。"),
+                ExecutionTraceEvent.Tool(toolStep("1", "read_file")),
+                ExecutionTraceEvent.Tool(toolStep("2", "exec")),
+                ExecutionTraceEvent.Reasoning("根据结果继续修复。"),
+                ExecutionTraceEvent.Tool(toolStep("3", "write_file")),
+                ExecutionTraceEvent.Tool(toolStep("4", "exec")),
+            ),
+        )
+
+        assertEquals(4, sections.size)
+        assertEquals("先检查配置。", (sections[0] as ExecutionProcessSection.Narrative).text)
+        assertEquals(
+            listOf("read_file", "exec"),
+            (sections[1] as ExecutionProcessSection.ToolGroup)
+                .entries
+                .map { it.step.labels.single() },
+        )
+        assertEquals("根据结果继续修复。", (sections[2] as ExecutionProcessSection.Narrative).text)
+        assertEquals(
+            listOf("write_file", "exec"),
+            (sections[3] as ExecutionProcessSection.ToolGroup)
+                .entries
+                .map { it.step.labels.single() },
+        )
+    }
+
+    @Test
+    fun `同一工具在同一段内合并次数但不跨过程文字合并`() {
+        val sections = executionProcessSections(
+            reasoningText = "",
+            executionSteps = emptyList(),
+            executionTrace = listOf(
+                ExecutionTraceEvent.Tool(toolStep("1", "read_file")),
+                ExecutionTraceEvent.Tool(toolStep("2", "read_file")),
+                ExecutionTraceEvent.Reasoning("换个方向。"),
+                ExecutionTraceEvent.Tool(toolStep("3", "read_file")),
+            ),
+        )
+
+        val first = sections[0] as ExecutionProcessSection.ToolGroup
+        val second = sections[2] as ExecutionProcessSection.ToolGroup
+        assertEquals(2, first.entries.single().invocationCount)
+        assertEquals(1, second.entries.single().invocationCount)
+    }
+
+    @Test
     fun `新旧步骤混合时使用旧消息兼容顺序`() {
         val items = orderedExecutionItems(
             reasoningText = "旧消息的完整思考。",

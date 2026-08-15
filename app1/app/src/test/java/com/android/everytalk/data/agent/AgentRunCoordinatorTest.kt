@@ -1,0 +1,43 @@
+package com.android.everytalk.data.agent
+
+import com.android.everytalk.data.database.entities.AgentRunEntity
+import kotlinx.coroutines.Job
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class AgentRunCoordinatorTest {
+    private val run = AgentRunEntity(
+        id = "run-1",
+        sessionId = "session-1",
+        userMessageId = "user-1",
+        visibleAssistantMessageId = "assistant-1",
+        configIdSnapshot = null,
+        requestSnapshotJson = null,
+        status = AgentRunStatus.WAITING_REMOTE_EXECUTION.name,
+        currentRequestOrdinal = 1,
+        terminalReason = null,
+        createdAt = 1L,
+        updatedAt = 1L,
+    )
+
+    @Test
+    fun `首次运行按消息登记时恢复器仍识别为活跃`() {
+        val activeJob = Job()
+
+        assertTrue(
+            isAgentRunActive(
+                activeJobs = mapOf("message:${run.visibleAssistantMessageId}" to activeJob),
+                run = run,
+            )
+        )
+
+        activeJob.cancel()
+        assertFalse(
+            isAgentRunActive(
+                activeJobs = mapOf("message:${run.visibleAssistantMessageId}" to activeJob),
+                run = run,
+            )
+        )
+    }
+}

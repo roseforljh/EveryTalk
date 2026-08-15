@@ -138,12 +138,13 @@ class AgentApprovalPersistenceTest {
     fun `AgentEntry按真实顺序重建执行链`() = runBlocking {
         seedRun()
         val call = approvalRecord().toolCall
+        val secondCall = call.copy(id = "call-2")
         store.appendAssistant(
             runId = "run-1",
             requestId = "request-1",
             turn = AgentAssistantTurn(
                 listOf(
-                    AgentContentBlock.Reasoning("先检查"),
+                    AgentContentBlock.Text("先检查"),
                     call,
                 ),
             ),
@@ -153,12 +154,35 @@ class AgentApprovalPersistenceTest {
             requestId = "request-1",
             result = AgentContentBlock.ToolResult(call.id, call.name, kotlinx.serialization.json.JsonPrimitive("完成")),
         )
+        store.appendAssistant(
+            runId = "run-1",
+            requestId = "request-2",
+            turn = AgentAssistantTurn(listOf(AgentContentBlock.Text("继续处理"), secondCall)),
+        )
+        store.appendToolResult(
+            runId = "run-1",
+            requestId = "request-2",
+            result = AgentContentBlock.ToolResult(
+                secondCall.id,
+                secondCall.name,
+                kotlinx.serialization.json.JsonPrimitive("完成"),
+            ),
+        )
 
         val trace = store.executionTrace("run-1")
 
-        assertTrue(trace.first() is com.android.everytalk.data.DataClass.ExecutionTraceEvent.Reasoning)
-        val tool = trace.last() as com.android.everytalk.data.DataClass.ExecutionTraceEvent.Tool
-        assertEquals(call.id, tool.step.id)
+        assertEquals(4, trace.size)
+        assertEquals(
+            "先检查",
+            (trace[0] as com.android.everytalk.data.DataClass.ExecutionTraceEvent.Reasoning).text,
+        )
+        assertEquals(call.id, (trace[1] as com.android.everytalk.data.DataClass.ExecutionTraceEvent.Tool).step.id)
+        assertEquals(
+            "继续处理",
+            (trace[2] as com.android.everytalk.data.DataClass.ExecutionTraceEvent.Reasoning).text,
+        )
+        val tool = trace[3] as com.android.everytalk.data.DataClass.ExecutionTraceEvent.Tool
+        assertEquals(secondCall.id, tool.step.id)
         assertTrue(tool.step.completed)
     }
 

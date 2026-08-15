@@ -649,6 +649,35 @@ class AppDatabaseMigrationTest {
         migrateHelper.close()
     }
 
+    @Test
+    fun `migration 20 to 21 preserves messages and adds execution finish time`() {
+        val createHelper = openHelper(
+            version = 20,
+            onCreate = { db ->
+                db.execSQL("CREATE TABLE messages (id TEXT NOT NULL PRIMARY KEY)")
+                db.execSQL("INSERT INTO messages (id) VALUES ('message-1')")
+            },
+        )
+        createHelper.writableDatabase.close()
+        createHelper.close()
+
+        val migrateHelper = openHelper(
+            version = 21,
+            onUpgrade = { db, oldVersion, newVersion ->
+                assertEquals(20, oldVersion)
+                assertEquals(21, newVersion)
+                AppDatabase.MIGRATION_20_21.migrate(db)
+            },
+        )
+        val db = migrateHelper.writableDatabase
+        db.query("SELECT executionFinishedAt FROM messages WHERE id = 'message-1'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue(cursor.isNull(0))
+        }
+        db.close()
+        migrateHelper.close()
+    }
+
     private fun openHelper(
         version: Int,
         onCreate: (SupportSQLiteDatabase) -> Unit = {},

@@ -1,7 +1,9 @@
 package com.android.everytalk.statecontroller
 
+import com.android.everytalk.data.agent.AGENT_INTERNAL_ERROR_TYPE
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.data.network.AppStreamEvent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -9,6 +11,18 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ApiHandlerRetryPolicyTest {
+
+    @Test
+    fun `Agent内部错误不会被包装成网络异常`() {
+        val error = streamEventErrorThrowable(
+            AppStreamEvent.Error(
+                message = "FOREIGN KEY constraint failed",
+                type = AGENT_INTERNAL_ERROR_TYPE,
+            )
+        )
+
+        assertTrue(error is IllegalStateException)
+    }
 
     @Test
     fun `network retry never returns early without retry action`() {
