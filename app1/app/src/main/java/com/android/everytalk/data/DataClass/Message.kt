@@ -9,6 +9,7 @@ import java.io.File
 import java.util.UUID
 import com.android.everytalk.ui.components.MarkdownPartSerializer
 import com.android.everytalk.data.network.TokenUsage
+import com.android.everytalk.data.skill.MessageSkillReference
 
 private fun SelectedMediaItem.ImageFromBitmap.encodedDataOrNull(
     uriEncoder: (Uri) -> String?,
@@ -57,6 +58,29 @@ data class ExecutionStep(
     val reasoningBefore: String? = null,
 )
 
+/** 用户消息正文中的有序内容。Skill 引用保持原位置并携带冻结版本。 */
+@Serializable
+sealed class MessageContentPart {
+    @Serializable
+    data class Text(val text: String) : MessageContentPart()
+
+    @Serializable
+    data class SkillReference(val reference: MessageSkillReference) : MessageContentPart()
+}
+
+fun List<MessageContentPart>.toApiText(fallback: String): String {
+    if (isEmpty()) return fallback
+    return joinToString("") { part ->
+        when (part) {
+            is MessageContentPart.Text -> part.text
+            is MessageContentPart.SkillReference -> {
+                val ref = part.reference
+                "<skill_ref id=\"${ref.skillId}\" content_hash=\"${ref.contentHash}\">${ref.displayName}</skill_ref>"
+            }
+        }
+    }
+}
+
 /**
  * AI 执行过程的有序事件。
  *
@@ -84,6 +108,7 @@ fun Sender.toRole(): String = when(this) {
 data class Message(
     override val id: String = UUID.randomUUID().toString(),
     val text: String,
+    val contentParts: List<MessageContentPart> = emptyList(),
     val sender: Sender,
     val reasoning: String? = null,
     val contentStarted: Boolean = false,
@@ -126,10 +151,11 @@ data class Message(
     
     // 转换为API消息 - 保留原方法兼容性
     fun toApiMessage(uriEncoder: (Uri) -> String?): AbstractApiMessage {
+        val apiText = contentParts.toApiText(text)
         return if (attachments.isNotEmpty()) {
             val parts = mutableListOf<ApiContentPart>()
-            if (text.isNotBlank()) {
-                parts.add(ApiContentPart.Text(text))
+            if (apiText.isNotBlank()) {
+                parts.add(ApiContentPart.Text(apiText))
             }
             attachments.forEach { mediaItem ->
                 when (mediaItem) {
@@ -155,16 +181,17 @@ data class Message(
             }
             PartsApiMessage(id = id, role = role, parts = parts, name = name)
         } else {
-            SimpleTextApiMessage(id = id, role = role, content = text, name = name)
+            SimpleTextApiMessage(id = id, role = role, content = contentParts.toApiText(text), name = name)
         }
     }
 
     // 🔥 新增：接受Context的方法，用于获取真实MIME类型
     fun toApiMessage(uriEncoder: (Uri) -> String?, context: Context): AbstractApiMessage {
+        val apiText = contentParts.toApiText(text)
         return if (attachments.isNotEmpty()) {
             val parts = mutableListOf<ApiContentPart>()
-            if (text.isNotBlank()) {
-                parts.add(ApiContentPart.Text(text))
+            if (apiText.isNotBlank()) {
+                parts.add(ApiContentPart.Text(apiText))
             }
             attachments.forEach { mediaItem ->
                 when (mediaItem) {
@@ -195,7 +222,7 @@ data class Message(
             }
             PartsApiMessage(id = id, role = role, parts = parts, name = name)
         } else {
-            SimpleTextApiMessage(id = id, role = role, content = text, name = name)
+            SimpleTextApiMessage(id = id, role = role, content = contentParts.toApiText(text), name = name)
         }
     }
 }

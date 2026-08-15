@@ -258,8 +258,8 @@ class ComputerWorkspaceManager(private val repository: ComputerRepository) {
             command = """
                 umask 077
                 workspace="${'$'}HOME/.everytalk/workspaces/$workspaceId"
-                mkdir -p "${'$'}workspace/.everytalk/runtime" "${'$'}workspace/.everytalk/background" "${'$'}workspace/.everytalk/previews"
-                chmod 700 "${'$'}HOME/.everytalk" "${'$'}HOME/.everytalk/workspaces" "${'$'}workspace" "${'$'}workspace/.everytalk" "${'$'}workspace/.everytalk/runtime" "${'$'}workspace/.everytalk/background" "${'$'}workspace/.everytalk/previews"
+                mkdir -p "${'$'}workspace/.everytalk/runtime" "${'$'}workspace/.everytalk/executions" "${'$'}workspace/.everytalk/background" "${'$'}workspace/.everytalk/previews"
+                chmod 700 "${'$'}HOME/.everytalk" "${'$'}HOME/.everytalk/workspaces" "${'$'}workspace" "${'$'}workspace/.everytalk" "${'$'}workspace/.everytalk/runtime" "${'$'}workspace/.everytalk/executions" "${'$'}workspace/.everytalk/background" "${'$'}workspace/.everytalk/previews"
                 metadata="${'$'}workspace/.everytalk/workspace.json"
                 if [ ! -f "${'$'}metadata" ]; then
                     temporary="${'$'}metadata.tmp.${'$'}${'$'}"

@@ -196,9 +196,16 @@ class AgentRunStore(
                 enableCodeExecution = snapshot.enableCodeExecution,
                 contextManagement = snapshot.contextManagement,
                 localComputerRequestContext = snapshot.computerRequestContext,
+                localSkillSnapshot = snapshot.skillSnapshot,
             )
         }.getOrNull()
     }
+
+    /** 用户批准 request_agent 后，先把服务器快照和工具写回原 Run，再继续同一次请求。 */
+    suspend fun updateRequestSnapshot(run: AgentRunEntity, request: ChatRequest): AgentRunEntity = run.copy(
+        requestSnapshotJson = json.encodeToString(AgentRequestSnapshot.serializer(), request.toRecoverySnapshot()),
+        updatedAt = System.currentTimeMillis(),
+    ).also { dao.upsertRun(it) }
 
     suspend fun updateRunStatus(
         run: AgentRunEntity,
@@ -1001,6 +1008,7 @@ private fun ChatRequest.toRecoverySnapshot(): AgentRequestSnapshot = AgentReques
     enableCodeExecution = enableCodeExecution,
     contextManagement = contextManagement,
     computerRequestContext = localComputerRequestContext,
+    skillSnapshot = localSkillSnapshot,
 )
 
 private fun anyToJsonElement(value: Any?): JsonElement = when (value) {

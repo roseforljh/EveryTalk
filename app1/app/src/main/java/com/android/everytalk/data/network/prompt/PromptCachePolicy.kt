@@ -104,13 +104,13 @@ internal object PromptCachePolicy {
             .orEmpty()
         val material = buildString {
             append("protocol=").append(SystemPromptInjector.PROTOCOL_VERSION)
-            append("\ncapabilities=").append(SystemPromptInjector.CAPABILITY_PROTOCOL_VERSION)
+            append("\nskills=").append(SystemPromptInjector.SKILL_PROTOCOL_VERSION)
             append("\nmodel=").append(model.trim().lowercase())
             append("\nsystem=").append(sha256(systemText))
             append("\nprofile=").append(toolProfile(tools).name)
             append("\ntools=").append(toolSchemaHash(tools))
         }
-        return "et-cap-v${SystemPromptInjector.CAPABILITY_PROTOCOL_VERSION}-${sha256(material).take(CACHE_KEY_HASH_CHARS)}"
+        return "et-skill-v${SystemPromptInjector.SKILL_PROTOCOL_VERSION}-${sha256(material).take(CACHE_KEY_HASH_CHARS)}"
     }
 
     fun isOfficialOpenAIEndpoint(apiAddress: String?): Boolean {

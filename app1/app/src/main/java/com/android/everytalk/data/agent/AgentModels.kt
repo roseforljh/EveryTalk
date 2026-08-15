@@ -10,6 +10,7 @@ import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.DataClass.RequestContextManagement
 import com.android.everytalk.data.computer.ComputerRequestContext
 import com.android.everytalk.data.computer.ComputerToolApprovalRequest
+import com.android.everytalk.data.skill.SkillRequestSnapshot
 
 /**
  * 一次用户输入对应一个 AgentRun。普通聊天同样创建 Run，通常只包含一次模型请求。
@@ -129,6 +130,7 @@ data class AgentRequestSnapshot(
     val enableCodeExecution: Boolean? = null,
     val contextManagement: RequestContextManagement? = null,
     val computerRequestContext: ComputerRequestContext? = null,
+    val skillSnapshot: SkillRequestSnapshot? = null,
 )
 
 @Serializable
@@ -138,11 +140,49 @@ data class AgentApprovalRecord(
     val toolCall: AgentContentBlock.ToolCall,
     val pendingToolCalls: List<AgentContentBlock.ToolCall>,
     val request: ComputerToolApprovalRequest? = null,
+    /** request_agent 使用本地暂停类型；旧的服务器工具审批继续保留 request 字段兼容历史记录。 */
+    val agentRequest: AgentPauseRequest? = null,
     val decision: AgentApprovalDecision? = null,
     val decidedAt: Long? = null,
     val toolResultAlreadyPersisted: Boolean = false,
     /** 恢复批次时从 pendingToolCalls 重新进入正常预检，不直接处理 toolCall。 */
     val resumePendingToolCallsOnly: Boolean = false,
+)
+
+@Serializable
+sealed class AgentPauseRequest {
+    @Serializable
+    @SerialName("enable_agent")
+    data class EnableAgent(
+        val reason: String,
+        val requiredSkillIds: List<String> = emptyList(),
+    ) : AgentPauseRequest()
+
+    @Serializable
+    @SerialName("skill_secret")
+    data class SkillSecret(
+        val skillId: String,
+        val name: String,
+        val reason: String,
+    ) : AgentPauseRequest()
+}
+
+data class PendingAgentEnableApproval(
+    val runId: String,
+    val approvalRequestId: String,
+    val conversationId: String,
+    val reason: String,
+    val requiredSkillIds: List<String>,
+)
+
+data class PendingSkillSecretApproval(
+    val runId: String,
+    val approvalRequestId: String,
+    val conversationId: String,
+    val skillId: String,
+    val skillName: String,
+    val name: String,
+    val reason: String,
 )
 
 /** 工具真正进入 Executor 前立即落库，重启时据此判断是否可能已经产生外部副作用。 */

@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-VERSION="8"
+VERSION="9"
 HELPER_PATH="/usr/local/libexec/everytalk-containerctl"
 RUNTIME_WRAPPER_PATH="/usr/local/libexec/everytalk-runtime-wrapper"
 RUNTIME_WRAPPER_VERSION_PATH="/usr/local/libexec/everytalk-runtime-wrapper.sha256"
@@ -69,12 +69,11 @@ require_workspace_container() {
 
 container_allowed_owner_uids() {
     name="$1"
-    configured_user="$(docker inspect -f '{{.Config.User}}' "$name" 2>/dev/null || true)"
-    case "$configured_user" in
-        ''|*[!0-9:]) printf '0 0' ;;
-        *:*) printf '%s 0' "${configured_user%%:*}" ;;
-        *) printf '%s 0' "$configured_user" ;;
-    esac
+    # Config.User 可能是 node、ubuntu 之类的用户名。直接解析配置会误把真实 UID
+    # 当成 root，随后 Wrapper 会拒绝由容器默认用户创建的状态文件。
+    runtime_uid="$(docker exec "$name" id -u 2>/dev/null || true)"
+    case "$runtime_uid" in ''|*[!0-9]*) fail '无法确定 Container 运行用户' 69 ;; esac
+    printf '%s 0' "$runtime_uid"
 }
 
 ensure_network() {
@@ -109,14 +108,12 @@ configure_network_boundary() {
     done
 }
 
-install_helper() {
+install_runtime_helper() {
     runtime_source="${1:-}"
-    dockerfile_source="${2:-}"
     case "$runtime_source" in /tmp/everytalk-bootstrap-*/runtime-wrapper.sh) ;; *) fail 'runtime 安装源无效' 56 ;; esac
-    case "$dockerfile_source" in /tmp/everytalk-bootstrap-*/Dockerfile) ;; *) fail 'Dockerfile 安装源无效' 57 ;; esac
-    [ -f "$runtime_source" ] && [ -f "$dockerfile_source" ] || fail '安装资产缺失' 58
+    [ -f "$runtime_source" ] || fail '安装资产缺失' 58
 
-    install -d -o root -g root -m 0755 /usr/local/libexec /usr/local/share/everytalk
+    install -d -o root -g root -m 0755 /usr/local/libexec
     install -o root -g root -m 0755 "$0" "$HELPER_PATH"
     runtime_hash="$(sha256sum "$runtime_source" | cut -d' ' -f1)"
     runtime_target="$RUNTIME_WRAPPER_PATH-$runtime_hash"
@@ -131,8 +128,6 @@ install_helper() {
         rm -f "$RUNTIME_WRAPPER_PATH"
     fi
     ln -sfn "${runtime_target##*/}" "$RUNTIME_WRAPPER_PATH"
-    install -o root -g root -m 0644 "$dockerfile_source" "$DOCKERFILE_PATH"
-
     user="$(target_user)"
     if [ "$user" != root ]; then
         sudoers_temporary="/etc/sudoers.d/everytalk-$user.tmp.$$"
@@ -142,6 +137,21 @@ install_helper() {
         visudo -cf "$sudoers_temporary" >/dev/null
         mv -f "$sudoers_temporary" "/etc/sudoers.d/everytalk-$user"
     fi
+}
+
+install_helper() {
+    runtime_source="${1:-}"
+    dockerfile_source="${2:-}"
+    case "$dockerfile_source" in /tmp/everytalk-bootstrap-*/Dockerfile) ;; *) fail 'Dockerfile 安装源无效' 57 ;; esac
+    [ -f "$dockerfile_source" ] || fail '安装资产缺失' 58
+    install_runtime_helper "$runtime_source"
+    install -d -o root -g root -m 0755 /usr/local/share/everytalk
+    install -o root -g root -m 0644 "$dockerfile_source" "$DOCKERFILE_PATH"
+    printf 'version=%s\n' "$VERSION"
+}
+
+install_runtime() {
+    install_runtime_helper "$1"
     printf 'version=%s\n' "$VERSION"
 }
 
@@ -591,6 +601,11 @@ case "$command_name" in
         require_exact_args 2 "$@"
         [ "$(readlink -f -- "$0")" != "$HELPER_PATH" ] || fail '已安装 helper 禁止重复 install' 75
         install_helper "$@"
+        ;;
+    install-runtime)
+        require_exact_args 1 "$@"
+        [ "$(readlink -f -- "$0")" != "$HELPER_PATH" ] || fail '已安装 helper 禁止重复 install' 75
+        install_runtime "$@"
         ;;
     version) require_exact_args 0 "$@"; runtime_wrapper_hash >/dev/null; printf 'version=%s\n' "$VERSION" ;;
     build-image) require_exact_args 0 "$@"; build_image ;;

@@ -20,8 +20,6 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 
-private const val DEFAULT_KEEP_RECENT_TOKENS = 20_000L
-private const val MIN_KEEP_RECENT_TOKENS = 2_000L
 private const val COMPACTION_META_SUMMARY_ROLE = "summary_role"
 private const val COMPACTION_META_RETAINED_IDS = "retained_ids"
 
@@ -50,7 +48,7 @@ class AgentContextWindowException(message: String) : IllegalStateException(messa
 
 /**
  * 每次模型请求前重新计算有效上下文。
- * 压缩沿用 Pi 的核心语义：旧摘要加近期原文，必要时允许在超长单轮内部按完整工具组切分。
+ * 压缩沿用 Pi 的核心语义：旧摘要加最新一轮原文，最新用户消息永不进入摘要。
  */
 class AgentContextManager(
     private val json: Json = Json { ignoreUnknownKeys = true },
@@ -87,11 +85,13 @@ class AgentContextManager(
             planCompaction(
                 canonical = canonical,
                 checkpoint = acceptedCheckpoint,
-                limits = limits,
                 tokensBefore = activeBeforeTrim + reservedOutput,
             )
         } else {
             null
+        }
+        if (needsCompaction && plan == null) {
+            throw AgentContextWindowException("上下文已达到压缩阈值，但没有可压缩的早期历史")
         }
 
         // 有可执行压缩计划时先返回完整有效上下文，AgentLoop 会生成并落库摘要后重新 prepare。
@@ -217,7 +217,6 @@ class AgentContextManager(
     private fun planCompaction(
         canonical: List<AbstractApiMessage>,
         checkpoint: AgentCompactionEntryEntity?,
-        limits: ModelTokenLimits,
         tokensBefore: Long,
     ): AgentCompactionPlan? {
         val systemIndexes = canonical.indices.filter { canonical[it].role.equals("system", true) }.toSet()
@@ -229,66 +228,28 @@ class AgentContextManager(
         val candidateIndexes = canonical.indices.filter { it >= sourceStart && it !in systemIndexes }
         if (candidateIndexes.isEmpty()) return null
 
-        val latestUserIndex = candidateIndexes.indexOfLast { canonical[it].role.equals("user", true) }
-        val inputBudget = (limits.maxContextTokens - limits.maxOutputTokens).toLong().coerceAtLeast(1L)
-        val keepRecentTokens = minOf(
-            DEFAULT_KEEP_RECENT_TOKENS,
-            (inputBudget / 4L).coerceAtLeast(MIN_KEEP_RECENT_TOKENS).coerceAtMost(inputBudget),
-        )
-
-        // 优先在最新用户轮次之前切分，保留完整近期轮次。
-        if (latestUserIndex > 0) {
-            val latestTurnIndexes = candidateIndexes.drop(latestUserIndex)
-            val latestTurnTokens = latestTurnIndexes.sumOf { RequestTokenEstimator.estimateMessageTokens(canonical[it]) }
-            if (latestTurnTokens <= keepRecentTokens) {
-                return createPlan(
-                    canonical = canonical,
-                    summarizedIndexes = candidateIndexes.take(latestUserIndex),
-                    retainedIndexes = latestTurnIndexes,
-                    checkpoint = checkpoint,
-                    summaryRole = "system",
-                    tokensBefore = tokensBefore,
-                )
-            }
-        }
-
-        // 最新一轮自身很长时，按 Assistant 加全部 Tool Result 的原子组从后向前保留。
-        val latestTurnStart = candidateIndexes.getOrNull(latestUserIndex.coerceAtLeast(0)) ?: return null
-        val latestTurnIndexes = candidateIndexes.filter { it >= latestTurnStart }
-        val groups = atomicGroups(canonical, latestTurnIndexes)
-        if (groups.size <= 1) {
-            // 单个用户输入或单个工具组已经超过硬窗口时，允许将整组压成一条用户摘要。
-            val hardOverflow = tokensBefore > limits.maxContextTokens.toLong()
-            if (!hardOverflow) return null
+        val latestUserPosition = candidateIndexes.indexOfLast { canonical[it].role.equals("user", true) }
+        if (latestUserPosition > 0) {
             return createPlan(
                 canonical = canonical,
-                summarizedIndexes = candidateIndexes,
-                retainedIndexes = emptyList(),
+                summarizedIndexes = candidateIndexes.take(latestUserPosition),
+                retainedIndexes = candidateIndexes.drop(latestUserPosition),
                 checkpoint = checkpoint,
-                summaryRole = "user",
+                summaryRole = "system",
                 tokensBefore = tokensBefore,
             )
         }
-        var keptTokens = 0L
-        var keptGroups = 0
-        for (group in groups.asReversed()) {
-            val groupTokens = group.sumOf { RequestTokenEstimator.estimateMessageTokens(canonical[it]) }
-            if (keptGroups > 0 && keptTokens + groupTokens > keepRecentTokens) break
-            keptTokens += groupTokens
-            keptGroups++
-        }
-        val firstKeptGroup = (groups.size - keptGroups).coerceAtLeast(1)
-        val summarized = buildList {
-            addAll(candidateIndexes.filter { it < latestTurnStart })
-            groups.take(firstKeptGroup).forEach(::addAll)
-        }
-        val retained = groups.drop(firstKeptGroup).flatten()
+
+        // 检查点之后没有新用户消息时，只压缩已完成的早期工具组，保留最后一个原子组。
+        if (latestUserPosition >= 0) return null
+        val groups = atomicGroups(canonical, candidateIndexes)
+        if (groups.size <= 1) return null
         return createPlan(
             canonical = canonical,
-            summarizedIndexes = summarized,
-            retainedIndexes = retained,
+            summarizedIndexes = groups.dropLast(1).flatten(),
+            retainedIndexes = groups.last(),
             checkpoint = checkpoint,
-            summaryRole = "user",
+            summaryRole = "system",
             tokensBefore = tokensBefore,
         )
     }

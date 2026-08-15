@@ -20,6 +20,9 @@ import com.android.everytalk.data.agent.AgentLoopRequest
 import com.android.everytalk.data.agent.AgentRunStore
 import com.android.everytalk.data.agent.AgentApprovalDecision
 import com.android.everytalk.data.agent.AgentApprovalRecord
+import com.android.everytalk.data.agent.AgentPauseRequest
+import com.android.everytalk.data.agent.PendingAgentEnableApproval
+import com.android.everytalk.data.agent.PendingSkillSecretApproval
 import com.android.everytalk.data.agent.AgentRunStatus
 import com.android.everytalk.data.agent.AgentToolResultStore
 import com.android.everytalk.data.computer.PendingComputerToolApproval
@@ -232,6 +235,7 @@ class ApiHandler(
         Job()
     },
     private val computerSessionStateProvider: suspend (ComputerRequestContext?) -> String? = { null },
+    private val prepareAgentResumeRequest: suspend (String, ChatRequest, List<String>) -> ChatRequest = { _, request, _ -> request },
 ) {
     private val context = context.applicationContext
     private val logger = AppLogger.forComponent("ApiHandler")
@@ -241,8 +245,16 @@ class ApiHandler(
     private val processedMessageIds = ConcurrentHashMap.newKeySet<String>()
     private val generatedImageSourceFingerprints = ConcurrentHashMap<String, MutableSet<String>>()
     private val agentRunStore by lazy { AgentRunStore(AppDatabase.getDatabase(context).agentDao()) }
+    private val skillRepository by lazy {
+        com.android.everytalk.data.skill.SkillRepository(context, AppDatabase.getDatabase(context).skillDao())
+    }
     private val _pendingAgentApprovals = MutableStateFlow<List<PendingComputerToolApproval>>(emptyList())
     val pendingAgentApprovals: StateFlow<List<PendingComputerToolApproval>> = _pendingAgentApprovals.asStateFlow()
+    private val _pendingAgentEnableApprovals = MutableStateFlow<List<PendingAgentEnableApproval>>(emptyList())
+    val pendingAgentEnableApprovals: StateFlow<List<PendingAgentEnableApproval>> = _pendingAgentEnableApprovals.asStateFlow()
+    private val _pendingSkillSecretApprovals = MutableStateFlow<List<PendingSkillSecretApproval>>(emptyList())
+    val pendingSkillSecretApprovals: StateFlow<List<PendingSkillSecretApproval>> = _pendingSkillSecretApprovals.asStateFlow()
+    private val skillSecretStore by lazy { com.android.everytalk.data.skill.SkillSecretStore(context) }
     private val agentResumeMutex = Mutex()
     private val resumingAgentRunIds = ConcurrentHashMap.newKeySet<String>()
     private val agentLoop by lazy {
@@ -251,6 +263,7 @@ class ApiHandler(
             toolRuntime = com.android.everytalk.data.agent.AgentToolRuntime(
                 executorProvider = com.android.everytalk.data.agent.AgentToolExecutorRegistry::current,
                 resultStore = AgentToolResultStore(context),
+                skillRuntimeTools = com.android.everytalk.data.skill.SkillRuntimeTools(skillRepository, agentRunStore),
             ),
             computerSessionStateProvider = computerSessionStateProvider,
         )
@@ -353,11 +366,36 @@ class ApiHandler(
     }
 
     private suspend fun refreshPendingAgentApprovals() {
-        _pendingAgentApprovals.value = agentRunStore.getWaitingApprovalRuns().mapNotNull { run ->
-            agentRunStore.pendingApproval(run.id)?.let { record ->
-                record.request?.let { request ->
-                    PendingComputerToolApproval(run.id, record.approvalRequestId, request)
-                }
+        val pending = agentRunStore.getWaitingApprovalRuns().mapNotNull { run ->
+            agentRunStore.pendingApproval(run.id)?.let { record -> run to record }
+        }
+        _pendingAgentApprovals.value = pending.mapNotNull { (run, record) ->
+            record.request?.let { request ->
+                PendingComputerToolApproval(run.id, record.approvalRequestId, request)
+            }
+        }
+        _pendingAgentEnableApprovals.value = pending.mapNotNull { (run, record) ->
+            (record.agentRequest as? AgentPauseRequest.EnableAgent)?.let { request ->
+                PendingAgentEnableApproval(
+                    runId = run.id,
+                    approvalRequestId = record.approvalRequestId,
+                    conversationId = run.sessionId,
+                    reason = request.reason,
+                    requiredSkillIds = request.requiredSkillIds,
+                )
+            }
+        }
+        _pendingSkillSecretApprovals.value = pending.mapNotNull { (run, record) ->
+            (record.agentRequest as? AgentPauseRequest.SkillSecret)?.let { request ->
+                PendingSkillSecretApproval(
+                    runId = run.id,
+                    approvalRequestId = record.approvalRequestId,
+                    conversationId = run.sessionId,
+                    skillId = request.skillId,
+                    skillName = skillRepository.get(request.skillId)?.name ?: request.skillId,
+                    name = request.name,
+                    reason = request.reason,
+                )
             }
         }
     }
@@ -386,9 +424,18 @@ class ApiHandler(
         viewModelScope.launch(Dispatchers.IO) {
             val current = _pendingAgentApprovals.value.firstOrNull {
                 it.runId == runId && it.approvalRequestId == approvalRequestId
-            } ?: return@launch
+            }
+            val currentAgent = _pendingAgentEnableApprovals.value.firstOrNull {
+                it.runId == runId && it.approvalRequestId == approvalRequestId
+            }
+            val currentSecret = _pendingSkillSecretApprovals.value.firstOrNull {
+                it.runId == runId && it.approvalRequestId == approvalRequestId
+            }
+            if (current == null && currentAgent == null && currentSecret == null) return@launch
             val record = agentRunStore.decideApproval(runId, approvalRequestId, decision) ?: return@launch
-            _pendingAgentApprovals.value = _pendingAgentApprovals.value - current
+            if (current != null) _pendingAgentApprovals.value = _pendingAgentApprovals.value - current
+            if (currentAgent != null) _pendingAgentEnableApprovals.value = _pendingAgentEnableApprovals.value - currentAgent
+            if (currentSecret != null) _pendingSkillSecretApprovals.value = _pendingSkillSecretApprovals.value - currentSecret
             var started = false
             if (resumingAgentRunIds.add(runId)) {
                 try {
@@ -403,6 +450,34 @@ class ApiHandler(
         }
     }
 
+    fun respondToSkillSecretApproval(
+        runId: String,
+        approvalRequestId: String,
+        value: CharArray?,
+        remember: Boolean,
+    ) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val current = _pendingSkillSecretApprovals.value.firstOrNull {
+                it.runId == runId && it.approvalRequestId == approvalRequestId
+            } ?: run {
+                value?.fill('\u0000')
+                return@launch
+            }
+            if (value == null || value.isEmpty()) {
+                value?.fill('\u0000')
+                respondToAgentApproval(runId, approvalRequestId, AgentApprovalDecision.REJECTED)
+                return@launch
+            }
+            try {
+                if (remember) skillSecretStore.save(current.skillId, current.name, value)
+                com.android.everytalk.data.skill.SkillSecretSessionStore.put(runId, current.name, value)
+            } finally {
+                value.fill('\u0000')
+            }
+            respondToAgentApproval(runId, approvalRequestId, AgentApprovalDecision.APPROVED)
+        }
+    }
+
     private suspend fun resumeAgentRun(runId: String, record: AgentApprovalRecord): Boolean =
         agentResumeMutex.withLock {
             if (stateHolder.textApiJob?.isActive == true) {
@@ -413,7 +488,7 @@ class ApiHandler(
 
     /** 同一时刻只允许一个文本 Run 占用统一流状态，避免恢复覆盖正在进行的会话。 */
     private suspend fun startResumedAgentRun(runId: String, record: AgentApprovalRecord?): Boolean {
-        val run = agentRunStore.getRun(runId) ?: run {
+        var run = agentRunStore.getRun(runId) ?: run {
             restorePendingAgentApproval(resumeDecided = false)
             return false
         }
@@ -433,7 +508,7 @@ class ApiHandler(
                 markApprovalDecisionFailure(run, "原模型配置已删除")
                 return false
             }
-        val request = agentRunStore.restoreChatRequest(run, config.key)
+        var request = agentRunStore.restoreChatRequest(run, config.key)
             ?: run {
                 if (run.status == AgentRunStatus.MODEL_CONTINUATION_PENDING.name) {
                     return false
@@ -441,6 +516,39 @@ class ApiHandler(
                 markApprovalDecisionFailure(run, "Agent 恢复快照不可用")
                 return false
             }
+        if (record?.decision == AgentApprovalDecision.APPROVED && record.agentRequest is AgentPauseRequest.SkillSecret) {
+            val secretRequest = record.agentRequest
+            if (!com.android.everytalk.data.skill.SkillSecretSessionStore.contains(run.id, secretRequest.name)) {
+                val restored = skillSecretStore.load(secretRequest.skillId, secretRequest.name)
+                if (restored != null) {
+                    try {
+                        com.android.everytalk.data.skill.SkillSecretSessionStore.put(run.id, secretRequest.name, restored)
+                    } finally {
+                        restored.fill('\u0000')
+                    }
+                } else {
+                    agentRunStore.pauseForApproval(
+                        run,
+                        record.copy(
+                            approvalRequestId = UUID.randomUUID().toString(),
+                            decision = null,
+                            decidedAt = null,
+                        ),
+                    )
+                    refreshPendingAgentApprovals()
+                    return false
+                }
+            }
+        }
+        if (record?.decision == AgentApprovalDecision.APPROVED && record.agentRequest is AgentPauseRequest.EnableAgent) {
+            request = try {
+                prepareAgentResumeRequest(run.sessionId, request, record.agentRequest.requiredSkillIds)
+            } catch (error: Exception) {
+                markApprovalDecisionFailure(run, error.message ?: "Agent 开启失败")
+                return false
+            }
+            run = agentRunStore.updateRequestSnapshot(run, request)
+        }
         val limits = resolvedModelTokenLimits(
             maxOutputTokens = request.generationConfig?.maxOutputTokens,
             maxContextTokens = request.contextManagement?.maxContextTokens
@@ -497,6 +605,8 @@ class ApiHandler(
     ) {
         agentRunStore.updateRunStatus(run, com.android.everytalk.data.agent.AgentRunStatus.FAILED, terminalReason = reason)
         _pendingAgentApprovals.value = _pendingAgentApprovals.value.filterNot { it.runId == run.id }
+        _pendingAgentEnableApprovals.value = _pendingAgentEnableApprovals.value.filterNot { it.runId == run.id }
+        _pendingSkillSecretApprovals.value = _pendingSkillSecretApprovals.value.filterNot { it.runId == run.id }
         withContext(Dispatchers.Main.immediate) {
             updatePreparedMessageStatus(stateHolder.messages, run.visibleAssistantMessageId, reason)
         }
@@ -1159,6 +1269,13 @@ class ApiHandler(
     ) {
         streamProcessor.processStreamEvent(appEvent, aiMessageId, isImageGeneration)
         if (appEvent is AppStreamEvent.AgentApprovalRequired) restorePendingAgentApproval()
+        if (appEvent is AppStreamEvent.Finish && !isImageGeneration) {
+            agentRunStore.getRunByVisibleMessage(aiMessageId)?.let { run ->
+                if (run.status in setOf(AgentRunStatus.COMPLETED.name, AgentRunStatus.FAILED.name, AgentRunStatus.CANCELLED.name)) {
+                    com.android.everytalk.data.skill.SkillSecretSessionStore.clear(run.id)
+                }
+            }
+        }
     }
 
     /** 在任意线程安全地更新取消或恢复提示。 */

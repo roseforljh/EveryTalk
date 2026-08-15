@@ -431,7 +431,8 @@ import java.util.TimeZone
         attachments: List<SelectedMediaItem> = emptyList(),
         audioBase64: String? = null,
         mimeType: String? = null,
-        isImageGeneration: Boolean = false
+        isImageGeneration: Boolean = false,
+        contentParts: List<com.android.everytalk.data.DataClass.MessageContentPart> = emptyList(),
     ) {
         Log.d("AppViewModel", "onSendMessage: isImage=$isImageGeneration, attachments=${attachments.size}")
         if (!isImageGeneration && stateHolder._isWebSearchEnabled.value) {
@@ -452,7 +453,8 @@ import java.util.TimeZone
             audioBase64 = audioBase64,
             mimeType = mimeType,
             systemPrompt = promptToUse,
-            isImageGeneration = isImageGeneration
+            isImageGeneration = isImageGeneration,
+            contentParts = contentParts,
         )
     }
 
@@ -545,6 +547,8 @@ import java.util.TimeZone
     internal fun AppViewModel.selectComputerForCurrentConversation(
         computerId: String,
         enableAgentAfterSelection: Boolean = false,
+        onReady: (() -> Unit)? = null,
+        onFailure: (() -> Unit)? = null,
     ) {
         val generation = stateHolder.agentActionGeneration.incrementAndGet()
         val shouldPrepareWorkspace = stateHolder._isAgentEnabled.value || enableAgentAfterSelection
@@ -567,6 +571,7 @@ import java.util.TimeZone
                         stateHolder.conversationFunctionToggleStates.value,
                     )
                 }
+                if (onReady != null) withContext(Dispatchers.Main.immediate) { onReady() }
             } catch (error: ComputerException) {
                 if (stateHolder.agentActionGeneration.get() == generation) {
                     if (enableAgentAfterSelection) {
@@ -574,6 +579,7 @@ import java.util.TimeZone
                         stateHolder._isAgentEnabled.value = false
                     }
                     showSnackbar(error.message)
+                    if (onFailure != null) withContext(Dispatchers.Main.immediate) { onFailure() }
                 }
             } catch (error: Exception) {
                 if (stateHolder.agentActionGeneration.get() == generation) {
@@ -582,12 +588,38 @@ import java.util.TimeZone
                         stateHolder._isAgentEnabled.value = false
                     }
                     showSnackbar("服务器选择失败")
+                    if (onFailure != null) withContext(Dispatchers.Main.immediate) { onFailure() }
                 }
                 Log.e("AppViewModel", "服务器选择失败", error)
             } finally {
                 if (stateHolder.agentActionGeneration.get() == generation) stateHolder._isAgentPreparing.value = false
             }
         }
+    }
+
+    internal fun AppViewModel.respondToAgentEnableApproval(
+        runId: String,
+        approvalRequestId: String,
+        approved: Boolean,
+    ) {
+        apiHandler.respondToAgentApproval(
+            runId = runId,
+            approvalRequestId = approvalRequestId,
+            decision = if (approved) {
+                com.android.everytalk.data.agent.AgentApprovalDecision.APPROVED
+            } else {
+                com.android.everytalk.data.agent.AgentApprovalDecision.REJECTED
+            },
+        )
+    }
+
+    internal fun AppViewModel.respondToSkillSecretApproval(
+        runId: String,
+        approvalRequestId: String,
+        value: CharArray?,
+        remember: Boolean,
+    ) {
+        apiHandler.respondToSkillSecretApproval(runId, approvalRequestId, value, remember)
     }
 
     internal fun AppViewModel.respondToComputerPublicPreview(approved: Boolean) {

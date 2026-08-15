@@ -6,10 +6,23 @@ import java.nio.CharBuffer
 import java.security.MessageDigest
 import java.util.EnumSet
 
-internal const val COMPUTER_BOOTSTRAP_VERSION = "8"
+internal const val COMPUTER_BOOTSTRAP_VERSION = "9"
+private const val COMPUTER_RUNTIME_ONLY_UPGRADE_FROM_VERSION = "8"
 private const val SANDBOX_IMAGE = "everytalk-sandbox:1"
 private const val BOOTSTRAP_COMMAND_TIMEOUT_MILLIS = 20 * 60 * 1000L
 private const val BOOTSTRAP_OUTPUT_BYTES = 2 * 1024 * 1024
+
+/** 有明确旧版本的 Container 服务器在界面显示“需要升级”。 */
+internal fun Computer.needsContainerRuntimeUpgrade(): Boolean =
+    runMode == ComputerRunMode.CONTAINER &&
+        bootstrapVersion != null &&
+        bootstrapVersion != COMPUTER_BOOTSTRAP_VERSION
+
+/** v8 已有完整 Docker 环境，v9 只需替换 Helper 和 Wrapper。 */
+internal fun Computer.canUseRuntimeOnlyUpgrade(): Boolean =
+    needsContainerRuntimeUpgrade() &&
+        bootstrapVersion == COMPUTER_RUNTIME_ONLY_UPGRADE_FROM_VERSION &&
+        capabilities?.dockerAvailable == true
 
 /** APK 可能由 Windows 工作区构建，上传 VPS 前统一把 CRLF/CR 转成 POSIX Shell 需要的 LF。 */
 internal fun normalizeComputerShellAsset(source: ByteArray): ByteArray {
@@ -51,6 +64,7 @@ class ComputerProvisioner(private val context: Context) {
         connection: ComputerSshConnection,
         computer: Computer,
         sudoPassword: CharArray?,
+        runtimeOnly: Boolean = false,
         onProgress: suspend (ComputerSetupStage) -> Unit = {},
     ): ComputerProvisionResult {
         require(computer.runMode == ComputerRunMode.CONTAINER) { "只有 Container 模式需要配置" }
@@ -59,12 +73,19 @@ class ComputerProvisioner(private val context: Context) {
         try {
             onProgress(ComputerSetupStage.PREPARING_CONTAINER)
             prepareRemoteDirectory(connection, remoteDirectory)
-            val hashes = uploadAssets(connection, remoteDirectory)
+            val selectedAssets = if (runtimeOnly) {
+                assets.filter { it.remoteName == "everytalk-containerctl.sh" || it.remoteName == "runtime-wrapper.sh" }
+            } else {
+                assets
+            }
+            val hashes = uploadAssets(connection, remoteDirectory, selectedAssets)
             verifyAssets(connection, remoteDirectory, hashes)
 
-            // 即使 Docker 已存在，也先展示同一个稳定阶段，界面步骤不会因服务器环境而跳号。
-            onProgress(ComputerSetupStage.PREPARING_DOCKER)
-            if (computer.capabilities?.dockerAvailable != true) {
+            if (!runtimeOnly) {
+                // 完整配置才需要安装 Docker；已配置服务器升级 Helper 时不碰 Docker。
+                onProgress(ComputerSetupStage.PREPARING_DOCKER)
+            }
+            if (!runtimeOnly && computer.capabilities?.dockerAvailable != true) {
                 runRootCommand(
                     connection = connection,
                     computer = computer,
@@ -79,21 +100,27 @@ class ComputerProvisioner(private val context: Context) {
             runRootCommand(
                 connection = connection,
                 computer = computer,
-                command = "sh $remoteDirectory/everytalk-containerctl.sh install $remoteDirectory/runtime-wrapper.sh $remoteDirectory/Dockerfile",
+                command = if (runtimeOnly) {
+                    "sh $remoteDirectory/everytalk-containerctl.sh install-runtime $remoteDirectory/runtime-wrapper.sh"
+                } else {
+                    "sh $remoteDirectory/everytalk-containerctl.sh install $remoteDirectory/runtime-wrapper.sh $remoteDirectory/Dockerfile"
+                },
                 sudoPassword = sudoPassword,
                 errorCode = ComputerErrorCodes.HELPER_INTEGRITY_FAILED,
                 errorMessage = "Container Helper 安装失败",
                 successMarker = "version=$COMPUTER_BOOTSTRAP_VERSION",
             )
-            onProgress(ComputerSetupStage.BUILDING_IMAGE)
-            runInstalledHelper(connection, computer, "build-image", sudoPassword)
-            onProgress(ComputerSetupStage.CONFIGURING_NETWORK)
-            runInstalledHelper(
-                connection,
-                computer,
-                if (computer.allowPrivateNetwork) "set-network private" else "set-network restricted",
-                sudoPassword,
-            )
+            if (!runtimeOnly) {
+                onProgress(ComputerSetupStage.BUILDING_IMAGE)
+                runInstalledHelper(connection, computer, "build-image", sudoPassword)
+                onProgress(ComputerSetupStage.CONFIGURING_NETWORK)
+                runInstalledHelper(
+                    connection,
+                    computer,
+                    if (computer.allowPrivateNetwork) "set-network private" else "set-network restricted",
+                    sudoPassword,
+                )
+            }
             return ComputerProvisionResult(COMPUTER_BOOTSTRAP_VERSION, SANDBOX_IMAGE)
         } finally {
             sudoPassword?.fill('\u0000')
@@ -121,10 +148,11 @@ class ComputerProvisioner(private val context: Context) {
     private suspend fun uploadAssets(
         connection: ComputerSshConnection,
         remoteDirectory: String,
+        selectedAssets: List<Asset>,
     ): Map<String, String> {
         val hashes = linkedMapOf<String, String>()
         connection.withSftp { sftp ->
-            assets.forEach { asset ->
+            selectedAssets.forEach { asset ->
                 val source = context.assets.open(asset.assetName).use { it.readBytes() }
                 val bytes = if (asset.remoteName.endsWith(".sh")) {
                     normalizeComputerShellAsset(source)

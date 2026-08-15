@@ -39,7 +39,6 @@ import kotlinx.coroutines.withTimeout
 internal const val MAX_AGENT_MODEL_TURNS = 50
 internal const val MAX_AGENT_CONSECUTIVE_TOOL_CALLS = 100
 internal const val MAX_IDENTICAL_TOOL_CALLS = 3
-private const val MAX_AGENT_COMPACTIONS_PER_RUN = 8
 private const val COMPACTION_OUTPUT_TOKENS = 4_096
 
 private val AGENT_COMPACTION_SYSTEM_PROMPT = """
@@ -102,7 +101,6 @@ class AgentLoop(
             var providerContinuation: ProviderTurnContinuation? = null
             var activeCompaction = runStore.latestCompaction(input.sessionId)
             var requestOrdinal = checkNotNull(run).currentRequestOrdinal
-            var compactionCount = runStore.completedCompactionCount(checkNotNull(run).id)
             val firstModelTurnOrdinal = runStore.nextModelTurnOrdinal(checkNotNull(run).id)
             val toolLoopGuard = ToolLoopGuard().apply {
                 runStore.finalExecutedToolCalls(checkNotNull(run).id).forEach(::recordHistorical)
@@ -200,10 +198,7 @@ class AgentLoop(
                     checkpoint = activeCompaction,
                 )
                 while (prepared.compactionPlan != null) {
-                    if (compactionCount >= MAX_AGENT_COMPACTIONS_PER_RUN) {
-                        throw AgentContextWindowException("上下文压缩次数超过安全上限")
-                    }
-                    compactionCount++
+                    val plan = checkNotNull(prepared.compactionPlan)
                     requestOrdinal++
                     run = runStore.updateRunStatus(
                         run = checkNotNull(run),
@@ -214,10 +209,13 @@ class AgentLoop(
                     activeCompaction = executeCompaction(
                         run = checkNotNull(run),
                         requestOrdinal = requestOrdinal,
-                        plan = checkNotNull(prepared.compactionPlan),
+                        plan = plan,
                         baseRequest = input.request,
                         limits = input.tokenLimits,
                     )
+                    if (checkNotNull(activeCompaction).estimatedTokensAfter >= plan.tokensBefore) {
+                        throw AgentContextWindowException("上下文压缩没有减少占用，已停止继续压缩")
+                    }
                     // 摘要替代了早期中立历史，供应商上一轮的原生连续状态已不再对应新前缀。
                     providerContinuation = null
                     requestId = UUID.randomUUID().toString()
@@ -546,6 +544,36 @@ class AgentLoop(
         var currentTranscript = transcript
         for ((index, call) in calls.withIndex()) {
             val contextualComputerContext = computerContext?.copy(runId = run.id)
+            val snapshot = runStore.decodeRequestSnapshot(run)?.skillSnapshot
+            val allowedSkillIds = snapshot?.let { value ->
+                (value.automaticCatalog.map { it.skillId } + value.manualReferences.map { it.skillId }).toSet()
+            }.orEmpty()
+            val pauseRequest = runCatching { agentPauseRequest(call, allowedSkillIds) }
+            if (pauseRequest.isFailure && call.name in AgentControlToolNames.all) {
+                val result = AgentContentBlock.ToolResult(
+                    toolCallId = call.id,
+                    toolName = call.name,
+                    content = kotlinx.serialization.json.JsonPrimitive(pauseRequest.exceptionOrNull()?.message ?: "申请参数无效"),
+                    isError = true,
+                )
+                runStore.appendToolResult(run.id, requestId, result)
+                currentTranscript = currentTranscript + result.toApiMessage()
+                continue
+            }
+            val agentRequest = pauseRequest.getOrNull()
+            if (agentRequest != null) {
+                val record = AgentApprovalRecord(
+                    approvalRequestId = UUID.randomUUID().toString(),
+                    requestId = requestId,
+                    toolCall = call,
+                    pendingToolCalls = calls.drop(index),
+                    agentRequest = agentRequest,
+                )
+                runStore.pauseForApproval(run, record)
+                emit(AppStreamEvent.ExecutionStatusUpdate("等待你确认开启 Agent"))
+                emit(AppStreamEvent.AgentApprovalRequired(run.id, record.approvalRequestId))
+                return ToolBatchOutcome(currentTranscript, paused = true)
+            }
             val approval = toolRuntime.approvalRequest(call, contextualComputerContext)
             if (approval != null) {
                 val record = AgentApprovalRecord(
@@ -612,6 +640,34 @@ class AgentLoop(
                     toolName = record.toolCall.name,
                     content = kotlinx.serialization.json.JsonPrimitive(message),
                     isError = true,
+                ),
+            )
+        }
+        if (record.agentRequest is AgentPauseRequest.EnableAgent) {
+            return ResumedToolOutcome(
+                AgentContentBlock.ToolResult(
+                    toolCallId = record.toolCall.id,
+                    toolName = record.toolCall.name,
+                    content = kotlinx.serialization.json.buildJsonObject {
+                        put("enabled", kotlinx.serialization.json.JsonPrimitive(true))
+                        put(
+                            "message",
+                            kotlinx.serialization.json.JsonPrimitive("用户已允许开启当前会话 Agent，可以继续调用 Agent 服务器工具"),
+                        )
+                    },
+                ),
+            )
+        }
+        if (record.agentRequest is AgentPauseRequest.SkillSecret) {
+            return ResumedToolOutcome(
+                AgentContentBlock.ToolResult(
+                    toolCallId = record.toolCall.id,
+                    toolName = record.toolCall.name,
+                    content = kotlinx.serialization.json.buildJsonObject {
+                        put("available", kotlinx.serialization.json.JsonPrimitive(true))
+                        put("name", kotlinx.serialization.json.JsonPrimitive(record.agentRequest.name))
+                        put("message", kotlinx.serialization.json.JsonPrimitive("用户已提供该密钥；正文不会返回，执行命令时通过 secret_names 按名称注入"))
+                    },
                 ),
             )
         }

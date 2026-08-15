@@ -5,6 +5,9 @@ object Screen {
     const val SETTINGS_SCREEN = "settings_screen"
     const val COMPUTER_SCREEN = "computer_screen"
     const val COMPUTER_DETAIL_SCREEN = "computer_detail/{computerId}"
+    const val SKILL_SCREEN = "skill_screen"
+    const val SKILL_DOWNLOAD_SCREEN = "skill_download_screen"
+    const val SKILL_DETAIL_SCREEN = "skill_detail/{skillId}"
     const val APP_INFO_SCREEN = "app_info_screen"
     const val PRIVACY_POLICY_SCREEN = "privacy_policy_screen"
     const val IMAGE_GENERATION_SCREEN = "image_generation_screen"
@@ -25,4 +28,5 @@ object Screen {
     fun chatWithHistory(index: Int) = "chat_screen/$index"
     fun imageWithHistory(index: Int) = "image_generation_screen/$index"
     fun computerDetail(computerId: String) = "computer_detail/$computerId"
+    fun skillDetail(skillId: String) = "skill_detail/${android.net.Uri.encode(skillId)}"
 }

@@ -375,6 +375,10 @@ interface ComputerDao {
     )
     suspend fun getActiveExecutionsForAgentRun(runId: String): List<ComputerExecutionEntity>
 
+    /** 判断 AgentRun 是否真正创建过 VPS 操作，普通聊天不会命中。 */
+    @Query("SELECT COUNT(*) FROM computer_executions WHERE runId = :runId")
+    suspend fun countExecutionsForAgentRun(runId: String): Int
+
     /** 原子声明结果已接回原 AgentRun，防止重复续写（UPDATE ... WHERE resultAttachedAt IS NULL）。返回更新行数。 */
     @Query(
         """

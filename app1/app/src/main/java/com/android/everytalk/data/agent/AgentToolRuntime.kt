@@ -13,6 +13,7 @@ import com.android.everytalk.data.network.truncateToolOutput
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import com.android.everytalk.data.skill.SkillRuntimeTools
 
 private const val MAX_AGENT_TOOL_RESULT_TOKENS = 64_000L
 
@@ -23,6 +24,7 @@ class AgentToolRuntime(
     private val executorProvider: () -> AppToolExecutor?,
     private val approvalProvider: () -> ComputerToolApprovalProvider? = AgentToolExecutorRegistry::currentApprovalProvider,
     private val resultStore: AgentToolResultStore? = null,
+    private val skillRuntimeTools: SkillRuntimeTools? = null,
 ) {
     /** 审批预检不连接 VPS，也不创建 ComputerExecution。 */
     suspend fun approvalRequest(
@@ -44,6 +46,28 @@ class AgentToolRuntime(
         runId: String? = null,
         emit: suspend (AppStreamEvent) -> Unit,
     ): AgentContentBlock.ToolResult {
+        if (runId != null && skillRuntimeTools?.handles(call.name) == true) {
+            return try {
+                val name = skillRuntimeTools.displayName(call, runId) ?: call.name
+                emit(AppStreamEvent.ExecutionStatusUpdate("正在读取技能：$name"))
+                AgentContentBlock.ToolResult(
+                    toolCallId = call.id,
+                    toolName = call.name,
+                    content = skillRuntimeTools.execute(call, runId),
+                )
+            } catch (error: kotlinx.coroutines.CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                AgentContentBlock.ToolResult(
+                    toolCallId = call.id,
+                    toolName = call.name,
+                    content = JsonPrimitive(error.message ?: "Skill 读取失败"),
+                    isError = true,
+                )
+            } finally {
+                emit(AppStreamEvent.ExecutionStatusUpdate(null))
+            }
+        }
         val executor = executorProvider()
             ?: return AgentContentBlock.ToolResult(
                 toolCallId = call.id,

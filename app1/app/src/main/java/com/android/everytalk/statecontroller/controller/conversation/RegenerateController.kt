@@ -3,6 +3,7 @@ package com.android.everytalk.statecontroller.controller.conversation
 import android.util.Log
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.data.DataClass.MessageContentPart
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.statecontroller.ApiHandler
 import com.android.everytalk.statecontroller.ViewModelStateHolder
@@ -45,7 +46,8 @@ class RegenerateController(
         isFromRegeneration: Boolean,
         attachments: List<SelectedMediaItem>,
         isImageGeneration: Boolean,
-        manualMessageId: String?
+        manualMessageId: String?,
+        contentParts: List<MessageContentPart>,
     ) -> Unit
 ) {
 
@@ -76,6 +78,7 @@ class RegenerateController(
 
         val originalUserMessageText = baseUserMessage.text
         val originalUserMessageId = baseUserMessage.id
+        val originalContentParts = baseUserMessage.contentParts
 
         // 克隆附件以生成新 ID，便于 LazyColumn 正确重组
         val originalAttachments =
@@ -161,7 +164,8 @@ class RegenerateController(
                     true,
                     originalAttachments,
                     isImageGeneration,
-                    originalUserMessageId
+                    originalUserMessageId,
+                    originalContentParts,
                 )
             }
         }

@@ -272,6 +272,44 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                      )
                   },
                 computerSessionStateProvider = computerManager::computerSessionState,
+                prepareAgentResumeRequest = ::prepareAgentRequestedChatRequest,
+        )
+    }
+
+    /** request_agent 获批后，为原 Run 补齐服务器快照、环境说明和 Agent 工具。 */
+    private suspend fun prepareAgentRequestedChatRequest(
+        conversationId: String,
+        request: ChatRequest,
+        requiredSkillIds: List<String>,
+    ): ChatRequest {
+        if (request.localComputerRequestContext != null) return request
+        val prepared = computerManager.prepareRequest(conversationId, agentEnabled = true)
+            ?: error("Agent 服务器准备失败")
+        val syncedSkills = computerManager.syncSkills(
+            context = prepared.context,
+            snapshot = request.localSkillSnapshot,
+            requiredSkillIds = requiredSkillIds,
+        )
+        val messages = request.messages.toMutableList()
+        val systemIndex = messages.indexOfFirst { it.role.equals("system", ignoreCase = true) }
+        if (systemIndex >= 0 && messages[systemIndex] is SimpleTextApiMessage) {
+            val current = messages[systemIndex] as SimpleTextApiMessage
+            val skillPaths = syncedSkills.takeIf { it.isNotEmpty() }?.joinToString("\n", prefix = "\n\n已同步的 Skill 文件：\n") {
+                "- ${it.skillId}: ${it.workspacePath}"
+            }.orEmpty()
+            messages[systemIndex] = current.copy(content = "${current.content}\n\n${prepared.environmentPrompt}$skillPaths")
+        } else {
+            messages.add(0, SimpleTextApiMessage(role = "system", content = prepared.environmentPrompt))
+        }
+        val requestToolName = com.android.everytalk.data.agent.AgentControlToolNames.REQUEST_AGENT
+        val toolsWithoutRequest = request.tools.orEmpty().filterNot { tool ->
+            val function = tool["function"] as? Map<*, *>
+            function?.get("name")?.toString()?.equals(requestToolName, ignoreCase = true) == true
+        }
+        return request.copy(
+            messages = messages,
+            tools = appendComputerTools(toolsWithoutRequest, enabled = true, permissionMode = prepared.permissionMode),
+            localComputerRequestContext = prepared.context,
         )
     }
     internal val configManager: ConfigManager by lazy {
@@ -444,6 +482,16 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val computers get() = computerManager.computers
     val computerSelections get() = computerManager.selections
     val pendingComputerAgentApprovals = apiHandler.pendingAgentApprovals
+    val pendingAgentEnableApproval = kotlinx.coroutines.flow.combine(
+        apiHandler.pendingAgentEnableApprovals,
+        stateHolder._currentConversationId,
+    ) { approvals, conversationId -> approvals.firstOrNull { it.conversationId == conversationId } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    val pendingSkillSecretApproval = kotlinx.coroutines.flow.combine(
+        apiHandler.pendingSkillSecretApprovals,
+        stateHolder._currentConversationId,
+    ) { approvals, conversationId -> approvals.firstOrNull { it.conversationId == conversationId } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
     val pendingComputerAgentApproval = kotlinx.coroutines.flow.combine(
         apiHandler.pendingAgentApprovals,
         stateHolder._currentConversationId,
@@ -585,13 +633,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
        showSnackbar = ::showSnackbar,
        shouldAutoScroll = { stateHolder.shouldAutoScroll() },
        triggerScrollToBottom = { triggerScrollToBottom() },
-       sendMessage = { messageText, isFromRegeneration, attachments, isImageGeneration, manualMessageId ->
+       sendMessage = { messageText, isFromRegeneration, attachments, isImageGeneration, manualMessageId, contentParts ->
            messageSender.sendMessage(
                messageText = messageText,
                isFromRegeneration = isFromRegeneration,
                attachments = attachments,
                isImageGeneration = isImageGeneration,
-               manualMessageId = manualMessageId
+               manualMessageId = manualMessageId,
+               contentParts = contentParts,
            )
        }
    )
@@ -826,7 +875,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
        // Initialize buffer scope for StreamingBuffer operations
        stateHolder.initializeBufferScope(viewModelScope)
     }
-
     /**
      * Get streaming content for a message
      *

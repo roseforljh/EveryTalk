@@ -57,6 +57,8 @@ import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.longOrNull
+import com.android.everytalk.data.skill.SkillRepository
+import com.android.everytalk.data.DataClass.MessageContentPart
 
 internal const val BUILT_IN_WEBFETCH_TOOL_NAME = "webfetch"
 internal const val BUILT_IN_CURRENT_TIME_TOOL_NAME = "get_current_datetime"
@@ -276,6 +278,22 @@ internal fun appendComputerTools(
     return tools + ComputerToolCatalog.definitions(permissionMode)
 }
 
+/** Agent 和 Skill 密钥申请名称由应用独占，模型只能通过这两张接口申请。 */
+internal fun appendAgentRequestTool(
+    tools: List<Map<String, Any>>,
+    enabled: Boolean,
+): List<Map<String, Any>> {
+    if (!enabled) return tools
+    val conflict = tools.mapNotNull(::extractToolName).firstOrNull { name ->
+        com.android.everytalk.data.agent.AgentControlToolNames.all.any { it.equals(name, ignoreCase = true) }
+    }
+    require(conflict == null) { "Agent 控制工具名已被占用：$conflict" }
+    return tools + listOf(
+        com.android.everytalk.data.agent.agentRequestToolDefinition(),
+        com.android.everytalk.data.agent.skillSecretRequestToolDefinition(),
+    )
+}
+
 /**
  * 捕获并行的服务器准备错误，避免 async 子任务先把整条消息发送协程取消。
  * 用户主动取消仍需原样传播，确保停止按钮和页面退出能够立即终止发送。
@@ -344,6 +362,7 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
     internal val autoContextCompressionMutex = Mutex()
     internal val autoContextCompressionStates =
         mutableMapOf<AutoContextCompressionKey, com.android.everytalk.data.DataClass.ContextCompressionState>()
+    internal val skillRepository: SkillRepository by lazy { SkillRepository(application) }
 
     internal fun logUiMessages(stage: String, messages: List<UiMessage>) {
         Log.d("MessageSender", "$stage.size=${messages.size}")
@@ -663,9 +682,10 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
         mimeType: String? = null,
         systemPrompt: String? = null,
         isImageGeneration: Boolean = false,
-        manualMessageId: String? = null
+        manualMessageId: String? = null,
+        contentParts: List<MessageContentPart> = emptyList(),
     ) {
-        sendMessageInternal(messageText, isFromRegeneration, attachments, audioBase64, mimeType, systemPrompt, isImageGeneration, manualMessageId)
+        sendMessageInternal(messageText, isFromRegeneration, attachments, audioBase64, mimeType, systemPrompt, isImageGeneration, manualMessageId, contentParts)
     }
     private fun getFileName(contentResolver: ContentResolver, uri: Uri): String? {
         if (uri == Uri.EMPTY) return null

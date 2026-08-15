@@ -12,8 +12,10 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.android.everytalk.R
+import com.android.everytalk.data.agent.AgentRunStatus
 import com.android.everytalk.statecontroller.MainActivity
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * 统一通知管理器与权限门槛。
@@ -23,6 +25,7 @@ object AgentNotificationManager {
     private val notifiedEvents = ConcurrentHashMap<String, Long>()
     private val executionTerminalStates = ConcurrentHashMap<String, String>()
     private val lostConnections = ConcurrentHashMap.newKeySet<String>()
+    private val appInForeground = AtomicBoolean(false)
 
     /**
      * 统一通知可用性检查：运行时权限、全局开关、渠道三者必须同时判断。
@@ -75,6 +78,46 @@ object AgentNotificationManager {
         }
     }
 
+    /**
+     * App 回到前台后，聊天界面已经负责展示 Agent 状态，系统事件通知应立即清掉。
+     * 前台服务使用独立渠道，不会被这里误删。
+     */
+    fun onAppForeground(context: Context) {
+        appInForeground.set(true)
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        manager.activeNotifications
+            .filter { it.notification.channelId == CHANNEL_EVENTS_ID }
+            .forEach { manager.cancel(it.id) }
+    }
+
+    /** MainActivity 不再可见后，允许新的 Agent 事件进入系统通知栏。 */
+    fun onAppBackground() {
+        appInForeground.set(false)
+    }
+
+    /** 一个 AgentRun 只在自身终态发送一次通知，通知 ID 使用 runId 隔离并行任务。 */
+    fun notifyAgentRunTerminal(
+        context: Context,
+        conversationId: String,
+        runId: String,
+        status: AgentRunStatus,
+    ) {
+        val (eventType, title, message) = when (status) {
+            AgentRunStatus.COMPLETED -> Triple("SUCCEEDED", "任务完成", "AI 已完成本轮任务")
+            AgentRunStatus.FAILED -> Triple("FAILED", "任务失败", "AI 未能完成本轮任务")
+            AgentRunStatus.CANCELLED -> Triple("CANCELLED", "任务已取消", "本轮任务已取消")
+            else -> return
+        }
+        notifyTaskEvent(
+            context = context,
+            conversationId = conversationId,
+            executionId = runId,
+            eventType = eventType,
+            title = title,
+            message = message,
+        )
+    }
+
     /** 服务重建时清掉上个版本遗留的断线通知，真实故障会在本轮对账后重新生成一条。 */
     fun clearConnectionFailureNotifications(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
@@ -91,7 +134,7 @@ object AgentNotificationManager {
     }
 
     /**
-     * 任务事件通知必须覆盖完成、失败、审批、断线和恢复，并按 executionId + eventType 去重。
+     * 过程事件按 executionId 去重，整个任务的最终事件按 runId 去重。
      */
     fun notifyTaskEvent(
         context: Context,
@@ -105,11 +148,9 @@ object AgentNotificationManager {
 
         val isTerminal = eventType == "SUCCEEDED" || eventType == "FAILED" || eventType == "CANCELLED" || eventType == "TIMED_OUT"
 
-        // 1. 任务已经处于终态时，丢弃迟到的非终态事件（如 CONNECTION_LOST、RECONNECTED、WAITING_APPROVAL）
+        // 1. 同一 Execution 或 AgentRun 只接受第一个终态，丢弃重复终态和迟到过程事件。
         val terminal = executionTerminalStates[executionId]
-        if (terminal != null && !isTerminal) {
-            return
-        }
+        if (terminal != null) return
 
         // 2. 从未通知断线时禁止单独发送重新连接通知
         if (eventType == "RECONNECTED" && !lostConnections.contains(executionId)) {
@@ -127,6 +168,9 @@ object AgentNotificationManager {
             executionTerminalStates[executionId] = eventType
             lostConnections.remove(executionId)
         }
+
+        // 状态照常推进，前台只是不展示系统通知。这样前台发生重连后，下一次断线仍能正确提醒。
+        if (appInForeground.get()) return
 
         val dedupKey = "${executionId}_${eventType}"
         val now = System.currentTimeMillis()
@@ -167,7 +211,7 @@ object AgentNotificationManager {
             .setOnlyAlertOnce(true)
             .build()
 
-        // 终态通知和过程通知使用统一的 ID (基于 executionId)，同一任务的状态更新直接覆盖旧通知，避免堆叠
+        // ID 基于事件归属：过程事件传 executionId，整个任务的最终事件传 runId。
         val notificationId = (executionId.hashCode().let { if (it < 0) -it else it } % 100000) + 10000
         manager.notify(notificationId, notification)
     }

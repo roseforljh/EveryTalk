@@ -39,7 +39,7 @@ interface ChatDao {
 
     @Query(
         """
-        SELECT id, sessionId, text, sender, reasoning, contentStarted, isError, name, timestamp,
+        SELECT id, sessionId, text, contentParts AS contentPartsJson, sender, reasoning, contentStarted, isError, name, timestamp,
                isPlaceholderName, webSearchResults AS webSearchResultsJson,
                currentWebSearchStage, imageUrls AS imageUrlsJson, attachments AS attachmentsJson,
                outputType, parts AS partsJson, executionStatus,

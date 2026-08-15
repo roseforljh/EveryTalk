@@ -7,6 +7,7 @@ import com.android.everytalk.data.DataClass.ContextUsageSnapshot
 import com.android.everytalk.data.DataClass.ContextCompressionState
 import com.android.everytalk.data.DataClass.ExecutionStep
 import com.android.everytalk.data.DataClass.ExecutionTraceEvent
+import com.android.everytalk.data.DataClass.MessageContentPart
 import com.android.everytalk.data.DataClass.ModalityType
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.WebSearchResult
@@ -161,6 +162,18 @@ class Converters {
         } catch (_: Exception) {
             emptyList()
         }
+    }
+
+    @TypeConverter
+    fun fromMessageContentParts(value: List<MessageContentPart>): String =
+        json.encodeToString(ListSerializer(MessageContentPart.serializer()), value)
+
+    @TypeConverter
+    fun toMessageContentParts(value: String?): List<MessageContentPart> {
+        if (value.isNullOrBlank()) return emptyList()
+        return runCatching {
+            json.decodeFromString(ListSerializer(MessageContentPart.serializer()), value)
+        }.getOrDefault(emptyList())
     }
 
     @TypeConverter

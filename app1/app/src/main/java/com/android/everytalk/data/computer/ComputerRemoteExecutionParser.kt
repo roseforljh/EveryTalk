@@ -62,6 +62,7 @@ object ComputerRemoteExecutionParser {
     private const val MAX_KEY_LENGTH = 64
     private const val MAX_VALUE_LENGTH = 16 * 1024
     private const val SHA256_HEX_LENGTH = 64
+    private val ZERO_REQUEST_HASH = "0".repeat(SHA256_HEX_LENGTH)
 
     private val knownKeys = setOf(
         "protocol",
@@ -121,6 +122,11 @@ object ComputerRemoteExecutionParser {
 
         val requestHash = fields.required("request_hash")
         requireSha256(requestHash, "request_hash")
+        // 旧 Wrapper 用全 0 哈希代替“不可信状态”。它不代表另一条真实请求，
+        // 必须在普通哈希比较前单独识别，避免把升级遗留记录误报为幂等冲突。
+        if (requestHash == ZERO_REQUEST_HASH && fields["status"] != "MISSING") {
+            invalid("远端状态身份不可用", ComputerErrorCodes.EXECUTION_STATE_INVALID)
+        }
         if (expectedRequestHash != null && requestHash != expectedRequestHash) {
             invalid(
                 "request_hash 与本地请求不一致",

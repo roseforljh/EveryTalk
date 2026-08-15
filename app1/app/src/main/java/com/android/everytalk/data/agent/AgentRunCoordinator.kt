@@ -10,6 +10,8 @@ import com.android.everytalk.data.network.AppStreamEvent
 import com.android.everytalk.service.ComputerConnectionServiceController
 import com.android.everytalk.util.AgentNotificationManager
 import com.android.everytalk.util.AppLogger
+import com.android.everytalk.data.skill.SkillRepository
+import com.android.everytalk.data.skill.SkillRuntimeTools
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -58,10 +60,13 @@ class AgentRunCoordinator(
     private val computerDao by lazy { database.computerDao() }
     private val agentRunStore by lazy { AgentRunStore(agentDao) }
     private val agentToolResultStore by lazy { AgentToolResultStore(appContext) }
+    private val skillRepository by lazy { SkillRepository(appContext, database.skillDao()) }
+    private val skillRuntimeTools by lazy { SkillRuntimeTools(skillRepository, agentRunStore) }
     private val recoveryToolRuntime by lazy {
         AgentToolRuntime(
             executorProvider = AgentToolExecutorRegistry::current,
             resultStore = agentToolResultStore,
+            skillRuntimeTools = skillRuntimeTools,
         )
     }
     private val activeJobs = ConcurrentHashMap<String, Job>()
@@ -76,6 +81,7 @@ class AgentRunCoordinator(
             toolRuntime = AgentToolRuntime(
                 executorProvider = AgentToolExecutorRegistry::current,
                 resultStore = agentToolResultStore,
+                skillRuntimeTools = skillRuntimeTools,
             ),
             computerSessionStateProvider = computerSessionStateProvider,
         )
@@ -103,6 +109,7 @@ class AgentRunCoordinator(
                         _events.emit(request.visibleAssistantMessageId to event)
                     }
                 }
+                notifyTerminalRun(agentDao.getRunByVisibleMessage(request.visibleAssistantMessageId))
             } finally {
                 foregroundActivity.close()
                 activeJobs.remove(jobKey)
@@ -160,6 +167,7 @@ class AgentRunCoordinator(
                 agentLoop.run(loopRequest).collect { event ->
                     _events.emit(run.visibleAssistantMessageId to event)
                 }
+                notifyTerminalRun(agentDao.getRun(run.id))
             } catch (e: Exception) {
                 AppLogger.error("AgentRunCoordinator", "Error executing resumed loop for run ${run.id}", e)
                 agentRunStore.updateRunStatus(
@@ -211,6 +219,30 @@ class AgentRunCoordinator(
     }
 
     /**
+     * 通知粒度跟随整个 AgentRun。普通聊天没有 ComputerExecution，不发送系统通知。
+     * 通知失败不能反向改坏已经落库的任务终态。
+     */
+    private suspend fun notifyTerminalRun(run: AgentRunEntity?) {
+        if (run == null) return
+        try {
+            val status = AgentRunStatus.valueOf(run.status)
+            val executionCount = computerDao.countExecutionsForAgentRun(run.id)
+            if (!shouldNotifyAgentRunTerminal(status, executionCount)) return
+            AgentNotificationManager.notifyAgentRunTerminal(
+                context = appContext,
+                conversationId = run.sessionId,
+                runId = run.id,
+                status = status,
+            )
+        } catch (error: Exception) {
+            AppLogger.warn(
+                "AgentRunCoordinator",
+                "Unable to publish terminal notification for run ${run.id}: ${error.message}",
+            )
+        }
+    }
+
+    /**
      * 先把结构化 Tool Result 写入 AgentEntry，再声明 Execution 已消费。
      * 崩溃发生在两步之间时，hasFinalToolResult 会阻止重复写入。
      */
@@ -248,3 +280,13 @@ internal fun isAgentRunActive(
     run: AgentRunEntity,
 ): Boolean = activeJobs["run:${run.id}"]?.isActive == true ||
     activeJobs["message:${run.visibleAssistantMessageId}"]?.isActive == true
+
+/** 只有实际使用过 VPS 且整个 Run 已结束时，才允许发送最终通知。 */
+internal fun shouldNotifyAgentRunTerminal(
+    status: AgentRunStatus,
+    computerExecutionCount: Int,
+): Boolean = computerExecutionCount > 0 && status in setOf(
+    AgentRunStatus.COMPLETED,
+    AgentRunStatus.FAILED,
+    AgentRunStatus.CANCELLED,
+)

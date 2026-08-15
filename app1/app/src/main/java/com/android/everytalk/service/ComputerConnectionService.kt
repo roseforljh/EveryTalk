@@ -11,6 +11,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.android.everytalk.statecontroller.MainActivity
@@ -21,7 +22,6 @@ import com.android.everytalk.data.agent.AgentToolExecutorRegistry
 import com.android.everytalk.data.agent.AgentTerminalReasons
 import com.android.everytalk.data.computer.ComputerException
 import com.android.everytalk.data.computer.ComputerExecutionReconciliationOutcome
-import com.android.everytalk.data.computer.ComputerRemoteStatus
 import com.android.everytalk.data.computer.ComputerRepository
 import com.android.everytalk.data.computer.ComputerPreviewManager
 import com.android.everytalk.data.computer.ComputerToolExecutor
@@ -30,6 +30,7 @@ import com.android.everytalk.data.computer.ComputerWorkspaceSecretManager
 import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.util.AppLogger
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -50,6 +51,17 @@ private const val ACTION_START = "com.android.everytalk.computer.START"
 private const val ACTION_STOP = "com.android.everytalk.computer.STOP"
 private const val ACTION_STOP_IF_IDLE = "com.android.everytalk.computer.STOP_IF_IDLE"
 private const val ACTION_RESUME_RECOVERY = "com.android.everytalk.computer.RESUME_RECOVERY"
+
+/** 通知只显示任务已运行多久，不再把当前钟表时间放进标题。 */
+internal fun agentNotificationElapsedText(startedAtElapsedMillis: Long, nowElapsedMillis: Long): String =
+    "${(nowElapsedMillis - startedAtElapsedMillis).coerceAtLeast(0L) / 1_000L}s"
+
+private data class ForegroundNotificationState(
+    val activeTaskCount: Int = 0,
+    val pendingApprovalCount: Int = 0,
+    val conversationId: String? = null,
+    val startedAtElapsedMillis: Long? = null,
+)
 
 /** 维护需要前台存活的本地 SSH 活动与任务监听，不保存服务器身份或命令。 */
 object ComputerConnectionServiceController {
@@ -136,7 +148,10 @@ object ComputerConnectionServiceController {
 class ComputerConnectionService : Service() {
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var taskMonitorJob: Job? = null
+    private var notificationTickerJob: Job? = null
     private val executionWatchJobs = ConcurrentHashMap<String, Job>()
+    @Volatile
+    private var notificationState = ForegroundNotificationState()
 
     private val database by lazy { AppDatabase.getDatabase(this) }
     private val computerDao by lazy { database.computerDao() }
@@ -187,6 +202,7 @@ class ComputerConnectionService : Service() {
         )
         AgentNotificationManager.clearConnectionFailureNotifications(this)
         startForeground(NOTIFICATION_ID, buildNotification())
+        startNotificationTicker()
         startTaskMonitoring()
         serviceScope.launch { recordRecoveredTasks() }
     }
@@ -363,6 +379,9 @@ class ComputerConnectionService : Service() {
                             title = "服务器需要处理",
                             message = error.message,
                         )
+                        // 协议或身份错误已经确定不会自行恢复。立即走统一对账，把旧任务
+                        // 从活动集合移出并让原 AgentRun 得到明确结果，禁止下次服务启动再监听。
+                        handleTerminalExecution(executionId, null)
                         break
                     }
                     if (!connectionLost) {
@@ -386,6 +405,16 @@ class ComputerConnectionService : Service() {
                     }
                     delay(backoffMillis)
                     backoffMillis = (backoffMillis * 2).coerceAtMost(60_000L)
+                } catch (error: Throwable) {
+                    if (error is CancellationException) throw error
+                    // 最后一层只负责保护进程。业务异常应在 Repository 转换为 ComputerException；
+                    // 即使未来出现遗漏，也只能结束这一条监听，不能结束整个 App。
+                    AppLogger.error(
+                        "ComputerConnectionService",
+                        "Execution watch crashed for $executionId: ${error.message}",
+                        error,
+                    )
+                    break
                 }
             }
         }
@@ -396,7 +425,6 @@ class ComputerConnectionService : Service() {
         val reconciliation = computerRepository.reconcileRemoteExecution(executionId) ?: return
         val latest = reconciliation.execution ?: computerDao.getExecutionById(executionId) ?: return
         val workspace = computerDao.getWorkspaceById(latest.workspaceId)
-        val conversationId = workspace?.conversationId.orEmpty()
         if (reconciliation.outcome == ComputerExecutionReconciliationOutcome.MISSING) {
             latest.runId?.let {
                 agentRunStore.appendStatusEvent(
@@ -423,15 +451,7 @@ class ComputerConnectionService : Service() {
                 )
             }
         }
-        val terminalEvent = latest.remoteStatus ?: return
-        AgentNotificationManager.notifyTaskEvent(
-            this,
-            conversationId = conversationId,
-            executionId = executionId,
-            eventType = terminalEvent,
-            title = if (terminalEvent == ComputerRemoteStatus.SUCCEEDED.name) "任务完成" else "任务结束",
-            message = latest.safeSummary ?: "远端任务执行结束",
-        )
+        if (latest.remoteStatus == null) return
         val run = latest.runId?.let { agentDao.getRun(it) }
             ?: workspace?.let { currentWorkspace ->
                 agentDao.getWaitingRemoteExecutionRuns()
@@ -444,6 +464,18 @@ class ComputerConnectionService : Service() {
             AppLogger.debug(
                 "ComputerConnectionService",
                 "Agent run ${run.id} is still active; keeping terminal result for the original loop",
+            )
+            return
+        }
+        // RETURN_HANDLE 的远端进程可能晚于 AgentRun 结束。已结束的 Run 禁止再次恢复，
+        // 单条 VPS 命令终态也不再发送“任务完成”，最终通知统一由协调器按 Run 发送。
+        if (run.status == AgentRunStatus.COMPLETED.name ||
+            run.status == AgentRunStatus.FAILED.name ||
+            run.status == AgentRunStatus.CANCELLED.name
+        ) {
+            AppLogger.debug(
+                "ComputerConnectionService",
+                "Agent run ${run.id} is already terminal; skipping execution-driven resume",
             )
             return
         }
@@ -460,6 +492,7 @@ class ComputerConnectionService : Service() {
 
     override fun onDestroy() {
         taskMonitorJob?.cancel()
+        notificationTickerJob?.cancel()
         executionWatchJobs.values.forEach(Job::cancel)
         executionWatchJobs.clear()
         serviceScope.cancel()
@@ -486,28 +519,55 @@ class ComputerConnectionService : Service() {
     }
 
     private fun updateNotification(activeTaskCount: Int, pendingApprovalCount: Int, conversationId: String? = null) {
+        val previous = notificationState
+        val hasTimedActivity = activeTaskCount > 0 || pendingApprovalCount > 0
+        val updated = ForegroundNotificationState(
+            activeTaskCount = activeTaskCount,
+            pendingApprovalCount = pendingApprovalCount,
+            conversationId = conversationId,
+            startedAtElapsedMillis = when {
+                !hasTimedActivity -> null
+                previous.startedAtElapsedMillis != null -> previous.startedAtElapsedMillis
+                else -> SystemClock.elapsedRealtime()
+            },
+        )
+        notificationState = updated
+        publishNotification(updated)
+    }
+
+    /** 只刷新通知文字，不增加 Room 查询和 SSH 请求。 */
+    private fun startNotificationTicker() {
+        if (notificationTickerJob?.isActive == true) return
+        notificationTickerJob = serviceScope.launch {
+            while (isActive) {
+                delay(1_000L)
+                val current = notificationState
+                if (current.startedAtElapsedMillis != null) publishNotification(current)
+            }
+        }
+    }
+
+    private fun publishNotification(state: ForegroundNotificationState) {
         val manager = getSystemService(NotificationManager::class.java) ?: return
-        val notification = buildNotification(activeTaskCount, pendingApprovalCount, conversationId)
-        manager.notify(NOTIFICATION_ID, notification)
+        manager.notify(NOTIFICATION_ID, buildNotification(state))
     }
 
     private fun buildNotification(
-        activeTaskCount: Int = 0,
-        pendingApprovalCount: Int = 0,
-        conversationId: String? = null,
+        state: ForegroundNotificationState = notificationState,
     ): android.app.Notification {
-        val timeFormat = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault())
-        val timeString = timeFormat.format(java.util.Date())
+        val elapsedText = state.startedAtElapsedMillis?.let { startedAt ->
+            agentNotificationElapsedText(startedAt, SystemClock.elapsedRealtime())
+        }
 
-        val title = if (activeTaskCount > 0) {
-            "Agent 运行中 · $timeString"
-        } else if (pendingApprovalCount > 0) {
-            "Agent 待处理 · $timeString"
+        val title = if (state.activeTaskCount > 0) {
+            "Agent 运行中 · ${elapsedText ?: "0s"}"
+        } else if (state.pendingApprovalCount > 0) {
+            "Agent 待处理 · ${elapsedText ?: "0s"}"
         } else {
             getString(R.string.computer_connection_notification_title)
         }
 
-        val text = if (activeTaskCount > 0) {
+        val text = if (state.activeTaskCount > 0) {
             "点击查看进度"
         } else {
             getString(R.string.computer_connection_notification_text)
@@ -515,8 +575,8 @@ class ComputerConnectionService : Service() {
 
         val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            if (conversationId != null) {
-                putExtra("conversationId", conversationId)
+            if (state.conversationId != null) {
+                putExtra("conversationId", state.conversationId)
             }
         }
 
@@ -532,6 +592,7 @@ class ComputerConnectionService : Service() {
             .setContentTitle(title)
             .setContentText(text)
             .setContentIntent(contentIntent)
+            .setShowWhen(false)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)

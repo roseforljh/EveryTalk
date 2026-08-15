@@ -432,13 +432,8 @@ class ComputerRuntimeEnvelope(
                 timeoutMillis = 30_000,
                 maxOutputBytes = 8 * 1024,
             )
+            throwRemoteIdentityError(result, "远端 Execution 请求身份冲突，已拒绝重复启动")
             if (result.timedOut || result.exitCode?.let { it != 0 } == true) {
-                if (result.exitCode == 49) {
-                    throw ComputerException(
-                        ComputerErrorCodes.EXECUTION_REQUEST_HASH_CONFLICT,
-                        "远端 Execution 请求身份冲突，已拒绝重复启动",
-                    )
-                }
                 throw ComputerException(
                     ComputerErrorCodes.EXECUTION_UNKNOWN,
                     "远端 Execution 启动结果无法确认",
@@ -480,14 +475,9 @@ class ComputerRuntimeEnvelope(
             expectedRequestHash = expectedRequestHash,
         )
         val result = connection.execute(command, timeoutMillis = 15_000, maxOutputBytes = 8 * 1024)
+        throwRemoteIdentityError(result, "远端 Execution 请求身份冲突")
         if (result.timedOut) {
             throw ComputerException(ComputerErrorCodes.EXECUTION_UNKNOWN, "远端 Execution 状态查询超时", retryable = true)
-        }
-        if (result.exitCode == 49) {
-            throw ComputerException(
-                ComputerErrorCodes.EXECUTION_REQUEST_HASH_CONFLICT,
-                "远端 Execution 请求身份冲突",
-            )
         }
         if (result.exitCode?.let { it != 0 } == true && result.stdout.isBlank()) {
             throw ComputerException(ComputerErrorCodes.EXECUTION_UNKNOWN, "远端 Execution 状态无法确认", retryable = true)
@@ -542,13 +532,8 @@ class ComputerRuntimeEnvelope(
             timeoutMillis = 20_000,
             maxOutputBytes = (maxBytes * 2.0).toInt().coerceAtMost(512 * 1024),
         )
+        throwRemoteIdentityError(result, "远端 Execution 请求身份冲突")
         if (result.timedOut || result.exitCode?.let { it != 0 } == true) {
-            if (result.exitCode == 49) {
-                throw ComputerException(
-                    ComputerErrorCodes.EXECUTION_REQUEST_HASH_CONFLICT,
-                    "远端 Execution 请求身份冲突",
-                )
-            }
             throw ComputerException(ComputerErrorCodes.EXECUTION_RESULT_UNAVAILABLE, "远端 Execution 结果无法读取", retryable = true)
         }
         val isMissing = isMissingSnapshotPayload(result.stdout)
@@ -617,13 +602,8 @@ class ComputerRuntimeEnvelope(
             timeoutMillis = 35_000,
             maxOutputBytes = (maxBytes * 3).coerceAtMost(512 * 1024),
         )
+        throwRemoteIdentityError(response, "远端 Execution 请求身份冲突")
         if (response.timedOut || response.exitCode?.let { it != 0 } == true) {
-            if (response.exitCode == 49) {
-                throw ComputerException(
-                    ComputerErrorCodes.EXECUTION_REQUEST_HASH_CONFLICT,
-                    "远端 Execution 请求身份冲突",
-                )
-            }
             throw ComputerException(
                 ComputerErrorCodes.EXECUTION_RESULT_UNAVAILABLE,
                 "远端 Execution 监听暂时中断",
@@ -672,13 +652,8 @@ class ComputerRuntimeEnvelope(
             expectedRequestHash = expectedRequestHash,
         )
         val result = connection.execute(command, timeoutMillis = 15_000, maxOutputBytes = 8 * 1024)
+        throwRemoteIdentityError(result, "远端 Execution 请求身份冲突，已拒绝取消")
         if (result.timedOut || result.exitCode?.let { it != 0 } == true) {
-            if (result.exitCode == 49) {
-                throw ComputerException(
-                    ComputerErrorCodes.EXECUTION_REQUEST_HASH_CONFLICT,
-                    "远端 Execution 请求身份冲突，已拒绝取消",
-                )
-            }
             throw ComputerException(ComputerErrorCodes.EXECUTION_CANCEL_FAILED, "远端 Execution 取消失败", retryable = true)
         }
         val isMissing = isMissingSnapshotPayload(result.stdout)
@@ -692,6 +667,24 @@ class ComputerRuntimeEnvelope(
     }
 
     private enum class QueryKind { STATUS, RESULT, WATCH, CANCEL }
+
+    /** Wrapper 只在可信状态文件中比较哈希；路径或所有者异常使用独立错误码。 */
+    private fun throwRemoteIdentityError(
+        result: ComputerSshCommandResult,
+        conflictMessage: String,
+    ) {
+        when (result.exitCode) {
+            47 -> throw ComputerException(
+                ComputerErrorCodes.EXECUTION_STATE_INVALID,
+                result.stderr.lineSequence().firstOrNull(String::isNotBlank)
+                    ?: "远端 Execution 状态目录不可信",
+            )
+            49 -> throw ComputerException(
+                ComputerErrorCodes.EXECUTION_REQUEST_HASH_CONFLICT,
+                conflictMessage,
+            )
+        }
+    }
 
     private fun managedStartCommand(
         computer: Computer,

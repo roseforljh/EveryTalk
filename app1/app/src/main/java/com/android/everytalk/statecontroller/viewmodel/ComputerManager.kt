@@ -179,6 +179,8 @@ class ComputerManager(
     private val workspaceManager = ComputerWorkspaceManager(repository)
     private val previewManager = ComputerPreviewManager(repository)
     private val secretManager = ComputerWorkspaceSecretManager(repository)
+    private val skillRepository = com.android.everytalk.data.skill.SkillRepository(context.applicationContext)
+    private val skillServerSync = com.android.everytalk.data.skill.SkillServerSync(skillRepository, repository)
     private val attachmentBridge = ComputerAttachmentBridge(
         context = context.applicationContext,
         attachmentsForConversation = attachmentsForConversation,
@@ -629,6 +631,13 @@ class ComputerManager(
             false
         }
     }
+
+    suspend fun syncSkills(
+        context: ComputerRequestContext,
+        snapshot: com.android.everytalk.data.skill.SkillRequestSnapshot?,
+        requiredSkillIds: List<String>,
+    ): List<com.android.everytalk.data.skill.SyncedSkill> =
+        skillServerSync.sync(context, snapshot, requiredSkillIds)
 
     suspend fun disconnect(computerId: String) {
         clearComputerPreparations(computerId)

@@ -31,9 +31,14 @@ internal fun ComputerStatus.canAttemptExecutionRecovery(): Boolean = this in set
     ComputerStatus.DISCONNECTED,
 )
 
-/** 容器待修复只影响隔离环境，已经确认过身份的基础 SSH 仍然可用。 */
-internal fun ComputerStatus.canUseSshTools(): Boolean = this == ComputerStatus.READY ||
-    this == ComputerStatus.CONFIGURATION_REQUIRED
+/** 新工具调用只允许使用已就绪的服务器；旧任务恢复会显式使用 requireReady=false。 */
+internal fun ComputerStatus.canUseSshTools(): Boolean = this == ComputerStatus.READY
+
+/** 只有受管 Container 任务会被 Wrapper 升级后的容器重建影响。 */
+internal fun hasActiveContainerExecution(executions: List<ComputerExecutionEntity>): Boolean =
+    executions.any { execution ->
+        execution.target == null || execution.target == ComputerExecTarget.CONTAINER.name
+    }
 
 /**
  * Computer 功能的本地统一入口。Room 保存非敏感状态，CredentialStore 保存加密凭据，SSH 直连用户 VPS。
@@ -234,6 +239,15 @@ class ComputerRepository(
         if (current.runMode != ComputerRunMode.CONTAINER) {
             throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "当前服务器使用 Direct 模式")
         }
+        if (hasActiveContainerExecution(dao.getActiveRemoteExecutionsForComputer(computerId))) {
+            throw ComputerException(
+                code = ComputerErrorCodes.COMPUTER_NOT_READY,
+                message = "当前还有 Container 任务在运行，请等待任务完成后升级",
+                retryable = true,
+                action = "WAIT_FOR_CONTAINER_TASKS",
+            )
+        }
+        val runtimeOnlyUpgrade = current.canUseRuntimeOnlyUpgrade()
         val sudoPassword = if (current.username == "root") {
             null
         } else {
@@ -248,7 +262,13 @@ class ComputerRepository(
             dao.updateComputerStatus(computerId, ComputerStatus.PROVISIONING.name, null)
             return try {
                 val result = withConnection(computerId, requireReady = false) { connection, computer ->
-                    provisioner.provision(connection, computer, sudoPassword, onProgress)
+                    provisioner.provision(
+                        connection = connection,
+                        computer = computer,
+                        sudoPassword = sudoPassword,
+                        runtimeOnly = runtimeOnlyUpgrade,
+                        onProgress = onProgress,
+                    )
                 }
                 val configured = current.copy(
                     bootstrapVersion = result.bootstrapVersion,
@@ -639,17 +659,28 @@ class ComputerRepository(
             ?: throw ComputerException(ComputerErrorCodes.WORKSPACE_NOT_READY, "Workspace 不存在")
         val target = execution.target?.let { runCatching { ComputerExecTarget.valueOf(it) }.getOrNull() }
             ?: ComputerExecTarget.CONTAINER
-        val event = withConnection(computer.id, requireReady = false) { connection, currentComputer ->
-            runtimeEnvelope.watchExecution(
-                connection = connection,
-                computer = currentComputer,
-                workspace = workspace,
-                executionId = execution.id,
-                stdoutCursor = execution.stdoutCursor,
-                stderrCursor = execution.stderrCursor,
-                target = target,
-                expectedProcessId = execution.remoteProcessId,
-                expectedRequestHash = execution.requestHash,
+        val event = try {
+            withConnection(computer.id, requireReady = false) { connection, currentComputer ->
+                runtimeEnvelope.watchExecution(
+                    connection = connection,
+                    computer = currentComputer,
+                    workspace = workspace,
+                    executionId = execution.id,
+                    stdoutCursor = execution.stdoutCursor,
+                    stderrCursor = execution.stderrCursor,
+                    target = target,
+                    expectedProcessId = execution.remoteProcessId,
+                    expectedRequestHash = execution.requestHash,
+                )
+            }
+        } catch (error: ComputerRemoteExecutionProtocolException) {
+            // 长监听不负责保存原始协议文本。转换成统一业务错误，交给服务对账收尾，
+            // 禁止解析异常逃出 SupervisorJob 并结束整个 App 进程。
+            throw ComputerException(
+                code = error.protocolCode,
+                message = error.message ?: "远端 Execution 状态无效",
+                retryable = false,
+                cause = error,
             )
         }
 
@@ -790,10 +821,12 @@ class ComputerRepository(
             }
             if (error.code == ComputerErrorCodes.EXECUTION_NOT_FOUND) {
                 ComputerRemoteExecutionQuery.Missing
-            } else if (error.code == ComputerErrorCodes.EXECUTION_REQUEST_HASH_CONFLICT) {
+            } else if (error.code == ComputerErrorCodes.EXECUTION_REQUEST_HASH_CONFLICT ||
+                error.code == ComputerErrorCodes.EXECUTION_STATE_INVALID
+            ) {
                 ComputerRemoteExecutionQuery.Invalid(
                     message = error.message,
-                    code = ComputerErrorCodes.EXECUTION_REQUEST_HASH_CONFLICT,
+                    code = error.code,
                 )
             } else {
                 ComputerRemoteExecutionQuery.Unavailable(

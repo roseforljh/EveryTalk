@@ -50,6 +50,7 @@ import com.android.everytalk.ui.screens.appinfo.PrivacyPolicyScreen
 import com.android.everytalk.ui.screens.settings.SettingsScreen
 import com.android.everytalk.ui.components.splash.PixelPenguinSplash
 import com.android.everytalk.ui.theme.App1Theme
+import com.android.everytalk.util.AgentNotificationManager
 import com.android.everytalk.util.message.MAX_EXTERNAL_TRANSFER_BYTES
 import com.android.everytalk.util.storage.readAtMost
 import kotlinx.coroutines.flow.collectLatest
@@ -623,6 +624,18 @@ class MainActivity : AppCompatActivity() {
                                         )
                                     }
                                 }
+                                composable(route = Screen.SKILL_SCREEN) {
+                                    com.android.everytalk.ui.screens.skill.SkillScreen(navController = navController)
+                                }
+                                composable(route = Screen.SKILL_DOWNLOAD_SCREEN) {
+                                    com.android.everytalk.ui.screens.skill.SkillDownloadScreen(navController = navController)
+                                }
+                                composable(route = Screen.SKILL_DETAIL_SCREEN) { entry ->
+                                    com.android.everytalk.ui.screens.skill.SkillDetailScreen(
+                                        navController = navController,
+                                        skillId = entry.arguments?.getString("skillId").orEmpty(),
+                                    )
+                                }
                                 composable(
                                     route = Screen.APP_INFO_SCREEN,
                                     enterTransition = {
@@ -854,6 +867,7 @@ class MainActivity : AppCompatActivity() {
    
    override fun onStart() {
        super.onStart()
+       AgentNotificationManager.onAppForeground(this)
        if (this::appViewModel.isInitialized) {
            appViewModel.retryPendingAiContentReports()
        }
@@ -861,6 +875,7 @@ class MainActivity : AppCompatActivity() {
 
    override fun onStop() {
        super.onStop()
+       AgentNotificationManager.onAppBackground()
        if (this::appViewModel.isInitialized) {
            appViewModel.onAppStop()
        }

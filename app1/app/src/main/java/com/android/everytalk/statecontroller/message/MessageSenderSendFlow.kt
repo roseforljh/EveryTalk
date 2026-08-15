@@ -25,6 +25,8 @@ import com.android.everytalk.data.DataClass.MAX_AUTO_CONTEXT_COMPRESSION_THRESHO
 import com.android.everytalk.data.DataClass.RequestContextManagement
 import com.android.everytalk.data.DataClass.ModelParameterProtocol
 import com.android.everytalk.data.DataClass.MessageToolIds
+import com.android.everytalk.data.DataClass.MessageContentPart
+import com.android.everytalk.data.DataClass.toApiText
 import com.android.everytalk.data.computer.ComputerException
 import com.android.everytalk.data.DataClass.PartsApiMessage
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
@@ -38,7 +40,6 @@ import com.android.everytalk.data.DataClass.resolvedModelTokenLimits
 import com.android.everytalk.data.DataClass.toThinkingConfig
 import com.android.everytalk.data.network.WebSearchSupport
 import com.android.everytalk.data.network.ExternalWebSearchProvider
-import com.android.everytalk.data.network.PromptCapabilityCatalog
 import com.android.everytalk.data.network.PromptCachePolicy
 import com.android.everytalk.data.network.AnthropicDirectClient
 import com.android.everytalk.data.network.MAX_ATTACHMENT_PAGE_CHARS
@@ -75,10 +76,7 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.jsonPrimitive
-
-internal fun shouldUsePromptCapabilities(
-    isImageGeneration: Boolean,
-): Boolean = !isImageGeneration
+import com.android.everytalk.data.skill.skillToolDefinitions
 
 private fun hasSuccessfulAnthropicCompaction(inputJson: String?): Boolean = runCatching {
     val messages = Json.parseToJsonElement(inputJson.orEmpty()) as? JsonArray ?: return@runCatching false
@@ -120,7 +118,8 @@ internal fun MessageSender.sendMessageInternal(
         mimeType: String? = null,
         systemPrompt: String? = null,
         isImageGeneration: Boolean = false,
-        manualMessageId: String? = null
+        manualMessageId: String? = null,
+        contentParts: List<MessageContentPart> = emptyList(),
     ) {
         val textToActuallySend = messageText.trim()
         val allAttachments = attachments.toMutableList()
@@ -214,6 +213,14 @@ internal fun MessageSender.sendMessageInternal(
                 }
             }
             val requestConversationId = stateHolder._currentConversationId.value
+            // 每条请求只冻结一次。后续启停和更新从下一条消息生效。
+            val skillSnapshotForRequest = if (isImageGeneration) {
+                null
+            } else {
+                val manualReferences = contentParts.filterIsInstance<MessageContentPart.SkillReference>()
+                    .map { it.reference }
+                withContext(Dispatchers.IO) { skillRepository.createSnapshot(manualReferences) }
+            }
             // Workspace 准备和附件处理并行。用户消息无需等待 SSH，点击发送后立即进入消息列表。
             val computerPreparation = async(Dispatchers.IO) {
                 captureComputerPreparation {
@@ -306,6 +313,7 @@ internal fun MessageSender.sendMessageInternal(
 
             val newUserMessageForUi = UiMessage(
                 id = manualMessageId ?: "user_${UUID.randomUUID()}", text = textToActuallySend, sender = UiSender.User,
+                contentParts = contentParts,
                 timestamp = System.currentTimeMillis(), contentStarted = true,
                 imageUrls = attachmentResult.imageUriStringsForUi,
                 attachments = attachmentResult.processedAttachmentsForUi,
@@ -493,7 +501,7 @@ internal fun MessageSender.sendMessageInternal(
                     SimpleTextApiMessage(
                         id = newUserMessageForUi.id,
                         role = newUserMessageForUi.role,
-                        content = newUserMessageForUi.text,
+                        content = newUserMessageForUi.contentParts.toApiText(newUserMessageForUi.text),
                         name = newUserMessageForUi.name,
                     )
                 }
@@ -607,6 +615,7 @@ internal fun MessageSender.sendMessageInternal(
                 val effectiveSystemPrompt = listOfNotNull(
                     systemPrompt?.trim()?.takeIf(String::isNotBlank) ?: existingSystemPrompt,
                     preparedComputerRequest?.environmentPrompt,
+                    skillSnapshotForRequest?.renderCatalog(),
                 ).joinToString("\n\n")
                 if (effectiveSystemPrompt.isNotBlank()) {
                     val systemMessage = SimpleTextApiMessage(role = "system", content = effectiveSystemPrompt)
@@ -657,8 +666,11 @@ internal fun MessageSender.sendMessageInternal(
                         Log.d("MessageSender", "注入内建 web_search 工具")
                         toolsList.add(builtInWebSearchToolDefinition())
                     }
-                    if (shouldUsePromptCapabilities(isImageGeneration = isImageGeneration)) {
-                        toolsList.add(PromptCapabilityCatalog.selectionToolDefinition())
+                    if (skillSnapshotForRequest?.let {
+                            it.automaticCatalog.isNotEmpty() || it.manualReferences.isNotEmpty()
+                        } == true
+                    ) {
+                        toolsList.addAll(skillToolDefinitions())
                     }
 
                     val effectiveTools = appendBuiltInWebFetchToolIfNeeded(toolsList)
@@ -678,8 +690,12 @@ internal fun MessageSender.sendMessageInternal(
                         tools = effectiveToolsWithCurrentTime,
                         enabled = hasGenericAttachments,
                     )
-                    appendComputerTools(
+                    val toolsWithAgentRequest = appendAgentRequestTool(
                         tools = toolsWithAttachmentReader,
+                        enabled = preparedComputerRequest == null,
+                    )
+                    appendComputerTools(
+                        tools = toolsWithAgentRequest,
                         enabled = preparedComputerRequest != null,
                         permissionMode = preparedComputerRequest?.permissionMode
                             ?: com.android.everytalk.data.computer.ComputerPermissionMode.MANUAL,
@@ -930,6 +946,7 @@ internal fun MessageSender.sendMessageInternal(
                         restoredStateCoversRequestPrefix = nativeThroughMessageId != null,
                     ),
                     localComputerRequestContext = preparedComputerRequest?.context,
+                    localSkillSnapshot = skillSnapshotForRequest,
                     imageGenRequest = if (isImageGeneration) {
                         // 调试信息：检查发送的配置
                         Log.d("MessageSender", "Image generation config: ${safeApiConfigSummary(currentConfig)}")

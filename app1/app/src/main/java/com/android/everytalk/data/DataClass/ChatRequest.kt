@@ -1,5 +1,6 @@
 package com.android.everytalk.data.DataClass
 import com.android.everytalk.data.computer.ComputerRequestContext
+import com.android.everytalk.data.skill.SkillRequestSnapshot
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Contextual
@@ -122,6 +123,10 @@ data class ChatRequest(
      */
     @Transient
     val localProviderContinuation: ProviderTurnContinuation? = null,
+
+    /** 当前请求冻结的 Skill 目录，只在 Android 本地运行和恢复时使用。 */
+    @Transient
+    val localSkillSnapshot: SkillRequestSnapshot? = null,
 )
 
 @Serializable

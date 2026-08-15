@@ -169,10 +169,11 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
         done
         [ "$group_found" = true ]
     }
-    print_untrusted_state() {
-        # 归属校验失败时只返回无法核验的固定身份，不采信状态文件内容。
-        printf 'protocol=2\nexecution_id=%s\nprocess_id=process_%s\nrequest_hash=0000000000000000000000000000000000000000000000000000000000000000\ntarget=%s\npid=0\nstart_ticks=0\nstatus=UNKNOWN\nexit_code=\nstarted_at=0\nupdated_at=0\nstdout_bytes=0\nstderr_bytes=0\n' \
-            "$execution_id" "$execution_id" "$state_target"
+    reject_untrusted_state() {
+        # 不可信状态不能伪造成全 0 request_hash。全 0 会被 Android 误判成另一条请求，
+        # 也会掩盖真正失败的是路径、所有者还是状态身份校验。
+        printf 'Execution 状态不可信: %s\n' "$1" >&2
+        exit 47
     }
 
     if [ "$v2_host" = true ]; then
@@ -271,19 +272,11 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
             printf 'protocol=2\nexecution_id=%s\nprocess_id=%s\nrequest_hash=0000000000000000000000000000000000000000000000000000000000000000\ntarget=%s\npid=0\nstart_ticks=0\nstatus=MISSING\nexit_code=\nstarted_at=0\nupdated_at=0\nstdout_bytes=0\nstderr_bytes=0\n' "$execution_id" "$process_id" "$state_target"
             return 0
         fi
-        if ! execution_parent_safe || ! execution_directory_safe; then
-            print_untrusted_state
-            return 0
-        fi
+        execution_parent_safe || reject_untrusted_state '父目录校验失败'
+        execution_directory_safe || reject_untrusted_state '执行目录校验失败'
         if [ -f "$state_file" ] && [ ! -L "$state_file" ]; then
-            if ! state_owner_allowed "$state_file"; then
-                print_untrusted_state
-                return 0
-            fi
-            if ! state_has_expected_identity; then
-                print_untrusted_state
-                return 0
-            fi
+            state_owner_allowed "$state_file" || reject_untrusted_state '状态文件所有者校验失败'
+            state_has_expected_identity || reject_untrusted_state '状态身份校验失败'
             current_status="$(state_value "$state_file" status)"
             if [ "$current_status" = RUNNING ] || [ "$current_status" = STARTING ]; then
                 if ! state_has_valid_process; then
@@ -301,7 +294,7 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
             fi
             cat "$state_file"
         else
-            print_untrusted_state
+            reject_untrusted_state '状态文件缺失或为符号链接'
         fi
     }
     cleanup_v2_runtime() {
@@ -313,6 +306,15 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
        [ "$input_mode" = --host-execution-cancel ] || [ "$input_mode" = --host-watch-execution ] || [ "$input_mode" = --host-watch-executions ] || \
        [ "$input_mode" = --execution-status ] || [ "$input_mode" = --execution-result ] || \
        [ "$input_mode" = --execution-cancel ] || [ "$input_mode" = --watch-execution ] || [ "$input_mode" = --watch-executions ]; then
+        # 查询前先完成信任校验。长监听禁止先读取不可信 state 再等待 25 秒，
+        # 否则旧目录会看起来像一条正常运行中的任务。
+        if [ -e "$execution_dir" ]; then
+            execution_parent_safe || reject_untrusted_state '父目录校验失败'
+            execution_directory_safe || reject_untrusted_state '执行目录校验失败'
+            [ -f "$state_file" ] && [ ! -L "$state_file" ] || reject_untrusted_state '状态文件缺失或为符号链接'
+            state_owner_allowed "$state_file" || reject_untrusted_state '状态文件所有者校验失败'
+            state_has_expected_identity || reject_untrusted_state '状态身份校验失败'
+        fi
         if [ -f "$state_file" ] && [ ! -L "$state_file" ] && execution_parent_safe && execution_directory_safe && state_owner_allowed "$state_file" && \
            [ -n "$expected_request_hash" ]; then
             existing_hash="$(state_value "$state_file" request_hash)"

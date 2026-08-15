@@ -5,6 +5,7 @@ import androidx.room.ForeignKey
 import androidx.room.Index
 import androidx.room.PrimaryKey
 import com.android.everytalk.data.DataClass.Message
+import com.android.everytalk.data.DataClass.MessageContentPart
 import com.android.everytalk.data.DataClass.ContextUsageSnapshot
 import com.android.everytalk.data.DataClass.ContextCompressionState
 import com.android.everytalk.data.DataClass.ExecutionStep
@@ -43,6 +44,7 @@ data class MessageEntity(
     val id: String,
     val sessionId: String, // Foreign Key to ChatSessionEntity
     val text: String,
+    val contentParts: List<MessageContentPart> = emptyList(),
     val sender: Sender,
     val reasoning: String?,
     val contentStarted: Boolean,
@@ -77,6 +79,7 @@ data class RawMessageRow(
     val id: String,
     val sessionId: String,
     val text: String,
+    val contentPartsJson: String,
     val sender: String,
     val reasoning: String?,
     val contentStarted: Boolean,
@@ -107,6 +110,7 @@ data class RawMessageRow(
 fun RawMessageRow.toMessage(converters: Converters): Message = Message(
     id = id,
     text = text,
+    contentParts = converters.toMessageContentParts(contentPartsJson),
     sender = converters.toSender(sender),
     reasoning = reasoning,
     contentStarted = contentStarted,
@@ -138,6 +142,7 @@ fun MessageEntity.toMessage(): Message {
     return Message(
         id = id,
         text = text,
+        contentParts = contentParts,
         sender = sender,
         reasoning = reasoning,
         contentStarted = contentStarted,
@@ -171,6 +176,7 @@ fun Message.toEntity(sessionId: String): MessageEntity {
         id = id,
         sessionId = sessionId,
         text = text,
+        contentParts = contentParts,
         sender = sender,
         reasoning = reasoning,
         contentStarted = contentStarted,

@@ -13,6 +13,7 @@ import com.android.everytalk.data.database.daos.ChatDao
 import com.android.everytalk.data.database.daos.ComputerDao
 import com.android.everytalk.data.database.daos.McpConfigDao
 import com.android.everytalk.data.database.daos.SettingsDao
+import com.android.everytalk.data.database.daos.SkillDao
 import com.android.everytalk.data.database.daos.VoiceConfigDao
 import com.android.everytalk.data.database.entities.ApiConfigEntity
 import com.android.everytalk.data.database.entities.AgentCompactionEntryEntity
@@ -35,6 +36,8 @@ import com.android.everytalk.data.database.entities.MessageEntity
 import com.android.everytalk.data.database.entities.PinnedItemEntity
 import com.android.everytalk.data.database.entities.ProviderContinuationStateEntity
 import com.android.everytalk.data.database.entities.SystemSettingEntity
+import com.android.everytalk.data.database.entities.SkillInstallationEntity
+import com.android.everytalk.data.database.entities.SkillVersionEntity
 import com.android.everytalk.data.database.entities.VoiceBackendConfigEntity
 import com.android.everytalk.data.database.entities.WorkspaceSecretMetadataEntity
 
@@ -63,8 +66,10 @@ import com.android.everytalk.data.database.entities.WorkspaceSecretMetadataEntit
         AgentContextSnapshotEntity::class,
         AgentCompactionEntryEntity::class,
         ProviderContinuationStateEntity::class,
+        SkillInstallationEntity::class,
+        SkillVersionEntity::class,
     ],
-    version = 21,
+    version = 22,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -76,6 +81,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun mcpConfigDao(): McpConfigDao
     abstract fun computerDao(): ComputerDao
     abstract fun agentDao(): AgentDao
+    abstract fun skillDao(): SkillDao
 
     companion object {
         @Volatile
@@ -111,6 +117,7 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_18_19,
                     MIGRATION_19_20,
                     MIGRATION_20_21,
+                    MIGRATION_21_22,
                 )
                 .build()
                 INSTANCE = instance
@@ -626,6 +633,53 @@ abstract class AppDatabase : RoomDatabase() {
         val MIGRATION_20_21 = object : Migration(20, 21) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE messages ADD COLUMN executionFinishedAt INTEGER")
+            }
+        }
+
+        /** 新增动态 Skill 安装和不可变版本表。 */
+        val MIGRATION_21_22 = object : Migration(21, 22) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN contentParts TEXT NOT NULL DEFAULT '[]'")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS skill_installations (
+                        skillId TEXT NOT NULL PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        description TEXT NOT NULL,
+                        sourceType TEXT NOT NULL,
+                        sourceRepository TEXT,
+                        sourcePath TEXT,
+                        currentHash TEXT NOT NULL,
+                        enabled INTEGER NOT NULL,
+                        invocationMode TEXT NOT NULL,
+                        auditStatus TEXT NOT NULL,
+                        updateHash TEXT,
+                        createdAt INTEGER NOT NULL,
+                        updatedAt INTEGER NOT NULL,
+                        lastUsedAt INTEGER,
+                        useCount INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_skill_installations_enabled ON skill_installations(enabled)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_skill_installations_currentHash ON skill_installations(currentHash)")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS skill_versions (
+                        skillId TEXT NOT NULL,
+                        contentHash TEXT NOT NULL,
+                        versionLabel TEXT,
+                        rootPath TEXT NOT NULL,
+                        manifestJson TEXT NOT NULL,
+                        frontmatterJson TEXT NOT NULL,
+                        auditJson TEXT,
+                        installedAt INTEGER NOT NULL,
+                        PRIMARY KEY(skillId, contentHash),
+                        FOREIGN KEY(skillId) REFERENCES skill_installations(skillId) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_skill_versions_skillId ON skill_versions(skillId)")
             }
         }
     }

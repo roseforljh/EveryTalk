@@ -19,6 +19,7 @@ import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import com.android.everytalk.util.AppLogger
+import com.android.everytalk.data.skill.SkillSecretSessionStore
 
 private const val DEFAULT_FILE_READ_LIMIT = 256 * 1024
 
@@ -1205,7 +1206,16 @@ class ComputerToolExecutor(
         val request = parseExecRequestWithoutSecrets(arguments)
         if (!loadSecrets) return request
         val secretNames = arguments.stringList("secret_names")
-        return request.copy(secrets = secretManager.loadSelected(context.workspaceId, secretNames))
+        if (secretNames.isEmpty()) return request
+        val workspaceSecrets = runCatching { secretManager.loadSelected(context.workspaceId, secretNames) }.getOrDefault(emptyMap())
+        val missing = secretNames.filterNot(workspaceSecrets::containsKey)
+        val sessionSecrets = SkillSecretSessionStore.loadSelected(context.runId, missing)
+        if (workspaceSecrets.size + sessionSecrets.size != secretNames.distinct().size) {
+            workspaceSecrets.values.forEach { it.fill('\u0000') }
+            sessionSecrets.values.forEach { it.fill('\u0000') }
+            throw ComputerException(ComputerErrorCodes.CREDENTIAL_MISSING, "请求的 Secret 不存在")
+        }
+        return request.copy(secrets = workspaceSecrets + sessionSecrets)
     }
 
     /** 审批预检只解析参数，不读取 Keystore，避免用户批准前触碰 Secret。 */
