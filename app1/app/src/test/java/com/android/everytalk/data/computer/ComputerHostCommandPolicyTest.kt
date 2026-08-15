@@ -1,5 +1,7 @@
 package com.android.everytalk.data.computer
 
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -115,6 +117,52 @@ class ComputerHostCommandPolicyTest {
             )
             assertFalse(command, assessment.requiresConfirmation)
         }
+    }
+
+    @Test
+    fun `磁盘占用诊断管道保持只读`() {
+        val assessment = ComputerHostCommandPolicy.assess(
+            ComputerExecRequest(
+                command = "df -h; echo \"=== Top 15 largest dirs in / ===\"; du -ahx / 2>/dev/null | sort -rh | head -n 15",
+                cwd = "~",
+                target = ComputerExecTarget.HOST,
+            ),
+        )
+
+        assertFalse(assessment.requiresConfirmation)
+    }
+
+    @Test
+    fun `诊断管道仍拒绝写文件和命令替换`() {
+        val commands = listOf(
+            "du -ahx / | sort -rh > /tmp/result",
+            "echo \"\$(rm -rf /tmp/demo)\"",
+            "du -ahx / | sort -o /tmp/result",
+        )
+
+        commands.forEach { command ->
+            val assessment = ComputerHostCommandPolicy.assess(
+                ComputerExecRequest(command = command, cwd = "~", target = ComputerExecTarget.HOST),
+            )
+            assertTrue(command, assessment.requiresConfirmation)
+        }
+    }
+
+    @Test
+    fun `UNKNOWN审批同时遵守只读判断和三档权限`() {
+        val readOnly = buildJsonObject {
+            put("command", "df -h; du -ahx / 2>/dev/null | sort -rh | head -n 15")
+            put("target", "host")
+        }
+        val write = buildJsonObject {
+            put("command", "systemctl restart demo")
+            put("target", "host")
+        }
+
+        assertFalse(ComputerToolCallSafety.requiresUnknownApproval("exec", readOnly, ComputerPermissionMode.MANUAL))
+        assertFalse(ComputerToolCallSafety.requiresUnknownApproval("exec", readOnly, ComputerPermissionMode.SMART))
+        assertTrue(ComputerToolCallSafety.requiresUnknownApproval("exec", write, ComputerPermissionMode.MANUAL))
+        assertFalse(ComputerToolCallSafety.requiresUnknownApproval("exec", write, ComputerPermissionMode.FULL))
     }
 
     @Test

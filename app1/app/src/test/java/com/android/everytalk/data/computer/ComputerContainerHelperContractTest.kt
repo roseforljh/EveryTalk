@@ -100,6 +100,7 @@ class ComputerContainerHelperContractTest {
     fun `Wrapper升级会重建受管Container并保留Workspace挂载`() {
         val helper = helperSource()
         val ensureWorkspaceBody = helper
+            .replace("\r\n", "\n")
             .substringAfter("ensure_workspace() {")
             .substringBefore("\n}\n\ncontainer_address")
 

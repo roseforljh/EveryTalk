@@ -218,6 +218,68 @@ class AgentApprovalPersistenceTest {
     }
 
     @Test
+    fun `只读诊断转UNKNOWN后直接交回AI且不弹审批`() = runBlocking {
+        database.chatDao().insertSession(ChatSessionEntity("session-unknown-read", 1L, 1L, false))
+        database.computerDao().upsertComputer(
+            ComputerEntity(
+                id = "computer-read", displayName = "测试 VPS", host = "example.test", port = 22,
+                username = "user", resolvedAddress = null, hostKeyAlgorithm = null,
+                hostKeyBlobBase64 = null, hostKeyFingerprint = null, authKind = "PASSWORD",
+                credentialState = "ORIGINAL_ENCRYPTED", runMode = "CONTAINER", status = "READY",
+                capabilitiesJson = null, bootstrapVersion = null, sandboxImage = null,
+                allowPrivateNetwork = false, permissionMode = ComputerPermissionMode.MANUAL.name,
+                lastConnectedAt = null, lastErrorCode = null, createdAt = 1L, updatedAt = 1L,
+            ),
+        )
+        database.computerDao().upsertWorkspace(
+            ComputerWorkspaceEntity(
+                id = "workspace-read", computerId = "computer-read", conversationId = "session-unknown-read",
+                hostPath = "/home/user/.everytalk/workspaces/workspace-read", containerName = null,
+                containerImage = null, runMode = "CONTAINER", status = "READY", createdAt = 1L, lastUsedAt = 1L,
+            ),
+        )
+        val context = ComputerRequestContext(
+            "session-unknown-read",
+            "computer-read",
+            "workspace-read",
+            ComputerPermissionMode.MANUAL,
+        )
+        val request = ChatRequest(
+            messages = listOf(SimpleTextApiMessage(role = "user", content = "检查磁盘")),
+            provider = "provider", channel = "OpenAI", apiAddress = "https://example.test",
+            apiKey = "secret", model = "model", localComputerRequestContext = context,
+        )
+        val run = store.createRun("session-unknown-read", "user-read", "assistant-read", "config-1", request)
+        val call = AgentContentBlock.ToolCall(
+            id = "tool-read",
+            name = "exec",
+            arguments = buildJsonObject {
+                put("command", "df -h; echo \"=== Top 15 largest dirs in / ===\"; du -ahx / 2>/dev/null | sort -rh | head -n 15")
+                put("target", "host")
+            },
+        )
+        store.appendAssistant(run.id, "request-read", AgentAssistantTurn(listOf(call)))
+        store.updateRunStatus(run, AgentRunStatus.INTERRUPTED, terminalReason = "APP_PROCESS_RESTARTED")
+        database.computerDao().upsertExecution(
+            ComputerExecutionEntity(
+                id = "execution-read",
+                toolCallId = com.android.everytalk.data.computer.ComputerToolRequestHasher.toolCallKey(call.id, context),
+                computerId = "computer-read", workspaceId = "workspace-read", toolName = call.name,
+                requestHash = "hash", status = "UNKNOWN", startedAt = 1L, finishedAt = 2L,
+                exitCode = null, errorCode = "EXECUTION_UNKNOWN", safeSummary = null,
+            ),
+        )
+
+        store.recoverUnknownComputerExecutions(database.computerDao())
+        store.recoverUnknownComputerExecutions(database.computerDao())
+
+        assertNull(store.pendingApproval(run.id))
+        val entries = database.agentDao().getEntries(run.id)
+        assertEquals(0, entries.count { it.kind == AgentEntryKind.APPROVAL_REQUEST.name })
+        assertEquals(1, entries.count { it.kind == AgentEntryKind.TOOL_RESULT.name })
+    }
+
+    @Test
     fun `工具结果已落库但模型未续接时恢复而不重放工具`() = runBlocking {
         database.chatDao().insertSession(ChatSessionEntity("session-result", 1L, 1L, false))
         val context = ComputerRequestContext("session-result", "computer-1", "workspace-1")
@@ -417,7 +479,7 @@ class AgentApprovalPersistenceTest {
     }
 
     @Test
-    fun `Computer开始事实存在但执行记录缺失时恢复为UNKNOWN审批`() = runBlocking {
+    fun `写操作开始事实存在但执行记录缺失时恢复为UNKNOWN审批`() = runBlocking {
         database.chatDao().insertSession(ChatSessionEntity("session-gap", 1L, 1L, false))
         seedComputer("session-gap")
         val context = ComputerRequestContext("session-gap", "computer-1", "workspace-1")
@@ -431,7 +493,10 @@ class AgentApprovalPersistenceTest {
         )
         val call = AgentContentBlock.ToolCall(
             id = "tool-gap", name = "exec",
-            arguments = buildJsonObject { put("command", "uname -a") },
+            arguments = buildJsonObject {
+                put("command", "systemctl restart demo")
+                put("target", "host")
+            },
         )
         store.appendAssistant(run.id, "request-gap", AgentAssistantTurn(listOf(call)))
         store.appendToolExecutionStarted(run.id, "request-gap", call)

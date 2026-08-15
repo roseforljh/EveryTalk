@@ -579,6 +579,76 @@ class AppDatabaseMigrationTest {
         migrateHelper.close()
     }
 
+    @Test
+    fun `migration 19 to 20 adds runId cursors cancelCompletedAt and resultAttachedAt`() {
+        val createHelper = openHelper(
+            version = 19,
+            onCreate = { db ->
+                db.execSQL(
+                    """
+                    CREATE TABLE computer_executions (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        toolCallId TEXT NOT NULL,
+                        computerId TEXT NOT NULL,
+                        workspaceId TEXT NOT NULL,
+                        toolName TEXT NOT NULL,
+                        requestHash TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        startedAt INTEGER,
+                        finishedAt INTEGER,
+                        exitCode INTEGER,
+                        errorCode TEXT,
+                        safeSummary TEXT,
+                        target TEXT,
+                        completionMode TEXT,
+                        remoteProcessId TEXT,
+                        remoteStatePath TEXT,
+                        remoteStatus TEXT,
+                        remoteExitCode INTEGER,
+                        lastObservedAt INTEGER
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO computer_executions(
+                        id, toolCallId, computerId, workspaceId, toolName, requestHash,
+                        status, startedAt, finishedAt, exitCode, errorCode, safeSummary
+                    ) VALUES ('execution-1', 'tool-1', 'computer-1', 'workspace-1', 'exec', 'hash',
+                        'RUNNING', 10, NULL, NULL, NULL, 'old summary')
+                    """.trimIndent(),
+                )
+            },
+        )
+        createHelper.writableDatabase.close()
+        createHelper.close()
+
+        val migrateHelper = openHelper(
+            version = 20,
+            onUpgrade = { db, oldVersion, newVersion ->
+                assertEquals(19, oldVersion)
+                assertEquals(20, newVersion)
+                AppDatabase.MIGRATION_19_20.migrate(db)
+            },
+        )
+        val db = migrateHelper.writableDatabase
+        db.query(
+            "SELECT runId, stdoutCursor, stderrCursor, lastEventAt, cancelRequestedAt, cancelCompletedAt, resultAttachedAt " +
+                "FROM computer_executions WHERE id = 'execution-1'",
+        ).use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertTrue(cursor.isNull(0)) // runId
+            assertEquals(0L, cursor.getLong(1)) // stdoutCursor
+            assertEquals(0L, cursor.getLong(2)) // stderrCursor
+            assertTrue(cursor.isNull(3)) // lastEventAt
+            assertTrue(cursor.isNull(4)) // cancelRequestedAt
+            assertTrue(cursor.isNull(5)) // cancelCompletedAt
+            assertTrue(cursor.isNull(6)) // resultAttachedAt
+        }
+        db.close()
+        migrateHelper.close()
+    }
+
     private fun openHelper(
         version: Int,
         onCreate: (SupportSQLiteDatabase) -> Unit = {},

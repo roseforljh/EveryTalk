@@ -1,0 +1,125 @@
+package com.android.everytalk.acceptance
+
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+/** 验证任务监听已经真正归前台服务所有，不再依赖页面 ViewModel 存活。 */
+class AgentBackgroundPlanServiceContractTest {
+    private val service = AgentBackgroundPlanTestFiles.source("service/ComputerConnectionService.kt")
+    private val viewModel = AgentBackgroundPlanTestFiles.source("statecontroller/viewmodel/AppViewModel.kt")
+
+    @Test
+    fun `前台服务恢复入口必须启动真实任务监听器`() {
+        assertTrue(
+            "ACTION_RESUME_RECOVERY 不能只返回 START_STICKY，必须委托后台任务运行时恢复 Room 中的任务",
+            service.contains("backgroundRuntime") || service.contains("taskMonitor") || service.contains("executionMonitor"),
+        )
+        val recoveryBranch = service.substringAfter("ACTION_RESUME_RECOVERY", missingDelimiterValue = "")
+            .substringBefore("return START_STICKY", missingDelimiterValue = "")
+        assertTrue(
+            "恢复分支必须在返回前调用 start/recover/resume 之一",
+            listOf(".start(", ".recover(", ".resume(", "startTaskMonitoring(").any(recoveryBranch::contains),
+        )
+    }
+
+    @Test
+    fun `系统用空Intent重建服务时仍会从持久状态恢复`() {
+        val afterActionDispatch = service.substringAfter("when (intent?.action)", "")
+        assertTrue("null intent 默认路径必须启动任务监听", afterActionDispatch.contains("startTaskMonitoring()"))
+        assertFalse(
+            "服务不能仅凭进程内 activeTokens 判断是否立即退出",
+            service.contains("if (!ComputerConnectionServiceController.hasActiveTokens()) {\n            stopForeground"),
+        )
+    }
+
+    @Test
+    fun `服务退出前必须查询持久化活动任务和待审批任务`() {
+        assertTrue(
+            "服务生命周期必须考虑 Room 中的 ComputerExecution",
+            service.contains("activeExecution") || service.contains("hasActiveExecution") || service.contains("loadActive"),
+        )
+        assertTrue(
+            "WAITING_APPROVAL 也必须阻止服务自然退出",
+            service.contains("WAITING_APPROVAL") || service.contains("waitingApproval"),
+        )
+    }
+
+    @Test
+    fun `任务监听不能继续放在AppViewModel无限轮询`() {
+        val recoveryBlock = viewModel.substringAfter("远端任务可能在 App 重启后仍处于 RUNNING", "")
+            .substringBefore("aiContentReportRepository.retryPendingReports", "")
+        assertFalse(
+            "AppViewModel 中的 while(true) 轮询必须迁移到可恢复前台服务",
+            recoveryBlock.contains("while (true)"),
+        )
+        assertFalse(
+            "AppViewModel 不应直接承担长期 reconcileRemoteExecutions 循环",
+            recoveryBlock.contains("reconcileRemoteExecutions"),
+        )
+    }
+
+    @Test
+    fun `服务必须按VPS复用Transport并按Execution区分Channel`() {
+        val monitorAndPool = AgentBackgroundPlanTestFiles.allProductionKotlin()
+            .filter { (file, text) -> file.name.contains("ConnectionPool") || file.name.contains("Service") || text.contains("taskMonitor") }
+            .joinToString("\n") { it.second }
+        assertTrue("必须按 computerId 复用 Transport", monitorAndPool.contains("computerId"))
+        assertTrue("必须按 executionId 管理任务 Channel", monitorAndPool.contains("executionId") || monitorAndPool.contains("execution_id"))
+    }
+
+    @Test
+    fun `进度写库必须在二百到五百毫秒窗口内合并`() {
+        val monitorSources = AgentBackgroundPlanTestFiles.allProductionKotlin()
+            .filter { (_, text) -> text.contains("executionMonitor") || text.contains("backgroundRuntime") || text.contains("taskMonitor") }
+            .joinToString("\n") { it.second }
+        val supportedWindow = (200L..500L).any { millis ->
+            monitorSources.contains("${millis}L") || monitorSources.contains("$millis.milliseconds")
+        }
+        assertTrue("后台监听必须把密集进度按 200 到 500 毫秒合并写库", supportedWindow)
+    }
+
+    @Test
+    fun `断线重连必须递增退避且上限约一分钟`() {
+        val monitorSources = AgentBackgroundPlanTestFiles.allProductionKotlin()
+            .filter { (_, text) -> text.contains("CONNECTION_LOST") || text.contains("reconnect") || text.contains("backoffMillis") }
+            .joinToString("\n") { it.second }
+        assertTrue("断线重连必须使用递增退避", monitorSources.contains("backoff") || monitorSources.contains("coerceAtMost"))
+        assertTrue(
+            "断线重连退避上限必须约为 60 秒",
+            monitorSources.contains("60_000") || monitorSources.contains("60.seconds"),
+        )
+    }
+
+    @Test
+    fun `后台监听不能设置十分钟或六十分钟硬停止`() {
+        assertFalse(service.contains("10 * 60"))
+        assertFalse(service.contains("60 * 60"))
+        assertFalse(service.contains("600_000"))
+        assertFalse(service.contains("3_600_000"))
+    }
+
+    @Test
+    fun `用户离开页面不能向服务发送停止任务动作`() {
+        val lifecycleBlocks = AgentBackgroundPlanTestFiles.allProductionKotlin()
+            .flatMap { (_, source) ->
+                listOf("onStop", "onPause", "onDestroy").mapNotNull { callback ->
+                    source.takeIf { it.contains("fun $callback") }
+                        ?.substringAfter("fun $callback")
+                        ?.substringBefore("override fun", missingDelimiterValue = source.takeLast(2_000))
+                }
+            }
+        lifecycleBlocks.forEach { block ->
+            assertFalse("页面生命周期不能取消 VPS Execution", block.contains("cancelActiveExecutions"))
+            assertFalse("页面生命周期不能写 USER_STOP", block.contains("AgentTerminalReasons.USER_STOP"))
+        }
+    }
+
+    @Test
+    fun `手机开机期间不得通过BootReceiver主动连接VPS`() {
+        val manifest = AgentBackgroundPlanTestFiles.appFile("app/src/main/AndroidManifest.xml")
+            .readText(Charsets.UTF_8)
+        assertFalse("计划要求用户打开 App 后恢复，禁止 BOOT_COMPLETED 自动连 VPS", manifest.contains("BOOT_COMPLETED"))
+        assertFalse("无需申请 RECEIVE_BOOT_COMPLETED", manifest.contains("RECEIVE_BOOT_COMPLETED"))
+    }
+}
