@@ -2,6 +2,7 @@ package com.android.everytalk.data.agent
 
 import com.android.everytalk.data.database.entities.AgentRunEntity
 import kotlinx.coroutines.Job
+import java.io.File
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -57,5 +58,27 @@ class AgentRunCoordinatorTest {
         assertEquals(15_000L, agentResumeRetryDelayMillis(3))
         assertEquals(30_000L, agentResumeRetryDelayMillis(4))
         assertEquals(60_000L, agentResumeRetryDelayMillis(20))
+    }
+
+    @Test
+    fun `前台Agent事件使用挂起发送保持单通道顺序`() {
+        val source = agentRunCoordinatorSource()
+        val firstRunCollector = source.substringAfter("agentLoop.run(request).collect { event ->")
+            .substringBefore("notifyTerminalRun")
+
+        assertTrue(firstRunCollector.contains("send(event)"))
+        assertFalse(firstRunCollector.contains("trySend(event)"))
+    }
+
+    private fun agentRunCoordinatorSource(): String {
+        val relativePath = "data/agent/AgentRunCoordinator.kt"
+        val candidates = listOf(
+            File("src/main/java/com/android/everytalk/$relativePath"),
+            File("app/src/main/java/com/android/everytalk/$relativePath"),
+            File("app1/app/src/main/java/com/android/everytalk/$relativePath"),
+        )
+        return requireNotNull(candidates.firstOrNull(File::isFile)) {
+            "找不到 $relativePath"
+        }.readText(Charsets.UTF_8)
     }
 }

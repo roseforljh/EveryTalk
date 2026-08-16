@@ -9,6 +9,7 @@ import io.mockk.unmockkAll
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -104,6 +105,38 @@ class StreamingMessageStateManagerRenderStateTest {
         assertTrue(renderState.isComplete)
         assertEquals("${'$'}${'$'}x^2${'$'}${'$'}", renderState.content)
         assertFalse(renderState.hasPendingMath)
+    }
+
+    @Test
+    fun `相同终态正文不重复发布渲染状态`() {
+        val messageId = "same-content"
+        val content = "## 标题\n\n正文"
+
+        subject.startStreaming(messageId)
+        subject.updateContent(messageId, content)
+        val before = subject.getCurrentRenderState(messageId)
+
+        val changed = subject.updateContent(messageId, content)
+
+        assertFalse(changed)
+        assertSame(before, subject.getCurrentRenderState(messageId))
+    }
+
+    @Test
+    fun `完成时正文未变化则复用已显示的Markdown结果`() {
+        val messageId = "finish-without-reparse"
+
+        subject.startStreaming(messageId)
+        subject.updateContent(messageId, "## 标题\n\n正文")
+        val before = subject.getCurrentRenderState(messageId)
+
+        subject.finalizeMessage(messageId)
+        val completed = subject.getCurrentRenderState(messageId)
+
+        assertSame(before.blocks, completed.blocks)
+        assertSame(before.preparedMessage, completed.preparedMessage)
+        assertFalse(completed.isStreaming)
+        assertTrue(completed.isComplete)
     }
 
     @Test

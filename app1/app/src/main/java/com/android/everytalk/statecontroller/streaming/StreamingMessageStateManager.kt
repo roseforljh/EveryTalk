@@ -241,12 +241,17 @@ class StreamingMessageStateManager {
         updateRenderState(messageId, content, isComplete = false, contentVersion = renderedVersion)
     }
 
-    fun updateContent(messageId: String, content: String) {
+    fun updateContent(messageId: String, content: String): Boolean {
         val contentVersion = synchronized(bufferLockFor(messageId)) {
             val stateFlow = streamingStates[messageId]
-            pendingBuffers.remove(messageId)
+            val pendingText = pendingBuffers.remove(messageId)?.toString().orEmpty()
             pendingJobs.remove(messageId)?.cancel()
             markdownHoldStartedAt.remove(messageId)
+            // 终态正文经常与最后一次流式快照完全相同。此时保持原状态和解析结果，
+            // 避免仅因“完成校正”再次发布同一份内容，引起无意义的重组和布局抖动。
+            if (stateFlow != null && pendingText.isEmpty() && stateFlow.value == content) {
+                return@synchronized null
+            }
             if (stateFlow != null) {
                 stateFlow.value = content
             } else {
@@ -257,8 +262,9 @@ class StreamingMessageStateManager {
                 streamingStates[messageId] = MutableStateFlow(content)
             }
             nextContentVersion(messageId)
-        }
+        } ?: return false
         updateRenderState(messageId, content, isComplete = false, contentVersion = contentVersion)
+        return true
     }
 
     fun finishStreaming(messageId: String): String {
@@ -499,6 +505,18 @@ class StreamingMessageStateManager {
             val state: StreamingRenderState
             val nextCache: IncrementalParseCache?
             if (
+                isComplete &&
+                previousContent == content &&
+                streamingRenderStates[messageId]?.value?.hasPendingMath == false
+            ) {
+                // 正文未变化时只切换生命周期标记，继续复用屏幕上已经排好的块和公式结果。
+                // 这样完成瞬间不会换成另一套等价的 Markdown 布局。
+                state = streamingRenderStates.getValue(messageId).value.copy(
+                    isStreaming = false,
+                    isComplete = true,
+                )
+                nextCache = null
+            } else if (
                 cache != null &&
                 previousContent != null &&
                 content.startsWith(previousContent) &&

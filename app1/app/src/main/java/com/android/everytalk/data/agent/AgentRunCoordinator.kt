@@ -14,6 +14,7 @@ import com.android.everytalk.data.skill.SkillRepository
 import com.android.everytalk.data.skill.SkillRuntimeTools
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -22,8 +23,10 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.channels.ClosedSendChannelException
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -112,8 +115,22 @@ class AgentRunCoordinator(
             val foregroundActivity = ComputerConnectionServiceController.acquireAgentRun(appContext)
             try {
                 agentLoop.run(request).collect { event ->
-                    if (!uiAttached.get() || !trySend(event).isSuccess) {
+                    if (!uiAttached.get()) {
                         _events.emit(request.visibleAssistantMessageId to event)
+                    } else {
+                        try {
+                            // 同一次运行只走前台通道，并通过挂起发送保持严格顺序。
+                            // 禁止在通道繁忙时把单个事件改送全局通道，否则 Finish 可能越过正文 delta。
+                            send(event)
+                        } catch (error: CancellationException) {
+                            // 下游页面取消收集也会关闭 callbackFlow。Agent 自身仍活跃时转交应用级通道；
+                            // 用户真正取消 Agent 时必须继续抛出，不能把已取消任务偷偷恢复。
+                            if (!currentCoroutineContext().isActive) throw error
+                            _events.emit(request.visibleAssistantMessageId to event)
+                        } catch (_: ClosedSendChannelException) {
+                            // 页面恰好在发送期间离开时，后续事件交给应用级收集器继续处理。
+                            _events.emit(request.visibleAssistantMessageId to event)
+                        }
                     }
                 }
                 notifyTerminalRun(agentDao.getRunByVisibleMessage(request.visibleAssistantMessageId))

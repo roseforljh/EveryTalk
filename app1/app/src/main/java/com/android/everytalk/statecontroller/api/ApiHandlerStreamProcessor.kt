@@ -253,6 +253,20 @@ internal fun appendExecutionTraceContent(
     }
 }
 
+/** 用供应商终态正文校正当前模型轮次，保留工具调用前已经完成的正文段。 */
+internal fun reconcileFinalRoundTraceContent(
+    trace: List<ExecutionTraceEvent>,
+    finalRoundText: String,
+): List<ExecutionTraceEvent> {
+    if (finalRoundText.isEmpty()) return trace
+    val last = trace.lastOrNull()
+    return if (last is ExecutionTraceEvent.Content) {
+        if (last.text == finalRoundText) trace else trace.dropLast(1) + last.copy(text = finalRoundText)
+    } else {
+        trace + ExecutionTraceEvent.Content(finalRoundText)
+    }
+}
+
 /**
  * 正文后出现任何非正文事件时，先冲刷正文缓冲。
  * 这样节流不会打乱“正文、思考、工具”的真实先后顺序。
@@ -772,22 +786,38 @@ internal class ApiHandlerStreamProcessor(
                     }
                 }
                 is AppStreamEvent.ContentFinal -> {
-                    // 🎯 优化：ContentFinal 事件已被废弃（后端不再发送）
-                    // 前端已通过累积 Content 增量事件构建了完整内容
-                    // 保留此分支仅为向后兼容旧版本后端
-                    android.util.Log.d("ApiHandler", "⚡ ContentFinal event received (deprecated, no-op)")
-                    android.util.Log.d("ApiHandler", "   Message ID: $aiMessageId")
-                    android.util.Log.d("ApiHandler", "   Event text length: ${appEvent.text.length}")
-                    android.util.Log.d("ApiHandler", "   Note: Content already accumulated via Content events, skipping redundant processing")
-                    
-                    // 向后兼容：如果旧版本后端仍然发送此事件，确保内容已标记开始
-                    if (appEvent.text.isNotBlank()) {
-                        updatedMessage = updatedMessage.copy(
+                    val finalized = processedResult as?
+                        com.android.everytalk.util.messageprocessor.ProcessedEventResult.ContentFinalized
+                    val canonicalText = finalized?.fullText.orEmpty()
+                    val canApplyCanonical = canonicalText.isNotEmpty() &&
+                        promptLeakDetectors[aiMessageId]?.isBlocking() != true &&
+                        !PromptLeakGuard.containsLeakage(canonicalText)
+                    if (canApplyCanonical) {
+                        // 内容相同时状态管理器直接保持原渲染快照；确有差异时才校正缺字和 Markdown 边界。
+                        stateHolder.streamingMessageStateManager.updateContent(aiMessageId, canonicalText)
+                        val latest = latestMessageForUpdate()
+                        updatedMessage = latest.copy(
+                            text = canonicalText,
                             contentStarted = true,
                             currentWebSearchStage = null,
-                            executionStatus = null
+                            executionStatus = null,
+                            executionTrace = reconcileFinalRoundTraceContent(
+                                latest.executionTrace,
+                                finalized?.roundText.orEmpty(),
+                            ),
                         )
-                        android.util.Log.d("ApiHandler", "   Marked contentStarted=true for backward compatibility")
+                        messageList[messageIndex] = updatedMessage
+                        if (isImageGeneration) {
+                            stateHolder.isImageConversationDirty.value = true
+                        } else {
+                            stateHolder.isTextConversationDirty.value = true
+                        }
+                    } else if (appEvent.text.isNotBlank()) {
+                        updatedMessage = latestMessageForUpdate().copy(
+                            contentStarted = true,
+                            currentWebSearchStage = null,
+                            executionStatus = null,
+                        )
                     }
                 }
                 is AppStreamEvent.Reasoning -> {

@@ -1107,6 +1107,50 @@ class MessageItemsControllerStatusTest {
     }
 
     @Test
+    fun `首段正文前保留请求到首字耗时组件`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.stateHolder.messages.add(
+            Message(
+                id = "ordered-output-initial-duration",
+                text = "第一段第二段",
+                sender = Sender.AI,
+                contentStarted = true,
+                timestamp = 100L,
+                executionFinishedAt = 900L,
+                executionTrace = listOf(
+                    ExecutionTraceEvent.Content("第一段", startedAtMillis = 500L),
+                    ExecutionTraceEvent.Reasoning("检查配置", startedAtMillis = 600L),
+                    ExecutionTraceEvent.Tool(
+                        step = completedToolStep(),
+                        startedAtMillis = 700L,
+                        finishedAtMillis = 800L,
+                    ),
+                    ExecutionTraceEvent.Content("第二段", startedAtMillis = 900L),
+                ),
+            )
+        )
+        Snapshot.sendApplyNotifications()
+
+        val items = controller.chatListItemsForTest()
+        val processItems = items.filterIsInstance<ChatListItem.AiMessageProcessSegment>()
+
+        assertEquals(
+            listOf("process", "content", "process", "content", "footer"),
+            items.map { item ->
+                when (item) {
+                    is ChatListItem.AiMessageProcessSegment -> "process"
+                    is ChatListItem.AiMessageContentSegment -> "content"
+                    is ChatListItem.AiMessageFooter -> "footer"
+                    else -> item::class.java.simpleName
+                }
+            },
+        )
+        assertTrue(processItems.first().events.isEmpty())
+        assertEquals(100L, processItems.first().executionStartedAtMillis)
+        assertEquals(500L, processItems.first().executionFinishedAtMillis)
+    }
+
+    @Test
     fun `流式正文已经继续输出时前一个过程段停止计时`() {
         val controller = MessageItemsControllerTestAccess.newController()
         val messageId = "ordered-output-streaming"

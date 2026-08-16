@@ -774,6 +774,27 @@ open class MessageItemsController(
         }
 
         return buildList {
+            val firstContent = segments.firstOrNull() as? OrderedAiOutputSegment.Content
+            val firstContentStartedAt = firstContent?.startedAtMillis
+            if (firstContentStartedAt != null && firstContentStartedAt > message.timestamp) {
+                // 第一段正文到达后，保留请求开始到首字出现的真实耗时。
+                // 这段没有思考或工具事件，只显示耗时标题，不伪造执行详情。
+                add(
+                    ChatListItem.AiMessageProcessSegment(
+                        messageId = message.id,
+                        segmentIndex = -1,
+                        events = emptyList(),
+                        detailStartIndex = 0,
+                        activityStatusText = null,
+                        replyIsStreaming = false,
+                        processIsActive = false,
+                        webSearchResults = emptyList(),
+                        messageIsError = false,
+                        executionStartedAtMillis = message.timestamp,
+                        executionFinishedAtMillis = firstContentStartedAt,
+                    )
+                )
+            }
             segments.forEachIndexed { segmentIndex, segment ->
                 when (segment) {
                     is OrderedAiOutputSegment.Content -> if (segment.text.isNotBlank()) {

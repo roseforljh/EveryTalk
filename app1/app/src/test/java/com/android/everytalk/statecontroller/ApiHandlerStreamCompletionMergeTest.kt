@@ -1,14 +1,45 @@
 package com.android.everytalk.statecontroller
 
+import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.ui.components.MarkdownPart
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ApiHandlerStreamCompletionMergeTest {
+
+    @Test
+    fun `终态正文相同时执行链保持原对象`() {
+        val trace = listOf(ExecutionTraceEvent.Content("完整正文"))
+
+        val reconciled = reconcileFinalRoundTraceContent(trace, "完整正文")
+
+        assertSame(trace, reconciled)
+    }
+
+    @Test
+    fun `终态正文只校正执行链最后一轮内容`() {
+        val trace = listOf(
+            ExecutionTraceEvent.Content("我先检查配置。"),
+            ExecutionTraceEvent.Reasoning("读取工具结果"),
+            ExecutionTraceEvent.Content("##结论\nhttps://.resend.com/em"),
+        )
+
+        val reconciled = reconcileFinalRoundTraceContent(
+            trace,
+            "## 结论\n\nhttps://api.resend.com/emails",
+        )
+
+        assertEquals("我先检查配置。", (reconciled[0] as ExecutionTraceEvent.Content).text)
+        assertEquals(
+            "## 结论\n\nhttps://api.resend.com/emails",
+            (reconciled[2] as ExecutionTraceEvent.Content).text,
+        )
+    }
 
     @Test
     fun `merge streaming completion message keeps the more complete synced reasoning`() {
