@@ -210,6 +210,19 @@ class ChatMessagesListRenderRouteTest {
     }
 
     @Test
+    fun `刚完成且流式渲染内容相同时不切换渲染来源`() {
+        assertFalse(
+            shouldUsePreparedStaticAiRender(
+                shouldPreferStreamingContent = false,
+                hasPreparedMessage = true,
+                itemText = "完整回复",
+                effectiveContent = "完整回复",
+                hasMatchingStreamingRender = true,
+            )
+        )
+    }
+
+    @Test
     fun `streaming ai content keeps incremental render path`() {
         assertFalse(
             shouldUsePreparedStaticAiRender(

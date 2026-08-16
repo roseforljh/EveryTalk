@@ -200,8 +200,10 @@ internal fun shouldUsePreparedStaticAiRender(
     hasPreparedMessage: Boolean,
     itemText: String,
     effectiveContent: String,
+    hasMatchingStreamingRender: Boolean = false,
 ): Boolean = !shouldPreferStreamingContent &&
     hasPreparedMessage &&
+    !hasMatchingStreamingRender &&
     itemText == effectiveContent
 
 internal fun shouldAddConversationGapAfter(item: ChatListItem): Boolean = when (item) {

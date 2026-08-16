@@ -201,6 +201,10 @@ fun AiMessageItem(
                 hasPreparedMessage = staticPreparedMessage != null,
                 itemText = text,
                 effectiveContent = effectiveContent,
+                // 刚完成的消息继续复用流式阶段已经显示的同一批 Markdown 块，
+                // 避免结束瞬间切换到等价的静态解析结果。
+                hasMatchingStreamingRender = streamingRenderState.content == effectiveContent &&
+                    streamingRenderState.blocks.isNotEmpty(),
             )
 
             val renderMessage = if (effectiveContent == message.text) {

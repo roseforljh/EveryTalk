@@ -290,6 +290,32 @@ class ThinkingExecutionTimelineGroupingTest {
         assertEquals(verticalPositions.sorted(), verticalPositions)
     }
 
+    @Test
+    fun `只有首字耗时时仍显示过程组件`() {
+        composeRule.setContent {
+            MaterialTheme {
+                ReasoningToggleAndContent(
+                    currentMessageId = "initial-response-duration",
+                    displayedReasoningText = "",
+                    executionSteps = emptyList(),
+                    executionTrace = emptyList(),
+                    isReasoningStreaming = false,
+                    isReasoningComplete = true,
+                    replyIsStreaming = false,
+                    messageIsError = false,
+                    mainContentHasStarted = false,
+                    executionStartedAtMillis = 1_000L,
+                    executionFinishedAtMillis = 2_500L,
+                    reasoningTextColor = Color.Gray,
+                    reasoningToggleDotColor = Color.Gray,
+                    onVisibilityChanged = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("reasoning-process-container").fetchSemanticsNode("")
+    }
+
     private fun toolStep(id: String, name: String) = ExecutionStep(
         id = id,
         type = ExecutionStepType.Tool,

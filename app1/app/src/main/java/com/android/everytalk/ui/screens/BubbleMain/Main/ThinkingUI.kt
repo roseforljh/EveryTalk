@@ -336,7 +336,9 @@ internal fun ReasoningToggleAndContent(
         webSearchResults = webSearchResults,
         executionStatus = activityStatusText,
     )
-    val shouldShowExecutionChain = processIsActive || hasReviewableProcess ||
+    val hasExecutionTiming = executionStartedAtMillis != null &&
+        (executionFinishedAtMillis != null || processIsActive)
+    val shouldShowExecutionChain = hasExecutionTiming || processIsActive || hasReviewableProcess ||
         (!mainContentHasStarted && displayedReasoningText.isNotBlank())
     val sections = remember(displayedReasoningText, executionSteps, executionTrace) {
         executionProcessSections(

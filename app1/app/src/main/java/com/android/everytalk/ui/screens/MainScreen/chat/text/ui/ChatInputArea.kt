@@ -755,12 +755,6 @@ fun ChatInputArea(
                         focusManager.clearFocus()
                     }
                 }
-                LaunchedEffect(localText, isFocused) {
-                    if (localText.isNotEmpty() && !isFocused) {
-                        focusRequester.requestFocus()
-                    }
-                }
-
                 // 增强 Gemini 渠道检测
                 val isGeminiChannel = selectedApiConfig?.let { config ->
                     com.android.everytalk.data.network.WebSearchSupport.isGeminiNativeSearch(config)
@@ -1163,7 +1157,9 @@ fun ChatInputArea(
                                 }
                                 .onFocusChanged { focusState ->
                                     isFocused = focusState.isFocused
-                                    if (!focusState.isFocused) onFocusChange(false)
+                                    // 正文长按选择会把焦点从输入框交给 SelectionContainer。
+                                    // 失焦时禁止滚动列表，否则正文在长按过程中位移，选择手势会被取消。
+                                    if (focusState.isFocused) onFocusChange(true)
                                 },
                             textStyle = MaterialTheme.typography.bodyLarge.copy(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant

@@ -15,6 +15,26 @@ import java.io.File
 class MarkdownEngineOwnershipTest {
 
     @Test
+    fun `AI正文选择依赖原生焦点交接且输入框失焦不触发列表跳动`() {
+        val rendererSource = mainSource(
+            "com/android/everytalk/ui/components/markdown/MikePenzMarkdownRenderer.kt"
+        )
+        val inputSource = mainSource(
+            "com/android/everytalk/ui/screens/MainScreen/chat/text/ui/ChatInputArea.kt"
+        )
+        val imageInputSource = mainSource(
+            "com/android/everytalk/ui/screens/ImageGeneration/ImageGenerationInputArea.kt"
+        )
+
+        assertFalse(rendererSource.contains("clearFocus(force = true)"))
+        assertTrue(rendererSource.contains("SelectionContainer { markdownContent() }"))
+        assertTrue(inputSource.contains("if (focusState.isFocused) onFocusChange(true)"))
+        assertFalse(inputSource.contains("if (!focusState.isFocused) onFocusChange(false)"))
+        assertFalse(inputSource.contains("if (localText.isNotEmpty() && !isFocused)"))
+        assertFalse(imageInputSource.contains("if (localText.isNotEmpty() && !isFocused)"))
+    }
+
+    @Test
     fun `唯一Markdown入口委托给MikePenz`() {
         val source = mainSource(
             "com/android/everytalk/ui/components/streaming/StreamBlocksRenderer.kt"

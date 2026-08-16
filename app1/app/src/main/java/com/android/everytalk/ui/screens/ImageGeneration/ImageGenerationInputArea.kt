@@ -398,12 +398,6 @@ fun ImageGenerationInputArea(
             focusManager.clearFocus()
         }
     }
-    LaunchedEffect(localText, isFocused) {
-        if (localText.isNotEmpty() && !isFocused) {
-            focusRequester.requestFocus()
-        }
-    }
-
     val keepInputSeparated = localText.isNotEmpty() || selectedMediaItems.isNotEmpty()
     val separationTarget = if (keepInputSeparated) 1f else imeProgress
     val separationProgress by androidx.compose.animation.core.animateFloatAsState(
