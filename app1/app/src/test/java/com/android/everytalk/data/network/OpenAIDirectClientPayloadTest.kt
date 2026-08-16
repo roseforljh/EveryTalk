@@ -25,7 +25,7 @@ class OpenAIDirectClientPayloadTest {
     fun `official recent model should include cache key and usage`() {
         val payload = buildPayload(request(apiAddress = "https://api.openai.com", model = "gpt-5.6"))
 
-        assertTrue(payload.contains("\"prompt_cache_key\":\"et-cap-v1-"))
+        assertTrue(payload.contains("\"prompt_cache_key\":\"et-skill-v"))
         assertTrue(payload.contains("\"stream_options\":{\"include_usage\":true}"))
         assertFalse(payload.contains("prompt_cache_options"))
         assertFalse(payload.contains("prompt_cache_breakpoint"))

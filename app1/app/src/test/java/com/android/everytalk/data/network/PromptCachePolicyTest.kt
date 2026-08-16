@@ -55,7 +55,7 @@ class PromptCachePolicyTest {
         )
 
         assertEquals(first, second)
-        assertTrue(first.orEmpty().startsWith("et-cap-v1-"))
+        assertTrue(first.orEmpty().startsWith("et-skill-v"))
         assertNull(
             PromptCachePolicy.buildOpenAICacheKey(
                 apiAddress = "https://example.com/v1",

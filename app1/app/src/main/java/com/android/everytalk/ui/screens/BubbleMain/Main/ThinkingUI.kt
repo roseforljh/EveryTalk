@@ -567,21 +567,44 @@ private fun ExecutionProcessContent(
         if (showStandaloneStatus) {
             val status = localizedExecutionStatusText(activityStatusText)
                 ?: stringResource(R.string.thinking_waiting_first_response)
-            ScanningHighlightText(
-                text = status,
-                textColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                useSmallStyle = false,
+            Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .testTag("reasoning-chain-live-status"),
-            )
+                    .testTag("reasoning-chain-summary-${sections.size}")
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() },
+                        onClick = onOpenDetails,
+                    ),
+            ) {
+                ScanningHighlightText(
+                    text = status,
+                    textColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    useSmallStyle = false,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("reasoning-chain-live-status"),
+                )
+            }
         } else if (messageIsError) {
-            Text(
-                text = stringResource(R.string.thinking_execution_failed),
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.testTag("reasoning-chain-error-status"),
-            )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("reasoning-chain-summary-${sections.size}")
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() },
+                        onClick = onOpenDetails,
+                    ),
+            ) {
+                Text(
+                    text = localizedExecutionStatusText(activityStatusText)
+                        ?: stringResource(R.string.thinking_execution_failed),
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.testTag("reasoning-chain-error-status"),
+                )
+            }
         }
     }
 }

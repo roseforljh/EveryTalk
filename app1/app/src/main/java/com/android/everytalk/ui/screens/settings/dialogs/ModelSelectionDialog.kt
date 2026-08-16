@@ -8,26 +8,17 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Close
-import androidx.compose.material.icons.rounded.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.res.stringResource
 import com.android.everytalk.R
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -35,6 +26,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.foundation.background
+import com.android.everytalk.ui.components.search.ExpandableSearchBar
 import java.util.Locale
 
 internal enum class ModelCatalogTab {
@@ -90,6 +82,7 @@ fun ModelSelectionDialog(
 
     var selectedModels by remember { mutableStateOf(setOf<String>()) }
     var searchText by remember { mutableStateOf("") }
+    var isSearchExpanded by remember { mutableStateOf(false) }
     var selectedTab by remember { mutableStateOf(ModelCatalogTab.NEW) }
     val groups = remember(models, existingModels) { classifyModelCatalog(models, existingModels) }
 
@@ -97,6 +90,7 @@ fun ModelSelectionDialog(
         if (showDialog) {
             selectedModels = emptySet()
             searchText = ""
+            isSearchExpanded = false
             selectedTab = ModelCatalogTab.NEW
         }
     }
@@ -174,21 +168,27 @@ fun ModelSelectionDialog(
 
                 Spacer(modifier = Modifier.height(14.dp))
 
-                ModelCatalogTabs(
-                    selectedTab = selectedTab,
-                    groups = groups,
-                    onSelect = {
-                        selectedTab = it
-                        searchText = ""
-                    },
-                )
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                SkillStyleModelSearchField(
+                ExpandableSearchBar(
                     query = searchText,
                     onQueryChange = { searchText = it },
+                    isExpanded = isSearchExpanded,
+                    onToggle = {
+                        isSearchExpanded = !isSearchExpanded
+                        if (!isSearchExpanded && searchText.isNotEmpty()) {
+                            searchText = ""
+                        }
+                    },
                     placeholder = stringResource(R.string.settings_search_hint),
+                    collapsedContent = {
+                        ModelCatalogTabs(
+                            selectedTab = selectedTab,
+                            groups = groups,
+                            onSelect = {
+                                selectedTab = it
+                                searchText = ""
+                            },
+                        )
+                    }
                 )
 
                 Spacer(modifier = Modifier.height(8.dp))
@@ -297,17 +297,27 @@ fun ModelSelectionDialog(
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
-                TextButton(
-                    onClick = onManualInput,
-                    modifier = Modifier.fillMaxWidth()
+
+                // 手动输入模型按钮
+                Box(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Text(
-                        stringResource(R.string.settings_enter_model_manually),
-                        color = contentColor,
-                        fontWeight = FontWeight.SemiBold,
-                    )
+                    TextButton(
+                        onClick = onManualInput
+                    ) {
+                        Text(
+                            stringResource(R.string.settings_enter_model_manually),
+                            color = contentColor,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
                 }
-                Spacer(modifier = Modifier.height(4.dp))
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                // 底部按钮栏
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(12.dp)
@@ -316,14 +326,18 @@ fun ModelSelectionDialog(
                         onClick = onDismiss,
                         modifier = Modifier.weight(1f).height(44.dp),
                         shape = RoundedCornerShape(22.dp),
+                        border = BorderStroke(1.dp, borderColor),
                         colors = ButtonDefaults.outlinedButtonColors(
                             containerColor = Color.Transparent,
                             contentColor = contentColor
-                        ),
-                        border = BorderStroke(1.dp, borderColor)
+                        )
                     ) {
-                        Text(stringResource(R.string.action_cancel), fontWeight = FontWeight.SemiBold)
+                        Text(
+                            stringResource(R.string.action_cancel),
+                            fontWeight = FontWeight.SemiBold
+                        )
                     }
+
                     Button(
                         onClick = {
                             if (selectedModels.isNotEmpty()) {
@@ -365,7 +379,7 @@ private fun ModelCatalogTabs(
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         listOf(
             Triple(ModelCatalogTab.NEW, R.string.settings_model_tab_new, groups.newModels.size),
@@ -383,7 +397,7 @@ private fun ModelCatalogTabs(
                         text = "${stringResource(labelRes)} $count",
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
-                        fontSize = 12.sp,
+                        fontSize = 11.sp,
                         fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
                     )
                 },
@@ -400,70 +414,6 @@ private fun ModelCatalogTabs(
                     selectedBorderColor = selectedBackground,
                 ),
             )
-        }
-    }
-}
-
-/** 与 Skill 页面相同的胶囊搜索框视觉。 */
-@Composable
-private fun SkillStyleModelSearchField(
-    query: String,
-    onQueryChange: (String) -> Unit,
-    placeholder: String,
-) {
-    val isDark = isSystemInDarkTheme()
-    val contentColor = if (isDark) Color.White else Color(0xFF0D0D0D)
-    val fieldBackground = if (isDark) Color(0xFF1E1E1E) else Color(0xFFF7F7F8)
-    val fieldBorder = if (isDark) Color(0xFF383838) else Color(0xFFE5E5E5)
-    val mutedColor = if (isDark) Color(0xFF888888) else Color(0xFF999999)
-    val focusManager = LocalFocusManager.current
-
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(46.dp)
-            .background(fieldBackground, RoundedCornerShape(percent = 50))
-            .border(1.dp, fieldBorder, RoundedCornerShape(percent = 50))
-            .padding(start = 14.dp, end = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(
-            imageVector = Icons.Rounded.Search,
-            contentDescription = null,
-            tint = mutedColor,
-            modifier = Modifier.size(18.dp),
-        )
-        Spacer(Modifier.width(8.dp))
-        Box(
-            modifier = Modifier.weight(1f),
-            contentAlignment = Alignment.CenterStart,
-        ) {
-            if (query.isEmpty()) {
-                Text(placeholder, color = mutedColor, style = MaterialTheme.typography.bodyMedium)
-            }
-            BasicTextField(
-                value = query,
-                onValueChange = onQueryChange,
-                modifier = Modifier.fillMaxWidth(),
-                textStyle = MaterialTheme.typography.bodyMedium.copy(color = contentColor),
-                singleLine = true,
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
-                cursorBrush = SolidColor(contentColor),
-            )
-        }
-        if (query.isNotEmpty()) {
-            IconButton(
-                onClick = { onQueryChange("") },
-                modifier = Modifier.size(30.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Rounded.Close,
-                    contentDescription = stringResource(R.string.settings_search_clear),
-                    tint = mutedColor,
-                    modifier = Modifier.size(16.dp),
-                )
-            }
         }
     }
 }

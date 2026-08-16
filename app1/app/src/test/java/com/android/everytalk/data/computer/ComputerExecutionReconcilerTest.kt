@@ -338,11 +338,11 @@ class ComputerExecutionReconcilerTest {
     }
 
     @Test
-    fun `恢复查询允许暂时离线但不会绕过服务器配置状态`() {
+    fun `恢复查询允许暂时离线和待升级状态但不会绕过主机密钥异常`() {
         assertTrue(ComputerStatus.READY.canAttemptExecutionRecovery())
         assertTrue(ComputerStatus.OFFLINE.canAttemptExecutionRecovery())
         assertTrue(ComputerStatus.DISCONNECTED.canAttemptExecutionRecovery())
-        assertTrue(!ComputerStatus.CONFIGURATION_REQUIRED.canAttemptExecutionRecovery())
+        assertTrue(ComputerStatus.CONFIGURATION_REQUIRED.canAttemptExecutionRecovery())
         assertTrue(!ComputerStatus.HOST_KEY_CHANGED.canAttemptExecutionRecovery())
     }
 

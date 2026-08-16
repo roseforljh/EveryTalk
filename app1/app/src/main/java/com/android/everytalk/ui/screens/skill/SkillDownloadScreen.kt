@@ -99,6 +99,7 @@ import com.android.everytalk.ui.components.dialog.AppDialogShape
 import com.android.everytalk.ui.components.dialog.appDialogBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
+import com.android.everytalk.ui.components.search.ExpandableSearchBar
 import com.android.everytalk.ui.components.floatingEdgeGradient
 import com.android.everytalk.ui.screens.computer.TopCircleButton
 import kotlinx.coroutines.CancellationException
@@ -396,7 +397,7 @@ fun SkillDownloadScreen(navController: NavController) {
 
                     Spacer(Modifier.width(8.dp))
 
-                    ExpandableSkillSearchBar(
+                    ExpandableSearchBar(
                         query = query,
                         onQueryChange = { query = it },
                         isExpanded = isSearchExpanded,
@@ -534,138 +535,6 @@ fun SkillDownloadScreen(navController: NavController) {
         )
     }
 
-}
-
-/**
- * 仿 KunBox 可展开/收起搜索栏
- */
-@Composable
-private fun ExpandableSkillSearchBar(
-    query: String,
-    onQueryChange: (String) -> Unit,
-    isExpanded: Boolean,
-    onToggle: () -> Unit,
-    placeholder: String,
-    modifier: Modifier = Modifier,
-    collapsedContent: @Composable () -> Unit,
-) {
-    val isDark = isSystemInDarkTheme()
-    val buttonBg = if (isDark) Color(0xFF303030) else Color.White
-    val buttonContent = if (isDark) Color.White else Color(0xFF0D0D0D)
-    val fieldBg = if (isDark) Color(0xFF1E1E1E) else Color(0xFFF7F7F8)
-    val fieldBorder = if (isDark) Color(0xFF383838) else Color(0xFFE5E5E5)
-    val iconMutedColor = if (isDark) Color(0xFF888888) else Color(0xFF999999)
-
-    Box(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(46.dp),
-        contentAlignment = Alignment.CenterStart,
-    ) {
-        // 折叠状态下的右侧内容（三个标签）
-        AnimatedVisibility(
-            visible = !isExpanded,
-            enter = fadeIn(tween(150)),
-            exit = fadeOut(tween(150)),
-            modifier = Modifier
-                .padding(end = 52.dp)
-                .fillMaxWidth(),
-        ) {
-            collapsedContent()
-        }
-
-        // 展开动画
-        val searchAlpha by animateFloatAsState(
-            targetValue = if (isExpanded) 1f else 0f,
-            animationSpec = tween(durationMillis = 240),
-            label = "expandable_search_alpha",
-        )
-
-        if (searchAlpha > 0f) {
-            var isFocused by remember { mutableStateOf(false) }
-            val focusRequester = remember { FocusRequester() }
-            val focusManager = LocalFocusManager.current
-
-            LaunchedEffect(isExpanded) {
-                if (isExpanded) {
-                    focusRequester.requestFocus()
-                }
-            }
-
-            Box(
-                modifier = Modifier
-                    .padding(end = 52.dp)
-                    .fillMaxWidth()
-                    .height(46.dp)
-                    .graphicsLayer {
-                        alpha = searchAlpha
-                        translationX = (1f - searchAlpha) * 15.dp.toPx()
-                        scaleX = 0.96f + 0.04f * searchAlpha
-                        compositingStrategy = CompositingStrategy.ModulateAlpha
-                    }
-                    .background(fieldBg, RoundedCornerShape(percent = 50))
-                    .border(1.dp, fieldBorder, RoundedCornerShape(percent = 50))
-                    .padding(start = 16.dp, end = if (query.isEmpty()) 16.dp else 40.dp),
-                contentAlignment = Alignment.CenterStart,
-            ) {
-                if (query.isEmpty() && !isFocused) {
-                    Text(
-                        text = placeholder,
-                        color = iconMutedColor,
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-                BasicTextField(
-                    value = query,
-                    onValueChange = onQueryChange,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .focusRequester(focusRequester)
-                        .onFocusChanged { isFocused = it.isFocused },
-                    textStyle = MaterialTheme.typography.bodyMedium.copy(color = buttonContent),
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
-                    cursorBrush = SolidColor(buttonContent),
-                )
-
-                if (query.isNotEmpty()) {
-                    IconButton(
-                        onClick = { onQueryChange("") },
-                        modifier = Modifier
-                            .align(Alignment.CenterEnd)
-                            .size(28.dp),
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Close,
-                            contentDescription = "清空",
-                            tint = iconMutedColor,
-                            modifier = Modifier.size(16.dp),
-                        )
-                    }
-                }
-            }
-        }
-
-        // 位于右侧的展开/收起搜索圆形按钮
-        Box(
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .size(46.dp)
-                .shadow(3.dp, CircleShape, clip = false)
-                .clip(CircleShape)
-                .background(buttonBg)
-                .clickable(onClick = onToggle),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = if (isExpanded) Icons.Rounded.Close else Icons.Rounded.Search,
-                contentDescription = if (isExpanded) "关闭搜索" else "搜索",
-                tint = buttonContent,
-                modifier = Modifier.size(20.dp),
-            )
-        }
-    }
 }
 
 @Composable

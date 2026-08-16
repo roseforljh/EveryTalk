@@ -27,9 +27,12 @@ class FunctionPanelShadowAnimationRulesTest {
     @Test
     fun `功能面板使用统一同步阴影入场和快速淡出`() {
         val source = chatInputSource().readText(Charsets.UTF_8)
-        val popupBlock = source
-            .substringAfter("AppFloatingCardPopup(")
-            .substringBefore("AppFloatingCardPopup(")
+        val marker = "visible = showFunctionPanel"
+        val markerIndex = source.indexOf(marker)
+        val popupStart = source.lastIndexOf("AppFloatingCardPopup(", markerIndex)
+        val nextPopup = source.indexOf("AppFloatingCardPopup(", markerIndex + marker.length)
+        assertTrue("找不到功能面板悬浮卡片", markerIndex >= 0 && popupStart >= 0)
+        val popupBlock = source.substring(popupStart, nextPopup.takeIf { it >= 0 } ?: source.length)
 
         assertTrue("功能面板必须使用统一动画悬浮卡片", popupBlock.contains("visible = showFunctionPanel"))
         assertTrue("功能面板不得在关闭时直接移除", !popupBlock.contains("if (showFunctionPanel) {"))

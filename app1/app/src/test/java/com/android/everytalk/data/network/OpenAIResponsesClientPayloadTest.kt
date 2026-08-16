@@ -60,7 +60,7 @@ class OpenAIResponsesClientPayloadTest {
         val official = buildResponsesPayloadForTest(request("https://api.openai.com"))
         val compatible = buildResponsesPayloadForTest(request("https://example.com/v1"))
 
-        assertTrue(official.contains("\"prompt_cache_key\":\"et-cap-v1-"))
+        assertTrue(official.contains("\"prompt_cache_key\":\"et-skill-v"))
         assertFalse(compatible.contains("prompt_cache_key"))
         assertFalse(official.contains("prompt_cache_options"))
         assertFalse(official.contains("prompt_cache_breakpoint"))

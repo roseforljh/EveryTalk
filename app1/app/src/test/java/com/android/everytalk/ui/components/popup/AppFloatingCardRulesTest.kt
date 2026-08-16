@@ -1,7 +1,6 @@
 package com.android.everytalk.ui.components.popup
 
 import java.io.File
-import com.android.everytalk.ui.theme.LightPopupBackground
 import androidx.compose.ui.graphics.Color
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -9,9 +8,9 @@ import org.junit.Test
 
 class AppFloatingCardRulesTest {
     @Test
-    fun `统一悬浮卡片浅色背景为固定淡灰色`() {
-        assertEquals(LightPopupBackground, resolveAppFloatingCardContainerColor(isDarkTheme = false))
-        assertEquals(Color(0xFF212121), resolveAppFloatingCardContainerColor(isDarkTheme = true))
+    fun `统一悬浮卡片使用当前黑白主题背景`() {
+        assertEquals(Color.White, resolveAppFloatingCardContainerColor(isDarkTheme = false))
+        assertEquals(Color(0xFF242424), resolveAppFloatingCardContainerColor(isDarkTheme = true))
     }
 
     @Test
@@ -75,7 +74,7 @@ class AppFloatingCardRulesTest {
         ).readText(Charsets.UTF_8)
 
         assertTrue(source.contains("AppFloatingCardShape = RoundedCornerShape(28.dp)"))
-        assertTrue("浅色悬浮卡片必须复用统一淡灰背景", source.contains("LightPopupBackground"))
+        assertTrue("浅色悬浮卡片必须使用当前白色背景", source.contains("else Color.White"))
         assertTrue(source.contains("fun AppFloatingCardContainer("))
         assertTrue(source.contains("AppFloatingCardElevation = 8.dp"))
         assertTrue("统一悬浮卡片必须从顶部同步展开", source.contains("TransformOrigin(0.5f, 0f)"))
