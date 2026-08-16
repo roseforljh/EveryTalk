@@ -45,6 +45,7 @@ import com.android.everytalk.util.text.TextSanitizer
 import com.android.everytalk.util.image.toGeneratedImageMessage
 import com.android.everytalk.util.locale.localizeUiMessage
 import io.ktor.client.statement.HttpResponse
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -110,6 +111,18 @@ internal fun mergeStreamingCompletionMessage(syncedMessage: Message, finalizedMe
             ?: syncedMessage.webSearchResults,
         contentStarted = true,
     )
+}
+
+/** 启动恢复协程并登记为当前任务；登记顺序由此公共入口统一保证。 */
+internal fun CoroutineScope.launchRegisteredJob(
+    register: (Job) -> Unit,
+    block: suspend CoroutineScope.() -> Unit,
+): Job {
+    // LAZY 保证极快的恢复流也必须等登记完成后才能进入 finally。
+    val job = launch(start = CoroutineStart.LAZY, block = block)
+    register(job)
+    job.start()
+    return job
 }
 
 internal fun mergeWebSearchResults(
@@ -604,7 +617,9 @@ class ApiHandler(
             stateHolder._isRemoteCancellationPending.value = false
         }
         withContext(Dispatchers.Main.immediate) {
-            val job = viewModelScope.launch {
+            viewModelScope.launchRegisteredJob(
+                register = { job -> stateHolder.textApiJob = job },
+            ) {
                 val thisJob = coroutineContext[Job]
                 try {
                     agentRunCoordinator.run(
@@ -631,7 +646,6 @@ class ApiHandler(
                     restorePendingAgentApproval()
                 }
             }
-            stateHolder.textApiJob = job
         }
         return true
     }

@@ -665,8 +665,9 @@
     <string name="context_usage_total">Total</string>
     <string name="context_usage_input">Input</string>
     <string name="context_usage_output">Output</string>
-    <string name="context_usage_conversation_total">Conversation total</string>
-    <string name="context_usage_window_total">Context window</string>
+    <string name="context_usage_conversation_total">Conversation cumulative usage</string>
+    <string name="context_usage_current_context">Current context</string>
+    <string name="context_usage_window_total">Context limit</string>
     <string name="context_usage_unknown">Unknown</string>
     <string name="context_usage_tokens_description">%1$s tokens</string>
     <string name="attachment_selected_gallery_image">Selected image from photo library</string>

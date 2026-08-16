@@ -55,7 +55,8 @@ class SkillRuntimeTools(
     suspend fun displayName(call: AgentContentBlock.ToolCall, runId: String): String? {
         val skillId = call.arguments["skill_id"]?.jsonPrimitive?.contentOrNull ?: return null
         val hash = call.arguments["content_hash"]?.jsonPrimitive?.contentOrNull ?: return null
-        return runStore.getRun(runId)?.let(runStore::decodeRequestSnapshot)
+        val run = runStore.getRun(runId) ?: return null
+        return runStore.decodeRequestSnapshot(run)
             ?.skillSnapshot
             ?.allowedVersion(skillId, hash)
             ?.name
@@ -65,7 +66,8 @@ class SkillRuntimeTools(
         val skillId = call.arguments["skill_id"]?.jsonPrimitive?.contentOrNull.orEmpty()
         val hash = call.arguments["content_hash"]?.jsonPrimitive?.contentOrNull.orEmpty()
         require(skillId.isNotBlank() && hash.isNotBlank()) { "skill_id 和 content_hash 不能为空" }
-        val snapshot = runStore.getRun(runId)?.let(runStore::decodeRequestSnapshot)?.skillSnapshot
+        val run = runStore.getRun(runId) ?: error("当前 Run 不存在")
+        val snapshot = runStore.decodeRequestSnapshot(run)?.skillSnapshot
             ?: error("当前 Run 没有 Skill 快照")
         val allowed = snapshot.allowedVersion(skillId, hash) ?: error("该 Skill 版本不在当前请求快照中")
         return when {

@@ -22,6 +22,7 @@ import com.android.everytalk.data.database.entities.AgentEntryEntity
 import com.android.everytalk.data.database.entities.AgentRequestEntity
 import com.android.everytalk.data.database.entities.AgentRequestUsageEntity
 import com.android.everytalk.data.database.entities.AgentRunEntity
+import com.android.everytalk.data.database.entities.AgentRunSnapshotChunkEntity
 import com.android.everytalk.data.database.entities.ChatSessionEntity
 import com.android.everytalk.data.database.entities.ConversationGroupEntity
 import com.android.everytalk.data.database.entities.ComputerAuditEventEntity
@@ -60,6 +61,7 @@ import com.android.everytalk.data.database.entities.WorkspaceSecretMetadataEntit
         WorkspaceSecretMetadataEntity::class,
         ComputerAuditEventEntity::class,
         AgentRunEntity::class,
+        AgentRunSnapshotChunkEntity::class,
         AgentEntryEntity::class,
         AgentRequestEntity::class,
         AgentRequestUsageEntity::class,
@@ -69,7 +71,7 @@ import com.android.everytalk.data.database.entities.WorkspaceSecretMetadataEntit
         SkillInstallationEntity::class,
         SkillVersionEntity::class,
     ],
-    version = 24,
+    version = 25,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -120,6 +122,7 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_21_22,
                     MIGRATION_22_23,
                     MIGRATION_23_24,
+                    MIGRATION_24_25,
                 )
                 .build()
                 INSTANCE = instance
@@ -815,5 +818,50 @@ abstract class AppDatabase : RoomDatabase() {
                 db.execSQL("CREATE INDEX index_skill_installations_packageId ON skill_installations(packageId)")
             }
         }
+
+        /**
+         * 把 Agent 恢复快照从主表单行迁移为小块。
+         *
+         * substr 在 SQLite 内部执行，Android 不会先把数 MB 的旧字段读进 CursorWindow。
+         */
+        val MIGRATION_24_25 = object : Migration(24, 25) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS agent_run_snapshot_chunks (
+                        runId TEXT NOT NULL,
+                        chunkIndex INTEGER NOT NULL,
+                        payload TEXT NOT NULL,
+                        PRIMARY KEY(runId, chunkIndex),
+                        FOREIGN KEY(runId) REFERENCES agent_runs(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+
+                val maxSnapshotLength = db.query(
+                    "SELECT COALESCE(MAX(length(requestSnapshotJson)), 0) FROM agent_runs",
+                ).use { cursor ->
+                    if (cursor.moveToFirst()) cursor.getLong(0) else 0L
+                }
+                var offset = 1L
+                var chunkIndex = 0
+                while (offset <= maxSnapshotLength) {
+                    db.execSQL(
+                        """
+                        INSERT INTO agent_run_snapshot_chunks (runId, chunkIndex, payload)
+                        SELECT id, $chunkIndex, substr(requestSnapshotJson, $offset, $AGENT_SNAPSHOT_CHUNK_CHARS)
+                        FROM agent_runs
+                        WHERE requestSnapshotJson IS NOT NULL
+                          AND length(requestSnapshotJson) >= $offset
+                        """.trimIndent(),
+                    )
+                    offset += AGENT_SNAPSHOT_CHUNK_CHARS
+                    chunkIndex += 1
+                }
+                db.execSQL("UPDATE agent_runs SET requestSnapshotJson = NULL WHERE requestSnapshotJson IS NOT NULL")
+            }
+        }
+
+        private const val AGENT_SNAPSHOT_CHUNK_CHARS = 65_536L
     }
 }

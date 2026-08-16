@@ -35,6 +35,30 @@ data class AgentRunEntity(
     val updatedAt: Long,
 )
 
+/**
+ * Agent 恢复快照的分块存储。
+ *
+ * Android CursorWindow 无法读取数 MB 的单行数据，因此每块必须保持足够小。
+ * 主表只保存 Run 状态，列表查询不会再顺带读取完整上下文。
+ */
+@Entity(
+    tableName = "agent_run_snapshot_chunks",
+    primaryKeys = ["runId", "chunkIndex"],
+    foreignKeys = [
+        ForeignKey(
+            entity = AgentRunEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["runId"],
+            onDelete = ForeignKey.CASCADE,
+        )
+    ],
+)
+data class AgentRunSnapshotChunkEntity(
+    val runId: String,
+    val chunkIndex: Int,
+    val payload: String,
+)
+
 @Entity(
     tableName = "agent_entries",
     foreignKeys = [

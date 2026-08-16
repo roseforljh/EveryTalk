@@ -7,6 +7,7 @@ import com.android.everytalk.data.database.entities.AgentEntryEntity
 import com.android.everytalk.data.database.entities.AgentRequestEntity
 import com.android.everytalk.data.database.entities.AgentRequestUsageEntity
 import com.android.everytalk.data.database.entities.AgentRunEntity
+import com.android.everytalk.data.database.entities.AgentRunSnapshotChunkEntity
 import com.android.everytalk.data.database.entities.ProviderContinuationStateEntity
 import com.android.everytalk.data.DataClass.AbstractApiMessage
 import com.android.everytalk.data.DataClass.AgentAssistantApiMessage
@@ -64,16 +65,18 @@ class AgentRunStore(
         request: ChatRequest,
     ): AgentRunEntity {
         val now = System.currentTimeMillis()
+        val encodedSnapshot = json.encodeToString(
+            AgentRequestSnapshot.serializer(),
+            request.toRecoverySnapshot(),
+        )
         return AgentRunEntity(
             id = UUID.randomUUID().toString(),
             sessionId = sessionId,
             userMessageId = userMessageId,
             visibleAssistantMessageId = visibleAssistantMessageId,
             configIdSnapshot = configIdSnapshot,
-            requestSnapshotJson = json.encodeToString(
-                AgentRequestSnapshot.serializer(),
-                request.toRecoverySnapshot(),
-            ),
+            // 大快照放入分块表，主表必须保持轻量，避免 CursorWindow 单行溢出。
+            requestSnapshotJson = null,
             status = AgentRunStatus.CREATED.name,
             currentRequestOrdinal = 0,
             terminalReason = null,
@@ -82,6 +85,7 @@ class AgentRunStore(
         ).also { run ->
             dao.startRunSupersedingWaitingApprovals(
                 run = run,
+                snapshotChunks = agentRequestSnapshotChunks(run.id, encodedSnapshot),
                 reason = AgentTerminalReasons.SUPERSEDED_BY_NEW_RUN,
             )
         }
@@ -176,10 +180,17 @@ class AgentRunStore(
             decodeAssistantToolCalls(entry).firstOrNull { it.id == toolCallId }
         }
 
-    fun decodeRequestSnapshot(run: AgentRunEntity): AgentRequestSnapshot? = run.requestSnapshotJson
-        ?.let { encoded -> runCatching { json.decodeFromString(AgentRequestSnapshot.serializer(), encoded) }.getOrNull() }
+    suspend fun decodeRequestSnapshot(run: AgentRunEntity): AgentRequestSnapshot? {
+        // requestSnapshotJson 只用于兼容 24 版及更早的数据；25 版开始统一读取小块。
+        val encoded = run.requestSnapshotJson
+            ?: dao.getRunSnapshotChunks(run.id).takeIf(List<String>::isNotEmpty)?.joinToString("")
+            ?: return null
+        return runCatching {
+            json.decodeFromString(AgentRequestSnapshot.serializer(), encoded)
+        }.getOrNull()
+    }
 
-    fun restoreChatRequest(run: AgentRunEntity, apiKey: String): ChatRequest? {
+    suspend fun restoreChatRequest(run: AgentRunEntity, apiKey: String): ChatRequest? {
         val snapshot = decodeRequestSnapshot(run) ?: return null
         return runCatching {
             ChatRequest(
@@ -207,10 +218,18 @@ class AgentRunStore(
     }
 
     /** 用户批准 request_agent 后，先把服务器快照和工具写回原 Run，再继续同一次请求。 */
-    suspend fun updateRequestSnapshot(run: AgentRunEntity, request: ChatRequest): AgentRunEntity = run.copy(
-        requestSnapshotJson = json.encodeToString(AgentRequestSnapshot.serializer(), request.toRecoverySnapshot()),
-        updatedAt = System.currentTimeMillis(),
-    ).also { dao.upsertRun(it) }
+    suspend fun updateRequestSnapshot(run: AgentRunEntity, request: ChatRequest): AgentRunEntity {
+        val encodedSnapshot = json.encodeToString(
+            AgentRequestSnapshot.serializer(),
+            request.toRecoverySnapshot(),
+        )
+        return run.copy(
+            requestSnapshotJson = null,
+            updatedAt = System.currentTimeMillis(),
+        ).also { updated ->
+            dao.persistRunSnapshot(updated, agentRequestSnapshotChunks(updated.id, encodedSnapshot))
+        }
+    }
 
     suspend fun updateRunStatus(
         run: AgentRunEntity,
@@ -1002,6 +1021,46 @@ private fun AgentContentBlock.ToolCall.toExecutionStep(completed: Boolean): Exec
         completed = completed,
         reasoningBefore = "",
     )
+}
+
+private const val AGENT_REQUEST_SNAPSHOT_CHUNK_CHARS = 65_536
+
+/**
+ * 把恢复快照切成 CursorWindow 可安全读取的小行。
+ * 边界遇到 Emoji 等代理对时把低代理一并放入当前块，重新拼接后文本保持原样。
+ */
+internal fun agentRequestSnapshotChunks(
+    runId: String,
+    encodedSnapshot: String,
+    maxChars: Int = AGENT_REQUEST_SNAPSHOT_CHUNK_CHARS,
+): List<AgentRunSnapshotChunkEntity> {
+    require(maxChars > 0) { "快照分块大小必须大于 0" }
+    if (encodedSnapshot.isEmpty()) {
+        return listOf(AgentRunSnapshotChunkEntity(runId, 0, ""))
+    }
+    return buildList {
+        var start = 0
+        var chunkIndex = 0
+        while (start < encodedSnapshot.length) {
+            var end = (start + maxChars).coerceAtMost(encodedSnapshot.length)
+            if (
+                end < encodedSnapshot.length &&
+                encodedSnapshot[end - 1].isHighSurrogate() &&
+                encodedSnapshot[end].isLowSurrogate()
+            ) {
+                end += 1
+            }
+            add(
+                AgentRunSnapshotChunkEntity(
+                    runId = runId,
+                    chunkIndex = chunkIndex,
+                    payload = encodedSnapshot.substring(start, end),
+                ),
+            )
+            start = end
+            chunkIndex += 1
+        }
+    }
 }
 
 /** 请求快照只保留恢复需要的本地参数，API Key 和设备标识禁止落库。 */

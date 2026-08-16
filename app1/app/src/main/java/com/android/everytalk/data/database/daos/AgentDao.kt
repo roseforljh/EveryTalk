@@ -10,6 +10,7 @@ import com.android.everytalk.data.database.entities.AgentEntryEntity
 import com.android.everytalk.data.database.entities.AgentRequestEntity
 import com.android.everytalk.data.database.entities.AgentRequestUsageEntity
 import com.android.everytalk.data.database.entities.AgentRunEntity
+import com.android.everytalk.data.database.entities.AgentRunSnapshotChunkEntity
 import com.android.everytalk.data.database.entities.ProviderContinuationStateEntity
 
 data class AgentTokenTotalsRow(
@@ -22,6 +23,7 @@ data class AgentTokenTotalsRow(
 @Dao
 interface AgentDao {
     @Upsert suspend fun upsertRun(run: AgentRunEntity)
+    @Upsert suspend fun upsertRunSnapshotChunks(chunks: List<AgentRunSnapshotChunkEntity>)
     @Upsert suspend fun upsertEntry(entry: AgentEntryEntity)
     @Upsert suspend fun upsertRequest(request: AgentRequestEntity)
     @Upsert suspend fun upsertUsage(usage: AgentRequestUsageEntity)
@@ -37,6 +39,12 @@ interface AgentDao {
 
     @Query("SELECT * FROM agent_runs WHERE sessionId = :sessionId ORDER BY createdAt ASC")
     suspend fun getRunsForSession(sessionId: String): List<AgentRunEntity>
+
+    @Query("SELECT payload FROM agent_run_snapshot_chunks WHERE runId = :runId ORDER BY chunkIndex ASC")
+    suspend fun getRunSnapshotChunks(runId: String): List<String>
+
+    @Query("DELETE FROM agent_run_snapshot_chunks WHERE runId = :runId")
+    suspend fun deleteRunSnapshotChunks(runId: String)
 
     @Query("SELECT * FROM agent_runs WHERE status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED')")
     suspend fun getActiveRuns(): List<AgentRunEntity>
@@ -190,10 +198,24 @@ interface AgentDao {
     @Transaction
     suspend fun startRunSupersedingWaitingApprovals(
         run: AgentRunEntity,
+        snapshotChunks: List<AgentRunSnapshotChunkEntity>,
         reason: String,
     ) {
         cancelSupersededApprovalRunsForSession(run.sessionId, reason, run.createdAt)
         upsertRun(run)
+        deleteRunSnapshotChunks(run.id)
+        if (snapshotChunks.isNotEmpty()) upsertRunSnapshotChunks(snapshotChunks)
+    }
+
+    /** 更新 Run 和恢复快照必须在同一事务完成，禁止状态指向半份快照。 */
+    @Transaction
+    suspend fun persistRunSnapshot(
+        run: AgentRunEntity,
+        snapshotChunks: List<AgentRunSnapshotChunkEntity>,
+    ) {
+        upsertRun(run)
+        deleteRunSnapshotChunks(run.id)
+        if (snapshotChunks.isNotEmpty()) upsertRunSnapshotChunks(snapshotChunks)
     }
 
 
