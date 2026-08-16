@@ -169,29 +169,84 @@ ${rules.trim()}
     }
 
     /**
-     * 下载完整远端包。全部文件先进入临时目录并校验，最后一次性切换所有子 Skill。
+     * 一次下载来源仓库 ZIP，只提取 Tree 清单声明的 Skill 文件。
+     * 全部子 Skill 校验通过后再用一个 Room 事务切换，失败时保留旧版本。
      */
     suspend fun importRemotePackage(
         detail: RemoteSkillPackageDetail,
-        copyFile: (detail: RemoteSkillPackageDetail, entry: RemoteSkillPackageFile, target: File) -> Unit,
+        downloadArchive: (target: File, onProgress: (received: Long, total: Long) -> Unit) -> Unit,
+        onProgress: (RemoteSkillInstallProgress) -> Unit = {},
     ): InstalledSkillPackage {
         require(detail.skills.isNotEmpty()) { "Skill 包为空" }
         val fileCount = detail.skills.sumOf { it.files.size }
         val totalBytes = detail.skills.sumOf { skill -> skill.files.sumOf(RemoteSkillPackageFile::size) }
         require(fileCount <= MAX_SKILL_FILES) { "Skill 包文件数超过 $MAX_SKILL_FILES" }
         require(totalBytes <= MAX_SKILL_BYTES) { "Skill 包超过 100 MB" }
+        val archive = File(appContext.cacheDir, ".remote-package-${UUID.randomUUID()}.zip")
         val temporary = File(root, ".remote-package-${UUID.randomUUID()}").apply { mkdirs() }
         return try {
+            onProgress(RemoteSkillInstallProgress(RemoteSkillInstallStage.DOWNLOADING, 0, 0))
+            downloadArchive(archive) { received, total ->
+                onProgress(RemoteSkillInstallProgress(RemoteSkillInstallStage.DOWNLOADING, received, total))
+            }
+            require(archive.isFile && archive.length() > 0) { "Skill 压缩包下载不完整" }
+
             val roots = detail.skills.mapIndexed { index, skill ->
-                val childRoot = File(temporary, index.toString()).apply { mkdirs() }
-                skill.files.forEach { entry ->
-                    val relative = requireRemoteRelativePath(entry.path)
-                    val target = File(childRoot, relative).canonicalFile
-                    require(target.toPath().startsWith(childRoot.canonicalFile.toPath())) { "Skill 文件路径越界" }
-                    copyFile(detail, entry, target)
-                    require(target.isFile && target.length() == entry.size) { "Skill 文件下载不完整：${entry.path}" }
+                PackageSkillRoot(File(temporary, index.toString()).apply { mkdirs() }, skill.sourcePath)
+            }
+            val expectedFiles = buildMap {
+                detail.skills.forEachIndexed { skillIndex, skill ->
+                    skill.files.forEach { entry ->
+                        require(put(entry.repositoryPath, RemoteArchiveFile(skillIndex, entry)) == null) {
+                            "Skill 文件清单重复：${entry.repositoryPath}"
+                        }
+                    }
                 }
-                PackageSkillRoot(childRoot, skill.sourcePath)
+            }
+            var extractedBytes = 0L
+            var extractedFiles = 0L
+            onProgress(RemoteSkillInstallProgress(RemoteSkillInstallStage.INSTALLING, 0, fileCount.toLong()))
+            ZipInputStream(archive.inputStream().buffered()).use { zip ->
+                while (true) {
+                    val zipEntry = zip.nextEntry ?: break
+                    val normalizedName = zipEntry.name.replace('\\', '/')
+                    require(
+                        normalizedName.isNotBlank() && !normalizedName.startsWith('/') &&
+                            normalizedName.split('/').none { it.isBlank() || it == "." || it == ".." },
+                    ) { "Skill 压缩包包含非法路径" }
+                    val repositoryPath = normalizedName.substringAfter('/', missingDelimiterValue = "")
+                    val expected = expectedFiles[repositoryPath]
+                    if (!zipEntry.isDirectory && expected != null) {
+                        val childRoot = roots[expected.skillIndex].root.canonicalFile
+                        val target = File(childRoot, requireRemoteRelativePath(expected.entry.path)).canonicalFile
+                        require(target.toPath().startsWith(childRoot.toPath())) { "Skill 文件路径越界" }
+                        require(!target.exists()) { "Skill 压缩包包含重复文件：${expected.entry.path}" }
+                        target.parentFile?.mkdirs()
+                        target.outputStream().use { output ->
+                            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                            while (true) {
+                                val read = zip.read(buffer)
+                                if (read < 0) break
+                                extractedBytes += read
+                                require(extractedBytes <= MAX_SKILL_BYTES) { "Skill 解压后超过 100 MB" }
+                                output.write(buffer, 0, read)
+                            }
+                        }
+                        require(target.length() == expected.entry.size) { "Skill 文件已变化：${expected.entry.path}" }
+                        extractedFiles += 1
+                        onProgress(
+                            RemoteSkillInstallProgress(
+                                RemoteSkillInstallStage.INSTALLING,
+                                extractedFiles,
+                                fileCount.toLong(),
+                            ),
+                        )
+                    }
+                    zip.closeEntry()
+                }
+            }
+            require(extractedFiles == fileCount.toLong()) {
+                "Skill 压缩包缺少文件，预期 $fileCount 个，实际 $extractedFiles 个"
             }
             installPackageRoots(
                 packageId = detail.packageId,
@@ -202,6 +257,7 @@ ${rules.trim()}
                 versionLabel = detail.contentHash,
             )
         } finally {
+            archive.delete()
             temporary.deleteRecursively()
         }
     }
@@ -609,6 +665,11 @@ ${rules.trim()}
 }
 
 private data class PackageSkillRoot(val root: File, val sourcePath: String)
+
+private data class RemoteArchiveFile(
+    val skillIndex: Int,
+    val entry: RemoteSkillPackageFile,
+)
 
 private val LOCAL_IGNORED_SKILL_ROOT_SEGMENTS = setOf(
     ".git", ".github", "node_modules", "build", "dist", "references", "templates",

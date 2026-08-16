@@ -388,6 +388,16 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
             onUpdate = { _, delta ->
                 if (delta.isNotEmpty()) {
                     streamingMessageStateManager.appendText(messageId, delta)
+                    // 有序正文跟随同一缓冲批次落入消息，避免每个模型 token 都触发整表重算。
+                    val messageList = if (isImageGeneration) imageGenerationMessages else messages
+                    val index = messageList.indexOfFirst { it.id == messageId }
+                    if (index >= 0) {
+                        val current = messageList[index]
+                        messageList[index] = current.copy(
+                            contentStarted = true,
+                            executionTrace = appendExecutionTraceContent(current.executionTrace, delta),
+                        )
+                    }
                 }
                 if (isImageGeneration) {
                     isImageConversationDirty.value = true
@@ -638,7 +648,7 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
      * - 流式期间：通过 StreamingBuffer 路由，按 80 至 180ms 和 64 字符阈值合并
      * - 同时更新 StreamingMessageStateManager 以支持高效的 UI 观察
      * - 非流式：正常更新 messages
-     * - 列表只在正文首次出现和终态同步时更新，正文增量由独立 StateFlow 驱动
+     * - 正文由独立 StateFlow 增量显示；有序输出轨迹按同一缓冲节奏更新消息列表
      * 
      * Requirements: 1.4, 3.1, 3.2, 3.3, 3.4
      */
@@ -663,7 +673,8 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
             val currentMessage = messageList[index]
             val updatedMessage = currentMessage.copy(
                 text = currentMessage.text + text,
-                contentStarted = true
+                contentStarted = true,
+                executionTrace = appendExecutionTraceContent(currentMessage.executionTrace, text),
             )
             messageList[index] = updatedMessage
             streamingMessageStateManager.updateContent(messageId, updatedMessage.text)

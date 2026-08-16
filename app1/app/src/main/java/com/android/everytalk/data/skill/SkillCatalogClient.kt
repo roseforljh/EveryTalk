@@ -4,6 +4,8 @@ import android.content.Context
 import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import okhttp3.HttpUrl
@@ -25,21 +27,34 @@ class SkillCatalogClient(
     private val client: OkHttpClient = OkHttpClient(),
     private val json: Json = Json { ignoreUnknownKeys = true },
 ) {
-    private val cacheDirectory = context?.applicationContext?.cacheDir?.resolve("skill-catalog")
+    private val cacheDirectory = context?.applicationContext?.filesDir?.resolve("skill-catalog")
+    private val detailCache = mutableMapOf<String, CachedPackageDetail>()
+    private val collectionPageLocks = ConcurrentHashMap<String, Any>()
     @Volatile
     var usedOfflineCache: Boolean = false
         private set
 
     fun collection(type: SkillCatalogCollection): List<RemoteSkillCatalogItem> {
-        val response = getJson(
-            HttpUrl.Builder()
-                .scheme("https")
-                .host(SKILLS_HOST)
-                .addPathSegments("api/skills/${type.path}/1")
-                .build(),
-        )
-        val items = json.decodeFromString<RemoteSkillCatalogResponse>(response).skills
-        return if (type == SkillCatalogCollection.OFFICIAL) items.filter(RemoteSkillCatalogItem::isOfficial) else items
+        return collectionPage(type, 1).skills
+    }
+
+    /**
+     * 读取一页榜单并保留分页信息。
+     * 页面先展示第一页，滚动到底部后自动追加后续页，避免一次等待全部云目录。
+     */
+    fun collectionPage(type: SkillCatalogCollection, page: Int): RemoteSkillCatalogPage {
+        require(page > 0) { "Skill 云目录页码无效" }
+        val lock = collectionPageLocks.getOrPut("${type.name}:$page") { Any() }
+        return synchronized(lock) {
+            decodeCollectionPage(type, page, getJson(collectionUrl(type, page)))
+        }
+    }
+
+    /** 读取磁盘中的旧页面，让重复进入云目录时无需先等待网络。 */
+    fun cachedCollectionPage(type: SkillCatalogCollection, page: Int): RemoteSkillCatalogPage? {
+        require(page > 0) { "Skill 云目录页码无效" }
+        val cached = cacheFile(collectionUrl(type, page))?.takeIf(File::isFile)?.readText(Charsets.UTF_8) ?: return null
+        return runCatching { decodeCollectionPage(type, page, cached) }.getOrNull()
     }
 
     fun search(query: String): List<RemoteSkillCatalogItem> {
@@ -61,9 +76,16 @@ class SkillCatalogClient(
      * 资源目录中的示例 SKILL.md 会被排除，避免把文档样例误装成可调用 Skill。
      */
     fun packageDetail(item: RemoteSkillPackageCatalogItem): RemoteSkillPackageDetail {
+        synchronized(detailCache) {
+            detailCache[item.packageId]
+                ?.takeIf { System.currentTimeMillis() - it.savedAt < DETAIL_CACHE_MILLIS }
+                ?.let { return it.detail }
+        }
         val repository = requireGithubRepository(item.source)
-        val branch = "HEAD"
-        val treeUrl = githubApiUrl("repos/${repository[0]}/${repository[1]}/git/trees/$branch")
+        val commit = json.decodeFromString<GithubCommitResponse>(
+            getJson(githubApiUrl("repos/${repository[0]}/${repository[1]}/commits/HEAD")),
+        )
+        val treeUrl = githubApiUrl("repos/${repository[0]}/${repository[1]}/git/trees/${commit.sha}")
             .newBuilder()
             .addQueryParameter("recursive", "1")
             .build()
@@ -87,14 +109,8 @@ class SkillCatalogClient(
         require(roots.isNotEmpty()) { "仓库中没有找到有效的 SKILL.md" }
 
         val skills = roots.map { root ->
-            val markdownPath = repositoryPath(root, "SKILL.md")
-            val markdown = getText(remoteRepositoryFileUrl(item.source, branch, markdownPath))
-            val frontmatter = parseSkillFrontmatter(markdown)
-            val name = frontmatter["name"]?.trim()?.takeIf(String::isNotBlank)
-                ?: root.substringAfterLast('/').ifBlank { item.name }
-            val description = frontmatter["description"]?.trim()?.takeIf(String::isNotBlank)
-                ?: markdown.lineSequence().firstOrNull { it.startsWith("# ") }?.removePrefix("# ")?.trim()
-                ?: "用户添加的 Skill"
+            // 详情阶段只使用目录名。真实名称、简介和调用方式在文件下载完成后统一校验读取。
+            val name = root.substringAfterLast('/').ifBlank { item.name }
             val files = blobs.asSequence()
                 .filter { entry -> belongsToSkillRoot(entry.path, root, roots) }
                 .map { entry ->
@@ -109,13 +125,9 @@ class SkillCatalogClient(
             require(files.any { it.path == "SKILL.md" }) { "Skill 缺少 SKILL.md：$name" }
             RemoteSkillPackageChild(
                 name = name,
-                description = description,
+                description = "安装后读取完整说明",
                 sourcePath = root.ifBlank { "." },
-                invocationMode = if (frontmatter["disable-model-invocation"].toBoolean()) {
-                    SkillInvocationMode.MANUAL_ONLY
-                } else {
-                    SkillInvocationMode.AUTO
-                },
+                invocationMode = SkillInvocationMode.AUTO,
                 files = files,
             )
         }
@@ -135,60 +147,87 @@ class SkillCatalogClient(
             }
             digest().joinToString("") { "%02x".format(it) }
         }
-        return RemoteSkillPackageDetail(
+        val detail = RemoteSkillPackageDetail(
             packageId = item.packageId,
             name = item.name,
             source = item.source,
             sourceRepository = "https://github.com/${item.source}",
-            branch = branch,
+            branch = commit.sha,
             contentHash = contentHash,
             skills = skills,
         )
+        synchronized(detailCache) {
+            detailCache[item.packageId] = CachedPackageDetail(System.currentTimeMillis(), detail)
+        }
+        return detail
     }
 
-    /** 只下载当前 Skill 清单中的一个文件，避免为了几 KB 的规则拉取整个 GitHub 仓库。 */
-    fun downloadRemotePackageFile(
+    /**
+     * 一次下载当前仓库的固定 commit ZIP。
+     * ZIP 只在用户确认安装或更新后请求，云目录浏览阶段不会触发。
+     */
+    fun downloadRemotePackageArchive(
         detail: RemoteSkillPackageDetail,
-        entry: RemoteSkillPackageFile,
         target: File,
+        onProgress: (received: Long, total: Long) -> Unit = { _, _ -> },
     ) {
-        val fileUrl = remoteRepositoryFileUrl(detail.source, detail.branch, entry.repositoryPath)
         val request = Request.Builder()
-            .url(fileUrl)
+            .url(remoteRepositoryArchiveUrl(detail.source, detail.branch))
+            .header("Accept", "application/zip")
             .header("User-Agent", "EveryTalk-Skill-Installer")
             .build()
-        client.newCall(request).execute().use { response ->
-            require(response.isSuccessful) { "Skill 文件下载失败：${entry.path} · HTTP ${response.code}" }
-            val body = response.body
-            val declaredSize = body.contentLength()
-            require(declaredSize < 0 || declaredSize == entry.size) { "Skill 文件已变化，请重新打开详情后下载" }
-            target.parentFile?.mkdirs()
-            var received = 0L
-            body.byteStream().use { input ->
-                target.outputStream().use { output ->
-                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                    while (true) {
-                        val read = input.read(buffer)
-                        if (read < 0) break
-                        received += read
-                        require(received <= entry.size) { "Skill 文件已变化，请重新打开详情后下载" }
-                        output.write(buffer, 0, read)
+        val call = client.newCall(request).apply {
+            timeout().timeout(ARCHIVE_CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+        }
+        try {
+            call.execute().use { response ->
+                require(response.isSuccessful) { "Skill 压缩包下载失败：HTTP ${response.code}" }
+                val body = response.body
+                val declaredSize = body.contentLength()
+                require(declaredSize < 0 || declaredSize <= MAX_REMOTE_ARCHIVE_BYTES) { "Skill 仓库压缩包超过 200 MB" }
+                target.parentFile?.mkdirs()
+                var received = 0L
+                onProgress(0, declaredSize)
+                body.byteStream().use { input ->
+                    target.outputStream().use { output ->
+                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                        while (true) {
+                            val read = input.read(buffer)
+                            if (read < 0) break
+                            received += read
+                            require(received <= MAX_REMOTE_ARCHIVE_BYTES) { "Skill 仓库压缩包超过 200 MB" }
+                            output.write(buffer, 0, read)
+                            onProgress(received, declaredSize)
+                        }
                     }
                 }
+                require(received > 0) { "Skill 压缩包为空" }
             }
-            require(received == entry.size) { "Skill 文件下载不完整：${entry.path}" }
+        } catch (error: Exception) {
+            target.delete()
+            throw error
         }
     }
 
     private fun getJson(url: HttpUrl): String {
         val cacheFile = cacheFile(url)
+        // skills.sh 榜单变化不需要秒级刷新。短时间内直接复用缓存，避免每次进入页面都等待远端生成榜单。
+        cacheFile
+            ?.takeIf { url.host == SKILLS_HOST && it.isFile && System.currentTimeMillis() - it.lastModified() < CATALOG_CACHE_MILLIS }
+            ?.let {
+                usedOfflineCache = false
+                return it.readText(Charsets.UTF_8)
+            }
         val request = Request.Builder()
             .url(url)
             .header("Accept", "application/json")
             .header("User-Agent", "EveryTalk-Skill-Catalog")
             .build()
         try {
-            client.newCall(request).execute().use { response ->
+            val call = client.newCall(request).apply {
+                timeout().timeout(METADATA_CALL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+            }
+            call.execute().use { response ->
                 require(response.isSuccessful) { "Skill 云目录请求失败：HTTP ${response.code}" }
                 val body = response.body.string()
                 usedOfflineCache = false
@@ -208,18 +247,43 @@ class SkillCatalogClient(
         MessageDigest.getInstance("SHA-256").digest(url.toString().toByteArray()).joinToString("") { "%02x".format(it) } + ".json",
     )
 
-    private fun getText(url: HttpUrl): String {
-        val request = Request.Builder().url(url).header("User-Agent", "EveryTalk-Skill-Installer").build()
-        client.newCall(request).execute().use { response ->
-            require(response.isSuccessful) { "Skill 文件下载失败：HTTP ${response.code}" }
-            return response.body.string()
+    private fun collectionUrl(type: SkillCatalogCollection, page: Int): HttpUrl = HttpUrl.Builder()
+        .scheme("https")
+        .host(SKILLS_HOST)
+        .addPathSegments("api/skills/${type.path}/$page")
+        .build()
+
+    private fun decodeCollectionPage(
+        type: SkillCatalogCollection,
+        page: Int,
+        responseBody: String,
+    ): RemoteSkillCatalogPage {
+        val response = json.decodeFromString<RemoteSkillCatalogResponse>(responseBody)
+        val items = if (type == SkillCatalogCollection.OFFICIAL) {
+            response.skills.filter(RemoteSkillCatalogItem::isOfficial)
+        } else {
+            response.skills
         }
+        return RemoteSkillCatalogPage(items, page, response.total, response.skills.size, response.hasMore)
     }
 
     private companion object {
         const val SKILLS_HOST = "skills.sh"
+        const val CATALOG_CACHE_MILLIS = 10 * 60 * 1_000L
+        const val DETAIL_CACHE_MILLIS = 5 * 60 * 1_000L
+        const val METADATA_CALL_TIMEOUT_SECONDS = 15L
+        const val ARCHIVE_CALL_TIMEOUT_SECONDS = 120L
+        const val MAX_REMOTE_ARCHIVE_BYTES = 200L * 1024L * 1024L
     }
 }
+
+private data class CachedPackageDetail(
+    val savedAt: Long,
+    val detail: RemoteSkillPackageDetail,
+)
+
+@Serializable
+private data class GithubCommitResponse(val sha: String)
 
 @Serializable
 private data class GithubTreeResponse(
@@ -267,9 +331,6 @@ private fun belongsToSkillRoot(path: String, root: String, roots: List<String>):
 private fun relativeToSkillRoot(path: String, root: String): String =
     if (root.isEmpty()) path else path.removePrefix("$root/")
 
-private fun repositoryPath(root: String, relative: String): String =
-    if (root.isBlank()) relative else "$root/$relative"
-
 private fun requireGithubRepository(source: String): List<String> = source.split('/').also { repository ->
     require(repository.size == 2 && repository.all { it.isNotBlank() }) { "Skill 来源仓库无效" }
 }
@@ -280,25 +341,17 @@ private fun githubApiUrl(path: String): HttpUrl = HttpUrl.Builder()
     .addPathSegments(path)
     .build()
 
-internal fun remoteRepositoryFileUrl(source: String, branch: String, repositoryPath: String): HttpUrl {
+internal fun remoteRepositoryArchiveUrl(source: String, commit: String): HttpUrl {
     val repository = requireGithubRepository(source)
-    val path = safeRemotePathSegments(repositoryPath, allowRoot = false)
+    require(commit.isNotBlank() && commit.all { it.isLetterOrDigit() || it in setOf('-', '_', '.') }) {
+        "Skill 版本无效"
+    }
     return HttpUrl.Builder()
         .scheme("https")
-        .host("raw.githubusercontent.com")
+        .host("codeload.github.com")
         .addPathSegment(repository[0])
         .addPathSegment(repository[1])
-        .addPathSegment(branch)
-        .apply { path.forEach(::addPathSegment) }
+        .addPathSegment("zip")
+        .addPathSegment(commit)
         .build()
-}
-
-private fun safeRemotePathSegments(value: String, allowRoot: Boolean): List<String> {
-    val normalized = value.trim().replace('\\', '/').trim('/')
-    if (allowRoot && (normalized.isBlank() || normalized == ".")) return emptyList()
-    val segments = normalized.split('/')
-    require(segments.isNotEmpty() && segments.all { it.isNotBlank() && it != "." && it != ".." }) {
-        "Skill 文件路径无效"
-    }
-    return segments
 }

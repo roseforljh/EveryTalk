@@ -62,6 +62,42 @@ data class RemoteSkillPackageCatalogItem(
     val githubRepository: String? = source.takeIf(::isSafeGithubRepository)?.let { "https://github.com/$it" }
 }
 
+/** skills.sh 榜单的一页。页面层根据 hasMore 在滚动到底部时继续读取。 */
+data class RemoteSkillCatalogPage(
+    val skills: List<RemoteSkillCatalogItem>,
+    val page: Int,
+    val total: Int,
+    val pageSize: Int,
+    val hasMore: Boolean,
+)
+
+/** 返回当前页前后需要静默缓存的页码，不重复请求当前正在显示的页面。 */
+internal fun catalogPrefetchPages(currentPage: Int, maxPage: Int, radius: Int = 3): List<Int> {
+    if (currentPage <= 0 || maxPage <= 0 || radius <= 0) return emptyList()
+    return (maxOf(1, currentPage - radius)..minOf(maxPage, currentPage + radius))
+        .filter { it != currentPage }
+}
+
+/** 云目录每个独立 Skill 都显示，但下载仍按来源仓库整包安装。 */
+fun RemoteSkillCatalogItem.toRemotePackageCatalogItem(): RemoteSkillPackageCatalogItem =
+    RemoteSkillPackageCatalogItem(
+        source = source,
+        name = source.substringAfterLast('/').replaceFirstChar(Char::uppercaseChar),
+        matchedSkills = listOf(this),
+    )
+
+enum class RemoteSkillInstallStage {
+    DOWNLOADING,
+    INSTALLING,
+}
+
+/** 下载阶段的字节进度和安装阶段的文件进度共用同一份轻量状态。 */
+data class RemoteSkillInstallProgress(
+    val stage: RemoteSkillInstallStage,
+    val completed: Long,
+    val total: Long,
+)
+
 /** GitHub Tree 中一个待下载文件，repositoryPath 是仓库内路径。 */
 data class RemoteSkillPackageFile(
     val path: String,

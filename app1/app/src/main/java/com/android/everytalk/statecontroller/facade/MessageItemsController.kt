@@ -14,6 +14,9 @@ import com.android.everytalk.ui.components.WebMarkdownSourcesExtractor
 import com.android.everytalk.ui.components.streaming.PreparedMessage
 import com.android.everytalk.ui.components.streaming.PreparedMarkdownDocument
 import com.android.everytalk.ui.components.streaming.StreamBlockParser
+import com.android.everytalk.ui.components.streaming.IncrementalParseCache
+import com.android.everytalk.ui.components.streaming.StreamingRenderState
+import com.android.everytalk.ui.components.streaming.buildStreamingRenderStateIncremental
 import com.android.everytalk.ui.components.streaming.contentVersionForRendering
 import com.android.everytalk.ui.components.markdown.footnoteTargets
 import com.android.everytalk.ui.components.markdown.EveryTalkMarkdownFlavourDescriptor
@@ -75,8 +78,17 @@ open class MessageItemsController(
         val preparedMarkdownDocument: PreparedMarkdownDocument?,
     )
 
+    /** 每个正文段独立保留增量 Markdown 状态，工具前后的正文互不污染。 */
+    private data class OrderedSegmentRenderCache(
+        val messageId: String,
+        val text: String,
+        val state: StreamingRenderState,
+        val incrementalCache: IncrementalParseCache,
+    )
+
     private val chatListItemCache = ConcurrentHashMap<String, CacheEntry>()
     private val imageGenerationChatListItemCache = ConcurrentHashMap<String, CacheEntry>()
+    private val orderedSegmentRenderCache = ConcurrentHashMap<String, OrderedSegmentRenderCache>()
     private val liveTextMessageIds = ConcurrentHashMap.newKeySet<String>()
 
     // 🔧 修复Loading不显示问题：记录每个消息开始流式传输的时间戳
@@ -207,6 +219,37 @@ open class MessageItemsController(
     ) {
         val currentIds = messages.mapTo(HashSet(messages.size)) { it.id }
         cache.keys.retainAll(currentIds)
+        if (cache === chatListItemCache) {
+            orderedSegmentRenderCache.entries.removeIf { it.value.messageId !in currentIds }
+        }
+    }
+
+    private fun orderedSegmentRenderState(
+        messageId: String,
+        segmentIndex: Int,
+        text: String,
+        isStreaming: Boolean,
+    ): StreamingRenderState {
+        val key = "$messageId:$segmentIndex"
+        val previous = orderedSegmentRenderCache[key]
+        if (previous?.text == text && previous.state.isStreaming == isStreaming) {
+            return previous.state
+        }
+        val appendOnly = previous != null && text.startsWith(previous.text)
+        val (state, incrementalCache) = buildStreamingRenderStateIncremental(
+            messageId = "${messageId}_content_$segmentIndex",
+            content = text,
+            isStreaming = isStreaming,
+            isComplete = !isStreaming,
+            cache = previous?.incrementalCache?.takeIf { appendOnly } ?: IncrementalParseCache(),
+        )
+        orderedSegmentRenderCache[key] = OrderedSegmentRenderCache(
+            messageId = messageId,
+            text = text,
+            state = state,
+            incrementalCache = incrementalCache,
+        )
+        return state
     }
 
     val chatListItems: StateFlow<List<ChatListItem>> =
@@ -232,10 +275,6 @@ open class MessageItemsController(
                                 liveTextMessageIds.add(message.id)
                             }
                             val effectiveMessage = buildEffectiveMessage(message, isCurrentlyStreaming)
-                            val parseResult = resolveParseResult(
-                                message = effectiveMessage,
-                                preferStreamingState = isCurrentlyStreaming,
-                            )
 
                             // 定义仅流式状态下允许存在的组件类型
                             val hasStreamingOnlyItems = cached?.items?.any {
@@ -272,10 +311,9 @@ open class MessageItemsController(
                             }
                             val footerMatches = (cachedFooter != null) == expectedHasFooter &&
                                 (!expectedHasFooter || cachedFooter?.message?.webSearchResults == message.webSearchResults)
-                            val blocksHashMatches = cached?.blocksHash == parseResult.blocksHash
                             val allowStreamingBlocksHashReuse = cached != null &&
                                 !isCurrentlyStreaming &&
-                                !parseResult.hasPendingMath &&
+                                !cached.hasPendingMath &&
                                 cached.text == message.text &&
                                 cached.items.any { it is ChatListItem.AiMessage || it is ChatListItem.AiMessageCode }
 
@@ -284,8 +322,6 @@ open class MessageItemsController(
                                 cached.reasoning == message.reasoning &&
                                 cached.outputType == message.outputType &&
                                 cached.hasReasoning == hasReasoning &&
-                                (blocksHashMatches || allowStreamingBlocksHashReuse) &&
-                                cached.hasPendingMath == parseResult.hasPendingMath &&
                                 cached.imageUrls == message.imageUrls &&
                                 cached.webSearchResults == message.webSearchResults &&
                                 cached.contentStarted == effectiveMessage.contentStarted &&
@@ -303,6 +339,20 @@ open class MessageItemsController(
                             if (cacheValid) {
                                 cached.items
                             } else {
+                                // 先用便宜字段判断缓存。只有消息真的变化时才解析 Markdown，
+                                // 避免当前消息流式刷新时反复解析全部历史消息。
+                                val parseResult = if (hasOrderedOutput) {
+                                    StreamBlockParser.ParseResult(
+                                        blocks = emptyList(),
+                                        hasPendingMath = false,
+                                        blocksHash = "ordered-output",
+                                    )
+                                } else {
+                                    resolveParseResult(
+                                        message = effectiveMessage,
+                                        preferStreamingState = isCurrentlyStreaming,
+                                    )
+                                }
                                 val newItems = createAiMessageItems(
                                     effectiveMessage,
                                     isApiCalling,
@@ -363,10 +413,6 @@ open class MessageItemsController(
                             val hasReasoning = !message.reasoning.isNullOrBlank()
                             val isCurrentlyStreaming = isApiCalling && message.id == currentStreamingAiMessageId
                             val effectiveMessage = buildEffectiveMessage(message, isCurrentlyStreaming)
-                            val parseResult = resolveParseResult(
-                                message = effectiveMessage,
-                                preferStreamingState = isCurrentlyStreaming,
-                            )
                             val reasoningComplete = stateHolder.imageReasoningCompleteMap[message.id] ?: false
                             val expectedStageText = if (isCurrentlyStreaming) {
                                 val elapsedMs = streamingStartTimestamps[message.id]?.let { System.currentTimeMillis() - it } ?: 0L
@@ -383,8 +429,6 @@ open class MessageItemsController(
                                 cached.reasoning == message.reasoning &&
                                 cached.outputType == message.outputType &&
                                 cached.hasReasoning == hasReasoning &&
-                                cached.blocksHash == parseResult.blocksHash &&
-                                cached.hasPendingMath == parseResult.hasPendingMath &&
                                 cached.imageUrls == message.imageUrls &&
                                 cached.webSearchResults == message.webSearchResults &&
                                 cached.contentStarted == effectiveMessage.contentStarted &&
@@ -397,6 +441,10 @@ open class MessageItemsController(
                             if (cacheValid) {
                                 cached.items
                             } else {
+                                val parseResult = resolveParseResult(
+                                    message = effectiveMessage,
+                                    preferStreamingState = isCurrentlyStreaming,
+                                )
                                 val newItems = createAiMessageItems(
                                     effectiveMessage,
                                     isApiCalling,
@@ -724,25 +772,44 @@ open class MessageItemsController(
             segments.forEachIndexed { segmentIndex, segment ->
                 when (segment) {
                     is OrderedAiOutputSegment.Content -> if (segment.text.isNotBlank()) {
+                        val isStreamingSegment = replyIsStreaming && segmentIndex == segments.lastIndex
+                        val segmentMessage = Message(
+                            id = "${message.id}_content_$segmentIndex",
+                            text = segment.text,
+                            sender = message.sender,
+                            contentStarted = true,
+                            timestamp = message.timestamp,
+                            outputType = message.outputType,
+                        )
                         add(
                             ChatListItem.AiMessageContentSegment(
-                                message = message,
+                                sourceMessageId = message.id,
+                                message = segmentMessage,
                                 segmentIndex = segmentIndex,
                                 text = segment.text,
-                                isStreaming = replyIsStreaming && segmentIndex == segments.lastIndex,
+                                isStreaming = isStreamingSegment,
+                                renderState = orderedSegmentRenderState(
+                                    messageId = message.id,
+                                    segmentIndex = segmentIndex,
+                                    text = segment.text,
+                                    isStreaming = isStreamingSegment,
+                                ),
                             )
                         )
                     }
                     is OrderedAiOutputSegment.Process -> add(
                         ChatListItem.AiMessageProcessSegment(
-                            message = message,
+                            messageId = message.id,
                             segmentIndex = segmentIndex,
                             events = segment.events,
                             detailStartIndex = segment.detailStartIndex,
                             activityStatusText = activityStatus.takeIf { segmentIndex == segments.lastIndex },
                             replyIsStreaming = replyIsStreaming,
                             processIsActive = replyIsStreaming && segmentIndex == segments.lastIndex,
-                            isLastProcess = segmentIndex == lastProcessIndex,
+                            webSearchResults = message.webSearchResults.orEmpty(),
+                            messageIsError = message.isError && segmentIndex == lastProcessIndex,
+                            executionStartedAtMillis = message.timestamp,
+                            executionFinishedAtMillis = message.executionFinishedAt,
                         )
                     )
                 }
@@ -819,6 +886,7 @@ open class MessageItemsController(
             android.util.Log.d("MessageItemsController", "Cleared IMAGE cache for message: ${messageId.take(8)}")
         } else {
             chatListItemCache.remove(messageId)
+            orderedSegmentRenderCache.entries.removeIf { it.value.messageId == messageId }
             android.util.Log.d("MessageItemsController", "Cleared TEXT cache for message: ${messageId.take(8)}")
         }
         streamingStartTimestamps.remove(messageId)
@@ -831,6 +899,7 @@ open class MessageItemsController(
     fun clearAllCaches() {
         chatListItemCache.clear()
         imageGenerationChatListItemCache.clear()
+        orderedSegmentRenderCache.clear()
         streamingStartTimestamps.clear()
         liveTextMessageIds.clear()
         android.util.Log.d("MessageItemsController", "Cleared all caches and streaming timestamps")
