@@ -72,6 +72,7 @@ object PerformanceMonitor {
     )
 
     private val sessions = ConcurrentHashMap<String, SessionStats>()
+    private val firstResponseStartedAt = ConcurrentHashMap<String, Long>()
 
     private fun stats(messageId: String): SessionStats {
         return sessions.getOrPut(messageId) { SessionStats(messageId) }
@@ -83,6 +84,16 @@ object PerformanceMonitor {
         mode?.let { s.mode = it }
         backend?.let { s.backend = it }
         model?.let { s.model = it }
+    }
+
+    /** 只记录一条首字耗时，不受详细性能日志开关影响。 */
+    fun startFirstResponse(messageId: String, startedAt: Long = System.currentTimeMillis()) {
+        firstResponseStartedAt.putIfAbsent(messageId, startedAt)
+    }
+
+    fun recordFirstVisibleText(messageId: String, now: Long = System.currentTimeMillis()) {
+        val startedAt = firstResponseStartedAt.remove(messageId) ?: return
+        Log.i("AI_TTFT", "messageId=$messageId placeholder_to_first_text_ms=${now - startedAt}")
     }
 
     fun recordEvent(messageId: String, eventType: String, deltaLen: Int = 0) {
@@ -183,6 +194,7 @@ object PerformanceMonitor {
     }
 
     fun onFinish(messageId: String) {
+        firstResponseStartedAt.remove(messageId)
         val s = sessions.remove(messageId) ?: return
         if (!enabled) return
         s.endTs = System.currentTimeMillis()
@@ -190,6 +202,7 @@ object PerformanceMonitor {
     }
 
     fun onAbort(messageId: String, reason: String) {
+        firstResponseStartedAt.remove(messageId)
         val s = sessions.remove(messageId) ?: return
         if (!enabled) return
         s.endTs = System.currentTimeMillis()

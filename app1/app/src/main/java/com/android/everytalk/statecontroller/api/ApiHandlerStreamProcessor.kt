@@ -653,6 +653,7 @@ internal class ApiHandlerStreamProcessor(
                             }
                             // sampling-based performance record
                             PerformanceMonitor.recordEvent(aiMessageId, "Content", filteredChunk.length)
+                            PerformanceMonitor.recordFirstVisibleText(aiMessageId)
                             stateHolder.appendContentToMessage(aiMessageId, filteredChunk, isImageGeneration)
                             // 🎯 第一个非空内容到来时，标记contentStarted = true
                             // 这样思考框会收起，正式内容开始流式展示
@@ -715,6 +716,7 @@ internal class ApiHandlerStreamProcessor(
                                 return@withContext
                             }
                             PerformanceMonitor.recordEvent(aiMessageId, "Text", filteredChunk.length)
+                            PerformanceMonitor.recordFirstVisibleText(aiMessageId)
                             stateHolder.appendContentToMessage(aiMessageId, filteredChunk, isImageGeneration)
                             // 🎯 第一个非空文本到来时，标记contentStarted = true
                             if (!currentMessage.contentStarted) {

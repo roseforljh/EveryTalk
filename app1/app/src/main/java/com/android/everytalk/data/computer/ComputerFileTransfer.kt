@@ -41,6 +41,12 @@ data class ComputerFileWriteResult(
     val size: Long,
 )
 
+data class ComputerFileEditResult(
+    val path: String,
+    val replacements: Int,
+    val size: Long,
+)
+
 data class ComputerStreamTransferResult(
     val path: String,
     val bytes: Long,
@@ -141,6 +147,66 @@ class ComputerFileTransfer {
             }
         } finally {
             bytes.fill(0)
+        }
+    }
+
+    /**
+     * 在同一个文件锁和 SFTP 会话内完成读取、匹配、原子写回。
+     * 这样能避免两个并发 edit 都基于旧内容成功，随后互相覆盖。
+     */
+    internal suspend fun edit(
+        connection: ComputerSshConnection,
+        workspace: ComputerWorkspace,
+        toolCallId: String,
+        path: String,
+        edits: List<ComputerTextEdit>,
+    ): ComputerFileEditResult {
+        ComputerIdentifier.requireValid(toolCallId, "Tool Call ID")
+        val relative = ComputerWorkspacePath.normalize(path)
+        val lock = writeLocks.computeIfAbsent("${workspace.id}\u0000$relative") { Mutex() }
+        return lock.withLock {
+            connection.withSftp { sftp ->
+                val target = resolveExistingFile(sftp, workspace, relative)
+                val size = sftp.size(target)
+                if (size > MAX_WRITE_BYTES) {
+                    throw ComputerException(ComputerErrorCodes.WORKSPACE_PATH_INVALID, "edit 文件不能超过 8 MiB")
+                }
+                val bytes = ByteArray(size.toInt())
+                try {
+                    sftp.open(target, EnumSet.of(OpenMode.READ)).use { file ->
+                        var offset = 0
+                        while (offset < bytes.size) {
+                            val count = file.read(offset.toLong(), bytes, offset, bytes.size - offset)
+                            if (count <= 0) break
+                            offset += count
+                        }
+                        if (offset != bytes.size) {
+                            throw ComputerException(
+                                ComputerErrorCodes.DOWNLOAD_INTERRUPTED,
+                                "edit 读取文件不完整",
+                                retryable = true,
+                            )
+                        }
+                    }
+                    val result = ComputerTextEditor.apply(bytes.toString(Charsets.UTF_8), edits, path)
+                    val editedBytes = result.content.toByteArray(Charsets.UTF_8)
+                    try {
+                        if (editedBytes.size > MAX_WRITE_BYTES) {
+                            throw ComputerException(ComputerErrorCodes.WORKSPACE_PATH_INVALID, "edit 后的文件不能超过 8 MiB")
+                        }
+                        overwriteAtomically(sftp, target, toolCallId, editedBytes)
+                        ComputerFileEditResult(
+                            path = ComputerWorkspacePath.display(relative),
+                            replacements = result.replacements,
+                            size = editedBytes.size.toLong(),
+                        )
+                    } finally {
+                        editedBytes.fill(0)
+                    }
+                } finally {
+                    bytes.fill(0)
+                }
+            }
         }
     }
 

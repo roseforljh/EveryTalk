@@ -4,15 +4,16 @@ object ComputerToolNames {
     const val EXEC = "exec"
     const val READ_FILE = "read_file"
     const val WRITE_FILE = "write_file"
+    const val EDIT = "edit"
     const val TERMINAL = "terminal"
     const val UPLOAD = "upload"
     const val DOWNLOAD = "download"
     const val OPEN_PORT = "open_port"
 
-    val all = setOf(EXEC, READ_FILE, WRITE_FILE, TERMINAL, UPLOAD, DOWNLOAD, OPEN_PORT)
+    val all = setOf(EXEC, READ_FILE, WRITE_FILE, EDIT, TERMINAL, UPLOAD, DOWNLOAD, OPEN_PORT)
 }
 
-/** 七个稳定的 Computer Tool Schema，服务器身份由 Android 请求快照注入，模型参数中不出现。 */
+/** 八个稳定的 Computer Tool Schema，服务器身份由 Android 请求快照注入，模型参数中不出现。 */
 object ComputerToolCatalog {
     fun definitions(
         permissionMode: ComputerPermissionMode = ComputerPermissionMode.MANUAL,
@@ -87,6 +88,28 @@ object ComputerToolCatalog {
                 "create_parents" to boolean("Create missing parent directories."),
             ),
             required = listOf("path", "content"),
+        ),
+        function(
+            name = ComputerToolNames.EDIT,
+            description = "Edit one file with one or more precise text replacements. Every oldText must be unique in the original file, and edits must not overlap.",
+            properties = mapOf(
+                "path" to string("Relative path or /workspace path."),
+                "edits" to mapOf(
+                    "type" to "array",
+                    "description" to "Targeted replacements matched against the original file.",
+                    "minItems" to 1,
+                    "items" to mapOf(
+                        "type" to "object",
+                        "properties" to mapOf(
+                            "oldText" to string("Exact text for one unique targeted replacement."),
+                            "newText" to string("Replacement text for this targeted edit."),
+                        ),
+                        "required" to listOf("oldText", "newText"),
+                        "additionalProperties" to false,
+                    ),
+                ),
+            ),
+            required = listOf("path", "edits"),
         ),
         function(
             name = ComputerToolNames.TERMINAL,

@@ -40,8 +40,25 @@ interface AgentDao {
     @Query("SELECT * FROM agent_runs WHERE sessionId = :sessionId ORDER BY createdAt ASC")
     suspend fun getRunsForSession(sessionId: String): List<AgentRunEntity>
 
-    @Query("SELECT payload FROM agent_run_snapshot_chunks WHERE runId = :runId ORDER BY chunkIndex ASC")
-    suspend fun getRunSnapshotChunks(runId: String): List<String>
+    /**
+     * 分页读取恢复快照。
+     *
+     * Room 会把一次查询的全部结果装进 CursorWindow。即使单块只有 64K，直接查询全部块仍会在
+     * 总量超过约 2MB 时失败，因此调用方必须按 chunkIndex 分页读取。
+     */
+    @Query(
+        """
+        SELECT * FROM agent_run_snapshot_chunks
+        WHERE runId = :runId AND chunkIndex > :afterChunkIndex
+        ORDER BY chunkIndex ASC
+        LIMIT :limit
+        """
+    )
+    suspend fun getRunSnapshotChunkPage(
+        runId: String,
+        afterChunkIndex: Int,
+        limit: Int,
+    ): List<AgentRunSnapshotChunkEntity>
 
     @Query("DELETE FROM agent_run_snapshot_chunks WHERE runId = :runId")
     suspend fun deleteRunSnapshotChunks(runId: String)

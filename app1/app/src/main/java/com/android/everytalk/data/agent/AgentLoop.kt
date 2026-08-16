@@ -1,5 +1,6 @@
 package com.android.everytalk.data.agent
 
+import android.util.Log
 import com.android.everytalk.data.DataClass.AgentAssistantApiMessage
 import com.android.everytalk.data.DataClass.AgentToolCallApiPart
 import com.android.everytalk.data.DataClass.AgentToolResultApiMessage
@@ -175,6 +176,7 @@ class AgentLoop(
 
             // modelTurnOrdinal 从 1 开始；恢复 Run 时只能使用剩余额度，不能重新获得 50 轮。
             for (modelTurnOrdinal in remainingAgentModelTurnOrdinals(firstModelTurnOrdinal)) {
+                val preparationStartedAt = System.currentTimeMillis()
                 run = runStore.updateRunStatus(
                     run = checkNotNull(run),
                     status = AgentRunStatus.PREPARING_CONTEXT,
@@ -278,6 +280,7 @@ class AgentLoop(
                 var usage: TokenUsage? = null
                 var finishReason: String? = null
                 var firstEventAt: Long? = null
+                var firstTextAt: Long? = null
                 var failure: AppStreamEvent.Error? = null
                 var finalText: String? = null
                 var nextProviderContinuation: ProviderTurnContinuation? = null
@@ -298,10 +301,12 @@ class AgentLoop(
                     }
                     when (event) {
                         is AppStreamEvent.Text -> {
+                            if (firstTextAt == null && event.text.isNotBlank()) firstTextAt = System.currentTimeMillis()
                             blocks.appendText(event.text)
                             roundContentBuffer.accept(event)
                         }
                         is AppStreamEvent.Content -> {
+                            if (firstTextAt == null && event.text.isNotBlank()) firstTextAt = System.currentTimeMillis()
                             blocks.appendText(event.text)
                             roundContentBuffer.accept(event)
                         }
@@ -358,6 +363,16 @@ class AgentLoop(
                 roundContentBuffer.finish(hasToolCalls = toolCalls.isNotEmpty())
                 val assistant = AgentAssistantTurn(blocks = blocks, finishReason = finishReason)
                 val finishedAt = System.currentTimeMillis()
+                Log.i(
+                    "AI_TTFT",
+                    "requestId=" + requestId +
+                        " runId=" + checkNotNull(run).id +
+                        " turn=" + modelTurnOrdinal +
+                        " prepare_ms=" + (startedAt - preparationStartedAt) +
+                        " first_event_ms=" + (firstEventAt?.minus(startedAt) ?: -1L) +
+                        " first_text_ms=" + (firstTextAt?.minus(startedAt) ?: -1L) +
+                        " total_ms=" + (finishedAt - startedAt),
+                )
 
                 val turnFailure = failure
                 if (turnFailure != null) {

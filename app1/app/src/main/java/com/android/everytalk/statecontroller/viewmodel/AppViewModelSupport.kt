@@ -251,6 +251,7 @@ internal suspend fun executeSharedToolCall(
             ComputerToolNames.EXEC -> "执行服务器命令"
             ComputerToolNames.READ_FILE -> "读取服务器文件"
             ComputerToolNames.WRITE_FILE -> "写入服务器文件"
+            ComputerToolNames.EDIT -> "编辑服务器文件"
             ComputerToolNames.TERMINAL -> "操作服务器终端"
             ComputerToolNames.UPLOAD -> "上传附件到服务器"
             ComputerToolNames.DOWNLOAD -> "从服务器下载文件"

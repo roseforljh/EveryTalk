@@ -30,6 +30,7 @@ import com.android.everytalk.data.computer.ComputerToolCallSafety
 import com.android.everytalk.data.database.daos.ComputerDao
 import java.security.MessageDigest
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -57,6 +58,8 @@ class AgentRunStore(
 ) {
     private val approvalDecisionLock = kotlinx.coroutines.sync.Mutex()
     private val entryAppendLock = kotlinx.coroutines.sync.Mutex()
+    private val snapshotReadLock = kotlinx.coroutines.sync.Mutex()
+    private val snapshotCache = ConcurrentHashMap<String, AgentRequestSnapshot>()
     suspend fun createRun(
         sessionId: String,
         userMessageId: String,
@@ -65,10 +68,8 @@ class AgentRunStore(
         request: ChatRequest,
     ): AgentRunEntity {
         val now = System.currentTimeMillis()
-        val encodedSnapshot = json.encodeToString(
-            AgentRequestSnapshot.serializer(),
-            request.toRecoverySnapshot(),
-        )
+        val snapshot = request.toRecoverySnapshot()
+        val encodedSnapshot = json.encodeToString(AgentRequestSnapshot.serializer(), snapshot)
         return AgentRunEntity(
             id = UUID.randomUUID().toString(),
             sessionId = sessionId,
@@ -88,6 +89,7 @@ class AgentRunStore(
                 snapshotChunks = agentRequestSnapshotChunks(run.id, encodedSnapshot),
                 reason = AgentTerminalReasons.SUPERSEDED_BY_NEW_RUN,
             )
+            snapshotCache[run.id] = snapshot
         }
     }
 
@@ -181,13 +183,38 @@ class AgentRunStore(
         }
 
     suspend fun decodeRequestSnapshot(run: AgentRunEntity): AgentRequestSnapshot? {
-        // requestSnapshotJson 只用于兼容 24 版及更早的数据；25 版开始统一读取小块。
-        val encoded = run.requestSnapshotJson
-            ?: dao.getRunSnapshotChunks(run.id).takeIf(List<String>::isNotEmpty)?.joinToString("")
-            ?: return null
-        return runCatching {
-            json.decodeFromString(AgentRequestSnapshot.serializer(), encoded)
-        }.getOrNull()
+        snapshotCache[run.id]?.let { return it }
+        return snapshotReadLock.withLock {
+            snapshotCache[run.id]?.let { return@withLock it }
+            // requestSnapshotJson 只用于兼容 24 版及更早的数据；25 版开始分页读取小块。
+            val encoded = run.requestSnapshotJson ?: readChunkedSnapshot(run.id) ?: return@withLock null
+            runCatching {
+                json.decodeFromString(AgentRequestSnapshot.serializer(), encoded)
+            }.getOrNull()?.also { snapshotCache[run.id] = it }
+        }
+    }
+
+    /**
+     * 每次最多读取 8 个 64K 块，保证单次 CursorWindow 数据量明显低于 Android 的约 2MB 上限。
+     * 块编号必须从 0 连续递增，缺块时拒绝拼出半份上下文。
+     */
+    private suspend fun readChunkedSnapshot(runId: String): String? {
+        val snapshot = StringBuilder()
+        var expectedChunkIndex = 0
+        while (true) {
+            val page = dao.getRunSnapshotChunkPage(
+                runId = runId,
+                afterChunkIndex = expectedChunkIndex - 1,
+                limit = AGENT_REQUEST_SNAPSHOT_READ_PAGE_SIZE,
+            )
+            if (page.isEmpty()) return snapshot.takeIf { expectedChunkIndex > 0 }?.toString()
+            page.forEach { chunk ->
+                if (chunk.chunkIndex != expectedChunkIndex) return null
+                snapshot.append(chunk.payload)
+                expectedChunkIndex += 1
+            }
+            if (page.size < AGENT_REQUEST_SNAPSHOT_READ_PAGE_SIZE) return snapshot.toString()
+        }
     }
 
     suspend fun restoreChatRequest(run: AgentRunEntity, apiKey: String): ChatRequest? {
@@ -219,15 +246,14 @@ class AgentRunStore(
 
     /** 用户批准 request_agent 后，先把服务器快照和工具写回原 Run，再继续同一次请求。 */
     suspend fun updateRequestSnapshot(run: AgentRunEntity, request: ChatRequest): AgentRunEntity {
-        val encodedSnapshot = json.encodeToString(
-            AgentRequestSnapshot.serializer(),
-            request.toRecoverySnapshot(),
-        )
+        val snapshot = request.toRecoverySnapshot()
+        val encodedSnapshot = json.encodeToString(AgentRequestSnapshot.serializer(), snapshot)
         return run.copy(
             requestSnapshotJson = null,
             updatedAt = System.currentTimeMillis(),
         ).also { updated ->
             dao.persistRunSnapshot(updated, agentRequestSnapshotChunks(updated.id, encodedSnapshot))
+            snapshotCache[updated.id] = snapshot
         }
     }
 
@@ -241,7 +267,10 @@ class AgentRunStore(
         currentRequestOrdinal = requestOrdinal,
         terminalReason = terminalReason,
         updatedAt = System.currentTimeMillis(),
-    ).also { dao.upsertRun(it) }
+    ).also {
+        dao.upsertRun(it)
+        if (status in AGENT_TERMINAL_RUN_STATUSES) snapshotCache.remove(run.id)
+    }
 
     suspend fun createRequest(
         run: AgentRunEntity,
@@ -1024,6 +1053,13 @@ private fun AgentContentBlock.ToolCall.toExecutionStep(completed: Boolean): Exec
 }
 
 private const val AGENT_REQUEST_SNAPSHOT_CHUNK_CHARS = 65_536
+private const val AGENT_REQUEST_SNAPSHOT_READ_PAGE_SIZE = 8
+private val AGENT_TERMINAL_RUN_STATUSES = setOf(
+    AgentRunStatus.COMPLETED,
+    AgentRunStatus.FAILED,
+    AgentRunStatus.CANCELLED,
+    AgentRunStatus.INTERRUPTED,
+)
 
 /**
  * 把恢复快照切成 CursorWindow 可安全读取的小行。

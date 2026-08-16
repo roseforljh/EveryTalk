@@ -23,7 +23,7 @@ import com.android.everytalk.data.skill.SkillSecretSessionStore
 
 private const val DEFAULT_FILE_READ_LIMIT = 256 * 1024
 
-/** 七个 Computer Tool 的统一参数校验、幂等、状态和路由入口。 */
+/** 八个 Computer Tool 的统一参数校验、幂等、状态和路由入口。 */
 class ComputerToolExecutor(
     context: Context,
     private val repository: ComputerRepository,
@@ -424,6 +424,7 @@ class ComputerToolExecutor(
         ComputerToolNames.EXEC -> executeCommand(arguments, toolCallId, requestContext, workspace, executionId, requestHash, updateStatus)
         ComputerToolNames.READ_FILE -> readFile(arguments, requestContext, workspace)
         ComputerToolNames.WRITE_FILE -> writeFile(arguments, requestContext, workspace, executionId)
+        ComputerToolNames.EDIT -> editFile(arguments, requestContext, workspace, executionId)
         ComputerToolNames.TERMINAL -> terminal(arguments, requestContext, workspace)
         ComputerToolNames.UPLOAD -> upload(arguments, requestContext, workspace, executionId)
         ComputerToolNames.DOWNLOAD -> download(arguments, requestContext, workspace)
@@ -909,6 +910,37 @@ class ComputerToolExecutor(
         }
     }
 
+    private suspend fun editFile(
+        arguments: JsonObject,
+        context: ComputerRequestContext,
+        workspace: ComputerWorkspace,
+        executionId: String,
+    ): JsonElement {
+        val rawEdits = arguments["edits"] as? JsonArray ?: throw invalidArgument("edits")
+        if (rawEdits.isEmpty()) throw invalidArgument("edits")
+        val edits = rawEdits.mapIndexed { index, element ->
+            val edit = element as? JsonObject ?: throw invalidArgument("edits[$index]")
+            ComputerTextEdit(
+                oldText = edit.requiredString("oldText"),
+                newText = edit.requiredString("newText"),
+            )
+        }
+        val result = repository.withConnection(context.computerId) { connection, _ ->
+            fileTransfer.edit(
+                connection = connection,
+                workspace = workspace,
+                toolCallId = executionId,
+                path = arguments.requiredString("path"),
+                edits = edits,
+            )
+        }
+        return buildJsonObject {
+            put("path", result.path)
+            put("replacements", result.replacements)
+            put("size", result.size)
+        }
+    }
+
     private suspend fun terminal(
         arguments: JsonObject,
         context: ComputerRequestContext,
@@ -1117,6 +1149,7 @@ class ComputerToolExecutor(
         ComputerToolNames.EXEC -> "exec 已完成"
         ComputerToolNames.READ_FILE -> "read_file 已读取文件页"
         ComputerToolNames.WRITE_FILE -> "write_file 已写入文件"
+        ComputerToolNames.EDIT -> "edit 已修改文件"
         ComputerToolNames.TERMINAL -> "terminal 操作已完成"
         ComputerToolNames.UPLOAD -> "upload 已完成"
         ComputerToolNames.DOWNLOAD -> "download 已保存本地附件"
@@ -1191,7 +1224,8 @@ class ComputerToolExecutor(
 
     private fun approvalDetail(toolName: String, arguments: JsonObject): String = when (toolName) {
         ComputerToolNames.EXEC -> arguments.optionalString("command").orEmpty()
-        ComputerToolNames.READ_FILE, ComputerToolNames.WRITE_FILE -> arguments.optionalString("path").orEmpty()
+        ComputerToolNames.READ_FILE, ComputerToolNames.WRITE_FILE, ComputerToolNames.EDIT ->
+            arguments.optionalString("path").orEmpty()
         ComputerToolNames.UPLOAD -> arguments.optionalString("destination_path").orEmpty()
         ComputerToolNames.DOWNLOAD -> arguments.optionalString("path").orEmpty()
         ComputerToolNames.OPEN_PORT -> arguments.optionalLong("port")?.toString().orEmpty()

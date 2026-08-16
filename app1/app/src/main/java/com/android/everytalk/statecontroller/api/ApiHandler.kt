@@ -317,36 +317,8 @@ class ApiHandler(
 
     /** 扫描并调度 MODEL_CONTINUATION_PENDING 状态的 AgentRun 进行模型续写。 */
     suspend fun dispatchPendingContinuationRuns() {
-        // 模型恢复前必须检查通知门槛，未开启通知权限时暂停模型续写并保留 MODEL_CONTINUATION_PENDING 状态
-        if (!canUseAgentNotifications(context)) {
-            return
-        }
-        val computerDao = AppDatabase.getDatabase(context).computerDao()
-        val pendingRuns = agentRunStore.getPendingModelContinuationRuns()
-        for (run in pendingRuns) {
-            if (stateHolder.textApiJob?.isActive == true) break
-            // 远端终态必须先持久化 ToolResult，再进行模型续写恢复 (continueRun / resume)
-            val unconsumed = computerDao.getUnconsumedCompletedExecutionsForRun(run.id)
-            for (exec in unconsumed) {
-                computerDao.markResultAttached(exec.id)
-                AgentToolResultStore(context).appendToolResult(exec.toolCallId, exec.safeSummary ?: "")
-            }
-            if (resumingAgentRunIds.add(run.id)) {
-                try {
-                    agentResumeMutex.withLock {
-                        if (stateHolder.textApiJob?.isActive != true) {
-                            // 恢复原 AgentRun 进行模型续写 (resume / continueRun)
-                            startResumedAgentRun(run.id, record = null)
-                        }
-                    }
-                } catch (e: Exception) {
-                    // 续写异常必须重新保存 MODEL_CONTINUATION_PENDING，禁止把 Run 标记为 FAILED
-                    agentRunStore.updateRunStatus(run, AgentRunStatus.MODEL_CONTINUATION_PENDING)
-                } finally {
-                    resumingAgentRunIds.remove(run.id)
-                }
-            }
-        }
+        // UI 与前台服务统一交给应用级协调器，禁止两套恢复循环同时驱动同一个 Run。
+        agentRunCoordinator.resumePendingContinuationRuns()
     }
 
     suspend fun resumePendingContinuationRuns() {
@@ -726,6 +698,7 @@ class ApiHandler(
         logger.debug("Preparing streaming AI message: $aiMessageId, model=$modelName, isImageGeneration=$isImageGeneration")
 
         PerformanceMonitor.setContext(aiMessageId, mode = if (isImageGeneration) "image" else "text")
+        PerformanceMonitor.startFirstResponse(aiMessageId)
 
         // 初始化处理器和状态
         val newMessageProcessor = MessageProcessor()
@@ -1055,6 +1028,7 @@ class ApiHandler(
                 contextUsageSnapshot = contextUsageSnapshot?.copy(messageId = aiMessageId),
             )
             PerformanceMonitor.setContext(aiMessageId, mode = if (isImageGeneration) "image" else "text")
+            PerformanceMonitor.startFirstResponse(aiMessageId)
 
             val newMessageProcessor = MessageProcessor()
             messageProcessorMap[aiMessageId] = newMessageProcessor

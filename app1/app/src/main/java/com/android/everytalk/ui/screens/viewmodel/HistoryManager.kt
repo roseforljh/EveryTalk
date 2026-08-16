@@ -20,6 +20,8 @@ import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.security.MessageDigest
+import java.util.IdentityHashMap
 
 internal fun resolveHistoryExpectedStableConversationId(
     isImageGeneration: Boolean,
@@ -37,6 +39,53 @@ internal fun resolveHistoryExpectedStableConversationId(
     }
     return stableIdFromMessages ?: currentConversationId.takeIf { it.isNotBlank() }
 }
+
+/**
+ * 把文本按 UTF-16 字符分段送入摘要，避免 `toByteArray()` 为数 MB 正文再分配一份完整副本。
+ * 字段长度先进入摘要，防止相邻字段拼接后产生相同结果。
+ */
+private fun MessageDigest.updateFingerprintField(value: String, trimWhitespace: Boolean = false) {
+    var start = 0
+    var end = value.length
+    if (trimWhitespace) {
+        while (start < end && value[start].isWhitespace()) start += 1
+        while (end > start && value[end - 1].isWhitespace()) end -= 1
+    }
+    val length = end - start
+    update((length ushr 24).toByte())
+    update((length ushr 16).toByte())
+    update((length ushr 8).toByte())
+    update(length.toByte())
+    val buffer = ByteArray(8_192)
+    var bufferSize = 0
+    for (index in start until end) {
+        val code = value[index].code
+        buffer[bufferSize++] = (code ushr 8).toByte()
+        buffer[bufferSize++] = code.toByte()
+        if (bufferSize == buffer.size) {
+            update(buffer)
+            bufferSize = 0
+        }
+    }
+    if (bufferSize > 0) update(buffer, 0, bufferSize)
+}
+
+private fun stableTextFingerprint(value: String): String = MessageDigest.getInstance("SHA-256")
+    .apply { updateFingerprintField(value) }
+    .toHexString()
+
+private fun MessageDigest.toHexString(): String {
+    val bytes = digest()
+    val hex = "0123456789abcdef"
+    return CharArray(bytes.size * 2).also { output ->
+        bytes.forEachIndexed { index, byte ->
+            val value = byte.toInt() and 0xff
+            output[index * 2] = hex[value ushr 4]
+            output[index * 2 + 1] = hex[value and 0x0f]
+        }
+    }.concatToString()
+}
+private const val HISTORY_FINGERPRINT_BACKGROUND_THRESHOLD_CHARS = 64_000L
 
 class HistoryManager(
     private val stateHolder: ViewModelStateHolder,
@@ -70,30 +119,43 @@ class HistoryManager(
 
     // 生成单条消息的稳定指纹（忽略 id/timestamp/动画状态/占位标题）
     private fun messageFingerprint(msg: Message): String {
+        val digest = MessageDigest.getInstance("SHA-256")
         val senderTag = when (msg.sender) {
             Sender.User -> "U"
             Sender.AI -> "A"
             Sender.System -> if (msg.isPlaceholderName) "S_PLACEHOLDER" else "S"
             else -> "O"
         }
-        val text = msg.text.trim()
-        val reasoning = (msg.reasoning ?: "").trim()
         val hasImages = if (msg.imageUrls.isNullOrEmpty()) 0 else msg.imageUrls.size
         val attachmentsSet = msg.attachments.mapNotNull {
             when (it) {
                 is com.android.everytalk.models.SelectedMediaItem.ImageFromUri -> it.uri.toString()
                 is com.android.everytalk.models.SelectedMediaItem.GenericFile -> it.uri.toString()
-                is com.android.everytalk.models.SelectedMediaItem.Audio -> it.data
+                // 音频可能是数 MB Base64。先压成固定摘要，禁止把完整数据复制进判重字符串。
+                is com.android.everytalk.models.SelectedMediaItem.Audio -> "audio:${stableTextFingerprint(it.data)}"
                 is com.android.everytalk.models.SelectedMediaItem.ImageFromBitmap -> it.filePath ?: ""
             }
         }.toSet().sorted().joinToString("|")
-        return listOf(senderTag, text, reasoning, "img=$hasImages", "att={$attachmentsSet}").joinToString("::")
+        digest.updateFingerprintField(senderTag)
+        digest.updateFingerprintField(msg.text, trimWhitespace = true)
+        digest.updateFingerprintField(msg.reasoning.orEmpty(), trimWhitespace = true)
+        digest.updateFingerprintField("img=$hasImages")
+        digest.updateFingerprintField("att={$attachmentsSet}")
+        return digest.toHexString()
     }
 
     // 会话稳定指纹：为判重目的，忽略一切 System 消息（标题/提示均不计入）
     private fun conversationFingerprint(messages: List<Message>): String {
-        val filtered = filterMessagesForSaving(messages).filter { it.sender != Sender.System }
-        return filtered.joinToString("||") { messageFingerprint(it) }
+        val digest = MessageDigest.getInstance("SHA-256")
+        var hasComparableMessage = false
+        filterMessagesForSaving(messages)
+            .asSequence()
+            .filter { it.sender != Sender.System }
+            .forEach {
+                hasComparableMessage = true
+                digest.updateFingerprintField(messageFingerprint(it))
+            }
+        return if (hasComparableMessage) digest.toHexString() else ""
     }
 
     private fun stableConversationId(messages: List<Message>): String? =
@@ -477,11 +539,38 @@ class HistoryManager(
         var finalNewLoadedIndex: Int? = loadedHistoryIndex
         var conversationToPersist: List<Message>? = null
         var addedNewConversation = false
-        val newConversationFingerprint = conversationFingerprint(messagesToSave)
         val nowMs = System.currentTimeMillis()
 
         val historicalConversations = if (isImageGeneration) stateHolder._imageGenerationHistoricalConversations else stateHolder._historicalConversations
         val currentHistory = historicalConversations.value
+        // 大会话指纹在后台线程一次算完。IdentityHashMap 按列表实例缓存，避免一次保存流程重复扫描同一份正文。
+        val buildFingerprintCache = {
+            IdentityHashMap<List<Message>, String>().apply {
+                put(messagesToSave, conversationFingerprint(messagesToSave))
+                currentHistory.forEach { conversation ->
+                    put(conversation, conversationFingerprint(conversation))
+                }
+            }
+        }
+        val fingerprintWorkChars = (currentHistory.asSequence().flatten() + messagesToSave.asSequence())
+            .sumOf { message ->
+                message.text.length.toLong() +
+                    message.reasoning.orEmpty().length +
+                    message.attachments.sumOf { attachment ->
+                        (attachment as? com.android.everytalk.models.SelectedMediaItem.Audio)
+                            ?.data?.length?.toLong() ?: 0L
+                    }
+            }
+        val fingerprintCache = if (fingerprintWorkChars >= HISTORY_FINGERPRINT_BACKGROUND_THRESHOLD_CHARS) {
+            withContext(Dispatchers.Default) { buildFingerprintCache() }
+        } else {
+            buildFingerprintCache()
+        }
+        fun fingerprint(messages: List<Message>): String =
+            fingerprintCache[messages] ?: conversationFingerprint(messages).also {
+                fingerprintCache[messages] = it
+            }
+        val newConversationFingerprint = fingerprint(messagesToSave)
         val mutableHistory = currentHistory.toMutableList()
         val requestedLoadedIdx = loadedHistoryIndex
         val stableIdFromMessages = stableConversationId(messagesToSave)
@@ -492,12 +581,24 @@ class HistoryManager(
             stableIdFromMessages = stableIdFromMessages,
             currentConversationIdInMessages = messagesToSave.any { it.id == currentConversationId },
         )
-        val requestedHistoryFingerprint = requestedLoadedIdx
+        val requestedConversation = requestedLoadedIdx
             ?.takeIf { it >= 0 && it < mutableHistory.size }
-            ?.let { conversationFingerprint(mutableHistory[it]) }
-        val requestedLooksLikeDraftOfCurrent = !requestedHistoryFingerprint.isNullOrEmpty() &&
-            (newConversationFingerprint == requestedHistoryFingerprint ||
-                newConversationFingerprint.startsWith("$requestedHistoryFingerprint||"))
+            ?.let(mutableHistory::get)
+        val compareRequestedDraft = {
+            requestedConversation?.let { stored ->
+                val comparableStored = filterMessagesForSaving(stored)
+                messagesToSave.size >= comparableStored.size &&
+                    comparableStored.indices.all { index ->
+                        messageFingerprint(comparableStored[index]) == messageFingerprint(messagesToSave[index])
+                    }
+            } ?: false
+        }
+        val requestedLooksLikeDraftOfCurrent =
+            if (fingerprintWorkChars >= HISTORY_FINGERPRINT_BACKGROUND_THRESHOLD_CHARS) {
+                withContext(Dispatchers.Default) { compareRequestedDraft() }
+            } else {
+                compareRequestedDraft()
+            }
         val currentLoadedIdx = if (
             requestedLoadedIdx != null &&
             requestedLoadedIdx >= 0 &&
@@ -553,7 +654,7 @@ class HistoryManager(
             val headDeepEqual = mutableHistory.firstOrNull()?.let { head ->
                 compareMessageLists(filterMessagesForSaving(head), messagesToSave)
             } ?: false
-            val headFingerprint = mutableHistory.firstOrNull()?.let(::conversationFingerprint)
+            val headFingerprint = mutableHistory.firstOrNull()?.let(::fingerprint)
 
             if (headFingerprint == newConversationFingerprint || headDeepEqual) {
                 Log.i(TAG_HM, "Skip insert: head equals new conversation (fingerprint/deep head guard)")
@@ -566,7 +667,7 @@ class HistoryManager(
                 } ?: -1
                 if (duplicateIndex == -1) {
                     duplicateIndex = mutableHistory.indexOfFirst { historyChat ->
-                        conversationFingerprint(historyChat) == newConversationFingerprint
+                        fingerprint(historyChat) == newConversationFingerprint
                     }
                 }
                 if (duplicateIndex == -1) {
@@ -609,16 +710,18 @@ class HistoryManager(
         var removed = 0
         for ((index, conversation) in mutableHistory.withIndex()) {
             val stableId = stableConversationId(conversation)
-            val fingerprint = conversationFingerprint(conversation)
+            val conversationFingerprint = fingerprint(conversation)
             val duplicateByStableId = stableId != null && !seenStableIds.add(stableId)
-            val duplicateByFingerprint = fingerprint.isNotEmpty() && !seenFingerprints.add(fingerprint)
+            val duplicateByFingerprint = conversationFingerprint.isNotEmpty() &&
+                !seenFingerprints.add(conversationFingerprint)
             if (!duplicateByStableId && !duplicateByFingerprint) {
                 deduped += conversation
             } else {
                 if (finalNewLoadedIndex == index) {
                     val keptIndex = deduped.indexOfFirst { kept ->
                         (stableId != null && stableConversationId(kept) == stableId) ||
-                            (fingerprint.isNotEmpty() && conversationFingerprint(kept) == fingerprint)
+                            (conversationFingerprint.isNotEmpty() &&
+                                fingerprint(kept) == conversationFingerprint)
                     }
                     finalNewLoadedIndex = keptIndex.takeIf { it >= 0 }
                     if (keptIndex >= 0) deduped[keptIndex] = conversation

@@ -13,6 +13,7 @@ import com.android.everytalk.util.AppLogger
 import com.android.everytalk.data.skill.SkillRepository
 import com.android.everytalk.data.skill.SkillRuntimeTools
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -70,6 +71,8 @@ class AgentRunCoordinator(
         )
     }
     private val activeJobs = ConcurrentHashMap<String, Job>()
+    private val recoveringRunIds = ConcurrentHashMap.newKeySet<String>()
+    private val resumeRetryStates = ConcurrentHashMap<String, ResumeRetryState>()
     private val resumeMutex = Mutex()
 
     private val _events = MutableSharedFlow<Pair<String, AppStreamEvent>>(extraBufferCapacity = 128)
@@ -127,7 +130,22 @@ class AgentRunCoordinator(
         return resumeRun(run)
     }
 
-    suspend fun resumeRun(run: AgentRunEntity): Boolean = resumeMutex.withLock {
+    suspend fun resumeRun(run: AgentRunEntity): Boolean {
+        if (!canAttemptResume(run.id) || !recoveringRunIds.add(run.id)) return false
+        return try {
+            resumeMutex.withLock { resumeRunLocked(run) }
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            recordResumeFailure(run.id)
+            AppLogger.warn("AgentRunCoordinator", "Resume failed for run ${run.id}: ${exception.message}")
+            false
+        } finally {
+            recoveringRunIds.remove(run.id)
+        }
+    }
+
+    private suspend fun resumeRunLocked(run: AgentRunEntity): Boolean {
         val jobKey = "run:${run.id}"
         if (isRunActive(run)) return false
         if (!AgentNotificationManager.canUseAgentNotifications(appContext)) {
@@ -135,15 +153,17 @@ class AgentRunCoordinator(
             return false
         }
 
-        val configId = run.configIdSnapshot ?: return false
-        val config = database.apiConfigDao().getTextConfig(configId)?.toApiConfig() ?: return false
-        val chatRequest = agentRunStore.restoreChatRequest(run, config.key) ?: return false
+        val configId = run.configIdSnapshot ?: return resumeFailed(run.id)
+        val config = database.apiConfigDao().getTextConfig(configId)?.toApiConfig() ?: return resumeFailed(run.id)
+        val chatRequest = agentRunStore.restoreChatRequest(run, config.key) ?: return resumeFailed(run.id)
 
         // 读取 VPS 最终 stdout/stderr，沿用 ComputerToolExecutor 的 Secret 过滤和输出截断，
         // 成功写入 ToolResult 后才声明 Execution 已接回。
         val unconsumed = computerDao.getUnconsumedCompletedExecutionsForRun(run.id)
         for (exec in unconsumed) {
-            if (!persistRecoveredToolResult(run, exec, chatRequest.localComputerRequestContext)) return false
+            if (!persistRecoveredToolResult(run, exec, chatRequest.localComputerRequestContext)) {
+                return resumeFailed(run.id)
+            }
         }
 
         val limits = com.android.everytalk.data.DataClass.ModelTokenLimits(
@@ -168,7 +188,10 @@ class AgentRunCoordinator(
                     _events.emit(run.visibleAssistantMessageId to event)
                 }
                 notifyTerminalRun(agentDao.getRun(run.id))
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
+                recordResumeFailure(run.id)
                 AppLogger.error("AgentRunCoordinator", "Error executing resumed loop for run ${run.id}", e)
                 agentRunStore.updateRunStatus(
                     run,
@@ -181,6 +204,7 @@ class AgentRunCoordinator(
             }
         }
         activeJobs[jobKey] = job
+        resumeRetryStates.remove(run.id)
         return true
     }
 
@@ -189,6 +213,7 @@ class AgentRunCoordinator(
         val pendingRuns = agentDao.getPendingModelContinuationRuns()
         var resumedCount = 0
         for (run in pendingRuns) {
+            if (!canAttemptResume(run.id)) continue
             if (resumeRun(run)) {
                 resumedCount++
             }
@@ -197,6 +222,7 @@ class AgentRunCoordinator(
     }
 
     fun cancelRun(runId: String, reason: String = "USER_CANCELLED") {
+        resumeRetryStates.remove(runId)
         activeJobs.remove("run:$runId")?.cancel()
         scope.launch {
             val run = agentDao.getRun(runId) ?: return@launch
@@ -213,8 +239,29 @@ class AgentRunCoordinator(
         activeJobs.remove("message:$messageId")?.cancel()
         scope.launch {
             agentDao.getRunByVisibleMessage(messageId)?.let { run ->
+                resumeRetryStates.remove(run.id)
                 activeJobs.remove("run:${run.id}")?.cancel()
             }
+        }
+    }
+
+    private fun canAttemptResume(runId: String, now: Long = System.currentTimeMillis()): Boolean =
+        resumeRetryStates[runId]?.nextAttemptAt?.let { now >= it } ?: true
+
+    private fun resumeFailed(runId: String): Boolean {
+        recordResumeFailure(runId)
+        return false
+    }
+
+    /** 恢复失败保留原 Run，按上限 60 秒退避，避免前台服务每三秒重复读取同一份大快照。 */
+    private fun recordResumeFailure(runId: String) {
+        val now = System.currentTimeMillis()
+        resumeRetryStates.compute(runId) { _, previous ->
+            val failures = (previous?.failures ?: 0) + 1
+            ResumeRetryState(
+                failures = failures,
+                nextAttemptAt = now + agentResumeRetryDelayMillis(failures),
+            )
         }
     }
 
@@ -272,6 +319,20 @@ class AgentRunCoordinator(
         computerDao.markResultAttached(execution.id)
         return true
     }
+}
+
+private data class ResumeRetryState(
+    val failures: Int,
+    val nextAttemptAt: Long,
+)
+
+/** 第一次失败等 2 秒，之后逐步放缓，最长一分钟。 */
+internal fun agentResumeRetryDelayMillis(failures: Int): Long = when (failures.coerceAtLeast(1)) {
+    1 -> 2_000L
+    2 -> 5_000L
+    3 -> 15_000L
+    4 -> 30_000L
+    else -> 60_000L
 }
 
 /** 同时识别首次启动的 message 键和恢复启动的 run 键。 */
