@@ -539,6 +539,12 @@ class ComputerManager(
     fun observeWorkspaces(computerId: String): Flow<List<ComputerWorkspace>> =
         repository.observeWorkspaces(computerId)
 
+    fun observeActiveTaskCount(computerId: String): Flow<Int> =
+        repository.observeActiveTaskCount(computerId)
+
+    suspend fun getWorkspaces(computerId: String): List<ComputerWorkspace> =
+        repository.getWorkspaces(computerId)
+
     fun observePreviews(workspaceId: String): Flow<List<ComputerPreview>> =
         repository.observePreviews(workspaceId)
 

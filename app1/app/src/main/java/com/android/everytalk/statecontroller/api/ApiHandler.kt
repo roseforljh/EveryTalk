@@ -366,9 +366,34 @@ class ApiHandler(
     }
 
     private suspend fun refreshPendingAgentApprovals() {
-        val pending = agentRunStore.getWaitingApprovalRuns().mapNotNull { run ->
+        val previouslyVisibleRunIds = buildSet {
+            _pendingAgentApprovals.value.mapTo(this) { it.runId }
+            _pendingAgentEnableApprovals.value.mapTo(this) { it.runId }
+            _pendingSkillSecretApprovals.value.mapTo(this) { it.runId }
+        }
+        val waitingRuns = agentRunStore.getWaitingApprovalRuns()
+        val latestRuns = waitingRuns.distinctBy { it.sessionId }
+        val latestRunIds = latestRuns.mapTo(mutableSetOf()) { it.id }
+        val staleRuns = waitingRuns.filterNot { it.id in latestRunIds }
+        staleRuns.forEach { run ->
+            agentRunStore.updateRunStatus(
+                run = run,
+                status = AgentRunStatus.CANCELLED,
+                terminalReason = AgentTerminalReasons.SUPERSEDED_BY_NEW_RUN,
+            )
+        }
+        val pending = latestRuns.mapNotNull { run ->
             agentRunStore.pendingApproval(run.id)?.let { record -> run to record }
         }
+        val pendingRunIds = pending.mapTo(mutableSetOf()) { (run, _) -> run.id }
+        val supersededRuns = (
+            staleRuns + (previouslyVisibleRunIds - pendingRunIds).mapNotNull { runId ->
+                agentRunStore.getRun(runId)?.takeIf {
+                    it.status == AgentRunStatus.CANCELLED.name &&
+                        it.terminalReason == AgentTerminalReasons.SUPERSEDED_BY_NEW_RUN
+                }
+            }
+        ).distinctBy { it.id }
         _pendingAgentApprovals.value = pending.mapNotNull { (run, record) ->
             record.request?.let { request ->
                 PendingComputerToolApproval(run.id, record.approvalRequestId, request)
@@ -398,6 +423,17 @@ class ApiHandler(
                 )
             }
         }
+        if (supersededRuns.isNotEmpty()) {
+            withContext(Dispatchers.Main.immediate) {
+                supersededRuns.forEach { run ->
+                    updatePreparedMessageStatus(
+                        stateHolder.messages,
+                        run.visibleAssistantMessageId,
+                        "已由新消息取代",
+                    )
+                }
+            }
+        }
     }
 
     /** 决定已经落库时无需再次显示卡片；恢复同一 Run 并由 Tool 幂等记录兜底。 */
@@ -422,20 +458,21 @@ class ApiHandler(
         decision: AgentApprovalDecision,
     ) {
         viewModelScope.launch(Dispatchers.IO) {
-            val current = _pendingAgentApprovals.value.firstOrNull {
+            // Room 中的待审批记录才是事实来源。UI StateFlow 只是卡片投影，Compose 重组或
+            // 卡片退场时可能短暂为空，不能因此吞掉用户已经点击的批准结果。
+            val record = agentRunStore.decideApproval(runId, approvalRequestId, decision) ?: run {
+                refreshPendingAgentApprovals()
+                return@launch
+            }
+            _pendingAgentApprovals.value = _pendingAgentApprovals.value.filterNot {
                 it.runId == runId && it.approvalRequestId == approvalRequestId
             }
-            val currentAgent = _pendingAgentEnableApprovals.value.firstOrNull {
+            _pendingAgentEnableApprovals.value = _pendingAgentEnableApprovals.value.filterNot {
                 it.runId == runId && it.approvalRequestId == approvalRequestId
             }
-            val currentSecret = _pendingSkillSecretApprovals.value.firstOrNull {
+            _pendingSkillSecretApprovals.value = _pendingSkillSecretApprovals.value.filterNot {
                 it.runId == runId && it.approvalRequestId == approvalRequestId
             }
-            if (current == null && currentAgent == null && currentSecret == null) return@launch
-            val record = agentRunStore.decideApproval(runId, approvalRequestId, decision) ?: return@launch
-            if (current != null) _pendingAgentApprovals.value = _pendingAgentApprovals.value - current
-            if (currentAgent != null) _pendingAgentEnableApprovals.value = _pendingAgentEnableApprovals.value - currentAgent
-            if (currentSecret != null) _pendingSkillSecretApprovals.value = _pendingSkillSecretApprovals.value - currentSecret
             var started = false
             if (resumingAgentRunIds.add(runId)) {
                 try {

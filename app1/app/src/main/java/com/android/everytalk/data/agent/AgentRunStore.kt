@@ -79,7 +79,12 @@ class AgentRunStore(
             terminalReason = null,
             createdAt = now,
             updatedAt = now,
-        ).also { dao.upsertRun(it) }
+        ).also { run ->
+            dao.startRunSupersedingWaitingApprovals(
+                run = run,
+                reason = AgentTerminalReasons.SUPERSEDED_BY_NEW_RUN,
+            )
+        }
     }
 
     suspend fun getRun(runId: String): AgentRunEntity? = dao.getRun(runId)

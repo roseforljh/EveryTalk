@@ -273,6 +273,20 @@ interface ComputerDao {
     )
     suspend fun getActiveRemoteExecutionsForComputer(computerId: String): List<ComputerExecutionEntity>
 
+    /** 删除服务器前实时显示会失去管理的受管远端任务数量。 */
+    @Query(
+        """
+        SELECT COUNT(*) FROM computer_executions
+        WHERE toolName = 'exec'
+          AND computerId = :computerId
+          AND (
+                remoteStatus IN ('STARTING', 'RUNNING')
+                OR (remoteStatus IS NULL AND status IN ('QUEUED', 'STARTING', 'RUNNING', 'CANCELLED'))
+              )
+        """,
+    )
+    fun observeActiveRemoteExecutionCountForComputer(computerId: String): Flow<Int>
+
     /**
      * 获取某个会话 Workspace 下仍在 VPS 运行的受管 Execution。
      * Workspace 是会话与服务器的稳定映射，不需要把会话 ID 再复制到 Execution 表。

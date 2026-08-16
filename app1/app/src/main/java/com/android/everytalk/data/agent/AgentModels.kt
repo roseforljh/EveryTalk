@@ -41,6 +41,7 @@ enum class AgentRunStatus {
  */
 object AgentTerminalReasons {
     const val USER_STOP = "USER_STOP"
+    const val SUPERSEDED_BY_NEW_RUN = "SUPERSEDED_BY_NEW_RUN"
     const val APP_INTERRUPTED = "APP_INTERRUPTED"
     const val FORCE_STOP_RECOVERED = "FORCE_STOP_RECOVERED"
     const val SYSTEM_RECOVERED = "SYSTEM_RECOVERED"

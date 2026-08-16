@@ -77,6 +77,9 @@ class ComputerRepository(
     fun observeWorkspaces(computerId: String): Flow<List<ComputerWorkspace>> =
         dao.observeWorkspaces(computerId).map { entities -> entities.map { it.toModel() } }
 
+    fun observeActiveTaskCount(computerId: String): Flow<Int> =
+        dao.observeActiveRemoteExecutionCountForComputer(computerId)
+
     fun observePreviews(workspaceId: String): Flow<List<ComputerPreview>> =
         dao.observePreviews(workspaceId).map { entities -> entities.map { it.toModel() } }
 
@@ -614,14 +617,12 @@ class ComputerRepository(
             executionReconciler.reconcileForegroundActiveForConversations(conversationIds)
         }
 
-    /** 读取当前 Workspace 的活动任务快照，供下一轮模型请求使用。 */
+    /**
+     * 读取当前 Workspace 的本地活动任务快照，供下一轮模型请求使用。
+     * 这里禁止同步连接 SSH；远端状态由后台监听负责刷新，避免模型续写被网络对账卡住。
+     */
     suspend fun getComputerSessionState(workspaceId: String): ComputerSessionState? {
         if (dao.getWorkspaceById(workspaceId) == null) return null
-        val beforeRefresh = dao.getRemoteExecutionsForWorkspace(workspaceId)
-        if (beforeRefresh.any(ComputerExecutionEntity::shouldReconcileRemote)) {
-            // 只有当前 Workspace 确实有活动任务时才建立 SSH，普通模型轮次不增加连接开销。
-            executionReconciler.reconcileActiveForWorkspace(workspaceId)
-        }
         val executions = dao.getRemoteExecutionsForWorkspace(workspaceId)
         val active = executions.filter { execution ->
             execution.shouldReconcileRemote() ||

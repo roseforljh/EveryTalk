@@ -488,7 +488,10 @@ import java.util.TimeZone
      * Agent 关闭立即生效并保留服务器选择与 Workspace。
      * 开启只做本地校验并立即更新 UI；Workspace 与 SSH 留给后台预热和发送前校验。
      */
-    internal fun AppViewModel.setAgentEnabled(enabled: Boolean) {
+    internal fun AppViewModel.setAgentEnabled(
+        enabled: Boolean,
+        allowWorkspaceRecreation: Boolean = false,
+    ) {
         val generation = stateHolder.agentActionGeneration.incrementAndGet()
         if (!enabled) {
             stateHolder.updateCurrentConversationFunctionToggleState { it.copy(agentEnabled = false) }
@@ -513,13 +516,28 @@ import java.util.TimeZone
         }
 
         val conversationId = stateHolder._currentConversationId.value
+        val currentState = stateHolder.getCurrentConversationFunctionToggleState()
+        if (
+            currentState.agentResourceState == AgentResourceState.WORKSPACE_DELETED &&
+            !allowWorkspaceRecreation
+        ) {
+            showSnackbar("原工作区已删除，请先确认创建新工作区")
+            return
+        }
         try {
             computerManager.requireSelectedReadyComputer(conversationId)
         } catch (error: ComputerException) {
             showSnackbar(error.message)
             return
         }
-        stateHolder.updateCurrentConversationFunctionToggleState { it.copy(agentEnabled = true) }
+        stateHolder.updateCurrentConversationFunctionToggleState { state ->
+            state.copy(
+                agentEnabled = true,
+                agentResourceState = null,
+                detachedComputerName = null,
+                detachedWorkspacePath = null,
+            )
+        }
         stateHolder._isAgentEnabled.value = true
         stateHolder._isAgentPreparing.value = false
         viewModelScope.launch(Dispatchers.IO) {
@@ -566,11 +584,17 @@ import java.util.TimeZone
                 val conversationId = stateHolder._currentConversationId.value
                 computerManager.selectComputer(conversationId, computerId, shouldPrepareWorkspace)
                 if (stateHolder.agentActionGeneration.get() != generation) return@launch
-                if (enableAgentAfterSelection) {
-                    persistenceManager.saveConversationFunctionToggleStates(
-                        stateHolder.conversationFunctionToggleStates.value,
-                    )
+                stateHolder.conversationFunctionToggleStates.update { current ->
+                    val state = current[conversationId] ?: ConversationFunctionToggleState()
+                    current + (conversationId to state.copy(
+                        agentResourceState = null,
+                        detachedComputerName = null,
+                        detachedWorkspacePath = null,
+                    ))
                 }
+                persistenceManager.saveConversationFunctionToggleStates(
+                    stateHolder.conversationFunctionToggleStates.value,
+                )
                 if (onReady != null) withContext(Dispatchers.Main.immediate) { onReady() }
             } catch (error: ComputerException) {
                 if (stateHolder.agentActionGeneration.get() == generation) {
@@ -724,6 +748,9 @@ import java.util.TimeZone
     internal fun AppViewModel.observeComputerWorkspaces(computerId: String): Flow<List<ComputerWorkspace>> =
         computerManager.observeWorkspaces(computerId)
 
+    internal fun AppViewModel.observeComputerActiveTaskCount(computerId: String): Flow<Int> =
+        computerManager.observeActiveTaskCount(computerId)
+
     internal fun AppViewModel.observeComputerPreviews(workspaceId: String): Flow<List<ComputerPreview>> =
         computerManager.observePreviews(workspaceId)
 
@@ -788,18 +815,30 @@ import java.util.TimeZone
         deleteRemoteFiles: Boolean,
     ) {
         val deleted = computerManager.deleteWorkspace(workspaceId, deleteRemoteFiles)
-        stateHolder.conversationFunctionToggleStates.update { current ->
-            val state = current[deleted.conversationId] ?: return@update current
-            current + (deleted.conversationId to state.copy(agentEnabled = false))
+        // 一个会话可能在多台服务器上各有 Workspace。删除非当前服务器的旧 Workspace 不影响当前 Agent。
+        val affectsCurrentBinding = computerManager.selections.value[deleted.conversationId] == deleted.computerId
+        if (affectsCurrentBinding) {
+            val computerName = computerManager.computers.value
+                .firstOrNull { it.id == deleted.computerId }
+                ?.displayName
+            stateHolder.conversationFunctionToggleStates.update { current ->
+                val state = current[deleted.conversationId] ?: ConversationFunctionToggleState()
+                current + (deleted.conversationId to state.copy(
+                    agentEnabled = false,
+                    agentResourceState = AgentResourceState.WORKSPACE_DELETED,
+                    detachedComputerName = computerName,
+                    detachedWorkspacePath = deleted.hostPath.takeUnless { deleteRemoteFiles },
+                ))
+            }
+            if (stateHolder._currentConversationId.value == deleted.conversationId) {
+                stateHolder.agentActionGeneration.incrementAndGet()
+                stateHolder._isAgentEnabled.value = false
+                stateHolder._isAgentPreparing.value = false
+            }
+            persistenceManager.saveConversationFunctionToggleStates(
+                stateHolder.conversationFunctionToggleStates.value,
+            )
         }
-        if (stateHolder._currentConversationId.value == deleted.conversationId) {
-            stateHolder.agentActionGeneration.incrementAndGet()
-            stateHolder._isAgentEnabled.value = false
-            stateHolder._isAgentPreparing.value = false
-        }
-        persistenceManager.saveConversationFunctionToggleStates(
-            stateHolder.conversationFunctionToggleStates.value,
-        )
     }
 
     internal suspend fun AppViewModel.deleteComputer(
@@ -807,14 +846,27 @@ import java.util.TimeZone
         cleanupContainers: Boolean,
         deleteRemoteFiles: Boolean,
     ): ComputerDeleteResult {
+        val computerName = computerManager.computers.value
+            .firstOrNull { it.id == computerId }
+            ?.displayName
+        val detachedPaths = computerManager.getWorkspaces(computerId)
+            .associate { workspace -> workspace.conversationId to workspace.hostPath }
         val affectedConversationIds = computerManager.selections.value
             .filterValues { selectedComputerId -> selectedComputerId == computerId }
             .keys
         val result = computerManager.deleteComputer(computerId, cleanupContainers, deleteRemoteFiles)
         if (affectedConversationIds.isNotEmpty()) {
             stateHolder.conversationFunctionToggleStates.update { current ->
-                current.mapValues { (conversationId, state) ->
-                    if (conversationId in affectedConversationIds) state.copy(agentEnabled = false) else state
+                current.toMutableMap().apply {
+                    affectedConversationIds.forEach { conversationId ->
+                        val state = this[conversationId] ?: ConversationFunctionToggleState()
+                        this[conversationId] = state.copy(
+                            agentEnabled = false,
+                            agentResourceState = AgentResourceState.SERVER_DELETED,
+                            detachedComputerName = computerName,
+                            detachedWorkspacePath = detachedPaths[conversationId].takeUnless { deleteRemoteFiles },
+                        )
+                    }
                 }
             }
             if (stateHolder._currentConversationId.value in affectedConversationIds) {

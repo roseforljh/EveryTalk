@@ -41,8 +41,26 @@ interface AgentDao {
     @Query("SELECT * FROM agent_runs WHERE status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED')")
     suspend fun getActiveRuns(): List<AgentRunEntity>
 
-    @Query("SELECT * FROM agent_runs WHERE status = 'WAITING_APPROVAL' ORDER BY updatedAt ASC")
+    /** 多条历史脏记录并存时先展示当前最新申请，禁止旧卡片抢走用户点击。 */
+    @Query("SELECT * FROM agent_runs WHERE status = 'WAITING_APPROVAL' ORDER BY updatedAt DESC")
     suspend fun getWaitingApprovalRuns(): List<AgentRunEntity>
+
+    @Query(
+        """
+        UPDATE agent_runs
+        SET status = 'CANCELLED', terminalReason = :reason, updatedAt = :updatedAt
+        WHERE sessionId = :sessionId
+          AND (
+              status = 'WAITING_APPROVAL'
+              OR (status = 'INTERRUPTED' AND terminalReason = 'APPROVAL_DECIDED_PENDING_RESUME')
+          )
+        """
+    )
+    suspend fun cancelSupersededApprovalRunsForSession(
+        sessionId: String,
+        reason: String,
+        updatedAt: Long,
+    )
 
     @Query("SELECT * FROM agent_runs WHERE status = 'WAITING_REMOTE_EXECUTION' ORDER BY updatedAt ASC")
     suspend fun getWaitingRemoteExecutionRuns(): List<AgentRunEntity>
@@ -166,6 +184,16 @@ interface AgentDao {
     ) {
         upsertEntry(entry)
         upsertRun(interruptedRun)
+    }
+
+    /** 新用户消息会取代同一会话中尚未回答的旧审批，避免批准被旧 Run 接走。 */
+    @Transaction
+    suspend fun startRunSupersedingWaitingApprovals(
+        run: AgentRunEntity,
+        reason: String,
+    ) {
+        cancelSupersededApprovalRunsForSession(run.sessionId, reason, run.createdAt)
+        upsertRun(run)
     }
 
 
