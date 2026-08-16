@@ -39,6 +39,8 @@ data class CustomModelParameter(
 
 @Serializable
 data class ModelParameters(
+    // 只覆盖当前模型发请求时使用的 API 协议，不参与配置分组。
+    val apiProtocolOverride: ModelParameterProtocol? = null,
     val reasoningMode: ReasoningMode = ReasoningMode.EFFORT,
     val reasoningEffort: String = DEFAULT_REASONING_EFFORT,
     val thinkingBudget: Int = DEFAULT_THINKING_BUDGET,
@@ -115,6 +117,19 @@ fun modelParameterProtocol(channel: String): ModelParameterProtocol {
         "gemini" in normalized -> ModelParameterProtocol.GEMINI
         else -> ModelParameterProtocol.OPENAI_COMPATIBLE
     }
+}
+
+/**
+ * 返回模型配置中持久化的协议名称。
+ *
+ * `ApiConfig.channel` 是历史字段，实际承担 API 协议的职责。所有协议切换统一经过
+ * 这个函数，避免界面各自保存不同文案，导致请求路由识别失败。
+ */
+fun modelParameterChannel(protocol: ModelParameterProtocol): String = when (protocol) {
+    ModelParameterProtocol.CODEX -> "Codex"
+    ModelParameterProtocol.ANTHROPIC -> "Anthropic"
+    ModelParameterProtocol.GEMINI -> "Gemini"
+    ModelParameterProtocol.OPENAI_COMPATIBLE -> "OpenAI兼容"
 }
 
 fun reasoningBudgetForEffort(effort: String): Int = when (effort.trim().lowercase()) {

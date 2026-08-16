@@ -182,17 +182,12 @@ object AnthropicDirectClient {
     ): Flow<AppStreamEvent> = streamSingleTurn(client, request)
 
     internal fun resolveMessagesUrl(apiAddress: String?): String {
-        val raw = apiAddress?.trim().orEmpty()
-        if (raw.isEmpty()) return "https://api.anthropic.com/v1/messages"
-        val direct = raw.endsWith('#')
-        val normalized = raw.removeSuffix("#").trimEnd('/')
-        val base = if (normalized.startsWith("http://", true) || normalized.startsWith("https://", true)) {
-            normalized
-        } else {
-            "https://$normalized"
-        }
-        if (direct || base.endsWith("/messages", ignoreCase = true)) return base
-        return if (base.endsWith("/v1", ignoreCase = true)) "$base/messages" else "$base/v1/messages"
+        return LlmEndpointResolver.resolve(
+            protocol = com.android.everytalk.data.DataClass.ModelParameterProtocol.ANTHROPIC,
+            apiAddress = apiAddress?.trim().takeUnless { it.isNullOrEmpty() }
+                ?: "https://api.anthropic.com",
+            model = "",
+        )
     }
 
     internal fun resolveModelsUrl(apiAddress: String): String {

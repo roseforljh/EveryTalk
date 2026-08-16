@@ -2,6 +2,7 @@ package com.android.everytalk.data.network
 
 import android.util.Log
 import com.android.everytalk.data.DataClass.ChatRequest
+import com.android.everytalk.data.DataClass.ModelParameterProtocol
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.DataClass.PartsApiMessage
 import com.android.everytalk.data.DataClass.AgentAssistantApiMessage
@@ -32,10 +33,21 @@ object GeminiDirectClient {
         val baseUrl = request.apiAddress?.trimEnd('/')?.takeIf { it.isNotBlank() }
             ?: com.android.everytalk.BuildConfig.GOOGLE_API_BASE_URL.trimEnd('/').takeIf { it.isNotBlank() }
             ?: "https://generativelanguage.googleapis.com"
-        val url = "$baseUrl/v1beta/models/${request.model.trim()}:streamGenerateContent?key=${request.apiKey}&alt=sse"
+        val url = LlmEndpointResolver.resolve(
+            protocol = ModelParameterProtocol.GEMINI,
+            apiAddress = baseUrl,
+            model = request.model,
+        )
         var terminalSent = false
         try {
             client.preparePost(url) {
+                url {
+                    // Gemini 使用查询参数鉴权。覆盖同名参数，避免用户地址中已有 key 时重复发送。
+                    parameters.remove("key")
+                    parameters.append("key", request.apiKey)
+                    parameters.remove("alt")
+                    parameters.append("alt", "sse")
+                }
                 contentType(ContentType.Application.Json)
                 setBody(withContext(Dispatchers.Default) { buildGeminiPayload(request) })
                 configureSSERequest()

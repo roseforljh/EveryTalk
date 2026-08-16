@@ -470,8 +470,7 @@ fun ChatScreen(
                 val filtered = availableModels.filter {
                     it.provider == sel.provider &&
                     it.address == sel.address &&
-                    it.key == sel.key &&
-                    it.channel == sel.channel
+                    it.key == sel.key
                 }
                 if (filtered.isNotEmpty()) filtered else listOfNotNull(sel)
             } ?: availableModels

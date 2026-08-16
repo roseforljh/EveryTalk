@@ -5,6 +5,7 @@ import com.android.everytalk.data.DataClass.AbstractApiMessage
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.ApiContentPart
 import com.android.everytalk.data.DataClass.ContextCompressionState
+import com.android.everytalk.data.DataClass.effectiveModelChannel
 import com.android.everytalk.data.DataClass.MAX_AUTO_CONTEXT_COMPRESSION_THRESHOLD_PERCENT
 import com.android.everytalk.data.DataClass.ModelTokenLimits
 import com.android.everytalk.data.DataClass.PartsApiMessage
@@ -290,7 +291,7 @@ internal suspend fun MessageSender.applyAutoContextCompressionIfNeeded(
             val state = ContextCompressionState(
                 configId = config.id,
                 provider = config.provider,
-                channel = config.channel,
+                channel = config.effectiveModelChannel(),
                 model = config.model,
                 summary = outcome.checkpoint.summary,
                 summarizedThroughMessageId = outcome.checkpoint.summarizedThroughMessageId,

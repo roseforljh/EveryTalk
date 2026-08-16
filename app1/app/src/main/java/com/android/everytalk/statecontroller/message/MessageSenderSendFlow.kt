@@ -35,6 +35,7 @@ import com.android.everytalk.data.DataClass.Sender as UiSender
 import com.android.everytalk.data.DataClass.ImageGenRequest
 import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.DataClass.modelParameterProtocol
+import com.android.everytalk.data.DataClass.effectiveModelChannel
 import com.android.everytalk.data.DataClass.openAICompatibleRequestParameters
 import com.android.everytalk.data.DataClass.resolvedModelTokenLimits
 import com.android.everytalk.data.DataClass.toThinkingConfig
@@ -197,7 +198,8 @@ internal fun MessageSender.sendMessageInternal(
         }
 
         viewModelScope.launch {
-            val parameterProtocol = modelParameterProtocol(currentConfig.channel)
+            val effectiveModelChannel = currentConfig.effectiveModelChannel()
+            val parameterProtocol = modelParameterProtocol(effectiveModelChannel)
             val modelIsGeminiType = parameterProtocol == ModelParameterProtocol.GEMINI
             val shouldUsePartsApiMessage = modelIsGeminiType
             val providerForRequestBackend = currentConfig.provider
@@ -731,7 +733,7 @@ internal fun MessageSender.sendMessageInternal(
                 } ?: 0L
                 val nativeResponsesState = restoredCompressionState?.takeIf {
                     currentConfig.modelParameters.autoContextCompressionEnabled &&
-                    currentConfig.channel.contains("codex", ignoreCase = true) &&
+                    effectiveModelChannel.contains("codex", ignoreCase = true) &&
                         isOfficialOpenAIResponsesAddress(currentConfig.address) &&
                         it.matchesNativeResponsesConfig(currentConfig) &&
                         !it.openAiResponsesInputJson.isNullOrBlank() &&
@@ -745,7 +747,7 @@ internal fun MessageSender.sendMessageInternal(
                 }
                 val nativeAnthropicState = restoredCompressionState?.takeIf {
                     currentConfig.modelParameters.autoContextCompressionEnabled &&
-                        currentConfig.channel.contains("anthropic", ignoreCase = true) &&
+                        effectiveModelChannel.contains("anthropic", ignoreCase = true) &&
                         isOfficialAnthropicMessagesAddress(currentConfig.address) &&
                         AnthropicDirectClient.isNativeCompactionAvailable(
                             currentConfig.address,
@@ -792,7 +794,7 @@ internal fun MessageSender.sendMessageInternal(
                             request = ChatRequest(
                                 messages = apiMessagesForBackend,
                                 provider = providerForRequestBackend,
-                                channel = currentConfig.channel,
+                                channel = effectiveModelChannel,
                                 apiAddress = currentConfig.address,
                                 apiKey = currentConfig.key,
                                 model = currentConfig.model,
@@ -911,7 +913,7 @@ internal fun MessageSender.sendMessageInternal(
                 val chatRequestForApi = ChatRequest(
                     messages = finalApiMessages,
                     provider = providerForRequestBackend,
-                    channel = currentConfig.channel,
+                    channel = effectiveModelChannel,
                     apiAddress = currentConfig.address,
                     apiKey = currentConfig.key,
                     model = currentConfig.model,
@@ -925,7 +927,7 @@ internal fun MessageSender.sendMessageInternal(
                         topP = currentConfig.topP,
                         maxOutputTokens = tokenLimits.maxOutputTokens,
                         thinkingConfig = currentConfig.modelParameters.toThinkingConfig(
-                            channel = currentConfig.channel,
+                            channel = effectiveModelChannel,
                             model = currentConfig.model,
                         )
                     ).let { if (it.temperature != null || it.topP != null || it.maxOutputTokens != null || it.thinkingConfig != null) it else null },
@@ -998,7 +1000,7 @@ internal fun MessageSender.sendMessageInternal(
                             apiAddress = if (isDefaultProvider) "" else upstreamApiForImageGen,
                             apiKey = if (isDefaultProvider) "" else currentConfig.key,
                             // 渠道控制路由：默认平台传"默认"，非默认按"渠道"字段（OpenAI兼容/Gemini）
-                            provider = if (isDefaultProvider) currentConfig.provider else currentConfig.channel,
+                            provider = if (isDefaultProvider) currentConfig.provider else effectiveModelChannel,
                             responseModalities = listOf("Image"),
                             aspectRatio = stateHolder._selectedImageRatio.value.let { r ->
                                 if (r.isAuto) null else r.displayName

@@ -849,7 +849,7 @@
     <string name="settings_edit_configuration_title">编辑配置</string>
     <string name="settings_add_configuration_title">添加配置</string>
     <string name="settings_model_platform_label">模型平台</string>
-    <string name="settings_channel_label">渠道</string>
+    <string name="settings_channel_label">API 接口协议</string>
     <string name="settings_api_endpoint_label">API 接口地址</string>
     <string name="settings_api_key_label">API 密钥</string>
     <string name="settings_endpoint_preview">预览：%1$s</string>
@@ -884,6 +884,15 @@
         <item quantity="other">%1$d 个可用</item>
     </plurals>
     <string name="settings_search_hint">搜索…</string>
+    <string name="settings_search_clear">清空搜索</string>
+    <string name="settings_model_tab_new">新模型</string>
+    <string name="settings_model_tab_added">已添加</string>
+    <string name="settings_model_tab_removed">已下架</string>
+    <string name="settings_model_tab_count">%1$d 个模型</string>
+    <string name="settings_no_new_models">没有发现新模型</string>
+    <string name="settings_no_added_models">还没有添加模型</string>
+    <string name="settings_no_removed_models">没有已下架模型</string>
+    <string name="settings_models_no_action">无需添加</string>
     <string name="settings_no_available_models">没有可用的模型</string>
     <string name="settings_no_matching_models">没有匹配的模型</string>
     <string name="settings_enter_model_manually">手动输入模型</string>
@@ -898,6 +907,13 @@
     <string name="auto_compression_threshold_content_description">自动压缩触发阈值</string>
 
     <string name="model_parameters_title">模型参数</string>
+    <string name="model_parameters_api_protocol">API 接口协议</string>
+    <string name="model_parameters_api_protocol_dropdown">API 接口协议下拉框</string>
+    <string name="model_parameters_endpoint_preview">请求地址：%1$s</string>
+    <string name="model_parameters_protocol_responses">OpenAI Responses</string>
+    <string name="model_parameters_protocol_chat_completions">OpenAI Chat Completions</string>
+    <string name="model_parameters_protocol_anthropic">Anthropic Messages</string>
+    <string name="model_parameters_protocol_gemini">Gemini GenerateContent</string>
     <string name="model_parameters_auto_fetch">自动获取模型参数</string>
     <string name="model_parameters_auto_fetching">正在自动获取模型参数</string>
     <string name="model_parameters_auto_fetch_failed">自动获取失败：%1$s</string>

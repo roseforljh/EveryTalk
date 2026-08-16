@@ -155,7 +155,7 @@ private fun sourcePriority(source: ModelCapabilitySource): Int = when (source) {
 fun ApiConfig.withModelCapabilityDefaults(
     candidates: List<ModelCapabilityCandidate>,
 ): ApiConfig {
-    val protocol = modelParameterProtocol(channel)
+    val protocol = modelParameterProtocol(effectiveModelChannel())
     val currentCapability = modelParameters.resolvedCapability
     val userOverride = currentCapability?.let { current ->
         ModelCapabilityCandidate(

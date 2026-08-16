@@ -54,7 +54,7 @@ import com.android.everytalk.data.network.ExternalWebSearchProvider
 import com.android.everytalk.data.network.ExternalWebSearchProviderConfig
 import com.android.everytalk.statecontroller.controller.config.modelConfigGroupId
 import com.android.everytalk.ui.components.popup.AppFloatingCardPopup
-import com.android.everytalk.ui.screens.MainScreen.chat.models.sortModelConfigs
+import com.android.everytalk.ui.screens.MainScreen.chat.models.centeredModelWindow
 
 @SuppressLint("ConfigurationScreenWidthHeight")
 @OptIn(ExperimentalMaterial3Api::class)
@@ -691,7 +691,9 @@ private fun ModelListPopup(
     val isDark = isSystemInDarkTheme()
     val textColor = if (isDark) Color.White else Color(0xFF0D0D0D)
     val selectedColor = if (isDark) Color(0xFF6EB5FF) else Color(0xFF3B82F6)
-    val sortedConfigs = remember(configs) { sortModelConfigs(configs) }
+    val visibleConfigs = remember(configs, selectedConfigId) {
+        centeredModelWindow(configs, selectedConfigId)
+    }
 
     AppFloatingCardPopup(
         visible = expanded,
@@ -722,7 +724,7 @@ private fun ModelListPopup(
                     .verticalScroll(rememberScrollState())
                     .padding(vertical = 8.dp)
             ) {
-                sortedConfigs.forEach { config ->
+                visibleConfigs.forEach { config ->
                     val isSelected = config.id == selectedConfigId
                     Row(
                         modifier = Modifier
@@ -760,6 +762,22 @@ private fun ModelListPopup(
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f)
                         )
+                        if (onConfigureModelParameters != null) {
+                            IconButton(
+                                onClick = {
+                                    onConfigureModelParameters(config)
+                                    onDismiss()
+                                },
+                                modifier = Modifier.size(32.dp),
+                            ) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_settings_slider),
+                                    contentDescription = stringResource(R.string.model_parameters_open),
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                        }
                         IconButton(
                             onClick = { onDeleteConfig(config) },
                             modifier = Modifier.size(32.dp)

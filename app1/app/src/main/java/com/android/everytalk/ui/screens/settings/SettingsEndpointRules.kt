@@ -1,5 +1,9 @@
 package com.android.everytalk.ui.screens.settings
 
+import com.android.everytalk.data.DataClass.ModelParameterProtocol
+import com.android.everytalk.data.DataClass.modelParameterProtocol
+import com.android.everytalk.data.network.LlmEndpointResolver
+
 object SettingsEndpointRules {
     private val nonDeletableProviders = setOf(
         "anthropic",
@@ -23,42 +27,30 @@ object SettingsEndpointRules {
 
     fun canExpandSettingsModels(provider: String): Boolean = !isPinnedSettingsGroup(provider)
 
+    @Suppress("UNUSED_PARAMETER")
     fun buildFullEndpointPreview(
         base: String,
         provider: String,
         channel: String?,
         isImageMode: Boolean = false,
+        model: String = "",
     ): String {
         val raw = base.trim()
         if (raw.isEmpty()) return ""
         val noHash = raw.removeSuffix("#").trimEnd('/')
-        if (raw.endsWith('#')) return noHash
 
-        val providerName = provider.trim().lowercase()
         val channelName = channel?.trim()?.lowercase().orEmpty()
-        val isGemini = providerName.contains("google") || channelName.contains("gemini")
-        val isAnthropic = providerName.contains("anthropic") || channelName.contains("anthropic")
+        val protocol = modelParameterProtocol(channelName)
 
-        if (isImageMode && !isGemini) {
+        if (isImageMode && protocol != ModelParameterProtocol.GEMINI) {
+            if (raw.endsWith('#')) return noHash
             return noHash.removeKnownCompletionPath() + "/v1/images/generations"
         }
-        if (isAnthropic) {
-            return when {
-                noHash.endsWith("/messages", ignoreCase = true) -> noHash
-                noHash.endsWith("/v1", ignoreCase = true) -> "$noHash/messages"
-                else -> "$noHash/v1/messages"
-            }
-        }
-        if (isGemini) {
-            if (hasPathAfterHost(noHash)) return noHash
-            return "$noHash/v1beta/models:generateContent"
-        }
-        if (channelName.contains("codex")) {
-            if (hasPathAfterHost(noHash)) return noHash
-            return "$noHash/v1/responses"
-        }
-        if (hasPathAfterHost(noHash)) return noHash
-        return "$noHash/v1/chat/completions"
+        return LlmEndpointResolver.resolve(
+            protocol = protocol,
+            apiAddress = raw,
+            model = model,
+        )
     }
 
     fun maskApiKey(secret: String, notConfiguredLabel: String): String = when {
@@ -80,12 +72,4 @@ object SettingsEndpointRules {
         return dropLast(path.length).trimEnd('/')
     }
 
-    private fun hasPathAfterHost(url: String): Boolean {
-        val schemeIndex = url.indexOf("://")
-        return if (schemeIndex >= 0) {
-            url.indexOf('/', schemeIndex + 3) >= 0
-        } else {
-            url.indexOf('/') >= 0
-        }
-    }
 }

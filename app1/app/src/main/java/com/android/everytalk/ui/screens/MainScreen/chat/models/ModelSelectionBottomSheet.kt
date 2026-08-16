@@ -130,12 +130,19 @@ fun ModelSelectionBottomSheet(
     
     val platforms = allApiConfigs.map { it.provider }.distinct()
 
-    // 过滤并按模型名称排序
-    val filteredModels = availableModels
-        .filter {
-            it.name.contains(searchText, ignoreCase = true) || it.model.contains(searchText, ignoreCase = true)
+    // 初次打开时把当前模型放在中间；用户搜索后显示完整搜索结果。
+    val filteredModels = remember(availableModels, selectedApiConfig?.id, searchText) {
+        if (searchText.isBlank()) {
+            centeredModelWindow(availableModels, selectedApiConfig?.id)
+        } else {
+            sortModelConfigs(
+                availableModels.filter {
+                    it.name.contains(searchText, ignoreCase = true) ||
+                        it.model.contains(searchText, ignoreCase = true)
+                }
+            )
         }
-        .let(::sortModelConfigs)
+    }
     
     // 检查是否有足够的内容需要滚动
     val hasScrollableContent by remember {

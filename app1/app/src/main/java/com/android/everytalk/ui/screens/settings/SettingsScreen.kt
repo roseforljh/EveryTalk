@@ -45,6 +45,7 @@ import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.ModalityType
 import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.statecontroller.SimpleModeManager
+import com.android.everytalk.statecontroller.controller.config.modelsForPendingConfigGroup
 import com.android.everytalk.ui.screens.mcp.McpServerListContent
 import com.android.everytalk.ui.screens.settings.EditExternalWebSearchProviderDialog
 import com.android.everytalk.data.network.ExternalWebSearchProvider
@@ -121,6 +122,7 @@ fun SettingsScreen(
     }
     val allProviders by viewModel.allProviders.collectAsState()
     val fetchedModels by viewModel.fetchedModels.collectAsState()
+    val pendingConfigParams by viewModel.pendingConfigParams.collectAsState()
     val isRefreshingModels by viewModel.isRefreshingModels.collectAsState()
     val showAutoFetchConfirm by viewModel.showAutoFetchConfirmDialog.collectAsState()
     val showModelSelection by viewModel.showModelSelectionDialog.collectAsState()
@@ -143,7 +145,7 @@ fun SettingsScreen(
         
         configsToShow
             .groupBy { config ->
-                "${config.provider}|${config.address}|${config.channel}|${config.key}"
+                "${config.provider}|${config.address}|${config.key}"
             }
             .mapValues { entry ->
                 entry.value.groupBy { it.modalityType }
@@ -300,6 +302,12 @@ fun SettingsScreen(
     var showMcpAddDialog by remember { mutableStateOf(false) }
     val settingsBackStackEntry = remember(navController) {
         navController.getBackStackEntry(Screen.SETTINGS_SCREEN)
+    }
+    val existingModelsForSelection = remember(pendingConfigParams, textConfigs, imageConfigs) {
+        modelsForPendingConfigGroup(
+            configs = if (pendingConfigParams?.isImageGen == true) imageConfigs else textConfigs,
+            params = pendingConfigParams,
+        )
     }
     val requestedTabIndex by settingsBackStackEntry.savedStateHandle
         .getStateFlow(Screen.SETTINGS_TAB_REQUEST_KEY, -1)
@@ -813,8 +821,8 @@ fun SettingsScreen(
         ModelSelectionDialog(
             showDialog = true,
             models = fetchedModels,
+            existingModels = existingModelsForSelection,
             onDismiss = { viewModel.dismissModelSelectionDialog() },
-            onSelectAll = { viewModel.onSelectAllModels() },
             onSelectModels = { selected -> viewModel.onSelectModels(selected) },
             onManualInput = { viewModel.onManualInput() }
         )

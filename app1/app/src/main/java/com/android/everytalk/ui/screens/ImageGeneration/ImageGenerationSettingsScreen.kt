@@ -31,6 +31,7 @@ import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.ModalityType
 import com.android.everytalk.statecontroller.AppViewModel
+import com.android.everytalk.statecontroller.controller.config.modelsForPendingConfigGroup
 import com.android.everytalk.ui.components.dialog.AppDialogShape
 import com.android.everytalk.ui.components.dialog.appDialogBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogCancelColor
@@ -66,10 +67,14 @@ fun ImageGenerationSettingsScreen(
     val selectedConfigForApp by viewModel.selectedImageGenApiConfig.collectAsState()
     val allProviders by viewModel.allProviders.collectAsState()
     val fetchedModels by viewModel.fetchedModels.collectAsState()
+    val pendingConfigParams by viewModel.pendingConfigParams.collectAsState()
     val isRefreshingModels by viewModel.isRefreshingModels.collectAsState()
     val showAutoFetchConfirm by viewModel.showAutoFetchConfirmDialog.collectAsState()
     val siliconFlowDefaultConfigName = stringResource(R.string.image_siliconflow_default_config)
     val showModelSelection by viewModel.showModelSelectionDialog.collectAsState()
+    val existingModelsForSelection = remember(pendingConfigParams, savedConfigs) {
+        modelsForPendingConfigGroup(savedConfigs, pendingConfigParams)
+    }
 
     // 固定为图像模式的配置分组
     val apiConfigsByApiKeyAndModality = remember(savedConfigs) {
@@ -400,8 +405,8 @@ fun ImageGenerationSettingsScreen(
         ModelSelectionDialog(
             showDialog = true,
             models = fetchedModels,
+            existingModels = existingModelsForSelection,
             onDismiss = { viewModel.dismissModelSelectionDialog() },
-            onSelectAll = { viewModel.onSelectAllModels() },
             onSelectModels = { selected -> viewModel.onSelectModels(selected) },
             onManualInput = { viewModel.onManualInput() }
         )

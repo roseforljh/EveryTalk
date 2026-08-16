@@ -2,6 +2,7 @@ package com.android.everytalk.data.network
 
 import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.ApiConfig
+import com.android.everytalk.data.DataClass.ModelParameterProtocol
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.webSearchToggleLabelRes
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -24,6 +25,19 @@ class WebSearchSupportTest {
 
         assertTrue(WebSearchSupport.isGeminiModel(config))
         assertFalse(WebSearchSupport.supportsNativeWebSearch(config))
+    }
+
+    @Test
+    fun `model protocol override controls request capability without changing group channel`() {
+        val base = createConfig(channel = "OpenAI兼容", model = "gemini-3-flash-preview")
+        val config = base.copy(
+            modelParameters = base.modelParameters.copy(
+                apiProtocolOverride = ModelParameterProtocol.GEMINI,
+            ),
+        )
+
+        assertEquals("OpenAI兼容", config.channel)
+        assertTrue(WebSearchSupport.supportsNativeWebSearch(config))
     }
 
     @Test

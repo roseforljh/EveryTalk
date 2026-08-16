@@ -1,6 +1,7 @@
 package com.android.everytalk.data.network
 import android.util.Log
 import com.android.everytalk.data.DataClass.ChatRequest
+import com.android.everytalk.data.DataClass.ModelParameterProtocol
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.DataClass.PartsApiMessage
 import com.android.everytalk.data.DataClass.ApiContentPart
@@ -35,17 +36,14 @@ object OpenAIDirectClient {
         } else {
             request
         }
-        var baseUrl = effectiveRequest.apiAddress?.trimEnd('/')?.takeIf { it.isNotBlank() }
+        val baseUrl = effectiveRequest.apiAddress?.trimEnd('/')?.takeIf { it.isNotBlank() }
             ?: com.android.everytalk.BuildConfig.DEFAULT_OPENAI_API_BASE_URL.trimEnd('/').takeIf { it.isNotBlank() }
             ?: "https://api.openai.com"
-        if (baseUrl.contains("bigmodel.cn") && !baseUrl.contains("/api/paas/v4")) {
-            baseUrl = "https://open.bigmodel.cn/api/paas/v4"
-        }
-        val url = when {
-            baseUrl.endsWith("/chat/completions") -> baseUrl
-            baseUrl.endsWith("/v1") -> "$baseUrl/chat/completions"
-            else -> "$baseUrl/v1/chat/completions"
-        }
+        val url = LlmEndpointResolver.resolve(
+            protocol = ModelParameterProtocol.OPENAI_COMPATIBLE,
+            apiAddress = baseUrl,
+            model = effectiveRequest.model,
+        )
         var terminalSent = false
         try {
             client.preparePost(url) {

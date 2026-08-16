@@ -1,6 +1,7 @@
 package com.android.everytalk.data.network
 
 import com.android.everytalk.data.DataClass.ApiConfig
+import com.android.everytalk.data.DataClass.effectiveModelChannel
 
 object WebSearchSupport {
     data class WebSearchRouting(
@@ -26,7 +27,7 @@ object WebSearchSupport {
 
     fun isGeminiNativeSearch(config: ApiConfig?): Boolean {
         if (config == null) return false
-        return config.channel.contains("gemini", ignoreCase = true) &&
+        return config.effectiveModelChannel().contains("gemini", ignoreCase = true) &&
             isGeminiModel(config)
     }
 

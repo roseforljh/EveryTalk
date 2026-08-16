@@ -4,7 +4,9 @@ import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.ModelCapabilityCandidate
 import com.android.everytalk.data.DataClass.ModelCapabilitySource
 import com.android.everytalk.data.DataClass.ModelParameterProtocol
+import com.android.everytalk.data.DataClass.ModelParameters
 import com.android.everytalk.data.DataClass.ModalityType
+import com.android.everytalk.data.DataClass.effectiveModelChannel
 import com.android.everytalk.data.network.ApiClient
 import com.android.everytalk.statecontroller.PendingConfigParams
 import com.android.everytalk.statecontroller.ViewModelStateHolder
@@ -29,7 +31,6 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -285,7 +286,7 @@ class ModelAndConfigControllerTest {
             modelFetchManager = modelFetchManager,
         )
 
-        controller.replaceModelsForConfigGroup(
+        controller.appendModelsToConfigGroup(
             PendingConfigParams(
                 provider = existing.provider,
                 address = existing.address,
@@ -311,7 +312,7 @@ class ModelAndConfigControllerTest {
     }
 
     @Test
-    fun `refresh preserves matching ids and migrates removed bindings`() = runTest(UnconfinedTestDispatcher()) {
+    fun `refresh only appends new models and keeps local removed models`() = runTest(UnconfinedTestDispatcher()) {
         val oldA = imageConfig(
             id = "id-a",
             model = "model-a",
@@ -347,7 +348,7 @@ class ModelAndConfigControllerTest {
             persistenceManager = persistenceManager,
         )
 
-        controller.replaceModelsForConfigGroup(
+        controller.appendModelsToConfigGroup(
             PendingConfigParams(
                 provider = oldA.provider,
                 address = oldA.address,
@@ -361,8 +362,10 @@ class ModelAndConfigControllerTest {
         )
 
         val refreshed = stateHolder._imageGenApiConfigs.value.filter { it.address == oldA.address }
+        val retainedA = refreshed.single { it.model == "model-a" }
         val retainedB = refreshed.single { it.model == "model-b" }
         val newC = refreshed.single { it.model == "model-c" }
+        assertEquals(oldA, retainedA)
         assertEquals(oldB, retainedB)
         assertNotEquals(oldA.id, newC.id)
         assertEquals(oldA.temperature, newC.temperature)
@@ -372,20 +375,17 @@ class ModelAndConfigControllerTest {
         assertEquals(oldB, stateHolder._selectedImageGenApiConfig.value)
         assertEquals(
             mapOf(
-                "text-history" to oldB.id,
+                "text-history" to oldA.id,
                 "image-history" to oldB.id,
                 "unrelated" to unrelated.id,
             ),
             stateHolder.conversationApiConfigIds.value,
         )
-        assertNull(refreshed.singleOrNull { it.model == "model-a" })
-        coVerify(exactly = 1) {
-            persistenceManager.saveConversationApiConfigIds(stateHolder.conversationApiConfigIds.value)
-        }
+        coVerify(exactly = 0) { persistenceManager.saveConversationApiConfigIds(any()) }
     }
 
     @Test
-    fun `config group id uses every identity field`() {
+    fun `config group id ignores each model protocol`() {
         val base = imageConfig(id = "id", model = "model", name = "model")
 
         assertEquals(
@@ -394,9 +394,32 @@ class ModelAndConfigControllerTest {
         )
         assertNotEquals(modelConfigGroupId(base), modelConfigGroupId(base.copy(provider = "other")))
         assertNotEquals(modelConfigGroupId(base), modelConfigGroupId(base.copy(address = "https://other")))
-        assertNotEquals(modelConfigGroupId(base), modelConfigGroupId(base.copy(channel = "Gemini")))
+        assertEquals(modelConfigGroupId(base), modelConfigGroupId(base.copy(channel = "Gemini")))
+        assertEquals(
+            modelConfigGroupId(base),
+            modelConfigGroupId(
+                base.copy(
+                    modelParameters = ModelParameters(apiProtocolOverride = ModelParameterProtocol.CODEX),
+                )
+            ),
+        )
         assertNotEquals(modelConfigGroupId(base), modelConfigGroupId(base.copy(key = "other-key")))
         assertNotEquals(modelConfigGroupId(base), modelConfigGroupId(base.copy(modalityType = ModalityType.TEXT)))
+    }
+
+    @Test
+    fun `model protocol override is used only for this model`() {
+        val base = imageConfig(id = "id", model = "model", name = "model").copy(channel = "OpenAI兼容")
+
+        assertEquals("OpenAI兼容", base.effectiveModelChannel())
+        assertEquals(
+            "Codex",
+            base.copy(
+                modelParameters = base.modelParameters.copy(
+                    apiProtocolOverride = ModelParameterProtocol.CODEX,
+                )
+            ).effectiveModelChannel(),
+        )
     }
 
     private fun controller(

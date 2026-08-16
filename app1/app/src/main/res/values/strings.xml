@@ -854,7 +854,7 @@
     <string name="settings_edit_configuration_title">Edit configuration</string>
     <string name="settings_add_configuration_title">Add configuration</string>
     <string name="settings_model_platform_label">Model platform</string>
-    <string name="settings_channel_label">Channel</string>
+    <string name="settings_channel_label">API protocol</string>
     <string name="settings_api_endpoint_label">API endpoint URL</string>
     <string name="settings_api_key_label">API key</string>
     <string name="settings_endpoint_preview">Preview: %1$s</string>
@@ -890,6 +890,15 @@
         <item quantity="other">%1$d available</item>
     </plurals>
     <string name="settings_search_hint">Search…</string>
+    <string name="settings_search_clear">Clear search</string>
+    <string name="settings_model_tab_new">New</string>
+    <string name="settings_model_tab_added">Added</string>
+    <string name="settings_model_tab_removed">Removed</string>
+    <string name="settings_model_tab_count">%1$d models</string>
+    <string name="settings_no_new_models">No new models found</string>
+    <string name="settings_no_added_models">No models added yet</string>
+    <string name="settings_no_removed_models">No removed models</string>
+    <string name="settings_models_no_action">Nothing to add</string>
     <string name="settings_no_available_models">No models available</string>
     <string name="settings_no_matching_models">No matching models</string>
     <string name="settings_enter_model_manually">Enter model manually</string>
@@ -904,6 +913,13 @@
     <string name="auto_compression_threshold_content_description">Automatic compression trigger threshold</string>
 
     <string name="model_parameters_title">Model parameters</string>
+    <string name="model_parameters_api_protocol">API protocol</string>
+    <string name="model_parameters_api_protocol_dropdown">API protocol dropdown</string>
+    <string name="model_parameters_endpoint_preview">Request URL: %1$s</string>
+    <string name="model_parameters_protocol_responses">OpenAI Responses</string>
+    <string name="model_parameters_protocol_chat_completions">OpenAI Chat Completions</string>
+    <string name="model_parameters_protocol_anthropic">Anthropic Messages</string>
+    <string name="model_parameters_protocol_gemini">Gemini GenerateContent</string>
     <string name="model_parameters_auto_fetch">Fetch model parameters automatically</string>
     <string name="model_parameters_auto_fetching">Fetching model parameters</string>
     <string name="model_parameters_auto_fetch_failed">Automatic fetch failed: %1$s</string>

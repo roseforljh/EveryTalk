@@ -28,3 +28,7 @@ data class ApiConfig(
     // 新增：是否启用代码执行
     val enableCodeExecution: Boolean? = null
 )
+
+/** 当前模型实际发请求时使用的协议。未单独设置时沿用配置组协议。 */
+fun ApiConfig.effectiveModelChannel(): String =
+    modelParameters.apiProtocolOverride?.let(::modelParameterChannel) ?: channel

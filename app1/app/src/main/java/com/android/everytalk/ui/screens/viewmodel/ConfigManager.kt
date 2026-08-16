@@ -4,6 +4,7 @@ import com.android.everytalk.statecontroller.*
 import android.util.Log
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.ModelParameters
+import com.android.everytalk.data.DataClass.modelParameterProtocol
 import com.android.everytalk.statecontroller.ApiHandler
 import com.android.everytalk.statecontroller.ViewModelStateHolder
 import com.android.everytalk.statecontroller.safeApiConfigSummary
@@ -25,8 +26,7 @@ class ConfigManager(
     private fun belongsToGroup(config: ApiConfig, representative: ApiConfig): Boolean =
         config.key == representative.key &&
             config.provider == representative.provider &&
-            config.address == representative.address &&
-            config.channel == representative.channel
+            config.address == representative.address
 
     private fun remapConversationConfigIds(
         removedIds: Set<String>,
@@ -321,9 +321,7 @@ class ConfigManager(
         }
     }
 
-    /**
-     * 成组删除：按 key/provider/address/channel 删除同组配置
-     */
+    /** 成组删除：同一平台、地址和密钥下的模型属于同一配置组。 */
     fun deleteConfigGroup(representativeConfig: ApiConfig, isImageGen: Boolean = false) {
         viewModelScope.launch {
             val originalConfigs = if (isImageGen) stateHolder._imageGenApiConfigs.value else stateHolder._apiConfigs.value
@@ -371,8 +369,8 @@ class ConfigManager(
     }
 
     /**
-     * 成组更新：按 key/provider/address/channel 匹配后，批量更新 address/key/channel
-     * isImageGen 若为 null，则根据 representativeConfig.modalityType 自动判断
+     * 成组更新配置。模型自己的协议覆盖保存在 ModelParameters，不影响这里的分组。
+     * isImageGen 若为 null，则根据 representativeConfig.modalityType 自动判断。
      */
     fun updateConfigGroup(
         representativeConfig: ApiConfig,
@@ -399,8 +397,7 @@ class ConfigManager(
                 val newConfigs = currentConfigs.map { cfg ->
                     if (cfg.key == representativeConfig.key &&
                         cfg.provider == representativeConfig.provider &&
-                        cfg.address == representativeConfig.address &&
-                        cfg.channel == representativeConfig.channel) {
+                        cfg.address == representativeConfig.address) {
                         // 图像模式暂不支持 tools
                         cfg.copy(provider = trimmedProvider, address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
                     } else cfg
@@ -413,8 +410,7 @@ class ConfigManager(
                     if (selected != null &&
                         selected.key == representativeConfig.key &&
                         selected.provider == representativeConfig.provider &&
-                        selected.address == representativeConfig.address &&
-                        selected.channel == representativeConfig.channel) {
+                        selected.address == representativeConfig.address) {
                         stateHolder._selectedImageGenApiConfig.value =
                             selected.copy(provider = trimmedProvider, address = trimmedAddress, key = trimmedKey, channel = trimmedChannel)
                     }
@@ -424,8 +420,7 @@ class ConfigManager(
                 val newConfigs = currentConfigs.map { cfg ->
                     if (cfg.key == representativeConfig.key &&
                         cfg.provider == representativeConfig.provider &&
-                        cfg.address == representativeConfig.address &&
-                        cfg.channel == representativeConfig.channel) {
+                        cfg.address == representativeConfig.address) {
                         
                         // 仅当参数不为 null 时才更新（支持部分更新）
                         var updatedCfg = cfg.copy(
@@ -436,7 +431,13 @@ class ConfigManager(
                             modelParameters = if (cfg.channel.equals(trimmedChannel, ignoreCase = true)) {
                                 cfg.modelParameters
                             } else {
-                                ModelParameters()
+                                ModelParameters(
+                                    // 组协议变化时保留当前模型原本使用的协议。
+                                    apiProtocolOverride = (
+                                        cfg.modelParameters.apiProtocolOverride
+                                            ?: modelParameterProtocol(cfg.channel)
+                                        ).takeUnless { it == modelParameterProtocol(trimmedChannel) },
+                                )
                             },
                         )
                         if (newEnableCodeExecution != null) {
@@ -456,8 +457,7 @@ class ConfigManager(
                     if (selected != null &&
                         selected.key == representativeConfig.key &&
                         selected.provider == representativeConfig.provider &&
-                        selected.address == representativeConfig.address &&
-                        selected.channel == representativeConfig.channel) {
+                        selected.address == representativeConfig.address) {
                         
                         stateHolder._selectedApiConfig.value = newConfigs.first { it.id == selected.id }
                     }

@@ -95,8 +95,7 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
             allImageConfigs.filter {
                 it.provider == currentSelectedConfig.provider &&
                 it.address == currentSelectedConfig.address &&
-                it.key == currentSelectedConfig.key &&
-                it.channel == currentSelectedConfig.channel
+                it.key == currentSelectedConfig.key
             }
         } else {
             allImageConfigs

@@ -37,7 +37,7 @@ data class ContextCompressionState(
     fun matchesNativeResponsesConfig(config: ApiConfig): Boolean =
         matchesConfig(config) &&
             provider.equals(config.provider, ignoreCase = true) &&
-            channel.equals(config.channel, ignoreCase = true) &&
+            channel.equals(config.effectiveModelChannel(), ignoreCase = true) &&
             model.equals(config.model, ignoreCase = true)
 
     fun matchesNativeAnthropicConfig(config: ApiConfig): Boolean =

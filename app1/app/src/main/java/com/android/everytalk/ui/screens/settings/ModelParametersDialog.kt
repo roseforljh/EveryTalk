@@ -84,6 +84,7 @@ import com.android.everytalk.data.DataClass.ModelParameterProtocol
 import com.android.everytalk.data.DataClass.ModelParameters
 import com.android.everytalk.data.DataClass.ReasoningMode
 import com.android.everytalk.data.DataClass.defaultOpenAICompatibleParameters
+import com.android.everytalk.data.DataClass.modelParameterChannel
 import com.android.everytalk.data.DataClass.modelParameterProtocol
 import com.android.everytalk.data.DataClass.openAICompatibleRequestParameters
 import com.android.everytalk.data.DataClass.validateAutoContextCompressionThreshold
@@ -106,6 +107,12 @@ private val codexThinkingLevels = listOf("none", "minimal", "low", "medium", "hi
 private val anthropicThinkingLevels = listOf("none", "low", "medium", "high", "max")
 private val geminiThinkingLevels = listOf("none", "minimal", "low", "medium", "high")
 private val openAICompatibleThinkingLevels = listOf("none", "low", "medium", "high", "xhigh", "max")
+private val modelParameterProtocols = listOf(
+    ModelParameterProtocol.CODEX,
+    ModelParameterProtocol.OPENAI_COMPATIBLE,
+    ModelParameterProtocol.ANTHROPIC,
+    ModelParameterProtocol.GEMINI,
+)
 
 @Composable
 private fun localizedThinkingLevel(option: String): String = when (option.trim().lowercase()) {
@@ -118,6 +125,16 @@ private fun localizedThinkingLevel(option: String): String = when (option.trim()
     "max" -> stringResource(R.string.model_parameters_reasoning_max)
     else -> option
 }
+
+@Composable
+private fun localizedProtocol(protocol: ModelParameterProtocol): String = stringResource(
+    when (protocol) {
+        ModelParameterProtocol.CODEX -> R.string.model_parameters_protocol_responses
+        ModelParameterProtocol.OPENAI_COMPATIBLE -> R.string.model_parameters_protocol_chat_completions
+        ModelParameterProtocol.ANTHROPIC -> R.string.model_parameters_protocol_anthropic
+        ModelParameterProtocol.GEMINI -> R.string.model_parameters_protocol_gemini
+    }
+)
 
 internal fun parseModelTokenLimits(
     maxOutputTokens: String,
@@ -345,10 +362,12 @@ internal fun ModelParametersDialog(
     val invalidParametersLabel = stringResource(R.string.model_parameters_invalid)
     val autoFetchLabel = stringResource(R.string.model_parameters_auto_fetch)
     val autoFetchingLabel = stringResource(R.string.model_parameters_auto_fetching)
-    val protocol = remember(config.channel) { modelParameterProtocol(config.channel) }
     val coroutineScope = rememberCoroutineScope()
     var workingConfig by remember(config) { mutableStateOf(config) }
-    var selectedValue by remember(config.id, protocol, config.modelParameters) {
+    var protocol by remember(config.id, config.channel) {
+        mutableStateOf(modelParameterProtocol(config.channel))
+    }
+    var selectedValue by remember(config.id, config.channel, config.modelParameters) {
         mutableStateOf(
             selectedThinkingLevelValue(
                 protocol,
@@ -357,7 +376,7 @@ internal fun ModelParametersDialog(
             )
         )
     }
-    var customValues by remember(config.id, protocol, config.modelParameters) {
+    var customValues by remember(config.id, config.channel, config.modelParameters) {
         mutableStateOf(
             normalizeCustomThinkingLevels(
                 protocol = protocol,
@@ -401,6 +420,12 @@ internal fun ModelParametersDialog(
     val maxOutputSource = resolvedCapability?.maxOutputSource ?: ModelCapabilitySource.USER_OVERRIDE
     val contextWindowSource = resolvedCapability?.contextWindowSource ?: ModelCapabilitySource.USER_OVERRIDE
     val reasoningSource = resolvedCapability?.reasoningSource
+    val endpointPreview = SettingsEndpointRules.buildFullEndpointPreview(
+        base = workingConfig.address,
+        provider = workingConfig.provider,
+        channel = modelParameterChannel(protocol),
+        model = workingConfig.model,
+    )
     val refreshRotation = if (isAutoLoading) {
         val transition = rememberInfiniteTransition(label = "模型参数加载旋转")
         val rotation by transition.animateFloat(
@@ -497,7 +522,10 @@ internal fun ModelParametersDialog(
             return
         }
         onConfirm(
-            workingConfig.copy(modelParameters = update.first)
+            workingConfig.copy(
+                channel = modelParameterChannel(protocol),
+                modelParameters = update.first,
+            )
                 .withUserTokenLimits(update.second)
         )
     }
@@ -555,6 +583,59 @@ internal fun ModelParametersDialog(
                     .heightIn(max = 520.dp)
                     .verticalScroll(rememberScrollState())
             ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 9.dp),
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 44.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = stringResource(R.string.model_parameters_api_protocol),
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        ProtocolDropdown(
+                            value = protocol,
+                            onValueChange = { selectedProtocol ->
+                                if (selectedProtocol != protocol) {
+                                    protocol = selectedProtocol
+                                    workingConfig = workingConfig.copy(
+                                        channel = modelParameterChannel(selectedProtocol),
+                                        // 自动获取的能力与协议和接口绑定，切换协议后必须重新获取。
+                                        modelParameters = workingConfig.modelParameters.copy(
+                                            resolvedCapability = null,
+                                        ),
+                                    )
+                                    val supportedValues = thinkingLevelOptions(selectedProtocol)
+                                    selectedValue = selectedValue.takeIf { it in supportedValues }
+                                        ?: DEFAULT_REASONING_EFFORT.takeIf { it in supportedValues }
+                                        ?: supportedValues.first()
+                                    customValues = normalizeCustomThinkingLevels(
+                                        protocol = selectedProtocol,
+                                        values = workingConfig.modelParameters.customReasoningEfforts,
+                                    )
+                                    errorText = null
+                                }
+                            },
+                        )
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = stringResource(
+                            R.string.model_parameters_endpoint_preview,
+                            endpointPreview,
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = appDialogSubtextColor(),
+                    )
+                }
+                HorizontalDivider(color = borderColor.copy(alpha = 0.55f))
                 ModelParameterRow(
                     label = stringResource(R.string.model_parameters_reasoning_effort),
                     supportingText = reasoningSource?.let {
@@ -684,6 +765,81 @@ internal fun ModelParametersDialog(
         },
         dismissButton = {},
     )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ProtocolDropdown(
+    value: ModelParameterProtocol,
+    onValueChange: (ModelParameterProtocol) -> Unit,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val displayedValue = localizedProtocol(value)
+    val dropdownLabel = stringResource(R.string.model_parameters_api_protocol_dropdown)
+    val arrowRotation by animateFloatAsState(
+        targetValue = if (expanded) 90f else 0f,
+        animationSpec = tween(durationMillis = 180),
+        label = "API 协议展开箭头",
+    )
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = it },
+        modifier = Modifier.width(180.dp),
+    ) {
+        Row(
+            modifier = Modifier
+                .menuAnchor(ExposedDropdownMenuAnchorType.PrimaryNotEditable)
+                .width(180.dp)
+                .height(44.dp)
+                .background(
+                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.42f),
+                    RoundedCornerShape(12.dp),
+                )
+                .padding(horizontal = 12.dp)
+                .semantics { contentDescription = dropdownLabel },
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = displayedValue,
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.labelLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Icon(
+                painter = painterResource(R.drawable.ic_gpt_chevron_right),
+                contentDescription = null,
+                modifier = Modifier
+                    .size(18.dp)
+                    .rotate(arrowRotation),
+            )
+        }
+        ExposedDropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+            modifier = Modifier.border(1.dp, appFloatingCardBorderColor(), AppFloatingCardShape),
+            shape = AppFloatingCardShape,
+            containerColor = appFloatingCardContainerColor(),
+            tonalElevation = 0.dp,
+            shadowElevation = AppFloatingCardElevation,
+        ) {
+            modelParameterProtocols.forEach { option ->
+                val displayOption = localizedProtocol(option)
+                ThinkingLevelOptionRow(
+                    option = option.name,
+                    displayOption = displayOption,
+                    isSelected = option == value,
+                    isCustom = false,
+                    onSelect = {
+                        onValueChange(option)
+                        expanded = false
+                    },
+                    onDelete = {},
+                )
+            }
+        }
+    }
 }
 
 @Composable

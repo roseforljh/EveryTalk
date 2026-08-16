@@ -9,6 +9,7 @@ import com.android.everytalk.data.DataClass.ModelTokenLimits
 import com.android.everytalk.data.DataClass.PartsApiMessage
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.DataClass.toThinkingConfig
+import com.android.everytalk.data.DataClass.effectiveModelChannel
 import com.android.everytalk.data.network.ApiClient
 import com.android.everytalk.data.network.AppStreamEvent
 import com.android.everytalk.models.ATTACHMENT_CONTENT_PAGE_MARKER
@@ -426,7 +427,7 @@ internal suspend fun MessageSender.requestContextCompressionCompletion(
     val request = ChatRequest(
         messages = requestMessages,
         provider = config.provider,
-        channel = config.channel,
+        channel = config.effectiveModelChannel(),
         apiAddress = config.address,
         apiKey = config.key,
         model = config.model,
@@ -434,7 +435,7 @@ internal suspend fun MessageSender.requestContextCompressionCompletion(
             temperature = config.temperature,
             topP = config.topP,
             maxOutputTokens = resolvedOutputTokens,
-            thinkingConfig = config.modelParameters.toThinkingConfig(config.channel, config.model),
+            thinkingConfig = config.modelParameters.toThinkingConfig(config.effectiveModelChannel(), config.model),
         ),
         customModelParameters = customModelParameters,
     )

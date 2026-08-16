@@ -264,7 +264,7 @@ import java.util.TimeZone
         }
 
         if (params.isRefresh) {
-            modelAndConfigController.replaceModelsForConfigGroup(params, listOf(trimmedModelName))
+            modelAndConfigController.appendModelsToConfigGroup(params, listOf(trimmedModelName))
         } else {
             modelAndConfigController.createMultipleConfigs(
                 provider = params.provider,
@@ -296,34 +296,6 @@ import java.util.TimeZone
         // Also clear Markdown cache for this message to force re-rendering
     }
 
-    internal fun AppViewModel.onSelectAllModels() {
-        val params = stateHolder._pendingConfigParams.value ?: return
-        val models = fetchedModels.value
-        if (models.isEmpty()) {
-            showSnackbar("没有可用的模型")
-            return
-        }
-
-        if (params.isRefresh) {
-            modelAndConfigController.replaceModelsForConfigGroup(params, models)
-        } else {
-            modelAndConfigController.createMultipleConfigs(
-                provider = params.provider,
-                address = params.address,
-                key = params.key,
-                modelNames = models,
-                channel = params.channel,
-                isImageGen = params.isImageGen,
-                enableCodeExecution = params.enableCodeExecution,
-                toolsJson = params.toolsJson,
-                imageSize = params.imageSize,
-                numInferenceSteps = params.numInferenceSteps,
-                guidanceScale = params.guidanceScale,
-            )
-        }
-        clearFetchedModels()
-    }
-
     internal fun AppViewModel.onSelectModels(selectedModels: List<String>) {
         val params = stateHolder._pendingConfigParams.value ?: return
         if (selectedModels.isEmpty()) {
@@ -332,7 +304,7 @@ import java.util.TimeZone
         }
 
         if (params.isRefresh) {
-            modelAndConfigController.replaceModelsForConfigGroup(params, selectedModels)
+            modelAndConfigController.appendModelsToConfigGroup(params, selectedModels)
         } else {
             modelAndConfigController.createMultipleConfigs(
                 provider = params.provider,

@@ -2,6 +2,7 @@ package com.android.everytalk.statecontroller.controller.config
 
 import android.util.Log
 import com.android.everytalk.data.DataClass.ApiConfig
+import com.android.everytalk.data.DataClass.effectiveModelChannel
 import com.android.everytalk.data.DataClass.ModalityType
 import com.android.everytalk.data.DataClass.ModelParameters
 import com.android.everytalk.data.DataClass.withModelCapabilityDefaults
@@ -17,17 +18,33 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.flow.update
 import java.util.UUID
+import java.util.Locale
 
 internal fun modelConfigGroupId(config: ApiConfig): String {
     return listOf(
         config.provider,
         config.address,
-        config.channel,
         config.key,
         config.modalityType.name,
     ).joinToString("\u0000")
+}
+
+/** 返回待处理配置组里已经添加的模型名称，供刷新弹窗区分新模型和旧模型。 */
+internal fun modelsForPendingConfigGroup(
+    configs: List<ApiConfig>,
+    params: com.android.everytalk.statecontroller.PendingConfigParams?,
+): List<String> {
+    if (params == null) return emptyList()
+    return configs.asSequence()
+        .filter {
+            it.provider == params.provider &&
+                it.address == params.address &&
+                it.key == params.key
+        }
+        .map(ApiConfig::model)
+        .distinctBy { it.trim().lowercase(Locale.ROOT) }
+        .toList()
 }
 
 /**
@@ -81,7 +98,7 @@ class ModelAndConfigController(
             ApiClient.getModelCapabilities(
                 apiUrl = config.address,
                 apiKey = config.key,
-                channel = config.channel,
+                channel = config.effectiveModelChannel(),
                 modelId = config.model,
                 providerHint = config.provider,
             )
@@ -261,8 +278,11 @@ class ModelAndConfigController(
         requestJob.start()
     }
 
-    fun replaceModelsForConfigGroup(params: com.android.everytalk.statecontroller.PendingConfigParams, modelNames: List<String>) {
-        val requestedModels = modelNames.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+    fun appendModelsToConfigGroup(params: com.android.everytalk.statecontroller.PendingConfigParams, modelNames: List<String>) {
+        val requestedModels = modelNames
+            .map(String::trim)
+            .filter(String::isNotEmpty)
+            .distinctBy { it.lowercase(Locale.ROOT) }
         if (requestedModels.isEmpty()) {
             showSnackbar("请至少选择一个模型")
             return
@@ -277,10 +297,7 @@ class ModelAndConfigController(
             }
 
             val belongsToGroup: (ApiConfig) -> Boolean = {
-                it.key == params.key &&
-                    it.provider == params.provider &&
-                    it.address == params.address &&
-                    it.channel == params.channel
+                it.key == params.key && it.provider == params.provider && it.address == params.address
             }
             val oldGroup = currentConfigs.filter(belongsToGroup)
             if (oldGroup.isEmpty()) {
@@ -288,10 +305,19 @@ class ModelAndConfigController(
                 return@launch
             }
 
-            val oldByModel = oldGroup.associateBy { it.model }
+            val existingModelIds = oldGroup.mapTo(mutableSetOf()) {
+                it.model.trim().lowercase(Locale.ROOT)
+            }
+            val modelsToAdd = requestedModels.filter {
+                it.lowercase(Locale.ROOT) !in existingModelIds
+            }
+            if (modelsToAdd.isEmpty()) {
+                showSnackbar("没有可添加的新模型")
+                return@launch
+            }
             val template = oldGroup.first()
-            val refreshedGroup = requestedModels.map { modelName ->
-                oldByModel[modelName] ?: template.copy(
+            val additions = modelsToAdd.map { modelName ->
+                template.copy(
                     id = UUID.randomUUID().toString(),
                     model = modelName,
                     name = modelName,
@@ -299,58 +325,15 @@ class ModelAndConfigController(
                     modelParameters = ModelParameters(),
                 ).withModelCapabilityDefaults(listOfNotNull(capabilitiesByModel[modelName]))
             }
-            val refreshedByModel = refreshedGroup.associateBy { it.model }
-            val oldIds = oldGroup.mapTo(mutableSetOf()) { it.id }
-            val currentSelectedConfig = if (params.isImageGen) {
-                stateHolder._selectedImageGenApiConfig.value
-            } else {
-                stateHolder._selectedApiConfig.value
-            }
-            val fallback = currentSelectedConfig
-                ?.takeIf { it.id in oldIds }
-                ?.let { refreshedByModel[it.model] }
-                ?: refreshedGroup.first()
-            val oldIdToNewId = oldGroup.associate { oldConfig ->
-                oldConfig.id to (refreshedByModel[oldConfig.model] ?: fallback).id
-            }
-            val finalConfigs = currentConfigs.filterNot(belongsToGroup) + refreshedGroup
-            val currentConversationMapping = stateHolder.conversationApiConfigIds.value
-            val updatedConversationMapping = currentConversationMapping.mapValues { (_, configId) ->
-                oldIdToNewId[configId] ?: configId
-            }
+            val finalConfigs = currentConfigs + additions
 
             if (params.isImageGen) {
                 stateHolder._imageGenApiConfigs.value = finalConfigs
             } else {
                 stateHolder._apiConfigs.value = finalConfigs
             }
-            if (updatedConversationMapping != currentConversationMapping) {
-                stateHolder.conversationApiConfigIds.update { currentMapping ->
-                    currentMapping.mapValues { (_, configId) -> oldIdToNewId[configId] ?: configId }
-                }
-            }
-
-            val newSelection = currentSelectedConfig
-                ?.takeIf { it.id in oldIds }
-                ?.let { selected ->
-                    val targetId = oldIdToNewId.getValue(selected.id)
-                    refreshedGroup.first { it.id == targetId }
-                }
-            if (newSelection != null && newSelection != currentSelectedConfig) {
-                if (params.isImageGen) {
-                    stateHolder._selectedImageGenApiConfig.value = newSelection
-                } else {
-                    stateHolder._selectedApiConfig.value = newSelection
-                }
-                persistenceManager.saveSelectedConfigIdentifier(newSelection.id, params.isImageGen)
-            }
-
             persistenceManager.saveApiConfigs(finalConfigs, params.isImageGen)
-            if (updatedConversationMapping != currentConversationMapping) {
-                persistenceManager.saveConversationApiConfigIds(updatedConversationMapping)
-            }
-
-            showSnackbar("刷新成功，已更新 ${requestedModels.size} 个模型")
+            showSnackbar("已添加 ${additions.size} 个新模型")
         }
     }
 }

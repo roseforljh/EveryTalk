@@ -2,6 +2,7 @@ package com.android.everytalk.data.network
 
 import android.util.Log
 import com.android.everytalk.data.DataClass.ChatRequest
+import com.android.everytalk.data.DataClass.ModelParameterProtocol
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.DataClass.PartsApiMessage
 import com.android.everytalk.data.DataClass.ApiContentPart
@@ -26,14 +27,14 @@ object OpenAIResponsesClient {
         client: HttpClient,
         request: ChatRequest,
     ): Flow<AppStreamEvent> = channelFlow {
-        var baseUrl = request.apiAddress?.trimEnd('/')?.takeIf { it.isNotBlank() }
+        val baseUrl = request.apiAddress?.trimEnd('/')?.takeIf { it.isNotBlank() }
             ?: com.android.everytalk.BuildConfig.DEFAULT_OPENAI_API_BASE_URL.trimEnd('/').takeIf { it.isNotBlank() }
             ?: "https://api.openai.com"
-        baseUrl = baseUrl
-            .replace(Regex("/v1/chat/completions/?$"), "")
-            .replace(Regex("/chat/completions/?$"), "")
-            .replace(Regex("/v1/responses/?$"), "")
-            .trimEnd('/')
+        val endpoint = LlmEndpointResolver.resolve(
+            protocol = ModelParameterProtocol.CODEX,
+            apiAddress = baseUrl,
+            model = request.model,
+        )
         var terminalSent = false
         try {
             var nativeContextManagementEnabled = shouldUseNativeContextManagement(request)
@@ -45,7 +46,7 @@ object OpenAIResponsesClient {
                     request = request,
                     allowRestoredCompaction = nativeContextManagementEnabled,
                 )
-                client.preparePost("$baseUrl/v1/responses") {
+                client.preparePost(endpoint) {
                     contentType(ContentType.Application.Json)
                     setBody(
                         buildResponsesPayloadFromInput(

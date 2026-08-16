@@ -255,7 +255,7 @@ internal fun AiContextUsageButton(
             expanded = expanded,
             onDismiss = onDismiss,
             minWidth = 0.dp,
-            modifier = Modifier.width(284.dp),
+            modifier = Modifier.width(308.dp),
             offset = popupOffset,
         ) {
             AiContextUsagePopupContent(summary)
@@ -358,25 +358,25 @@ private fun AiContextUsagePopupContent(summary: AiContextUsageSummary?) {
         Spacer(Modifier.height(10.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(18.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             UsageTotal(
                 label = stringResource(R.string.context_usage_input),
                 value = formatUsageTokens(summary.runInputTokens),
                 color = InputUsageColor,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1.1f),
             )
             UsageTotal(
                 label = stringResource(R.string.context_usage_output),
                 value = formatUsageTokens(summary.runOutputTokens),
                 color = OutputUsageColor,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(0.8f),
             )
             UsageTotal(
                 label = stringResource(R.string.context_usage_total),
                 value = formatUsageTokens(summary.runTotalTokens),
                 color = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1.1f),
             )
         }
         Spacer(Modifier.height(10.dp))
@@ -495,13 +495,16 @@ private fun UsageTotal(
             text = label,
             style = MaterialTheme.typography.labelSmall,
             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
+            maxLines = 1,
         )
         Spacer(Modifier.height(3.dp))
         Text(
             text = value,
-            style = MaterialTheme.typography.titleMedium,
+            style = if (value.length > 8) MaterialTheme.typography.titleSmall else MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold,
             color = color,
+            maxLines = 1,
+            softWrap = false,
         )
     }
 }

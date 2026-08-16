@@ -47,7 +47,8 @@ class ModelConfigFlowContractTest {
         assertTrue(imageSettings.contains("imageSize = imageSize"))
         assertTrue(imageSettings.contains("numInferenceSteps = numInferenceSteps"))
         assertTrue(imageSettings.contains("guidanceScale = guidanceScale"))
-        assertTrue(selectionDialog.contains("LaunchedEffect(showDialog, models)"))
+        assertTrue(selectionDialog.contains("classifyModelCatalog(models, existingModels)"))
+        assertTrue(selectionDialog.contains("ModelCatalogTab.NEW"))
         assertTrue(selectionDialog.contains("stringResource(R.string.settings_enter_model_manually)"))
         assertTrue(settingsContent.contains("modelConfigGroupId(configsForKeyAndModality.first())"))
     }
