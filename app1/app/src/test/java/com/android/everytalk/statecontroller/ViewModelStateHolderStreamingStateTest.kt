@@ -1,6 +1,7 @@
 package com.android.everytalk.statecontroller
 
 import com.android.everytalk.data.DataClass.Message
+import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.util.debug.PerformanceMonitor
 import io.mockk.every
@@ -105,4 +106,26 @@ class ViewModelStateHolderStreamingStateTest {
         assertEquals("AB", stateHolder.messages.single().text)
         assertFalse(stateHolder.streamingMessageStateManager.isStreaming(messageId))
     }
+
+    @Test
+    fun `ordered content trace follows the existing streaming buffer cadence`() {
+        val messageId = "ordered-buffered-trace"
+        stateHolder.createStreamingBuffer(messageId)
+        stateHolder.messages.add(Message(id = messageId, text = "", sender = Sender.AI))
+
+        // 第一段沿用现有首帧立即刷新的规则，保证用户立刻看到内容。
+        stateHolder.appendContentToMessage(messageId, "A")
+        assertEquals("A", stateHolder.messages.single().orderedContentText())
+
+        // 第二段先留在缓冲区，不能重新退化成每个 token 都改消息列表。
+        stateHolder.appendContentToMessage(messageId, "B")
+        assertEquals("A", stateHolder.messages.single().orderedContentText())
+
+        stateHolder.flushStreamingBuffer(messageId)
+        assertEquals("AB", stateHolder.messages.single().orderedContentText())
+    }
+
+    private fun Message.orderedContentText(): String = executionTrace
+        .filterIsInstance<ExecutionTraceEvent.Content>()
+        .joinToString("") { it.text }
 }

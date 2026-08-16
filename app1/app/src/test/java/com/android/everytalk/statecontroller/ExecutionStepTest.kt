@@ -17,6 +17,21 @@ import org.junit.Test
 
 class ExecutionStepTest {
     @Test
+    fun `正文缓冲只在真实输出边界前强制冲刷`() {
+        assertFalse(AppStreamEvent.Content("正文").requiresOrderedContentFlush())
+        assertFalse(AppStreamEvent.Text("正文").requiresOrderedContentFlush())
+        assertTrue(AppStreamEvent.Reasoning("思考").requiresOrderedContentFlush())
+        assertTrue(
+            AppStreamEvent.ToolCall(
+                id = "tool-boundary",
+                name = ComputerToolNames.EXEC,
+                argumentsObj = buildJsonObject {},
+            ).requiresOrderedContentFlush()
+        )
+        assertTrue(AppStreamEvent.Finish("stop").requiresOrderedContentFlush())
+    }
+
+    @Test
     fun `真实流事件严格保留思考与工具的交错顺序`() {
         val events = listOf(
             AppStreamEvent.Reasoning("先读取系统配置。"),

@@ -1091,6 +1091,18 @@ class MessageItemsControllerStatusTest {
             listOf("正文 1", "正文 2", "正文 3"),
             items.filterIsInstance<ChatListItem.AiMessageContentSegment>().map { it.text },
         )
+        assertTrue(
+            items.filterIsInstance<ChatListItem.AiMessageContentSegment>().all {
+                it.sourceMessageId == "ordered-output" &&
+                    it.renderState.content == it.text &&
+                    it.renderState.blocks.isNotEmpty()
+            }
+        )
+        assertTrue(
+            items.filterIsInstance<ChatListItem.AiMessageProcessSegment>().all {
+                it.messageId == "ordered-output"
+            }
+        )
         assertTrue(items.filterIsInstance<ChatListItem.AiMessageProcessSegment>().all { !it.replyIsStreaming })
     }
 
