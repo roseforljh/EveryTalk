@@ -9,6 +9,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.SystemClock
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.android.everytalk.R
@@ -78,16 +80,37 @@ object AgentNotificationManager {
         }
     }
 
-    /**
-     * App 回到前台后，聊天界面已经负责展示 Agent 状态，系统事件通知应立即清掉。
-     * 前台服务使用独立渠道，不会被这里误删。
-     */
-    fun onAppForeground(context: Context) {
+    /** App 一进入前台就立即关闭后续事件通知，避免后台清理期间又弹出新通知。 */
+    fun markAppForeground() {
         appInForeground.set(true)
+    }
+
+    /**
+     * 清理已经存在的 Agent 事件通知。
+     * NotificationManager 的查询和逐条取消都是跨进程调用，必须由调用方放到后台线程，
+     * 否则通知较多或系统服务繁忙时会直接卡住整个界面。
+     */
+    fun clearForegroundEventNotifications(context: Context) {
+        val startedAt = SystemClock.elapsedRealtime()
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
-        manager.activeNotifications
-            .filter { it.notification.channelId == CHANNEL_EVENTS_ID }
-            .forEach { manager.cancel(it.id) }
+        try {
+            manager.activeNotifications
+                .filter { it.notification.channelId == CHANNEL_EVENTS_ID }
+                .forEach { manager.cancel(it.id) }
+        } catch (error: RuntimeException) {
+            Log.w("AgentNotification", "清理前台 Agent 通知失败", error)
+        } finally {
+            Log.d(
+                "AgentNotification",
+                "foreground_notification_cleanup_ms=${SystemClock.elapsedRealtime() - startedAt}",
+            )
+        }
+    }
+
+    /** 保留同步入口给现有调用和契约测试；界面生命周期必须使用上面的两个分步方法。 */
+    fun onAppForeground(context: Context) {
+        markAppForeground()
+        clearForegroundEventNotifications(context)
     }
 
     /** MainActivity 不再可见后，允许新的 Agent 事件进入系统通知栏。 */

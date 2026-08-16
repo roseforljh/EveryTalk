@@ -413,7 +413,6 @@ object OpenAIDirectClient {
         var reasoningStarted = false
         var reasoningFinished = false
         var contentStarted = false
-        val contentAggregator = StreamingContentAggregator()
         val thinkRouter = ThinkTagStreamRouter()
         var hasToolCalls = false
         var safetyBlocked = false
@@ -487,10 +486,7 @@ object OpenAIDirectClient {
                                                 }
                                                 if (!contentStarted) contentStarted = true
                                                 fullText.append(routedChunk.text)
-                                                val aggregatedChunks = contentAggregator.append(routedChunk.text)
-                                                aggregatedChunks.forEach { aggregated ->
-                                                    emitEvent(AppStreamEvent.Content(aggregated, null, ""))
-                                                }
+                                                emitEvent(AppStreamEvent.Content(routedChunk.text, null, ""))
                                             }
                                         }
                                     }
@@ -572,14 +568,8 @@ object OpenAIDirectClient {
                         reasoningFinished = true
                     }
                     fullText.append(routedChunk.text)
-                    contentAggregator.append(routedChunk.text)
+                    emitEvent(AppStreamEvent.Content(routedChunk.text, null, ""))
                 }
-            }
-
-            // 冲刷正文缓冲
-            val remainingContent = contentAggregator.flushRemaining()
-            if (remainingContent.isNotEmpty()) {
-                emitEvent(AppStreamEvent.Content(remainingContent, null, ""))
             }
 
             // 处理完成后，发送聚合的工具调用

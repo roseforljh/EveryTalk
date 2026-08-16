@@ -14,6 +14,7 @@ import com.android.everytalk.data.computer.ComputerErrorCodes
 import com.android.everytalk.data.computer.ComputerRequestContext
 import com.android.everytalk.data.computer.ComputerToolApprovalPhase
 import com.android.everytalk.data.computer.ComputerToolApprovalRequest
+import com.android.everytalk.data.computer.ComputerToolCallSafety
 import com.android.everytalk.data.computer.ComputerToolNames
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.database.entities.AgentRunEntity
@@ -31,15 +32,23 @@ import java.io.IOException
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.produceIn
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeout
 
 internal const val MAX_AGENT_MODEL_TURNS = 50
 internal const val MAX_AGENT_CONSECUTIVE_TOOL_CALLS = 100
 internal const val MAX_IDENTICAL_TOOL_CALLS = 3
+internal const val MAX_PARALLEL_TOOL_CALLS = 4
 private const val COMPACTION_OUTPUT_TOKENS = 4_096
 
 private val AGENT_COMPACTION_SYSTEM_PROMPT = """
@@ -557,14 +566,46 @@ class AgentLoop(
         toolLoopGuard: ToolLoopGuard,
     ): ToolBatchOutcome {
         var currentTranscript = transcript
+        val contextualComputerContext = computerContext?.copy(runId = run.id)
+        val snapshot = runStore.decodeRequestSnapshot(run)?.skillSnapshot
+        val allowedSkillIds = snapshot?.let { value ->
+            (value.automaticCatalog.map { it.skillId } + value.manualReferences.map { it.skillId }).toSet()
+        }.orEmpty()
+        val parallelCalls = mutableListOf<AgentContentBlock.ToolCall>()
+
+        /**
+         * 同一批工具并发执行，完成后仍按模型给出的 Tool Call 顺序写入上下文。
+         * 开始事实先统一落库，App 中途退出时，每条远端命令都能沿原 Execution 恢复。
+         */
+        suspend fun flushParallelCalls() {
+            if (parallelCalls.isEmpty()) return
+            val batch = parallelCalls.toList()
+            parallelCalls.clear()
+            batch.forEach { call -> runStore.appendToolExecutionStarted(run.id, requestId, call) }
+            val containsComputerCall = batch.any { it.name in ComputerToolNames.all }
+            if (containsComputerCall) {
+                runStore.updateRunStatus(run, AgentRunStatus.WAITING_REMOTE_EXECUTION)
+            }
+            val results = executeToolCallBatch(
+                calls = batch,
+                computerContext = contextualComputerContext,
+                maxModelResultTokens = maxModelResultTokens,
+                runId = run.id,
+                emit = emit,
+            )
+            if (containsComputerCall) {
+                runStore.updateRunStatus(run, AgentRunStatus.PERSISTING_RESULT)
+            }
+            results.forEach { result ->
+                runStore.appendToolResult(run.id, requestId, result)
+                currentTranscript = currentTranscript + result.toApiMessage()
+            }
+        }
+
         for ((index, call) in calls.withIndex()) {
-            val contextualComputerContext = computerContext?.copy(runId = run.id)
-            val snapshot = runStore.decodeRequestSnapshot(run)?.skillSnapshot
-            val allowedSkillIds = snapshot?.let { value ->
-                (value.automaticCatalog.map { it.skillId } + value.manualReferences.map { it.skillId }).toSet()
-            }.orEmpty()
             val pauseRequest = runCatching { agentPauseRequest(call, allowedSkillIds) }
             if (pauseRequest.isFailure && call.name in AgentControlToolNames.all) {
+                flushParallelCalls()
                 val result = AgentContentBlock.ToolResult(
                     toolCallId = call.id,
                     toolName = call.name,
@@ -577,6 +618,7 @@ class AgentLoop(
             }
             val agentRequest = pauseRequest.getOrNull()
             if (agentRequest != null) {
+                flushParallelCalls()
                 val record = AgentApprovalRecord(
                     approvalRequestId = UUID.randomUUID().toString(),
                     requestId = requestId,
@@ -589,8 +631,28 @@ class AgentLoop(
                 emit(AppStreamEvent.AgentApprovalRequired(run.id, record.approvalRequestId))
                 return ToolBatchOutcome(currentTranscript, paused = true)
             }
-            val approval = toolRuntime.approvalRequest(call, contextualComputerContext)
+            val approval = try {
+                toolRuntime.approvalRequest(call, contextualComputerContext)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                flushParallelCalls()
+                /**
+                 * 审批预检也会解析工具参数。参数错误属于本次工具调用失败，
+                 * 应回传模型自行纠正，不能让整次 Agent 运行直接失败。
+                 */
+                val result = AgentContentBlock.ToolResult(
+                    toolCallId = call.id,
+                    toolName = call.name,
+                    content = kotlinx.serialization.json.JsonPrimitive(error.message ?: "工具参数无效"),
+                    isError = true,
+                )
+                runStore.appendToolResult(run.id, requestId, result)
+                currentTranscript = currentTranscript + result.toApiMessage()
+                continue
+            }
             if (approval != null) {
+                flushParallelCalls()
                 val record = AgentApprovalRecord(
                     approvalRequestId = UUID.randomUUID().toString(),
                     requestId = requestId,
@@ -604,6 +666,14 @@ class AgentLoop(
                 return ToolBatchOutcome(currentTranscript, paused = true)
             }
             toolLoopGuard.record(call)?.let { reason -> throw AgentToolLoopException(reason) }
+
+            // 修改服务器的命令可能依赖前一条命令，继续串行；查询类命令才能安全并发。
+            if (canRunToolCallInParallel(call)) {
+                parallelCalls += call
+                continue
+            }
+
+            flushParallelCalls()
             runStore.appendToolExecutionStarted(run.id, requestId, call)
             if (call.name in ComputerToolNames.all) {
                 // 先写等待状态，再让 Executor 连接 VPS。进程在此窗口退出时仍可恢复。
@@ -636,7 +706,71 @@ class AgentLoop(
             runStore.appendToolResult(run.id, requestId, result)
             currentTranscript = currentTranscript + result.toApiMessage()
         }
+        flushParallelCalls()
         return ToolBatchOutcome(currentTranscript, paused = false)
+    }
+
+    /**
+     * 普通工具和只读 Computer 工具允许并发。
+     * 修改服务器的命令保留原始顺序，防止创建目录、写文件、启动服务等操作互相抢跑。
+     */
+    private fun canRunToolCallInParallel(call: AgentContentBlock.ToolCall): Boolean =
+        call.name !in ComputerToolNames.all || ComputerToolCallSafety.isReadOnly(call.name, call.arguments)
+
+    /**
+     * 最多同时运行四条工具调用，避免模型异常返回大量调用时压垮手机或 SSH Transport。
+     * 工具过程事件通过单一 Channel 回到 Agent Flow，保证并发协程不会直接抢占 FlowCollector。
+     */
+    private suspend fun executeToolCallBatch(
+        calls: List<AgentContentBlock.ToolCall>,
+        computerContext: ComputerRequestContext?,
+        maxModelResultTokens: Long,
+        runId: String,
+        emit: suspend (AppStreamEvent) -> Unit,
+    ): List<AgentContentBlock.ToolResult> {
+        if (calls.size == 1) {
+            return listOf(toolRuntime.execute(calls.single(), computerContext, maxModelResultTokens, runId, emit))
+        }
+        emit(AppStreamEvent.ExecutionStatusUpdate("正在并行执行 ${calls.size} 个工具"))
+        return try {
+            coroutineScope {
+                val eventChannel = Channel<AppStreamEvent>(Channel.UNLIMITED)
+                val semaphore = Semaphore(MAX_PARALLEL_TOOL_CALLS)
+                val results = calls.map { call ->
+                    async {
+                        semaphore.withPermit {
+                            toolRuntime.execute(
+                                call = call,
+                                computerContext = computerContext,
+                                maxModelResultTokens = maxModelResultTokens,
+                                runId = runId,
+                            ) { event ->
+                                // 多条命令共用稳定的批次状态，单条状态只会造成顶部文字来回闪动。
+                                // 带 Execution ID 的完成事件必须保留，否则 UI 无法把远端结果绑定回工具卡片。
+                                if (event !is AppStreamEvent.ExecutionStatusUpdate ||
+                                    event.toolCallId != null ||
+                                    event.executionId != null
+                                ) {
+                                    eventChannel.send(event)
+                                }
+                            }
+                        }
+                    }
+                }
+                val closer = launch {
+                    try {
+                        results.joinAll()
+                    } finally {
+                        eventChannel.close()
+                    }
+                }
+                for (event in eventChannel) emit(event)
+                closer.join()
+                results.awaitAll()
+            }
+        } finally {
+            emit(AppStreamEvent.ExecutionStatusUpdate(null))
+        }
     }
 
     private suspend fun executeApprovedOrRejectedTool(

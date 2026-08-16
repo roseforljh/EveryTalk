@@ -867,7 +867,12 @@ class MainActivity : AppCompatActivity() {
    
    override fun onStart() {
        super.onStart()
-       AgentNotificationManager.onAppForeground(this)
+       // 先立即禁止新的事件通知，再在后台清理通知栏。
+       // 系统通知查询属于跨进程调用，放在主线程会让回前台动画和整个聊天页面一起卡住。
+       AgentNotificationManager.markAppForeground()
+       lifecycleScope.launch(Dispatchers.IO) {
+           AgentNotificationManager.clearForegroundEventNotifications(applicationContext)
+       }
        if (this::appViewModel.isInitialized) {
            appViewModel.retryPendingAiContentReports()
        }

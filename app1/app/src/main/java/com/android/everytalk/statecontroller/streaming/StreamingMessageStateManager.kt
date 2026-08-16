@@ -64,12 +64,14 @@ class StreamingMessageStateManager {
     private val lifecycleLock = ReentrantReadWriteLock()
 
     private val DEBOUNCE_MS = 60L
+    private val MARKDOWN_MAX_HOLD_MS = 450L
     private val MAX_BUFFER_BEFORE_FORCE = 1024
     private val SHORT_CONTENT_THRESHOLD = 200
     
     // 短内容快速响应：首次 flush 不走 debounce
     private val FIRST_FLUSH_DEBOUNCE_MS = 8L
     private val lastFlushTime = ConcurrentHashMap<String, Long>()
+    private val markdownHoldStartedAt = ConcurrentHashMap<String, Long>()
     // 记录每个消息是否已经执行过首次 flush
     private val hasFirstFlushed = ConcurrentHashMap.newKeySet<String>()
 
@@ -118,6 +120,7 @@ class StreamingMessageStateManager {
             pendingJobs.remove(messageId)?.cancel()
             hasFirstFlushed.remove(messageId)
             lastFlushTime.remove(messageId)
+            markdownHoldStartedAt.remove(messageId)
             contentLengthTracker.remove(messageId)
             stateFlow.value
         }
@@ -188,15 +191,25 @@ class StreamingMessageStateManager {
             val previousContent = stateFlow.value
             val pendingText = buf.toString()
             val combined = previousContent + pendingText
+            val now = System.currentTimeMillis()
             if (shouldDelayFlush(previousContent, combined, pendingText.length)) {
-                return
+                val holdStartedAt = markdownHoldStartedAt.putIfAbsent(messageId, now) ?: now
+                val remainingDelay = MARKDOWN_MAX_HOLD_MS - (now - holdStartedAt)
+                if (remainingDelay > 0L) {
+                    // 没有后续 chunk 时也必须再次检查，避免内容永远卡在缓冲区。
+                    pendingJobs[messageId] = scope.launch {
+                        delay(remainingDelay)
+                        flushNow(messageId)
+                    }
+                    return
+                }
             }
+            markdownHoldStartedAt.remove(messageId)
 
             previousLength = previousContent.length
             contentLengthTracker[messageId] = previousLength
             adaptiveInterval = resolveStreamingRenderFlushIntervalMs(previousLength)
 
-            val now = System.currentTimeMillis()
             val lastTime = lastFlushTime[messageId] ?: 0L
             if ((now - lastTime) < adaptiveInterval && pendingText.length < MAX_BUFFER_BEFORE_FORCE) {
                 val remainingDelay = (adaptiveInterval - (now - lastTime)).coerceAtLeast(1L)
@@ -233,6 +246,7 @@ class StreamingMessageStateManager {
             val stateFlow = streamingStates[messageId]
             pendingBuffers.remove(messageId)
             pendingJobs.remove(messageId)?.cancel()
+            markdownHoldStartedAt.remove(messageId)
             if (stateFlow != null) {
                 stateFlow.value = content
             } else {
@@ -262,6 +276,7 @@ class StreamingMessageStateManager {
             }
 
             pendingJobs.remove(messageId)?.cancel()
+            markdownHoldStartedAt.remove(messageId)
 
             val stateFlow = streamingStates[messageId]
             val buf = pendingBuffers.remove(messageId)
@@ -301,6 +316,7 @@ class StreamingMessageStateManager {
                 pendingBuffers.remove(messageId)
                 hasFirstFlushed.remove(messageId)
                 lastFlushTime.remove(messageId)
+                markdownHoldStartedAt.remove(messageId)
                 contentLengthTracker.remove(messageId)
                 contentVersions.remove(messageId)
                 streamingStates.remove(messageId)
@@ -325,6 +341,7 @@ class StreamingMessageStateManager {
                 hasFirstFlushed.clear()
                 finalizedMessages.clear()
                 lastFlushTime.clear()
+                markdownHoldStartedAt.clear()
                 contentLengthTracker.clear()
                 incrementalParseCaches.clear()
                 contentVersions.clear()
@@ -389,6 +406,7 @@ class StreamingMessageStateManager {
                 hasFirstFlushed.clear()
                 finalizedMessages.clear()
                 lastFlushTime.clear()
+                markdownHoldStartedAt.clear()
                 contentLengthTracker.clear()
                 incrementalParseCaches.clear()
                 contentVersions.clear()
