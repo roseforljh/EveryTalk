@@ -193,12 +193,12 @@ class AgentApprovalPersistenceTest {
         assertEquals(4, trace.size)
         assertEquals(
             "先检查",
-            (trace[0] as com.android.everytalk.data.DataClass.ExecutionTraceEvent.Reasoning).text,
+            (trace[0] as com.android.everytalk.data.DataClass.ExecutionTraceEvent.Content).text,
         )
         assertEquals(call.id, (trace[1] as com.android.everytalk.data.DataClass.ExecutionTraceEvent.Tool).step.id)
         assertEquals(
             "继续处理",
-            (trace[2] as com.android.everytalk.data.DataClass.ExecutionTraceEvent.Reasoning).text,
+            (trace[2] as com.android.everytalk.data.DataClass.ExecutionTraceEvent.Content).text,
         )
         val tool = trace[3] as com.android.everytalk.data.DataClass.ExecutionTraceEvent.Tool
         assertEquals(secondCall.id, tool.step.id)

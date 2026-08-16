@@ -19,7 +19,7 @@ class ToolLoopContextGuardTest {
     }
 
     @Test
-    fun `工具轮过渡正文进入思考并排在工具调用之前`() = runTest {
+    fun `工具前正文保留正文类型并排在工具调用之前`() = runTest {
         val emitted = mutableListOf<AppStreamEvent>()
         val buffer = ToolRoundContentBuffer { emitted += it }
         val toolCall = AppStreamEvent.ToolCall(
@@ -33,7 +33,7 @@ class ToolLoopContextGuardTest {
         buffer.finish(hasToolCalls = true)
 
         assertEquals(
-            listOf(AppStreamEvent.Reasoning("我先检查服务器："), toolCall),
+            listOf(AppStreamEvent.Content("我先检查服务器："), toolCall),
             emitted,
         )
     }
@@ -50,14 +50,14 @@ class ToolLoopContextGuardTest {
     }
 
     @Test
-    fun `最终轮长正文在轮次结束前开始流式输出`() = runTest {
+    fun `正文增量到达后立即流式输出`() = runTest {
         val emitted = mutableListOf<AppStreamEvent>()
         val buffer = ToolRoundContentBuffer { emitted += it }
         val first = AppStreamEvent.Content("a".repeat(40))
         val second = AppStreamEvent.Content("b".repeat(40))
 
         buffer.accept(first)
-        assertTrue(emitted.isEmpty())
+        assertEquals(listOf(first), emitted)
         buffer.accept(second)
 
         assertEquals(listOf(first, second), emitted)

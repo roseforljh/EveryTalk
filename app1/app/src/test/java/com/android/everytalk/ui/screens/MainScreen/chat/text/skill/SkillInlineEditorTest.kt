@@ -4,6 +4,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import com.android.everytalk.data.skill.MessageSkillReference
 import com.android.everytalk.data.skill.SkillSourceType
+import com.android.everytalk.data.database.entities.SkillInstallationEntity
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -18,6 +19,7 @@ class SkillInlineEditorTest {
 
     @Test
     fun `斜杠只在开头或空白后触发`() {
+        assertEquals("", findSkillSlashQuery(value("/"))?.query)
         assertEquals("pd", findSkillSlashQuery(value("请用 /pd"))?.query)
         assertEquals("pd", findSkillSlashQuery(value("/pd"))?.query)
         assertNull(findSkillSlashQuery(value("https://example.com/pdf")))
@@ -38,6 +40,34 @@ class SkillInlineEditorTest {
         val normalized = normalizeSkillEdit(inserted.value, value(deletedText, marker), inserted.references)
         assertEquals(emptyList<MessageSkillReference>(), normalized.references)
     }
+
+    @Test
+    fun `包名匹配会返回全部子 Skill 且不限制六条`() {
+        val skills = (1..8).map { index -> installation("child-$index", packageName = "Ponytail") }
+
+        val ranked = rankSkillCandidates(skills, "pon")
+
+        assertEquals(8, ranked.size)
+    }
+
+    private fun installation(name: String, packageName: String) = SkillInstallationEntity(
+        skillId = "local:$name",
+        name = name,
+        description = "说明",
+        sourceType = SkillSourceType.LOCAL_IMPORT.name,
+        sourceRepository = null,
+        sourcePath = ".",
+        currentHash = "hash-$name",
+        enabled = true,
+        invocationMode = "AUTO",
+        updateHash = null,
+        createdAt = 1,
+        updatedAt = 1,
+        lastUsedAt = null,
+        useCount = 0,
+        packageId = "local:package",
+        packageName = packageName,
+    )
 
     private fun value(text: String, cursor: Int = text.length) = TextFieldValue(text, TextRange(cursor))
 }

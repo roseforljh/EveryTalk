@@ -4,6 +4,7 @@ import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.ExecutionStep
 import com.android.everytalk.data.DataClass.ExecutionStepType
+import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.ModelParameters
 import com.android.everytalk.data.DataClass.ReasoningMode
 import com.android.everytalk.data.DataClass.Sender
@@ -1048,6 +1049,49 @@ class MessageItemsControllerStatusTest {
             .single().stableId
         assertEquals(streamingId, completedId)
         assertEquals("${messageId}_reasoning", completedId)
+    }
+
+    @Test
+    fun `新消息列表按正文过程正文顺序生成稳定节点`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        val tool = completedToolStep()
+        controller.stateHolder.messages.add(
+            Message(
+                id = "ordered-output",
+                text = "正文 1正文 2正文 3",
+                sender = Sender.AI,
+                contentStarted = true,
+                executionTrace = listOf(
+                    ExecutionTraceEvent.Content("正文 1"),
+                    ExecutionTraceEvent.Reasoning("思考 1"),
+                    ExecutionTraceEvent.Tool(tool),
+                    ExecutionTraceEvent.Content("正文 2"),
+                    ExecutionTraceEvent.Reasoning("思考 2"),
+                    ExecutionTraceEvent.Tool(tool.copy(id = "tool-2")),
+                    ExecutionTraceEvent.Content("正文 3"),
+                ),
+            )
+        )
+        Snapshot.sendApplyNotifications()
+
+        val items = controller.chatListItemsForTest()
+
+        assertEquals(
+            listOf("content", "process", "content", "process", "content", "footer"),
+            items.map { item ->
+                when (item) {
+                    is ChatListItem.AiMessageContentSegment -> "content"
+                    is ChatListItem.AiMessageProcessSegment -> "process"
+                    is ChatListItem.AiMessageFooter -> "footer"
+                    else -> item::class.java.simpleName
+                }
+            },
+        )
+        assertEquals(
+            listOf("正文 1", "正文 2", "正文 3"),
+            items.filterIsInstance<ChatListItem.AiMessageContentSegment>().map { it.text },
+        )
+        assertTrue(items.filterIsInstance<ChatListItem.AiMessageProcessSegment>().all { !it.replyIsStreaming })
     }
 
     private fun completedToolStep() = ExecutionStep(

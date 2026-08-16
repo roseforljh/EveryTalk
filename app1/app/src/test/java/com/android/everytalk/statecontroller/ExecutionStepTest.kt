@@ -47,6 +47,7 @@ class ExecutionStepTest {
             listOf("先读取系统配置。", "uname -a", "再检查磁盘占用。", "df -h"),
             trace.map { event ->
                 when (event) {
+                    is ExecutionTraceEvent.Content -> event.text
                     is ExecutionTraceEvent.Reasoning -> event.text
                     is ExecutionTraceEvent.Tool -> event.step.labels.single()
                 }
@@ -124,6 +125,7 @@ class ExecutionStepTest {
     fun `有序执行链可序列化并恢复`() {
         val converters = Converters()
         val trace = listOf(
+            ExecutionTraceEvent.Content("先说明目标。"),
             ExecutionTraceEvent.Reasoning("先检查系统。"),
             ExecutionTraceEvent.Tool(
                 executionStepForToolCall(

@@ -12,6 +12,8 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.android.everytalk.data.DataClass.ExecutionStep
 import com.android.everytalk.data.DataClass.ExecutionStepType
 import com.android.everytalk.data.DataClass.ExecutionTraceEvent
+import com.android.everytalk.ui.screens.MainScreen.chat.core.OrderedAiOutputSegment
+import com.android.everytalk.ui.screens.MainScreen.chat.core.orderedAiOutputSegments
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -108,6 +110,35 @@ class ThinkingExecutionTimelineGroupingTest {
                     is OrderedExecutionItem.Step -> item.entry.step.labels.single()
                 }
             },
+        )
+    }
+
+    @Test
+    fun `正文与过程按真实顺序分成多段`() {
+        val segments = orderedAiOutputSegments(
+            listOf(
+                ExecutionTraceEvent.Content("正文 1"),
+                ExecutionTraceEvent.Reasoning("思考 1"),
+                ExecutionTraceEvent.Tool(toolStep("1", "exec")),
+                ExecutionTraceEvent.Content("正文 2"),
+                ExecutionTraceEvent.Reasoning("思考 2"),
+                ExecutionTraceEvent.Tool(toolStep("2", "search")),
+                ExecutionTraceEvent.Content("正文 3"),
+            )
+        )
+
+        assertEquals(
+            listOf("正文 1", "process:2", "正文 2", "process:2", "正文 3"),
+            segments.map { segment ->
+                when (segment) {
+                    is OrderedAiOutputSegment.Content -> segment.text
+                    is OrderedAiOutputSegment.Process -> "process:${segment.events.size}"
+                }
+            },
+        )
+        assertEquals(
+            listOf(0, 2),
+            segments.filterIsInstance<OrderedAiOutputSegment.Process>().map { it.detailStartIndex },
         )
     }
 

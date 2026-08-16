@@ -95,6 +95,47 @@ class ThinkingUiScrollComposeTest {
     }
 
     @Test
+    fun `多段过程在整条回复流式结束后统一收起`() {
+        val replyStreaming = mutableStateOf(true)
+        composeRule.setContent {
+            MaterialTheme {
+                ReasoningToggleAndContent(
+                    currentMessageId = "reply-collapse-process",
+                    displayedReasoningText = "已完成的思考",
+                    executionTrace = listOf(ExecutionTraceEvent.Reasoning("已完成的思考")),
+                    isReasoningStreaming = false,
+                    isReasoningComplete = true,
+                    replyIsStreaming = replyStreaming.value,
+                    messageIsError = false,
+                    mainContentHasStarted = true,
+                    reasoningTextColor = Color.Black,
+                    reasoningToggleDotColor = Color.Black,
+                    onVisibilityChanged = {},
+                )
+            }
+        }
+
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("reasoning-chain-summaries").fetchSemanticsNode("")
+
+        composeRule.runOnIdle { replyStreaming.value = false }
+        composeRule.waitUntil(timeoutMillis = 2_000L) {
+            composeRule.onAllNodesWithTag("reasoning-chain-summaries")
+                .fetchSemanticsNodes()
+                .isEmpty()
+        }
+
+        val remainingNodes = composeRule
+            .onAllNodesWithTag("reasoning-chain-summaries")
+            .fetchSemanticsNodes()
+        assertTrue(
+            "收起后仍有节点：count=${remainingNodes.size}, " +
+                "heights=${remainingNodes.map { it.boundsInRoot.height }}",
+            remainingNodes.isEmpty(),
+        )
+    }
+
+    @Test
     fun `只有最新思考段扫描并显示最新三行`() {
         composeRule.mainClock.autoAdvance = false
         composeRule.setContent {

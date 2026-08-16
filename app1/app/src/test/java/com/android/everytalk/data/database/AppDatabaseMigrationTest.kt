@@ -678,6 +678,146 @@ class AppDatabaseMigrationTest {
         migrateHelper.close()
     }
 
+    @Test
+    fun `migration 22 to 23 removes skill audit fields and preserves installed data`() {
+        val createHelper = openHelper(
+            version = 22,
+            onCreate = { db ->
+                db.execSQL(
+                    """
+                    CREATE TABLE skill_installations (
+                        skillId TEXT NOT NULL PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL,
+                        sourceType TEXT NOT NULL, sourceRepository TEXT, sourcePath TEXT,
+                        currentHash TEXT NOT NULL, enabled INTEGER NOT NULL, invocationMode TEXT NOT NULL,
+                        auditStatus TEXT NOT NULL, updateHash TEXT, createdAt INTEGER NOT NULL,
+                        updatedAt INTEGER NOT NULL, lastUsedAt INTEGER, useCount INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE skill_versions (
+                        skillId TEXT NOT NULL, contentHash TEXT NOT NULL, versionLabel TEXT,
+                        rootPath TEXT NOT NULL, manifestJson TEXT NOT NULL, frontmatterJson TEXT NOT NULL,
+                        auditJson TEXT, installedAt INTEGER NOT NULL,
+                        PRIMARY KEY(skillId, contentHash),
+                        FOREIGN KEY(skillId) REFERENCES skill_installations(skillId) ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO skill_installations VALUES (
+                        'skill-1', '测试 Skill', '说明', 'REMOTE', 'https://github.com/a/b', 'skills/test',
+                        'hash-1', 0, 'AUTO', 'FAIL', 'hash-2', 10, 20, 15, 3
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO skill_versions VALUES (
+                        'skill-1', 'hash-1', 'v1', '/skills/hash-1', '[]', '{}', '{"status":"FAIL"}', 10
+                    )
+                    """.trimIndent(),
+                )
+            },
+        )
+        createHelper.writableDatabase.close()
+        createHelper.close()
+
+        val migrateHelper = openHelper(
+            version = 23,
+            onUpgrade = { db, oldVersion, newVersion ->
+                assertEquals(22, oldVersion)
+                assertEquals(23, newVersion)
+                AppDatabase.MIGRATION_22_23.migrate(db)
+            },
+        )
+        val db = migrateHelper.writableDatabase
+        db.query("SELECT currentHash, enabled, updateHash, useCount FROM skill_installations WHERE skillId = 'skill-1'").use {
+            assertTrue(it.moveToFirst())
+            assertEquals("hash-1", it.getString(0))
+            assertEquals(0, it.getInt(1))
+            assertEquals("hash-2", it.getString(2))
+            assertEquals(3L, it.getLong(3))
+        }
+        db.query("SELECT versionLabel, rootPath, installedAt FROM skill_versions WHERE skillId = 'skill-1'").use {
+            assertTrue(it.moveToFirst())
+            assertEquals("v1", it.getString(0))
+            assertEquals("/skills/hash-1", it.getString(1))
+            assertEquals(10L, it.getLong(2))
+        }
+        val installationColumns = mutableListOf<String>()
+        db.query("PRAGMA table_info(skill_installations)").use { while (it.moveToNext()) installationColumns += it.getString(1) }
+        val versionColumns = mutableListOf<String>()
+        db.query("PRAGMA table_info(skill_versions)").use { while (it.moveToNext()) versionColumns += it.getString(1) }
+        assertFalse(installationColumns.contains("auditStatus"))
+        assertFalse(versionColumns.contains("auditJson"))
+        db.query("PRAGMA foreign_key_list(skill_versions)").use {
+            assertTrue(it.moveToFirst())
+            assertEquals("skill_installations", it.getString(2))
+        }
+        db.close()
+        migrateHelper.close()
+    }
+
+    @Test
+    fun `migration 23 to 24 groups remote skills by repository`() {
+        val createHelper = openHelper(
+            version = 23,
+            onCreate = { db ->
+                db.execSQL(
+                    """
+                    CREATE TABLE skill_installations (
+                        skillId TEXT NOT NULL PRIMARY KEY, name TEXT NOT NULL, description TEXT NOT NULL,
+                        sourceType TEXT NOT NULL, sourceRepository TEXT, sourcePath TEXT,
+                        currentHash TEXT NOT NULL, enabled INTEGER NOT NULL, invocationMode TEXT NOT NULL,
+                        updateHash TEXT, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL,
+                        lastUsedAt INTEGER, useCount INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO skill_installations VALUES
+                    ('remote-1', 'ponytail', '说明', 'REMOTE', 'https://github.com/dietrichgebert/ponytail', 'skills/ponytail', 'h1', 1, 'AUTO', NULL, 1, 1, NULL, 0),
+                    ('remote-2', 'ponytail-review', '说明', 'REMOTE', 'https://github.com/dietrichgebert/ponytail', 'skills/ponytail-review', 'h2', 0, 'AUTO', NULL, 1, 1, NULL, 0),
+                    ('local-1', '我的 Skill', '说明', 'USER_CREATED', NULL, NULL, 'h3', 0, 'AUTO', NULL, 1, 1, NULL, 0)
+                    """.trimIndent(),
+                )
+            },
+        )
+        createHelper.writableDatabase.close()
+        createHelper.close()
+
+        val migrateHelper = openHelper(
+            version = 24,
+            onUpgrade = { db, oldVersion, newVersion ->
+                assertEquals(23, oldVersion)
+                assertEquals(24, newVersion)
+                AppDatabase.MIGRATION_23_24.migrate(db)
+            },
+        )
+        val db = migrateHelper.writableDatabase
+        db.query("SELECT packageId, packageName, enabled FROM skill_installations WHERE skillId = 'remote-1'").use {
+            assertTrue(it.moveToFirst())
+            assertEquals("remote:dietrichgebert/ponytail", it.getString(0))
+            assertEquals("dietrichgebert/ponytail", it.getString(1))
+            assertEquals(0, it.getInt(2))
+        }
+        db.query("SELECT COUNT(DISTINCT packageId) FROM skill_installations").use {
+            assertTrue(it.moveToFirst())
+            assertEquals(2, it.getInt(0))
+        }
+        db.query("SELECT packageId, enabled FROM skill_installations WHERE skillId = 'local-1'").use {
+            assertTrue(it.moveToFirst())
+            assertEquals("local-1", it.getString(0))
+            assertEquals(0, it.getInt(1))
+        }
+        db.close()
+        migrateHelper.close()
+    }
+
     private fun openHelper(
         version: Int,
         onCreate: (SupportSQLiteDatabase) -> Unit = {},
