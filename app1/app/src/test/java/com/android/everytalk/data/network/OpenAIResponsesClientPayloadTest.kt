@@ -13,6 +13,7 @@ import com.android.everytalk.data.DataClass.AgentAssistantApiMessage
 import com.android.everytalk.data.DataClass.AgentToolCallApiPart
 import com.android.everytalk.data.DataClass.ProviderTurnContinuation
 import com.android.everytalk.data.DataClass.ModelParameterProtocol
+import com.android.everytalk.data.computer.ComputerToolCatalog
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -74,6 +75,24 @@ class OpenAIResponsesClientPayloadTest {
         val second = buildResponsesPayloadForTest(request(tools = listOf(alpha, beta)))
 
         assertEquals(first, second)
+    }
+
+    @Test
+    fun `responses不会对含可选参数的Computer工具强制严格模式`() {
+        val payload = Json.parseToJsonElement(
+            buildResponsesPayloadForTest(request(tools = ComputerToolCatalog.definitions()))
+        ).jsonObject
+        val download = payload.getValue("tools").jsonArray
+            .map(JsonElement::jsonObject)
+            .first { it.getValue("name").jsonPrimitive.content == "download" }
+        val parameters = download.getValue("parameters").jsonObject
+
+        assertFalse(download.getValue("strict").jsonPrimitive.content.toBoolean())
+        assertTrue(parameters.getValue("properties").jsonObject.containsKey("suggested_name"))
+        assertFalse(
+            parameters.getValue("required").jsonArray
+                .any { it.jsonPrimitive.content == "suggested_name" }
+        )
     }
 
     @Test

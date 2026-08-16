@@ -268,14 +268,16 @@ object OpenAIResponsesClient {
                                     funcTyped["name"]?.let { put("name", it.toString()) }
                                     funcTyped["description"]?.let { put("description", it.toString()) }
                                     funcTyped["parameters"]?.let { put("parameters", anyToJsonElement(it)) }
-                                    put("strict", true)
                                 } else {
                                     // 已经是扁平格式
                                     toolDef["name"]?.let { put("name", it.toString()) }
                                     toolDef["description"]?.let { put("description", it.toString()) }
                                     toolDef["parameters"]?.let { put("parameters", anyToJsonElement(it)) }
-                                    put("strict", true)
                                 }
+                                // Computer 与 MCP 工具允许省略可选参数，部分工具还接受动态对象。
+                                // OpenAI 严格模式要求 properties 中所有字段都出现在 required，
+                                // 因此这里明确关闭严格模式，避免请求在模型执行前被 400 拒绝。
+                                put("strict", false)
                             }
                         }
                     }
