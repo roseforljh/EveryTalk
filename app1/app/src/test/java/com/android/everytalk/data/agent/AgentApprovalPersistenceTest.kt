@@ -74,6 +74,31 @@ class AgentApprovalPersistenceTest {
     }
 
     @Test
+    fun `超过CursorWindow上限的快照可分页恢复`() = runBlocking {
+        database.chatDao().insertSession(ChatSessionEntity("session-large", 1L, 1L, false))
+        val content = "大上下文😀" + "x".repeat(2_500_000)
+        val run = store.createRun(
+            sessionId = "session-large",
+            userMessageId = "user-large",
+            visibleAssistantMessageId = "assistant-large",
+            configIdSnapshot = "config-1",
+            request = ChatRequest(
+                messages = listOf(SimpleTextApiMessage("user-large", "user", content)),
+                provider = "OpenAI",
+                channel = "OpenAI Chat Completions",
+                apiAddress = "https://example.test/v1",
+                apiKey = "secret",
+                model = "model-1",
+            ),
+        )
+
+        val restored = AgentRunStore(database.agentDao()).restoreChatRequest(run, "fresh-secret")
+
+        assertEquals(content, (restored?.messages?.single() as SimpleTextApiMessage).content)
+        assertEquals("fresh-secret", restored.apiKey)
+    }
+
+    @Test
     fun `批准和拒绝都保留原toolCallId及冻结请求`() = runBlocking {
         seedRun()
         val record = approvalRecord()

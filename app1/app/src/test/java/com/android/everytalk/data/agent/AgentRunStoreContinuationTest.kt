@@ -141,7 +141,7 @@ class AgentRunStoreContinuationTest {
                 any(),
             )
         } returns Unit
-        val largeText = "含 Emoji 😀 " + "x".repeat(200_000)
+        val largeText = "含 Emoji 😀 " + "x".repeat(2_500_000)
         val largeRequest = request.copy(
             messages = listOf(
                 SimpleTextApiMessage(
@@ -163,12 +163,18 @@ class AgentRunStoreContinuationTest {
         assertNull(run.requestSnapshotJson)
         org.junit.Assert.assertTrue(chunksSlot.captured.size > 1)
         org.junit.Assert.assertTrue(chunksSlot.captured.all { it.payload.length <= 65_537 })
-        coEvery { dao.getRunSnapshotChunks(run.id) } returns chunksSlot.captured.map { it.payload }
+        coEvery { dao.getRunSnapshotChunkPage(run.id, any(), any()) } answers {
+            val afterChunkIndex = invocation.args[1] as Int
+            val limit = invocation.args[2] as Int
+            chunksSlot.captured.filter { it.chunkIndex > afterChunkIndex }.take(limit)
+        }
 
-        val restored = store.restoreChatRequest(run, "fresh-secret")
+        // 新 Store 模拟进程重启，确保走真实分页读取，不能命中创建时的内存缓存。
+        val restored = AgentRunStore(dao).restoreChatRequest(run, "fresh-secret")
 
         assertEquals(largeText, (restored?.messages?.single() as? SimpleTextApiMessage)?.content)
         assertEquals("fresh-secret", restored?.apiKey)
+        coVerify(atLeast = 5) { dao.getRunSnapshotChunkPage(run.id, any(), 8) }
     }
 
     private fun state(opaqueStateJson: String = Json.encodeToString(
