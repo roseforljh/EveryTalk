@@ -3,11 +3,13 @@ package com.android.everytalk.data.agent
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.ModelParameterProtocol
 import com.android.everytalk.data.DataClass.ProviderTurnContinuation
+import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.database.daos.AgentDao
 import com.android.everytalk.data.database.entities.ProviderContinuationStateEntity
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
+import io.mockk.slot
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
@@ -126,6 +128,47 @@ class AgentRunStoreContinuationTest {
         assertEquals("fresh-secret", restored?.apiKey)
         assertEquals(true, restored?.forceGoogleReasoningPrompt)
         org.junit.Assert.assertFalse(run.requestSnapshotJson.orEmpty().contains("fresh-secret"))
+    }
+
+    @Test
+    fun `新恢复快照分块落库并可完整还原`() = runBlocking {
+        val runSlot = slot<com.android.everytalk.data.database.entities.AgentRunEntity>()
+        val chunksSlot = slot<List<com.android.everytalk.data.database.entities.AgentRunSnapshotChunkEntity>>()
+        coEvery {
+            dao.startRunSupersedingWaitingApprovals(
+                capture(runSlot),
+                capture(chunksSlot),
+                any(),
+            )
+        } returns Unit
+        val largeText = "含 Emoji 😀 " + "x".repeat(200_000)
+        val largeRequest = request.copy(
+            messages = listOf(
+                SimpleTextApiMessage(
+                    id = "user-large",
+                    role = "user",
+                    content = largeText,
+                ),
+            ),
+        )
+
+        val run = store.createRun(
+            sessionId = "session-1",
+            userMessageId = "user-large",
+            visibleAssistantMessageId = "assistant-large",
+            configIdSnapshot = "config-1",
+            request = largeRequest,
+        )
+
+        assertNull(run.requestSnapshotJson)
+        org.junit.Assert.assertTrue(chunksSlot.captured.size > 1)
+        org.junit.Assert.assertTrue(chunksSlot.captured.all { it.payload.length <= 65_537 })
+        coEvery { dao.getRunSnapshotChunks(run.id) } returns chunksSlot.captured.map { it.payload }
+
+        val restored = store.restoreChatRequest(run, "fresh-secret")
+
+        assertEquals(largeText, (restored?.messages?.single() as? SimpleTextApiMessage)?.content)
+        assertEquals("fresh-secret", restored?.apiKey)
     }
 
     private fun state(opaqueStateJson: String = Json.encodeToString(

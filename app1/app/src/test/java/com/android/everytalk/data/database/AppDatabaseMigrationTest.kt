@@ -818,6 +818,90 @@ class AppDatabaseMigrationTest {
         migrateHelper.close()
     }
 
+    @Test
+    fun `migration 24 to 25 splits oversized agent snapshots without data loss`() {
+        val largeSnapshot = "{\"payload\":\"${"大".repeat(900_000)}\"}"
+        val createHelper = openHelper(
+            version = 24,
+            onCreate = { db ->
+                db.execSQL(
+                    """
+                    CREATE TABLE agent_runs (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        sessionId TEXT NOT NULL,
+                        userMessageId TEXT NOT NULL,
+                        visibleAssistantMessageId TEXT NOT NULL,
+                        configIdSnapshot TEXT,
+                        requestSnapshotJson TEXT,
+                        status TEXT NOT NULL,
+                        currentRequestOrdinal INTEGER NOT NULL,
+                        terminalReason TEXT,
+                        createdAt INTEGER NOT NULL,
+                        updatedAt INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO agent_runs (
+                        id, sessionId, userMessageId, visibleAssistantMessageId, configIdSnapshot,
+                        requestSnapshotJson, status, currentRequestOrdinal, terminalReason, createdAt, updatedAt
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """.trimIndent(),
+                    arrayOf<Any?>(
+                        "run-large",
+                        "session-1",
+                        "user-1",
+                        "assistant-1",
+                        "config-1",
+                        largeSnapshot,
+                        "COMPLETED",
+                        42,
+                        null,
+                        1L,
+                        2L,
+                    ),
+                )
+            },
+        )
+        createHelper.writableDatabase.close()
+        createHelper.close()
+
+        val migrateHelper = openHelper(
+            version = 25,
+            onUpgrade = { db, oldVersion, newVersion ->
+                assertEquals(24, oldVersion)
+                assertEquals(25, newVersion)
+                AppDatabase.MIGRATION_24_25.migrate(db)
+            },
+        )
+        val db = migrateHelper.writableDatabase
+
+        db.query("SELECT status, currentRequestOrdinal, requestSnapshotJson FROM agent_runs WHERE id = 'run-large'").use {
+            assertTrue(it.moveToFirst())
+            assertEquals("COMPLETED", it.getString(0))
+            assertEquals(42, it.getInt(1))
+            assertTrue(it.isNull(2))
+        }
+        db.query(
+            "SELECT COUNT(*), MAX(length(payload)) FROM agent_run_snapshot_chunks WHERE runId = 'run-large'",
+        ).use {
+            assertTrue(it.moveToFirst())
+            assertTrue(it.getInt(0) > 1)
+            assertTrue(it.getInt(1) <= 65_536)
+        }
+        val restored = StringBuilder(largeSnapshot.length)
+        db.query(
+            "SELECT payload FROM agent_run_snapshot_chunks WHERE runId = 'run-large' ORDER BY chunkIndex ASC",
+        ).use { cursor ->
+            while (cursor.moveToNext()) restored.append(cursor.getString(0))
+        }
+        assertEquals(largeSnapshot, restored.toString())
+
+        db.close()
+        migrateHelper.close()
+    }
+
     private fun openHelper(
         version: Int,
         onCreate: (SupportSQLiteDatabase) -> Unit = {},

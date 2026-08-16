@@ -63,6 +63,49 @@ class AiContextUsagePopupTest {
     }
 
     @Test
+    fun `上下文比例不受Agent和会话累计消耗影响`() {
+        val usage = TokenUsage(
+            inputTokens = 87_767,
+            outputTokens = 395,
+            totalTokens = 88_162,
+            isFinal = true,
+            source = TokenUsageSource.GEMINI,
+        )
+        val snapshot = ContextUsageSnapshot(
+            messageId = "large-agent-run",
+            systemPromptTokens = 0,
+            conversationTextTokens = 87_767,
+            mediaTokens = 0,
+            toolSchemaTokens = 0,
+            protocolOverheadTokens = 0,
+            reservedOutputTokens = 0,
+            contextWindowTokens = 128_000,
+        ).withActiveContextOverride(87_767).withAgentUsage(
+            usage = usage,
+            runInputTokens = 3_133_724,
+            runOutputTokens = 9_328,
+            runTotalTokens = 3_143_052,
+            requestCount = 42,
+            conversationTotalTokens = 9_618_888,
+        )
+
+        val summary = aiContextUsageSummary(
+            message = Message(
+                id = "large-agent-run",
+                text = "完成",
+                sender = Sender.AI,
+                tokenUsage = usage,
+                contextUsageSnapshot = snapshot,
+            ),
+            conversationTotalTokens = 9_618_888,
+        )
+
+        assertEquals(87_767L, summary?.currentContextTokens)
+        assertEquals(9_618_888L, summary?.conversationTotalTokens)
+        assertEquals(87_767f / 128_000f, summary?.fraction ?: -1f, 0.0001f)
+    }
+
+    @Test
     fun `目前总消耗累计整个会话并忽略重复消息`() {
         val first = usageMessage(id = "ai-1", inputTokens = 100, outputTokens = 20)
         val second = usageMessage(id = "ai-2", inputTokens = 200, outputTokens = 40)
@@ -208,9 +251,10 @@ class AiContextUsagePopupTest {
                 context.getString(R.string.context_usage_output),
             ),
         ).assertIsDisplayed()
-        composeRule.onNodeWithText("会话总消耗").assertIsDisplayed()
+        composeRule.onNodeWithText("会话累计消耗").assertIsDisplayed()
         composeRule.onNodeWithText("420").assertIsDisplayed()
-        composeRule.onNodeWithText("总上下文").assertIsDisplayed()
+        composeRule.onNodeWithText("当前上下文").assertIsDisplayed()
+        composeRule.onNodeWithText("上下文上限").assertIsDisplayed()
         composeRule.onNodeWithText("1,000").assertIsDisplayed()
     }
 

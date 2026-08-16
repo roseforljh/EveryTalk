@@ -296,6 +296,55 @@ class ThinkingUiScrollComposeTest {
     }
 
     @Test
+    fun `服务器操作默认收起且展开只显示最新三条`() {
+        val trace = List(5) { index ->
+            ExecutionTraceEvent.Tool(
+                ExecutionStep(
+                    id = "server-command-$index",
+                    type = ExecutionStepType.Agent,
+                    title = "运行 Agent",
+                    labels = listOf("command-$index"),
+                    completed = index < 4,
+                ),
+            )
+        }
+        composeRule.mainClock.autoAdvance = false
+        composeRule.setContent {
+            MaterialTheme {
+                ReasoningToggleAndContent(
+                    currentMessageId = "latest-server-commands",
+                    displayedReasoningText = "",
+                    executionTrace = trace,
+                    isReasoningStreaming = true,
+                    isReasoningComplete = false,
+                    messageIsError = false,
+                    mainContentHasStarted = false,
+                    reasoningTextColor = Color.Black,
+                    reasoningToggleDotColor = Color.Black,
+                    onVisibilityChanged = {},
+                )
+            }
+        }
+
+        composeRule.mainClock.advanceTimeBy(500L)
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("执行了 5 项服务器操作").fetchSemanticsNode("")
+        assertTrue(
+            composeRule.onAllNodesWithText("运行 Agent · command-4").fetchSemanticsNodes().isEmpty(),
+        )
+
+        composeRule.onNodeWithTag("reasoning-chain-summary-0").performClick()
+        composeRule.mainClock.advanceTimeBy(250L)
+        composeRule.waitForIdle()
+
+        assertTrue(composeRule.onAllNodesWithText("运行 Agent · command-0").fetchSemanticsNodes().isEmpty())
+        assertTrue(composeRule.onAllNodesWithText("运行 Agent · command-1").fetchSemanticsNodes().isEmpty())
+        composeRule.onNodeWithText("运行 Agent · command-2").fetchSemanticsNode("")
+        composeRule.onNodeWithText("运行 Agent · command-3").fetchSemanticsNode("")
+        composeRule.onNodeWithText("运行 Agent · command-4").fetchSemanticsNode("")
+    }
+
+    @Test
     fun `执行链增长时按真实顺序增加多段内容并可打开工具详情`() {
         composeRule.mainClock.autoAdvance = false
         lateinit var appendExecutionTrace: () -> Unit
@@ -496,7 +545,7 @@ class ThinkingUiScrollComposeTest {
     }
 
     @Test
-    fun `前导正文出现后工具运行状态仍持续显示`() {
+    fun `前导正文出现后工具组保持收起且可手动展开`() {
         composeRule.mainClock.autoAdvance = false
         composeRule.setContent {
             MaterialTheme {
@@ -527,6 +576,10 @@ class ThinkingUiScrollComposeTest {
         composeRule.waitForIdle()
 
         composeRule.onNodeWithTag("reasoning-inline-status").fetchSemanticsNode("")
+        assertTrue(composeRule.onAllNodesWithText("运行 Agent · exec").fetchSemanticsNodes().isEmpty())
+        composeRule.onNodeWithTag("reasoning-chain-summary-1").performClick()
+        composeRule.mainClock.advanceTimeBy(250L)
+        composeRule.waitForIdle()
         composeRule.onNodeWithText("运行 Agent · exec").fetchSemanticsNode("")
     }
 
