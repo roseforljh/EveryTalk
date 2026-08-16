@@ -83,6 +83,7 @@ import com.android.everytalk.statecontroller.deleteComputer
 import com.android.everytalk.statecontroller.disconnectComputer
 import com.android.everytalk.statecontroller.getConversationFullText
 import com.android.everytalk.statecontroller.observeComputerAuditEvents
+import com.android.everytalk.statecontroller.observeComputerActiveTaskCount
 import com.android.everytalk.statecontroller.observeComputerWorkspaces
 import com.android.everytalk.statecontroller.probeUpdatedComputerHostKey
 import com.android.everytalk.statecontroller.probeComputerReplacementHostKey
@@ -119,8 +120,10 @@ fun ComputerDetailScreen(
     val computer = computers.firstOrNull { it.id == computerId }
     val context = LocalContext.current
     val workspacesFlow = remember(computerId) { viewModel.observeComputerWorkspaces(computerId) }
+    val activeTaskCountFlow = remember(computerId) { viewModel.observeComputerActiveTaskCount(computerId) }
     val auditFlow = remember(computerId) { viewModel.observeComputerAuditEvents(computerId) }
     val workspaces by workspacesFlow.collectAsState(initial = emptyList())
+    val activeTaskCount by activeTaskCountFlow.collectAsState(initial = 0)
     val containerCount = remember(workspaces) {
         workspaces.count { workspace ->
             workspace.runMode == ComputerRunMode.CONTAINER && workspace.containerName != null
@@ -591,6 +594,7 @@ fun ComputerDetailScreen(
     ComputerDeleteDialog(
         computer = computer.takeIf { deleteDialogVisible },
         workspacePaths = workspaces.map { it.hostPath },
+        activeTaskCount = activeTaskCount,
         isBusy = busyAction == "delete",
         onDismiss = { if (busyAction == null) deleteDialogVisible = false },
         onDelete = { cleanupContainers, deleteFiles ->
@@ -1386,7 +1390,7 @@ private fun ComputerDeleteDialog(
                 Text(stringResource(R.string.computer_delete_body))
                 if (activeTaskCount > 0) {
                     Text(
-                        text = "警告：当前有 $activeTaskCount 个活动任务 (runningTask) 正在运行，删除服务器配置后这些任务将失去管理 (warning)",
+                        text = stringResource(R.string.computer_delete_active_tasks_warning, activeTaskCount),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
                     )

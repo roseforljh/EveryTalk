@@ -67,6 +67,7 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.foundation.text.appendInlineContent
 import androidx.compose.ui.text.Placeholder
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.PlaceholderVerticalAlign
 import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
@@ -388,26 +389,33 @@ private fun UserMessageWithSkillTags(
             parts.filterIsInstance<MessageContentPart.SkillReference>().forEachIndexed { index, part ->
                 val key = "skill-$index"
                 val name = part.reference.displayName
+                val placeholderWidth = (name.length.coerceIn(1, 24) * 7.5f + 16).sp
                 put(
                     key,
                     InlineTextContent(
                         placeholder = Placeholder(
-                            width = (name.length.coerceIn(1, 24) * 8 + 22).sp,
-                            height = 24.sp,
-                            placeholderVerticalAlign = PlaceholderVerticalAlign.TextCenter,
+                            width = placeholderWidth,
+                            height = 22.sp,
+                            placeholderVerticalAlign = PlaceholderVerticalAlign.Center,
                         ),
                     ) {
                         Surface(
                             shape = RoundedCornerShape(percent = 50),
-                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.16f),
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
                         ) {
-                            Text(
-                                text = name,
-                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 2.dp),
-                                color = contentColor,
-                                fontSize = 13.sp,
-                                maxLines = 1,
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .padding(horizontal = 7.dp, vertical = 1.dp),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                Text(
+                                    text = name,
+                                    color = contentColor,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium,
+                                    maxLines = 1,
+                                )
+                            }
                         }
                     },
                 )

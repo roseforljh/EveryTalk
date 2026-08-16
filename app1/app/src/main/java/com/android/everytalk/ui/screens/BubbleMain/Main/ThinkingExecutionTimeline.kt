@@ -167,6 +167,7 @@ private val TERMINAL_EXECUTION_STATUS_PREFIXES = listOf(
     "命令执行完成",
     "命令执行失败",
     "命令已取消",
+    "已由新消息取代",
 )
 
 internal fun latestReasoningSummary(reasoningText: String): String? {

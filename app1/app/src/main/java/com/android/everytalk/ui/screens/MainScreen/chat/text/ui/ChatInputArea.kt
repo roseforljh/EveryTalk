@@ -24,6 +24,7 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -87,6 +88,12 @@ import com.android.everytalk.data.computer.ComputerStatus
 import com.android.everytalk.models.ImageSourceOption
 import com.android.everytalk.models.MoreOptionsType
 import com.android.everytalk.models.SelectedMediaItem
+import com.android.everytalk.ui.components.dialog.AppDialogButtonShape
+import com.android.everytalk.ui.components.dialog.AppDialogShape
+import com.android.everytalk.ui.components.dialog.appDialogBorderColor
+import com.android.everytalk.ui.components.dialog.appDialogContainerColor
+import com.android.everytalk.ui.components.dialog.appDialogContentColor
+import com.android.everytalk.ui.components.dialog.appDialogTextFieldBorderColor
 import com.android.everytalk.ui.components.modifier.diffuseShadow
 import com.android.everytalk.ui.components.popup.AppFloatingCardPopup
 import kotlinx.coroutines.CancellationException
@@ -126,6 +133,7 @@ private data class PendingAgentAction(
     val selectComputer: Boolean,
     val enableAgentAfterSelection: Boolean,
     val requiresDisclosure: Boolean,
+    val confirmedWorkspaceRecreation: Boolean = false,
     val onCompleted: (() -> Unit)? = null,
     val onFailed: (() -> Unit)? = null,
 )
@@ -191,11 +199,17 @@ fun ChatInputArea(
     val computers by viewModel.computers.collectAsState()
     val computerSelections by viewModel.computerSelections.collectAsState()
     val currentConversationId by viewModel.currentConversationId.collectAsState()
+    val conversationFunctionStates by viewModel.stateHolder.conversationFunctionToggleStates.collectAsState()
+    val currentAgentResourceState = conversationFunctionStates[currentConversationId]?.agentResourceState
+    val detachedComputerName = conversationFunctionStates[currentConversationId]?.detachedComputerName
+    val detachedWorkspacePath = conversationFunctionStates[currentConversationId]?.detachedWorkspacePath
     val selectedComputerId = computerSelections[currentConversationId]
     val disclosureStore = remember(context) { ComputerDisclosureStore(context) }
     var pendingAgentAction by remember { mutableStateOf<PendingAgentAction?>(null) }
     var pendingAgentDisclosures by remember { mutableStateOf<Set<ComputerDisclosureKind>>(emptySet()) }
     var pendingApprovalForComputerSelection by remember { mutableStateOf<PendingAgentEnableApproval?>(null) }
+    var pendingWorkspaceRecreationAction by remember { mutableStateOf<PendingAgentAction?>(null) }
+    var showDeletedServerDialog by remember { mutableStateOf(false) }
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
@@ -224,12 +238,24 @@ fun ChatInputArea(
                 onFailure = action.onFailed,
             )
         } else {
-            viewModel.setAgentEnabled(true)
+            viewModel.setAgentEnabled(
+                enabled = true,
+                allowWorkspaceRecreation = action.confirmedWorkspaceRecreation,
+            )
             if (viewModel.isAgentEnabled.value) action.onCompleted?.invoke() else action.onFailed?.invoke()
         }
     }
 
     fun requestAgentAction(action: PendingAgentAction) {
+        if (
+            action.enableAgentAfterSelection &&
+            !action.selectComputer &&
+            !action.confirmedWorkspaceRecreation &&
+            currentAgentResourceState == AgentResourceState.WORKSPACE_DELETED
+        ) {
+            pendingWorkspaceRecreationAction = action
+            return
+        }
         val missing = if (action.requiresDisclosure) {
             disclosureStore.missingFor(action.computer)
         } else {
@@ -640,11 +666,13 @@ fun ChatInputArea(
                             isEnabled = isAgentEnabled,
                             isPreparing = isAgentPreparing,
                             hasSelectedComputer = selectedComputer != null,
+                            requiresWorkspaceRecreation = currentAgentResourceState == AgentResourceState.WORKSPACE_DELETED,
                         )
                     ) {
                         AgentToggleAction.DISABLE -> viewModel.setAgentEnabled(false)
                         AgentToggleAction.OPEN_SERVER_PICKER ->
                             openComputerSelection(enableAgentAfterSelection = true)
+                        AgentToggleAction.CONFIRM_WORKSPACE_RECREATION,
                         AgentToggleAction.ENABLE_SELECTED -> {
                             val computer = requireNotNull(selectedComputer)
                             if (computer.status != ComputerStatus.READY) {
@@ -731,7 +759,8 @@ fun ChatInputArea(
                 val activeTagCount =
                     (if (isWebSearchEnabled && effectiveWebSearchAvailable) 1 else 0) +
                         (if (isMcpEnabled) 1 else 0) +
-                        (if (isAgentEnabled) 1 else 0)
+                        (if (isAgentEnabled) 1 else 0) +
+                        (if (!isAgentEnabled && currentAgentResourceState != null) 1 else 0)
                 val hasActiveTags = activeTagCount > 0
 
                 // 合并保护：只有输入框完全回到原始状态（无文本、无媒体、无标签）
@@ -896,29 +925,21 @@ fun ChatInputArea(
                                 ),
                                 modifier = Modifier.width(inputFieldWidth),
                             ) {
-                                Column(
+                                LazyColumn(
                                     modifier = Modifier
                                         .fillMaxWidth()
-                                        .padding(horizontal = 4.dp, vertical = 4.dp)
+                                        .heightIn(max = 260.dp),
+                                    contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp),
+                                    verticalArrangement = Arrangement.spacedBy(1.dp),
+                                    state = skillSuggestionListState,
                                 ) {
-                                    if (skillCandidates.isEmpty()) {
-                                        EmptySkillSlashRow()
-                                    } else {
-                                        LazyColumn(
-                                            modifier = Modifier
-                                                .fillMaxWidth()
-                                                .heightIn(max = 260.dp),
-                                            state = skillSuggestionListState,
-                                        ) {
-                                            itemsIndexed(skillCandidates, key = { _, skill -> skill.skillId }) { index, skill ->
-                                                SkillCatalogSuggestionRow(
-                                                    skill = skill,
-                                                    selected = index == selectedSkillCandidateIndex,
-                                                    showPackageName = skill.name.lowercase() in duplicateSkillNames,
-                                                    onClick = { selectSkillCandidate(index) },
-                                                )
-                                            }
-                                        }
+                                    itemsIndexed(skillCandidates, key = { _, skill -> skill.skillId }) { index, skill ->
+                                        SkillCatalogSuggestionRow(
+                                            skill = skill,
+                                            selected = index == selectedSkillCandidateIndex,
+                                            showPackageName = skill.name.lowercase() in duplicateSkillNames,
+                                            onClick = { selectSkillCandidate(index) },
+                                        )
                                     }
                                 }
                             }
@@ -1194,6 +1215,28 @@ fun ChatInputArea(
                                                         openComputerSelection(enableAgentAfterSelection = false)
                                                     },
                                                 )
+                                            } else if (currentAgentResourceState != null) {
+                                                ActiveFunctionTag(
+                                                    iconRes = R.drawable.ic_gpt_terminal,
+                                                    label = stringResource(
+                                                        if (currentAgentResourceState == AgentResourceState.WORKSPACE_DELETED) {
+                                                            R.string.agent_resource_workspace_deleted
+                                                        } else {
+                                                            R.string.agent_resource_server_deleted
+                                                        },
+                                                    ),
+                                                    tint = MaterialTheme.colorScheme.error,
+                                                    lightBackground = MaterialTheme.colorScheme.errorContainer,
+                                                    closeContentDescription = stringResource(R.string.agent_resource_status_action),
+                                                    onClick = {
+                                                        if (currentAgentResourceState == AgentResourceState.SERVER_DELETED) {
+                                                            showDeletedServerDialog = true
+                                                        } else {
+                                                            toggleAgent()
+                                                        }
+                                                    },
+                                                    showCloseIcon = false,
+                                                )
                                             }
                                         }
                                     }
@@ -1316,13 +1359,51 @@ fun ChatInputArea(
         },
     )
 
-    agentEnableApprovalRequest?.takeIf { pendingApprovalForComputerSelection == null }?.let { request ->
+    pendingWorkspaceRecreationAction?.let { action ->
+        AgentWorkspaceRecreationDialog(
+            computerName = detachedComputerName ?: action.computer.displayName,
+            detachedWorkspacePath = detachedWorkspacePath,
+            onConfirm = {
+                pendingWorkspaceRecreationAction = null
+                requestAgentAction(action.copy(confirmedWorkspaceRecreation = true))
+            },
+            onDismiss = {
+                pendingWorkspaceRecreationAction = null
+                action.onFailed?.invoke()
+            },
+        )
+    }
+
+    if (showDeletedServerDialog && currentAgentResourceState == AgentResourceState.SERVER_DELETED) {
+        AgentServerDeletedDialog(
+            computerName = detachedComputerName,
+            detachedWorkspacePath = detachedWorkspacePath,
+            onChooseServer = {
+                showDeletedServerDialog = false
+                enableAgentAfterComputerSelection = true
+                showComputerSelectionPopup = true
+            },
+            onDismiss = { showDeletedServerDialog = false },
+        )
+    }
+
+    agentEnableApprovalRequest?.takeIf {
+        pendingApprovalForComputerSelection == null && pendingWorkspaceRecreationAction == null
+    }?.let { request ->
+        val dialogBg = appDialogContainerColor()
+        val dialogContent = appDialogContentColor()
+        val dialogBorder = appDialogBorderColor()
         AlertDialog(
             onDismissRequest = {},
-            title = { Text("开启 Agent？") },
+            modifier = Modifier.border(1.dp, dialogBorder, AppDialogShape),
+            shape = AppDialogShape,
+            containerColor = dialogBg,
+            titleContentColor = dialogContent,
+            textContentColor = dialogContent,
+            title = { Text("开启 Agent？", fontWeight = FontWeight.Bold) },
             text = { Text(request.reason) },
             confirmButton = {
-                TextButton(
+                Button(
                     onClick = {
                         val selectedComputer = computers.firstOrNull { it.id == selectedComputerId }
                             ?.takeIf { it.status == ComputerStatus.READY }
@@ -1350,10 +1431,15 @@ fun ChatInputArea(
                             )
                         }
                     },
-                ) { Text("允许") }
+                    shape = AppDialogButtonShape,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = dialogContent,
+                        contentColor = dialogBg,
+                    ),
+                ) { Text("允许", fontWeight = FontWeight.SemiBold) }
             },
             dismissButton = {
-                TextButton(
+                OutlinedButton(
                     onClick = {
                         pendingApprovalForComputerSelection = null
                         viewModel.respondToAgentEnableApproval(
@@ -1362,21 +1448,35 @@ fun ChatInputArea(
                             approved = false,
                         )
                     },
-                ) { Text("拒绝") }
+                    shape = AppDialogButtonShape,
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = Color.Transparent,
+                        contentColor = dialogContent,
+                    ),
+                    border = BorderStroke(1.dp, dialogBorder),
+                ) { Text("拒绝", fontWeight = FontWeight.SemiBold) }
             },
         )
     }
 
     skillSecretApprovalRequest?.let { request ->
+        val dialogBg = appDialogContainerColor()
+        val dialogContent = appDialogContentColor()
+        val dialogBorder = appDialogBorderColor()
         var secret by remember(request.approvalRequestId) { mutableStateOf("") }
         var rememberSecret by remember(request.approvalRequestId) { mutableStateOf(true) }
         AlertDialog(
             onDismissRequest = {},
-            title = { Text("提供 Skill 密钥？") },
+            modifier = Modifier.border(1.dp, dialogBorder, AppDialogShape),
+            shape = AppDialogShape,
+            containerColor = dialogBg,
+            titleContentColor = dialogContent,
+            textContentColor = dialogContent,
+            title = { Text("提供 Skill 密钥？", fontWeight = FontWeight.Bold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text("${request.skillName} 申请 ${request.name}")
-                    Text(request.reason, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(request.reason, color = dialogContent.copy(alpha = 0.72f))
                     OutlinedTextField(
                         value = secret,
                         onValueChange = { secret = it },
@@ -1391,7 +1491,7 @@ fun ChatInputArea(
                 }
             },
             confirmButton = {
-                TextButton(
+                Button(
                     enabled = secret.isNotEmpty(),
                     onClick = {
                         val chars = secret.toCharArray()
@@ -1403,18 +1503,33 @@ fun ChatInputArea(
                             rememberSecret,
                         )
                     },
-                ) { Text("继续") }
+                    shape = AppDialogButtonShape,
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = dialogContent,
+                        contentColor = dialogBg,
+                        disabledContainerColor = dialogContent.copy(alpha = 0.4f),
+                        disabledContentColor = dialogBg.copy(alpha = 0.4f),
+                    ),
+                ) { Text("继续", fontWeight = FontWeight.SemiBold) }
             },
             dismissButton = {
-                TextButton(onClick = {
-                    secret = ""
-                    viewModel.respondToSkillSecretApproval(
-                        request.runId,
-                        request.approvalRequestId,
-                        null,
-                        false,
-                    )
-                }) { Text("拒绝") }
+                OutlinedButton(
+                    onClick = {
+                        secret = ""
+                        viewModel.respondToSkillSecretApproval(
+                            request.runId,
+                            request.approvalRequestId,
+                            null,
+                            false,
+                        )
+                    },
+                    shape = AppDialogButtonShape,
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = Color.Transparent,
+                        contentColor = dialogContent,
+                    ),
+                    border = BorderStroke(1.dp, dialogBorder),
+                ) { Text("拒绝", fontWeight = FontWeight.SemiBold) }
             },
         )
     }

@@ -213,3 +213,107 @@ internal fun AgentDisclosureDialog(
         },
     )
 }
+
+/** 工作区被用户删除后，必须明确确认才允许为原会话创建新的空工作区。 */
+@Composable
+internal fun AgentWorkspaceRecreationDialog(
+    computerName: String?,
+    detachedWorkspacePath: String?,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
+        shape = AppDialogShape,
+        containerColor = appDialogContainerColor(),
+        titleContentColor = appDialogContentColor(),
+        textContentColor = appDialogContentColor(),
+        title = { Text(stringResource(R.string.agent_workspace_recreate_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    stringResource(
+                        R.string.agent_workspace_recreate_body,
+                        computerName ?: stringResource(R.string.agent_current_server),
+                    ),
+                )
+                detachedWorkspacePath?.let { path ->
+                    Text(
+                        text = stringResource(R.string.agent_workspace_recreate_files_kept, path),
+                        color = appDialogContentColor().copy(alpha = 0.72f),
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onConfirm,
+                shape = AppDialogButtonShape,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = appDialogContentColor(),
+                    contentColor = appDialogContainerColor(),
+                ),
+            ) { Text(stringResource(R.string.agent_workspace_recreate_confirm)) }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                shape = AppDialogButtonShape,
+                colors = ButtonDefaults.textButtonColors(contentColor = appDialogContentColor()),
+            ) { Text(stringResource(R.string.action_cancel)) }
+        },
+    )
+}
+
+/** 服务器记录删除后展示会话仍然保留，并把旧文件路径作为只读恢复线索交给用户。 */
+@Composable
+internal fun AgentServerDeletedDialog(
+    computerName: String?,
+    detachedWorkspacePath: String?,
+    onChooseServer: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
+        shape = AppDialogShape,
+        containerColor = appDialogContainerColor(),
+        titleContentColor = appDialogContentColor(),
+        textContentColor = appDialogContentColor(),
+        title = { Text(stringResource(R.string.agent_server_deleted_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                Text(
+                    stringResource(
+                        R.string.agent_server_deleted_body,
+                        computerName ?: stringResource(R.string.agent_current_server),
+                    ),
+                )
+                detachedWorkspacePath?.let { path ->
+                    Text(
+                        text = stringResource(R.string.agent_server_deleted_files_kept, path),
+                        color = appDialogContentColor().copy(alpha = 0.72f),
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onChooseServer,
+                shape = AppDialogButtonShape,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = appDialogContentColor(),
+                    contentColor = appDialogContainerColor(),
+                ),
+            ) { Text(stringResource(R.string.agent_server_deleted_choose)) }
+        },
+        dismissButton = {
+            TextButton(
+                onClick = onDismiss,
+                shape = AppDialogButtonShape,
+                colors = ButtonDefaults.textButtonColors(contentColor = appDialogContentColor()),
+            ) { Text(stringResource(R.string.action_cancel)) }
+        },
+    )
+}

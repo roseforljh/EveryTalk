@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -437,6 +438,7 @@ fun SkillDownloadScreen(navController: NavController) {
         val isInstalled = installedPackages.any { it.packageId == "remote:${skill.source}" }
         AlertDialog(
             modifier = Modifier
+                .widthIn(min = 300.dp, max = 340.dp)
                 .wrapContentHeight()
                 .border(1.dp, dialogBorder, AppDialogShape),
             shape = AppDialogShape,
@@ -446,7 +448,12 @@ fun SkillDownloadScreen(navController: NavController) {
             onDismissRequest = { if (!installing) selected = null },
             title = { Text(skill.name, fontSize = 20.sp, fontWeight = FontWeight.Bold) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 160.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     Text("来源：${skill.source}", style = MaterialTheme.typography.bodyMedium, color = dialogContent.copy(alpha = 0.8f))
                     Text("安装量：${formatInstalls(skill.installs)}", style = MaterialTheme.typography.bodyMedium, color = dialogContent.copy(alpha = 0.8f))
                     Text(if (skill.isOfficial) "skills.sh 官方标记" else "第三方维护", style = MaterialTheme.typography.bodyMedium, color = dialogContent.copy(alpha = 0.8f))
@@ -457,19 +464,6 @@ fun SkillDownloadScreen(navController: NavController) {
                     )
                     if (skill.githubRepository == null) {
                         Text("当前来源暂不支持 Android 端下载", color = MaterialTheme.colorScheme.error)
-                    }
-                    installError?.let { message ->
-                        Surface(
-                            color = MaterialTheme.colorScheme.errorContainer,
-                            contentColor = MaterialTheme.colorScheme.onErrorContainer,
-                            shape = RoundedCornerShape(12.dp),
-                        ) {
-                            Text(
-                                text = "安装失败：$message",
-                                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                        }
                     }
                     if (installing) {
                         Surface(
@@ -484,6 +478,22 @@ fun SkillDownloadScreen(navController: NavController) {
                                 Text(installStatusText, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
                                 Text("已用时 ${installElapsedSeconds} 秒", style = MaterialTheme.typography.labelSmall, color = dialogContent.copy(alpha = 0.65f))
                             }
+                        }
+                    } else {
+                        // 未在下载时使用等高空白占位，确保无论是否正在下载，对话框高度完全一致不跳动
+                        Spacer(modifier = Modifier.height(48.dp))
+                    }
+                    installError?.let { message ->
+                        Surface(
+                            color = MaterialTheme.colorScheme.errorContainer,
+                            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                            shape = RoundedCornerShape(12.dp),
+                        ) {
+                            Text(
+                                text = "安装失败：$message",
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
                         }
                     }
                 }

@@ -479,7 +479,6 @@ private fun ExecutionChainHeader(
                 textColor = textColor,
                 useSmallStyle = false,
                 modifier = Modifier
-                    .weight(1f)
                     .testTag("reasoning-inline-status-text"),
             )
         } else {
@@ -491,10 +490,10 @@ private fun ExecutionChainHeader(
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier
-                    .weight(1f)
                     .testTag("reasoning-inline-status-text"),
             )
         }
+        Spacer(Modifier.width(6.dp))
         Icon(
             imageVector = Icons.Filled.KeyboardArrowDown,
             contentDescription = stringResource(
@@ -502,10 +501,10 @@ private fun ExecutionChainHeader(
             ),
             tint = iconColor.copy(alpha = 0.72f),
             modifier = Modifier
-                .padding(start = 2.dp)
                 .size(18.dp)
                 .graphicsLayer { rotationZ = arrowRotation },
         )
+        Spacer(Modifier.weight(1f, fill = false))
     }
 }
 
@@ -725,7 +724,6 @@ private fun ExecutionToolGroup(
                     textColor = MaterialTheme.colorScheme.onSurfaceVariant,
                     useSmallStyle = false,
                     modifier = Modifier
-                        .weight(1f)
                         .testTag("reasoning-chain-summary-scanning"),
                 )
             } else {
@@ -736,7 +734,6 @@ private fun ExecutionToolGroup(
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier
-                        .weight(1f)
                         .testTag("reasoning-chain-summary-static"),
                 )
             }
@@ -751,6 +748,7 @@ private fun ExecutionToolGroup(
                     .size(18.dp)
                     .graphicsLayer { rotationZ = arrowRotation },
             )
+            Spacer(Modifier.weight(1f, fill = false))
         }
         AnimatedVisibility(
             visible = expanded,

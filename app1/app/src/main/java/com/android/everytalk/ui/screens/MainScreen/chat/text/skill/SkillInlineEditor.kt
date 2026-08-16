@@ -80,7 +80,7 @@ internal fun insertSkillReference(
     query: SkillSlashQuery,
     reference: MessageSkillReference,
 ): SkillEditState {
-    val replacement = if (references.any { it.skillId == reference.skillId }) "" else SKILL_TAG_MARKER.toString()
+    val replacement = if (references.any { it.skillId == reference.skillId }) "" else "${SKILL_TAG_MARKER} "
     val newText = value.text.replaceRange(query.start, query.end, replacement)
     val markerIndex = value.text.take(query.start).count { it == SKILL_TAG_MARKER }
     val newReferences = if (replacement.isEmpty()) {

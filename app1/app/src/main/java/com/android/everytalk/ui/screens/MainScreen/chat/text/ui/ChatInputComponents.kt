@@ -49,6 +49,7 @@ internal val ChatMcpColor = Color(0xFFFF6B00)
 internal enum class AgentToggleAction {
     DISABLE,
     OPEN_SERVER_PICKER,
+    CONFIRM_WORKSPACE_RECREATION,
     ENABLE_SELECTED,
 }
 
@@ -57,9 +58,11 @@ internal fun resolveAgentToggleAction(
     isEnabled: Boolean,
     isPreparing: Boolean,
     hasSelectedComputer: Boolean,
+    requiresWorkspaceRecreation: Boolean = false,
 ): AgentToggleAction = when {
     isEnabled || isPreparing -> AgentToggleAction.DISABLE
     !hasSelectedComputer -> AgentToggleAction.OPEN_SERVER_PICKER
+    requiresWorkspaceRecreation -> AgentToggleAction.CONFIRM_WORKSPACE_RECREATION
     else -> AgentToggleAction.ENABLE_SELECTED
 }
 
@@ -84,6 +87,7 @@ internal fun ActiveFunctionTag(
     closeContentDescription: String,
     onClick: () -> Unit,
     onLongClick: (() -> Unit)? = null,
+    showCloseIcon: Boolean = true,
 ) {
     val background = if (isSystemInDarkTheme()) Color(0xFF2A2A2A) else lightBackground
     Surface(
@@ -104,13 +108,15 @@ internal fun ActiveFunctionTag(
             )
             Spacer(Modifier.width(2.dp))
             Text(text = label, fontSize = 13.sp, color = tint, maxLines = 1)
-            Spacer(Modifier.width(2.dp))
-            Icon(
-                painter = painterResource(R.drawable.ic_close),
-                contentDescription = closeContentDescription,
-                tint = tint,
-                modifier = Modifier.size(12.dp),
-            )
+            if (showCloseIcon) {
+                Spacer(Modifier.width(2.dp))
+                Icon(
+                    painter = painterResource(R.drawable.ic_close),
+                    contentDescription = closeContentDescription,
+                    tint = tint,
+                    modifier = Modifier.size(12.dp),
+                )
+            }
         }
     }
 }
