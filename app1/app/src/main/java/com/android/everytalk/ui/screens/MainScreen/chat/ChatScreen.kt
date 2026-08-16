@@ -419,8 +419,8 @@ fun ChatScreen(
                         is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageSources -> it.messageId == messageId
                         is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMarkdownNode -> it.messageId == messageId
                         is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageReasoning -> it.message.id == messageId
-                        is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageContentSegment -> it.message.id == messageId
-                        is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageProcessSegment -> it.message.id == messageId
+                        is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageContentSegment -> it.sourceMessageId == messageId
+                        is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageProcessSegment -> it.messageId == messageId
                         else -> false
                     }
                 }

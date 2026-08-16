@@ -10,6 +10,7 @@ import com.android.everytalk.ui.components.streaming.INLINE_FORMULA_SCHEME
 import com.android.everytalk.ui.components.streaming.PreparedMarkdownDocument
 import com.android.everytalk.ui.components.streaming.PreparedMessage
 import com.android.everytalk.ui.components.streaming.StreamBlock
+import com.android.everytalk.ui.components.streaming.StreamingRenderState
 import org.intellij.markdown.MarkdownElementTypes
 import org.intellij.markdown.MarkdownTokenTypes
 import org.intellij.markdown.ast.ASTNode
@@ -146,26 +147,31 @@ sealed interface ChatListItem {
 
     /** 新版有序输出中的一段正式正文。 */
     data class AiMessageContentSegment(
+        val sourceMessageId: String,
         val message: Message,
         val segmentIndex: Int,
         val text: String,
         val isStreaming: Boolean,
+        val renderState: StreamingRenderState,
     ) : ChatListItem {
-        override val stableId: String = "${message.id}_content_$segmentIndex"
+        override val stableId: String = "${sourceMessageId}_content_$segmentIndex"
     }
 
     /** 新版有序输出中一段连续的思考和工具过程。 */
     data class AiMessageProcessSegment(
-        val message: Message,
+        val messageId: String,
         val segmentIndex: Int,
         val events: List<ExecutionTraceEvent>,
         val detailStartIndex: Int,
         val activityStatusText: String?,
         val replyIsStreaming: Boolean,
         val processIsActive: Boolean,
-        val isLastProcess: Boolean,
+        val webSearchResults: List<WebSearchResult>,
+        val messageIsError: Boolean,
+        val executionStartedAtMillis: Long,
+        val executionFinishedAtMillis: Long?,
     ) : ChatListItem {
-        override val stableId: String = "${message.id}_process_$segmentIndex"
+        override val stableId: String = "${messageId}_process_$segmentIndex"
     }
 
     data class AiMessageFooter(val message: Message) : ChatListItem {
@@ -212,39 +218,48 @@ internal sealed interface OrderedAiOutputSegment {
     ) : OrderedAiOutputSegment
 }
 
-/** 相邻正文合并，相邻思考和工具合并，两类事件互相形成真实边界。 */
-internal fun orderedAiOutputSegments(trace: List<ExecutionTraceEvent>): List<OrderedAiOutputSegment> =
-    buildList {
-        var processEventIndex = 0
-        trace.forEach { event ->
-            when (event) {
-                is ExecutionTraceEvent.Content -> {
-                    val previous = lastOrNull() as? OrderedAiOutputSegment.Content
-                    if (previous == null) {
-                        add(OrderedAiOutputSegment.Content(event.text))
-                    } else {
-                        this[lastIndex] = previous.copy(text = previous.text + event.text)
-                    }
-                }
-                is ExecutionTraceEvent.Reasoning,
-                is ExecutionTraceEvent.Tool,
-                -> {
-                    val previous = lastOrNull() as? OrderedAiOutputSegment.Process
-                    if (previous == null) {
-                        add(
-                            OrderedAiOutputSegment.Process(
-                                events = listOf(event),
-                                detailStartIndex = processEventIndex,
-                            )
-                        )
-                    } else {
-                        this[lastIndex] = previous.copy(events = previous.events + event)
-                    }
-                    processEventIndex++
-                }
+/** 相邻正文合并，相邻思考和工具合并；每个事件只处理一次，避免长工具链反复复制列表。 */
+internal fun orderedAiOutputSegments(trace: List<ExecutionTraceEvent>): List<OrderedAiOutputSegment> {
+    val result = mutableListOf<OrderedAiOutputSegment>()
+    var content = StringBuilder()
+    var processEvents = mutableListOf<ExecutionTraceEvent>()
+    var processStartIndex = 0
+    var processEventIndex = 0
+
+    fun flushContent() {
+        if (content.isNotEmpty()) {
+            result += OrderedAiOutputSegment.Content(content.toString())
+            content = StringBuilder()
+        }
+    }
+
+    fun flushProcess() {
+        if (processEvents.isNotEmpty()) {
+            result += OrderedAiOutputSegment.Process(processEvents.toList(), processStartIndex)
+            processEvents = mutableListOf()
+        }
+    }
+
+    trace.forEach { event ->
+        when (event) {
+            is ExecutionTraceEvent.Content -> {
+                flushProcess()
+                content.append(event.text)
+            }
+            is ExecutionTraceEvent.Reasoning,
+            is ExecutionTraceEvent.Tool,
+            -> {
+                flushContent()
+                if (processEvents.isEmpty()) processStartIndex = processEventIndex
+                processEvents += event
+                processEventIndex++
             }
         }
     }
+    flushContent()
+    flushProcess()
+    return result
+}
 
 internal fun expandStaticAiMessageItem(item: ChatListItem): List<ChatListItem> {
     val message: Message

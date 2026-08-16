@@ -641,28 +641,14 @@ fun ChatMessagesList(
                         }
 
                         is ChatListItem.AiMessageContentSegment -> {
-                            val segmentMessage = remember(
-                                item.message.id,
-                                item.segmentIndex,
-                                item.text,
-                            ) {
-                                item.message.copy(
-                                    id = "${item.message.id}_content_${item.segmentIndex}",
-                                    text = item.text,
-                                    reasoning = null,
-                                    executionSteps = emptyList(),
-                                    executionTrace = emptyList(),
-                                    webSearchResults = null,
-                                    imageUrls = null,
-                                )
-                            }
                             AiMessageItem(
-                                message = segmentMessage,
+                                message = item.message,
                                 text = item.text,
                                 maxWidth = bubbleMaxWidth,
                                 isStreaming = item.isStreaming,
                                 messageOutputType = item.message.outputType,
                                 viewModel = viewModel,
+                                streamingRenderStateOverride = item.renderState,
                                 onImageClick = { url ->
                                     val now = SystemClock.elapsedRealtime()
                                     if (now - lastImagePreviewAt > 500) {
@@ -685,31 +671,36 @@ fun ChatMessagesList(
                                     .filterIsInstance<ExecutionTraceEvent.Tool>()
                                     .map { it.step }
                             }
-                            val fullProcessTrace = remember(item.message.executionTrace) {
-                                item.message.executionTrace.filterNot { it is ExecutionTraceEvent.Content }
+                            val detailTraceProvider = remember(item.messageId, item.events, viewModel) {
+                                {
+                                    viewModel.getMessageById(item.messageId)
+                                        ?.executionTrace
+                                        ?.filterNot { it is ExecutionTraceEvent.Content }
+                                        ?: item.events
+                                }
                             }
                             val reasoningIsActive = item.processIsActive &&
-                                currentStreamingId == item.message.id &&
-                                reasoningCompleteMap[item.message.id] != true &&
+                                currentStreamingId == item.messageId &&
+                                reasoningCompleteMap[item.messageId] != true &&
                                 item.events.lastOrNull() is ExecutionTraceEvent.Reasoning
 
                             ReasoningToggleAndContent(
                                 modifier = Modifier.fillMaxWidth(),
-                                currentMessageId = "${item.message.id}_process_${item.segmentIndex}",
+                                currentMessageId = "${item.messageId}_process_${item.segmentIndex}",
                                 displayedReasoningText = reasoningText,
                                 activityStatusText = item.activityStatusText,
                                 executionSteps = processSteps,
                                 executionTrace = item.events,
-                                detailExecutionTrace = fullProcessTrace,
+                                detailExecutionTraceProvider = detailTraceProvider,
                                 detailInitialEventIndex = item.detailStartIndex,
-                                webSearchResults = item.message.webSearchResults.orEmpty(),
+                                webSearchResults = item.webSearchResults,
                                 isReasoningStreaming = reasoningIsActive,
                                 isReasoningComplete = !reasoningIsActive,
                                 replyIsStreaming = item.replyIsStreaming,
-                                messageIsError = item.message.isError && item.isLastProcess,
+                                messageIsError = item.messageIsError,
                                 mainContentHasStarted = false,
-                                executionStartedAtMillis = item.message.timestamp,
-                                executionFinishedAtMillis = item.message.executionFinishedAt,
+                                executionStartedAtMillis = item.executionStartedAtMillis,
+                                executionFinishedAtMillis = item.executionFinishedAtMillis,
                                 reasoningTextColor = MaterialTheme.chatColors.reasoningText,
                                 reasoningToggleDotColor = MaterialTheme.colorScheme.onSurface,
                                 onVisibilityChanged = {},

@@ -30,7 +30,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -285,6 +284,7 @@ internal fun ReasoningToggleAndContent(
     executionSteps: List<ExecutionStep> = emptyList(),
     executionTrace: List<ExecutionTraceEvent> = emptyList(),
     detailExecutionTrace: List<ExecutionTraceEvent> = executionTrace,
+    detailExecutionTraceProvider: (() -> List<ExecutionTraceEvent>)? = null,
     detailInitialEventIndex: Int = 0,
     webSearchResults: List<WebSearchResult> = emptyList(),
     isReasoningStreaming: Boolean,
@@ -430,7 +430,7 @@ internal fun ReasoningToggleAndContent(
             displayedReasoningText = displayedReasoningText,
             activityStatusText = activityStatusText,
             executionSteps = executionSteps,
-            executionTrace = detailExecutionTrace,
+            executionTrace = detailExecutionTraceProvider?.invoke() ?: detailExecutionTrace,
             webSearchResults = webSearchResults,
             isReasoningActive = processIsActive,
             messageIsError = messageIsError,
@@ -452,7 +452,7 @@ private fun ExecutionChainHeader(
     modifier: Modifier = Modifier,
 ) {
     val arrowRotation by animateFloatAsState(
-        targetValue = if (expanded) 180f else 0f,
+        targetValue = if (expanded) 0f else -90f,
         animationSpec = tween(EXECUTION_ARROW_ROTATION_MS, easing = FastOutSlowInEasing),
         label = "executionChainArrow",
     )
@@ -697,14 +697,13 @@ private fun ExecutionToolGroup(
         wasActive = active
     }
     val arrowRotation by animateFloatAsState(
-        targetValue = if (expanded) 180f else 0f,
+        targetValue = if (expanded) 0f else -90f,
         animationSpec = tween(EXECUTION_ARROW_ROTATION_MS, easing = FastOutSlowInEasing),
         label = "executionGroupArrow",
     )
     val summary = executionToolGroupSummary(group.entries)
 
     Column(modifier = Modifier.fillMaxWidth()) {
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.52f))
         Row(
             modifier = Modifier
                 .fillMaxWidth()

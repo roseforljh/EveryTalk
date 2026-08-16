@@ -419,23 +419,23 @@ fun ChatInputArea(
     // 防抖同步到 ViewModel（使用 PerformanceConfig 中定义的延迟）
     val localText = localTextFieldValue.text
     val slashQuery = findSkillSlashQuery(localTextFieldValue)
-    var dismissedSlashSignature by remember { mutableStateOf<String?>(null) }
-    val slashSignature = slashQuery?.let { "${it.start}:${it.end}:${it.query}" }
-    val activeSlashQuery = slashQuery?.takeUnless { slashSignature == dismissedSlashSignature }
+    var dismissedSlashQueryStart by remember { mutableStateOf<Int?>(null) }
+    val activeSlashQuery = slashQuery?.takeUnless { it.start == dismissedSlashQueryStart }
     val skillCandidates = remember(installedSkills, activeSlashQuery?.query) {
         activeSlashQuery?.let { rankSkillCandidates(installedSkills, it.query) }.orEmpty()
     }
     val duplicateSkillNames = remember(installedSkills) {
         installedSkills.groupingBy { it.name.lowercase() }.eachCount().filterValues { it > 1 }.keys
     }
-    var selectedSkillCandidateIndex by remember { mutableIntStateOf(0) }
+    var selectedSkillCandidateIndex by remember { mutableIntStateOf(-1) }
     val skillSuggestionListState = rememberLazyListState()
-    LaunchedEffect(slashSignature) {
-        // 查询词变化后始终回到最相关的第一项，行为与 CLI 斜杠菜单一致。
-        selectedSkillCandidateIndex = 0
+    LaunchedEffect(slashQuery?.query) {
+        selectedSkillCandidateIndex = -1
     }
     LaunchedEffect(selectedSkillCandidateIndex, skillCandidates.size) {
-        if (skillCandidates.isNotEmpty()) skillSuggestionListState.scrollToItem(selectedSkillCandidateIndex)
+        if (selectedSkillCandidateIndex in skillCandidates.indices) {
+            skillSuggestionListState.scrollToItem(selectedSkillCandidateIndex)
+        }
     }
 
     fun selectSkillCandidate(index: Int) {
@@ -452,11 +452,11 @@ fun ChatInputArea(
         val next = insertSkillReference(localTextFieldValue, skillReferences, query, reference)
         localTextFieldValue = next.value
         skillReferences = next.references
-        dismissedSlashSignature = null
+        dismissedSlashQueryStart = null
     }
 
     BackHandler(enabled = activeSlashQuery != null) {
-        dismissedSlashSignature = slashSignature
+        dismissedSlashQueryStart = slashQuery?.start
     }
     LaunchedEffect(localText) {
         // 取消上一次的同步任务
@@ -888,15 +888,19 @@ fun ChatInputArea(
                             AppFloatingCardPopup(
                                 visible = activeSlashQuery != null,
                                 popupPositionProvider = hostCommandPopupPositionProvider,
-                                onDismissRequest = { dismissedSlashSignature = slashSignature },
+                                onDismissRequest = { dismissedSlashQueryStart = slashQuery?.start },
                                 properties = PopupProperties(
                                     focusable = false,
                                     dismissOnBackPress = false,
-                                    dismissOnClickOutside = true,
+                                    dismissOnClickOutside = false,
                                 ),
                                 modifier = Modifier.width(inputFieldWidth),
                             ) {
-                                Column(modifier = Modifier.padding(5.dp)) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 4.dp, vertical = 4.dp)
+                                ) {
                                     if (skillCandidates.isEmpty()) {
                                         EmptySkillSlashRow()
                                     } else {
@@ -1080,7 +1084,7 @@ fun ChatInputArea(
                                 val next = normalizeSkillEdit(localTextFieldValue, newValue, skillReferences)
                                 localTextFieldValue = next.value
                                 skillReferences = next.references
-                                dismissedSlashSignature = null
+                                dismissedSlashQueryStart = null
                             },
                             visualTransformation = SkillTagVisualTransformation(
                                 references = skillReferences,
@@ -1093,20 +1097,31 @@ fun ChatInputArea(
                                     if (event.type != KeyEventType.KeyDown || activeSlashQuery == null) return@onPreviewKeyEvent false
                                     when (event.key) {
                                         Key.DirectionDown -> {
-                                            selectedSkillCandidateIndex = (selectedSkillCandidateIndex + 1)
-                                                .coerceAtMost((skillCandidates.size - 1).coerceAtLeast(0))
+                                            selectedSkillCandidateIndex = if (selectedSkillCandidateIndex < 0) {
+                                                0
+                                            } else {
+                                                (selectedSkillCandidateIndex + 1).coerceAtMost(skillCandidates.size - 1)
+                                            }
                                             true
                                         }
                                         Key.DirectionUp -> {
-                                            selectedSkillCandidateIndex = (selectedSkillCandidateIndex - 1).coerceAtLeast(0)
+                                            selectedSkillCandidateIndex = if (selectedSkillCandidateIndex <= 0) {
+                                                -1
+                                            } else {
+                                                selectedSkillCandidateIndex - 1
+                                            }
                                             true
                                         }
                                         Key.Enter, Key.NumPadEnter -> {
-                                            selectSkillCandidate(selectedSkillCandidateIndex)
-                                            true
+                                            if (selectedSkillCandidateIndex in skillCandidates.indices) {
+                                                selectSkillCandidate(selectedSkillCandidateIndex)
+                                                true
+                                            } else {
+                                                false
+                                            }
                                         }
                                         Key.Escape -> {
-                                            dismissedSlashSignature = slashSignature
+                                            dismissedSlashQueryStart = slashQuery.start
                                             true
                                         }
                                         else -> false
@@ -1416,8 +1431,8 @@ private fun SkillCatalogSuggestionRow(
     onClick: () -> Unit,
 ) {
     val isDark = isSystemInDarkTheme()
-    // 外层 28dp、内边距 5dp，23dp 才是同心圆角。
-    val shape = RoundedCornerShape(23.dp)
+    // 外层容器圆角为 28dp，内边距为 4dp，内列表项圆角为 24dp 达到同心内外圆角一致
+    val shape = RoundedCornerShape(24.dp)
     val selectedBg = if (isDark) Color.White.copy(alpha = 0.09f) else Color.Black.copy(alpha = 0.055f)
     val primaryTextColor = MaterialTheme.colorScheme.onSurface
     val secondaryTextColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f)

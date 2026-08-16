@@ -120,9 +120,12 @@ fun SkillScreen(
                     val installedRemoteHash = repository.packageVersionLabel(skillPackage.packageId)
                     val migratedSingleInstall = skillPackage.children.any { it.packageName.contains('/') }
                     if (migratedSingleInstall) {
-                        repository.importRemotePackage(remote) { detail, entry, target ->
-                            catalog.downloadRemotePackageFile(detail, entry, target)
-                        }
+                        repository.importRemotePackage(
+                            detail = remote,
+                            downloadArchive = { target, progress ->
+                                catalog.downloadRemotePackageArchive(remote, target, progress)
+                            },
+                        )
                     } else {
                         val update = remote.contentHash.takeIf { it != installedRemoteHash }
                         if (update != skillPackage.updateHash) {

@@ -93,6 +93,7 @@ import com.android.everytalk.ui.components.streaming.StreamBlockParser
 import com.android.everytalk.ui.components.streaming.UnifiedMarkdownRenderer
 import com.android.everytalk.ui.components.streaming.UnifiedMarkdownNodesRenderer
 import com.android.everytalk.ui.components.streaming.buildStreamingRenderState
+import com.android.everytalk.ui.components.streaming.StreamingRenderState
 import com.android.everytalk.ui.components.streaming.contentVersionForRendering
 import com.android.everytalk.ui.topanchor.RunTopAnchorReserveEngine
 import com.android.everytalk.ui.topanchor.TopAnchorConfig
@@ -126,6 +127,7 @@ fun AiMessageItem(
     staticDisplayText: String? = null,
     staticPageSources: List<WebSearchResult> = emptyList(),
     staticPreparedMessage: PreparedMessage? = null,
+    streamingRenderStateOverride: StreamingRenderState? = null,
     onImageClick: ((String) -> Unit)? = null
 ) {
     val shape = RectangleShape
@@ -162,15 +164,20 @@ fun AiMessageItem(
             contentColor = MaterialTheme.colorScheme.onSurface,
             shadowElevation = 0.dp
         ) {
-            val streamingRenderStateSource = remember(message.id, viewModel) {
-                viewModel.getStreamingRenderState(message.id)
+            val streamingRenderState = if (streamingRenderStateOverride != null) {
+                streamingRenderStateOverride
+            } else {
+                val streamingRenderStateSource = remember(message.id, viewModel) {
+                    viewModel.getStreamingRenderState(message.id)
+                }
+                val pauseAwareRenderState = remember(streamingRenderStateSource, viewModel) {
+                    streamingRenderStateSource.freezeWhileStreamingPaused(viewModel.isStreamingPaused)
+                }
+                val observedRenderState by pauseAwareRenderState.collectAsState(
+                    initial = streamingRenderStateSource.value
+                )
+                observedRenderState
             }
-            val pauseAwareRenderState = remember(streamingRenderStateSource, viewModel) {
-                streamingRenderStateSource.freezeWhileStreamingPaused(viewModel.isStreamingPaused)
-            }
-            val streamingRenderState by pauseAwareRenderState.collectAsState(
-                initial = streamingRenderStateSource.value
-            )
 
             val shouldPreferStreamingContent =
                 isStreaming ||

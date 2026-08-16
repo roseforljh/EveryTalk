@@ -458,9 +458,12 @@ fun SkillDetailScreen(navController: NavController, skillId: String) {
                         scope.launch {
                             message = runCatching {
                                 withContext(Dispatchers.IO) {
-                                    repository.importRemotePackage(detail) { packageDetail, entry, target ->
-                                        catalog.downloadRemotePackageFile(packageDetail, entry, target)
-                                    }
+                                    repository.importRemotePackage(
+                                        detail = detail,
+                                        downloadArchive = { target, progress ->
+                                            catalog.downloadRemotePackageArchive(detail, target, progress)
+                                        },
+                                    )
                                 }
                                 showUpdateDialog = false
                                 "Skill 已更新"

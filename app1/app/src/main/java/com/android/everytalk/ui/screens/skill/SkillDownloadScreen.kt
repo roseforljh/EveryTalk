@@ -76,7 +76,6 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextOverflow
@@ -84,12 +83,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.navigation.NavController
 import com.android.everytalk.R
-import com.android.everytalk.data.skill.RemoteSkillPackageCatalogItem
-import com.android.everytalk.data.skill.RemoteSkillPackageDetail
+import com.android.everytalk.data.skill.RemoteSkillCatalogItem
+import com.android.everytalk.data.skill.RemoteSkillInstallProgress
+import com.android.everytalk.data.skill.RemoteSkillInstallStage
 import com.android.everytalk.data.skill.SkillCatalogClient
 import com.android.everytalk.data.skill.SkillCatalogCollection
 import com.android.everytalk.data.skill.SkillRepository
-import com.android.everytalk.data.skill.groupRemoteSkillPackages
+import com.android.everytalk.data.skill.catalogPrefetchPages
+import com.android.everytalk.data.skill.toRemotePackageCatalogItem
 import com.android.everytalk.data.skill.toInstalledSkillPackages
 import com.android.everytalk.ui.components.dialog.AppDialogButtonShape
 import com.android.everytalk.ui.components.dialog.AppDialogShape
@@ -98,10 +99,16 @@ import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
 import com.android.everytalk.ui.components.floatingEdgeGradient
 import com.android.everytalk.ui.screens.computer.TopCircleButton
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.math.ceil
 
 @Composable
 fun SkillDownloadScreen(navController: NavController) {
@@ -114,62 +121,119 @@ fun SkillDownloadScreen(navController: NavController) {
     var query by remember { mutableStateOf("") }
     var isSearchExpanded by remember { mutableStateOf(false) }
     var collection by remember { mutableStateOf(SkillCatalogCollection.POPULAR) }
-    var skills by remember { mutableStateOf<List<RemoteSkillPackageCatalogItem>>(emptyList()) }
-    var selected by remember { mutableStateOf<RemoteSkillPackageCatalogItem?>(null) }
-    var detail by remember { mutableStateOf<RemoteSkillPackageDetail?>(null) }
-    var detailLoading by remember { mutableStateOf(false) }
-    var detailError by remember { mutableStateOf<String?>(null) }
+    var catalogItems by remember { mutableStateOf<List<RemoteSkillCatalogItem>>(emptyList()) }
+    var loadedPage by remember { mutableStateOf(0) }
+    var maxCatalogPage by remember { mutableStateOf(1) }
+    var hasMore by remember { mutableStateOf(false) }
+    var loadingMore by remember { mutableStateOf(false) }
+    var loadMoreError by remember { mutableStateOf<String?>(null) }
+    var loadMoreRetry by remember { mutableStateOf(0) }
+    var refreshRetry by remember { mutableStateOf(0) }
+    var refreshing by remember { mutableStateOf(false) }
+    var selected by remember { mutableStateOf<RemoteSkillCatalogItem?>(null) }
     var installError by remember { mutableStateOf<String?>(null) }
     var loading by remember { mutableStateOf(true) }
     var installing by remember { mutableStateOf(false) }
     var error by remember { mutableStateOf<String?>(null) }
     var usingOfflineCache by remember { mutableStateOf(false) }
+    var installStartedAt by remember { mutableStateOf(0L) }
+    var installElapsedSeconds by remember { mutableStateOf(0L) }
+    var installStatusText by remember { mutableStateOf("正在准备下载") }
+    val installProgress = remember { AtomicReference<RemoteSkillInstallProgress?>(null) }
 
-    val isDark = isSystemInDarkTheme()
     val dialogBg = appDialogContainerColor()
     val dialogBorder = appDialogBorderColor()
     val dialogContent = appDialogContentColor()
 
-    LaunchedEffect(query, collection) {
+    LaunchedEffect(query, collection, refreshRetry) {
         if (query.isNotBlank()) delay(250)
         loading = true
+        refreshing = true
         error = null
-        runCatching {
-            withContext(Dispatchers.IO) {
-                val items = if (query.isBlank()) catalog.collection(collection) else catalog.search(query)
-                groupRemoteSkillPackages(items) to catalog.usedOfflineCache
+        usingOfflineCache = false
+        catalogItems = emptyList()
+        loadedPage = 0
+        maxCatalogPage = 1
+        hasMore = false
+        loadMoreError = null
+        if (query.isBlank()) {
+            withContext(Dispatchers.IO) { catalog.cachedCollectionPage(collection, 1) }?.let { cached ->
+                catalogItems = cached.skills
+                loadedPage = cached.page
+                maxCatalogPage = catalogPageCount(cached.total, cached.pageSize)
+                hasMore = cached.hasMore
+                loading = false
             }
-        }.onSuccess { (items, offline) -> skills = items; usingOfflineCache = offline }
-            .onFailure { error = it.message ?: "云目录加载失败" }
-        loading = false
+        }
+        try {
+            if (query.isBlank()) {
+                val page = withContext(Dispatchers.IO) { catalog.collectionPage(collection, 1) }
+                catalogItems = page.skills
+                loadedPage = page.page
+                maxCatalogPage = catalogPageCount(page.total, page.pageSize)
+                hasMore = page.hasMore
+                usingOfflineCache = catalog.usedOfflineCache
+            } else {
+                catalogItems = withContext(Dispatchers.IO) { catalog.search(query) }
+            }
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (cause: Exception) {
+            if (catalogItems.isEmpty()) error = cause.message ?: "云目录加载失败"
+        } finally {
+            loading = false
+            refreshing = false
+        }
     }
 
-    LaunchedEffect(selected?.source) {
-        val item = selected ?: return@LaunchedEffect
-        detail = null
-        detailError = null
-        installError = null
-        detailLoading = true
-        runCatching { withContext(Dispatchers.IO) { catalog.packageDetail(item) } }
-            .onSuccess { detail = it }
-            .onFailure { detailError = it.message ?: "详情加载失败" }
-        detailLoading = false
+    /** 当前页变化时静默预取前后各三页。滚动加载只会读取已经写好的持久缓存。 */
+    LaunchedEffect(query, collection, loadedPage, maxCatalogPage, refreshing) {
+        if (query.isNotBlank() || loadedPage <= 0 || refreshing) return@LaunchedEffect
+        val pages = catalogPrefetchPages(loadedPage, maxCatalogPage)
+        withContext(Dispatchers.IO) {
+            coroutineScope {
+                pages.map { page ->
+                    async { runCatching { catalog.collectionPage(collection, page) } }
+                }.awaitAll()
+            }
+        }
     }
 
-    fun install(item: RemoteSkillPackageCatalogItem) {
+    LaunchedEffect(installing, installStartedAt) {
+        while (installing) {
+            installElapsedSeconds = ((System.currentTimeMillis() - installStartedAt) / 1_000L).coerceAtLeast(0)
+            installProgress.get()?.let { progress ->
+                installStatusText = when (progress.stage) {
+                    RemoteSkillInstallStage.DOWNLOADING -> formatDownloadProgress(progress)
+                    RemoteSkillInstallStage.INSTALLING -> "正在安装文件 ${progress.completed}/${progress.total}"
+                }
+            }
+            delay(250)
+        }
+    }
+
+    fun install(item: RemoteSkillCatalogItem) {
         installing = true
         installError = null
-        val knownDetail = detail
+        installStartedAt = System.currentTimeMillis()
+        installElapsedSeconds = 0
+        installStatusText = "正在读取远端版本"
+        installProgress.set(null)
+        val packageItem = item.toRemotePackageCatalogItem()
         scope.launch {
             runCatching {
+                val installDetail = withContext(Dispatchers.IO) { catalog.packageDetail(packageItem) }
                 withContext(Dispatchers.IO) {
-                    val installDetail = knownDetail ?: catalog.packageDetail(item)
-                    repository.importRemotePackage(installDetail) { packageDetail, entry, target ->
-                        catalog.downloadRemotePackageFile(packageDetail, entry, target)
-                    }
+                    repository.importRemotePackage(
+                        detail = installDetail,
+                        downloadArchive = { target, report ->
+                            catalog.downloadRemotePackageArchive(installDetail, target, report)
+                        },
+                        onProgress = installProgress::set,
+                    )
                 }
-            }.onSuccess {
-                Toast.makeText(context, "${item.name} 已安装，共 ${knownDetail?.skills?.size ?: "多个"} 个 Skill", Toast.LENGTH_SHORT).show()
+            }.onSuccess { installedPackage ->
+                Toast.makeText(context, "${item.name} 已安装，共 ${installedPackage.children.size} 个 Skill", Toast.LENGTH_SHORT).show()
                 selected = null
             }.onFailure { installError = it.message ?: "Skill 安装失败" }
             installing = false
@@ -198,8 +262,10 @@ fun SkillDownloadScreen(navController: NavController) {
                 if (usingOfflineCache) {
                     item {
                         Text(
-                            "当前离线，显示上次缓存的目录",
-                            modifier = Modifier.padding(vertical = 2.dp),
+                            "云目录刷新失败，当前显示缓存，点此重试",
+                            modifier = Modifier
+                                .padding(vertical = 2.dp)
+                                .clickable { refreshRetry += 1 },
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodySmall,
                         )
@@ -232,7 +298,7 @@ fun SkillDownloadScreen(navController: NavController) {
                             }
                         }
                     }
-                    skills.isEmpty() -> {
+                    catalogItems.isEmpty() -> {
                         item {
                             Box(
                                 modifier = Modifier
@@ -245,9 +311,61 @@ fun SkillDownloadScreen(navController: NavController) {
                         }
                     }
                     else -> {
-                        items(skills, key = RemoteSkillPackageCatalogItem::packageId) { skill ->
-                            val isInstalled = installedPackages.any { it.packageId == skill.packageId }
+                        items(catalogItems, key = { "${it.source}#${it.skillId}" }) { skill ->
+                            val isInstalled = installedPackages.any { it.packageId == "remote:${skill.source}" }
                             RemoteSkillCard(skill, isInstalled) { selected = skill }
+                        }
+                        if (query.isBlank() && hasMore && !refreshing) {
+                            item(key = "load-more-${collection.name}-${loadedPage + 1}") {
+                                LaunchedEffect(collection, loadedPage, loadMoreRetry) {
+                                    if (loadingMore) return@LaunchedEffect
+                                    loadingMore = true
+                                    loadMoreError = null
+                                    try {
+                                        val next = withContext(Dispatchers.IO) {
+                                            catalog.collectionPage(collection, loadedPage + 1)
+                                        }
+                                        catalogItems = (catalogItems + next.skills)
+                                            .distinctBy { it.source to it.skillId }
+                                        loadedPage = next.page
+                                        hasMore = next.hasMore
+                                        usingOfflineCache = usingOfflineCache || catalog.usedOfflineCache
+                                    } catch (cancelled: CancellationException) {
+                                        throw cancelled
+                                    } catch (cause: Exception) {
+                                        loadMoreError = cause.message ?: "更多 Skill 加载失败"
+                                    } finally {
+                                        loadingMore = false
+                                    }
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(64.dp)
+                                        .then(
+                                            if (loadMoreError != null) {
+                                                Modifier.clickable { loadMoreRetry += 1 }
+                                            } else {
+                                                Modifier
+                                            },
+                                        ),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    if (loadMoreError == null) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(24.dp),
+                                            color = dialogContent,
+                                            strokeWidth = 2.dp,
+                                        )
+                                    } else {
+                                        Text(
+                                            "加载更多失败，点此重试",
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            style = MaterialTheme.typography.bodySmall,
+                                        )
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -315,7 +433,7 @@ fun SkillDownloadScreen(navController: NavController) {
     }
 
     selected?.let { skill ->
-        val isInstalled = installedPackages.any { it.packageId == skill.packageId }
+        val isInstalled = installedPackages.any { it.packageId == "remote:${skill.source}" }
         AlertDialog(
             modifier = Modifier
                 .wrapContentHeight()
@@ -331,34 +449,11 @@ fun SkillDownloadScreen(navController: NavController) {
                     Text("来源：${skill.source}", style = MaterialTheme.typography.bodyMedium, color = dialogContent.copy(alpha = 0.8f))
                     Text("安装量：${formatInstalls(skill.installs)}", style = MaterialTheme.typography.bodyMedium, color = dialogContent.copy(alpha = 0.8f))
                     Text(if (skill.isOfficial) "skills.sh 官方标记" else "第三方维护", style = MaterialTheme.typography.bodyMedium, color = dialogContent.copy(alpha = 0.8f))
-                    when {
-                        detailLoading -> {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 20.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                CircularProgressIndicator(
-                                    modifier = Modifier.size(30.dp),
-                                    color = dialogContent,
-                                    strokeWidth = 2.5.dp,
-                                )
-                            }
-                        }
-                        detail != null -> {
-                            Text("哈希：${detail?.contentHash?.take(16)}", style = MaterialTheme.typography.bodySmall, color = dialogContent.copy(alpha = 0.7f))
-                            Text("包含 ${detail?.skills?.size ?: 0} 个 Skill", style = MaterialTheme.typography.bodySmall, color = dialogContent.copy(alpha = 0.7f))
-                            detail?.skills?.take(8)?.forEach { child ->
-                                Text(child.name, style = MaterialTheme.typography.labelSmall, color = dialogContent.copy(alpha = 0.6f))
-                            }
-                        }
-                        else -> Text(
-                            detailError ?: "详情加载失败",
-                            color = dialogContent.copy(alpha = 0.7f),
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                    }
+                    Text(
+                        "下载后会安装该来源仓库内的全部 Skill",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = dialogContent.copy(alpha = 0.7f),
+                    )
                     if (skill.githubRepository == null) {
                         Text("当前来源暂不支持 Android 端下载", color = MaterialTheme.colorScheme.error)
                     }
@@ -376,17 +471,18 @@ fun SkillDownloadScreen(navController: NavController) {
                         }
                     }
                     if (installing) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(vertical = 12.dp),
-                            contentAlignment = Alignment.Center,
+                        Surface(
+                            color = dialogContent.copy(alpha = 0.07f),
+                            contentColor = dialogContent,
+                            shape = RoundedCornerShape(12.dp),
                         ) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(28.dp),
-                                color = dialogContent,
-                                strokeWidth = 2.5.dp,
-                            )
+                            Column(
+                                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
+                                verticalArrangement = Arrangement.spacedBy(2.dp),
+                            ) {
+                                Text(installStatusText, style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Medium)
+                                Text("已用时 ${installElapsedSeconds} 秒", style = MaterialTheme.typography.labelSmall, color = dialogContent.copy(alpha = 0.65f))
+                            }
                         }
                     }
                 }
@@ -396,8 +492,23 @@ fun SkillDownloadScreen(navController: NavController) {
                     enabled = !installing && !isInstalled && skill.githubRepository != null,
                     onClick = { install(skill) },
                     shape = AppDialogButtonShape,
-                    colors = ButtonDefaults.buttonColors(containerColor = dialogContent, contentColor = dialogBg),
-                ) { Text(if (isInstalled) "已安装" else "下载并安装", fontWeight = FontWeight.SemiBold) }
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = dialogContent,
+                        contentColor = dialogBg,
+                        disabledContainerColor = dialogContent,
+                        disabledContentColor = dialogBg,
+                    ),
+                ) {
+                    if (installing) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(16.dp),
+                            color = dialogBg,
+                            strokeWidth = 2.dp,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                    }
+                    Text(if (isInstalled) "已安装" else if (installing) "下载中 ${installElapsedSeconds}s" else "下载并安装", fontWeight = FontWeight.SemiBold)
+                }
             },
             dismissButton = {
                 OutlinedButton(
@@ -570,7 +681,7 @@ private fun CatalogChip(label: String, selected: Boolean, onClick: () -> Unit) {
 
 @Composable
 private fun RemoteSkillCard(
-    skill: RemoteSkillPackageCatalogItem,
+    skill: RemoteSkillCatalogItem,
     installed: Boolean,
     onClick: () -> Unit,
 ) {
@@ -601,7 +712,7 @@ private fun RemoteSkillCard(
                 }
                 Text(skill.source, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Text(
-                    "包含 ${skill.matchedSkills.size} 个匹配 Skill · ${formatInstalls(skill.installs)} 次安装",
+                    "${formatInstalls(skill.installs)} 次安装",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                 )
@@ -609,6 +720,20 @@ private fun RemoteSkillCard(
             if (installed) Icon(Icons.Default.CheckCircle, "已安装", tint = if (isDark) Color.White else Color.Black)
         }
     }
+}
+
+private fun catalogPageCount(total: Int, pageSize: Int): Int =
+    if (pageSize <= 0) 1 else ceil(total.toDouble() / pageSize).toInt().coerceAtLeast(1)
+
+private fun formatDownloadProgress(progress: RemoteSkillInstallProgress): String {
+    val completed = formatBytes(progress.completed)
+    return if (progress.total > 0) "正在下载仓库 $completed/${formatBytes(progress.total)}" else "正在下载仓库 $completed"
+}
+
+private fun formatBytes(value: Long): String = when {
+    value >= 1024 * 1024 -> "%.1f MB".format(value / (1024.0 * 1024.0))
+    value >= 1024 -> "%.1f KB".format(value / 1024.0)
+    else -> "$value B"
 }
 
 private fun formatInstalls(value: Long): String = when {
