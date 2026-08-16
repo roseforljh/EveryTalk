@@ -241,17 +241,18 @@ object OpenAIResponsesClient {
             }
 
             // reasoning 参数（Responses API 专用）
-            val thinkingConfig = request.generationConfig?.thinkingConfig
-            putJsonObject("reasoning") {
-                put(
-                    "effort",
-                    if (thinkingConfig?.reasoningMode == com.android.everytalk.data.DataClass.ReasoningMode.DISABLED) {
-                        "none"
-                    } else {
-                        thinkingConfig?.reasoningEffort ?: com.android.everytalk.data.DataClass.DEFAULT_REASONING_EFFORT
-                    }
-                )
-                put("summary", "auto")
+            request.generationConfig?.thinkingConfig?.let { thinkingConfig ->
+                putJsonObject("reasoning") {
+                    put(
+                        "effort",
+                        if (thinkingConfig.reasoningMode == com.android.everytalk.data.DataClass.ReasoningMode.DISABLED) {
+                            "none"
+                        } else {
+                            thinkingConfig.reasoningEffort
+                        }
+                    )
+                    put("summary", "auto")
+                }
             }
 
             // 工具注入 (Responses API 扁平格式)

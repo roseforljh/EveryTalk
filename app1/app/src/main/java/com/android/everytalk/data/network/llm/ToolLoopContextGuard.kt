@@ -13,12 +13,16 @@ internal class ToolRoundContentBuffer(
 ) {
     private var pendingFinalContent: AppStreamEvent.ContentFinal? = null
     private var toolCallObserved = false
+    private var streamedContentObserved = false
 
     suspend fun accept(event: AppStreamEvent) {
         when (event) {
             is AppStreamEvent.Content,
             is AppStreamEvent.Text,
-            -> emitEvent(event)
+            -> {
+                streamedContentObserved = true
+                emitEvent(event)
+            }
             is AppStreamEvent.ContentFinal -> pendingFinalContent = event
             is AppStreamEvent.ToolCall -> {
                 toolCallObserved = true
@@ -30,8 +34,17 @@ internal class ToolRoundContentBuffer(
 
     suspend fun finish(hasToolCalls: Boolean) {
         val isToolRound = hasToolCalls || toolCallObserved
-        if (!isToolRound) pendingFinalContent?.let { emitEvent(it) }
+        val finalContent = pendingFinalContent
+        when {
+            // 部分兼容接口没有增量正文，只在结束事件给完整文字。
+            // 转成普通正文事件，确保工具轮里的过程描述不会被丢掉。
+            !streamedContentObserved && !finalContent?.text.isNullOrBlank() -> {
+                emitEvent(AppStreamEvent.Content(finalContent.text))
+            }
+            !isToolRound -> finalContent?.let { emitEvent(it) }
+        }
         pendingFinalContent = null
+        streamedContentObserved = false
     }
 }
 

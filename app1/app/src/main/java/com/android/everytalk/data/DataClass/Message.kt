@@ -89,15 +89,29 @@ fun List<MessageContentPart>.toApiText(fallback: String): String {
  */
 @Serializable
 sealed class ExecutionTraceEvent {
+    /** 该事件第一次进入执行链的时间。旧消息没有此字段时保持 null。 */
+    abstract val startedAtMillis: Long?
+
     /** 模型对用户可见的正式正文，相邻增量会合并为一段。 */
     @Serializable
-    data class Content(val text: String) : ExecutionTraceEvent()
+    data class Content(
+        val text: String,
+        override val startedAtMillis: Long? = null,
+    ) : ExecutionTraceEvent()
 
     @Serializable
-    data class Reasoning(val text: String) : ExecutionTraceEvent()
+    data class Reasoning(
+        val text: String,
+        override val startedAtMillis: Long? = null,
+    ) : ExecutionTraceEvent()
 
     @Serializable
-    data class Tool(val step: ExecutionStep) : ExecutionTraceEvent()
+    data class Tool(
+        val step: ExecutionStep,
+        override val startedAtMillis: Long? = null,
+        /** 工具返回结果的时间，用于恢复后保留真实耗时。 */
+        val finishedAtMillis: Long? = null,
+    ) : ExecutionTraceEvent()
 }
 
 // 将Sender枚举值映射到API角色字符串

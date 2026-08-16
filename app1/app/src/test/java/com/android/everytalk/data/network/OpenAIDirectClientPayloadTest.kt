@@ -7,6 +7,11 @@ import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.DataClass.AgentAssistantApiMessage
 import com.android.everytalk.data.DataClass.AgentToolCallApiPart
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
+import com.android.everytalk.data.computer.ComputerToolCatalog
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
@@ -66,6 +71,24 @@ class OpenAIDirectClientPayloadTest {
     }
 
     @Test
+    fun `Chat Completions保留Computer工具可选参数且不强开严格模式`() {
+        val payload = Json.parseToJsonElement(
+            buildPayload(request(tools = ComputerToolCatalog.definitions())),
+        ).jsonObject
+        val download = payload.getValue("tools").jsonArray
+            .map { it.jsonObject }
+            .first {
+                it.getValue("function").jsonObject.getValue("name").jsonPrimitive.content == "download"
+            }
+        val function = download.getValue("function").jsonObject
+        val schema = function.getValue("parameters").jsonObject
+
+        assertTrue(schema.getValue("properties").jsonObject.containsKey("suggested_name"))
+        assertFalse(schema.getValue("required").jsonArray.any { it.jsonPrimitive.content == "suggested_name" })
+        assertFalse(function.containsKey("strict"))
+    }
+
+    @Test
     fun `chat payload keeps user history unchanged and exposes skill protocol`() {
         val messages = listOf(
             SimpleTextApiMessage(id = "u1", role = "user", content = "第一轮财报分析"),
@@ -116,6 +139,28 @@ class OpenAIDirectClientPayloadTest {
         )
 
         assertTrue(payload.contains("\"reasoning_content\":\"需要先读取状态\""))
+    }
+
+    @Test
+    fun `official Chat Completions不发送第三方reasoning content字段`() {
+        val payload = buildPayload(
+            request(
+                apiAddress = "https://api.openai.com/v1",
+                model = "gpt-5.6",
+                messages = listOf(
+                    SimpleTextApiMessage(role = "user", content = "检查服务"),
+                    AgentAssistantApiMessage(
+                        reasoning = "需要先读取状态",
+                        toolCalls = listOf(
+                            AgentToolCallApiPart("call-1", "exec", JsonObject(emptyMap())),
+                        ),
+                    ),
+                ),
+            )
+        )
+
+        assertFalse(payload.contains("reasoning_content"))
+        assertTrue(payload.contains("\"tool_calls\""))
     }
 
     private fun buildPayload(request: ChatRequest): String {

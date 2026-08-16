@@ -24,6 +24,7 @@ import java.util.UUID
 
 object GeminiDirectClient {
     private const val TAG = "GeminiDirectClient"
+    private const val LOCAL_TOOL_CALL_ID_PREFIX = "fc_local_"
     
     @OptIn(ExperimentalCoroutinesApi::class)
     internal fun streamSingleTurn(
@@ -190,7 +191,39 @@ object GeminiDirectClient {
                 mergedMessages.filterIsInstance<AgentAssistantApiMessage>().lastOrNull()
             }
             putJsonArray("contents") {
-                mergedMessages.forEach { message ->
+                var messageIndex = 0
+                while (messageIndex < mergedMessages.size) {
+                    val message = mergedMessages[messageIndex]
+                    if (message is AgentToolResultApiMessage) {
+                        val toolResults = mergedMessages
+                            .drop(messageIndex)
+                            .takeWhile { it is AgentToolResultApiMessage }
+                            .filterIsInstance<AgentToolResultApiMessage>()
+                        // Gemini 官方协议要求工具结果作为 user Content 返回。
+                        // 并行调用的结果必须放在同一条 Content 中，避免生成连续 user 消息。
+                        addJsonObject {
+                            put("role", "user")
+                            putJsonArray("parts") {
+                                toolResults.forEach { result ->
+                                    addJsonObject {
+                                        putJsonObject("functionResponse") {
+                                            put("name", result.toolName)
+                                            result.toolCallId
+                                                .takeUnless(::isLocalGeminiToolCallId)
+                                                ?.let { put("id", it) }
+                                            putJsonObject("response") {
+                                                if (result.isError) put("error", result.content)
+                                                else put("result", result.content)
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        messageIndex += toolResults.size
+                        continue
+                    }
+
                     if (message === replacedAssistant) {
                         add(checkNotNull(nativeAssistantContent))
                     } else addJsonObject {
@@ -241,22 +274,16 @@ object GeminiDirectClient {
                                             putJsonObject("functionCall") {
                                                 put("name", call.name)
                                                 put("args", call.arguments)
+                                                call.id.takeUnless(::isLocalGeminiToolCallId)?.let { put("id", it) }
                                             }
                                         }
                                     }
                                 }
-                                is AgentToolResultApiMessage -> addJsonObject {
-                                    putJsonObject("functionResponse") {
-                                        put("name", message.toolName)
-                                        putJsonObject("response") {
-                                            if (message.isError) put("error", message.content)
-                                            else put("result", message.content)
-                                        }
-                                    }
-                                }
+                                is AgentToolResultApiMessage -> error("工具结果应在前面按连续批次处理")
                             }
                         }
                     }
+                    messageIndex++
                 }
             }
             
@@ -324,9 +351,9 @@ object GeminiDirectClient {
                                     addJsonObject {
                                         put("name", name)
                                         put("description", description)
-                                        if (parameters != null) {
-                                            put("parameters", convertToolParametersForGemini(parameters))
-                                        }
+                                        // parametersJsonSchema 接受完整 JSON Schema，保留可选字段、
+                                        // anyOf 和 additionalProperties，避免有损转换后改变工具含义。
+                                        if (parameters != null) put("parametersJsonSchema", convertToJsonElement(parameters))
                                     }
                                     Log.d(TAG, "🔧 添加 MCP 工具: $name")
                                 }
@@ -399,110 +426,7 @@ object GeminiDirectClient {
         return if (markerIndex >= 0) value.substring(markerIndex + marker.length) else value
     }
     
-    // Gemini 完全不支持、需要直接移除的字段
-    private val REMOVE_SCHEMA_KEYS = setOf(
-        "propertyNames", "dependentSchemas", "dependentRequired", 
-        "unevaluatedProperties", "unevaluatedItems", 
-        "contentMediaType", "contentEncoding",
-        "\$schema", "\$id", "\$anchor", "\$dynamicRef",
-        "\$dynamicAnchor", "\$vocabulary", "\$comment",
-        "not", "if", "then", "else"
-    )
-    
-    // 需要特殊转换的字段
-    private val CONVERT_SCHEMA_KEYS = setOf(
-        "const", "anyOf", "any_of", "oneOf", "one_of", 
-        "allOf", "all_of", "\$ref", "\$defs"
-    )
-    
-    /**
-     * 转换 JSON Schema 为 Gemini 兼容格式
-     * - const -> enum
-     * - anyOf/oneOf -> 取第一个有效类型
-     * - allOf -> 合并所有 schema
-     * - $ref/$defs -> 尝试内联解析
-     */
-    private fun sanitizeSchemaForGemini(element: JsonElement, defs: JsonObject? = null): JsonElement = when (element) {
-        is JsonObject -> transformSchemaObject(element, defs ?: element["\$defs"]?.jsonObjectOrNull)
-        is JsonArray -> buildJsonArray { element.forEach { add(sanitizeSchemaForGemini(it, defs)) } }
-        else -> element
-    }
-    
-    private fun transformSchemaObject(obj: JsonObject, defs: JsonObject?): JsonObject {
-        val addedKeys = mutableSetOf<String>()
-        
-        return buildJsonObject {
-            // 先处理 $ref 引用
-            obj["\$ref"]?.jsonPrimitive?.contentOrNull?.let { ref ->
-                val resolved = resolveRef(ref, defs)
-                if (resolved != null) {
-                    val sanitized = sanitizeSchemaForGemini(resolved, defs).jsonObject
-                    sanitized.forEach { (k, v) -> put(k, v); addedKeys.add(k) }
-                    return@buildJsonObject
-                }
-            }
-            
-            // 处理 const -> enum
-            obj["const"]?.let { constVal ->
-                put("enum", buildJsonArray { add(constVal) })
-                addedKeys.add("enum")
-                Log.d(TAG, "转换 const -> enum: $constVal")
-            }
-            
-            // 处理 anyOf/oneOf -> 取第一个有效 schema
-            val anyOfKey = listOf("anyOf", "any_of", "oneOf", "one_of").firstOrNull { obj.containsKey(it) }
-            if (anyOfKey != null) {
-                obj[anyOfKey]?.jsonArrayOrNull?.firstOrNull()?.jsonObjectOrNull?.let { first ->
-                    val sanitized = sanitizeSchemaForGemini(first, defs).jsonObject
-                    sanitized.forEach { (k, v) -> 
-                        if (k !in addedKeys) { put(k, v); addedKeys.add(k) }
-                    }
-                    Log.d(TAG, "转换 $anyOfKey -> 使用第一个 schema")
-                }
-            }
-            
-            // 处理 allOf -> 合并所有 schema
-            val allOfKey = listOf("allOf", "all_of").firstOrNull { obj.containsKey(it) }
-            if (allOfKey != null) {
-                obj[allOfKey]?.jsonArrayOrNull?.forEach { item ->
-                    item.jsonObjectOrNull?.let { subSchema ->
-                        val sanitized = sanitizeSchemaForGemini(subSchema, defs).jsonObject
-                        sanitized.forEach { (k, v) -> 
-                            if (k !in addedKeys) { put(k, v); addedKeys.add(k) }
-                        }
-                    }
-                }
-                Log.d(TAG, "转换 $allOfKey -> 合并 schema")
-            }
-            
-            // 复制其他字段，递归处理嵌套
-            obj.forEach { (key, value) ->
-                if (key in REMOVE_SCHEMA_KEYS || key in CONVERT_SCHEMA_KEYS || key in addedKeys) return@forEach
-                put(key, sanitizeSchemaForGemini(value, defs))
-            }
-        }
-    }
-    
-    private fun resolveRef(ref: String, defs: JsonObject?): JsonElement? {
-        if (defs == null) return null
-        // 格式: "#/$defs/SomeName" 或 "#/definitions/SomeName"
-        val parts = ref.removePrefix("#/").split("/")
-        if (parts.size >= 2 && (parts[0] == "\$defs" || parts[0] == "definitions")) {
-            return defs[parts[1]]
-        }
-        return null
-    }
-    
-    private val JsonElement.jsonObjectOrNull: JsonObject?
-        get() = this as? JsonObject
-    
-    private val JsonElement.jsonArrayOrNull: JsonArray?
-        get() = this as? JsonArray
-    
-    private fun convertToolParametersForGemini(value: Any?): JsonElement {
-        val rawElement = convertToJsonElement(value)
-        return sanitizeSchemaForGemini(rawElement)
-    }
+    private fun isLocalGeminiToolCallId(id: String): Boolean = id.startsWith(LOCAL_TOOL_CALL_ID_PREFIX)
     
     /**
      * 解析结果，用于在工具循环中传递信息
@@ -623,7 +547,11 @@ object GeminiDirectClient {
                                             val name = fcObj["name"]?.jsonPrimitive?.contentOrNull ?: return@let
                                             val args = fcObj["args"]?.jsonObject ?: JsonObject(emptyMap())
                                             hasToolCalls = true
-                                            val toolCallId = "fc_${UUID.randomUUID()}"
+                                            // Gemini 3 要求 FunctionResponse 原样带回服务端 FunctionCall.id。
+                                            // 旧模型可能没有 id，本地 ID 只供 AgentLoop 关联，不能伪装成服务端 ID 回传。
+                                            val toolCallId = fcObj["id"]?.jsonPrimitive?.contentOrNull
+                                                ?.takeIf(String::isNotBlank)
+                                                ?: "$LOCAL_TOOL_CALL_ID_PREFIX${UUID.randomUUID()}"
                                             onToolCall(GeminiToolCall(toolCallId, name, args))
                                             emitEvent(AppStreamEvent.ToolCall(
                                                 id = toolCallId,

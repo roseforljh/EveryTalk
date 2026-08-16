@@ -104,6 +104,27 @@ class ModelParametersTest {
         assertEquals(true, result.getValue("enable_thinking").jsonPrimitive.content.toBoolean())
     }
 
+    @Test
+    fun `未知OpenAI兼容模型不会自动注入推理参数`() {
+        val result = ModelParameters().openAICompatibleRequestParameters("custom-chat-model")
+
+        assertEquals(emptyMap<String, kotlinx.serialization.json.JsonElement>(), result)
+    }
+
+    @Test
+    fun `已识别推理模型保留默认推理参数`() {
+        val result = ModelParameters().openAICompatibleRequestParameters("gpt-5.6")
+
+        assertEquals("medium", result.getValue("reasoning_effort").jsonPrimitive.content)
+    }
+
+    @Test
+    fun `未知Responses模型不生成reasoning配置`() {
+        val thinking = ModelParameters().toThinkingConfig("Codex", "custom-response-model")
+
+        assertNull(thinking)
+    }
+
     @Test(expected = IllegalArgumentException::class)
     fun `openai compatible cannot override managed fields`() {
         ModelParameters(

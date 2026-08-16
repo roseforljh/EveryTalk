@@ -15,6 +15,7 @@ import com.android.everytalk.data.DataClass.AgentToolCallApiPart
 import com.android.everytalk.data.DataClass.AgentToolResultApiMessage
 import com.android.everytalk.data.DataClass.ProviderTurnContinuation
 import com.android.everytalk.data.DataClass.ModelParameterProtocol
+import com.android.everytalk.data.computer.ComputerToolCatalog
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.respond
@@ -86,6 +87,23 @@ class AnthropicDirectClientTest {
         val tool = payload.getValue("tools").jsonArray.single().jsonObject
         assertEquals("weather", tool.getValue("name").jsonPrimitive.content)
         assertNotNull(tool["input_schema"])
+    }
+
+    @Test
+    fun `Computer工具按Anthropic input schema原样发送可选参数`() {
+        val payload = Json.parseToJsonElement(
+            AnthropicDirectClient.buildAnthropicPayload(
+                request(tools = ComputerToolCatalog.definitions()),
+            ),
+        ).jsonObject
+        val download = payload.getValue("tools").jsonArray
+            .map { it.jsonObject }
+            .first { it.getValue("name").jsonPrimitive.content == "download" }
+        val schema = download.getValue("input_schema").jsonObject
+
+        assertTrue(schema.getValue("properties").jsonObject.containsKey("suggested_name"))
+        assertFalse(schema.getValue("required").jsonArray.any { it.jsonPrimitive.content == "suggested_name" })
+        assertFalse(download.containsKey("parameters"))
     }
 
     @Test

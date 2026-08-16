@@ -7,6 +7,17 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SystemPromptInjectorRenderSafetyTest {
+    @Test
+    fun `系统提示要求工具调用之间输出可见过程说明`() {
+        val zhPrompt = SystemPromptInjector.getSystemPrompt("zh-CN")
+        val enPrompt = SystemPromptInjector.getSystemPrompt("en")
+
+        assertTrue(zhPrompt.contains("调用工具前先用一两句简短正文"))
+        assertTrue(zhPrompt.contains("禁止只连续输出工具调用"))
+        assertTrue(enPrompt.contains("Before each tool call"))
+        assertTrue(enPrompt.contains("Do not emit only a sequence of tool calls"))
+    }
+
 
     @Test
     fun `existing custom system prompt should be merged behind stable EveryTalk prompt`() {
@@ -65,11 +76,15 @@ class SystemPromptInjectorRenderSafetyTest {
         val zhPrompt = SystemPromptInjector.getSystemPrompt("zh-CN")
         val enPrompt = SystemPromptInjector.getSystemPrompt("en")
 
-        assertTrue(zhPrompt.contains("每项只使用一个行首标记"))
+        assertTrue(zhPrompt.contains("`#` 标记与标题正文之间必须有一个空格"))
+        assertTrue(zhPrompt.contains("`-`、`*`、`+` 等行首标记后必须有一个空格"))
+        assertTrue(zhPrompt.contains("每项只使用一个标记"))
         assertTrue(zhPrompt.contains("禁止在同一物理行继续写第二个标记"))
         assertTrue(zhPrompt.contains("缩进到父项正文起始列"))
         assertTrue(zhPrompt.contains("改用同级列表或普通段落"))
 
+        assertTrue(enPrompt.contains("one space between the `#` marker and text"))
+        assertTrue(enPrompt.contains("one space after a leading `-`, `*`, or `+`"))
         assertTrue(enPrompt.contains("one marker per physical line"))
         assertTrue(enPrompt.contains("parent text column"))
         assertTrue(enPrompt.contains("Use siblings or prose"))

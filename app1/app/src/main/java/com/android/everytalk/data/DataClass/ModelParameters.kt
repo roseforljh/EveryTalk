@@ -143,28 +143,50 @@ fun reasoningBudgetForEffort(effort: String): Int = when (effort.trim().lowercas
 
 fun ModelParameters.toThinkingConfig(channel: String, model: String): ThinkingConfig? {
     val protocol = modelParameterProtocol(channel)
-    val allowedEfforts = when (protocol) {
+    val normalizedModel = model.removePrefix("models/").trim()
+    val inferredCapability = resolvedCapability
+        ?.takeIf { it.modelId.removePrefix("models/").trim().equals(normalizedModel, ignoreCase = true) }
+        ?: officialModelCapability(model, protocol)?.let { candidate ->
+            resolveModelCapability(model, protocol, "", listOf(candidate))
+        }
+        ?: familyModelCapability(model, protocol)?.let { candidate ->
+            resolveModelCapability(model, protocol, "", listOf(candidate))
+        }
+    val protocolEfforts = when (protocol) {
         ModelParameterProtocol.CODEX -> setOf("none", "minimal", "low", "medium", "high", "xhigh", "max")
         ModelParameterProtocol.ANTHROPIC -> setOf("low", "medium", "high", "max")
         ModelParameterProtocol.GEMINI -> setOf("minimal", "low", "medium", "high")
         ModelParameterProtocol.OPENAI_COMPATIBLE -> emptySet()
     }
+    val allowedEfforts = inferredCapability?.reasoningEfforts
+        ?.takeIf(Set<String>::isNotEmpty)
+        ?: protocolEfforts
     val normalizedEffort = reasoningEffort.trim().lowercase().takeIf { it in allowedEfforts }
         ?: DEFAULT_REASONING_EFFORT
     return when (protocol) {
         ModelParameterProtocol.OPENAI_COMPATIBLE -> null
-        ModelParameterProtocol.CODEX -> ThinkingConfig(
-            includeThoughts = !normalizedEffort.equals("none", ignoreCase = true),
-            reasoningMode = ReasoningMode.EFFORT,
-            reasoningEffort = normalizedEffort,
-        )
-        ModelParameterProtocol.ANTHROPIC -> ThinkingConfig(
-            includeThoughts = reasoningMode != ReasoningMode.DISABLED,
-            thinkingBudget = thinkingBudget.takeIf { reasoningMode == ReasoningMode.BUDGET },
-            reasoningMode = reasoningMode,
-            reasoningEffort = normalizedEffort,
-        )
+        ModelParameterProtocol.CODEX -> inferredCapability
+            ?.takeIf { it.supportsReasoning == true }
+            ?.let {
+                ThinkingConfig(
+                    includeThoughts = !normalizedEffort.equals("none", ignoreCase = true),
+                    reasoningMode = ReasoningMode.EFFORT,
+                    reasoningEffort = normalizedEffort,
+                )
+            }
+        ModelParameterProtocol.ANTHROPIC -> when {
+            reasoningMode == ReasoningMode.DISABLED -> null
+            reasoningMode == ReasoningMode.EFFORT &&
+                (inferredCapability?.supportsReasoning != true || inferredCapability.reasoningEfforts.isEmpty()) -> null
+            else -> ThinkingConfig(
+                includeThoughts = true,
+                thinkingBudget = thinkingBudget.takeIf { reasoningMode == ReasoningMode.BUDGET },
+                reasoningMode = reasoningMode,
+                reasoningEffort = normalizedEffort,
+            )
+        }
         ModelParameterProtocol.GEMINI -> {
+            if (inferredCapability?.supportsReasoning != true) return null
             val usesThinkingLevel = "gemini-3" in model.lowercase()
             when (reasoningMode) {
                 ReasoningMode.DISABLED -> ThinkingConfig(
@@ -232,8 +254,17 @@ fun CustomModelParameter.toJsonElement(): JsonElement = when (type) {
     CustomParameterType.JSON -> Json.parseToJsonElement(value)
 }
 
-fun ModelParameters.openAICompatibleRequestParameters(): Map<String, JsonElement> {
-    val parameters = customParameters ?: defaultOpenAICompatibleParameters
+fun ModelParameters.openAICompatibleRequestParameters(model: String? = null): Map<String, JsonElement> {
+    val supportsReasoning = resolvedCapability
+        ?.takeIf { capability ->
+            model == null || capability.modelId.removePrefix("models/").trim()
+                .equals(model.removePrefix("models/").trim(), ignoreCase = true)
+        }
+        ?.supportsReasoning
+        ?: model?.let { familyModelCapability(it, ModelParameterProtocol.OPENAI_COMPATIBLE)?.supportsReasoning }
+    // 旧配置没有自定义列表时，只给已确认的推理模型补默认参数。
+    // 用户自己保存过的参数始终原样发送，兼容第三方接口的私有字段。
+    val parameters = customParameters ?: defaultOpenAICompatibleParameters.takeIf { supportsReasoning == true }.orEmpty()
     val enabledParameters = parameters.filter(CustomModelParameter::enabled)
     val duplicateName = enabledParameters
         .groupBy { it.name.trim().lowercase() }

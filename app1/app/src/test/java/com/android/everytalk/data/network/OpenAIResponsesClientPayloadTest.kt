@@ -111,8 +111,8 @@ class OpenAIResponsesClientPayloadTest {
     }
 
     @Test
-    fun `responses reasoning effort comes from model parameters and defaults to medium`() {
-        val defaultPayload = buildResponsesPayloadForTest(request())
+    fun `responses只在模型配置明确启用时发送reasoning`() {
+        val noReasoningPayload = buildResponsesPayloadForTest(request())
         val highPayload = buildResponsesPayloadForTest(
             request(
                 generationConfig = GenerationConfig(
@@ -121,7 +121,7 @@ class OpenAIResponsesClientPayloadTest {
             )
         )
 
-        assertTrue(defaultPayload.contains("\"effort\":\"medium\""))
+        assertFalse(noReasoningPayload.contains("\"reasoning\""))
         assertTrue(highPayload.contains("\"effort\":\"high\""))
     }
 

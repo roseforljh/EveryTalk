@@ -284,7 +284,10 @@ object OpenAIDirectClient {
                                 qwenFileIds.clear()
                             }
                         }
-                        is AgentAssistantApiMessage -> addAgentAssistantMessage(message)
+                        is AgentAssistantApiMessage -> addAgentAssistantMessage(
+                            message = message,
+                            includeReasoningContent = !PromptCachePolicy.isOfficialOpenAIEndpoint(request.apiAddress),
+                        )
                         is AgentToolResultApiMessage -> addAgentToolResultMessage(message)
                     }
                 }
@@ -634,13 +637,17 @@ object OpenAIDirectClient {
         }
     }
 
-    private fun JsonArrayBuilder.addAgentAssistantMessage(message: AgentAssistantApiMessage) {
+    private fun JsonArrayBuilder.addAgentAssistantMessage(
+        message: AgentAssistantApiMessage,
+        includeReasoningContent: Boolean,
+    ) {
         addJsonObject {
             put("role", "assistant")
             put("content", message.text)
             // DeepSeek、Kimi 等 OpenAI 兼容推理模型要求工具下一轮回传 reasoning_content。
-            // 普通兼容端点会忽略该可选字段；长期事实仍保存在中立 reasoning 中。
-            message.reasoning.takeIf(String::isNotBlank)?.let { put("reasoning_content", it) }
+            // OpenAI 官方 Chat Completions 没有该字段，发送过去会触发参数校验错误。
+            message.reasoning.takeIf { includeReasoningContent && it.isNotBlank() }
+                ?.let { put("reasoning_content", it) }
             if (message.toolCalls.isNotEmpty()) {
                 putJsonArray("tool_calls") {
                     message.toolCalls.forEach { call ->

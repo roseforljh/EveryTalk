@@ -62,4 +62,24 @@ class ToolLoopContextGuardTest {
 
         assertEquals(listOf(first, second), emitted)
     }
+
+    @Test
+    fun `工具轮只有完整正文时仍保留过程描述`() = runTest {
+        val emitted = mutableListOf<AppStreamEvent>()
+        val buffer = ToolRoundContentBuffer { emitted += it }
+        val toolCall = AppStreamEvent.ToolCall(
+            id = "call-1",
+            name = "exec",
+            argumentsObj = JsonObject(emptyMap()),
+        )
+
+        buffer.accept(toolCall)
+        buffer.accept(AppStreamEvent.ContentFinal("我已经拿到配置，接着检查磁盘。"))
+        buffer.finish(hasToolCalls = true)
+
+        assertEquals(
+            listOf(toolCall, AppStreamEvent.Content("我已经拿到配置，接着检查磁盘。")),
+            emitted,
+        )
+    }
 }
