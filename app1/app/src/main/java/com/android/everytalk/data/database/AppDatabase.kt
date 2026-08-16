@@ -69,7 +69,7 @@ import com.android.everytalk.data.database.entities.WorkspaceSecretMetadataEntit
         SkillInstallationEntity::class,
         SkillVersionEntity::class,
     ],
-    version = 22,
+    version = 24,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -118,6 +118,8 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_19_20,
                     MIGRATION_20_21,
                     MIGRATION_21_22,
+                    MIGRATION_22_23,
+                    MIGRATION_23_24,
                 )
                 .build()
                 INSTANCE = instance
@@ -652,7 +654,6 @@ abstract class AppDatabase : RoomDatabase() {
                         currentHash TEXT NOT NULL,
                         enabled INTEGER NOT NULL,
                         invocationMode TEXT NOT NULL,
-                        auditStatus TEXT NOT NULL,
                         updateHash TEXT,
                         createdAt INTEGER NOT NULL,
                         updatedAt INTEGER NOT NULL,
@@ -672,7 +673,6 @@ abstract class AppDatabase : RoomDatabase() {
                         rootPath TEXT NOT NULL,
                         manifestJson TEXT NOT NULL,
                         frontmatterJson TEXT NOT NULL,
-                        auditJson TEXT,
                         installedAt INTEGER NOT NULL,
                         PRIMARY KEY(skillId, contentHash),
                         FOREIGN KEY(skillId) REFERENCES skill_installations(skillId) ON UPDATE NO ACTION ON DELETE CASCADE
@@ -680,6 +680,139 @@ abstract class AppDatabase : RoomDatabase() {
                     """.trimIndent(),
                 )
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_skill_versions_skillId ON skill_versions(skillId)")
+            }
+        }
+
+        /** 删除 Skill 安装审计字段，原有安装、版本和用户启停状态全部保留。 */
+        val MIGRATION_22_23 = object : Migration(22, 23) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // 先把子表数据复制到无外键备份表。这样重建父表时不会留下指向临时表名的外键。
+                db.execSQL(
+                    """
+                    CREATE TABLE skill_versions_backup (
+                        skillId TEXT NOT NULL,
+                        contentHash TEXT NOT NULL,
+                        versionLabel TEXT,
+                        rootPath TEXT NOT NULL,
+                        manifestJson TEXT NOT NULL,
+                        frontmatterJson TEXT NOT NULL,
+                        installedAt INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO skill_versions_backup (
+                        skillId, contentHash, versionLabel, rootPath, manifestJson, frontmatterJson, installedAt
+                    )
+                    SELECT
+                        skillId, contentHash, versionLabel, rootPath, manifestJson, frontmatterJson, installedAt
+                    FROM skill_versions
+                    """.trimIndent(),
+                )
+                db.execSQL("DROP TABLE skill_versions")
+                db.execSQL(
+                    """
+                    CREATE TABLE skill_installations_new (
+                        skillId TEXT NOT NULL PRIMARY KEY,
+                        name TEXT NOT NULL,
+                        description TEXT NOT NULL,
+                        sourceType TEXT NOT NULL,
+                        sourceRepository TEXT,
+                        sourcePath TEXT,
+                        currentHash TEXT NOT NULL,
+                        enabled INTEGER NOT NULL,
+                        invocationMode TEXT NOT NULL,
+                        updateHash TEXT,
+                        createdAt INTEGER NOT NULL,
+                        updatedAt INTEGER NOT NULL,
+                        lastUsedAt INTEGER,
+                        useCount INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO skill_installations_new (
+                        skillId, name, description, sourceType, sourceRepository, sourcePath,
+                        currentHash, enabled, invocationMode, updateHash, createdAt, updatedAt,
+                        lastUsedAt, useCount
+                    )
+                    SELECT
+                        skillId, name, description, sourceType, sourceRepository, sourcePath,
+                        currentHash, enabled, invocationMode, updateHash, createdAt, updatedAt,
+                        lastUsedAt, useCount
+                    FROM skill_installations
+                    """.trimIndent(),
+                )
+                db.execSQL("DROP TABLE skill_installations")
+                db.execSQL("ALTER TABLE skill_installations_new RENAME TO skill_installations")
+
+                // 父表已使用最终名称后再创建子表，Room 读取到的外键目标才能稳定为 skill_installations。
+                db.execSQL(
+                    """
+                    CREATE TABLE skill_versions (
+                        skillId TEXT NOT NULL,
+                        contentHash TEXT NOT NULL,
+                        versionLabel TEXT,
+                        rootPath TEXT NOT NULL,
+                        manifestJson TEXT NOT NULL,
+                        frontmatterJson TEXT NOT NULL,
+                        installedAt INTEGER NOT NULL,
+                        PRIMARY KEY(skillId, contentHash),
+                        FOREIGN KEY(skillId) REFERENCES skill_installations(skillId) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO skill_versions (
+                        skillId, contentHash, versionLabel, rootPath, manifestJson, frontmatterJson, installedAt
+                    )
+                    SELECT
+                        skillId, contentHash, versionLabel, rootPath, manifestJson, frontmatterJson, installedAt
+                    FROM skill_versions_backup
+                    """.trimIndent(),
+                )
+                db.execSQL("DROP TABLE skill_versions_backup")
+                db.execSQL("CREATE INDEX index_skill_installations_enabled ON skill_installations(enabled)")
+                db.execSQL("CREATE INDEX index_skill_installations_currentHash ON skill_installations(currentHash)")
+                db.execSQL("CREATE INDEX index_skill_versions_skillId ON skill_versions(skillId)")
+            }
+        }
+
+        /** 把已有单项安装归入稳定包；远端同仓库条目自动合并，本地条目各自成包。 */
+        val MIGRATION_23_24 = object : Migration(23, 24) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE skill_installations ADD COLUMN packageId TEXT NOT NULL DEFAULT ''")
+                db.execSQL("ALTER TABLE skill_installations ADD COLUMN packageName TEXT NOT NULL DEFAULT ''")
+                db.execSQL(
+                    """
+                    UPDATE skill_installations
+                    SET packageId = CASE
+                            WHEN sourceType = 'REMOTE' AND sourceRepository IS NOT NULL
+                                THEN 'remote:' || replace(sourceRepository, 'https://github.com/', '')
+                            ELSE skillId
+                        END,
+                        packageName = CASE
+                            WHEN sourceType = 'REMOTE' AND sourceRepository IS NOT NULL
+                                THEN replace(sourceRepository, 'https://github.com/', '')
+                            ELSE name
+                        END
+                    """.trimIndent(),
+                )
+                // 旧版本允许同仓库子 Skill 分别启停；迁移后取最保守状态并统一整包。
+                db.execSQL(
+                    """
+                    UPDATE skill_installations
+                    SET enabled = (
+                        SELECT MIN(sibling.enabled)
+                        FROM skill_installations AS sibling
+                        WHERE sibling.packageId = skill_installations.packageId
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX index_skill_installations_packageId ON skill_installations(packageId)")
             }
         }
     }

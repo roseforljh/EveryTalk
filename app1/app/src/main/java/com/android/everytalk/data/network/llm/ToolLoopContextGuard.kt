@@ -3,42 +3,24 @@ package com.android.everytalk.data.network
 import kotlinx.serialization.json.JsonElement
 
 internal const val TOOL_CONTEXT_COMPRESSION_STATUS = "正在压缩上下文"
-private const val TOOL_ROUND_CLASSIFICATION_WINDOW_CHARS = 64
 
 /**
- * 暂存单轮模型正文，等本轮是否调用工具明确后再决定去向。
- * 工具轮正文属于执行说明，会转换成 reasoning；最终轮正文仍按 Content 输出。
+ * 保留模型返回的原始事件类型和顺序。
+ * Content/Text 即使出现在工具前也是正式正文，禁止再自动改成 Reasoning。
  */
 internal class ToolRoundContentBuffer(
     private val emitEvent: suspend (AppStreamEvent) -> Unit,
 ) {
-    private val pendingContent = mutableListOf<AppStreamEvent>()
     private var pendingFinalContent: AppStreamEvent.ContentFinal? = null
     private var toolCallObserved = false
-    private var contentCommitted = false
-    private var pendingContentChars = 0
 
     suspend fun accept(event: AppStreamEvent) {
         when (event) {
             is AppStreamEvent.Content,
             is AppStreamEvent.Text,
-            -> if (toolCallObserved) {
-                emitAsReasoning(event)
-            } else if (contentCommitted) {
-                emitEvent(event)
-            } else {
-                pendingContent += event
-                pendingContentChars += event.textLength()
-                // ponytail: 只保留 64 字符分类窗口。工具轮的常见短前导语仍进入执行过程，
-                // 长正文会尽快下发；若供应商先输出超长前导语再调工具，前 64 字符会作为正文。
-                if (pendingContentChars >= TOOL_ROUND_CLASSIFICATION_WINDOW_CHARS) {
-                    flushContent(asReasoning = false)
-                    contentCommitted = true
-                }
-            }
+            -> emitEvent(event)
             is AppStreamEvent.ContentFinal -> pendingFinalContent = event
             is AppStreamEvent.ToolCall -> {
-                flushContent(asReasoning = true)
                 toolCallObserved = true
                 emitEvent(event)
             }
@@ -48,32 +30,8 @@ internal class ToolRoundContentBuffer(
 
     suspend fun finish(hasToolCalls: Boolean) {
         val isToolRound = hasToolCalls || toolCallObserved
-        flushContent(asReasoning = isToolRound)
         if (!isToolRound) pendingFinalContent?.let { emitEvent(it) }
         pendingFinalContent = null
-    }
-
-    private suspend fun flushContent(asReasoning: Boolean) {
-        pendingContent.forEach { event ->
-            if (asReasoning) emitAsReasoning(event) else emitEvent(event)
-        }
-        pendingContent.clear()
-        pendingContentChars = 0
-    }
-
-    private suspend fun emitAsReasoning(event: AppStreamEvent) {
-        val text = when (event) {
-            is AppStreamEvent.Content -> event.text
-            is AppStreamEvent.Text -> event.text
-            else -> return
-        }
-        if (text.isNotEmpty()) emitEvent(AppStreamEvent.Reasoning(text))
-    }
-
-    private fun AppStreamEvent.textLength(): Int = when (this) {
-        is AppStreamEvent.Content -> text.length
-        is AppStreamEvent.Text -> text.length
-        else -> 0
     }
 }
 

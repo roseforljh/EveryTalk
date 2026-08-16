@@ -82,13 +82,17 @@ fun List<MessageContentPart>.toApiText(fallback: String): String {
 }
 
 /**
- * AI 执行过程的有序事件。
+ * AI 单条回复的有序输出事件。
  *
- * 这里直接保存流事件的先后关系。Reasoning 增量只和相邻 Reasoning 合并，
- * Tool 一到达就形成边界，因此思考和工具不会在渲染时被重新归组。
+ * Content、Reasoning 只和相邻同类增量合并，Tool 一到达就形成边界，
+ * 因此正文、思考和工具不会在渲染时被重新排序。
  */
 @Serializable
 sealed class ExecutionTraceEvent {
+    /** 模型对用户可见的正式正文，相邻增量会合并为一段。 */
+    @Serializable
+    data class Content(val text: String) : ExecutionTraceEvent()
+
     @Serializable
     data class Reasoning(val text: String) : ExecutionTraceEvent()
 
@@ -235,7 +239,7 @@ fun hasReviewableExecutionProcess(
     executionStatus: String? = null,
 ): Boolean = !reasoningText.isNullOrBlank() ||
     executionSteps.isNotEmpty() ||
-    executionTrace.isNotEmpty() ||
+    executionTrace.any { it !is ExecutionTraceEvent.Content } ||
     !webSearchResults.isNullOrEmpty() ||
     !executionStatus.isNullOrBlank()
 

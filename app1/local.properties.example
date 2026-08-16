@@ -59,6 +59,3 @@ JINA_SEARCH_BASE_URL=https://s.jina.ai
 
 ## AI 内容举报接收接口（必须为 HTTPS，接收应用内举报 JSON）
 AI_CONTENT_REPORT_URL=https://your-backend.example.com/ai-content-reports
-
-## skills.sh 薄转发服务。部署 services/skills-proxy 后填写。
-SKILL_CATALOG_BASE_URL=https://your-skills-proxy.vercel.app/v1/skills

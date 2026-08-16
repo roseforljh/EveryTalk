@@ -11,9 +11,9 @@ import java.io.File
 import java.security.MessageDigest
 import java.util.UUID
 import java.io.InputStream
-import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.map
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.MapSerializer
 import kotlinx.serialization.builtins.serializer
@@ -29,15 +29,28 @@ class SkillRepository(
 
     fun observeAll(): Flow<List<SkillInstallationEntity>> = dao.observeAll()
 
+    fun observePackages(): Flow<List<InstalledSkillPackage>> = observeAll().map { it.toInstalledSkillPackages() }
+
     suspend fun getAll(): List<SkillInstallationEntity> = dao.getAll()
 
     suspend fun get(skillId: String): SkillInstallationEntity? = dao.getInstallation(skillId)
 
+    suspend fun getPackage(packageId: String): InstalledSkillPackage? =
+        dao.getPackageChildren(packageId).toInstalledSkillPackages().singleOrNull()
+
     suspend fun setEnabled(skillId: String, enabled: Boolean) = dao.setEnabled(skillId, enabled)
+
+    suspend fun setPackageEnabled(packageId: String, enabled: Boolean) = dao.setPackageEnabled(packageId, enabled)
 
     suspend fun delete(skillId: String) {
         dao.delete(skillId)
         File(root, skillId.directoryKey()).deleteRecursively()
+    }
+
+    suspend fun deletePackage(packageId: String) {
+        val children = dao.getPackageChildren(packageId)
+        dao.deletePackage(packageId)
+        children.forEach { child -> File(root, child.skillId.directoryKey()).deleteRecursively() }
     }
 
     /**
@@ -72,17 +85,20 @@ ${rules.trim()}
         sourceType: SkillSourceType = SkillSourceType.LOCAL_IMPORT,
         sourceRepository: String? = null,
         sourcePath: String? = null,
-        auditStatus: SkillAuditStatus = SkillAuditStatus.UNVERIFIED,
         versionLabel: String? = null,
-        auditJson: String? = null,
     ): SkillInstallationEntity {
         val validated = SkillPackageValidator.validate(sourceRoot)
-        require(auditStatus != SkillAuditStatus.FAIL) { "安全审计失败的 Skill 禁止安装" }
+        val localPackageId = "local:${UUID.randomUUID()}"
         val skillId = if (sourceType == SkillSourceType.REMOTE) {
             require(!sourceRepository.isNullOrBlank() && !sourcePath.isNullOrBlank()) { "远端 Skill 缺少来源" }
             "remote:${sourceRepository.trim().trimEnd('/')}#${sourcePath.trim().trim('/')}"
         } else {
-            "local:${UUID.randomUUID()}"
+            "$localPackageId#."
+        }
+        val packageId = if (sourceType == SkillSourceType.REMOTE) {
+            "remote:${sourceRepository.orEmpty().removePrefix("https://github.com/").trimEnd('/')}"
+        } else {
+            localPackageId
         }
         return installValidatedVersion(
             skillId = skillId,
@@ -91,9 +107,13 @@ ${rules.trim()}
             sourceType = sourceType,
             sourceRepository = sourceRepository,
             sourcePath = sourcePath,
-            auditStatus = auditStatus,
             versionLabel = versionLabel,
-            auditJson = auditJson,
+            packageId = packageId,
+            packageName = if (sourceType == SkillSourceType.REMOTE) {
+                sourceRepository.orEmpty().trimEnd('/').substringAfterLast('/')
+            } else {
+                validated.name
+            },
         )
     }
 
@@ -105,24 +125,11 @@ ${rules.trim()}
         sourceType: SkillSourceType,
         sourceRepository: String?,
         sourcePath: String?,
-        auditStatus: SkillAuditStatus,
         versionLabel: String?,
-        auditJson: String?,
+        packageId: String,
+        packageName: String,
     ): SkillInstallationEntity {
-        val versionRoot = File(File(root, skillId.directoryKey()), validated.contentHash)
-        if (!versionRoot.exists()) {
-            val staging = File(root, ".install-${UUID.randomUUID()}")
-            try {
-                sourceRoot.copyRecursively(staging, overwrite = false)
-                require(SkillPackageValidator.validate(staging).contentHash == validated.contentHash) {
-                    "Skill 复制后哈希不一致"
-                }
-                versionRoot.parentFile?.mkdirs()
-                require(staging.renameTo(versionRoot)) { "Skill 安装目录写入失败" }
-            } finally {
-                staging.deleteRecursively()
-            }
-        }
+        val versionRoot = materializeVersion(skillId, sourceRoot, validated)
         val now = System.currentTimeMillis()
         val previous = dao.getInstallation(skillId)
         val installation = SkillInstallationEntity(
@@ -133,19 +140,15 @@ ${rules.trim()}
             sourceRepository = sourceRepository,
             sourcePath = sourcePath,
             currentHash = validated.contentHash,
-            enabled = previous?.enabled ?: when {
-                sourceType == SkillSourceType.USER_CREATED -> true
-                sourceType == SkillSourceType.LOCAL_IMPORT -> true
-                auditStatus == SkillAuditStatus.PASS -> true
-                else -> false
-            },
+            enabled = previous?.enabled ?: true,
             invocationMode = validated.invocationMode.name,
-            auditStatus = auditStatus.name,
             updateHash = null,
             createdAt = previous?.createdAt ?: now,
             updatedAt = now,
             lastUsedAt = previous?.lastUsedAt,
             useCount = previous?.useCount ?: 0,
+            packageId = previous?.effectivePackageId() ?: packageId,
+            packageName = previous?.effectivePackageName() ?: packageName,
         )
         dao.saveVersion(
             installation = installation,
@@ -159,7 +162,6 @@ ${rules.trim()}
                     MapSerializer(String.serializer(), String.serializer()),
                     validated.frontmatter,
                 ),
-                auditJson = auditJson,
                 installedAt = now,
             ),
         )
@@ -167,85 +169,126 @@ ${rules.trim()}
     }
 
     /**
-     * 从完整 GitHub 仓库 ZIP 中只提取用户选择的 Skill。
-     * 仓库内其他文件不会进入安装目录，也不会占用单个 Skill 的文件额度。
+     * 下载完整远端包。全部文件先进入临时目录并校验，最后一次性切换所有子 Skill。
      */
-    suspend fun importRemoteArchive(
-        input: InputStream,
-        sourceRepository: String,
-        skillName: String,
-        auditStatus: SkillAuditStatus = SkillAuditStatus.UNVERIFIED,
-        versionLabel: String? = null,
-        auditJson: String? = null,
-    ): SkillInstallationEntity {
-        require(skillName.isNotBlank()) { "远端 Skill 名称不能为空" }
-        root.mkdirs()
-        val archive = File(root, ".remote-${UUID.randomUUID()}.zip")
-        val temporary = File(root, ".remote-${UUID.randomUUID()}").apply { mkdirs() }
+    suspend fun importRemotePackage(
+        detail: RemoteSkillPackageDetail,
+        copyFile: (detail: RemoteSkillPackageDetail, entry: RemoteSkillPackageFile, target: File) -> Unit,
+    ): InstalledSkillPackage {
+        require(detail.skills.isNotEmpty()) { "Skill 包为空" }
+        val fileCount = detail.skills.sumOf { it.files.size }
+        val totalBytes = detail.skills.sumOf { skill -> skill.files.sumOf(RemoteSkillPackageFile::size) }
+        require(fileCount <= MAX_SKILL_FILES) { "Skill 包文件数超过 $MAX_SKILL_FILES" }
+        require(totalBytes <= MAX_SKILL_BYTES) { "Skill 包超过 100 MB" }
+        val temporary = File(root, ".remote-package-${UUID.randomUUID()}").apply { mkdirs() }
         return try {
-            var archiveBytes = 0L
-            archive.outputStream().use { output ->
-                val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                while (true) {
-                    val read = input.read(buffer)
-                    if (read < 0) break
-                    archiveBytes += read
-                    require(archiveBytes <= MAX_SKILL_BYTES) { "Skill 仓库压缩包超过 100 MB" }
-                    output.write(buffer, 0, read)
+            val roots = detail.skills.mapIndexed { index, skill ->
+                val childRoot = File(temporary, index.toString()).apply { mkdirs() }
+                skill.files.forEach { entry ->
+                    val relative = requireRemoteRelativePath(entry.path)
+                    val target = File(childRoot, relative).canonicalFile
+                    require(target.toPath().startsWith(childRoot.canonicalFile.toPath())) { "Skill 文件路径越界" }
+                    copyFile(detail, entry, target)
+                    require(target.isFile && target.length() == entry.size) { "Skill 文件下载不完整：${entry.path}" }
                 }
+                PackageSkillRoot(childRoot, skill.sourcePath)
             }
-
-            ZipFile(archive).use { zip ->
-                val entries = zip.entries().asSequence().toList()
-                entries.forEach { validateArchiveEntryName(it.name) }
-                val skillFile = chooseRemoteSkillFile(zip, entries, skillName)
-                val selectedRoot = skillFile.name.substringBeforeLast('/', "")
-                val prefix = selectedRoot.takeIf(String::isNotBlank)?.plus('/') ?: ""
-                var fileCount = 0
-                var totalBytes = 0L
-
-                entries.filter { !it.isDirectory && it.name.startsWith(prefix) }.forEach { entry ->
-                    val relative = entry.name.removePrefix(prefix)
-                    if ('/' !in relative && relative != "SKILL.md" && selectedRoot.isBlank()) return@forEach
-                    require(relative.isNotBlank()) { "Skill 文件路径无效" }
-                    fileCount++
-                    require(fileCount <= MAX_SKILL_FILES) { "Skill 文件数超过 $MAX_SKILL_FILES" }
-                    val target = File(temporary, relative).canonicalFile
-                    require(target.toPath().startsWith(temporary.canonicalFile.toPath())) { "Skill 文件路径越界" }
-                    target.parentFile?.mkdirs()
-                    zip.getInputStream(entry).use { entryInput ->
-                        target.outputStream().use { output ->
-                            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
-                            while (true) {
-                                val read = entryInput.read(buffer)
-                                if (read < 0) break
-                                totalBytes += read
-                                require(totalBytes <= MAX_SKILL_BYTES) { "Skill 解压后超过 100 MB" }
-                                output.write(buffer, 0, read)
-                            }
-                        }
-                    }
-                }
-
-                val sourcePath = selectedRoot.substringAfter('/', missingDelimiterValue = ".").ifBlank { "." }
-                importDirectory(
-                    sourceRoot = temporary,
-                    sourceType = SkillSourceType.REMOTE,
-                    sourceRepository = sourceRepository,
-                    sourcePath = sourcePath,
-                    auditStatus = auditStatus,
-                    versionLabel = versionLabel,
-                    auditJson = auditJson,
-                )
-            }
+            installPackageRoots(
+                packageId = detail.packageId,
+                packageName = detail.name,
+                roots = roots,
+                sourceType = SkillSourceType.REMOTE,
+                sourceRepository = detail.sourceRepository,
+                versionLabel = detail.contentHash,
+            )
         } finally {
-            archive.delete()
             temporary.deleteRecursively()
         }
     }
 
+    /** 所有子 Skill 的不可变版本准备完成后，再用一个 Room 事务切换整包。 */
+    private suspend fun installPackageRoots(
+        packageId: String,
+        packageName: String,
+        roots: List<PackageSkillRoot>,
+        sourceType: SkillSourceType,
+        sourceRepository: String?,
+        versionLabel: String?,
+    ): InstalledSkillPackage {
+        require(roots.isNotEmpty()) { "Skill 包中没有找到 SKILL.md" }
+        val previousChildren = dao.getPackageChildren(packageId)
+        val previousById = previousChildren.associateBy(SkillInstallationEntity::skillId)
+        val packageEnabled = previousChildren.firstOrNull()?.enabled ?: true
+        val now = System.currentTimeMillis()
+        val prepared = roots.map { child ->
+            val validated = SkillPackageValidator.validate(child.root)
+            val normalizedSourcePath = child.sourcePath.trim().replace('\\', '/').trim('/').ifBlank { "." }
+            val skillId = if (sourceType == SkillSourceType.REMOTE) {
+                "remote:${sourceRepository.orEmpty().trimEnd('/')}#$normalizedSourcePath"
+            } else {
+                "$packageId#$normalizedSourcePath"
+            }
+            val versionRoot = materializeVersion(skillId, child.root, validated)
+            val previous = previousById[skillId]
+            val installation = SkillInstallationEntity(
+                skillId = skillId,
+                name = validated.name,
+                description = validated.description,
+                sourceType = sourceType.name,
+                sourceRepository = sourceRepository,
+                sourcePath = normalizedSourcePath,
+                currentHash = validated.contentHash,
+                enabled = packageEnabled,
+                invocationMode = validated.invocationMode.name,
+                updateHash = null,
+                createdAt = previous?.createdAt ?: now,
+                updatedAt = now,
+                lastUsedAt = previous?.lastUsedAt,
+                useCount = previous?.useCount ?: 0,
+                packageId = packageId,
+                packageName = packageName,
+            )
+            installation to SkillVersionEntity(
+                skillId = skillId,
+                contentHash = validated.contentHash,
+                versionLabel = versionLabel,
+                rootPath = versionRoot.absolutePath,
+                manifestJson = json.encodeToString(ListSerializer(SkillFileManifestEntry.serializer()), validated.manifest),
+                frontmatterJson = json.encodeToString(
+                    MapSerializer(String.serializer(), String.serializer()),
+                    validated.frontmatter,
+                ),
+                installedAt = now,
+            )
+        }
+        dao.replacePackage(packageId, prepared.map { it.first }, prepared.map { it.second })
+        val installedIds = prepared.map { it.first.skillId }.toSet()
+        previousChildren.filterNot { it.skillId in installedIds }
+            .forEach { File(root, it.skillId.directoryKey()).deleteRecursively() }
+        return prepared.map { it.first }.toInstalledSkillPackages().single()
+    }
+
+    private fun materializeVersion(
+        skillId: String,
+        sourceRoot: File,
+        validated: ValidatedSkillPackage,
+    ): File {
+        val versionRoot = File(File(root, skillId.directoryKey()), validated.contentHash)
+        if (versionRoot.exists()) return versionRoot
+        val staging = File(root, ".install-${UUID.randomUUID()}")
+        try {
+            sourceRoot.copyRecursively(staging, overwrite = false)
+            require(SkillPackageValidator.validate(staging).contentHash == validated.contentHash) { "Skill 复制后哈希不一致" }
+            versionRoot.parentFile?.mkdirs()
+            require(staging.renameTo(versionRoot)) { "Skill 安装目录写入失败" }
+        } finally {
+            staging.deleteRecursively()
+        }
+        return versionRoot
+    }
+
     /** 从系统文件选择器导入 ZIP。解压阶段只写普通文件，不执行任何内容。 */
-    suspend fun importZip(input: InputStream): SkillInstallationEntity {
+    suspend fun importZip(input: InputStream, packageName: String? = null): InstalledSkillPackage {
         val temporary = File(root, ".zip-${UUID.randomUUID()}").apply { mkdirs() }
         return try {
             var fileCount = 0
@@ -281,14 +324,15 @@ ${rules.trim()}
                     zip.closeEntry()
                 }
             }
-            importDirectory(resolveImportedRoot(temporary))
+            val packageRoot = resolveImportedPackageRoot(temporary)
+            importLocalPackage(packageRoot, packageName ?: packageRoot.name)
         } finally {
             temporary.deleteRecursively()
         }
     }
 
     /** 从 Android 文档树复制目录。Provider 的特殊对象只会被复制成普通文件。 */
-    suspend fun importDocumentTree(treeUri: Uri): SkillInstallationEntity {
+    suspend fun importDocumentTree(treeUri: Uri, packageName: String? = null): InstalledSkillPackage {
         val temporary = File(root, ".tree-${UUID.randomUUID()}").apply { mkdirs() }
         return try {
             var fileCount = 0
@@ -344,7 +388,8 @@ ${rules.trim()}
             }
 
             copyChildren(rootDocumentId, temporary)
-            importDirectory(resolveImportedRoot(temporary))
+            val packageRoot = resolveImportedPackageRoot(temporary)
+            importLocalPackage(packageRoot, packageName ?: packageRoot.name)
         } finally {
             temporary.deleteRecursively()
         }
@@ -398,21 +443,13 @@ ${rules.trim()}
     suspend fun versionLabel(skillId: String, contentHash: String): String? =
         dao.getVersion(skillId, contentHash)?.versionLabel
 
-    suspend fun auditJson(skillId: String, contentHash: String): String? =
-        dao.getVersion(skillId, contentHash)?.auditJson
-
-    suspend fun markAvailableUpdate(skillId: String, remoteHash: String?) = dao.setUpdateHash(skillId, remoteHash)
-
-    suspend fun diff(skillId: String, remoteFiles: List<SkillFileManifestEntry>): SkillFileDiff {
-        val installation = dao.getInstallation(skillId) ?: error("Skill 不存在")
-        val local = manifest(skillId, installation.currentHash).associateBy(SkillFileManifestEntry::path)
-        val remote = remoteFiles.associateBy(SkillFileManifestEntry::path)
-        return SkillFileDiff(
-            added = (remote.keys - local.keys).sorted(),
-            modified = (remote.keys intersect local.keys).filter { remote[it]?.sha256 != local[it]?.sha256 }.sorted(),
-            removed = (local.keys - remote.keys).sorted(),
-        )
+    suspend fun packageVersionLabel(packageId: String): String? {
+        val child = dao.getPackageChildren(packageId).firstOrNull() ?: return null
+        return versionLabel(child.skillId, child.currentHash)
     }
+
+    suspend fun markPackageAvailableUpdate(packageId: String, remoteHash: String?) =
+        dao.setPackageUpdateHash(packageId, remoteHash)
 
     /** 远端原版保持只读，编辑动作先复制成新的用户 Skill。 */
     suspend fun copyAsUserSkill(skillId: String): SkillInstallationEntity {
@@ -471,9 +508,9 @@ ${rules.trim()}
                 sourceType = enumValueOrNull<SkillSourceType>(installation.sourceType) ?: SkillSourceType.LOCAL_IMPORT,
                 sourceRepository = installation.sourceRepository,
                 sourcePath = installation.sourcePath,
-                auditStatus = enumValueOrNull<SkillAuditStatus>(installation.auditStatus) ?: SkillAuditStatus.UNVERIFIED,
                 versionLabel = null,
-                auditJson = null,
+                packageId = installation.effectivePackageId(),
+                packageName = installation.effectivePackageName(),
             )
         } finally {
             staging.deleteRecursively()
@@ -485,38 +522,107 @@ ${rules.trim()}
     private fun manifest(version: SkillVersionEntity): List<SkillFileManifestEntry> =
         json.decodeFromString(ListSerializer(SkillFileManifestEntry.serializer()), version.manifestJson)
 
-    private fun resolveImportedRoot(temporary: File): File {
-        if (File(temporary, "SKILL.md").isFile) return temporary
-        val candidates = temporary.walkTopDown().filter { it.isFile && it.name == "SKILL.md" }.toList()
-        require(candidates.size == 1) { "导入内容必须只包含一个 SKILL.md" }
-        return candidates.single().parentFile ?: error("SKILL.md 路径无效")
-    }
-
-    private fun chooseRemoteSkillFile(
-        zip: ZipFile,
-        entries: List<java.util.zip.ZipEntry>,
-        skillName: String,
-    ): java.util.zip.ZipEntry {
-        val skillFiles = entries.filter { !it.isDirectory && it.name.substringAfterLast('/') == "SKILL.md" }
-        require(skillFiles.isNotEmpty()) { "来源仓库没有包含 SKILL.md" }
-        val normalizedName = skillName.normalizeSkillName()
-        val directoryMatches = skillFiles.filter {
-            it.name.substringBeforeLast('/', "").substringAfterLast('/').normalizeSkillName() == normalizedName
-        }
-        if (directoryMatches.size == 1) return directoryMatches.single()
-
-        val metadataMatches = skillFiles.filter { entry ->
-            if (entry.size > MAX_SKILL_MARKDOWN_BYTES) return@filter false
-            zip.getInputStream(entry).bufferedReader(Charsets.UTF_8).use { reader ->
-                parseSkillFrontmatter(reader.readText())["name"]?.normalizeSkillName() == normalizedName
+    /** 本地目录和 ZIP 也按包发现全部独立 SKILL.md。 */
+    private suspend fun importLocalPackage(packageRoot: File, packageName: String): InstalledSkillPackage {
+        val skillRoots = discoverSkillRoots(packageRoot)
+        val packageId = "local:${UUID.randomUUID()}"
+        val staging = File(root, ".local-package-${UUID.randomUUID()}").apply { mkdirs() }
+        return try {
+            val materialized = skillRoots.mapIndexed { index, skillRoot ->
+                val target = File(staging, index.toString()).apply { mkdirs() }
+                copyIndependentSkillRoot(packageRoot, skillRoot, skillRoots, target)
+                val sourcePath = packageRoot.canonicalFile.toPath().relativize(skillRoot.canonicalFile.toPath())
+                    .toString().replace('\\', '/').ifBlank { "." }
+                PackageSkillRoot(target, sourcePath)
             }
-        }
-        return when {
-            metadataMatches.size == 1 -> metadataMatches.single()
-            directoryMatches.isNotEmpty() -> error("来源仓库存在多个同名 Skill")
-            else -> error("来源仓库中找不到 Skill：$skillName")
+            installPackageRoots(
+                packageId = packageId,
+                packageName = packageName.ifBlank { skillRoots.first().name },
+                roots = materialized,
+                sourceType = SkillSourceType.LOCAL_IMPORT,
+                sourceRepository = null,
+                versionLabel = null,
+            )
+        } finally {
+            staging.deleteRecursively()
         }
     }
+
+    private fun discoverSkillRoots(packageRoot: File): List<File> {
+        val canonicalPackageRoot = packageRoot.canonicalFile
+        val discovered = packageRoot.walkTopDown()
+            .filter { it.isFile && it.name == "SKILL.md" }
+            .mapNotNull(File::getParentFile)
+            .filter { candidate ->
+                val relative = canonicalPackageRoot.toPath().relativize(candidate.canonicalFile.toPath())
+                    .toString().replace('\\', '/')
+                relative.split('/').none { it.lowercase() in LOCAL_IGNORED_SKILL_ROOT_SEGMENTS }
+            }
+            .distinctBy { it.canonicalPath }
+            .sortedBy { it.canonicalPath }
+            .toList()
+        val roots = discovered.groupBy { it.name.lowercase() }.values.map { duplicates ->
+            duplicates.minWith(
+                compareBy<File> { candidate ->
+                    val relative = canonicalPackageRoot.toPath().relativize(candidate.canonicalFile.toPath())
+                        .toString().replace('\\', '/')
+                    when {
+                        relative == "skills" || relative.startsWith("skills/") -> 0
+                        relative.substringBefore('/').startsWith('.') -> 2
+                        else -> 1
+                    }
+                }.thenBy { it.canonicalPath.length },
+            )
+        }.sortedBy { it.canonicalPath }
+        require(roots.isNotEmpty()) { "导入内容中没有找到 SKILL.md" }
+        return roots
+    }
+
+    private fun copyIndependentSkillRoot(
+        packageRoot: File,
+        skillRoot: File,
+        allRoots: List<File>,
+        target: File,
+    ) {
+        val canonicalRoot = skillRoot.canonicalFile
+        val nestedRoots = allRoots.map(File::getCanonicalFile).filter { it != canonicalRoot }
+        skillRoot.walkTopDown().filter(File::isFile).forEach { source ->
+            val canonicalSource = source.canonicalFile
+            if (nestedRoots.any { nested -> canonicalSource.toPath().startsWith(nested.toPath()) }) return@forEach
+            val relative = canonicalRoot.toPath().relativize(canonicalSource.toPath()).toString().replace('\\', '/')
+            if (skillRoot.canonicalFile == packageRoot.canonicalFile && allRoots.size > 1) {
+                val first = relative.substringBefore('/').lowercase()
+                if (relative != "SKILL.md" && first !in LOCAL_ROOT_RESOURCE_DIRECTORIES) return@forEach
+            }
+            val destination = File(target, relative)
+            destination.parentFile?.mkdirs()
+            source.copyTo(destination, overwrite = false)
+        }
+    }
+
+    private fun resolveImportedPackageRoot(temporary: File): File {
+        if (File(temporary, "SKILL.md").isFile) return temporary
+        val children = temporary.listFiles().orEmpty().filterNot { it.name.startsWith(".") }
+        return children.singleOrNull()?.takeIf(File::isDirectory) ?: temporary
+    }
+
+}
+
+private data class PackageSkillRoot(val root: File, val sourcePath: String)
+
+private val LOCAL_IGNORED_SKILL_ROOT_SEGMENTS = setOf(
+    ".git", ".github", "node_modules", "build", "dist", "references", "templates",
+    "assets", "scripts", "examples", "example", "test", "tests",
+)
+
+private val LOCAL_ROOT_RESOURCE_DIRECTORIES = setOf("scripts", "references", "templates", "assets")
+
+private fun requireRemoteRelativePath(value: String): String {
+    val normalized = value.trim().replace('\\', '/').trim('/')
+    require(
+        normalized.isNotBlank() && normalized.split('/').none { it.isBlank() || it == "." || it == ".." },
+    ) { "Skill 文件路径无效" }
+    return normalized
 }
 
 private fun requireEditableRelativePath(value: String): String {
@@ -531,19 +637,6 @@ private fun requireEditableRelativePath(value: String): String {
     return normalized
 }
 
-private fun validateArchiveEntryName(name: String) {
-    val normalized = name.replace('\\', '/')
-    require(
-        normalized.isNotBlank() &&
-            !normalized.startsWith('/') &&
-            normalized.split('/').none { it == ".." },
-    ) { "ZIP 包含非法路径" }
-}
-
-private fun String.normalizeSkillName(): String = lowercase().replace('_', '-').replace(' ', '-')
-
-private const val MAX_SKILL_MARKDOWN_BYTES = 1024L * 1024L
-
 private fun SkillInstallationEntity.toSnapshotEntry(mode: SkillInvocationMode): SkillSnapshotEntry =
     SkillSnapshotEntry(
         skillId = skillId,
@@ -554,6 +647,7 @@ private fun SkillInstallationEntity.toSnapshotEntry(mode: SkillInvocationMode): 
         sourcePath = sourcePath,
         contentHash = currentHash,
         invocationMode = mode,
+        packageName = effectivePackageName(),
     )
 
 private inline fun <reified T : Enum<T>> enumValueOrNull(value: String): T? =

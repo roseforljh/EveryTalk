@@ -3,10 +3,11 @@ package com.android.everytalk.data.database.entities
 import androidx.room.Entity
 import androidx.room.ForeignKey
 import androidx.room.Index
+import androidx.room.ColumnInfo
 
 @Entity(
     tableName = "skill_installations",
-    indices = [Index("enabled"), Index("currentHash")],
+    indices = [Index("enabled"), Index("currentHash"), Index("packageId")],
     primaryKeys = ["skillId"],
 )
 data class SkillInstallationEntity(
@@ -19,12 +20,16 @@ data class SkillInstallationEntity(
     val currentHash: String,
     val enabled: Boolean,
     val invocationMode: String,
-    val auditStatus: String,
     val updateHash: String?,
     val createdAt: Long,
     val updatedAt: Long,
     val lastUsedAt: Long?,
     val useCount: Long,
+    /** 安装、启停、更新和删除按包执行；skillId 仍表示可独立调用的子 Skill。 */
+    @ColumnInfo(defaultValue = "''")
+    val packageId: String = "",
+    @ColumnInfo(defaultValue = "''")
+    val packageName: String = "",
 )
 
 @Entity(
@@ -47,6 +52,5 @@ data class SkillVersionEntity(
     val rootPath: String,
     val manifestJson: String,
     val frontmatterJson: String,
-    val auditJson: String?,
     val installedAt: Long,
 )

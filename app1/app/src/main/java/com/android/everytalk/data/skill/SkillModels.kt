@@ -1,7 +1,6 @@
 package com.android.everytalk.data.skill
 
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.JsonElement
 
 object SkillToolNames {
     const val LOAD_SKILL = "load_skill"
@@ -21,14 +20,6 @@ enum class SkillSourceType {
 enum class SkillInvocationMode {
     AUTO,
     MANUAL_ONLY,
-}
-
-@Serializable
-enum class SkillAuditStatus {
-    PASS,
-    WARN,
-    FAIL,
-    UNVERIFIED,
 }
 
 /**
@@ -58,6 +49,94 @@ data class RemoteSkillCatalogItem(
         get() = source.takeIf(::isSafeGithubRepository)?.let { "https://github.com/$it" }
 }
 
+/** 云目录按来源仓库合并后的下载单位。 */
+data class RemoteSkillPackageCatalogItem(
+    val source: String,
+    val name: String,
+    val matchedSkills: List<RemoteSkillCatalogItem>,
+) {
+    val installs: Long = matchedSkills.maxOfOrNull(RemoteSkillCatalogItem::installs) ?: 0
+    val isOfficial: Boolean = matchedSkills.any(RemoteSkillCatalogItem::isOfficial)
+    val matchedSkillNames: List<String> = matchedSkills.map(RemoteSkillCatalogItem::name).distinct()
+    val packageId: String = "remote:$source"
+    val githubRepository: String? = source.takeIf(::isSafeGithubRepository)?.let { "https://github.com/$it" }
+}
+
+/** GitHub Tree 中一个待下载文件，repositoryPath 是仓库内路径。 */
+data class RemoteSkillPackageFile(
+    val path: String,
+    val repositoryPath: String,
+    val size: Long,
+)
+
+/** 一个仓库包内可独立调用的子 Skill。 */
+data class RemoteSkillPackageChild(
+    val name: String,
+    val description: String,
+    val sourcePath: String,
+    val invocationMode: SkillInvocationMode,
+    val files: List<RemoteSkillPackageFile>,
+)
+
+/** GitHub 默认分支在一次 Tree 快照下生成的完整 Skill 包。 */
+data class RemoteSkillPackageDetail(
+    val packageId: String,
+    val name: String,
+    val source: String,
+    val sourceRepository: String,
+    val branch: String,
+    val contentHash: String,
+    val skills: List<RemoteSkillPackageChild>,
+)
+
+/** 设置页使用的包视图，数据库仍按子 Skill 保存不可变版本。 */
+data class InstalledSkillPackage(
+    val packageId: String,
+    val name: String,
+    val sourceType: SkillSourceType,
+    val sourceRepository: String?,
+    val enabled: Boolean,
+    val updateHash: String?,
+    val children: List<com.android.everytalk.data.database.entities.SkillInstallationEntity>,
+)
+
+fun List<com.android.everytalk.data.database.entities.SkillInstallationEntity>.toInstalledSkillPackages(): List<InstalledSkillPackage> =
+    groupBy { it.effectivePackageId() }
+        .map { (packageId, children) ->
+            val first = children.first()
+            InstalledSkillPackage(
+                packageId = packageId,
+                name = first.effectivePackageName(),
+                sourceType = runCatching { SkillSourceType.valueOf(first.sourceType) }.getOrDefault(SkillSourceType.LOCAL_IMPORT),
+                sourceRepository = first.sourceRepository,
+                enabled = children.all { it.enabled },
+                updateHash = children.firstNotNullOfOrNull { it.updateHash },
+                children = children.sortedBy { it.name.lowercase() },
+            )
+        }
+        .sortedBy { it.name.lowercase() }
+
+fun com.android.everytalk.data.database.entities.SkillInstallationEntity.effectivePackageId(): String =
+    packageId.ifBlank {
+        sourceRepository?.removePrefix("https://github.com/")?.let { "remote:$it" } ?: skillId
+    }
+
+fun com.android.everytalk.data.database.entities.SkillInstallationEntity.effectivePackageName(): String =
+    packageName.ifBlank { sourceRepository?.trimEnd('/')?.substringAfterLast('/') ?: name }.let { stored ->
+        if (sourceType == SkillSourceType.REMOTE.name) stored.substringAfterLast('/') else stored
+    }
+
+fun groupRemoteSkillPackages(items: List<RemoteSkillCatalogItem>): List<RemoteSkillPackageCatalogItem> =
+    items.groupBy(RemoteSkillCatalogItem::source)
+        .map { (source, children) ->
+            RemoteSkillPackageCatalogItem(
+                source = source,
+                name = source.substringAfterLast('/').replaceFirstChar(Char::uppercaseChar),
+                matchedSkills = children.sortedBy { it.name.lowercase() },
+            )
+        }
+        .sortedByDescending(RemoteSkillPackageCatalogItem::installs)
+
 private fun isSafeGithubRepository(value: String): Boolean {
     val parts = value.split('/')
     return parts.size == 2 && parts.all { part ->
@@ -73,37 +152,6 @@ internal data class RemoteSkillCatalogResponse(
     val hasMore: Boolean = false,
 )
 
-/** 转发服务返回的稳定详情，文件哈希与 Android 本地安装校验使用同一算法。 */
-@Serializable
-data class RemoteSkillDetail(
-    val id: String,
-    val source: String,
-    val skillId: String,
-    val name: String,
-    val description: String,
-    val sourceRepository: String,
-    val sourcePath: String,
-    val contentHash: String,
-    val files: List<SkillFileManifestEntry> = emptyList(),
-    val auditStatus: SkillAuditStatus = SkillAuditStatus.UNVERIFIED,
-    val audit: JsonElement? = null,
-    val updatedAt: String? = null,
-)
-
-@Serializable
-data class RemoteSkillHash(
-    val id: String,
-    val contentHash: String,
-    val updatedAt: String? = null,
-    val auditStatus: SkillAuditStatus = SkillAuditStatus.UNVERIFIED,
-)
-
-data class SkillFileDiff(
-    val added: List<String>,
-    val modified: List<String>,
-    val removed: List<String>,
-)
-
 /** 每次发送消息时冻结的 Skill 目录项。 */
 @Serializable
 data class SkillSnapshotEntry(
@@ -115,6 +163,7 @@ data class SkillSnapshotEntry(
     val sourcePath: String? = null,
     val contentHash: String,
     val invocationMode: SkillInvocationMode,
+    val packageName: String = "",
 )
 
 /** 用户消息中一次性的 Skill 引用。 */
@@ -153,6 +202,7 @@ data class SkillRequestSnapshot(
                 sourcePath = reference.sourcePath,
                 contentHash = reference.contentHash,
                 invocationMode = SkillInvocationMode.MANUAL_ONLY,
+                packageName = "用户手动指定",
             )
         }
     }
@@ -161,9 +211,18 @@ data class SkillRequestSnapshot(
         if (automaticCatalog.isEmpty() && manualReferences.isEmpty()) {
             return "<skill_catalog empty=\"true\" />"
         }
-        val automatic = automaticCatalog.joinToString("\n") { entry ->
-            """  <skill id="${entry.skillId.xmlEscape()}" name="${entry.name.xmlEscape()}" source="${(entry.sourceRepository ?: entry.sourceType.name).xmlEscape()}" content_hash="${entry.contentHash}" invocation_mode="auto">${entry.description.xmlEscape()}</skill>"""
-        }
+        val automatic = automaticCatalog
+            .groupBy { it.packageName.ifBlank { it.sourceRepository ?: "我的 Skill" } }
+            .entries
+            .joinToString("\n") { (packageName, entries) ->
+                buildString {
+                    appendLine("  <skill_package name=\"${packageName.xmlEscape()}\">")
+                    entries.forEach { entry ->
+                        appendLine("""    <skill id="${entry.skillId.xmlEscape()}" name="${entry.name.xmlEscape()}" source="${(entry.sourceRepository ?: entry.sourceType.name).xmlEscape()}" content_hash="${entry.contentHash}" invocation_mode="auto">${entry.description.xmlEscape()}</skill>""")
+                    }
+                    append("  </skill_package>")
+                }
+            }
         val manual = manualReferences.joinToString("\n") { entry ->
             """  <required_skill id="${entry.skillId.xmlEscape()}" name="${entry.displayName.xmlEscape()}" content_hash="${entry.contentHash}" />"""
         }

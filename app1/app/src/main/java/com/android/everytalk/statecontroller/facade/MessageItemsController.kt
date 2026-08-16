@@ -21,6 +21,8 @@ import com.android.everytalk.ui.components.markdown.markdownLinkLogoIndex
 import com.android.everytalk.ui.components.markdown.preparedMessageLinkLogoSource
 import com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem
 import com.android.everytalk.ui.screens.MainScreen.chat.core.expandStaticAiMessageItem
+import com.android.everytalk.ui.screens.MainScreen.chat.core.OrderedAiOutputSegment
+import com.android.everytalk.ui.screens.MainScreen.chat.core.orderedAiOutputSegments
 import com.mikepenz.markdown.model.State
 import com.mikepenz.markdown.model.parseMarkdown
 import kotlinx.coroutines.CoroutineScope
@@ -258,7 +260,12 @@ open class MessageItemsController(
                             val cachedFooter = cached?.items
                                 ?.filterIsInstance<ChatListItem.AiMessageFooter>()
                                 ?.firstOrNull()
-                            val expectedHasFooter = !message.isError && if (isCurrentlyStreaming) {
+                            val hasOrderedOutput = message.executionTrace.any {
+                                it is ExecutionTraceEvent.Content
+                            }
+                            val expectedHasFooter = !message.isError && if (hasOrderedOutput) {
+                                !isCurrentlyStreaming
+                            } else if (isCurrentlyStreaming) {
                                 !message.webSearchResults.isNullOrEmpty()
                             } else {
                                 effectiveMessage.text.isNotBlank() || !message.webSearchResults.isNullOrEmpty()
@@ -530,6 +537,21 @@ open class MessageItemsController(
         allowLazyStaticRender: Boolean = true,
     ): List<ChatListItem> {
         val state = computeBubbleState(message, isApiCalling, currentStreamingAiMessageId, isImageGeneration)
+        val reasoningCompleteMap =
+            if (isImageGeneration) stateHolder.imageReasoningCompleteMap else stateHolder.textReasoningCompleteMap
+        val reasoningComplete = reasoningCompleteMap[message.id] ?: false
+
+        if (
+            !isImageGeneration &&
+            message.executionTrace.any { it is ExecutionTraceEvent.Content }
+        ) {
+            return createOrderedAiOutputItems(
+                message = message,
+                state = state,
+                reasoningComplete = reasoningComplete,
+            )
+        }
+
         val resolvedParseResult = parseResult ?: resolveParseResult(
             message = message,
             preferStreamingState = isApiCalling && message.id == currentStreamingAiMessageId,
@@ -541,9 +563,6 @@ open class MessageItemsController(
         }
         val completedParseResult = staticPreparation?.parseResult ?: resolvedParseResult
 
-        val reasoningCompleteMap =
-            if (isImageGeneration) stateHolder.imageReasoningCompleteMap else stateHolder.textReasoningCompleteMap
-        val reasoningComplete = reasoningCompleteMap[message.id] ?: false
         val hasReviewableProcess = message.hasReviewableExecutionProcess()
 
         return when (state) {
@@ -679,6 +698,62 @@ open class MessageItemsController(
         return messages
             .filterNot { it.sender == Sender.System && it.isPlaceholderName }
             .dropWhile { it.sender == Sender.System && it.text.isNotBlank() }
+    }
+
+    /** 新消息按正文与执行过程的真实事件顺序生成列表项。 */
+    private fun createOrderedAiOutputItems(
+        message: Message,
+        state: com.android.everytalk.ui.state.AiBubbleState,
+        reasoningComplete: Boolean,
+    ): List<ChatListItem> {
+        val segments = orderedAiOutputSegments(message.executionTrace)
+        val replyIsStreaming = state is com.android.everytalk.ui.state.AiBubbleState.Connecting ||
+            state is com.android.everytalk.ui.state.AiBubbleState.Reasoning ||
+            state is com.android.everytalk.ui.state.AiBubbleState.Streaming
+        val lastProcessIndex = segments.indexOfLast { it is OrderedAiOutputSegment.Process }
+        val activityStatus = if (replyIsStreaming) {
+            val elapsedMs = streamingStartTimestamps[message.id]
+                ?.let { System.currentTimeMillis() - it }
+                ?: 0L
+            resolveStreamingStageText(message, elapsedMs, reasoningComplete)
+        } else {
+            message.executionStatus
+        }
+
+        return buildList {
+            segments.forEachIndexed { segmentIndex, segment ->
+                when (segment) {
+                    is OrderedAiOutputSegment.Content -> if (segment.text.isNotBlank()) {
+                        add(
+                            ChatListItem.AiMessageContentSegment(
+                                message = message,
+                                segmentIndex = segmentIndex,
+                                text = segment.text,
+                                isStreaming = replyIsStreaming && segmentIndex == segments.lastIndex,
+                            )
+                        )
+                    }
+                    is OrderedAiOutputSegment.Process -> add(
+                        ChatListItem.AiMessageProcessSegment(
+                            message = message,
+                            segmentIndex = segmentIndex,
+                            events = segment.events,
+                            detailStartIndex = segment.detailStartIndex,
+                            activityStatusText = activityStatus.takeIf { segmentIndex == segments.lastIndex },
+                            replyIsStreaming = replyIsStreaming,
+                            processIsActive = replyIsStreaming && segmentIndex == segments.lastIndex,
+                            isLastProcess = segmentIndex == lastProcessIndex,
+                        )
+                    )
+                }
+            }
+
+            if (!replyIsStreaming && !message.isError) {
+                add(ChatListItem.AiMessageFooter(message))
+            } else if (message.isError && none { it is ChatListItem.AiMessageContentSegment }) {
+                add(ChatListItem.ErrorMessage(message.id, message.text))
+            }
+        }
     }
 
     protected fun normalizeStatusText(message: Message): String {

@@ -753,8 +753,18 @@ class AgentRunStore(
         messages: List<AbstractApiMessage>,
     ): List<AbstractApiMessage> = messages + decodeFinalTranscriptEntries(runId)
 
-    /** 进程重建时按 AgentEntry.sequence 还原思考和工具顺序，供可见消息恢复执行抽屉。 */
+    /** 进程重建时按 AgentEntry.sequence 还原正文、思考和工具顺序。 */
     suspend fun executionTrace(runId: String): List<ExecutionTraceEvent> = buildList {
+        fun appendContent(text: String) {
+            if (text.isBlank()) return
+            val previous = lastOrNull()
+            if (previous is ExecutionTraceEvent.Content) {
+                this[lastIndex] = previous.copy(text = previous.text + text)
+            } else {
+                add(ExecutionTraceEvent.Content(text))
+            }
+        }
+
         fun appendNarrative(text: String) {
             if (text.isBlank()) return
             val previous = lastOrNull()
@@ -769,11 +779,10 @@ class AgentRunStore(
             when (entry.kind) {
                 AgentEntryKind.ASSISTANT.name -> {
                     val blocks = decodeAssistantBlocks(entry)
-                    val isToolRound = blocks.any { it is AgentContentBlock.ToolCall }
                     blocks.forEach { block ->
                         when (block) {
                             is AgentContentBlock.Reasoning -> appendNarrative(block.text)
-                            is AgentContentBlock.Text -> if (isToolRound) appendNarrative(block.text)
+                            is AgentContentBlock.Text -> appendContent(block.text)
                             is AgentContentBlock.ToolCall -> add(
                                 ExecutionTraceEvent.Tool(block.toExecutionStep(completed = false))
                             )

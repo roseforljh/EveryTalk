@@ -234,6 +234,21 @@ private fun List<ExecutionTraceEvent>.appendReasoningChunk(chunk: String): List<
     }
 }
 
+/** 正文增量只和相邻正文合并，思考或工具一到达就形成新边界。 */
+internal fun appendExecutionTraceContent(
+    trace: List<ExecutionTraceEvent>,
+    chunk: String,
+): List<ExecutionTraceEvent> {
+    if (chunk.isEmpty()) return trace
+    val previous = trace.lastOrNull()
+    if (previous !is ExecutionTraceEvent.Content) {
+        return trace + ExecutionTraceEvent.Content(chunk)
+    }
+    return trace.toMutableList().apply {
+        this[lastIndex] = previous.copy(text = previous.text + chunk)
+    }
+}
+
 private fun List<ExecutionTraceEvent>.mergeToolStep(step: ExecutionStep): List<ExecutionTraceEvent> {
     val index = indexOfFirst { event ->
         event is ExecutionTraceEvent.Tool && event.step.id == step.id
@@ -270,6 +285,34 @@ private fun List<ExecutionTraceEvent>.completeTool(
                 executionId = executionId ?: event.step.executionId,
             )
         )
+    }
+}
+
+private fun List<ExecutionTraceEvent>.appendBuiltInCodeExecution(language: String?): List<ExecutionTraceEvent> {
+    val sequence = count { event ->
+        event is ExecutionTraceEvent.Tool && event.step.id.startsWith("builtin-code-")
+    }
+    return this + ExecutionTraceEvent.Tool(
+        ExecutionStep(
+            id = "builtin-code-$sequence",
+            type = ExecutionStepType.Tool,
+            title = "执行代码",
+            labels = listOfNotNull(language?.takeIf(String::isNotBlank)),
+            completed = false,
+        )
+    )
+}
+
+private fun List<ExecutionTraceEvent>.completeBuiltInCodeExecution(): List<ExecutionTraceEvent> {
+    val index = indexOfLast { event ->
+        event is ExecutionTraceEvent.Tool &&
+            event.step.id.startsWith("builtin-code-") &&
+            !event.step.completed
+    }
+    if (index < 0) return this
+    return toMutableList().apply {
+        val event = this[index] as ExecutionTraceEvent.Tool
+        this[index] = event.copy(step = event.step.copy(completed = true))
     }
 }
 
@@ -598,13 +641,21 @@ internal class ApiHandlerStreamProcessor(
                                 updatedMessage = latestMessageForUpdate().copy(
                                     contentStarted = true,
                                     currentWebSearchStage = null,
-                                    executionStatus = null
+                                    executionStatus = null,
+                                    executionTrace = appendExecutionTraceContent(
+                                        latestMessageForUpdate().executionTrace,
+                                        filteredChunk,
+                                    ),
                                 )
                                 logger.debug("First content chunk received for message $aiMessageId, setting contentStarted=true")
                             } else {
                                 updatedMessage = latestMessageForUpdate().copy(
                                     currentWebSearchStage = null,
-                                    executionStatus = null
+                                    executionStatus = null,
+                                    executionTrace = appendExecutionTraceContent(
+                                        latestMessageForUpdate().executionTrace,
+                                        filteredChunk,
+                                    ),
                                 )
                             }
                             // 🛡️ 持久化保护：实时流式期间也触发一次"可合流"的保存（内部1.8s防抖+CONFLATED）
@@ -618,31 +669,23 @@ internal class ApiHandlerStreamProcessor(
                     }
                 }
                 is AppStreamEvent.CodeExecutable -> {
-                    // 显示"正在执行代码"状态，并将代码追加到正文
+                    // 内置代码执行属于过程，禁止把它冒充成模型的最终正文。
                     val code = appEvent.executableCode ?: ""
                     if (code.isNotBlank()) {
-                        val formattedCode = "\n```${appEvent.codeLanguage ?: "python"}\n$code\n```\n"
-                        stateHolder.appendContentToMessage(aiMessageId, formattedCode, isImageGeneration)
                         updatedMessage = latestMessageForUpdate().copy(
-                            executionStatus = null,
+                            executionStatus = "执行代码",
                             currentWebSearchStage = null,
-                            contentStarted = true
+                            executionTrace = latestMessageForUpdate().executionTrace
+                                .appendBuiltInCodeExecution(appEvent.codeLanguage),
                         )
                     }
                 }
                 is AppStreamEvent.CodeExecutionResult -> {
-                    // 清除执行状态，追加执行结果
-                    updatedMessage = updatedMessage.copy(executionStatus = null)
-                    val output = appEvent.codeExecutionOutput?.let(TextSanitizer::removeUnicodeReplacementCharacters)
-                    if (!output.isNullOrBlank()) {
-                        val formattedOutput = "\n```text\n$output\n```\n"
-                        stateHolder.appendContentToMessage(aiMessageId, formattedOutput, isImageGeneration)
-                        updatedMessage = latestMessageForUpdate().copy(
-                            contentStarted = true,
-                            currentWebSearchStage = null,
-                            executionStatus = null
-                        )
-                    }
+                    updatedMessage = latestMessageForUpdate().copy(
+                        executionStatus = null,
+                        currentWebSearchStage = null,
+                        executionTrace = latestMessageForUpdate().executionTrace.completeBuiltInCodeExecution(),
+                    )
                     applyPreparedGeneratedImage(preparedGeneratedImage)
                 }
                 is AppStreamEvent.ImageGeneration -> applyPreparedGeneratedImage(preparedGeneratedImage)
@@ -667,13 +710,21 @@ internal class ApiHandlerStreamProcessor(
                                 updatedMessage = latestMessageForUpdate().copy(
                                     contentStarted = true,
                                     currentWebSearchStage = null,
-                                    executionStatus = null
+                                    executionStatus = null,
+                                    executionTrace = appendExecutionTraceContent(
+                                        latestMessageForUpdate().executionTrace,
+                                        filteredChunk,
+                                    ),
                                 )
                                 logger.debug("First text chunk received for message $aiMessageId, setting contentStarted=true")
                             } else {
                                 updatedMessage = latestMessageForUpdate().copy(
                                     currentWebSearchStage = null,
-                                    executionStatus = null
+                                    executionStatus = null,
+                                    executionTrace = appendExecutionTraceContent(
+                                        latestMessageForUpdate().executionTrace,
+                                        filteredChunk,
+                                    ),
                                 )
                             }
                             // 🛡️ 持久化保护：实时保存（可被防抖合并），防止切会话导致未落盘

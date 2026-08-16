@@ -176,7 +176,6 @@ android {
             buildConfigField("String", "JINA_READER_BASE_URL", "\"${getConfigValue("JINA_READER_BASE_URL")}\"")
             buildConfigField("String", "JINA_SEARCH_BASE_URL", "\"${getConfigValue("JINA_SEARCH_BASE_URL")}\"")
             buildConfigField("String", "AI_CONTENT_REPORT_URL", "\"${getConfigValue("AI_CONTENT_REPORT_URL")}\"")
-            buildConfigField("String", "SKILL_CATALOG_BASE_URL", "\"${getConfigValue("SKILL_CATALOG_BASE_URL")}\"")
         }
         debug {
             isProfileable = false // debug 构建也可以设为 profileable,方便测试
@@ -199,7 +198,6 @@ android {
             buildConfigField("String", "JINA_READER_BASE_URL", "\"${getConfigValue("JINA_READER_BASE_URL")}\"")
             buildConfigField("String", "JINA_SEARCH_BASE_URL", "\"${getConfigValue("JINA_SEARCH_BASE_URL")}\"")
             buildConfigField("String", "AI_CONTENT_REPORT_URL", "\"${getConfigValue("AI_CONTENT_REPORT_URL")}\"")
-            buildConfigField("String", "SKILL_CATALOG_BASE_URL", "\"${getConfigValue("SKILL_CATALOG_BASE_URL")}\"")
 
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
