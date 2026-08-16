@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.LazyColumn
@@ -489,6 +490,7 @@ fun SkillDownloadScreen(navController: NavController) {
             },
             confirmButton = {
                 Button(
+                    modifier = Modifier.widthIn(min = 144.dp),
                     enabled = !installing && !isInstalled && skill.githubRepository != null,
                     onClick = { install(skill) },
                     shape = AppDialogButtonShape,
@@ -505,9 +507,9 @@ fun SkillDownloadScreen(navController: NavController) {
                             color = dialogBg,
                             strokeWidth = 2.dp,
                         )
-                        Spacer(Modifier.width(8.dp))
+                    } else {
+                        Text(if (isInstalled) "已安装" else "下载并安装", fontWeight = FontWeight.SemiBold)
                     }
-                    Text(if (isInstalled) "已安装" else if (installing) "下载中 ${installElapsedSeconds}s" else "下载并安装", fontWeight = FontWeight.SemiBold)
                 }
             },
             dismissButton = {

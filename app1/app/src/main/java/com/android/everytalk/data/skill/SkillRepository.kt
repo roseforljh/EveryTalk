@@ -209,7 +209,8 @@ ${rules.trim()}
             ZipInputStream(archive.inputStream().buffered()).use { zip ->
                 while (true) {
                     val zipEntry = zip.nextEntry ?: break
-                    val normalizedName = zipEntry.name.replace('\\', '/')
+                    // GitHub codeload 会把目录写成 `目录/`，先去掉末尾斜杠再校验路径段。
+                    val normalizedName = zipEntry.name.replace('\\', '/').trimEnd('/')
                     require(
                         normalizedName.isNotBlank() && !normalizedName.startsWith('/') &&
                             normalizedName.split('/').none { it.isBlank() || it == "." || it == ".." },
