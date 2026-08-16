@@ -72,6 +72,38 @@ class ExecutionStepTest {
     }
 
     @Test
+    fun `执行链记录每个事件自己的时间`() {
+        var trace = emptyList<ExecutionTraceEvent>()
+        trace = reduceExecutionTrace(
+            trace,
+            AppStreamEvent.Reasoning("先检查。"),
+            nowMillis = 100L,
+        )
+        trace = reduceExecutionTrace(
+            trace,
+            AppStreamEvent.ToolCall(
+                id = "timed-tool",
+                name = ComputerToolNames.EXEC,
+                argumentsObj = buildJsonObject {},
+            ),
+            nowMillis = 200L,
+        )
+        trace = reduceExecutionTrace(
+            trace,
+            AppStreamEvent.ExecutionStatusUpdate(
+                status = null,
+                toolCallId = "timed-tool",
+            ),
+            nowMillis = 650L,
+        )
+
+        assertEquals(100L, (trace[0] as ExecutionTraceEvent.Reasoning).startedAtMillis)
+        val tool = trace[1] as ExecutionTraceEvent.Tool
+        assertEquals(200L, tool.startedAtMillis)
+        assertEquals(650L, tool.finishedAtMillis)
+    }
+
+    @Test
     fun `搜索工具保留真实查询并合并同一调用`() {
         val event = AppStreamEvent.ToolCall(
             id = "search-1",
@@ -140,10 +172,10 @@ class ExecutionStepTest {
     fun `有序执行链可序列化并恢复`() {
         val converters = Converters()
         val trace = listOf(
-            ExecutionTraceEvent.Content("先说明目标。"),
-            ExecutionTraceEvent.Reasoning("先检查系统。"),
+            ExecutionTraceEvent.Content("先说明目标。", startedAtMillis = 100L),
+            ExecutionTraceEvent.Reasoning("先检查系统。", startedAtMillis = 200L),
             ExecutionTraceEvent.Tool(
-                executionStepForToolCall(
+                step = executionStepForToolCall(
                     AppStreamEvent.ToolCall(
                         id = "call-1",
                         name = ComputerToolNames.EXEC,
@@ -151,7 +183,9 @@ class ExecutionStepTest {
                             put("command", JsonPrimitive("uname -a"))
                         },
                     )
-                )
+                ),
+                startedAtMillis = 300L,
+                finishedAtMillis = 600L,
             ),
         )
 

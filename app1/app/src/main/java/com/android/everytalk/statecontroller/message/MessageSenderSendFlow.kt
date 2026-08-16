@@ -238,7 +238,7 @@ internal fun MessageSender.sendMessageInternal(
             val isDefaultProvider = currentConfig.provider.trim().lowercase() in listOf("默认", "default")
             val customModelParameters = if (parameterProtocol == ModelParameterProtocol.OPENAI_COMPATIBLE) {
                 try {
-                    currentConfig.modelParameters.openAICompatibleRequestParameters()
+                    currentConfig.modelParameters.openAICompatibleRequestParameters(currentConfig.model)
                 } catch (e: IllegalArgumentException) {
                     Log.e("MessageSender", "模型参数校验失败", e)
                     withContext(Dispatchers.Main.immediate) {

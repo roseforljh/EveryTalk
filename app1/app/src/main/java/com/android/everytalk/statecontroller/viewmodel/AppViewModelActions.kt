@@ -262,6 +262,11 @@ import java.util.TimeZone
         return simpleModeManager.isInTextMode()
     }
 
+    /** 执行终态属于会话事实，保存历史时不能只比较正文和思考。 */
+    internal fun Message.hasSamePersistedExecutionState(other: Message): Boolean =
+        executionStatus == other.executionStatus &&
+            executionFinishedAt == other.executionFinishedAt
+
     internal suspend fun AppViewModel.areMessageListsEffectivelyEqual(
         list1: List<Message>?,
         list2: List<Message>?
@@ -302,6 +307,7 @@ import java.util.TimeZone
             val imagesCount1 = msg1.imageUrls?.size ?: 0
             val imagesCount2 = msg2.imageUrls?.size ?: 0
             val imagesMatch = imagesCount1 == imagesCount2
+            val executionStateMatches = msg1.hasSamePersistedExecutionState(msg2)
 
             // 忽略 id/timestamp/动画/占位等不稳定字段，仅对“角色 + 内容”判等
             if (
@@ -310,7 +316,8 @@ import java.util.TimeZone
                 !textMatch ||
                 !reasoningMatch ||
                 !attachmentsMatch ||
-                !imagesMatch
+                !imagesMatch ||
+                !executionStateMatches
             ) {
                 return@withContext false
             }
@@ -491,7 +498,7 @@ import java.util.TimeZone
     internal fun AppViewModel.setAgentEnabled(
         enabled: Boolean,
         allowWorkspaceRecreation: Boolean = false,
-    ) {
+    ): Boolean {
         val generation = stateHolder.agentActionGeneration.incrementAndGet()
         if (!enabled) {
             stateHolder.updateCurrentConversationFunctionToggleState { it.copy(agentEnabled = false) }
@@ -502,17 +509,17 @@ import java.util.TimeZone
                     stateHolder.conversationFunctionToggleStates.value,
                 )
             }
-            return
+            return true
         }
 
         if (!canUseAgentNotifications(getApplication())) {
             showSnackbar("Agent 需要通知权限以在后台继续运行并提醒结果")
-            return
+            return false
         }
 
         if (!computerManager.supportsToolCalls(stateHolder._selectedApiConfig.value)) {
             showSnackbar("当前模型不支持 Agent Tool Call")
-            return
+            return false
         }
 
         val conversationId = stateHolder._currentConversationId.value
@@ -522,13 +529,13 @@ import java.util.TimeZone
             !allowWorkspaceRecreation
         ) {
             showSnackbar("原工作区已删除，请先确认创建新工作区")
-            return
+            return false
         }
         try {
             computerManager.requireSelectedReadyComputer(conversationId)
         } catch (error: ComputerException) {
             showSnackbar(error.message)
-            return
+            return false
         }
         stateHolder.updateCurrentConversationFunctionToggleState { state ->
             state.copy(
@@ -559,6 +566,7 @@ import java.util.TimeZone
                 Log.e("AppViewModel", "Agent 后台预热失败", error)
             }
         }
+        return true
     }
 
     /** 长按选服使用；选择落库后立即更新 Agent，Workspace 在后台准备。 */
@@ -570,8 +578,14 @@ import java.util.TimeZone
     ) {
         val generation = stateHolder.agentActionGeneration.incrementAndGet()
         val shouldPrepareWorkspace = stateHolder._isAgentEnabled.value || enableAgentAfterSelection
+        if (enableAgentAfterSelection && !canUseAgentNotifications(getApplication())) {
+            showSnackbar("Agent 需要通知权限以在后台继续运行并提醒结果")
+            onFailure?.invoke()
+            return
+        }
         if (enableAgentAfterSelection && !computerManager.supportsToolCalls(stateHolder._selectedApiConfig.value)) {
             showSnackbar("当前模型不支持 Agent Tool Call")
+            onFailure?.invoke()
             return
         }
         if (enableAgentAfterSelection) {

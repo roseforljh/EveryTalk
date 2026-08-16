@@ -1106,6 +1106,76 @@ class MessageItemsControllerStatusTest {
         assertTrue(items.filterIsInstance<ChatListItem.AiMessageProcessSegment>().all { !it.replyIsStreaming })
     }
 
+    @Test
+    fun `流式正文已经继续输出时前一个过程段停止计时`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        val messageId = "ordered-output-streaming"
+        controller.stateHolder.messages.add(
+            Message(
+                id = messageId,
+                text = "正文 1正文 2正文 3",
+                sender = Sender.AI,
+                contentStarted = true,
+                executionTrace = listOf(
+                    ExecutionTraceEvent.Content("正文 1"),
+                    ExecutionTraceEvent.Reasoning("思考 1"),
+                    ExecutionTraceEvent.Tool(completedToolStep()),
+                    ExecutionTraceEvent.Content("正文 2"),
+                    ExecutionTraceEvent.Reasoning("思考 2"),
+                    ExecutionTraceEvent.Tool(completedToolStep().copy(id = "tool-2")),
+                    ExecutionTraceEvent.Content("正文 3"),
+                ),
+            )
+        )
+        controller.stateHolder._isTextApiCalling.value = true
+        controller.stateHolder._currentTextStreamingAiMessageId.value = messageId
+        Snapshot.sendApplyNotifications()
+
+        val processItems = controller.chatListItemsForTest()
+            .filterIsInstance<ChatListItem.AiMessageProcessSegment>()
+
+        assertEquals(listOf(false, false), processItems.map { it.replyIsStreaming })
+        assertEquals(listOf(false, false), processItems.map { it.processIsActive })
+    }
+
+    @Test
+    fun `多个过程段显示各自耗时而非整条回复总耗时`() {
+        val controller = MessageItemsControllerTestAccess.newController()
+        controller.stateHolder.messages.add(
+            Message(
+                id = "ordered-output-duration",
+                text = "正文 1正文 2",
+                sender = Sender.AI,
+                contentStarted = true,
+                timestamp = 50L,
+                executionFinishedAt = 900L,
+                executionTrace = listOf(
+                    ExecutionTraceEvent.Content("正文 1", startedAtMillis = 100L),
+                    ExecutionTraceEvent.Reasoning("思考 1", startedAtMillis = 200L),
+                    ExecutionTraceEvent.Tool(
+                        step = completedToolStep(),
+                        startedAtMillis = 300L,
+                        finishedAtMillis = 450L,
+                    ),
+                    ExecutionTraceEvent.Content("正文 2", startedAtMillis = 500L),
+                    ExecutionTraceEvent.Reasoning("思考 2", startedAtMillis = 700L),
+                    ExecutionTraceEvent.Tool(
+                        step = completedToolStep().copy(id = "tool-2"),
+                        startedAtMillis = 800L,
+                        finishedAtMillis = 850L,
+                    ),
+                ),
+            )
+        )
+        Snapshot.sendApplyNotifications()
+
+        val processItems = controller.chatListItemsForTest()
+            .filterIsInstance<ChatListItem.AiMessageProcessSegment>()
+
+        assertEquals(listOf(200L, 700L), processItems.map { it.executionStartedAtMillis })
+        assertEquals(listOf(500L, 900L), processItems.map { it.executionFinishedAtMillis })
+    }
+
     private fun completedToolStep() = ExecutionStep(
         id = "tool-1",
         type = ExecutionStepType.Tool,

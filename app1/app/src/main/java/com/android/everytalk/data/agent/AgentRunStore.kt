@@ -272,6 +272,21 @@ class AgentRunStore(
         if (status in AGENT_TERMINAL_RUN_STATUSES) snapshotCache.remove(run.id)
     }
 
+    /** 按消息 ID 原子记录用户停止，并清掉只服务于恢复的内存快照。 */
+    suspend fun cancelActiveRunByVisibleMessage(
+        messageId: String,
+        reason: String,
+    ): AgentRunEntity? {
+        val changed = dao.cancelActiveRunByVisibleMessage(
+            messageId = messageId,
+            reason = reason,
+            updatedAt = System.currentTimeMillis(),
+        )
+        val run = dao.getRunByVisibleMessage(messageId)
+        if (changed > 0 && run != null) snapshotCache.remove(run.id)
+        return run
+    }
+
     suspend fun createRequest(
         run: AgentRunEntity,
         ordinal: Int,
@@ -808,23 +823,23 @@ class AgentRunStore(
 
     /** 进程重建时按 AgentEntry.sequence 还原正文、思考和工具顺序。 */
     suspend fun executionTrace(runId: String): List<ExecutionTraceEvent> = buildList {
-        fun appendContent(text: String) {
+        fun appendContent(text: String, startedAtMillis: Long) {
             if (text.isBlank()) return
             val previous = lastOrNull()
             if (previous is ExecutionTraceEvent.Content) {
                 this[lastIndex] = previous.copy(text = previous.text + text)
             } else {
-                add(ExecutionTraceEvent.Content(text))
+                add(ExecutionTraceEvent.Content(text, startedAtMillis))
             }
         }
 
-        fun appendNarrative(text: String) {
+        fun appendNarrative(text: String, startedAtMillis: Long) {
             if (text.isBlank()) return
             val previous = lastOrNull()
             if (previous is ExecutionTraceEvent.Reasoning) {
                 this[lastIndex] = previous.copy(text = previous.text + text)
             } else {
-                add(ExecutionTraceEvent.Reasoning(text))
+                add(ExecutionTraceEvent.Reasoning(text, startedAtMillis))
             }
         }
 
@@ -834,10 +849,13 @@ class AgentRunStore(
                     val blocks = decodeAssistantBlocks(entry)
                     blocks.forEach { block ->
                         when (block) {
-                            is AgentContentBlock.Reasoning -> appendNarrative(block.text)
-                            is AgentContentBlock.Text -> appendContent(block.text)
+                            is AgentContentBlock.Reasoning -> appendNarrative(block.text, entry.createdAt)
+                            is AgentContentBlock.Text -> appendContent(block.text, entry.createdAt)
                             is AgentContentBlock.ToolCall -> add(
-                                ExecutionTraceEvent.Tool(block.toExecutionStep(completed = false))
+                                ExecutionTraceEvent.Tool(
+                                    step = block.toExecutionStep(completed = false),
+                                    startedAtMillis = entry.createdAt,
+                                )
                             )
                             is AgentContentBlock.ToolResult -> Unit
                         }
@@ -850,7 +868,10 @@ class AgentRunStore(
                     }
                     if (index >= 0) {
                         val tool = this[index] as ExecutionTraceEvent.Tool
-                        this[index] = tool.copy(step = tool.step.copy(completed = true))
+                        this[index] = tool.copy(
+                            step = tool.step.copy(completed = true),
+                            finishedAtMillis = entry.finalizedAt ?: entry.createdAt,
+                        )
                     }
                 }
             }

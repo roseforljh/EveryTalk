@@ -14,6 +14,7 @@ import kotlinx.coroutines.test.TestScope
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -123,6 +124,25 @@ class ViewModelStateHolderStreamingStateTest {
 
         stateHolder.flushStreamingBuffer(messageId)
         assertEquals("AB", stateHolder.messages.single().orderedContentText())
+    }
+
+    @Test
+    fun `后台续写重新挂接界面并在真正结束后归位`() {
+        val messageId = "resumed-agent-message"
+        stateHolder.messages.add(Message(id = messageId, text = "已有内容", sender = Sender.AI))
+
+        assertTrue(stateHolder.attachTextAgentUi(messageId))
+        assertTrue(stateHolder._isTextApiCalling.value)
+        assertEquals(messageId, stateHolder._currentTextStreamingAiMessageId.value)
+
+        stateHolder.messages.add(Message(id = "other-message", text = "", sender = Sender.AI))
+        assertFalse(stateHolder.attachTextAgentUi("other-message"))
+        assertEquals(messageId, stateHolder._currentTextStreamingAiMessageId.value)
+
+        stateHolder.detachTextAgentUi(messageId)
+
+        assertFalse(stateHolder._isTextApiCalling.value)
+        assertNull(stateHolder._currentTextStreamingAiMessageId.value)
     }
 
     private fun Message.orderedContentText(): String = executionTrace

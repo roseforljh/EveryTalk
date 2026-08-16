@@ -759,6 +759,11 @@ open class MessageItemsController(
             state is com.android.everytalk.ui.state.AiBubbleState.Reasoning ||
             state is com.android.everytalk.ui.state.AiBubbleState.Streaming
         val lastProcessIndex = segments.indexOfLast { it is OrderedAiOutputSegment.Process }
+        val processCount = segments.count { it is OrderedAiOutputSegment.Process }
+        // 正文已经继续输出时，前一个过程段已经结束，不能继续沿用整条回复的计时器。
+        val activeProcessIndex = lastProcessIndex.takeIf {
+            replyIsStreaming && lastProcessIndex == segments.lastIndex
+        } ?: -1
         val activityStatus = if (replyIsStreaming) {
             val elapsedMs = streamingStartTimestamps[message.id]
                 ?.let { System.currentTimeMillis() - it }
@@ -797,21 +802,35 @@ open class MessageItemsController(
                             )
                         )
                     }
-                    is OrderedAiOutputSegment.Process -> add(
-                        ChatListItem.AiMessageProcessSegment(
+                    is OrderedAiOutputSegment.Process -> {
+                        // 旧消息没有分段时间。只有整条回复仅含一个过程段时，才沿用旧的总耗时；
+                        // 多个旧过程段不再全部显示同一个伪造时间。
+                        val useLegacyWholeMessageTiming =
+                            segment.startedAtMillis == null && processCount == 1
+                        val segmentStartedAt = segment.startedAtMillis
+                            ?: message.timestamp.takeIf { useLegacyWholeMessageTiming }
+                        val segmentFinishedAt = segment.finishedAtMillis
+                            ?: message.executionFinishedAt.takeIf {
+                                segmentIndex == lastProcessIndex &&
+                                    (segment.startedAtMillis != null || useLegacyWholeMessageTiming)
+                            }
+                        add(ChatListItem.AiMessageProcessSegment(
                             messageId = message.id,
                             segmentIndex = segmentIndex,
                             events = segment.events,
                             detailStartIndex = segment.detailStartIndex,
-                            activityStatusText = activityStatus.takeIf { segmentIndex == segments.lastIndex },
-                            replyIsStreaming = replyIsStreaming,
-                            processIsActive = replyIsStreaming && segmentIndex == segments.lastIndex,
+                            activityStatusText = activityStatus.takeIf {
+                                segmentIndex == activeProcessIndex ||
+                                    (message.isError && segmentIndex == lastProcessIndex)
+                            },
+                            replyIsStreaming = segmentIndex == activeProcessIndex,
+                            processIsActive = segmentIndex == activeProcessIndex,
                             webSearchResults = message.webSearchResults.orEmpty(),
                             messageIsError = message.isError && segmentIndex == lastProcessIndex,
-                            executionStartedAtMillis = message.timestamp,
-                            executionFinishedAtMillis = message.executionFinishedAt,
-                        )
-                    )
+                            executionStartedAtMillis = segmentStartedAt,
+                            executionFinishedAtMillis = segmentFinishedAt,
+                        ))
+                    }
                 }
             }
 

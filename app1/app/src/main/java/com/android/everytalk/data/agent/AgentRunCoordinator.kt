@@ -16,6 +16,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -23,6 +24,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.ConcurrentHashMap
@@ -71,6 +73,8 @@ class AgentRunCoordinator(
         )
     }
     private val activeJobs = ConcurrentHashMap<String, Job>()
+    /** 先于 Room Run 创建到达的停止请求，防止用户第一次点击落在登记空窗内。 */
+    private val visibleRunCancellationReasons = ConcurrentHashMap<String, String>()
     private val recoveringRunIds = ConcurrentHashMap.newKeySet<String>()
     private val resumeRetryStates = ConcurrentHashMap<String, ResumeRetryState>()
     private val resumeMutex = Mutex()
@@ -116,11 +120,23 @@ class AgentRunCoordinator(
             } finally {
                 foregroundActivity.close()
                 activeJobs.remove(jobKey)
+                visibleRunCancellationReasons[request.visibleAssistantMessageId]?.let { reason ->
+                    withContext(NonCancellable) {
+                        agentRunStore.cancelActiveRunByVisibleMessage(
+                            request.visibleAssistantMessageId,
+                            reason,
+                        )
+                        visibleRunCancellationReasons.remove(request.visibleAssistantMessageId, reason)
+                    }
+                }
                 close()
             }
         }
         activeJobs[jobKey]?.cancel()
         activeJobs[jobKey] = job
+        visibleRunCancellationReasons[request.visibleAssistantMessageId]?.let { reason ->
+            job.cancel(CancellationException(reason))
+        }
         // UI Collector 消失时不取消 job；前台服务和 Room 继续持有任务事实。
         awaitClose { uiAttached.set(false) }
     }
@@ -201,9 +217,18 @@ class AgentRunCoordinator(
             } finally {
                 foregroundActivity.close()
                 activeJobs.remove(jobKey)
+                visibleRunCancellationReasons[run.visibleAssistantMessageId]?.let { reason ->
+                    withContext(NonCancellable) {
+                        agentRunStore.cancelActiveRunByVisibleMessage(run.visibleAssistantMessageId, reason)
+                        visibleRunCancellationReasons.remove(run.visibleAssistantMessageId, reason)
+                    }
+                }
             }
         }
         activeJobs[jobKey] = job
+        visibleRunCancellationReasons[run.visibleAssistantMessageId]?.let { reason ->
+            job.cancel(CancellationException(reason))
+        }
         resumeRetryStates.remove(run.id)
         return true
     }
@@ -234,13 +259,20 @@ class AgentRunCoordinator(
         }
     }
 
-    /** 用户点击输入框停止时，取消当前可见回复对应的应用级 Agent Job。 */
-    fun cancelVisibleRun(messageId: String) {
-        activeJobs.remove("message:$messageId")?.cancel()
+    /** 用户第一次点击就登记停止；即使 Run 尚未写入 Room，稍后登记的 Job 也会立即取消。 */
+    fun cancelVisibleRun(messageId: String, reason: String = AgentTerminalReasons.USER_STOP) {
+        visibleRunCancellationReasons[messageId] = reason
+        val messageJob = activeJobs.remove("message:$messageId")
+        messageJob?.cancel(CancellationException(reason))
         scope.launch {
-            agentDao.getRunByVisibleMessage(messageId)?.let { run ->
+            messageJob?.join()
+            agentRunStore.cancelActiveRunByVisibleMessage(messageId, reason)?.let { run ->
                 resumeRetryStates.remove(run.id)
-                activeJobs.remove("run:${run.id}")?.cancel()
+                activeJobs.remove("run:${run.id}")?.let { runJob ->
+                    runJob.cancel(CancellationException(reason))
+                    runJob.join()
+                }
+                visibleRunCancellationReasons.remove(messageId, reason)
             }
         }
     }

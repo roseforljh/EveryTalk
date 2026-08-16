@@ -713,6 +713,26 @@ private fun addMessageInternal(message: Message, isImageGeneration: Boolean) {
         }
     }
 
+    /**
+     * 把应用级恢复的 AgentRun 重新挂到当前文本会话 UI。
+     * 只接管当前消息列表里真实存在的消息，也不会覆盖另一条正在运行的回复。
+     */
+    fun attachTextAgentUi(messageId: String): Boolean {
+        if (messages.none { it.id == messageId }) return false
+        if (_isTextApiCalling.value && _currentTextStreamingAiMessageId.value != messageId) return false
+        _currentTextStreamingAiMessageId.value = messageId
+        _isTextApiCalling.value = true
+        return true
+    }
+
+    /** 只有终态属于当前消息时才归位 UI，防止后台旧 Run 清掉另一条新回复的状态。 */
+    fun detachTextAgentUi(messageId: String) {
+        if (_currentTextStreamingAiMessageId.value != messageId) return
+        _isTextApiCalling.value = false
+        _currentTextStreamingAiMessageId.value = null
+        _isRemoteCancellationPending.value = false
+    }
+
     fun startLocalSlashLoading(messageId: String, isImageGeneration: Boolean = false) {
         if (isImageGeneration) {
             _currentImageStreamingAiMessageId.value = messageId

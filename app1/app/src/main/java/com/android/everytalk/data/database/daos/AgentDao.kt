@@ -37,6 +37,24 @@ interface AgentDao {
     @Query("SELECT * FROM agent_runs WHERE visibleAssistantMessageId = :messageId LIMIT 1")
     suspend fun getRunByVisibleMessage(messageId: String): AgentRunEntity?
 
+    /**
+     * 用户点击停止时按可见消息原子封存 Run。
+     * 条件更新避免 AgentLoop 恰好完成时又被旧的停止请求覆盖成 CANCELLED。
+     */
+    @Query(
+        """
+        UPDATE agent_runs
+        SET status = 'CANCELLED', terminalReason = :reason, updatedAt = :updatedAt
+        WHERE visibleAssistantMessageId = :messageId
+          AND status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED')
+        """
+    )
+    suspend fun cancelActiveRunByVisibleMessage(
+        messageId: String,
+        reason: String,
+        updatedAt: Long,
+    ): Int
+
     @Query("SELECT * FROM agent_runs WHERE sessionId = :sessionId ORDER BY createdAt ASC")
     suspend fun getRunsForSession(sessionId: String): List<AgentRunEntity>
 

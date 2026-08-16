@@ -223,11 +223,14 @@ internal fun mergeExecutionStep(
     }
 }
 
-private fun List<ExecutionTraceEvent>.appendReasoningChunk(chunk: String): List<ExecutionTraceEvent> {
+private fun List<ExecutionTraceEvent>.appendReasoningChunk(
+    chunk: String,
+    nowMillis: Long,
+): List<ExecutionTraceEvent> {
     if (chunk.isEmpty()) return this
     val previous = lastOrNull()
     if (previous !is ExecutionTraceEvent.Reasoning) {
-        return this + ExecutionTraceEvent.Reasoning(chunk)
+        return this + ExecutionTraceEvent.Reasoning(chunk, startedAtMillis = nowMillis)
     }
     return toMutableList().apply {
         this[lastIndex] = previous.copy(text = previous.text + chunk)
@@ -238,11 +241,12 @@ private fun List<ExecutionTraceEvent>.appendReasoningChunk(chunk: String): List<
 internal fun appendExecutionTraceContent(
     trace: List<ExecutionTraceEvent>,
     chunk: String,
+    nowMillis: Long = System.currentTimeMillis(),
 ): List<ExecutionTraceEvent> {
     if (chunk.isEmpty()) return trace
     val previous = trace.lastOrNull()
     if (previous !is ExecutionTraceEvent.Content) {
-        return trace + ExecutionTraceEvent.Content(chunk)
+        return trace + ExecutionTraceEvent.Content(chunk, startedAtMillis = nowMillis)
     }
     return trace.toMutableList().apply {
         this[lastIndex] = previous.copy(text = previous.text + chunk)
@@ -264,18 +268,23 @@ internal fun AppStreamEvent.requiresOrderedContentFlush(): Boolean = when (this)
     else -> true
 }
 
-private fun List<ExecutionTraceEvent>.mergeToolStep(step: ExecutionStep): List<ExecutionTraceEvent> {
+private fun List<ExecutionTraceEvent>.mergeToolStep(
+    step: ExecutionStep,
+    nowMillis: Long,
+): List<ExecutionTraceEvent> {
     val index = indexOfFirst { event ->
         event is ExecutionTraceEvent.Tool && event.step.id == step.id
     }
-    if (index < 0) return this + ExecutionTraceEvent.Tool(step)
+    if (index < 0) {
+        return this + ExecutionTraceEvent.Tool(step, startedAtMillis = nowMillis)
+    }
     return toMutableList().apply {
         val previous = this[index] as ExecutionTraceEvent.Tool
-        this[index] = ExecutionTraceEvent.Tool(
-            step.copy(
+        this[index] = previous.copy(
+            step = step.copy(
                 completed = previous.step.completed,
                 executionId = previous.step.executionId ?: step.executionId,
-            )
+            ),
         )
     }
 }
@@ -283,6 +292,7 @@ private fun List<ExecutionTraceEvent>.mergeToolStep(step: ExecutionStep): List<E
 private fun List<ExecutionTraceEvent>.completeTool(
     toolCallId: String?,
     executionId: String?,
+    nowMillis: Long,
 ): List<ExecutionTraceEvent> {
     val index = if (!toolCallId.isNullOrBlank()) {
         indexOfFirst { event ->
@@ -298,27 +308,34 @@ private fun List<ExecutionTraceEvent>.completeTool(
             step = event.step.copy(
                 completed = true,
                 executionId = executionId ?: event.step.executionId,
-            )
+            ),
+            finishedAtMillis = event.finishedAtMillis ?: nowMillis,
         )
     }
 }
 
-private fun List<ExecutionTraceEvent>.appendBuiltInCodeExecution(language: String?): List<ExecutionTraceEvent> {
+private fun List<ExecutionTraceEvent>.appendBuiltInCodeExecution(
+    language: String?,
+    nowMillis: Long = System.currentTimeMillis(),
+): List<ExecutionTraceEvent> {
     val sequence = count { event ->
         event is ExecutionTraceEvent.Tool && event.step.id.startsWith("builtin-code-")
     }
     return this + ExecutionTraceEvent.Tool(
-        ExecutionStep(
+        step = ExecutionStep(
             id = "builtin-code-$sequence",
             type = ExecutionStepType.Tool,
             title = "执行代码",
             labels = listOfNotNull(language?.takeIf(String::isNotBlank)),
             completed = false,
-        )
+        ),
+        startedAtMillis = nowMillis,
     )
 }
 
-private fun List<ExecutionTraceEvent>.completeBuiltInCodeExecution(): List<ExecutionTraceEvent> {
+private fun List<ExecutionTraceEvent>.completeBuiltInCodeExecution(
+    nowMillis: Long = System.currentTimeMillis(),
+): List<ExecutionTraceEvent> {
     val index = indexOfLast { event ->
         event is ExecutionTraceEvent.Tool &&
             event.step.id.startsWith("builtin-code-") &&
@@ -327,17 +344,25 @@ private fun List<ExecutionTraceEvent>.completeBuiltInCodeExecution(): List<Execu
     if (index < 0) return this
     return toMutableList().apply {
         val event = this[index] as ExecutionTraceEvent.Tool
-        this[index] = event.copy(step = event.step.copy(completed = true))
+        this[index] = event.copy(
+            step = event.step.copy(completed = true),
+            finishedAtMillis = event.finishedAtMillis ?: nowMillis,
+        )
     }
 }
 
-private fun List<ExecutionTraceEvent>.completeAllTraceTools(): List<ExecutionTraceEvent> =
+private fun List<ExecutionTraceEvent>.completeAllTraceTools(
+    nowMillis: Long = System.currentTimeMillis(),
+): List<ExecutionTraceEvent> =
     if (none { event -> event is ExecutionTraceEvent.Tool && !event.step.completed }) {
         this
     } else {
         map { event ->
-            if (event is ExecutionTraceEvent.Tool) {
-                event.copy(step = event.step.copy(completed = true))
+            if (event is ExecutionTraceEvent.Tool && !event.step.completed) {
+                event.copy(
+                    step = event.step.copy(completed = true),
+                    finishedAtMillis = event.finishedAtMillis ?: nowMillis,
+                )
             } else {
                 event
             }
@@ -351,19 +376,24 @@ private fun List<ExecutionTraceEvent>.completeAllTraceTools(): List<ExecutionTra
 internal fun reduceExecutionTrace(
     trace: List<ExecutionTraceEvent>,
     event: AppStreamEvent,
+    nowMillis: Long = System.currentTimeMillis(),
 ): List<ExecutionTraceEvent> = when (event) {
     is AppStreamEvent.Reasoning -> trace.appendReasoningChunk(
-        TextSanitizer.removeUnicodeReplacementCharacters(event.text)
+        chunk = TextSanitizer.removeUnicodeReplacementCharacters(event.text),
+        nowMillis = nowMillis,
     )
-    is AppStreamEvent.ToolCall -> trace.mergeToolStep(executionStepForToolCall(event))
+    is AppStreamEvent.ToolCall -> trace.mergeToolStep(
+        step = executionStepForToolCall(event),
+        nowMillis = nowMillis,
+    )
     is AppStreamEvent.ExecutionStatusUpdate -> if (event.status.isNullOrBlank()) {
-        trace.completeTool(event.toolCallId, event.executionId)
+        trace.completeTool(event.toolCallId, event.executionId, nowMillis)
     } else {
         trace
     }
     is AppStreamEvent.Finish,
     is AppStreamEvent.StreamEnd,
-    -> trace.completeAllTraceTools()
+    -> trace.completeAllTraceTools(nowMillis)
     else -> trace
 }
 
@@ -788,11 +818,6 @@ internal class ApiHandlerStreamProcessor(
                     val reasoningMap = if (isImageGeneration) stateHolder.imageReasoningCompleteMap else stateHolder.textReasoningCompleteMap
                     reasoningMap[aiMessageId] = true
                     logger.debug("Reasoning finished for message $aiMessageId, marking reasoning as complete")
-                    
-                    // ❌ 不在这里设置contentStarted = true，避免思考框过早消失
-                    updatedMessage = updatedMessage.copy(
-                        timestamp = System.currentTimeMillis()
-                    )
                 }
                 is AppStreamEvent.Usage -> {
                     updatedMessage = applyMessageTokenUsage(latestMessageForUpdate(), appEvent)
