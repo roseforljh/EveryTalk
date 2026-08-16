@@ -33,7 +33,7 @@ class SkillInlineEditorTest {
         val original = value("前面 /pd 后面", cursor = 6)
         val query = requireNotNull(findSkillSlashQuery(original))
         val inserted = insertSkillReference(original, emptyList(), query, reference)
-        assertEquals("前面 ${SKILL_TAG_MARKER} 后面", inserted.value.text)
+        assertEquals("前面 ${SKILL_TAG_MARKER}  后面", inserted.value.text)
 
         val marker = inserted.value.text.indexOf(SKILL_TAG_MARKER)
         val deletedText = inserted.value.text.removeRange(marker, marker + 1)

@@ -55,6 +55,7 @@ class ThinkingUiTextTest {
         assertFalse(isExecutionStatusActive("远端任务已取消"))
         assertFalse(isExecutionStatusActive("远端取消失败，等待恢复确认"))
         assertFalse(isExecutionStatusActive("命令执行完成"))
+        assertFalse(isExecutionStatusActive("已由新消息取代"))
         assertTrue(isExecutionStatusActive("正在取消远端任务"))
         assertTrue(isExecutionStatusActive("正在恢复远端任务"))
     }

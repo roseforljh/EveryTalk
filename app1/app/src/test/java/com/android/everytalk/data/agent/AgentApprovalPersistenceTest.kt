@@ -119,6 +119,70 @@ class AgentApprovalPersistenceTest {
     }
 
     @Test
+    fun `同会话新Run作废旧审批并只展示最新申请`() = runBlocking {
+        seedRun()
+        store.pauseForApproval(requireNotNull(store.getRun("run-1")), approvalRecord())
+
+        val newRun = store.createRun(
+            sessionId = "session-1",
+            userMessageId = "user-2",
+            visibleAssistantMessageId = "assistant-2",
+            configIdSnapshot = "config-1",
+            request = ChatRequest(
+                messages = listOf(SimpleTextApiMessage(role = "user", content = "重新申请")),
+                provider = "provider",
+                channel = "OpenAI",
+                apiAddress = "https://example.test",
+                apiKey = "secret",
+                model = "model",
+            ),
+        )
+        val latestCall = toolCall("request-agent-2", AgentControlToolNames.REQUEST_AGENT)
+        store.pauseForApproval(
+            newRun,
+            AgentApprovalRecord(
+                approvalRequestId = "approval-agent-2",
+                requestId = "request-agent-2",
+                toolCall = latestCall,
+                pendingToolCalls = listOf(latestCall),
+                agentRequest = AgentPauseRequest.EnableAgent("重新开启 Agent", emptyList()),
+            ),
+        )
+
+        val waiting = store.getWaitingApprovalRuns()
+        assertEquals(AgentRunStatus.CANCELLED.name, store.getRun("run-1")?.status)
+        assertEquals(AgentTerminalReasons.SUPERSEDED_BY_NEW_RUN, store.getRun("run-1")?.terminalReason)
+        assertEquals(listOf(newRun.id), waiting.map(AgentRunEntity::id))
+    }
+
+    @Test
+    fun `同会话新Run作废已批准但尚未续接的旧审批`() = runBlocking {
+        seedRun()
+        store.pauseForApproval(requireNotNull(store.getRun("run-1")), approvalRecord())
+        store.decideApproval("run-1", "approval-1", AgentApprovalDecision.APPROVED)
+
+        store.createRun(
+            sessionId = "session-1",
+            userMessageId = "user-2",
+            visibleAssistantMessageId = "assistant-2",
+            configIdSnapshot = "config-1",
+            request = ChatRequest(
+                messages = listOf(SimpleTextApiMessage(role = "user", content = "新消息")),
+                provider = "provider",
+                channel = "OpenAI",
+                apiAddress = "https://example.test",
+                apiKey = "secret",
+                model = "model",
+            ),
+        )
+
+        val oldRun = requireNotNull(store.getRun("run-1"))
+        assertEquals(AgentRunStatus.CANCELLED.name, oldRun.status)
+        assertEquals(AgentTerminalReasons.SUPERSEDED_BY_NEW_RUN, oldRun.terminalReason)
+        assertTrue(store.resumableApprovalRuns(database.computerDao()).isEmpty())
+    }
+
+    @Test
     fun `并发追加Entry仍保持严格递增序号`() = runBlocking {
         seedRun()
         coroutineScope {
