@@ -94,6 +94,7 @@ private const val EXECUTION_SECTION_COLLAPSE_FADE_MS = 120
 private const val EXECUTION_ARROW_ROTATION_MS = 200
 private const val REASONING_PREVIEW_MAX_LINES = 3
 private const val REASONING_PREVIEW_SOURCE_CHAR_LIMIT = 2_000
+private const val EXECUTION_TOOL_PREVIEW_MAX_ITEMS = 3
 
 internal fun reasoningSheetTallHeightFraction(): Float = AppModalBottomSheetMaximumHeightFraction
 
@@ -685,16 +686,7 @@ private fun ExecutionToolGroup(
     onOpenDetails: () -> Unit,
 ) {
     val stableKey = group.entries.firstOrNull()?.step?.id ?: "group-$groupIndex"
-    var expanded by remember(stableKey) { mutableStateOf(active) }
-    var wasActive by remember(stableKey) { mutableStateOf(active) }
-    var userControlledAfterCompletion by remember(stableKey) { mutableStateOf(false) }
-    LaunchedEffect(active) {
-        if (!userControlledAfterCompletion) {
-            if (active && !wasActive) expanded = true
-            if (!active && wasActive) expanded = false
-        }
-        wasActive = active
-    }
+    var expanded by remember(stableKey) { mutableStateOf(false) }
     val arrowRotation by animateFloatAsState(
         targetValue = if (expanded) 0f else -90f,
         animationSpec = tween(EXECUTION_ARROW_ROTATION_MS, easing = FastOutSlowInEasing),
@@ -710,10 +702,7 @@ private fun ExecutionToolGroup(
                 .clickable(
                     indication = null,
                     interactionSource = remember { MutableInteractionSource() },
-                    onClick = {
-                        expanded = !expanded
-                        if (!active) userControlledAfterCompletion = true
-                    },
+                    onClick = { expanded = !expanded },
                 )
                 .padding(vertical = 9.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -762,7 +751,8 @@ private fun ExecutionToolGroup(
             ),
         ) {
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                group.entries.forEachIndexed { stepIndex, entry ->
+                // 主页面只预览最近三条，完整执行记录仍由详情抽屉展示。
+                group.entries.takeLast(EXECUTION_TOOL_PREVIEW_MAX_ITEMS).forEachIndexed { stepIndex, entry ->
                     InlineExecutionStep(
                         entry = entry,
                         active = active && !entry.step.completed,

@@ -379,17 +379,32 @@ private fun AiContextUsagePopupContent(summary: AiContextUsageSummary?) {
                 modifier = Modifier.weight(1f),
             )
         }
-        HorizontalDivider(
-            modifier = Modifier.padding(vertical = 15.dp),
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f),
-        )
+        Spacer(Modifier.height(10.dp))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = stringResource(R.string.context_usage_conversation_total),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.62f),
+            )
+            Text(
+                text = formatUsageTokens(summary.conversationTotalTokens),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurface,
+            )
+        }
+        Spacer(Modifier.height(10.dp))
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(20.dp),
         ) {
             UsageTotal(
-                label = stringResource(R.string.context_usage_conversation_total),
-                value = formatUsageTokens(summary.conversationTotalTokens),
+                label = stringResource(R.string.context_usage_current_context),
+                value = formatUsageTokens(summary.currentContextTokens),
                 color = contextUsageColor(summary.fraction),
                 modifier = Modifier.weight(1f),
             )
