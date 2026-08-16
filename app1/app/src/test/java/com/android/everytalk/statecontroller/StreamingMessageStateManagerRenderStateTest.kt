@@ -164,6 +164,22 @@ class StreamingMessageStateManagerRenderStateTest {
     }
 
     @Test
+    fun `不完整Markdown超过最长等待后仍会自动显示`() {
+        val messageId = "markdown-max-wait"
+        val content = "正文".repeat(100) + "**未闭合"
+
+        subject.startStreaming(messageId)
+        subject.appendText(messageId, content)
+
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(1)
+        while (subject.getCurrentRenderState(messageId).content != content && System.nanoTime() < deadline) {
+            Thread.sleep(10)
+        }
+
+        assertEquals(content, subject.getCurrentRenderState(messageId).content)
+    }
+
+    @Test
     fun `完整Markdown刷新频率随正文长度逐级降低`() {
         assertEquals(80L, resolveStreamingRenderFlushIntervalMs(0))
         assertEquals(80L, resolveStreamingRenderFlushIntervalMs(199))

@@ -8,6 +8,7 @@ import com.android.everytalk.data.computer.ComputerExecTarget
 import com.android.everytalk.data.computer.ComputerPublicPreviewRequest
 import com.android.everytalk.data.computer.ComputerRequestContext
 import com.android.everytalk.data.computer.ComputerToolApprovalRequest
+import com.android.everytalk.data.computer.ComputerToolApprovalProvider
 import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.data.database.entities.AgentRunEntity
 import com.android.everytalk.data.database.entities.ChatSessionEntity
@@ -15,14 +16,20 @@ import com.android.everytalk.data.database.entities.ComputerEntity
 import com.android.everytalk.data.database.entities.ComputerExecutionEntity
 import com.android.everytalk.data.database.entities.ComputerWorkspaceEntity
 import com.android.everytalk.data.DataClass.ChatRequest
+import com.android.everytalk.data.DataClass.AgentToolResultApiMessage
+import com.android.everytalk.data.DataClass.ModelTokenLimits
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.computer.ComputerPermissionMode
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.toList
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import com.android.everytalk.data.network.AppStreamEvent
+import com.android.everytalk.data.network.ModelTurnTransport
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -50,6 +57,63 @@ class AgentApprovalPersistenceTest {
 
     @After
     fun tearDown() = database.close()
+
+    @Test
+    fun `工具审批预检参数错误会回传模型继续运行`() = runBlocking {
+        val sessionId = "session-invalid-tool"
+        database.chatDao().insertSession(ChatSessionEntity(sessionId, 1L, 1L, false))
+        val observedRequests = mutableListOf<ChatRequest>()
+        var turn = 0
+        val invalidApprovalProvider: ComputerToolApprovalProvider = { _, _, _, _, _ ->
+            error("Tool 参数 command 无效")
+        }
+        val loop = AgentLoop(
+            runStore = store,
+            toolRuntime = AgentToolRuntime(
+                executorProvider = { null },
+                approvalProvider = { invalidApprovalProvider },
+            ),
+            modelTransport = ModelTurnTransport { request ->
+                observedRequests += request.request
+                turn++
+                if (turn == 1) {
+                    flowOf(
+                        AppStreamEvent.ToolCall("call-invalid", "exec", buildJsonObject {}),
+                        AppStreamEvent.Finish("tool_calls"),
+                    )
+                } else {
+                    flowOf(
+                        AppStreamEvent.Content("参数已纠正"),
+                        AppStreamEvent.Finish("stop"),
+                    )
+                }
+            },
+        )
+        val request = ChatRequest(
+            messages = listOf(SimpleTextApiMessage(role = "user", content = "检查项目")),
+            provider = "OpenAI",
+            channel = "OpenAI兼容",
+            apiAddress = "https://example.test",
+            apiKey = "test-key",
+            model = "test-model",
+        )
+
+        val events = loop.run(
+            AgentLoopRequest(
+                request = request,
+                sessionId = sessionId,
+                userMessageId = "user-invalid-tool",
+                visibleAssistantMessageId = "assistant-invalid-tool",
+                tokenLimits = ModelTokenLimits(maxOutputTokens = 512, maxContextTokens = 8_192),
+            )
+        ).toList()
+
+        val toolResult = observedRequests[1].messages.filterIsInstance<AgentToolResultApiMessage>().single()
+        assertTrue(toolResult.isError)
+        assertTrue(toolResult.content.toString().contains("Tool 参数 command 无效"))
+        assertTrue(events.none { it is AppStreamEvent.Error })
+        assertTrue(events.any { it is AppStreamEvent.Content && it.text == "参数已纠正" })
+    }
 
     @Test
     fun `审批请求可恢复且同一请求只能决策一次`() = runBlocking {

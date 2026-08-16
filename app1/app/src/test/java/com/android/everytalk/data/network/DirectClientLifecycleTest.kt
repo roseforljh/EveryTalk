@@ -12,9 +12,15 @@ import io.ktor.http.Headers
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
 import io.ktor.utils.io.ByteReadChannel
+import io.ktor.utils.io.ByteChannel
+import io.ktor.utils.io.writeStringUtf8
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import io.mockk.every
 import io.mockk.mockkStatic
 import io.mockk.unmockkStatic
@@ -152,6 +158,32 @@ class DirectClientLifecycleTest {
             )
             assertEquals("B", sources[1].title)
             assertEquals("C", sources[2].title)
+        }
+    }
+
+    @Test
+    fun `OpenAI Chat首个短正文无需等待后续事件`() = runBlocking {
+        val channel = ByteChannel(autoFlush = true)
+        val firstContent = CompletableDeferred<String>()
+        val parserJob = launch {
+            OpenAIDirectClient.parseOpenAISSEStreamWithTools(
+                channel = channel,
+                onToolCall = {},
+                emitEvent = { event ->
+                    if (event is AppStreamEvent.Content && !firstContent.isCompleted) {
+                        firstContent.complete(event.text)
+                    }
+                },
+            )
+        }
+
+        try {
+            channel.writeStringUtf8("data: {\"choices\":[{\"delta\":{\"content\":\"你\"}}]}\n\n")
+
+            assertEquals("你", withTimeout(500) { firstContent.await() })
+        } finally {
+            channel.close()
+            parserJob.cancelAndJoin()
         }
     }
 
