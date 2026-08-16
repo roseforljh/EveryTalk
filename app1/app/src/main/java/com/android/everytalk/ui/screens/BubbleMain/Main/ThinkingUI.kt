@@ -36,6 +36,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
@@ -299,6 +300,7 @@ internal fun ReasoningToggleAndContent(
     reasoningToggleDotColor: Color,
     modifier: Modifier = Modifier,
     streamingScrollState: ScrollState = rememberScrollState(),
+    onInteractiveExpansionChanged: (key: String, expanded: Boolean) -> Unit = { _, _ -> },
     onVisibilityChanged: () -> Unit,
 ) {
     val focusManager = LocalFocusManager.current
@@ -306,12 +308,14 @@ internal fun ReasoningToggleAndContent(
     var showReasoningSheet by remember(currentMessageId) { mutableStateOf(false) }
     var visibilityNotified by remember(currentMessageId) { mutableStateOf(false) }
 
-    val processIsActive = !messageIsError &&
-        (
-            isReasoningStreaming ||
-                isExecutionStatusActive(activityStatusText) ||
-                (replyIsStreaming && executionSteps.any { !it.completed })
-            )
+    // 是否还在运行只能由真实流状态决定。历史消息里的“正在……”只是展示文本，
+    // 不能在退出重进后凭一行旧文字重新启动计时器。
+    val processIsActive = executionProcessIsActive(
+        executionFinishedAtMillis = executionFinishedAtMillis,
+        messageIsError = messageIsError,
+        replyIsStreaming = replyIsStreaming,
+        isReasoningStreaming = isReasoningStreaming,
+    )
     var userExpanded by remember(currentMessageId) { mutableStateOf(false) }
     val forceExpanded = processIsActive || replyIsStreaming
     val executionChainExpanded = forceExpanded || userExpanded
@@ -413,12 +417,14 @@ internal fun ReasoningToggleAndContent(
                         ),
                     ) {
                         ExecutionProcessContent(
+                            expansionNamespace = currentMessageId,
                             sections = sections,
                             activityStatusText = activityStatusText,
                             active = processIsActive,
                             reasoningActive = isReasoningStreaming,
                             messageIsError = messageIsError,
                             onOpenDetails = openReasoningSheet,
+                            onInteractiveExpansionChanged = onInteractiveExpansionChanged,
                         )
                     }
                 }
@@ -441,6 +447,16 @@ internal fun ReasoningToggleAndContent(
         )
     }
 }
+
+/** 计时器只认当前真实流，历史状态文字不能自行恢复运行。 */
+internal fun executionProcessIsActive(
+    executionFinishedAtMillis: Long?,
+    messageIsError: Boolean,
+    replyIsStreaming: Boolean,
+    isReasoningStreaming: Boolean,
+): Boolean = executionFinishedAtMillis == null &&
+    !messageIsError &&
+    (replyIsStreaming || isReasoningStreaming)
 
 @Composable
 private fun ExecutionChainHeader(
@@ -470,8 +486,8 @@ private fun ExecutionChainHeader(
                 interactionSource = remember { MutableInteractionSource() },
                 onClick = onClick,
             )
-            .height(44.dp)
-            .padding(horizontal = 12.dp),
+            .height(24.dp)
+            .padding(horizontal = 0.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (active) {
@@ -511,12 +527,14 @@ private fun ExecutionChainHeader(
 
 @Composable
 private fun ExecutionProcessContent(
+    expansionNamespace: String,
     sections: List<ExecutionProcessSection>,
     activityStatusText: String?,
     active: Boolean,
     reasoningActive: Boolean,
     messageIsError: Boolean,
     onOpenDetails: () -> Unit,
+    onInteractiveExpansionChanged: (key: String, expanded: Boolean) -> Unit,
 ) {
     val hasPendingTool = sections.any { section ->
         section is ExecutionProcessSection.ToolGroup && section.entries.any { !it.step.completed }
@@ -538,9 +556,9 @@ private fun ExecutionProcessContent(
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .padding(start = 12.dp, end = 12.dp, bottom = 12.dp)
+            .padding(start = 12.dp, end = 12.dp, top = 2.dp, bottom = 6.dp)
             .testTag("reasoning-chain-summaries"),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         sections.forEachIndexed { sectionIndex, section ->
             when (section) {
@@ -555,10 +573,12 @@ private fun ExecutionProcessContent(
 
                 is ExecutionProcessSection.ToolGroup -> {
                     ExecutionToolGroup(
+                        expansionNamespace = expansionNamespace,
                         group = section,
                         active = active && section.entries.any { !it.step.completed },
                         groupIndex = sectionIndex,
                         onOpenDetails = onOpenDetails,
+                        onInteractiveExpansionChanged = onInteractiveExpansionChanged,
                     )
                 }
             }
@@ -645,7 +665,7 @@ private fun ReasoningPreviewCard(
                 active = active,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 10.dp, vertical = 9.dp),
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
             )
         }
     }
@@ -703,13 +723,22 @@ private fun LatestReasoningPreviewText(
 
 @Composable
 private fun ExecutionToolGroup(
+    expansionNamespace: String,
     group: ExecutionProcessSection.ToolGroup,
     active: Boolean,
     groupIndex: Int,
     onOpenDetails: () -> Unit,
+    onInteractiveExpansionChanged: (key: String, expanded: Boolean) -> Unit,
 ) {
     val stableKey = group.entries.firstOrNull()?.step?.id ?: "group-$groupIndex"
+    val expansionKey = "$expansionNamespace:$stableKey"
     var expanded by remember(stableKey) { mutableStateOf(false) }
+    DisposableEffect(expansionKey, expanded) {
+        if (expanded) onInteractiveExpansionChanged(expansionKey, true)
+        onDispose {
+            if (expanded) onInteractiveExpansionChanged(expansionKey, false)
+        }
+    }
     val arrowRotation by animateFloatAsState(
         targetValue = if (expanded) 0f else -90f,
         animationSpec = tween(EXECUTION_ARROW_ROTATION_MS, easing = FastOutSlowInEasing),
@@ -727,7 +756,7 @@ private fun ExecutionToolGroup(
                     interactionSource = remember { MutableInteractionSource() },
                     onClick = { expanded = !expanded },
                 )
-                .padding(vertical = 9.dp),
+                .padding(vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             if (active) {

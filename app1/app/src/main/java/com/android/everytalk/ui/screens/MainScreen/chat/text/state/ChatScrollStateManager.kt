@@ -37,9 +37,8 @@ import kotlin.math.roundToInt
 import kotlin.math.sign
 
 private val BottomAutoFollowRange = 48.dp
-private const val POST_STREAMING_BOTTOM_GUARD_MS = 600L
-private const val STREAMING_FOLLOW_ANIMATION_MS = 140
-private const val MAX_CONTENT_FOLLOW_PASSES = 3
+private const val POST_STREAMING_BOTTOM_GUARD_MS = 200L
+private const val STREAMING_FOLLOW_ANIMATION_MS = 120
 
 internal enum class BottomCorrection {
     None,
@@ -84,6 +83,7 @@ class ChatScrollStateManager(
 
     private var autoScrollJob: Job? = null
     private var contentFollowJob: Job? = null
+    private var contentFollowPending = false
     private var contentFollowGeneration = 0L
     private var postStreamingGuardJob: Job? = null
     
@@ -250,7 +250,13 @@ class ChatScrollStateManager(
             snapshotFlow { bottomContentRevision() }
                 .distinctUntilChanged()
                 .collect {
-                    if (!isProgrammaticScroll) requestContentFollow()
+                    // 展开、收起动画可能在一次滚动补偿期间继续改变高度。
+                    // 记录这次变化，当前补偿结束后会按最终高度再校正一次。
+                    if (contentFollowJob?.isActive == true) {
+                        contentFollowPending = true
+                    } else if (!isProgrammaticScroll) {
+                        requestContentFollow()
+                    }
                 }
         }
     }
@@ -288,10 +294,33 @@ class ChatScrollStateManager(
         if (wasStreaming && !streaming) {
             lastStreamingTransitionTime = System.currentTimeMillis()
             consecutiveBottomFrames = 0
+            cancelContentFollowJob()
             postStreamingGuardJob?.cancel()
+
+            // 流式结束瞬间：若用户本来就在底部范围，执行一次无动画瞬时 scrollBy 贴实物理底部，避免慢速动画拉扯
+            if (!preventAutoScroll && !suppressTopAnchorBottomScroll && !isStopBottomPinActive) {
+                coroutineScope.launch {
+                    val remainingPx = remainingDistanceToBottomPx()
+                    if (remainingPx != null && remainingPx > 0) {
+                        isProgrammaticScroll = true
+                        try {
+                            listState.scrollBy(remainingPx.toFloat())
+                        } finally {
+                            isProgrammaticScroll = false
+                        }
+                    }
+                }
+            }
+
+            // 终态轻量短保底：仅延时一次做单次静默校验，彻底杜绝长时间循环拉扯
             postStreamingGuardJob = coroutineScope.launch {
-                requestContentFollow()
                 delay(POST_STREAMING_BOTTOM_GUARD_MS)
+                if (shouldFollowContent()) {
+                    val remainingPx = remainingDistanceToBottomPx()
+                    if (remainingPx != null && remainingPx > 0) {
+                        performBottomCorrection(BottomCorrection.ScrollBy, remainingPx)
+                    }
+                }
                 postStreamingGuardJob = null
             }
         }
@@ -361,6 +390,7 @@ class ChatScrollStateManager(
 
     private fun cancelContentFollowJob() {
         contentFollowGeneration++
+        contentFollowPending = false
         contentFollowJob?.cancel()
         contentFollowJob = null
         isProgrammaticScroll = false
@@ -368,24 +398,37 @@ class ChatScrollStateManager(
 
     /**
      * 流式内容、展开动画或输入区高度变化后平滑补到底部。
-     * 同一时刻只保留一个补偿任务；用户一旦拖动，nestedScrollConnection 会立即取消它。
+     * 同一时刻只执行一个补偿；执行期间的新高度变化会合并为下一次最终校正。
      */
     private fun requestContentFollow() {
-        if (!shouldFollowContent() || contentFollowJob?.isActive == true) return
+        if (!shouldFollowContent()) {
+            contentFollowPending = false
+            return
+        }
+        if (contentFollowJob?.isActive == true) {
+            contentFollowPending = true
+            return
+        }
+
+        contentFollowPending = false
         val generation = ++contentFollowGeneration
         contentFollowJob = coroutineScope.launch {
             try {
-                repeat(MAX_CONTENT_FOLLOW_PASSES) {
+                do {
+                    contentFollowPending = false
                     if (!shouldFollowContent()) return@launch
                     smoothCorrectToBottom()
+                    // 等布局提交，避免用动画中间帧当成最终高度。
                     withFrameNanos { }
-                    val after = bottomContentRevision()
-                    if (resolveContentFollowCorrection(after.remainingPx) == BottomCorrection.None) {
-                        return@launch
+                } while (contentFollowPending && shouldFollowContent())
+            } finally {
+                if (generation == contentFollowGeneration) {
+                    contentFollowJob = null
+                    // 高度可能正好在循环退出与任务清理之间变化，再补接一次。
+                    if (contentFollowPending && shouldFollowContent()) {
+                        requestContentFollow()
                     }
                 }
-            } finally {
-                if (generation == contentFollowGeneration) contentFollowJob = null
             }
         }
     }
@@ -917,8 +960,10 @@ internal fun isWithinBottomActivationRange(
     remainingPx != null && remainingPx <= activationRangePx.coerceAtLeast(0)
 )
 
-/** 自动跟随只修正真实可见距离，避免 LazyList 的瞬时 canScrollForward 触发无限锚定。 */
-internal fun resolveContentFollowCorrection(remainingPx: Int?): BottomCorrection = when {
+/** 自动跟随必须消除全部可见缺口，否则连续展开、收起后会逐步丢掉底部空间。 */
+internal fun resolveContentFollowCorrection(
+    remainingPx: Int?,
+): BottomCorrection = when {
     remainingPx == null -> BottomCorrection.AnchorLastItem
     remainingPx > 0 -> BottomCorrection.ScrollBy
     else -> BottomCorrection.None

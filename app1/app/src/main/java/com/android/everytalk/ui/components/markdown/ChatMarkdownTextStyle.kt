@@ -12,9 +12,9 @@ internal object ChatMarkdownTextStyle {
     const val BODY_LINE_HEIGHT_SP = 26f
 
     const val ASSISTANT_CONTENT_START_PADDING_DP = 16f
-    const val ASSISTANT_CONTENT_TOP_PADDING_DP = 4f
+    const val ASSISTANT_CONTENT_TOP_PADDING_DP = 0f
     const val ASSISTANT_CONTENT_END_PADDING_DP = 12f
-    const val ASSISTANT_CONTENT_BOTTOM_PADDING_DP = 4f
+    const val ASSISTANT_CONTENT_BOTTOM_PADDING_DP = 0f
 
     const val INLINE_CODE_RELATIVE_SIZE = 0.92f
     const val INLINE_CODE_TEXT_COLOR_LIGHT_HEX = "#4F5661"

@@ -378,41 +378,65 @@ internal fun UserOrErrorMessageContent(
     }
 }
 
+/** 历史数据可能在 Skill 标签后保存了多个空格；显示时统一压成一个标准间距。 */
+internal fun normalizeSkillTagFollowingText(text: String): String {
+    val trimmed = text.dropWhile { it == ' ' || it == '\t' }
+    return when {
+        trimmed.length == text.length -> text
+        trimmed.isEmpty() -> ""
+        else -> " $trimmed"
+    }
+}
+
 /** 历史消息按原位置显示一次性 Skill 标签，引用本身仍由 contentParts 持久化。 */
 @Composable
 private fun UserMessageWithSkillTags(
     parts: List<MessageContentPart>,
     contentColor: Color,
 ) {
-    val inlineContent = remember(parts, contentColor) {
+    val density = LocalDensity.current
+    val textMeasurer = androidx.compose.ui.text.rememberTextMeasurer()
+    val textStyle = MaterialTheme.typography.bodyLarge
+    val inlineContent = remember(parts, contentColor, density) {
         buildMap<String, InlineTextContent> {
             parts.filterIsInstance<MessageContentPart.SkillReference>().forEachIndexed { index, part ->
                 val key = "skill-$index"
                 val name = part.reference.displayName
-                val placeholderWidth = (name.length.coerceIn(1, 24) * 7.5f + 16).sp
+                val measuredWidthPx = textMeasurer.measure(
+                    text = AnnotatedString(name),
+                    style = TextStyle(fontSize = 12.sp, fontWeight = FontWeight.Medium),
+                ).size.width
+                val tagWidthDp = with(density) { (measuredWidthPx + 16.dp.toPx()).toDp() }
                 put(
                     key,
                     InlineTextContent(
                         placeholder = Placeholder(
-                            width = placeholderWidth,
+                            width = tagWidthDp.value.sp,
                             height = 22.sp,
                             placeholderVerticalAlign = PlaceholderVerticalAlign.Center,
                         ),
                     ) {
                         Surface(
+                            modifier = Modifier.fillMaxSize(),
                             shape = RoundedCornerShape(percent = 50),
                             color = MaterialTheme.colorScheme.primary.copy(alpha = 0.14f),
                         ) {
                             Box(
                                 modifier = Modifier
-                                    .padding(horizontal = 7.dp, vertical = 1.dp),
+                                    .fillMaxSize()
+                                    .padding(horizontal = 8.dp),
                                 contentAlignment = Alignment.Center,
                             ) {
                                 Text(
                                     text = name,
+                                    modifier = Modifier.fillMaxWidth(),
                                     color = contentColor,
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Medium,
+                                    textAlign = TextAlign.Center,
+                                    style = TextStyle(
+                                        platformStyle = PlatformTextStyle(includeFontPadding = false),
+                                    ),
                                     maxLines = 1,
                                 )
                             }
@@ -425,11 +449,16 @@ private fun UserMessageWithSkillTags(
     val text = remember(parts) {
         AnnotatedString.Builder().apply {
             var skillIndex = 0
+            var previousWasSkill = false
             parts.forEach { part ->
                 when (part) {
-                    is MessageContentPart.Text -> append(part.text)
+                    is MessageContentPart.Text -> {
+                        append(part.text)
+                        previousWasSkill = false
+                    }
                     is MessageContentPart.SkillReference -> {
                         appendInlineContent("skill-${skillIndex++}", "/${part.reference.displayName}")
+                        previousWasSkill = true
                     }
                 }
             }

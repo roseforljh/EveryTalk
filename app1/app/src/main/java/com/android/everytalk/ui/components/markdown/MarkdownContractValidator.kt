@@ -22,8 +22,10 @@ internal object MarkdownContractValidator {
         var index = 0
 
         while (index < lines.size) {
-            val line = lines[index]
-            val protectedLine = fenceTracker.isFenceLine(line)
+            val sourceLine = lines[index]
+            val protectedLine = fenceTracker.isFenceLine(sourceLine)
+            val line = if (protectedLine) sourceLine else repairMissingBlockMarkerSpace(sourceLine)
+            if (line != sourceLine) changed = true
             val nextLine = lines.getOrNull(index + 1)
             val listMarker = findEmbeddedListMarker(line) ?: -1
             val firstPipe = findFirstTablePipe(line) ?: -1
@@ -61,6 +63,61 @@ internal object MarkdownContractValidator {
         }
 
         return if (changed) output.joinToString("\n") else normalizedLineBreaks
+    }
+
+    /**
+     * 修复模型省略的标题或无序列表标记空格。
+     *
+     * 标题仅处理明确的 Markdown 标记。无序列表仅自动处理非 ASCII 文字开头的正文，避免把负数、
+     * 命令参数、水平线、强调语法和未围栏的代码误改成列表。
+     */
+    private fun repairMissingBlockMarkerSpace(line: String): String {
+        val contentStart = line.indexOfFirst { it != ' ' && it != '\t' }
+        if (contentStart < 0) return line
+
+        val headingEnd = missingHeadingSpaceOffset(line, contentStart)
+        if (headingEnd >= 0) return line.substring(0, headingEnd) + " " + line.substring(headingEnd)
+
+        val marker = line[contentStart]
+        if (marker !in setOf('-', '*', '+')) return line
+        val bodyStart = contentStart + 1
+        val firstBodyChar = line.getOrNull(bodyStart) ?: return line
+        if (!firstBodyChar.isLetter() || firstBodyChar.code <= 0x7F) return line
+        if (marker == '*' && hasLeadingEmphasisClose(line, bodyStart)) return line
+
+        return line.substring(0, bodyStart) + " " + line.substring(bodyStart)
+    }
+
+    private fun hasLeadingEmphasisClose(line: String, bodyStart: Int): Boolean {
+        var cursor = bodyStart
+        while (cursor < line.length) {
+            if (line[cursor] != '*' || isEscaped(line, cursor)) {
+                cursor++
+                continue
+            }
+            val runLength = countRun(line, cursor, '*')
+            if (runLength == 1) {
+                val following = line.getOrNull(cursor + 1)
+                if (following == null || following.isWhitespace() || !following.isLetterOrDigit()) {
+                    return true
+                }
+            }
+            cursor += runLength
+        }
+        return false
+    }
+
+    private fun missingHeadingSpaceOffset(line: String, contentStart: Int): Int {
+        if (line[contentStart] != '#') return -1
+        val markerEnd = contentStart + countRun(line, contentStart, '#')
+        val markerLength = markerEnd - contentStart
+        if (markerLength !in 1..6) return -1
+
+        val firstBodyChar = line.getOrNull(markerEnd) ?: return -1
+        if (firstBodyChar.isWhitespace() || firstBodyChar == '#') return -1
+
+        // 单个 # 也可能是预处理指令或普通文本，只自动修复非 ASCII 标题；两个以上 # 意图足够明确。
+        return if (markerLength > 1 || firstBodyChar.code > 0x7F) markerEnd else -1
     }
 
     /**

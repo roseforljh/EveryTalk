@@ -186,6 +186,109 @@ class TopAnchorReserveEngineComposeTest {
     }
 
     @Test
+    fun `流式中展开执行详情不会消耗底部预留`() {
+        composeRule.mainClock.autoAdvance = false
+        val turn = TopAnchorTurn("u2", "a2", "s1", 2L)
+        val historyItems = listOf(
+            HarnessItem("u1", 280.dp),
+            HarnessItem("a1", 720.dp),
+            HarnessItem("u2", 80.dp),
+        )
+        lateinit var engineState: TopAnchorReserveEngineState
+        lateinit var expandDetails: () -> Unit
+        lateinit var collapseDetails: () -> Unit
+        var answerHeight by mutableStateOf(80.dp)
+
+        composeRule.setContent {
+            val density = LocalDensity.current
+            val listState = rememberLazyListState()
+            engineState = remember {
+                TopAnchorReserveEngineState().also {
+                    it.updateRuntime(
+                        TopAnchorRuntimeState(
+                            phase = TopAnchorPhase.InitialSnap,
+                            activeTurn = turn,
+                        )
+                    )
+                }
+            }
+            expandDetails = {
+                engineState.updateInteractiveExpansion("a2:tool", expanded = true)
+                answerHeight = 320.dp
+            }
+            collapseDetails = {
+                answerHeight = 80.dp
+                engineState.updateInteractiveExpansion("a2:tool", expanded = false)
+            }
+
+            RunTopAnchorReserveEngine(
+                state = engineState,
+                listState = listState,
+                anchorIndex = 2,
+                anchorKey = "u2",
+                targetAnchorY = with(density) { 96.dp.toPx().toInt() },
+                trailingRealItemIndex = historyItems.size,
+                isRunning = true,
+                config = TopAnchorConfig(
+                    tallAnchorThresholdPx = with(density) { 240.dp.toPx().toInt() },
+                    tallAnchorVisibleHeightPx = with(density) { 96.dp.toPx().toInt() },
+                    topInsetPx = with(density) { 96.dp.toPx().toInt() },
+                    stableWindowNanos = 1_000_000L,
+                    keepReserveAfterRunEnd = true,
+                    reserveInsideTrailingItem = true,
+                ),
+                enabled = engineState.runtime.hasRuntime,
+                hasResponseTarget = true,
+            )
+
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.height(640.dp),
+                contentPadding = PaddingValues(top = 96.dp, bottom = 80.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                itemsIndexed(historyItems, key = { _, item -> item.id }) { _, item ->
+                    Box(Modifier.height(item.heightDp))
+                }
+                item(key = "a2") {
+                    Box(
+                        Modifier
+                            .appendTopAnchorReserve(engineState.reservePx)
+                            .height(answerHeight)
+                    )
+                }
+            }
+        }
+
+        repeat(12) {
+            composeRule.mainClock.advanceTimeByFrame()
+            composeRule.waitForIdle()
+        }
+        var reserveBeforeExpansion = 0
+        composeRule.runOnIdle {
+            reserveBeforeExpansion = engineState.reservePx
+            assertTrue(reserveBeforeExpansion > 0)
+            expandDetails()
+        }
+        repeat(20) {
+            composeRule.mainClock.advanceTimeByFrame()
+            composeRule.waitForIdle()
+        }
+        composeRule.runOnIdle {
+            assertEquals(reserveBeforeExpansion, engineState.reservePx)
+            assertTrue(engineState.runtime.hasRuntime)
+            collapseDetails()
+        }
+        repeat(20) {
+            composeRule.mainClock.advanceTimeByFrame()
+            composeRule.waitForIdle()
+        }
+        composeRule.runOnIdle {
+            assertEquals(reserveBeforeExpansion, engineState.reservePx)
+        }
+    }
+
+    @Test
     fun `terminal response present on first frame retains anchor runtime`() {
         composeRule.mainClock.autoAdvance = false
         val turn = TopAnchorTurn("u2", "a2", "s1", 2L)

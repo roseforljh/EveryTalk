@@ -45,6 +45,7 @@ fun Modifier.appendTopAnchorReserve(reservePx: Int): Modifier {
 @Stable
 class TopAnchorReserveEngineState {
     private var nextTurnGeneration = 0L
+    private val interactiveExpansionKeys = mutableSetOf<String>()
 
     var runtime by mutableStateOf(TopAnchorRuntimeState())
         private set
@@ -58,15 +59,21 @@ class TopAnchorReserveEngineState {
     val userScrollEnabled: Boolean
         get() = runtime.phase != TopAnchorPhase.InitialSnap
 
+    /** 用户展开的执行详情只改变展示高度，不能被当成 AI 新输出消耗底部预留。 */
+    val holdsReserveForInteractiveExpansion: Boolean
+        get() = interactiveExpansionKeys.isNotEmpty()
+
     fun updateRuntime(next: TopAnchorRuntimeState) {
         runtime = next
     }
 
     fun clearRuntime() {
+        interactiveExpansionKeys.clear()
         runtime = TopAnchorRuntimeState()
     }
 
     fun activateTurn(turn: TopAnchorTurn) {
+        interactiveExpansionKeys.clear()
         nextTurnGeneration += 1
         val activatedTurn = turn.copy(generation = nextTurnGeneration)
         val previousTurn = runtime.currentTurn
@@ -111,6 +118,14 @@ class TopAnchorReserveEngineState {
             runtime.copy(activeTurn = updatedTurn)
         } else {
             runtime.copy(retainedTurn = updatedTurn)
+        }
+    }
+
+    fun updateInteractiveExpansion(key: String, expanded: Boolean) {
+        if (expanded) {
+            interactiveExpansionKeys.add(key)
+        } else {
+            interactiveExpansionKeys.remove(key)
         }
     }
 }
@@ -373,7 +388,10 @@ private suspend fun runTopAnchorCorrectionLoop(
         if (!corrected) {
             val currentTrailingIndex = trailingRealItemIndex()
             val reserveRepresentedBySnapshot = state.reservePx
-            if (state.runtime.phase == TopAnchorPhase.UserControlled) {
+                if (
+                    state.runtime.phase == TopAnchorPhase.UserControlled &&
+                    !state.holdsReserveForInteractiveExpansion
+                ) {
                 val reserveBeforeShrink = reserveRepresentedBySnapshot
                 val previousSnapshot = previousUserControlledSnapshot ?: previousLoopSnapshot
                 val previousReservePx = if (previousUserControlledSnapshot == null) {
@@ -411,7 +429,7 @@ private suspend fun runTopAnchorCorrectionLoop(
                 previousUserControlledSnapshot = snapshot
                 previousUserControlledReservePx = reserveBeforeShrink
                 previousUserControlledTrailingIndex = currentTrailingIndex
-            } else {
+            } else if (!state.holdsReserveForInteractiveExpansion) {
                 previousUserControlledSnapshot = null
                 previousUserControlledReservePx = 0
                 previousUserControlledTrailingIndex = -1

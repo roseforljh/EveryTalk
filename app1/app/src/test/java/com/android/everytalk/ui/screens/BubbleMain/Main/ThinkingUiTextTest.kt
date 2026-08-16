@@ -61,15 +61,44 @@ class ThinkingUiTextTest {
     }
 
     @Test
+    fun `计时只由真实流驱动且结束后不能重启`() {
+        assertTrue(
+            executionProcessIsActive(
+                executionFinishedAtMillis = null,
+                messageIsError = false,
+                replyIsStreaming = true,
+                isReasoningStreaming = false,
+            )
+        )
+        assertFalse(
+            executionProcessIsActive(
+                executionFinishedAtMillis = null,
+                messageIsError = false,
+                replyIsStreaming = false,
+                isReasoningStreaming = false,
+            )
+        )
+        assertFalse(
+            executionProcessIsActive(
+                executionFinishedAtMillis = 1234L,
+                messageIsError = false,
+                replyIsStreaming = true,
+                isReasoningStreaming = true,
+            )
+        )
+    }
+
+    @Test
     fun `reasoning sheet does not render horizontal dividers`() {
+        assertFalse(thinkingUiSourceFile().readText(Charsets.UTF_8).contains("HorizontalDivider("))
+    }
+
+    private fun thinkingUiSourceFile(): File {
         val candidates = listOf(
             File("src/main/java/com/android/everytalk/ui/screens/BubbleMain/Main/ThinkingUI.kt"),
             File("app/src/main/java/com/android/everytalk/ui/screens/BubbleMain/Main/ThinkingUI.kt"),
             File("app1/app/src/main/java/com/android/everytalk/ui/screens/BubbleMain/Main/ThinkingUI.kt"),
         )
-        val sourceFile = candidates.firstOrNull { it.isFile }
-        requireNotNull(sourceFile) { "找不到 ThinkingUI.kt" }
-
-        assertFalse(sourceFile.readText(Charsets.UTF_8).contains("HorizontalDivider("))
+        return requireNotNull(candidates.firstOrNull { it.isFile }) { "找不到 ThinkingUI.kt" }
     }
 }

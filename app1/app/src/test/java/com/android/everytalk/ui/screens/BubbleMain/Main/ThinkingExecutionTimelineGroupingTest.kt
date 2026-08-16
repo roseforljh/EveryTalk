@@ -143,6 +143,48 @@ class ThinkingExecutionTimelineGroupingTest {
     }
 
     @Test
+    fun `正文过程边界换行不会变成额外下间距`() {
+        val segments = orderedAiOutputSegments(
+            listOf(
+                ExecutionTraceEvent.Content("上方正文\n\n"),
+                ExecutionTraceEvent.Reasoning("思考"),
+                ExecutionTraceEvent.Content("\n\n下方正文"),
+            )
+        )
+
+        assertEquals(
+            listOf("上方正文", "process:1", "下方正文"),
+            segments.map { segment ->
+                when (segment) {
+                    is OrderedAiOutputSegment.Content -> segment.text
+                    is OrderedAiOutputSegment.Process -> "process:${segment.events.size}"
+                }
+            },
+        )
+    }
+
+    @Test
+    fun `每个过程段保留自己的开始和结束时间`() {
+        val segments = orderedAiOutputSegments(
+            listOf(
+                ExecutionTraceEvent.Content("正文 1", startedAtMillis = 100L),
+                ExecutionTraceEvent.Reasoning("思考 1", startedAtMillis = 200L),
+                ExecutionTraceEvent.Tool(
+                    step = toolStep("1", "exec"),
+                    startedAtMillis = 300L,
+                    finishedAtMillis = 450L,
+                ),
+                ExecutionTraceEvent.Content("正文 2", startedAtMillis = 500L),
+                ExecutionTraceEvent.Reasoning("思考 2", startedAtMillis = 700L),
+            )
+        )
+
+        val processes = segments.filterIsInstance<OrderedAiOutputSegment.Process>()
+        assertEquals(listOf(200L, 700L), processes.map { it.startedAtMillis })
+        assertEquals(listOf(500L, null), processes.map { it.finishedAtMillis })
+    }
+
+    @Test
     fun `连续工具合并为一段且过程文字会切开工具段`() {
         val sections = executionProcessSections(
             reasoningText = "",

@@ -685,7 +685,11 @@ fun ChatMessagesList(
                                 item.events.lastOrNull() is ExecutionTraceEvent.Reasoning
 
                             ReasoningToggleAndContent(
-                                modifier = Modifier.fillMaxWidth(),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    // 每段 Markdown 正文开头自带 16dp 块间距。
+                                    // 过程段只补同样的顶部间距，底部交给下一段正文，保证两边一致。
+                                    .padding(top = ChatMarkdownTextStyle.SPACING_PARAGRAPH_DP.dp),
                                 currentMessageId = "${item.messageId}_process_${item.segmentIndex}",
                                 displayedReasoningText = reasoningText,
                                 activityStatusText = item.activityStatusText,
@@ -703,6 +707,7 @@ fun ChatMessagesList(
                                 executionFinishedAtMillis = item.executionFinishedAtMillis,
                                 reasoningTextColor = MaterialTheme.chatColors.reasoningText,
                                 reasoningToggleDotColor = MaterialTheme.colorScheme.onSurface,
+                                onInteractiveExpansionChanged = topAnchorEngine::updateInteractiveExpansion,
                                 onVisibilityChanged = {},
                             )
                         }
@@ -744,12 +749,14 @@ fun ChatMessagesList(
                                     webSearchResults = item.message.webSearchResults.orEmpty(),
                                     isReasoningStreaming = isReasoningStreaming,
                                     isReasoningComplete = isReasoningComplete,
+                                    replyIsStreaming = currentStreamingId == item.message.id,
                                     messageIsError = item.message.isError,
                                     mainContentHasStarted = item.message.contentStarted,
                                     executionStartedAtMillis = item.message.timestamp,
                                     executionFinishedAtMillis = item.message.executionFinishedAt,
                                     reasoningTextColor = MaterialTheme.chatColors.reasoningText,
                                     reasoningToggleDotColor = MaterialTheme.colorScheme.onSurface,
+                                    onInteractiveExpansionChanged = topAnchorEngine::updateInteractiveExpansion,
                                     onVisibilityChanged = { }
                                 )
                             }

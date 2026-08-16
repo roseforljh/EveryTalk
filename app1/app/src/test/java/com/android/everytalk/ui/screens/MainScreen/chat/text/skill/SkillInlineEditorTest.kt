@@ -33,12 +33,23 @@ class SkillInlineEditorTest {
         val original = value("前面 /pd 后面", cursor = 6)
         val query = requireNotNull(findSkillSlashQuery(original))
         val inserted = insertSkillReference(original, emptyList(), query, reference)
-        assertEquals("前面 ${SKILL_TAG_MARKER}  后面", inserted.value.text)
+        assertEquals("前面 ${SKILL_TAG_MARKER} 后面", inserted.value.text)
 
         val marker = inserted.value.text.indexOf(SKILL_TAG_MARKER)
         val deletedText = inserted.value.text.removeRange(marker, marker + 1)
         val normalized = normalizeSkillEdit(inserted.value, value(deletedText, marker), inserted.references)
         assertEquals(emptyList<MessageSkillReference>(), normalized.references)
+    }
+
+    @Test
+    fun `标签和正文之间的连续横向空白统一为一个`() {
+        val original = value("/pd   \t正文", cursor = 3)
+        val query = requireNotNull(findSkillSlashQuery(original))
+
+        val inserted = insertSkillReference(original, emptyList(), query, reference)
+
+        assertEquals("${SKILL_TAG_MARKER} 正文", inserted.value.text)
+        assertEquals(2, inserted.value.selection.start)
     }
 
     @Test

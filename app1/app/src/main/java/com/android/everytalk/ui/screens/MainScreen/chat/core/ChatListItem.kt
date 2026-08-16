@@ -168,7 +168,7 @@ sealed interface ChatListItem {
         val processIsActive: Boolean,
         val webSearchResults: List<WebSearchResult>,
         val messageIsError: Boolean,
-        val executionStartedAtMillis: Long,
+        val executionStartedAtMillis: Long?,
         val executionFinishedAtMillis: Long?,
     ) : ChatListItem {
         override val stableId: String = "${messageId}_process_$segmentIndex"
@@ -211,10 +211,16 @@ sealed interface ChatListItem {
 }
 
 internal sealed interface OrderedAiOutputSegment {
-    data class Content(val text: String) : OrderedAiOutputSegment
+    data class Content(
+        val text: String,
+        val startedAtMillis: Long?,
+    ) : OrderedAiOutputSegment
+
     data class Process(
         val events: List<ExecutionTraceEvent>,
         val detailStartIndex: Int,
+        val startedAtMillis: Long?,
+        val finishedAtMillis: Long?,
     ) : OrderedAiOutputSegment
 }
 
@@ -225,17 +231,27 @@ internal fun orderedAiOutputSegments(trace: List<ExecutionTraceEvent>): List<Ord
     var processEvents = mutableListOf<ExecutionTraceEvent>()
     var processStartIndex = 0
     var processEventIndex = 0
+    var contentStartedAtMillis: Long? = null
 
     fun flushContent() {
-        if (content.isNotEmpty()) {
-            result += OrderedAiOutputSegment.Content(content.toString())
-            content = StringBuilder()
+        // 正文和执行过程已经是两个独立列表项，边界换行不能继续交给 Markdown 渲染，
+        // 否则过程段下方会比上方多出一整行空白。正文内部的换行保持不变。
+        val text = content.toString().trim('\r', '\n')
+        content = StringBuilder()
+        if (text.isNotBlank()) {
+            result += OrderedAiOutputSegment.Content(text, contentStartedAtMillis)
         }
+        contentStartedAtMillis = null
     }
 
-    fun flushProcess() {
+    fun flushProcess(finishedAtMillis: Long? = null) {
         if (processEvents.isNotEmpty()) {
-            result += OrderedAiOutputSegment.Process(processEvents.toList(), processStartIndex)
+            result += OrderedAiOutputSegment.Process(
+                events = processEvents.toList(),
+                detailStartIndex = processStartIndex,
+                startedAtMillis = processEvents.firstNotNullOfOrNull { it.startedAtMillis },
+                finishedAtMillis = finishedAtMillis,
+            )
             processEvents = mutableListOf()
         }
     }
@@ -243,7 +259,8 @@ internal fun orderedAiOutputSegments(trace: List<ExecutionTraceEvent>): List<Ord
     trace.forEach { event ->
         when (event) {
             is ExecutionTraceEvent.Content -> {
-                flushProcess()
+                flushProcess(event.startedAtMillis)
+                if (content.isEmpty()) contentStartedAtMillis = event.startedAtMillis
                 content.append(event.text)
             }
             is ExecutionTraceEvent.Reasoning,

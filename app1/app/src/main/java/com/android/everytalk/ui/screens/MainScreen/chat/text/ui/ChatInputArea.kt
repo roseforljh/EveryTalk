@@ -90,10 +90,13 @@ import com.android.everytalk.models.MoreOptionsType
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.ui.components.dialog.AppDialogButtonShape
 import com.android.everytalk.ui.components.dialog.AppDialogShape
+import com.android.everytalk.ui.components.dialog.AppDialogTextFieldShape
 import com.android.everytalk.ui.components.dialog.appDialogBorderColor
 import com.android.everytalk.ui.components.dialog.appDialogContainerColor
 import com.android.everytalk.ui.components.dialog.appDialogContentColor
+import com.android.everytalk.ui.components.dialog.appDialogSubtextColor
 import com.android.everytalk.ui.components.dialog.appDialogTextFieldBorderColor
+import com.android.everytalk.ui.components.dialog.appDialogTextFieldColors
 import com.android.everytalk.ui.components.modifier.diffuseShadow
 import com.android.everytalk.ui.components.popup.AppFloatingCardPopup
 import kotlinx.coroutines.CancellationException
@@ -209,27 +212,16 @@ fun ChatInputArea(
     var pendingAgentDisclosures by remember { mutableStateOf<Set<ComputerDisclosureKind>>(emptySet()) }
     var pendingApprovalForComputerSelection by remember { mutableStateOf<PendingAgentEnableApproval?>(null) }
     var pendingWorkspaceRecreationAction by remember { mutableStateOf<PendingAgentAction?>(null) }
+    var pendingNotificationPermissionAction by remember { mutableStateOf<PendingAgentAction?>(null) }
     var showDeletedServerDialog by remember { mutableStateOf(false) }
 
-    val notificationPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission(),
-    ) { }
-
-    fun requestAgentNotificationPermission() {
-        if (
-            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        }
-    }
-
-    fun executeAgentAction(action: PendingAgentAction) {
+    /** 真正执行 Agent 开关。系统权限申请必须结束后才能进入这里。 */
+    fun performAgentAction(action: PendingAgentAction) {
         if (action.conversationId != currentConversationId) {
             onShowSnackbar(context.getString(R.string.agent_conversation_changed))
+            action.onFailed?.invoke()
             return
         }
-        if (action.enableAgentAfterSelection) requestAgentNotificationPermission()
         if (action.selectComputer) {
             viewModel.selectComputerForCurrentConversation(
                 computerId = action.computer.id,
@@ -238,12 +230,33 @@ fun ChatInputArea(
                 onFailure = action.onFailed,
             )
         } else {
-            viewModel.setAgentEnabled(
+            val enabled = viewModel.setAgentEnabled(
                 enabled = true,
                 allowWorkspaceRecreation = action.confirmedWorkspaceRecreation,
             )
-            if (viewModel.isAgentEnabled.value) action.onCompleted?.invoke() else action.onFailed?.invoke()
+            if (enabled) action.onCompleted?.invoke() else action.onFailed?.invoke()
         }
+    }
+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) {
+        // 权限结果返回后再继续原动作。即使用户拒绝，也交给统一开关检查显示原因并触发失败回调。
+        pendingNotificationPermissionAction?.let(::performAgentAction)
+        pendingNotificationPermissionAction = null
+    }
+
+    fun executeAgentAction(action: PendingAgentAction) {
+        if (
+            action.enableAgentAfterSelection &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            pendingNotificationPermissionAction = action
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+            return
+        }
+        performAgentAction(action)
     }
 
     fun requestAgentAction(action: PendingAgentAction) {
@@ -1388,7 +1401,10 @@ fun ChatInputArea(
     }
 
     agentEnableApprovalRequest?.takeIf {
-        pendingApprovalForComputerSelection == null && pendingWorkspaceRecreationAction == null
+        pendingApprovalForComputerSelection == null &&
+            pendingWorkspaceRecreationAction == null &&
+            pendingAgentAction == null &&
+            pendingNotificationPermissionAction == null
     }?.let { request ->
         val dialogBg = appDialogContainerColor()
         val dialogContent = appDialogContentColor()
@@ -1405,10 +1421,11 @@ fun ChatInputArea(
             confirmButton = {
                 Button(
                     onClick = {
+                        // 批准决定必须活到服务器选择、风险确认和通知授权全部完成，不能绑在某个短命弹窗上。
+                        pendingApprovalForComputerSelection = request
                         val selectedComputer = computers.firstOrNull { it.id == selectedComputerId }
                             ?.takeIf { it.status == ComputerStatus.READY }
                         if (selectedComputer == null) {
-                            pendingApprovalForComputerSelection = request
                             enableAgentAfterComputerSelection = true
                             showComputerSelectionPopup = true
                         } else {
@@ -1420,6 +1437,7 @@ fun ChatInputArea(
                                     enableAgentAfterSelection = true,
                                     requiresDisclosure = true,
                                     onCompleted = {
+                                        pendingApprovalForComputerSelection = null
                                         viewModel.respondToAgentEnableApproval(
                                             request.runId,
                                             request.approvalRequestId,
@@ -1475,18 +1493,48 @@ fun ChatInputArea(
             title = { Text("提供 Skill 密钥？", fontWeight = FontWeight.Bold) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("${request.skillName} 申请 ${request.name}")
-                    Text(request.reason, color = dialogContent.copy(alpha = 0.72f))
+                    Text(
+                        "${request.skillName} 申请 ${request.name}",
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.Medium,
+                        color = dialogContent,
+                    )
+                    Text(
+                        request.reason,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = appDialogSubtextColor(0.72f),
+                    )
                     OutlinedTextField(
                         value = secret,
                         onValueChange = { secret = it },
                         label = { Text(request.name) },
                         singleLine = true,
+                        shape = AppDialogTextFieldShape,
+                        colors = appDialogTextFieldColors(),
+                        modifier = Modifier.fillMaxWidth(),
                         visualTransformation = PasswordVisualTransformation(),
                     )
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = rememberSecret, onCheckedChange = { rememberSecret = it })
-                        Text("记住此密钥")
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { rememberSecret = !rememberSecret },
+                    ) {
+                        Checkbox(
+                            checked = rememberSecret,
+                            onCheckedChange = { rememberSecret = it },
+                            colors = CheckboxDefaults.colors(
+                                checkedColor = dialogContent,
+                                checkmarkColor = dialogBg,
+                                uncheckedColor = dialogContent.copy(alpha = 0.55f),
+                            ),
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            "记住此密钥",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = dialogContent,
+                        )
                     }
                 }
             },

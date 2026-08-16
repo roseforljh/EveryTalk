@@ -625,6 +625,7 @@ fun ImageGenerationMessagesList(
                                 webSearchResults = item.message.webSearchResults.orEmpty(),
                                 isReasoningStreaming = isReasoningStreaming,
                                 isReasoningComplete = reasoningCompleteMap[item.message.id] ?: false,
+                                replyIsStreaming = currentStreamingId == item.message.id,
                                 messageIsError = item.message.isError,
                                 mainContentHasStarted = item.message.contentStarted,
                                 executionStartedAtMillis = item.message.timestamp,

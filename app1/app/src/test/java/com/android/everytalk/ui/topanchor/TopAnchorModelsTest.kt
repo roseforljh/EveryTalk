@@ -153,4 +153,19 @@ class TopAnchorModelsTest {
         assertEquals(360, state.reservePx)
         assertTrue(requireNotNull(state.runtime.currentTurn).generation > firstTurn.generation)
     }
+
+    @Test
+    fun `展开执行详情时冻结预留并在收起后释放`() {
+        val state = TopAnchorReserveEngineState()
+
+        state.activateTurn(TopAnchorTurn("u2", "a2", "s1", 0L))
+        state.updateInteractiveExpansion("a2:tool-1", expanded = true)
+        state.updateInteractiveExpansion("a2:tool-2", expanded = true)
+
+        assertTrue(state.holdsReserveForInteractiveExpansion)
+        state.updateInteractiveExpansion("a2:tool-1", expanded = false)
+        assertTrue(state.holdsReserveForInteractiveExpansion)
+        state.updateInteractiveExpansion("a2:tool-2", expanded = false)
+        assertFalse(state.holdsReserveForInteractiveExpansion)
+    }
 }

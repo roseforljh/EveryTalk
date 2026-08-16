@@ -80,8 +80,19 @@ internal fun insertSkillReference(
     query: SkillSlashQuery,
     reference: MessageSkillReference,
 ): SkillEditState {
-    val replacement = if (references.any { it.skillId == reference.skillId }) "" else "${SKILL_TAG_MARKER} "
-    val newText = value.text.replaceRange(query.start, query.end, replacement)
+    val isDuplicate = references.any { it.skillId == reference.skillId }
+    var replaceEnd = query.end
+    if (!isDuplicate) {
+        // 候选词后原本通常已有空格。吞掉连续横向空白后统一补一个，避免标签和正文被两个空格拉开。
+        while (
+            replaceEnd < value.text.length &&
+            (value.text[replaceEnd] == ' ' || value.text[replaceEnd] == '\t')
+        ) {
+            replaceEnd++
+        }
+    }
+    val replacement = if (isDuplicate) "" else "${SKILL_TAG_MARKER}"
+    val newText = value.text.replaceRange(query.start, replaceEnd, replacement)
     val markerIndex = value.text.take(query.start).count { it == SKILL_TAG_MARKER }
     val newReferences = if (replacement.isEmpty()) {
         references

@@ -40,6 +40,26 @@ class BubbleContentTypesRenderRouteTest {
     }
 
     @Test
+    fun `Skill标签后的历史空白只显示一个`() {
+        assertEquals(" 正文", normalizeSkillTagFollowingText("   \t正文"))
+        assertEquals("\n正文", normalizeSkillTagFollowingText("\n正文"))
+        assertEquals("", normalizeSkillTagFollowingText("   "))
+    }
+
+    @Test
+    fun `Skill标签文字在固定标签区域内水平垂直居中`() {
+        val skillBlock = bubbleContentTypesSource()
+            .substringAfter("private fun UserMessageWithSkillTags(")
+            .substringBefore("fun AttachmentsContent(")
+
+        assertTrue(skillBlock.contains("modifier = Modifier.fillMaxSize()"))
+        assertTrue(skillBlock.contains("contentAlignment = Alignment.Center"))
+        assertTrue(skillBlock.contains("modifier = Modifier.fillMaxWidth()"))
+        assertTrue(skillBlock.contains("textAlign = TextAlign.Center"))
+        assertTrue(skillBlock.contains("PlatformTextStyle(includeFontPadding = false)"))
+    }
+
+    @Test
     fun `multiple image attachments use visible bounds instead of fixed square whitespace`() {
         val source = bubbleContentTypesSource()
 

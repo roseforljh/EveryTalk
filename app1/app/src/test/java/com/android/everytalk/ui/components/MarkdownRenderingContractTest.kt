@@ -476,6 +476,79 @@ class MarkdownRenderingContractTest {
     }
 
     @Test
+    fun `标题和列表标记缺少空格时恢复截图中的层级结构`() {
+        val source = """
+            ##结论
+
+            **DTCPAY 的卡以虚拟卡为主。**
+
+            ##依据（均来自官方来源）
+
+            **1. dtcpay 官网页面**
+
+            -主推产品：**虚拟卡**，即时开通。
+            -实体卡：目前仅提供等待名单入口。
+
+            **2. dtcpay 官方新闻稿**
+
+            -原文明确写道：虚拟卡已上线。
+
+            ##补充说明
+
+            -第三方社区信息以 App 内展示为准。
+            -实体卡目前仍属于等待名单状态。
+        """.trimIndent()
+
+        val prepared = StreamBlockParser.prepareMessage(
+            content = source,
+            messageId = "missing-block-marker-spaces",
+            contentVersion = 59L,
+        )
+        val state = parseMarkdown(
+            prepared.markdown,
+            lookupLinks = false,
+            flavour = EveryTalkMarkdownFlavourDescriptor,
+        ) as State.Success
+        val normalizedAgain = StreamBlockParser.prepareMessage(
+            content = prepared.markdown,
+            messageId = "missing-block-marker-spaces-idempotent",
+            contentVersion = 60L,
+        )
+
+        assertTrue(prepared.markdown.contains("## 结论"))
+        assertTrue(prepared.markdown.contains("- 主推产品"))
+        assertTrue(prepared.markdown.contains("- 原文明确写道"))
+        assertTrue(prepared.markdown.contains("- 第三方社区信息"))
+        assertEquals(3, state.node.children.count { it.type == MarkdownElementTypes.ATX_2 })
+        assertEquals(prepared.markdown, normalizedAgain.markdown)
+    }
+
+    @Test
+    fun `合法的负数命令参数强调和代码内容不被标记空格修复`() {
+        val source = """
+            -5 天
+            --verbose
+            ---
+            *强调*
+            +86 13800000000
+            #include <stdio.h>
+
+            ```text
+            ##结论
+            -主推产品
+            ```
+        """.trimIndent()
+
+        val prepared = StreamBlockParser.prepareMessage(
+            content = source,
+            messageId = "missing-block-marker-spaces-protected",
+            contentVersion = 61L,
+        )
+
+        assertEquals(source, prepared.markdown)
+    }
+
+    @Test
     fun `正文粘连表头时只修复表格边界并交给 GFM 表格解析`() {
         val source = """
             特征：| 财务指标 | 2024 财年 | 2025 财年 | 年同比变化 |
