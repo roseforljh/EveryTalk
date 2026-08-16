@@ -20,6 +20,7 @@ class MessageProcessor {
     private val isCompleted = AtomicBoolean(false)
     private val currentTextBuilder = AtomicReference(StringBuilder())
     private val currentReasoningBuilder = AtomicReference(StringBuilder())
+    private var currentRoundTextStart = 0
 
     fun initialize(sessionId: String, messageId: String) {
         this.sessionId.set(sessionId)
@@ -68,8 +69,16 @@ class MessageProcessor {
                     ProcessedEventResult.ContentUpdated("")
                 }
                 is AppStreamEvent.ContentFinal -> {
-                    // 不对已有内容做任何替换/合并处理，保持已累积文本原样
-                    ProcessedEventResult.ContentUpdated("")
+                    val canonicalRoundText = lightweightCleanup(event.text)
+                    val builder = currentTextBuilder.get()
+                    if (canonicalRoundText.isNotEmpty()) {
+                        val roundStart = currentRoundTextStart.coerceIn(0, builder.length)
+                        builder.replace(roundStart, builder.length, canonicalRoundText)
+                    }
+                    ProcessedEventResult.ContentFinalized(
+                        fullText = builder.toString(),
+                        roundText = canonicalRoundText,
+                    )
                 }
                 is AppStreamEvent.CodeExecutionResult -> {
                     // 图片由 ApiHandler 在落盘后统一写入消息状态，这里只处理文本执行结果。
@@ -85,6 +94,7 @@ class MessageProcessor {
                     if (!event.codeExecutionOutput.isNullOrBlank()) {
                         val outputMarkdown = "\n\n```\n${event.codeExecutionOutput}\n```\n\n"
                         builder.append(outputMarkdown)
+                        currentRoundTextStart = builder.length
                         ProcessedEventResult.ContentUpdated(outputMarkdown)
                     } else {
                         ProcessedEventResult.NoChange
@@ -101,8 +111,8 @@ class MessageProcessor {
                     ProcessedEventResult.ReasoningComplete
                 }
                 is AppStreamEvent.ToolCall -> {
-                    // 暂时不在此处处理 ToolCall，由 ApiHandler 拦截并处理
-                    // 返回 NoChange 或 新增 ToolCallResult
+                    // 下一次模型请求属于新轮次，终态文本只校正工具调用之后的正文。
+                    currentRoundTextStart = currentTextBuilder.get().length
                     ProcessedEventResult.NoChange
                 }
                 is AppStreamEvent.StreamEnd, is AppStreamEvent.Finish -> {
@@ -161,11 +171,16 @@ class MessageProcessor {
         isCompleted.set(false)
         currentTextBuilder.set(StringBuilder())
         currentReasoningBuilder.set(StringBuilder())
+        currentRoundTextStart = 0
     }
 }
 
 sealed class ProcessedEventResult {
     data class ContentUpdated(val text: String) : ProcessedEventResult()
+    data class ContentFinalized(
+        val fullText: String,
+        val roundText: String,
+    ) : ProcessedEventResult()
     data object ReasoningUpdated : ProcessedEventResult()
     object ReasoningComplete : ProcessedEventResult()
     object StreamComplete : ProcessedEventResult()

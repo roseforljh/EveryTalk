@@ -10,6 +10,7 @@ import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.buildJsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
@@ -95,6 +96,57 @@ class MessageProcessorFinalizePartsTest {
 
         assertEquals("为什么今天", finalized.text)
         assertEquals("推理内容", finalized.reasoning)
+    }
+
+    @Test
+    fun `完整终态会修复流式过程中缺失的正文和Markdown边界`() = runBlocking {
+        val processor = MessageProcessor().apply { initialize("session", "final-reconcile") }
+        processor.processStreamEvent(
+            AppStreamEvent.Content("##具体流程\nhttps://.resend.com/em"),
+            "final-reconcile",
+        )
+
+        val result = processor.processStreamEvent(
+            AppStreamEvent.ContentFinal("## 具体流程\n\nhttps://api.resend.com/emails"),
+            "final-reconcile",
+        )
+        val finalized = processor.finalizeMessageProcessing(
+            Message(id = "final-reconcile", text = "", sender = Sender.AI),
+        )
+
+        assertTrue(result is ProcessedEventResult.ContentFinalized)
+        assertEquals("## 具体流程\n\nhttps://api.resend.com/emails", finalized.text)
+    }
+
+    @Test
+    fun `Agent多轮终态只校正最后一轮并保留工具调用前正文`() = runBlocking {
+        val processor = MessageProcessor().apply { initialize("session", "agent-final-reconcile") }
+        processor.processStreamEvent(AppStreamEvent.Content("我先检查配置。\n\n"), "agent-final-reconcile")
+        processor.processStreamEvent(
+            AppStreamEvent.ToolCall(
+                id = "tool-1",
+                name = "read_file",
+                argumentsObj = buildJsonObject { },
+            ),
+            "agent-final-reconcile",
+        )
+        processor.processStreamEvent(
+            AppStreamEvent.Content("##结论\nhttps://.resend.com/em"),
+            "agent-final-reconcile",
+        )
+        processor.processStreamEvent(
+            AppStreamEvent.ContentFinal("## 结论\n\nhttps://api.resend.com/emails"),
+            "agent-final-reconcile",
+        )
+
+        val finalized = processor.finalizeMessageProcessing(
+            Message(id = "agent-final-reconcile", text = "", sender = Sender.AI),
+        )
+
+        assertEquals(
+            "我先检查配置。\n\n## 结论\n\nhttps://api.resend.com/emails",
+            finalized.text,
+        )
     }
 
     @Test

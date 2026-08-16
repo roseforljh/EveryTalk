@@ -279,6 +279,29 @@ class DirectClientLifecycleTest {
     }
 
     @Test
+    fun `OpenAI Responses使用completed完整正文修复缺失delta`() = runBlocking {
+        val canonical = "## 具体流程\n\nhttps://api.resend.com/emails"
+        val body = buildString {
+            appendResponsesEvent(
+                """{"type":"response.output_text.delta","delta":"##具体流程\nhttps://.resend.com/em"}"""
+            )
+            appendResponsesEvent(
+                """{"type":"response.completed","response":{"output":[{"type":"message","content":[{"type":"output_text","text":"## 具体流程\n\nhttps://api.resend.com/emails"}]}]}}"""
+            )
+            append("data: [DONE]\n\n")
+        }
+
+        withHttpClient(body = body) { client ->
+            val events = OpenAIResponsesClient.streamChatResponses(
+                client,
+                request("OpenAI", "OpenAI"),
+            ).toList()
+
+            assertEquals(canonical, events.filterIsInstance<AppStreamEvent.ContentFinal>().single().text)
+        }
+    }
+
+    @Test
     fun `OpenAI Chat流将最终usage发布为统一事件`() = runBlocking {
         val body = buildString {
             append("data: ")

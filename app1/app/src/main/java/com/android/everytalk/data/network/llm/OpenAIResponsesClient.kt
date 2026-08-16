@@ -441,6 +441,7 @@ object OpenAIResponsesClient {
         var safetyBlocked = false
         val streamedOutputItems = linkedMapOf<String, JsonElement>()
         var completedOutputItems: List<JsonElement>? = null
+        var completedResponseText: String? = null
         var finalUsage: TokenUsage? = null
 
         // 聚合 function_call 参数
@@ -589,6 +590,8 @@ object OpenAIResponsesClient {
                                     "response.completed" -> {
                                         val responseObject = event["response"] as? JsonObject
                                         completedOutputItems = (responseObject?.get("output") as? JsonArray)?.toList()
+                                        completedResponseText = completedOutputItems
+                                            ?.let(::extractOpenAICompletedOutputText)
                                         completedOutputItems.orEmpty().forEach { outputItem ->
                                             val item = outputItem as? JsonObject ?: return@forEach
                                             if (item["type"]?.jsonPrimitive?.contentOrNull != "function_call") {
@@ -708,7 +711,9 @@ object OpenAIResponsesClient {
             throw e
         }
 
-        val completedText = fullText.toString()
+        val completedText = completedResponseText
+            ?.takeIf { it.isNotEmpty() }
+            ?: fullText.toString()
         val completedReasoning = fullReasoningContent.toString()
         if (completedText.isNotEmpty() && !hasToolCalls) {
             emitEvent(AppStreamEvent.ContentFinal(completedText, null, null))
@@ -744,6 +749,23 @@ object OpenAIResponsesClient {
             outputItems = canonicalOutput,
             usage = finalUsage,
         )
+    }
+
+    /** response.completed 携带供应商最终正文，可用于修复中途缺失的 delta。 */
+    internal fun extractOpenAICompletedOutputText(outputItems: List<JsonElement>): String? {
+        val text = buildString {
+            for (outputItem in outputItems) {
+                val item = outputItem as? JsonObject ?: continue
+                if (item["type"]?.jsonPrimitive?.contentOrNull != "message") continue
+                for (contentPart in (item["content"] as? JsonArray).orEmpty()) {
+                    val part = contentPart as? JsonObject ?: continue
+                    if (part["type"]?.jsonPrimitive?.contentOrNull == "output_text") {
+                        part["text"]?.jsonPrimitive?.contentOrNull?.let(::append)
+                    }
+                }
+            }
+        }
+        return text.takeIf { it.isNotEmpty() }
     }
 
     private fun responseOutputItemKey(item: JsonObject, outputIndex: Int?): String =
