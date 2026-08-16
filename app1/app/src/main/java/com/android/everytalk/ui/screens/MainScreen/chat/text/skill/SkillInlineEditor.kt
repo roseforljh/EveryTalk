@@ -13,6 +13,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import com.android.everytalk.data.DataClass.MessageContentPart
 import com.android.everytalk.data.skill.MessageSkillReference
 import com.android.everytalk.data.database.entities.SkillInstallationEntity
+import com.android.everytalk.data.skill.effectivePackageName
 
 internal const val SKILL_TAG_MARKER: Char = '\uFFFC'
 
@@ -30,7 +31,6 @@ internal data class SkillEditState(
 internal fun rankSkillCandidates(
     skills: List<SkillInstallationEntity>,
     query: String,
-    limit: Int = 6,
 ): List<SkillInstallationEntity> {
     val needle = query.trim().lowercase()
     return skills.asSequence()
@@ -38,12 +38,14 @@ internal fun rankSkillCandidates(
         .map { skill ->
             val name = skill.name.lowercase()
             val description = skill.description.lowercase()
+            val packageName = skill.effectivePackageName().lowercase()
             val score = when {
                 needle.isEmpty() -> 0
                 name == needle -> 500
                 name.startsWith(needle) -> 400
                 needle in name -> 300
-                needle in description -> 200
+                needle in packageName -> 200
+                needle in description -> 100
                 else -> -1
             }
             skill to score
@@ -55,7 +57,6 @@ internal fun rankSkillCandidates(
                 .thenByDescending { it.first.useCount }
                 .thenBy { it.first.name.lowercase() },
         )
-        .take(limit)
         .map { it.first }
         .toList()
 }

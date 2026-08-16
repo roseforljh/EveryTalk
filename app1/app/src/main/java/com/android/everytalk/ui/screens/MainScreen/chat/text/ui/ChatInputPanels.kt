@@ -27,6 +27,7 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
@@ -330,23 +331,31 @@ internal fun ComputerSelectionCard(
                         val isReady = computer.status == ComputerStatus.READY
                         val isSelected = selectedComputerId == computer.id
                         val accentColor = ComputerCardAccentPalette[accentColorIndexes.getValue(computer.id)]
-                Surface(
-                    onClick = {
-                                if (isReady) onSelect(computer) else onUnavailable(computer)
-                            },
+                        val shape = RoundedCornerShape(percent = 50)
+                        Box(
                             modifier = Modifier
                                 .widthIn(min = 72.dp, max = maxItemWidth)
-                                .height(48.dp),
-                            shape = RoundedCornerShape(percent = 50),
-                            color = if (isSelected) {
-                                accentColor.copy(alpha = if (isSystemInDarkTheme()) 0.18f else 0.11f)
-                            } else {
-                                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.52f)
-                            },
-                            border = if (isSelected) BorderStroke(1.dp, accentColor) else null,
+                                .height(48.dp)
+                                .background(
+                                    color = if (isSelected) {
+                                        accentColor.copy(alpha = if (isSystemInDarkTheme()) 0.18f else 0.11f)
+                                    } else {
+                                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.52f)
+                                    },
+                                    shape = shape,
+                                )
+                                .then(if (isSelected) Modifier.border(1.dp, accentColor, shape) else Modifier)
+                                .clip(shape)
+                                .combinedClickable(
+                                    onClick = {
+                                        if (isReady) onSelect(computer) else onUnavailable(computer)
+                                    },
+                                    onLongClick = onAddComputer,
+                                )
+                                .padding(horizontal = 11.dp),
+                            contentAlignment = Alignment.CenterStart,
                         ) {
                             Row(
-                                modifier = Modifier.padding(horizontal = 11.dp),
                                 verticalAlignment = Alignment.CenterVertically,
                             ) {
                                 Icon(
@@ -377,9 +386,6 @@ internal fun ComputerSelectionCard(
                         }
                     }
                 }
-            }
-            TextButton(onClick = onAddComputer, modifier = Modifier.align(Alignment.End)) {
-                Text("管理服务器")
             }
         }
     }

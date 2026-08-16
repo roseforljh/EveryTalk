@@ -66,6 +66,7 @@ import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.Message
+import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.statecontroller.freezeWhileStreamingPaused
@@ -207,6 +208,8 @@ internal fun shouldAddConversationGapAfter(item: ChatListItem): Boolean = when (
     is ChatListItem.AiMessageSources -> false
     // 思考过程和紧随其后的正文属于同一条 AI 回复，不能插入完整会话间距。
     is ChatListItem.AiMessageReasoning -> false
+    is ChatListItem.AiMessageContentSegment -> false
+    is ChatListItem.AiMessageProcessSegment -> false
     is ChatListItem.AiMarkdownNode -> item.isLastNode
     else -> true
 }
@@ -456,6 +459,8 @@ fun ChatMessagesList(
                     // This allows the inner Composable to handle state transitions smoothly.
                     is ChatListItem.AiMessageSources -> "AiMessageSources"
                     is ChatListItem.AiMarkdownNode -> "AiMarkdownBlock"
+                    is ChatListItem.AiMessageContentSegment -> "AiMessageContentSegment"
+                    is ChatListItem.AiMessageProcessSegment -> "AiMessageProcessSegment"
                     is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessage,
                     is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageStreaming,
                     is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageCode,
@@ -633,6 +638,82 @@ fun ChatMessagesList(
                                     )
                                 }
                             }
+                        }
+
+                        is ChatListItem.AiMessageContentSegment -> {
+                            val segmentMessage = remember(
+                                item.message.id,
+                                item.segmentIndex,
+                                item.text,
+                            ) {
+                                item.message.copy(
+                                    id = "${item.message.id}_content_${item.segmentIndex}",
+                                    text = item.text,
+                                    reasoning = null,
+                                    executionSteps = emptyList(),
+                                    executionTrace = emptyList(),
+                                    webSearchResults = null,
+                                    imageUrls = null,
+                                )
+                            }
+                            AiMessageItem(
+                                message = segmentMessage,
+                                text = item.text,
+                                maxWidth = bubbleMaxWidth,
+                                isStreaming = item.isStreaming,
+                                messageOutputType = item.message.outputType,
+                                viewModel = viewModel,
+                                onImageClick = { url ->
+                                    val now = SystemClock.elapsedRealtime()
+                                    if (now - lastImagePreviewAt > 500) {
+                                        lastImagePreviewAt = now
+                                        onImageClick(url)
+                                    }
+                                },
+                            )
+                        }
+
+                        is ChatListItem.AiMessageProcessSegment -> {
+                            val reasoningCompleteMap = viewModel.textReasoningCompleteMap
+                            val reasoningText = remember(item.events) {
+                                item.events
+                                    .filterIsInstance<ExecutionTraceEvent.Reasoning>()
+                                    .joinToString("") { it.text }
+                            }
+                            val processSteps = remember(item.events) {
+                                item.events
+                                    .filterIsInstance<ExecutionTraceEvent.Tool>()
+                                    .map { it.step }
+                            }
+                            val fullProcessTrace = remember(item.message.executionTrace) {
+                                item.message.executionTrace.filterNot { it is ExecutionTraceEvent.Content }
+                            }
+                            val reasoningIsActive = item.processIsActive &&
+                                currentStreamingId == item.message.id &&
+                                reasoningCompleteMap[item.message.id] != true &&
+                                item.events.lastOrNull() is ExecutionTraceEvent.Reasoning
+
+                            ReasoningToggleAndContent(
+                                modifier = Modifier.fillMaxWidth(),
+                                currentMessageId = "${item.message.id}_process_${item.segmentIndex}",
+                                displayedReasoningText = reasoningText,
+                                activityStatusText = item.activityStatusText,
+                                executionSteps = processSteps,
+                                executionTrace = item.events,
+                                detailExecutionTrace = fullProcessTrace,
+                                detailInitialEventIndex = item.detailStartIndex,
+                                webSearchResults = item.message.webSearchResults.orEmpty(),
+                                isReasoningStreaming = reasoningIsActive,
+                                isReasoningComplete = !reasoningIsActive,
+                                replyIsStreaming = item.replyIsStreaming,
+                                messageIsError = item.message.isError && item.isLastProcess,
+                                mainContentHasStarted = false,
+                                executionStartedAtMillis = item.message.timestamp,
+                                executionFinishedAtMillis = item.message.executionFinishedAt,
+                                reasoningTextColor = MaterialTheme.chatColors.reasoningText,
+                                reasoningToggleDotColor = MaterialTheme.colorScheme.onSurface,
+                                onVisibilityChanged = {},
+                            )
                         }
 
                         is com.android.everytalk.ui.screens.MainScreen.chat.core.ChatListItem.AiMessageReasoning -> {

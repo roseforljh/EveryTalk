@@ -56,14 +56,14 @@ fun appFloatingCardContainerColor(): Color =
     resolveAppFloatingCardContainerColor(isSystemInDarkTheme())
 
 internal fun resolveAppFloatingCardContainerColor(isDarkTheme: Boolean): Color =
-    if (isDarkTheme) Color(0xFF212121) else LightPopupBackground
+    if (isDarkTheme) Color(0xFF242424) else Color.White
 
 @Composable
 fun appFloatingCardBorderColor(): Color =
     if (isSystemInDarkTheme()) {
-        Color.White.copy(alpha = 0.10f)
+        Color.White.copy(alpha = 0.12f)
     } else {
-        Color(0xFF0D0D0D).copy(alpha = 0.05f)
+        Color(0xFF0D0D0D).copy(alpha = 0.08f)
     }
 
 @Composable

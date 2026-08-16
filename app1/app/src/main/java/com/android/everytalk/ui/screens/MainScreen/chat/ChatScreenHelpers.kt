@@ -207,6 +207,8 @@ internal fun isHistoryConversationReadyForInitialBottom(
             is ChatListItem.AiMessageStreaming -> item.messageId
             is ChatListItem.AiMessageCodeStreaming -> item.messageId
             is ChatListItem.AiMessageReasoning -> item.message.id
+            is ChatListItem.AiMessageContentSegment -> item.message.id
+            is ChatListItem.AiMessageProcessSegment -> item.message.id
             is ChatListItem.AiMessageFooter -> item.message.id
             is ChatListItem.ErrorMessage -> item.messageId
             is ChatListItem.LoadingIndicator -> item.messageId

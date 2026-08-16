@@ -31,17 +31,21 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.border
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.outlined.Image
+import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -49,7 +53,9 @@ import com.android.everytalk.R
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -64,7 +70,6 @@ import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.input.key.Key
@@ -102,6 +107,8 @@ import com.android.everytalk.data.DataClass.MessageContentPart
 import com.android.everytalk.data.skill.MessageSkillReference
 import com.android.everytalk.data.skill.SkillSourceType
 import com.android.everytalk.data.skill.SkillRepository
+import com.android.everytalk.data.database.entities.SkillInstallationEntity
+import com.android.everytalk.data.skill.effectivePackageName
 import com.android.everytalk.data.agent.PendingAgentEnableApproval
 import com.android.everytalk.data.agent.PendingSkillSecretApproval
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -418,9 +425,17 @@ fun ChatInputArea(
     val skillCandidates = remember(installedSkills, activeSlashQuery?.query) {
         activeSlashQuery?.let { rankSkillCandidates(installedSkills, it.query) }.orEmpty()
     }
+    val duplicateSkillNames = remember(installedSkills) {
+        installedSkills.groupingBy { it.name.lowercase() }.eachCount().filterValues { it > 1 }.keys
+    }
     var selectedSkillCandidateIndex by remember { mutableIntStateOf(0) }
-    LaunchedEffect(slashSignature, skillCandidates.size) {
-        selectedSkillCandidateIndex = selectedSkillCandidateIndex.coerceIn(0, (skillCandidates.size - 1).coerceAtLeast(0))
+    val skillSuggestionListState = rememberLazyListState()
+    LaunchedEffect(slashSignature) {
+        // 查询词变化后始终回到最相关的第一项，行为与 CLI 斜杠菜单一致。
+        selectedSkillCandidateIndex = 0
+    }
+    LaunchedEffect(selectedSkillCandidateIndex, skillCandidates.size) {
+        if (skillCandidates.isNotEmpty()) skillSuggestionListState.scrollToItem(selectedSkillCandidateIndex)
     }
 
     fun selectSkillCandidate(index: Int) {
@@ -541,11 +556,12 @@ fun ChatInputArea(
         }
 
     val inputBackgroundColor = MaterialTheme.colorScheme.background
-    
+
     // 使用 WindowInsets 组合逻辑来统一处理底部间距，消除手动计算带来的动画抖动
     val navInsets = WindowInsets.navigationBarsIgnoringVisibility
     val baseInsets = navInsets.add(WindowInsets(bottom = 12.dp))
-    val targetInsets = WindowInsets.ime.union(baseInsets)
+    val imeWithPadding = WindowInsets.ime.add(WindowInsets(bottom = 8.dp))
+    val targetInsets = imeWithPadding.union(baseInsets)
     val hostCommandPopupPositionProvider = remember(chatInputContentHeightPx, density) {
         chatInputPopupPositionProvider(chatInputContentHeightPx, density)
     }
@@ -870,7 +886,7 @@ fun ChatInputArea(
                             }
 
                             AppFloatingCardPopup(
-                                visible = activeSlashQuery != null && skillCandidates.isNotEmpty(),
+                                visible = activeSlashQuery != null,
                                 popupPositionProvider = hostCommandPopupPositionProvider,
                                 onDismissRequest = { dismissedSlashSignature = slashSignature },
                                 properties = PopupProperties(
@@ -878,32 +894,26 @@ fun ChatInputArea(
                                     dismissOnBackPress = false,
                                     dismissOnClickOutside = true,
                                 ),
-                                modifier = Modifier.widthIn(min = 240.dp, max = 340.dp),
+                                modifier = Modifier.width(inputFieldWidth),
                             ) {
-                                Column(modifier = Modifier.padding(vertical = 6.dp)) {
-                                    skillCandidates.forEachIndexed { index, skill ->
-                                        val selected = index == selectedSkillCandidateIndex
-                                        Row(
+                                Column(modifier = Modifier.padding(5.dp)) {
+                                    if (skillCandidates.isEmpty()) {
+                                        EmptySkillSlashRow()
+                                    } else {
+                                        LazyColumn(
                                             modifier = Modifier
                                                 .fillMaxWidth()
-                                                .background(
-                                                    if (selected) MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)
-                                                    else Color.Transparent,
-                                                )
-                                                .clickable { selectSkillCandidate(index) }
-                                                .padding(horizontal = 14.dp, vertical = 10.dp),
-                                            verticalAlignment = Alignment.CenterVertically,
+                                                .heightIn(max = 260.dp),
+                                            state = skillSuggestionListState,
                                         ) {
-                                            Column(modifier = Modifier.weight(1f)) {
-                                                Text(skill.name, style = MaterialTheme.typography.bodyMedium)
-                                                Text(
-                                                    skill.description,
-                                                    style = MaterialTheme.typography.bodySmall,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                                    maxLines = 1,
+                                            itemsIndexed(skillCandidates, key = { _, skill -> skill.skillId }) { index, skill ->
+                                                SkillCatalogSuggestionRow(
+                                                    skill = skill,
+                                                    selected = index == selectedSkillCandidateIndex,
+                                                    showPackageName = skill.name.lowercase() in duplicateSkillNames,
+                                                    onClick = { selectSkillCandidate(index) },
                                                 )
                                             }
-                                            Text("/", color = MaterialTheme.colorScheme.primary)
                                         }
                                     }
                                 }
@@ -949,7 +959,8 @@ fun ChatInputArea(
                                     isAgentPreparing = isAgentPreparing,
                                     onToggleAgent = ::toggleAgent,
                                     onLongPressAgent = {
-                                        openComputerSelection(enableAgentAfterSelection = false)
+                                        showFunctionPanel = false
+                                        onOpenComputerSettings()
                                     },
                                     onOpenFilePicker = { filePickerLauncher.launch(arrayOf("*/*")) },
                                     onOpenCamera = { cameraPermissionLauncher.launch(Manifest.permission.CAMERA) },
@@ -1390,6 +1401,96 @@ fun ChatInputArea(
                     )
                 }) { Text("拒绝") }
             },
+        )
+    }
+}
+
+/**
+ * CLI 风格的 `/` 候选行。名称和用途只占一行，整行点击即插入 Skill 标签。
+ */
+@Composable
+private fun SkillCatalogSuggestionRow(
+    skill: SkillInstallationEntity,
+    selected: Boolean,
+    showPackageName: Boolean,
+    onClick: () -> Unit,
+) {
+    val isDark = isSystemInDarkTheme()
+    // 外层 28dp、内边距 5dp，23dp 才是同心圆角。
+    val shape = RoundedCornerShape(23.dp)
+    val selectedBg = if (isDark) Color.White.copy(alpha = 0.09f) else Color.Black.copy(alpha = 0.055f)
+    val primaryTextColor = MaterialTheme.colorScheme.onSurface
+    val secondaryTextColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f)
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(
+                color = if (selected) selectedBg else Color.Transparent,
+                shape = shape,
+            )
+            .clip(shape)
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 9.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.Inventory2,
+            contentDescription = null,
+            tint = secondaryTextColor,
+            modifier = Modifier.size(17.dp),
+        )
+        Spacer(Modifier.width(9.dp))
+        Text(
+            text = if (showPackageName) "${skill.name} · ${skill.effectivePackageName()}" else skill.name,
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium,
+            color = primaryTextColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.widthIn(max = 132.dp),
+        )
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = skill.description,
+            style = MaterialTheme.typography.bodySmall,
+            color = secondaryTextColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f),
+        )
+        if (selected) {
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = "↑↓  ↵",
+                style = MaterialTheme.typography.labelMedium,
+                color = secondaryTextColor,
+                maxLines = 1,
+            )
+        }
+    }
+}
+
+/** 即使没有可用 Skill，也保留同一张斜杠菜单，明确告诉用户当前为空。 */
+@Composable
+private fun EmptySkillSlashRow() {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 10.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(
+            imageVector = Icons.Outlined.Inventory2,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.55f),
+            modifier = Modifier.size(17.dp),
+        )
+        Spacer(Modifier.width(9.dp))
+        Text(
+            text = "暂无 Skill",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }

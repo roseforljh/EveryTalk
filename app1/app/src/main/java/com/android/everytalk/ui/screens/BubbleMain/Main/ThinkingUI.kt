@@ -284,9 +284,12 @@ internal fun ReasoningToggleAndContent(
     activityStatusText: String? = null,
     executionSteps: List<ExecutionStep> = emptyList(),
     executionTrace: List<ExecutionTraceEvent> = emptyList(),
+    detailExecutionTrace: List<ExecutionTraceEvent> = executionTrace,
+    detailInitialEventIndex: Int = 0,
     webSearchResults: List<WebSearchResult> = emptyList(),
     isReasoningStreaming: Boolean,
     isReasoningComplete: Boolean,
+    replyIsStreaming: Boolean = false,
     messageIsError: Boolean,
     mainContentHasStarted: Boolean,
     executionStartedAtMillis: Long? = null,
@@ -303,11 +306,19 @@ internal fun ReasoningToggleAndContent(
     var visibilityNotified by remember(currentMessageId) { mutableStateOf(false) }
 
     val processIsActive = !messageIsError &&
-        (isReasoningStreaming || isExecutionStatusActive(activityStatusText))
-    var executionChainExpanded by remember(currentMessageId) { mutableStateOf(processIsActive) }
+        (
+            isReasoningStreaming ||
+                isExecutionStatusActive(activityStatusText) ||
+                (replyIsStreaming && executionSteps.any { !it.completed })
+            )
+    var userExpanded by remember(currentMessageId) { mutableStateOf(false) }
+    val forceExpanded = processIsActive || replyIsStreaming
+    val executionChainExpanded = forceExpanded || userExpanded
     var nowMillis by remember(currentMessageId) { mutableLongStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(forceExpanded, currentMessageId) {
+        if (forceExpanded) userExpanded = false
+    }
     LaunchedEffect(processIsActive, currentMessageId) {
-        executionChainExpanded = processIsActive
         while (processIsActive) {
             nowMillis = System.currentTimeMillis()
             delay(1_000L)
@@ -385,7 +396,9 @@ internal fun ReasoningToggleAndContent(
                         expanded = executionChainExpanded,
                         textColor = reasoningTextColor,
                         iconColor = reasoningToggleDotColor,
-                        onClick = { executionChainExpanded = !executionChainExpanded },
+                        onClick = {
+                            if (!forceExpanded) userExpanded = !userExpanded
+                        },
                     )
                     AnimatedVisibility(
                         visible = executionChainExpanded,
@@ -417,11 +430,12 @@ internal fun ReasoningToggleAndContent(
             displayedReasoningText = displayedReasoningText,
             activityStatusText = activityStatusText,
             executionSteps = executionSteps,
-            executionTrace = executionTrace,
+            executionTrace = detailExecutionTrace,
             webSearchResults = webSearchResults,
             isReasoningActive = processIsActive,
             messageIsError = messageIsError,
             scrollState = streamingScrollState,
+            initialEventIndex = detailInitialEventIndex,
             onDismissRequest = { showReasoningSheet = false },
         )
     }
@@ -905,8 +919,17 @@ private fun ReasoningBottomSheet(
     isReasoningActive: Boolean,
     messageIsError: Boolean,
     scrollState: ScrollState,
+    initialEventIndex: Int,
     onDismissRequest: () -> Unit,
 ) {
+    var focusTop by remember(initialEventIndex) { mutableStateOf<Int?>(null) }
+    LaunchedEffect(focusTop, initialEventIndex) {
+        val target = focusTop ?: return@LaunchedEffect
+        if (initialEventIndex > 0) {
+            delay(250L)
+            scrollState.scrollTo(target.coerceIn(0, scrollState.maxValue))
+        }
+    }
     val executionLoadingDescription = stringResource(R.string.thinking_execution_loading)
     val sheetText = if (
         displayedReasoningText.isBlank() &&
@@ -958,6 +981,8 @@ private fun ReasoningBottomSheet(
             reasoningText = sheetText,
             isReasoningActive = isReasoningActive,
             messageIsError = messageIsError,
+            focusItemIndex = initialEventIndex,
+            onFocusItemPositioned = { focusTop = it },
             modifier = Modifier
                 .fillMaxWidth()
                 .semantics {

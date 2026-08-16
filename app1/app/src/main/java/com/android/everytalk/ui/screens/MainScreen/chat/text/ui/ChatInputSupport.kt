@@ -119,10 +119,32 @@ internal fun chatInputPopupPositionProvider(
         val marginPx = with(density) { 8.dp.roundToPx() }
         val x = ((windowSize.width - popupContentSize.width) / 2)
             .coerceIn(0, (windowSize.width - popupContentSize.width).coerceAtLeast(0))
-        val y = (windowSize.height - contentHeightPx - marginPx - popupContentSize.height)
-            .coerceIn(0, (windowSize.height - popupContentSize.height).coerceAtLeast(0))
+        val y = resolveChatInputPopupY(
+            windowHeightPx = windowSize.height,
+            anchorTopPx = anchorBounds.top,
+            inputContentHeightPx = contentHeightPx,
+            popupHeightPx = popupContentSize.height,
+            marginPx = marginPx,
+        )
         return IntOffset(x, y)
     }
+}
+
+/**
+ * 悬浮卡优先贴住调用位置所属输入框锚点。
+ * IME 可见时外层输入区高度包含键盘 inset，不能再次从 Popup 可用窗口高度中扣除。
+ */
+internal fun resolveChatInputPopupY(
+    windowHeightPx: Int,
+    anchorTopPx: Int,
+    inputContentHeightPx: Int,
+    popupHeightPx: Int,
+    marginPx: Int,
+): Int {
+    val maxY = (windowHeightPx - popupHeightPx).coerceAtLeast(0)
+    val anchoredY = anchorTopPx - marginPx - popupHeightPx
+    val fallbackY = windowHeightPx - inputContentHeightPx - marginPx - popupHeightPx
+    return (if (anchorTopPx > 0) anchoredY else fallbackY).coerceIn(0, maxY)
 }
 
 internal fun createImageFileUri(context: Context): Uri {

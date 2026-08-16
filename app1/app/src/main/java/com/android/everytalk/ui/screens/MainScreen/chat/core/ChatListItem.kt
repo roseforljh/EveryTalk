@@ -2,6 +2,7 @@ package com.android.everytalk.ui.screens.MainScreen.chat.core
 import com.android.everytalk.statecontroller.*
 
 import com.android.everytalk.data.DataClass.Message
+import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.ui.components.markdown.safeTextInNode
 import com.android.everytalk.ui.components.streaming.BLOCK_FORMULA_FENCE_LANGUAGE
@@ -143,6 +144,30 @@ sealed interface ChatListItem {
         override val stableId: String = "${message.id}_reasoning"
     }
 
+    /** 新版有序输出中的一段正式正文。 */
+    data class AiMessageContentSegment(
+        val message: Message,
+        val segmentIndex: Int,
+        val text: String,
+        val isStreaming: Boolean,
+    ) : ChatListItem {
+        override val stableId: String = "${message.id}_content_$segmentIndex"
+    }
+
+    /** 新版有序输出中一段连续的思考和工具过程。 */
+    data class AiMessageProcessSegment(
+        val message: Message,
+        val segmentIndex: Int,
+        val events: List<ExecutionTraceEvent>,
+        val detailStartIndex: Int,
+        val activityStatusText: String?,
+        val replyIsStreaming: Boolean,
+        val processIsActive: Boolean,
+        val isLastProcess: Boolean,
+    ) : ChatListItem {
+        override val stableId: String = "${message.id}_process_$segmentIndex"
+    }
+
     data class AiMessageFooter(val message: Message) : ChatListItem {
         override val stableId: String = "${message.id}_footer"
     }
@@ -178,6 +203,48 @@ sealed interface ChatListItem {
         override val stableId: String = id
     }
 }
+
+internal sealed interface OrderedAiOutputSegment {
+    data class Content(val text: String) : OrderedAiOutputSegment
+    data class Process(
+        val events: List<ExecutionTraceEvent>,
+        val detailStartIndex: Int,
+    ) : OrderedAiOutputSegment
+}
+
+/** 相邻正文合并，相邻思考和工具合并，两类事件互相形成真实边界。 */
+internal fun orderedAiOutputSegments(trace: List<ExecutionTraceEvent>): List<OrderedAiOutputSegment> =
+    buildList {
+        var processEventIndex = 0
+        trace.forEach { event ->
+            when (event) {
+                is ExecutionTraceEvent.Content -> {
+                    val previous = lastOrNull() as? OrderedAiOutputSegment.Content
+                    if (previous == null) {
+                        add(OrderedAiOutputSegment.Content(event.text))
+                    } else {
+                        this[lastIndex] = previous.copy(text = previous.text + event.text)
+                    }
+                }
+                is ExecutionTraceEvent.Reasoning,
+                is ExecutionTraceEvent.Tool,
+                -> {
+                    val previous = lastOrNull() as? OrderedAiOutputSegment.Process
+                    if (previous == null) {
+                        add(
+                            OrderedAiOutputSegment.Process(
+                                events = listOf(event),
+                                detailStartIndex = processEventIndex,
+                            )
+                        )
+                    } else {
+                        this[lastIndex] = previous.copy(events = previous.events + event)
+                    }
+                    processEventIndex++
+                }
+            }
+        }
+    }
 
 internal fun expandStaticAiMessageItem(item: ChatListItem): List<ChatListItem> {
     val message: Message

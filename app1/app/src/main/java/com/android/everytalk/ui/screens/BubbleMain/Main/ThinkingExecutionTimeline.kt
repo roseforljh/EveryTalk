@@ -41,6 +41,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.UriHandler
@@ -263,6 +265,7 @@ internal fun orderedExecutionItems(
     if (executionTrace.isNotEmpty()) {
         executionTrace.forEach { event ->
             when (event) {
+                is ExecutionTraceEvent.Content -> Unit
                 is ExecutionTraceEvent.Reasoning -> event.text
                     .takeIf(String::isNotBlank)
                     ?.let { add(OrderedExecutionItem.Reasoning(it)) }
@@ -365,6 +368,8 @@ internal fun ThinkingExecutionTimeline(
     reasoningText: String,
     isReasoningActive: Boolean,
     messageIsError: Boolean,
+    focusItemIndex: Int? = null,
+    onFocusItemPositioned: (Int) -> Unit = {},
     modifier: Modifier = Modifier,
     reasoningContent: @Composable (text: String, index: Int) -> Unit,
 ) {
@@ -400,6 +405,13 @@ internal fun ThinkingExecutionTimeline(
             .testTag("reasoning-execution-timeline"),
     ) {
         orderedItems.forEachIndexed { itemIndex, item ->
+            val focusModifier = if (itemIndex == focusItemIndex) {
+                Modifier.onGloballyPositioned { coordinates ->
+                    onFocusItemPositioned(coordinates.positionInParent().y.toInt())
+                }
+            } else {
+                Modifier
+            }
             when (item) {
                 is OrderedExecutionItem.Reasoning -> {
                     val currentReasoningIndex = reasoningNodeIndex++
@@ -411,7 +423,7 @@ internal fun ThinkingExecutionTimeline(
                         completed = itemIndex != activeReasoningItemIndex,
                         first = nodeIndex == 0,
                         last = nodeIndex == nodeCount - 1,
-                        modifier = Modifier.testTag(
+                        modifier = focusModifier.testTag(
                             "reasoning-execution-reasoning-step-$currentReasoningIndex"
                         ),
                     ) {
@@ -430,7 +442,7 @@ internal fun ThinkingExecutionTimeline(
                         completed = step.completed,
                         first = nodeIndex == 0,
                         last = nodeIndex == nodeCount - 1,
-                        modifier = Modifier.testTag("reasoning-execution-step-$currentToolIndex"),
+                        modifier = focusModifier.testTag("reasoning-execution-step-$currentToolIndex"),
                     ) {
                         ExecutionLabels(step, entry.invocationCount)
                         if (itemIndex == sourceItemIndex && webSearchResults.isNotEmpty()) {
