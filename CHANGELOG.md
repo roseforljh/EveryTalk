@@ -1,5 +1,48 @@
 # Changelog
 
+## [1.28.0](https://github.com/roseforljh/EveryTalk/compare/v1.27.0...v1.28.0) (2026-08-16)
+
+
+### Features
+
+* Agent 后台持续执行与通知恢复实施 ([9ebcc49](https://github.com/roseforljh/EveryTalk/commit/9ebcc49237445def7f0bf4b8738bad73d677ca81))
+* **core:** 支持 Skill 能力系统、Agent 控制工具、数据库升级 v22 及上下文优化 ([df9d2f7](https://github.com/roseforljh/EveryTalk/commit/df9d2f7e19573fd66454588c242f4a214ac47e56))
+* **services:** 新增 skills-proxy 代理服务工程 ([9597e56](https://github.com/roseforljh/EveryTalk/commit/9597e5652609b29d0d7d686114ff0d9fedf25ffe))
+* **ui:** 新增 Skill 市场与详情界面、支持斜杠命令面板与UI联动 ([dcb27a0](https://github.com/roseforljh/EveryTalk/commit/dcb27a07734b9c86e6fff01d26efb7e48b10304f))
+* VPS Agent 有状态执行协议与断线对账恢复 ([8184ead](https://github.com/roseforljh/EveryTalk/commit/8184ead08ac0a704c79c67f6790b0fe8ab7a856a))
+* 优化 Thinking 过程时间线展示与审批交互界面 ([990d85f](https://github.com/roseforljh/EveryTalk/commit/990d85f9de0d179ecc9e97836a893b3175fb200b))
+* 优化技能系统与聊天输入区UI交互及视觉样式对齐 ([2b92fd6](https://github.com/roseforljh/EveryTalk/commit/2b92fd6c46bea93a567393b282951d74b8696062))
+* 升级数据库Schema至v24并增强Skill与ToolLoop核心数据链路 ([9fd9567](https://github.com/roseforljh/EveryTalk/commit/9fd9567133eeedb03408b442514a45005410feb4))
+* 升级数据库Schema至v25并完善Agent运行连续性与Skill工具运行时 ([a01f5b0](https://github.com/roseforljh/EveryTalk/commit/a01f5b0036659aec8f69b82ae65a306365597cb0))
+* 增强Computer文本编辑工具与Agent协调调度链路 ([1a342a0](https://github.com/roseforljh/EveryTalk/commit/1a342a0c1b5f5c71d0845fcb65a9d551b777c91b))
+* 完善 Agent 运行状态持久化、远程协议解析与会话删除联动 ([75bff30](https://github.com/roseforljh/EveryTalk/commit/75bff301170e4c86ba0e22bc3368851a00a325c9))
+* 支持 Agent 人工审批挂起恢复与数据库 Schema v21 升级 ([64a813e](https://github.com/roseforljh/EveryTalk/commit/64a813edd969c5ca654b36d640455ca7daa55a9b))
+* 支持Agent并行工具执行与通知管理优化 ([80c8155](https://github.com/roseforljh/EveryTalk/commit/80c8155d1b8e410d0d8c8415013fba8d606b75b0))
+
+
+### Bug Fixes
+
+* Markdown 链接规范化与思考时间线状态优化 ([c16a616](https://github.com/roseforljh/EveryTalk/commit/c16a6167b91ea2fb2018da2445e0ff3b8ce37275))
+* 优化LLM网络客户端载荷构建与模型参数传递 ([0a4fd1e](https://github.com/roseforljh/EveryTalk/commit/0a4fd1ed27a8ae721a644e1af73a864731a39001))
+* 优化Markdown渲染与聊天UI组件交互 ([0092fb7](https://github.com/roseforljh/EveryTalk/commit/0092fb7f09cbee5eecded24af54932b804b8ddf7))
+* 优化Skill加载数据处理与流式消息状态控制 ([7c18569](https://github.com/roseforljh/EveryTalk/commit/7c18569cf3f0b15dd1d8e0a4db5668249f6fc4c1))
+* 优化UI渲染层、思考状态展示与输入滚动交互 ([b2828a2](https://github.com/roseforljh/EveryTalk/commit/b2828a2219e0579847b006dee9f0254a2fa1c6eb))
+* 优化上下文Token用量弹窗展示与思考过程UI ([20676eb](https://github.com/roseforljh/EveryTalk/commit/20676eb92c293c997551c75b68c613e93d696a5d))
+* 优化模型参数接口协议展示与Token消耗弹窗布局 ([d6c8096](https://github.com/roseforljh/EveryTalk/commit/d6c8096d60b5ffdc9448ae18b8cd92ab79e194fb))
+* 优化流式消息状态管理与Agent运行协调逻辑 ([5965631](https://github.com/roseforljh/EveryTalk/commit/596563137ff06795d106f4081e855d0150e8f684))
+* 修复Zip解压目录路径校验与下载按钮加载状态样式 ([d99441f](https://github.com/roseforljh/EveryTalk/commit/d99441f1b3977f00d793dbe836276ad500372b78))
+* 完善 Agent 后台持续执行、重连重试与状态恢复逻辑 ([921dcd8](https://github.com/roseforljh/EveryTalk/commit/921dcd8b886c9ca9527ed729ee9a32c62c6e2e4f))
+* 完善Agent审批持久化与Computer会话状态管理 ([4078b9b](https://github.com/roseforljh/EveryTalk/commit/4078b9b064ba0dce69dfbd6ba74735a9dabaf3eb))
+* 完善Agent运行状态控制与消息流式处理逻辑 ([079a58b](https://github.com/roseforljh/EveryTalk/commit/079a58b58cfce5fc58d32b80719c008c5546164d))
+* 完善LLM客户端响应流生命周期与消息解析处理 ([ec2945e](https://github.com/roseforljh/EveryTalk/commit/ec2945e5589b4746da997dd300cd3758f58254a8))
+* 抽离统一可展开搜索栏组件并接入模型选择弹窗与Skill下载页 ([37830d9](https://github.com/roseforljh/EveryTalk/commit/37830d9fd11bfa82839627f02ecc3c9d93dad875))
+* 更新 Agent 后台持续执行验收测试文档 ([39dc50d](https://github.com/roseforljh/EveryTalk/commit/39dc50dc52b0d97c8b7df9869dd103670d4d30a9))
+* 统一弹窗UI风格、固定Skill下载对话框尺寸并优化标签间距 ([f88ec71](https://github.com/roseforljh/EveryTalk/commit/f88ec71d193825d90e9a6bc59b94d7a0d7ef16d5))
+* 补充和更新 Agent 后台执行与连接恢复单元测试用例 ([51e47c2](https://github.com/roseforljh/EveryTalk/commit/51e47c2a4bc78ec1c5a121f48dccb1fb65830874))
+* 调整OpenAI Responses工具定义允许可选参数 ([00e5b33](https://github.com/roseforljh/EveryTalk/commit/00e5b33c189799f77bb96b7c9c546f122e84fce4))
+* 调整斜杠菜单交互保持、同心圆角与AI气泡展开箭头朝向 ([ef63ada](https://github.com/roseforljh/EveryTalk/commit/ef63adafd9de11ee4109df5442d3f5c0d848149c))
+* 配置 gitattributes 行尾换行规则 ([10a5380](https://github.com/roseforljh/EveryTalk/commit/10a5380748c2ef1063a3dead202aac22931ae164))
+
 ## [1.27.0](https://github.com/roseforljh/EveryTalk/compare/v1.26.0...v1.27.0) (2026-08-14)
 
 
