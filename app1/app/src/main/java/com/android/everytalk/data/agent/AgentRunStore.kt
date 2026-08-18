@@ -270,6 +270,7 @@ class AgentRunStore(
     ).also {
         dao.upsertRun(it)
         if (status in AGENT_TERMINAL_RUN_STATUSES) snapshotCache.remove(run.id)
+        if (status == AgentRunStatus.CANCELLED) dao.deleteContinuationStates(run.sessionId)
     }
 
     /** 按消息 ID 原子记录用户停止，并清掉只服务于恢复的内存快照。 */
@@ -283,7 +284,10 @@ class AgentRunStore(
             updatedAt = System.currentTimeMillis(),
         )
         val run = dao.getRunByVisibleMessage(messageId)
-        if (changed > 0 && run != null) snapshotCache.remove(run.id)
+        if (changed > 0 && run != null) {
+            snapshotCache.remove(run.id)
+            dao.deleteContinuationStates(run.sessionId)
+        }
         return run
     }
 

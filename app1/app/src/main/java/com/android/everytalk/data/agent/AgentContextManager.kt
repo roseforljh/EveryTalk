@@ -182,6 +182,24 @@ class AgentContextManager(
     ).toString()
 
     /**
+     * 摘要最多使用待压缩内容约三分之一的 token。
+     * 固定给 4096 会让较短历史生成更长摘要，随后触发“压缩没有减少占用”。
+     */
+    fun compactionOutputTokenLimit(plan: AgentCompactionPlan, hardLimit: Int): Int {
+        val sourceMessages = buildList {
+            plan.previousSummary?.takeIf(String::isNotBlank)?.let { summary ->
+                add(SimpleTextApiMessage(role = "system", content = summary))
+            }
+            addAll(plan.messagesToSummarize)
+        }
+        val sourceTokens = RequestTokenEstimator.estimate(sourceMessages, tools = null).totalInputTokens
+        return (sourceTokens / 3L)
+            .coerceAtLeast(32L)
+            .coerceAtMost(hardLimit.coerceAtLeast(1).toLong())
+            .toInt()
+    }
+
+    /**
      * 估算新摘要真正替换旧历史后的业务上下文占用。
      * 该值用于压缩记录，不能误用生成摘要那次请求自身的 token 数。
      */
