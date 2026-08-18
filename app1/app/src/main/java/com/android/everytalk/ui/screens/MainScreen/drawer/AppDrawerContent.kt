@@ -76,6 +76,8 @@ fun AppDrawerContent(
     onMoveConversationToGroup: (Int, String?, Boolean) -> Unit,
     expandedGroups: Set<String>,
     onToggleGroup: (String) -> Unit,
+    isGroupSectionExpanded: Boolean = false,
+    onToggleGroupSection: () -> Unit = {},
     modifier: Modifier = Modifier,
     isLoadingHistoryData: Boolean = false, // 新增：历史数据加载状态
     onShareConversation: (Int) -> Unit = {}, // 新增：分享会话回调
@@ -87,8 +89,7 @@ fun AppDrawerContent(
     var renamingIndex by remember { mutableStateOf<Int?>(null) }
     var showCreateGroupDialog by remember { mutableStateOf(false) }
     var showMoveToGroupDialog by remember { mutableStateOf<Int?>(null) }
-    var isAddGroupButtonVisible by remember { mutableStateOf(false) } // 控制"创建分组"按钮的可见性（默认隐藏）
-    var isGroupSectionExpanded by remember { mutableStateOf(false) } // 控制分组区域的展开/收起（默认收起）
+    var isAddGroupButtonVisible by remember(isGroupSectionExpanded) { mutableStateOf(isGroupSectionExpanded) } // 控制"创建分组"按钮的可见性（跟随展开状态）
     // Animation states for deletion
     val deletingGroups = remember { mutableStateListOf<String>() }
     val deletingItems = remember { mutableStateListOf<String>() }
@@ -270,8 +271,8 @@ fun AppDrawerContent(
                     .fillMaxWidth()
                     .padding(start = 16.dp, end = 8.dp, top = 16.dp, bottom = 8.dp)
                     .clickable {
-                        isAddGroupButtonVisible = !isAddGroupButtonVisible
-                        isGroupSectionExpanded = !isGroupSectionExpanded
+                        isAddGroupButtonVisible = !isGroupSectionExpanded
+                        onToggleGroupSection()
                     }, // 使整行可点击以切换按钮可见性和展开状态
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
@@ -310,79 +311,85 @@ fun AppDrawerContent(
                 }
                     }
                 }
-                // 分组与会话共享当前 LazyColumn，避免嵌套滚动区域。
-                if (isGroupSectionExpanded) {
-                    if (conversationGroups.isEmpty()) {
-                        item(key = "groups_empty") {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(vertical = 12.dp),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Text(
-                                    stringResource(R.string.drawer_no_groups),
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.Bold,
-                                )
-                            }
-                        }
-                    } else {
-                        conversationGroups.keys.forEach { groupName ->
-                            item(key = "group_header_$groupName") {
-                                androidx.compose.animation.AnimatedVisibility(
-                                    visible = !deletingGroups.contains(groupName),
-                                    exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
-                                    modifier = if (deletingGroups.contains(groupName)) Modifier else Modifier.animateItem(placementSpec = tween(300)),
+                // 分组区域内容：采用动画控制高度与渐隐，保证收起时平滑过渡
+                item(key = "drawer_groups_content") {
+                    androidx.compose.animation.AnimatedVisibility(
+                        visible = isGroupSectionExpanded,
+                        enter = expandVertically(animationSpec = tween(300)) + fadeIn(animationSpec = tween(300)),
+                        exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
+                    ) {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            if (conversationGroups.isEmpty()) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(vertical = 12.dp),
+                                    contentAlignment = Alignment.Center,
                                 ) {
-                                    CollapsibleGroupHeader(
-                                        groupName = groupName,
-                                        isExpanded = expandedGroups.contains(groupName),
-                                        onToggleExpand = { onToggleGroup(groupName) },
-                                        onRename = { newName -> onRenameGroup(groupName, newName) },
-                                        onDelete = {
-                                            deletingGroups.add(groupName)
-                                            scope.launch {
-                                                delay(300)
-                                                onDeleteGroup(groupName)
-                                                deletingGroups.remove(groupName)
-                                            }
-                                        },
+                                    Text(
+                                        stringResource(R.string.drawer_no_groups),
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        fontWeight = FontWeight.Bold,
                                     )
                                 }
-                            }
-                            val isExpanded = expandedGroups.contains(groupName) && !deletingGroups.contains(groupName)
-                            val groupItems = processedItems.custom[groupName].orEmpty()
-                            if (isExpanded && groupItems.isNotEmpty()) {
-                                items(
-                                    items = groupItems,
-                                    key = { itemData -> "custom_${itemData.stableId}_${isImageGenerationMode}" },
-                                ) { itemData ->
+                            } else {
+                                conversationGroups.keys.forEach { groupName ->
                                     androidx.compose.animation.AnimatedVisibility(
-                                        visible = !deletingItems.contains(itemData.stableId),
+                                        visible = !deletingGroups.contains(groupName),
                                         exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
-                                        enter = expandVertically(animationSpec = tween(300)) + fadeIn(animationSpec = tween(300)),
-                                        modifier = if (deletingItems.contains(itemData.stableId)) Modifier else Modifier.animateItem(placementSpec = tween(300)),
                                     ) {
-                                        ConversationItem(itemData)
-                                    }
-                                }
-                            } else if (isExpanded) {
-                                item(key = "group_empty_$groupName") {
-                                    Box(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(vertical = 12.dp)
-                                            .animateItem(placementSpec = tween(300)),
-                                        contentAlignment = Alignment.Center,
-                                    ) {
-                                        Text(
-                                            stringResource(R.string.drawer_no_groups),
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                            style = MaterialTheme.typography.bodySmall,
-                                            fontWeight = FontWeight.Bold,
-                                        )
+                                        Column(modifier = Modifier.fillMaxWidth()) {
+                                            CollapsibleGroupHeader(
+                                                groupName = groupName,
+                                                isExpanded = expandedGroups.contains(groupName),
+                                                onToggleExpand = { onToggleGroup(groupName) },
+                                                onRename = { newName -> onRenameGroup(groupName, newName) },
+                                                onDelete = {
+                                                    deletingGroups.add(groupName)
+                                                    scope.launch {
+                                                        delay(300)
+                                                        onDeleteGroup(groupName)
+                                                        deletingGroups.remove(groupName)
+                                                    }
+                                                },
+                                            )
+                                            val isExpanded = expandedGroups.contains(groupName)
+                                            val groupItems = processedItems.custom[groupName].orEmpty()
+                                            androidx.compose.animation.AnimatedVisibility(
+                                                visible = isExpanded,
+                                                enter = expandVertically(animationSpec = tween(300)) + fadeIn(animationSpec = tween(300)),
+                                                exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
+                                            ) {
+                                                Column(modifier = Modifier.fillMaxWidth()) {
+                                                    if (groupItems.isNotEmpty()) {
+                                                        groupItems.forEach { itemData ->
+                                                            androidx.compose.animation.AnimatedVisibility(
+                                                                visible = !deletingItems.contains(itemData.stableId),
+                                                                exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
+                                                                enter = expandVertically(animationSpec = tween(300)) + fadeIn(animationSpec = tween(300)),
+                                                            ) {
+                                                                ConversationItem(itemData)
+                                                            }
+                                                        }
+                                                    } else {
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .fillMaxWidth()
+                                                                .padding(vertical = 12.dp),
+                                                            contentAlignment = Alignment.Center,
+                                                        ) {
+                                                            Text(
+                                                                stringResource(R.string.drawer_no_groups),
+                                                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                                                style = MaterialTheme.typography.bodySmall,
+                                                                fontWeight = FontWeight.Bold,
+                                                            )
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -437,18 +444,23 @@ fun AppDrawerContent(
                                     modifier = Modifier.animateItem(placementSpec = tween(300)),
                                 )
                             }
-                            if (expandedGroups.contains("pinned")) {
-                                items(
-                                    items = processedItems.pinned,
-                                    key = { itemData -> "pinned_${itemData.stableId}_${isImageGenerationMode}" },
-                                ) { itemData ->
-                                    androidx.compose.animation.AnimatedVisibility(
-                                        visible = !deletingItems.contains(itemData.stableId),
-                                        exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
-                                        enter = expandVertically(animationSpec = tween(300)) + fadeIn(animationSpec = tween(300)),
-                                        modifier = if (deletingItems.contains(itemData.stableId)) Modifier else Modifier.animateItem(placementSpec = tween(300)),
-                                    ) {
-                                        ConversationItem(itemData)
+                            item(key = "pinned_items_container") {
+                                val isPinnedExpanded = expandedGroups.contains("pinned")
+                                androidx.compose.animation.AnimatedVisibility(
+                                    visible = isPinnedExpanded,
+                                    enter = expandVertically(animationSpec = tween(300)) + fadeIn(animationSpec = tween(300)),
+                                    exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
+                                ) {
+                                    Column(modifier = Modifier.fillMaxWidth()) {
+                                        processedItems.pinned.forEach { itemData ->
+                                            androidx.compose.animation.AnimatedVisibility(
+                                                visible = !deletingItems.contains(itemData.stableId),
+                                                exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
+                                                enter = expandVertically(animationSpec = tween(300)) + fadeIn(animationSpec = tween(300)),
+                                            ) {
+                                                ConversationItem(itemData)
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -621,8 +633,10 @@ fun AppDrawerContent(
                     onConfirm = { groupName ->
                         onCreateGroup(groupName)
                         showCreateGroupDialog = false
-                        // 创建分组后自动展开分组区域
-                        isGroupSectionExpanded = true
+                        // 创建分组后若未展开则自动展开分组区域
+                        if (!isGroupSectionExpanded) {
+                            onToggleGroupSection()
+                        }
                         isAddGroupButtonVisible = true
                     }
                 )

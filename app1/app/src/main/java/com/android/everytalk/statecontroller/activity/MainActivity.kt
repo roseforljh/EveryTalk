@@ -430,6 +430,8 @@ class MainActivity : AppCompatActivity() {
                                     onMoveConversationToGroup = { index, groupName, isImageGen -> appViewModel.moveConversationToGroup(index, groupName, isImageGen) },
                                     expandedGroups = appViewModel.stateHolder.expandedGroups.collectAsState().value,
                                     onToggleGroup = { groupKey -> appViewModel.toggleGroupExpanded(groupKey) },
+                                    isGroupSectionExpanded = appViewModel.stateHolder.isGroupSectionExpanded.collectAsState().value,
+                                    onToggleGroupSection = { appViewModel.toggleGroupSectionExpanded() },
                                     onShareConversation = { index ->
                                         appViewModel.shareConversation(index, isImageGenerationMode)
                                     }

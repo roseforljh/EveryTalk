@@ -59,7 +59,10 @@ import java.util.concurrent.atomic.AtomicLong
     
     // 分组状态
     val conversationGroups = MutableStateFlow<Map<String, List<String>>>(emptyMap())
-    
+
+    // 分组总区域展开/折叠状态（默认折叠）
+    val isGroupSectionExpanded = MutableStateFlow(false)
+
     // 分组展开/折叠状态（默认全部折叠）
     val expandedGroups = MutableStateFlow<Set<String>>(emptySet())
     

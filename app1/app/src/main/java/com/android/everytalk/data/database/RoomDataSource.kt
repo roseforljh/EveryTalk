@@ -389,6 +389,14 @@ class RoomDataSource(context: Context) {
         settingsDao.replaceExpandedGroups(entities)
     }
 
+    suspend fun loadIsGroupSectionExpanded(): Boolean {
+        return settingsDao.getValue("is_group_section_expanded")?.toBooleanStrictOrNull() ?: false
+    }
+
+    suspend fun saveIsGroupSectionExpanded(expanded: Boolean) {
+        settingsDao.insertSetting(SystemSettingEntity("is_group_section_expanded", expanded.toString()))
+    }
+
     // --- Conversation Api Config Mapping ---
     // 持久化会话ID到配置ID的映射，用于恢复会话时的模型选择
     

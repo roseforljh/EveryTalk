@@ -837,6 +837,29 @@ class DataPersistenceManager(
         }
     }
 
+    suspend fun saveIsGroupSectionExpanded(expanded: Boolean) {
+        withContext(Dispatchers.IO) {
+            try {
+                roomDataSource.saveIsGroupSectionExpanded(expanded)
+            } catch (e: Exception) {
+                e.rethrowIfCancellation()
+                Log.e(TAG, "saveIsGroupSectionExpanded failed", e)
+            }
+        }
+    }
+
+    suspend fun loadIsGroupSectionExpanded(): Boolean {
+        return withContext(Dispatchers.IO) {
+            try {
+                roomDataSource.loadIsGroupSectionExpanded()
+            } catch (e: Exception) {
+                e.rethrowIfCancellation()
+                Log.e(TAG, "loadIsGroupSectionExpanded failed", e)
+                false
+            }
+        }
+    }
+
     // ========= 语音配置 =========
 
     /**

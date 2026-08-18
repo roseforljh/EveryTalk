@@ -817,10 +817,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
                     // 加载分组展开状态
                     val expandedKeys = persistenceManager.loadExpandedGroupKeys()
+                    val isGroupSectionExpanded = persistenceManager.loadIsGroupSectionExpanded()
                     withContext(Dispatchers.Main) {
                         stateHolder.expandedGroups.value = expandedKeys
+                        stateHolder.isGroupSectionExpanded.value = isGroupSectionExpanded
                     }
-                    Log.d("AppViewModel", "分组展开状态已加载 - 共 ${expandedKeys.size} 个展开的分组")
+                    Log.d("AppViewModel", "分组展开状态已加载 - 共 ${expandedKeys.size} 个展开的分组, 分组总区域展开=$isGroupSectionExpanded")
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {

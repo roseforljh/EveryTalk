@@ -578,7 +578,7 @@ import java.util.TimeZone
             currentExpanded.add(groupKey)
         }
         stateHolder.expandedGroups.value = currentExpanded
-        
+
         // 持久化展开状态
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -588,6 +588,21 @@ import java.util.TimeZone
                 throw e
             } catch (e: Exception) {
                 Log.e("AppViewModel", "保存分组展开状态失败", e)
+            }
+        }
+    }
+
+    internal fun AppViewModel.toggleGroupSectionExpanded() {
+        val nextState = !stateHolder.isGroupSectionExpanded.value
+        stateHolder.isGroupSectionExpanded.value = nextState
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                persistenceManager.saveIsGroupSectionExpanded(nextState)
+                Log.d("AppViewModel", "分组总区域展开状态已保存: isGroupSectionExpanded=$nextState")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e("AppViewModel", "保存分组总区域展开状态失败", e)
             }
         }
     }
