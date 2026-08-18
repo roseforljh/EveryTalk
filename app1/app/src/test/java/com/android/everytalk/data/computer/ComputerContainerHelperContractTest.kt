@@ -11,6 +11,7 @@ class ComputerContainerHelperContractTest {
     @Test
     fun `上传Shell资产前必须转成Linux换行`() {
         listOf(
+            shellAssetFile("install-docker.sh"),
             shellAssetFile("everytalk-containerctl.sh"),
             shellAssetFile("runtime-wrapper.sh"),
         ).forEach { file ->
@@ -18,6 +19,14 @@ class ComputerContainerHelperContractTest {
             assertFalse("${file.name} 仍包含 CR 字节", normalized.any { it == '\r'.code.toByte() })
             assertTrue(String(normalized, Charsets.UTF_8).startsWith("#!/bin/sh\n"))
         }
+    }
+
+    @Test
+    fun `Docker安装等待系统包管理器释放锁`() {
+        val source = shellAssetFile("install-docker.sh").readText(Charsets.UTF_8)
+
+        assertEquals(4, source.lineSequence().count { it.startsWith("apt-get ") })
+        assertEquals(4, source.lineSequence().count { it.contains("DPkg::Lock::Timeout=300") })
     }
 
     @Test

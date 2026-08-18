@@ -273,6 +273,12 @@ class ComputerProvisioner(private val context: Context) {
     /** 修复失败必须告诉用户 VPS 返回了什么，同时限制长度并清掉控制字符。 */
     private fun commandFailureMessage(base: String, result: ComputerSshCommandResult): String {
         if (result.timedOut) return "$base：执行超时"
+        if (
+            result.stderr.contains("Could not get lock", ignoreCase = true) ||
+            result.stderr.contains("Unable to acquire the dpkg frontend lock", ignoreCase = true)
+        ) {
+            return "$base：系统包管理器长时间忙碌，请稍后重试"
+        }
         val detail = result.stderr.lineSequence()
             .map(String::trim)
             .lastOrNull(String::isNotEmpty)
