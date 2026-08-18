@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.28.1](https://github.com/roseforljh/EveryTalk/compare/v1.28.0...v1.28.1) (2026-08-16)
+
+
+### Bug Fixes
+
+* 版本号更新 ([3f5c228](https://github.com/roseforljh/EveryTalk/commit/3f5c2288fa49b2597a15d957d0bb0a30b613ff2b))
+
 ## [1.28.0](https://github.com/roseforljh/EveryTalk/compare/v1.27.0...v1.28.0) (2026-08-16)
 
 
