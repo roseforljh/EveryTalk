@@ -16,6 +16,7 @@ import com.android.everytalk.data.network.ModelTurnTransport
 import com.android.everytalk.data.network.NetworkUtils
 import io.mockk.coEvery
 import io.mockk.mockk
+import io.ktor.http.HttpStatusCode
 import java.net.SocketException
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.toList
@@ -58,12 +59,31 @@ class AgentBackgroundPlanModelRecoveryBehaviorTest {
     }
 
     @Test
-    fun `模型连接中断后原Run必须等待后台续写而不是永久失败`() = runTest {
+    fun `暂时性HTTP错误必须产生结构化可重试错误`() = runTest {
+        listOf(HttpStatusCode.TooManyRequests, HttpStatusCode.ServiceUnavailable).forEach { status ->
+            val result = NetworkUtils.handleApiError(
+                statusCode = status,
+                errorBody = """{"error":{"message":"temporary failure"}}""",
+                apiName = "Gemini",
+            )
+
+            assertEquals(status.value, result.error.upstreamStatus)
+            assertEquals("retryable_network", result.error.type)
+        }
+    }
+
+    @Test
+    fun `暂时性HTTP错误后原Run必须等待后台续写而不是永久失败`() = runTest {
         val statuses = mutableListOf<AgentRunStatus>()
         val run = runEntity()
         val request = chatRequest()
         val requestEntity = requestEntity(run)
         val store = mockk<AgentRunStore>(relaxed = true)
+        val retryableError = NetworkUtils.handleApiError(
+            statusCode = HttpStatusCode.ServiceUnavailable,
+            errorBody = """{"error":{"message":"temporary failure"}}""",
+            apiName = "Gemini",
+        )
 
         coEvery { store.expandTranscript(run.sessionId, any()) } returns request.messages
         coEvery { store.appendRunTranscript(run.id, any()) } returns request.messages
@@ -86,12 +106,8 @@ class AgentBackgroundPlanModelRecoveryBehaviorTest {
             runStore = store,
             modelTransport = ModelTurnTransport {
                 flowOf(
-                    AppStreamEvent.Error(
-                        message = "OpenAI 连接失败: Software caused connection abort",
-                        code = "connection_aborted",
-                        type = "retryable_network",
-                    ),
-                    AppStreamEvent.Finish("connection_failed"),
+                    retryableError.error,
+                    retryableError.finish,
                 )
             },
         )

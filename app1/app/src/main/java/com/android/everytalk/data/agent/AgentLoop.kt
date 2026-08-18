@@ -31,6 +31,7 @@ import com.android.everytalk.config.PerformanceConfig
 import java.io.IOException
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -44,6 +45,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withContext
 
 internal const val MAX_AGENT_MODEL_TURNS = 50
 internal const val MAX_AGENT_CONSECUTIVE_TOOL_CALLS = 100
@@ -207,12 +209,38 @@ class AgentLoop(
                         )
                     },
                 )
+                val toolSchemaFingerprint = agentToolSchemaFingerprint(input.request)
                 var prepared = contextManager.prepare(
                     requestId = requestId,
-                    request = input.request.copy(messages = contextTranscript),
+                    request = input.request.copy(
+                        messages = contextTranscript,
+                        localProviderContinuation = providerContinuation,
+                    ),
                     limits = input.tokenLimits,
                     checkpoint = activeCompaction,
                 )
+                if (providerContinuation == null) {
+                    val restoredContinuation = runStore.loadContinuation(
+                        sessionId = input.sessionId,
+                        configId = checkNotNull(run).configIdSnapshot,
+                        request = input.request,
+                        systemPromptFingerprint = agentSystemPromptFingerprint(prepared.messages),
+                        toolSchemaFingerprint = toolSchemaFingerprint,
+                        compactionId = activeCompaction?.id,
+                    )
+                    if (restoredContinuation != null) {
+                        providerContinuation = restoredContinuation
+                        prepared = contextManager.prepare(
+                            requestId = requestId,
+                            request = input.request.copy(
+                                messages = contextTranscript,
+                                localProviderContinuation = restoredContinuation,
+                            ),
+                            limits = input.tokenLimits,
+                            checkpoint = activeCompaction,
+                        )
+                    }
+                }
                 while (prepared.compactionPlan != null) {
                     val plan = checkNotNull(prepared.compactionPlan)
                     requestOrdinal++
@@ -222,16 +250,32 @@ class AgentLoop(
                         requestOrdinal = requestOrdinal,
                     )
                     emit(AppStreamEvent.ExecutionStatusUpdate("正在压缩上下文"))
-                    activeCompaction = executeCompaction(
-                        run = checkNotNull(run),
-                        requestOrdinal = requestOrdinal,
-                        plan = plan,
-                        baseRequest = input.request,
-                        limits = input.tokenLimits,
-                    )
-                    if (checkNotNull(activeCompaction).estimatedTokensAfter >= plan.tokensBefore) {
-                        throw AgentContextWindowException("上下文压缩没有减少占用，已停止继续压缩")
+                    val completedCompaction = try {
+                        executeCompaction(
+                            run = checkNotNull(run),
+                            requestOrdinal = requestOrdinal,
+                            plan = plan,
+                            baseRequest = input.request.copy(messages = contextTranscript),
+                            limits = input.tokenLimits,
+                        )
+                    } catch (error: AgentContextWindowException) {
+                        // 软阈值压缩失败时沿用旧检查点，并通过硬窗口裁剪继续当前主请求。
+                        emit(AppStreamEvent.ExecutionStatusUpdate("上下文压缩失败，正在使用安全上下文继续"))
+                        prepared = contextManager.prepare(
+                            requestId = UUID.randomUUID().toString(),
+                            request = input.request.copy(
+                                messages = contextTranscript,
+                                contextManagement = input.request.contextManagement?.copy(
+                                    autoCompressionEnabled = false,
+                                ),
+                                localProviderContinuation = providerContinuation,
+                            ),
+                            limits = input.tokenLimits,
+                            checkpoint = activeCompaction,
+                        )
+                        break
                     }
+                    activeCompaction = completedCompaction
                     // 摘要替代了早期中立历史，供应商上一轮的原生连续状态已不再对应新前缀。
                     providerContinuation = null
                     requestId = UUID.randomUUID().toString()
@@ -247,25 +291,17 @@ class AgentLoop(
                     )
                     prepared = contextManager.prepare(
                         requestId = requestId,
-                        request = input.request.copy(messages = refreshedContextTranscript),
+                        request = input.request.copy(
+                            messages = refreshedContextTranscript,
+                            localProviderContinuation = providerContinuation,
+                        ),
                         limits = input.tokenLimits,
                         checkpoint = activeCompaction,
                     )
                 }
                 requestOrdinal++
                 val ordinal = requestOrdinal
-                val toolSchemaFingerprint = agentToolSchemaFingerprint(input.request)
                 val systemPromptFingerprint = agentSystemPromptFingerprint(prepared.messages)
-                if (providerContinuation == null) {
-                    providerContinuation = runStore.loadContinuation(
-                        sessionId = input.sessionId,
-                        configId = checkNotNull(run).configIdSnapshot,
-                        request = input.request,
-                        systemPromptFingerprint = systemPromptFingerprint,
-                        toolSchemaFingerprint = toolSchemaFingerprint,
-                        compactionId = activeCompaction?.id,
-                    )
-                }
                 val turnRequest = input.request.copy(
                     messages = prepared.messages,
                     localProviderContinuation = providerContinuation,
@@ -359,6 +395,7 @@ class AgentLoop(
                                 nextProviderContinuation = ProviderTurnContinuation(
                                     protocol = protocol,
                                     payloadJson = event.payloadJson,
+                                    assistantMessageId = "assistant:$requestId",
                                     compactedContextJson = event.compactedContextJson
                                         ?: providerContinuation?.compactedContextJson,
                                     compactedThroughMessageId = if (event.compactedContextJson != null) {
@@ -369,6 +406,15 @@ class AgentLoop(
                                     },
                                 )
                             }
+                        }
+                        is AppStreamEvent.NativeContextCompaction -> {
+                            if (event.reset) {
+                                nextProviderContinuation = (nextProviderContinuation ?: providerContinuation)?.copy(
+                                    compactedContextJson = null,
+                                    compactedThroughMessageId = null,
+                                )
+                            }
+                            roundContentBuffer.accept(event)
                         }
                         else -> roundContentBuffer.accept(event)
                     }
@@ -538,9 +584,11 @@ class AgentLoop(
             emit(AppStreamEvent.Error(limitMessage))
             emit(AppStreamEvent.Finish("tool_loop_limit"))
         } catch (error: CancellationException) {
-            run?.let { activeRun ->
-                runStore.cancelOpenRequests(activeRun.id, error.message)
-                runStore.updateRunStatus(activeRun, AgentRunStatus.CANCELLED, terminalReason = error.message)
+            withContext(NonCancellable) {
+                run?.let { activeRun ->
+                    runStore.cancelOpenRequests(activeRun.id, error.message)
+                    runStore.updateRunStatus(activeRun, AgentRunStatus.CANCELLED, terminalReason = error.message)
+                }
             }
             throw error
         } catch (error: AgentRetryableNetworkException) {
@@ -1003,6 +1051,21 @@ class AgentLoop(
             )
             throw AgentContextWindowException("上下文压缩失败：模型未返回摘要")
         }
+        val estimatedTokensAfter = contextManager.estimateCompactedContextTokens(
+            request = baseRequest,
+            plan = plan,
+            summary = finalSummary,
+        )
+        if (estimatedTokensAfter >= plan.tokensBefore) {
+            runStore.updateRequest(
+                requestFact,
+                AgentRequestStatus.FAILED,
+                finishReason = "compaction_no_gain",
+                firstEventAt = firstEventAt,
+                finishedAt = finishedAt,
+            )
+            throw AgentContextWindowException("上下文压缩没有减少占用，已使用旧检查点继续")
+        }
         runStore.updateRequest(
             requestFact,
             AgentRequestStatus.COMPLETED,
@@ -1016,11 +1079,7 @@ class AgentLoop(
             plan = plan,
             summary = finalSummary,
             summaryRequestId = requestId,
-            estimatedTokensAfter = contextManager.estimateCompactedContextTokens(
-                request = baseRequest,
-                plan = plan,
-                summary = finalSummary,
-            ),
+            estimatedTokensAfter = estimatedTokensAfter,
             retainedTailJson = contextManager.compactionMetadata(plan),
         )
     }

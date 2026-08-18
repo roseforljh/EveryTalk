@@ -10,6 +10,9 @@ import com.android.everytalk.data.DataClass.PartsApiMessage
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.database.entities.AgentCompactionEntryEntity
 import com.android.everytalk.data.database.entities.AgentContextSnapshotEntity
+import com.android.everytalk.data.network.AnthropicDirectClient
+import com.android.everytalk.data.network.isOfficialAnthropicMessagesAddress
+import com.android.everytalk.data.network.isOfficialOpenAIResponsesAddress
 import com.android.everytalk.statecontroller.RequestTokenEstimator
 import com.android.everytalk.statecontroller.calibratedInputTokens
 import com.android.everytalk.statecontroller.trimMessagesToContextWindow
@@ -22,6 +25,7 @@ import kotlinx.serialization.json.jsonPrimitive
 
 private const val COMPACTION_META_SUMMARY_ROLE = "summary_role"
 private const val COMPACTION_META_RETAINED_IDS = "retained_ids"
+private const val COMPACTION_RECENT_CONTEXT_PERCENT = 25L
 
 data class PreparedAgentContext(
     val messages: List<AbstractApiMessage>,
@@ -68,10 +72,19 @@ class AgentContextManager(
         val reservedOutput = limits.maxOutputTokens.toLong()
         val contextWindow = limits.maxContextTokens.toLong()
         val inputBudget = contextWindow - reservedOutput
-        val threshold = request.contextManagement
+        val configuredThreshold = request.contextManagement
             ?.compactThresholdTokens
             ?.coerceIn(1L, contextWindow.coerceAtLeast(1L))
             ?: inputBudget
+        val prefersNativeCompaction = request.prefersNativeCompaction()
+        val providerContinuation = request.localProviderContinuation
+        val nativeThroughMessageId = providerContinuation?.compactedThroughMessageId
+        val hasActiveNativeCompaction = prefersNativeCompaction &&
+            !providerContinuation?.compactedContextJson.isNullOrBlank() &&
+            !nativeThroughMessageId.isNullOrBlank() &&
+            effective.any { it.id == nativeThroughMessageId }
+        // 官方原生压缩先使用用户配置的软阈值。本地通用压缩保留到硬窗口前兜底。
+        val genericCompactionThreshold = if (prefersNativeCompaction) contextWindow else configuredThreshold
         val compactedThroughIndex = acceptedCheckpoint
             ?.let { saved -> canonical.indexOfFirst { it.id == saved.summarizedThroughItemId } }
             ?: -1
@@ -79,37 +92,38 @@ class AgentContextManager(
             .drop(compactedThroughIndex + 1)
             .any { !it.role.equals("system", true) }
         val needsCompaction = request.contextManagement?.autoCompressionEnabled == true &&
+            !hasActiveNativeCompaction &&
             hasNewCompactionSource &&
-            activeBeforeTrim + reservedOutput >= threshold
+            activeBeforeTrim + reservedOutput >= genericCompactionThreshold
         val plan = if (needsCompaction) {
             planCompaction(
                 canonical = canonical,
                 checkpoint = acceptedCheckpoint,
                 tokensBefore = activeBeforeTrim + reservedOutput,
+                keepRecentTokens = (contextWindow * COMPACTION_RECENT_CONTEXT_PERCENT / 100L)
+                    .coerceAtLeast(1L),
             )
         } else {
             null
         }
-        if (needsCompaction && plan == null) {
-            throw AgentContextWindowException("上下文已达到压缩阈值，但没有可压缩的早期历史")
-        }
 
         // 有可执行压缩计划时先返回完整有效上下文，AgentLoop 会生成并落库摘要后重新 prepare。
-        val fitted = if (plan != null) {
-            effective
-        } else {
-            removeOrphanToolResults(
-                trimMessagesToContextWindow(
-                    messages = effective,
-                    limits = limits,
-                    tools = request.tools,
-                    inputTokenCalibration = calibration,
+        val fitted = when {
+            plan != null || hasActiveNativeCompaction -> effective
+            else -> {
+                removeOrphanToolResults(
+                    trimMessagesToContextWindow(
+                        messages = effective,
+                        limits = limits,
+                        tools = request.tools,
+                        inputTokenCalibration = calibration,
+                    )
                 )
-            )
+            }
         }
         val estimate = RequestTokenEstimator.estimate(fitted, request.tools)
         val active = calibratedInputTokens(estimate, calibration)
-        if (plan == null && active > inputBudget) {
+        if (plan == null && !hasActiveNativeCompaction && active > inputBudget) {
             throw AgentContextWindowException("当前请求的单轮内容超过模型上下文窗口")
         }
         val fingerprint = agentTranscriptFingerprint(fitted.map(::fingerprintPart))
@@ -140,24 +154,42 @@ class AgentContextManager(
      * 只接受结果齐全的工具组。Assistant 一次返回的多个 Tool Call 共同组成一个原子组。
      */
     internal fun removeOrphanToolResults(messages: List<AbstractApiMessage>): List<AbstractApiMessage> {
-        val completeToolCalls = messages
-            .filterIsInstance<AgentToolResultApiMessage>()
-            .mapTo(mutableSetOf()) { it.toolCallId }
-        val retainedAssistantIds = messages
-            .filterIsInstance<AgentAssistantApiMessage>()
-            .filter { assistant ->
-                assistant.toolCalls.isEmpty() || assistant.toolCalls.all { it.id in completeToolCalls }
-            }
-            .flatMapTo(mutableSetOf()) { assistant -> assistant.toolCalls.map { it.id } }
-
-        return messages.filter { message ->
-            when (message) {
-                is AgentAssistantApiMessage -> message.toolCalls.isEmpty() ||
-                    message.toolCalls.all { it.id in completeToolCalls }
-                is AgentToolResultApiMessage -> message.toolCallId in retainedAssistantIds
-                else -> true
+        val retained = mutableListOf<AbstractApiMessage>()
+        var cursor = 0
+        while (cursor < messages.size) {
+            val message = messages[cursor]
+            when {
+                message is AgentAssistantApiMessage && message.toolCalls.isNotEmpty() -> {
+                    val callsById = message.toolCalls.associateBy { it.id }
+                    val seenResults = mutableSetOf<String>()
+                    val results = mutableListOf<AgentToolResultApiMessage>()
+                    var next = cursor + 1
+                    var valid = callsById.size == message.toolCalls.size
+                    while (next < messages.size && messages[next] is AgentToolResultApiMessage) {
+                        val result = messages[next] as AgentToolResultApiMessage
+                        val call = callsById[result.toolCallId]
+                        if (call == null || !seenResults.add(result.toolCallId)) {
+                            valid = false
+                        } else {
+                            // Provider 历史以调用记录为准，修正可能漂移的结果名称。
+                            results += result.copy(toolName = call.name, name = call.name)
+                        }
+                        next++
+                    }
+                    if (valid && seenResults == callsById.keys) {
+                        retained += message
+                        retained += results
+                    }
+                    cursor = next
+                }
+                message is AgentToolResultApiMessage -> cursor++
+                else -> {
+                    retained += message
+                    cursor++
+                }
             }
         }
+        return retained
     }
 
     /** 摘要输入使用数据标签，工具结果只取 2,000 字符，避免摘要请求再次被输出淹没。 */
@@ -236,6 +268,7 @@ class AgentContextManager(
         canonical: List<AbstractApiMessage>,
         checkpoint: AgentCompactionEntryEntity?,
         tokensBefore: Long,
+        keepRecentTokens: Long,
     ): AgentCompactionPlan? {
         val systemIndexes = canonical.indices.filter { canonical[it].role.equals("system", true) }.toSet()
         val sourceStart = checkpoint
@@ -245,29 +278,31 @@ class AgentContextManager(
             ?: 0
         val candidateIndexes = canonical.indices.filter { it >= sourceStart && it !in systemIndexes }
         if (candidateIndexes.isEmpty()) return null
-
-        val latestUserPosition = candidateIndexes.indexOfLast { canonical[it].role.equals("user", true) }
-        if (latestUserPosition > 0) {
-            return createPlan(
-                canonical = canonical,
-                summarizedIndexes = candidateIndexes.take(latestUserPosition),
-                retainedIndexes = candidateIndexes.drop(latestUserPosition),
-                checkpoint = checkpoint,
-                summaryRole = "system",
-                tokensBefore = tokensBefore,
-            )
-        }
-
-        // 检查点之后没有新用户消息时，只压缩已完成的早期工具组，保留最后一个原子组。
-        if (latestUserPosition >= 0) return null
         val groups = atomicGroups(canonical, candidateIndexes)
         if (groups.size <= 1) return null
+
+        // 从最新消息向前累计近期预算，并始终给摘要至少留下一个完整原子组。
+        var retainedGroupStart = groups.lastIndex
+        var retainedTokens = 0L
+        for (groupIndex in groups.lastIndex downTo 1) {
+            retainedGroupStart = groupIndex
+            retainedTokens += groups[groupIndex].sumOf { index ->
+                RequestTokenEstimator.estimateMessageTokens(canonical[index])
+            }
+            if (retainedTokens >= keepRecentTokens) break
+        }
+        val summarizedGroups = groups.take(retainedGroupStart)
+        if (summarizedGroups.isEmpty()) return null
+        val retainedGroups = groups.drop(retainedGroupStart)
+        val firstRetainedMessage = canonical[retainedGroups.first().first()]
+        val splitsTurn = !firstRetainedMessage.role.equals("user", true)
+
         return createPlan(
             canonical = canonical,
-            summarizedIndexes = groups.dropLast(1).flatten(),
-            retainedIndexes = groups.last(),
+            summarizedIndexes = summarizedGroups.flatten(),
+            retainedIndexes = retainedGroups.flatten(),
             checkpoint = checkpoint,
-            summaryRole = "system",
+            summaryRole = if (splitsTurn) "user" else "system",
             tokensBefore = tokensBefore,
         )
     }
@@ -359,6 +394,19 @@ class AgentContextManager(
 
     private fun prefixFingerprint(messages: List<AbstractApiMessage>, throughIndex: Int): String =
         agentTranscriptFingerprint(messages.take(throughIndex + 1).map(::fingerprintPart))
+
+    /** 官方接口先尝试 Provider 原生压缩，通用摘要保留为硬窗口兜底。 */
+    private fun ChatRequest.prefersNativeCompaction(): Boolean {
+        if (contextManagement?.autoCompressionEnabled != true) return false
+        return when {
+            channel.contains("codex", ignoreCase = true) ->
+                isOfficialOpenAIResponsesAddress(apiAddress)
+            channel.contains("anthropic", ignoreCase = true) ->
+                isOfficialAnthropicMessagesAddress(apiAddress) &&
+                    AnthropicDirectClient.isNativeCompactionAvailable(apiAddress, model)
+            else -> false
+        }
+    }
 
     private fun fingerprintPart(message: AbstractApiMessage): String = when (message) {
         is SimpleTextApiMessage -> buildString {

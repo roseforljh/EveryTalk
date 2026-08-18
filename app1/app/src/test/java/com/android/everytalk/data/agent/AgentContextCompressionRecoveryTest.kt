@@ -88,6 +88,64 @@ class AgentContextCompressionRecoveryTest {
         assertTrue(events.any { it is AppStreamEvent.Content && it.text == "已继续处理" })
     }
 
+    @Test
+    fun `压缩服务拒绝请求时安全裁剪并继续主请求`() = runBlocking {
+        seedSession("compression-fallback")
+        var requestCount = 0
+        val loop = AgentLoop(
+            runStore = store,
+            modelTransport = ModelTurnTransport {
+                requestCount++
+                if (requestCount == 1) {
+                    flowOf(
+                        AppStreamEvent.Error(
+                            message = "摘要请求被拒绝",
+                            code = "bad_request",
+                            type = "provider_error",
+                        ),
+                        AppStreamEvent.Finish("error"),
+                    )
+                } else {
+                    flowOf(AppStreamEvent.Content("主请求继续完成"), AppStreamEvent.Finish("stop"))
+                }
+            },
+        )
+
+        val events = loop.run(loopRequest("compression-fallback")).toList()
+
+        assertEquals(2, requestCount)
+        assertTrue(events.any { it is AppStreamEvent.Content && it.text == "主请求继续完成" })
+    }
+
+    @Test
+    fun `无收益摘要标记失败并继续主请求`() = runBlocking {
+        val sessionId = "compression-no-gain"
+        seedSession(sessionId)
+        var requestCount = 0
+        val loop = AgentLoop(
+            runStore = store,
+            modelTransport = ModelTurnTransport {
+                requestCount++
+                if (requestCount == 1) {
+                    flowOf(AppStreamEvent.Content("无效摘要".repeat(2_000)), AppStreamEvent.Finish("stop"))
+                } else {
+                    flowOf(AppStreamEvent.Content("主请求继续完成"), AppStreamEvent.Finish("stop"))
+                }
+            },
+        )
+
+        val events = loop.run(loopRequest(sessionId)).toList()
+        val run = checkNotNull(database.agentDao().getRunsForSession(sessionId).single())
+        val compactionRequest = database.agentDao().getRequests(run.id)
+            .single { it.purpose == AgentRequestPurpose.COMPACTION.name }
+
+        assertEquals(2, requestCount)
+        assertEquals(AgentRequestStatus.FAILED.name, compactionRequest.status)
+        assertEquals("compaction_no_gain", compactionRequest.finishReason)
+        assertEquals(null, store.latestCompaction(sessionId))
+        assertTrue(events.any { it is AppStreamEvent.Content && it.text == "主请求继续完成" })
+    }
+
     private suspend fun seedSession(sessionId: String) {
         database.chatDao().insertSession(ChatSessionEntity(sessionId, 1L, 1L, false))
     }
