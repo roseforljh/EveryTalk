@@ -208,6 +208,7 @@ object AnthropicDirectClient {
         includeRequestMessages: Boolean = true,
     ): String {
         val preparedMessages = SystemPromptInjector.smartInjectSystemPrompt(request.messages)
+            .normalizeAgentToolHistory()
         val systemText = preparedMessages
             .filter { it.role.equals("system", ignoreCase = true) }
             .mapNotNull(::messageText)
@@ -218,7 +219,7 @@ object AnthropicDirectClient {
                 ?: preparedMessages
                 .filterNot { it.role.equals("system", ignoreCase = true) }
                 .mapNotNull(::toAnthropicMessage)
-            ).replaceLatestAssistantWithNativeContinuation(request)
+            ).replaceLatestAssistantWithNativeContinuation(request, preparedMessages)
             .pruneBeforeLatestCompaction()
         val maxTokens = request.generationConfig?.maxOutputTokens
             ?.takeIf { it > 0 }
@@ -293,9 +294,16 @@ object AnthropicDirectClient {
 
     private fun List<JsonObject>.replaceLatestAssistantWithNativeContinuation(
         request: ChatRequest,
+        preparedMessages: List<AbstractApiMessage>,
     ): List<JsonObject> {
+        val latestAssistant = preparedMessages.filterIsInstance<AgentAssistantApiMessage>().lastOrNull()
+            ?: return this
         val nativeContent = request.localProviderContinuation
             ?.takeIf { it.protocol == com.android.everytalk.data.DataClass.ModelParameterProtocol.ANTHROPIC }
+            ?.takeIf { continuation ->
+                (continuation.assistantMessageId == null || continuation.assistantMessageId == latestAssistant.id) &&
+                    nativeAnthropicToolCallsMatch(continuation.payloadJson, latestAssistant)
+            }
             ?.payloadJson
             ?.let { raw -> runCatching { Json.parseToJsonElement(raw) as? JsonArray }.getOrNull() }
             ?.takeIf(JsonArray::isNotEmpty)
@@ -308,6 +316,25 @@ object AnthropicDirectClient {
                 put("content", nativeContent)
             }
         }
+    }
+
+    /** 兼容升级前没有 assistantMessageId 的状态，只接受工具 ID 和名称完全一致的回合。 */
+    private fun nativeAnthropicToolCallsMatch(
+        payloadJson: String,
+        assistant: AgentAssistantApiMessage,
+    ): Boolean {
+        if (assistant.toolCalls.isEmpty()) return false
+        val nativeCalls = runCatching { Json.parseToJsonElement(payloadJson) as? JsonArray }
+            .getOrNull().orEmpty()
+            .mapNotNull { block ->
+                val value = block as? JsonObject ?: return@mapNotNull null
+                if (value["type"]?.jsonPrimitive?.contentOrNull != "tool_use") return@mapNotNull null
+                value["id"]?.jsonPrimitive?.contentOrNull to value["name"]?.jsonPrimitive?.contentOrNull
+            }
+        return nativeCalls.size == assistant.toolCalls.size &&
+            nativeCalls.zip(assistant.toolCalls).all { (native, call) ->
+                native.first == call.id && native.second == call.name
+            }
     }
 
     /**
@@ -336,6 +363,7 @@ object AnthropicDirectClient {
         if (completed.hasSuccessfulCompaction()) return JsonArray(listOf(currentAssistant))
 
         val preparedMessages = SystemPromptInjector.smartInjectSystemPrompt(request.messages)
+            .normalizeAgentToolHistory()
         val messages = restoredAnthropicMessages(
             request = request,
             preparedMessages = preparedMessages,
@@ -344,7 +372,7 @@ object AnthropicDirectClient {
             .filterNot { it.role.equals("system", ignoreCase = true) }
             .mapNotNull(::toAnthropicMessage)
         val canonical = messages
-            .replaceLatestAssistantWithNativeContinuation(request)
+            .replaceLatestAssistantWithNativeContinuation(request, preparedMessages)
             .pruneBeforeLatestCompaction()
         if (!containsSuccessfulCompaction(canonical)) return null
         return JsonArray(canonical + currentAssistant)

@@ -1105,8 +1105,15 @@ internal class ApiHandlerStreamProcessor(
 }
 
 /** 保留错误来源。Agent 内部异常走“处理失败”，只有供应商/传输错误才走网络错误。 */
-internal fun streamEventErrorThrowable(event: AppStreamEvent.Error): Throwable = when (event.type) {
-    AI_CONTENT_SAFETY_ERROR_TYPE -> AiContentSafetyBlockedException(event.code)
-    AGENT_INTERNAL_ERROR_TYPE -> IllegalStateException(event.message)
-    else -> IOException(event.message)
+internal fun streamEventErrorThrowable(event: AppStreamEvent.Error): Throwable {
+    val providerMessage = event.rawMessage
+        ?.trim()
+        ?.takeIf(String::isNotEmpty)
+        ?.let { raw -> "${event.message}：$raw" }
+        ?: event.message
+    return when (event.type) {
+        AI_CONTENT_SAFETY_ERROR_TYPE -> AiContentSafetyBlockedException(event.code)
+        AGENT_INTERNAL_ERROR_TYPE -> IllegalStateException(event.message)
+        else -> IOException(providerMessage)
+    }
 }

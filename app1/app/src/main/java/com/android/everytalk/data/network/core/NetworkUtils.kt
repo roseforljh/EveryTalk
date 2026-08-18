@@ -62,6 +62,7 @@ object NetworkUtils {
         val body = errorBody ?: "(no body)"
         Log.e(TAG, "$apiName API 错误 $statusCode: bodyChars=${body.length}")
         val upstream = parseProviderErrorBody(body)
+        val retryable = statusCode.value in setOf(408, 409, 425, 429) || statusCode.value in 500..599
         
         val errorMessage = when {
             statusCode.value == 401 -> "$apiName: API 密钥无效或已过期"
@@ -77,7 +78,8 @@ object NetworkUtils {
                 message = errorMessage,
                 upstreamStatus = statusCode.value,
                 code = upstream.code,
-                type = upstream.type,
+                // 临时 HTTP 错误必须进入 AgentRun 恢复链路，不能永久标记为执行失败。
+                type = if (retryable) "retryable_network" else upstream.type,
                 parameter = upstream.parameter,
                 rawMessage = upstream.message,
                 maxContextTokens = upstream.maxContextTokens,

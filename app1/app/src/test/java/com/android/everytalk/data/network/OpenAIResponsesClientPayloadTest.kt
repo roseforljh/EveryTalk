@@ -11,12 +11,14 @@ import com.android.everytalk.data.DataClass.ContextCompressionState
 import com.android.everytalk.data.DataClass.RequestContextManagement
 import com.android.everytalk.data.DataClass.AgentAssistantApiMessage
 import com.android.everytalk.data.DataClass.AgentToolCallApiPart
+import com.android.everytalk.data.DataClass.AgentToolResultApiMessage
 import com.android.everytalk.data.DataClass.ProviderTurnContinuation
 import com.android.everytalk.data.DataClass.ModelParameterProtocol
 import com.android.everytalk.data.computer.ComputerToolCatalog
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -257,6 +259,56 @@ class OpenAIResponsesClientPayloadTest {
         assertFalse(input.any { it.jsonObject["call_id"]?.jsonPrimitive?.content == "call-interrupted" })
         assertFalse(input.any { it.jsonObject["id"]?.jsonPrimitive?.content == "rs-interrupted" })
         assertTrue(input.any { it.jsonObject["content"]?.jsonPrimitive?.contentOrNull == "中断后继续" })
+    }
+
+    @Test
+    fun `旧Responses continuation不会覆盖当前工具回合`() {
+        val payload = Json.parseToJsonElement(
+            buildResponsesPayloadForTest(
+                request(
+                    messages = listOf(
+                        AgentAssistantApiMessage(
+                            id = "assistant-old",
+                            toolCalls = listOf(AgentToolCallApiPart("call-old", "read_file", JsonObject(emptyMap()))),
+                        ),
+                        AgentToolResultApiMessage(
+                            toolCallId = "call-old",
+                            toolName = "read_file",
+                            content = JsonPrimitive("old"),
+                        ),
+                        AgentAssistantApiMessage(
+                            id = "assistant-current",
+                            toolCalls = listOf(AgentToolCallApiPart("call-current", "exec", JsonObject(emptyMap()))),
+                        ),
+                        AgentToolResultApiMessage(
+                            toolCallId = "call-current",
+                            toolName = "exec",
+                            content = JsonPrimitive("current"),
+                        ),
+                    ),
+                ).copy(
+                    localProviderContinuation = ProviderTurnContinuation(
+                        protocol = ModelParameterProtocol.CODEX,
+                        payloadJson =
+                            """[{"type":"function_call","call_id":"call-old","name":"read_file","arguments":"{}"}]""",
+                    ),
+                ),
+            ),
+        ).jsonObject
+        val input = payload.getValue("input").jsonArray
+
+        assertEquals(1, input.count {
+            it.jsonObject["type"]?.jsonPrimitive?.contentOrNull == "function_call" &&
+                it.jsonObject["call_id"]?.jsonPrimitive?.contentOrNull == "call-old"
+        })
+        assertEquals(1, input.count {
+            it.jsonObject["type"]?.jsonPrimitive?.contentOrNull == "function_call" &&
+                it.jsonObject["call_id"]?.jsonPrimitive?.contentOrNull == "call-current"
+        })
+        assertEquals(1, input.count {
+            it.jsonObject["type"]?.jsonPrimitive?.contentOrNull == "function_call_output" &&
+                it.jsonObject["call_id"]?.jsonPrimitive?.contentOrNull == "call-current"
+        })
     }
 
     @Test

@@ -133,6 +133,8 @@ data class ChatRequest(
 data class ProviderTurnContinuation(
     val protocol: ModelParameterProtocol,
     val payloadJson: String,
+    /** 原生数据所属的内部 Assistant。中断后禁止把旧回合套到新 Assistant 上。 */
+    val assistantMessageId: String? = null,
     /** 最近一次原生压缩后的权威输入，供同一 AgentRun 后续工具轮继续使用。 */
     val compactedContextJson: String? = null,
     /** 权威输入已覆盖到的内部 Assistant ID，避免后续轮再次发送同一段历史。 */

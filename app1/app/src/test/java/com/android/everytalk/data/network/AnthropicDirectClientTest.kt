@@ -186,6 +186,11 @@ class AnthropicDirectClientTest {
                         AgentToolCallApiPart("tool-1", "weather", JsonObject(emptyMap())),
                     ),
                 ),
+                AgentToolResultApiMessage(
+                    toolCallId = "tool-1",
+                    toolName = "weather",
+                    content = JsonPrimitive("晴"),
+                ),
             ),
         ).copy(
             localProviderContinuation = ProviderTurnContinuation(
@@ -195,10 +200,77 @@ class AnthropicDirectClientTest {
         )
 
         val payload = Json.parseToJsonElement(AnthropicDirectClient.buildAnthropicPayload(request)).jsonObject
-        val assistant = payload.getValue("messages").jsonArray.last().jsonObject
+        val assistant = payload.getValue("messages").jsonArray
+            .map { it.jsonObject }
+            .last { it["role"]?.jsonPrimitive?.content == "assistant" }
         val thinking = assistant.getValue("content").jsonArray.first().jsonObject
 
         assertEquals("sig", thinking.getValue("signature").jsonPrimitive.content)
+    }
+
+    @Test
+    fun `旧continuation不会覆盖当前Anthropic工具回合`() {
+        val payload = Json.parseToJsonElement(
+            AnthropicDirectClient.buildAnthropicPayload(
+                request(
+                    messages = listOf(
+                        SimpleTextApiMessage(role = "user", content = "修改文件"),
+                        AgentAssistantApiMessage(
+                            id = "assistant-current",
+                            toolCalls = listOf(AgentToolCallApiPart("call-current", "exec", JsonObject(emptyMap()))),
+                        ),
+                        AgentToolResultApiMessage(
+                            toolCallId = "call-current",
+                            toolName = "exec",
+                            content = JsonPrimitive("ok"),
+                        ),
+                    ),
+                ).copy(
+                    localProviderContinuation = ProviderTurnContinuation(
+                        protocol = ModelParameterProtocol.ANTHROPIC,
+                        payloadJson =
+                            """[{"type":"thinking","thinking":"旧分析","signature":"old"},{"type":"tool_use","id":"call-old","name":"edit","input":{}}]""",
+                    ),
+                ),
+            ),
+        ).jsonObject
+        val blocks = payload.getValue("messages").jsonArray.flatMap {
+            it.jsonObject.getValue("content").jsonArray
+        }
+
+        assertFalse(blocks.any { it.jsonObject["id"]?.jsonPrimitive?.content == "call-old" })
+        assertTrue(blocks.any { it.jsonObject["id"]?.jsonPrimitive?.content == "call-current" })
+        assertTrue(blocks.any { it.jsonObject["tool_use_id"]?.jsonPrimitive?.content == "call-current" })
+    }
+
+    @Test
+    fun `中断后的孤立Anthropic工具项不会进入请求`() {
+        val payload = Json.parseToJsonElement(
+            AnthropicDirectClient.buildAnthropicPayload(
+                request(
+                    messages = listOf(
+                        AgentAssistantApiMessage(
+                            id = "assistant-orphan",
+                            toolCalls = listOf(AgentToolCallApiPart("call-orphan", "exec", JsonObject(emptyMap()))),
+                        ),
+                        SimpleTextApiMessage(role = "user", content = "继续"),
+                    ),
+                ).copy(
+                    localProviderContinuation = ProviderTurnContinuation(
+                        protocol = ModelParameterProtocol.ANTHROPIC,
+                        assistantMessageId = "assistant-orphan",
+                        payloadJson =
+                            """[{"type":"thinking","thinking":"分析","signature":"sig"},{"type":"tool_use","id":"call-orphan","name":"exec","input":{}}]""",
+                    ),
+                ),
+            ),
+        ).jsonObject
+        val blocks = payload.getValue("messages").jsonArray.flatMap {
+            it.jsonObject.getValue("content").jsonArray
+        }
+
+        assertFalse(blocks.any { it.jsonObject["type"]?.jsonPrimitive?.content == "tool_use" })
+        assertTrue(blocks.any { it.jsonObject["text"]?.jsonPrimitive?.content == "继续" })
     }
 
     @Test

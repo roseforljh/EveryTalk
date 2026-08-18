@@ -178,6 +178,7 @@ object OpenAIResponsesClient {
         nativeContextManagementEnabled: Boolean,
     ): String {
         val messagesWithSystemPrompt = SystemPromptInjector.smartInjectSystemPrompt(request.messages)
+            .normalizeAgentToolHistory()
         val normalizedTools = PromptCachePolicy.normalizeTools(request.tools)
         val promptCacheKey = PromptCachePolicy.buildOpenAICacheKey(
             apiAddress = resolvedOpenAIApiAddress(request),
@@ -293,6 +294,7 @@ object OpenAIResponsesClient {
         allowRestoredCompaction: Boolean = true,
     ): List<JsonElement> {
         val messagesWithSystemPrompt = SystemPromptInjector.smartInjectSystemPrompt(request.messages)
+            .normalizeAgentToolHistory()
         val transcriptToolCallIds = messagesWithSystemPrompt
             .filterIsInstance<AgentAssistantApiMessage>()
             .flatMap { message -> message.toolCalls.map { it.id } }
@@ -319,14 +321,25 @@ object OpenAIResponsesClient {
             ?.payloadJson
             ?.let { raw -> runCatching { Json.parseToJsonElement(raw) as? JsonArray }.getOrNull() }
             ?.takeIf(JsonArray::isNotEmpty)
-        val nativeFunctionCallIds = nativeOutputCandidate.orEmpty()
-            .filter { item ->
-                (item as? JsonObject)?.get("type")?.jsonPrimitive?.contentOrNull == "function_call"
+        val latestAssistant = messagesWithSystemPrompt.filterIsInstance<AgentAssistantApiMessage>().lastOrNull()
+        val nativeFunctionCalls = nativeOutputCandidate.orEmpty().mapNotNull { item ->
+            val value = item as? JsonObject ?: return@mapNotNull null
+            if (value["type"]?.jsonPrimitive?.contentOrNull != "function_call") return@mapNotNull null
+            value["call_id"]?.jsonPrimitive?.contentOrNull to value["name"]?.jsonPrimitive?.contentOrNull
+        }
+        val nativeFunctionCallIds = nativeFunctionCalls.map { it.first }
+        val continuationBelongsToAssistant = latestAssistant != null &&
+            (request.localProviderContinuation?.assistantMessageId == null ||
+                request.localProviderContinuation.assistantMessageId == latestAssistant.id) &&
+            latestAssistant.toolCalls.isNotEmpty() &&
+            nativeFunctionCalls.size == latestAssistant.toolCalls.size &&
+            nativeFunctionCalls.zip(latestAssistant.toolCalls).all { (native, call) ->
+                native.first == call.id && native.second == call.name
             }
-            .map { item -> (item as JsonObject)["call_id"]?.jsonPrimitive?.contentOrNull }
         // 中断可能只保存模型的 function_call，却没来得及保存工具结果。
         // 这种 continuation 不能再发给 Responses，否则服务端会直接返回 400。
         val nativeOutput = nativeOutputCandidate?.takeIf {
+            continuationBelongsToAssistant &&
             nativeFunctionCallIds.all { callId ->
                 callId != null && callId.isNotBlank() && callId in toolResultIds
             }

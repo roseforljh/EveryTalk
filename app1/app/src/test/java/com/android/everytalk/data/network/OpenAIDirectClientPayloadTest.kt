@@ -6,6 +6,7 @@ import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.DataClass.AgentAssistantApiMessage
 import com.android.everytalk.data.DataClass.AgentToolCallApiPart
+import com.android.everytalk.data.DataClass.AgentToolResultApiMessage
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.computer.ComputerToolCatalog
 import kotlinx.serialization.json.Json
@@ -134,6 +135,11 @@ class OpenAIDirectClientPayloadTest {
                             AgentToolCallApiPart("call-1", "exec", JsonObject(emptyMap())),
                         ),
                     ),
+                    AgentToolResultApiMessage(
+                        toolCallId = "call-1",
+                        toolName = "exec",
+                        content = JsonPrimitive("ok"),
+                    ),
                 ),
             )
         )
@@ -155,12 +161,70 @@ class OpenAIDirectClientPayloadTest {
                             AgentToolCallApiPart("call-1", "exec", JsonObject(emptyMap())),
                         ),
                     ),
+                    AgentToolResultApiMessage(
+                        toolCallId = "call-1",
+                        toolName = "exec",
+                        content = JsonPrimitive("ok"),
+                    ),
                 ),
             )
         )
 
         assertFalse(payload.contains("reasoning_content"))
         assertTrue(payload.contains("\"tool_calls\""))
+    }
+
+    @Test
+    fun `中断后的孤立工具调用和结果不会进入Chat Completions`() {
+        val payload = Json.parseToJsonElement(
+            buildPayload(
+                request(
+                    messages = listOf(
+                        SimpleTextApiMessage(role = "user", content = "执行命令"),
+                        AgentAssistantApiMessage(
+                            toolCalls = listOf(AgentToolCallApiPart("call-orphan", "exec", JsonObject(emptyMap()))),
+                        ),
+                        AgentToolResultApiMessage(
+                            toolCallId = "result-orphan",
+                            toolName = "edit",
+                            content = JsonPrimitive("错误结果"),
+                        ),
+                        SimpleTextApiMessage(role = "user", content = "中断后继续"),
+                    ),
+                ),
+            ),
+        ).jsonObject
+        val messages = payload.getValue("messages").jsonArray
+
+        assertFalse(messages.any { it.jsonObject["tool_calls"] != null })
+        assertFalse(messages.any { it.jsonObject["role"]?.jsonPrimitive?.content == "tool" })
+        assertTrue(messages.any { it.jsonObject["content"]?.jsonPrimitive?.content == "中断后继续" })
+    }
+
+    @Test
+    fun `被普通消息打断的工具组整体移除`() {
+        val payload = Json.parseToJsonElement(
+            buildPayload(
+                request(
+                    messages = listOf(
+                        AgentAssistantApiMessage(
+                            toolCalls = listOf(AgentToolCallApiPart("call-late", "exec", JsonObject(emptyMap()))),
+                        ),
+                        SimpleTextApiMessage(role = "user", content = "先停一下"),
+                        AgentToolResultApiMessage(
+                            toolCallId = "call-late",
+                            toolName = "exec",
+                            content = JsonPrimitive("late"),
+                        ),
+                    ),
+                ),
+            ),
+        ).jsonObject
+        val messages = payload.getValue("messages").jsonArray
+
+        assertFalse(messages.any { it.jsonObject["tool_calls"] != null })
+        assertFalse(messages.any { it.jsonObject["role"]?.jsonPrimitive?.content == "tool" })
+        assertTrue(messages.any { it.jsonObject["content"]?.jsonPrimitive?.content == "先停一下" })
     }
 
     private fun buildPayload(request: ChatRequest): String {

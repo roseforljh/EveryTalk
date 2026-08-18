@@ -91,6 +91,7 @@ object OpenAIDirectClient {
     internal fun buildOpenAIPayload(request: ChatRequest): String {
         // 首先注入系统提示词（如果消息中没有系统消息，则自动注入）
         val messagesWithSystemPrompt = SystemPromptInjector.smartInjectSystemPrompt(request.messages)
+            .normalizeAgentToolHistory()
         val normalizedTools = PromptCachePolicy.normalizeTools(request.tools)
         val promptCacheKey = PromptCachePolicy.buildOpenAICacheKey(
             apiAddress = resolvedOpenAIApiAddress(request),

@@ -25,6 +25,18 @@ class ApiHandlerRetryPolicyTest {
     }
 
     @Test
+    fun `Provider原始错误原因必须传给用户错误文本`() {
+        val error = streamEventErrorThrowable(
+            AppStreamEvent.Error(
+                message = "Gemini API 错误: 400 Bad Request",
+                rawMessage = "Function call is missing a thought_signature",
+            )
+        )
+
+        assertTrue(error.message.orEmpty().contains("Function call is missing a thought_signature"))
+    }
+
+    @Test
     fun `network retry never returns early without retry action`() {
         val shouldReturnEarly = shouldReturnEarlyForNetworkRetry(
             allowRetry = true,
