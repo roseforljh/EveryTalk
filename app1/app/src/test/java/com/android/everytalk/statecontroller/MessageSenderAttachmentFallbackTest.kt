@@ -4,6 +4,7 @@ import android.app.Application
 import com.android.everytalk.data.DataClass.AbstractApiMessage
 import com.android.everytalk.data.DataClass.ApiContentPart
 import com.android.everytalk.data.DataClass.PartsApiMessage
+import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
 import io.mockk.every
 import io.mockk.mockk
@@ -66,6 +67,23 @@ class MessageSenderAttachmentFallbackTest {
 
         assertEquals(1, result.size)
         assertSame(currentUserMessage, result.single())
+    }
+
+    @Test
+    fun `中断后的空白 AI 占位不会进入下一次请求`() {
+        val historyMessages = mutableListOf<AbstractApiMessage>(
+            SimpleTextApiMessage(id = "old-user", role = "user", content = "旧问题"),
+            SimpleTextApiMessage(id = "cancelled-ai", role = "assistant", content = "   "),
+        )
+        val currentUserMessage = SimpleTextApiMessage(
+            id = "new-user",
+            role = "user",
+            content = "中断后继续",
+        )
+
+        val result = sender.ensureUserMessagePresentForRequest(historyMessages, currentUserMessage)
+
+        assertEquals(listOf("old-user", "new-user"), result.map(AbstractApiMessage::id))
     }
 
     @Test

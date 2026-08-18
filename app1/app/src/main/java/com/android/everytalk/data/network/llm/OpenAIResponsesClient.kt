@@ -291,8 +291,16 @@ object OpenAIResponsesClient {
     private fun buildInitialResponsesInput(
         request: ChatRequest,
         allowRestoredCompaction: Boolean = true,
-    ): List<JsonElement> = buildList {
+    ): List<JsonElement> {
         val messagesWithSystemPrompt = SystemPromptInjector.smartInjectSystemPrompt(request.messages)
+        val transcriptToolCallIds = messagesWithSystemPrompt
+            .filterIsInstance<AgentAssistantApiMessage>()
+            .flatMap { message -> message.toolCalls.map { it.id } }
+            .toSet()
+        val toolResultIds = messagesWithSystemPrompt
+            .filterIsInstance<AgentToolResultApiMessage>()
+            .map { it.toolCallId }
+            .toSet()
         val runThroughIndex = request.localProviderContinuation
             ?.compactedThroughMessageId
             ?.let { throughId -> messagesWithSystemPrompt.indexOfFirst { it.id == throughId } }
@@ -306,27 +314,45 @@ object OpenAIResponsesClient {
             ?.compactedContextJson
             ?.let { raw -> runCatching { Json.parseToJsonElement(raw) as? JsonArray }.getOrNull() }
             ?.toList()
-        if (allowRestoredCompaction) {
-            (runNativeInput ?: restoredNativeInput(request))?.let(::addAll)
-        }
-        val nativeOutput = request.localProviderContinuation
+        val nativeOutputCandidate = request.localProviderContinuation
             ?.takeIf { it.protocol == com.android.everytalk.data.DataClass.ModelParameterProtocol.CODEX }
             ?.payloadJson
             ?.let { raw -> runCatching { Json.parseToJsonElement(raw) as? JsonArray }.getOrNull() }
             ?.takeIf(JsonArray::isNotEmpty)
+        val nativeFunctionCallIds = nativeOutputCandidate.orEmpty()
+            .filter { item ->
+                (item as? JsonObject)?.get("type")?.jsonPrimitive?.contentOrNull == "function_call"
+            }
+            .map { item -> (item as JsonObject)["call_id"]?.jsonPrimitive?.contentOrNull }
+        // 中断可能只保存模型的 function_call，却没来得及保存工具结果。
+        // 这种 continuation 不能再发给 Responses，否则服务端会直接返回 400。
+        val nativeOutput = nativeOutputCandidate?.takeIf {
+            nativeFunctionCallIds.all { callId ->
+                callId != null && callId.isNotBlank() && callId in toolResultIds
+            }
+        }
+        val completedToolCallIds = (
+            transcriptToolCallIds +
+                nativeFunctionCallIds.filterNotNull().takeIf { nativeOutput != null }.orEmpty()
+            ).intersect(toolResultIds)
         val replacedAssistantId = nativeOutput?.let {
             messagesWithSystemPrompt.filterIsInstance<AgentAssistantApiMessage>().lastOrNull()?.id
         }
         val throughIndex = runThroughIndex.takeIf { runNativeInput != null } ?: -1
-        messagesWithSystemPrompt
-            .filterIndexed { index, message ->
-                message.role.equals("system", ignoreCase = true) || index > throughIndex
+        return buildList {
+            if (allowRestoredCompaction) {
+                (runNativeInput ?: restoredNativeInput(request))?.let(::addAll)
             }
-            .filterNot { it.role.equals("system", ignoreCase = true) }
-            .forEach { message ->
-                if (message.id == replacedAssistantId) addAll(checkNotNull(nativeOutput))
-                else addAll(message.toResponsesInputItems())
-            }
+            messagesWithSystemPrompt
+                .filterIndexed { index, message ->
+                    message.role.equals("system", ignoreCase = true) || index > throughIndex
+                }
+                .filterNot { it.role.equals("system", ignoreCase = true) }
+                .forEach { message ->
+                    if (message.id == replacedAssistantId) addAll(checkNotNull(nativeOutput))
+                    else addAll(message.toResponsesInputItems(completedToolCallIds))
+                }
+        }.removeOrphanToolItems()
     }
 
     private fun restoredNativeInput(request: ChatRequest): List<JsonElement>? {
@@ -358,7 +384,9 @@ object OpenAIResponsesClient {
     private fun hasRestoredResponsesCompaction(request: ChatRequest): Boolean =
         activeNativeInput(request)?.let(::latestCompactionItemId) != null
 
-    private fun com.android.everytalk.data.DataClass.AbstractApiMessage.toResponsesInputItems(): List<JsonElement> =
+    private fun com.android.everytalk.data.DataClass.AbstractApiMessage.toResponsesInputItems(
+        completedToolCallIds: Set<String>,
+    ): List<JsonElement> =
         when (this) {
             is SimpleTextApiMessage -> listOf(buildJsonObject {
                 put("role", role)
@@ -412,7 +440,7 @@ object OpenAIResponsesClient {
                         put("content", text)
                     })
                 }
-                toolCalls.forEach { call ->
+                toolCalls.filter { it.id in completedToolCallIds }.forEach { call ->
                     add(buildJsonObject {
                         put("type", "function_call")
                         put("call_id", call.id)
@@ -421,12 +449,39 @@ object OpenAIResponsesClient {
                     })
                 }
             }
-            is AgentToolResultApiMessage -> listOf(buildJsonObject {
-                put("type", "function_call_output")
-                put("call_id", toolCallId)
-                put("output", content.toString())
-            })
+            is AgentToolResultApiMessage -> if (toolCallId in completedToolCallIds) {
+                listOf(buildJsonObject {
+                    put("type", "function_call_output")
+                    put("call_id", toolCallId)
+                    put("output", content.toString())
+                })
+            } else {
+                emptyList()
+            }
         }
+
+    /** 请求发出前再做一次协议配对，兼容数据库里已经存在的脏数据。 */
+    private fun List<JsonElement>.removeOrphanToolItems(): List<JsonElement> {
+        val functionCallIds = mapNotNull { item ->
+            (item as? JsonObject)
+                ?.takeIf { it["type"]?.jsonPrimitive?.contentOrNull == "function_call" }
+                ?.get("call_id")?.jsonPrimitive?.contentOrNull
+        }.toSet()
+        val functionOutputIds = mapNotNull { item ->
+            (item as? JsonObject)
+                ?.takeIf { it["type"]?.jsonPrimitive?.contentOrNull == "function_call_output" }
+                ?.get("call_id")?.jsonPrimitive?.contentOrNull
+        }.toSet()
+        val completedIds = functionCallIds.intersect(functionOutputIds)
+        return filter { item ->
+            val objectItem = item as? JsonObject ?: return@filter true
+            when (objectItem["type"]?.jsonPrimitive?.contentOrNull) {
+                "function_call", "function_call_output" ->
+                    objectItem["call_id"]?.jsonPrimitive?.contentOrNull in completedIds
+                else -> true
+            }
+        }
+    }
 
     private suspend fun parseResponsesSSEStream(
         channel: ByteReadChannel,

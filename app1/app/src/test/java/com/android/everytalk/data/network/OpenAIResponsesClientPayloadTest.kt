@@ -202,6 +202,11 @@ class OpenAIResponsesClientPayloadTest {
                                 AgentToolCallApiPart("call-1", "exec", JsonObject(emptyMap())),
                             ),
                         ),
+                        com.android.everytalk.data.DataClass.AgentToolResultApiMessage(
+                            toolCallId = "call-1",
+                            toolName = "exec",
+                            content = kotlinx.serialization.json.JsonPrimitive("结果"),
+                        ),
                     ),
                 ).copy(
                     localProviderContinuation = ProviderTurnContinuation(
@@ -221,6 +226,37 @@ class OpenAIResponsesClientPayloadTest {
                     it.jsonObject["call_id"]?.jsonPrimitive?.content == "call-1"
             },
         )
+    }
+
+    @Test
+    fun `中断工具调用后新请求不再携带孤立function call`() {
+        val payload = Json.parseToJsonElement(
+            buildResponsesPayloadForTest(
+                request(
+                    messages = listOf(
+                        SimpleTextApiMessage(role = "user", content = "检查服务"),
+                        AgentAssistantApiMessage(
+                            id = "assistant:turn-1",
+                            toolCalls = listOf(
+                                AgentToolCallApiPart("call-interrupted", "exec", JsonObject(emptyMap())),
+                            ),
+                        ),
+                        SimpleTextApiMessage(role = "user", content = "中断后继续"),
+                    ),
+                ).copy(
+                    localProviderContinuation = ProviderTurnContinuation(
+                        protocol = ModelParameterProtocol.CODEX,
+                        payloadJson =
+                            """[{"id":"rs-interrupted","type":"reasoning","encrypted_content":"opaque"},{"type":"function_call","call_id":"call-interrupted","name":"exec","arguments":"{}"}]""",
+                    ),
+                ),
+            ),
+        ).jsonObject
+        val input = payload.getValue("input").jsonArray
+
+        assertFalse(input.any { it.jsonObject["call_id"]?.jsonPrimitive?.content == "call-interrupted" })
+        assertFalse(input.any { it.jsonObject["id"]?.jsonPrimitive?.content == "rs-interrupted" })
+        assertTrue(input.any { it.jsonObject["content"]?.jsonPrimitive?.contentOrNull == "中断后继续" })
     }
 
     @Test

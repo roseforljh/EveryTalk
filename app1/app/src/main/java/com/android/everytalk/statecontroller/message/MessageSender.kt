@@ -411,6 +411,13 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
         currentUserMessage: AbstractApiMessage,
         currentUserHasAttachments: Boolean,
     ): MutableList<AbstractApiMessage> {
+        // 用户中断生成时，异步 UI 清理可能晚于下一次发送的历史快照。
+        // 空白 AI 占位不能进入模型请求，否则 OpenAI Responses 会直接返回 400。
+        messages.removeAll { message ->
+            message.role.equals("assistant", ignoreCase = true) &&
+                message is SimpleTextApiMessage &&
+                message.content.isBlank()
+        }
         val hasUserContent = currentUserHasAttachments || when (currentUserMessage) {
             is SimpleTextApiMessage -> currentUserMessage.content.trim().isNotBlank()
             is PartsApiMessage -> currentUserMessage.parts.any { part ->
