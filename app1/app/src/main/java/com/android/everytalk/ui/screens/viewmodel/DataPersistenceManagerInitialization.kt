@@ -284,13 +284,9 @@ internal fun DataPersistenceManager.loadInitialDataInternal(
                         var textHistoryLoadedCompletely = false
                         val loadedHistory = if (shouldLoadHistory) {
                             Log.d(TAG, "loadInitialData: 从 Room 加载历史数据...")
-                            val loadResult = roomDataSource.loadChatHistoryResult()
+                            val loadResult = roomDataSource.loadChatHistoryPreviewResult()
                             textHistoryLoadedCompletely = loadResult.failedSessionIds.isEmpty()
-                            migrateLoadedHistorySessions(
-                                loadResult = loadResult,
-                                isImageGeneration = false,
-                                onLoadWarning = ::warnOnce,
-                            )
+                            loadResult.sessions.map(com.android.everytalk.data.database.LoadedHistorySession::messages)
                         } else {
                             Log.d(TAG, "loadInitialData: 使用缓存的历史数据。")
                             stateHolder._historicalConversations.value
@@ -369,12 +365,9 @@ internal fun DataPersistenceManager.loadInitialDataInternal(
                     }
 
                     try {
-                        val imageHistoryLoadResult = roomDataSource.loadImageGenerationHistoryResult()
-                        val convertedImageGenHistory = migrateLoadedHistorySessions(
-                            loadResult = imageHistoryLoadResult,
-                            isImageGeneration = true,
-                            onLoadWarning = ::warnOnce,
-                        )
+                        val imageHistoryLoadResult = roomDataSource.loadImageGenerationHistoryPreviewResult()
+                        val convertedImageGenHistory = imageHistoryLoadResult.sessions
+                            .map(com.android.everytalk.data.database.LoadedHistorySession::messages)
                         withContext(Dispatchers.Main.immediate) {
                             stateHolder._imageGenerationHistoricalConversations.value = convertedImageGenHistory
                             if (imageHistoryLoadResult.failedSessionIds.isEmpty()) {

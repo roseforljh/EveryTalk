@@ -141,6 +141,11 @@ class HistoryController(
         }
 
         val original = currentHistorical[index].toMutableList()
+        val stableId = ConversationNameHelper.resolveStableId(original)
+        if (stableId == null) {
+            showSnackbar("无法重命名：会话标识缺失")
+            return
+        }
         val existingTitleIndex = original.indexOfFirst {
             it.sender == Sender.System && it.isPlaceholderName
         }
@@ -182,7 +187,7 @@ class HistoryController(
         }
 
         scope.launch {
-            historyManager.persistHistoryListDirectly(isImageGeneration)
+            historyManager.renameHistorySession(stableId, trimmed)
             withContext(Dispatchers.Main) { showSnackbar("对话已重命名") }
         }
     }

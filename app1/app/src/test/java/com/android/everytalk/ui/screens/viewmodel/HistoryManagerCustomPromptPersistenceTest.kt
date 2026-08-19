@@ -923,4 +923,35 @@ class HistoryManagerCustomPromptPersistenceTest {
             scope.coroutineContext[Job]?.cancelAndJoin()
         }
     }
+
+    @Test
+    fun `保存新会话不会逐条深比较全部历史`() = runBlocking {
+        val stateHolder = ViewModelStateHolder()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val persistenceManager = mockk<DataPersistenceManager>(relaxed = true)
+        var comparisonCount = 0
+        val historyManager = HistoryManager(
+            stateHolder = stateHolder,
+            persistenceManager = persistenceManager,
+            compareMessageLists = { left, right ->
+                comparisonCount += 1
+                left == right
+            },
+            onHistoryModified = {},
+            scope = scope,
+        )
+        stateHolder._historicalConversations.value = (0 until 30).map { index ->
+            listOf(Message(id = "old-$index", text = "旧会话 $index", sender = Sender.User))
+        }
+        stateHolder.messages += Message(id = "new-session", text = "新会话", sender = Sender.User)
+
+        try {
+            historyManager.saveCurrentChatToHistoryNow(forceSave = true)
+
+            assertTrue("保存新会话只允许比较列表头，实际比较 $comparisonCount 次", comparisonCount <= 1)
+            assertEquals("new-session", stateHolder._historicalConversations.value.first().first().id)
+        } finally {
+            scope.coroutineContext[Job]?.cancelAndJoin()
+        }
+    }
 }

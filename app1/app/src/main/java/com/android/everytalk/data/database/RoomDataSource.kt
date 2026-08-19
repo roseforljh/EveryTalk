@@ -12,6 +12,8 @@ import com.android.everytalk.data.database.entities.SystemSettingEntity
 import com.android.everytalk.data.database.entities.toApiConfig
 import com.android.everytalk.data.database.entities.toEntity
 import com.android.everytalk.data.database.entities.toMessage
+import com.android.everytalk.data.database.entities.toPreviewMessage
+import com.android.everytalk.data.database.entities.HISTORY_PREVIEW_OUTPUT_TYPE
 import com.android.everytalk.data.database.entities.toVoiceBackendConfig
 import com.android.everytalk.data.network.ExternalWebSearchProviderConfig
 import com.android.everytalk.data.agent.AgentToolResultStore
@@ -176,6 +178,10 @@ class RoomDataSource(context: Context) {
         return loadSessionsResult(isImageGeneration = false)
     }
 
+    suspend fun loadChatHistoryPreviewResult(): SessionHistoryLoadResult {
+        return loadSessionPreviewsResult(isImageGeneration = false)
+    }
+
     suspend fun saveChatHistory(
         history: List<List<Message>>,
         protectedSessionIds: Set<String> = emptySet(),
@@ -193,6 +199,10 @@ class RoomDataSource(context: Context) {
 
     suspend fun loadImageGenerationHistoryResult(): SessionHistoryLoadResult {
         return loadSessionsResult(isImageGeneration = true)
+    }
+
+    suspend fun loadImageGenerationHistoryPreviewResult(): SessionHistoryLoadResult {
+        return loadSessionPreviewsResult(isImageGeneration = true)
     }
 
     suspend fun saveImageGenerationHistory(
@@ -225,7 +235,10 @@ class RoomDataSource(context: Context) {
             try {
                 loadedSessions += LoadedHistorySession(
                     sessionId = session.id,
-                    messages = rawMessagesBySession[session.id].orEmpty().map { it.toMessage(converters) },
+                    messages = applySessionTitle(
+                        session,
+                        rawMessagesBySession[session.id].orEmpty().map { it.toMessage(converters) },
+                    ),
                 )
             } catch (exception: CancellationException) {
                 throw exception
@@ -236,19 +249,81 @@ class RoomDataSource(context: Context) {
         return SessionHistoryLoadResult(loadedSessions, failedSessionIds)
     }
 
+    /** 启动只加载标量字段，禁止触发消息 JSON 的批量反序列化。 */
+    private suspend fun loadSessionPreviewsResult(isImageGeneration: Boolean): SessionHistoryLoadResult {
+        val sessions = chatDao.getAllSessions(isImageGeneration)
+            .filterNot { it.id in LAST_OPEN_SESSION_IDS }
+        val messagesBySession = chatDao.getLightweightMessagesForMode(isImageGeneration)
+            .groupBy { it.sessionId }
+        return SessionHistoryLoadResult(
+            sessions = sessions.map { session ->
+                LoadedHistorySession(
+                    sessionId = session.id,
+                    messages = applySessionTitle(
+                        session,
+                        messagesBySession[session.id].orEmpty().map { it.toPreviewMessage(converters) },
+                    ),
+                )
+            },
+            failedSessionIds = emptySet(),
+        )
+    }
+
+    /** 用户打开、分享或导出时才加载单个会话的完整消息。 */
+    suspend fun loadHistorySession(sessionId: String): List<Message>? {
+        val session = chatDao.getSession(sessionId) ?: return null
+        return applySessionTitle(session, chatDao.getMessagesForSession(sessionId).map { it.toMessage() })
+    }
+
+    suspend fun renameHistorySession(sessionId: String, title: String) {
+        chatDao.updateSessionTitle(sessionId, title)
+    }
+
+    suspend fun isImageGenerationSession(sessionId: String): Boolean {
+        return chatDao.getSession(sessionId)?.isImageGeneration ?: false
+    }
+
+    private fun applySessionTitle(session: ChatSessionEntity, messages: List<Message>): List<Message> {
+        val title = session.title?.trim()?.takeIf(String::isNotEmpty) ?: return messages
+        val withoutLegacyTitle = ConversationNameHelper.withoutStoredConversationTitle(messages)
+        return listOf(
+            Message(
+                id = "title_${session.id}",
+                text = title,
+                sender = com.android.everytalk.data.DataClass.Sender.System,
+                timestamp = session.lastModifiedTimestamp,
+                contentStarted = true,
+                isPlaceholderName = true,
+                outputType = HISTORY_PREVIEW_OUTPUT_TYPE,
+            ),
+        ) + withoutLegacyTitle
+    }
+
     suspend fun saveLoadedHistorySession(
         sessionId: String,
         messages: List<Message>,
         isImageGeneration: Boolean,
     ) {
         if (messages.isEmpty()) return
+        val existingSession = chatDao.getSession(sessionId)
+        val persistedMessages = ConversationNameHelper.withoutStoredConversationTitle(messages)
         val session = ChatSessionEntity(
             id = sessionId,
-            creationTimestamp = messages.first().timestamp,
-            lastModifiedTimestamp = messages.last().timestamp,
+            creationTimestamp = existingSession?.creationTimestamp
+                ?: persistedMessages.firstOrNull()?.timestamp
+                ?: messages.first().timestamp,
+            lastModifiedTimestamp = persistedMessages.lastOrNull()?.timestamp
+                ?: existingSession?.lastModifiedTimestamp
+                ?: messages.last().timestamp,
             isImageGeneration = isImageGeneration,
+            title = existingSession?.title
+                ?: ConversationNameHelper.getStoredConversationTitle(messages),
         )
-        chatDao.saveSessionWithMessages(session, messages.map { it.toEntity(sessionId) })
+        chatDao.saveSessionWithMessages(
+            session = session,
+            messages = persistedMessages.map { it.toEntity(sessionId, converters) },
+            sessionChanged = session != existingSession,
+        )
     }
 
     suspend fun deleteHistorySession(sessionId: String) {
@@ -266,32 +341,41 @@ class RoomDataSource(context: Context) {
         protectedSessionIds: Set<String>,
     ) {
         val newSessionIds = mutableSetOf<String>()
-        val existingResult = loadSessionsResult(isImageGeneration)
-        val existingById = existingResult.sessions.associate { it.sessionId to it.messages }
-        val effectiveProtectedSessionIds = protectedSessionIds + existingResult.failedSessionIds
+        val effectiveProtectedSessionIds = protectedSessionIds
+        val existingSessions = chatDao.getAllSessions(isImageGeneration)
+        val existingSessionsById = existingSessions.associateBy(ChatSessionEntity::id)
 
         history.forEach { messages ->
             if (messages.isNotEmpty()) {
                 val stableId = ConversationNameHelper.resolveStableId(messages) ?: UUID.randomUUID().toString()
                 newSessionIds.add(stableId)
                 if (stableId in effectiveProtectedSessionIds) return@forEach
-
-                val existingMessages = existingById[stableId]
-                if (existingMessages != null && areMessagesStorageEquivalent(existingMessages, messages)) {
+                // 启动预览只含轻量字段，任何批量持久化都必须跳过，防止覆盖完整消息。
+                if (messages.all { it.outputType == HISTORY_PREVIEW_OUTPUT_TYPE }) {
                     return@forEach
                 }
 
+                val existingSession = existingSessionsById[stableId]
+                val persistedMessages = ConversationNameHelper.withoutStoredConversationTitle(messages)
                 val session = ChatSessionEntity(
                     id = stableId,
-                    creationTimestamp = messages.firstOrNull()?.timestamp ?: System.currentTimeMillis(),
-                    lastModifiedTimestamp = messages.lastOrNull()?.timestamp ?: System.currentTimeMillis(),
-                    isImageGeneration = isImageGeneration
+                    creationTimestamp = existingSession?.creationTimestamp
+                        ?: persistedMessages.firstOrNull()?.timestamp
+                        ?: System.currentTimeMillis(),
+                    lastModifiedTimestamp = persistedMessages.lastOrNull()?.timestamp
+                        ?: existingSession?.lastModifiedTimestamp
+                        ?: System.currentTimeMillis(),
+                    isImageGeneration = isImageGeneration,
+                    title = ConversationNameHelper.getStoredConversationTitle(messages) ?: existingSession?.title,
                 )
 
-                chatDao.saveSessionWithMessages(session, messages.map { it.toEntity(stableId) })
+                chatDao.saveSessionWithMessages(
+                    session = session,
+                    messages = persistedMessages.map { it.toEntity(stableId, converters) },
+                    sessionChanged = session != existingSession,
+                )
             }
         }
-        val existingSessions = chatDao.getAllSessions(isImageGeneration)
         existingSessions.forEach { existing ->
             if (existing.id !in newSessionIds &&
                 existing.id !in effectiveProtectedSessionIds &&
@@ -300,14 +384,6 @@ class RoomDataSource(context: Context) {
                 chatDao.deleteSession(existing.id)
             }
         }
-    }
-
-    private fun areMessagesStorageEquivalent(first: List<Message>, second: List<Message>): Boolean {
-        fun Message.normalizedForStorage(): Message = copy(
-            imageUrls = imageUrls.orEmpty(),
-            webSearchResults = webSearchResults.orEmpty(),
-        )
-        return first.map { it.normalizedForStorage() } == second.map { it.normalizedForStorage() }
     }
 
     // --- Last Open Chat ---
@@ -343,7 +419,7 @@ class RoomDataSource(context: Context) {
                 isImageGeneration = isImageGen,
                 title = "Last Open"
             )
-            chatDao.saveSessionWithMessages(session, messages.map { it.toEntity(sessionId) })
+            chatDao.saveSessionWithMessages(session, messages.map { it.toEntity(sessionId, converters) })
         }
     }
 

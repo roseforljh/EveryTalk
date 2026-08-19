@@ -73,7 +73,7 @@ internal fun collectMediaDeletionCandidates(messages: Iterable<Message>): MediaD
             val source = when (attachment) {
                 is SelectedMediaItem.ImageFromUri -> attachment.filePath
                 is SelectedMediaItem.GenericFile -> attachment.filePath
-                is SelectedMediaItem.Audio -> null
+                is SelectedMediaItem.Audio -> attachment.filePath
                 is SelectedMediaItem.ImageFromBitmap -> attachment.filePath
             }
             addSource(source)
@@ -166,7 +166,7 @@ internal fun collectReferencedAttachmentPaths(messages: Iterable<Message>): Set<
             val path = when (attachment) {
                 is SelectedMediaItem.ImageFromUri -> attachment.filePath
                 is SelectedMediaItem.GenericFile -> attachment.filePath
-                is SelectedMediaItem.Audio -> null
+                is SelectedMediaItem.Audio -> attachment.filePath
                 is SelectedMediaItem.ImageFromBitmap -> attachment.filePath
             }
             addLocalPath(path)
@@ -620,17 +620,6 @@ class DataPersistenceManager(
     suspend fun saveLastOpenChat(messages: List<Message>, isImageGeneration: Boolean = false) {
         if (isImageGeneration && protectLastOpenImageSession) return
         if (!isImageGeneration && protectLastOpenTextSession) return
-        android.util.Log.d("DataPersistenceManager", "=== SAVE LAST OPEN CHAT START ===")
-        android.util.Log.d("DataPersistenceManager", "Saving ${messages.size} messages, isImageGeneration: $isImageGeneration")
-        
-        messages.forEachIndexed { index, message -> 
-            android.util.Log.d("DataPersistenceManager", "Message $index (${message.id}): text length=${message.text.length}, parts=${message.parts.size}, contentStarted=${message.contentStarted}")
-            android.util.Log.d("DataPersistenceManager", "  Sender: ${message.sender}, IsError: ${message.isError}")
-            message.parts.forEachIndexed { partIndex, part -> 
-                android.util.Log.d("DataPersistenceManager", "  Part $partIndex: ${part::class.simpleName}")
-            }
-        }
-        
         // 修复：确保AI消息的文本内容不会丢失
         val processedMessages = messages.map { message -> 
             if (message.sender == com.android.everytalk.data.DataClass.Sender.AI &&
@@ -679,7 +668,56 @@ class DataPersistenceManager(
                 android.util.Log.e("DataPersistenceManager", "Failed to save last open chat to Room", e)
             }
         }
-        android.util.Log.d("DataPersistenceManager", "=== SAVE LAST OPEN CHAT END ===")
+    }
+
+    /** 打开、分享时按会话读取完整消息，启动阶段不调用。 */
+    suspend fun loadHistorySession(sessionId: String): List<Message>? = withContext(Dispatchers.IO) {
+        val original = roomDataSource.loadHistorySession(sessionId) ?: return@withContext null
+        var changed = false
+        val migrated = original.map { message ->
+            var attachmentChanged = false
+            val attachments = message.attachments.mapIndexed { index, attachment ->
+                if (attachment !is SelectedMediaItem.Audio || attachment.data.isBlank()) return@mapIndexed attachment
+                val existingPath = attachment.filePath
+                    ?.let(::File)
+                    ?.takeIf { it.isFile && it.length() > 0L }
+                    ?.absolutePath
+                val path = existingPath ?: fileManager.persistBase64Attachment(
+                    base64Data = attachment.data,
+                    mimeType = attachment.mimeType,
+                    messageIdHint = message.id,
+                    attachmentIndex = index,
+                )
+                if (path == null) attachment else attachment.copy(data = "", filePath = path).also {
+                    attachmentChanged = true
+                }
+            }
+            if (attachmentChanged) {
+                changed = true
+                message.copy(attachments = attachments)
+            } else {
+                message
+            }
+        }
+        if (changed) {
+            val isImageGeneration = roomDataSource.isImageGenerationSession(sessionId)
+            roomDataSource.saveLoadedHistorySession(sessionId, migrated, isImageGeneration)
+        }
+        migrated
+    }
+
+    /** 导出和回滚必须读取完整历史，不能使用启动阶段的轻量预览。 */
+    suspend fun loadCompleteHistory(isImageGeneration: Boolean): List<List<Message>> = withContext(Dispatchers.IO) {
+        val result = if (isImageGeneration) {
+            roomDataSource.loadImageGenerationHistoryResult()
+        } else {
+            roomDataSource.loadChatHistoryResult()
+        }
+        result.sessions.map(com.android.everytalk.data.database.LoadedHistorySession::messages)
+    }
+
+    suspend fun renameHistorySession(sessionId: String, title: String) {
+        withContext(Dispatchers.IO) { roomDataSource.renameHistorySession(sessionId, title) }
     }
 
     suspend fun clearLastOpenChat(isImageGeneration: Boolean = false) {

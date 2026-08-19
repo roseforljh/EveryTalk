@@ -71,7 +71,7 @@ import com.android.everytalk.data.database.entities.WorkspaceSecretMetadataEntit
         SkillInstallationEntity::class,
         SkillVersionEntity::class,
     ],
-    version = 25,
+    version = 26,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -123,6 +123,7 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_22_23,
                     MIGRATION_23_24,
                     MIGRATION_24_25,
+                    MIGRATION_25_26,
                 )
                 .build()
                 INSTANCE = instance
@@ -859,6 +860,24 @@ abstract class AppDatabase : RoomDatabase() {
                     chunkIndex += 1
                 }
                 db.execSQL("UPDATE agent_runs SET requestSnapshotJson = NULL WHERE requestSnapshotJson IS NOT NULL")
+            }
+        }
+
+        /**
+         * 聊天保存改为按消息摘要增量同步，并为两个高频排序查询补联合索引。
+         * 旧消息摘要留空，首次再次保存该会话时会安全地补齐。
+         */
+        val MIGRATION_25_26 = object : Migration(25, 26) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN storageFingerprint TEXT NOT NULL DEFAULT ''")
+                db.execSQL("DROP INDEX IF EXISTS index_messages_sessionId")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_messages_sessionId_timestamp ON messages(sessionId, timestamp)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_chat_sessions_isImageGeneration_lastModifiedTimestamp " +
+                        "ON chat_sessions(isImageGeneration, lastModifiedTimestamp)",
+                )
             }
         }
 

@@ -902,6 +902,70 @@ class AppDatabaseMigrationTest {
         migrateHelper.close()
     }
 
+    @Test
+    fun `migration 25 to 26 adds incremental message fingerprint and chat indexes`() {
+        val createHelper = openHelper(
+            version = 25,
+            onCreate = { db ->
+                db.execSQL(
+                    """
+                    CREATE TABLE chat_sessions (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        creationTimestamp INTEGER NOT NULL,
+                        lastModifiedTimestamp INTEGER NOT NULL,
+                        isImageGeneration INTEGER NOT NULL,
+                        title TEXT
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE messages (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        sessionId TEXT NOT NULL,
+                        timestamp INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX index_messages_sessionId ON messages(sessionId)")
+            },
+        )
+        createHelper.writableDatabase.close()
+        createHelper.close()
+
+        val migrateHelper = openHelper(
+            version = 26,
+            onUpgrade = { db, oldVersion, newVersion ->
+                assertEquals(25, oldVersion)
+                assertEquals(26, newVersion)
+                AppDatabase.MIGRATION_25_26.migrate(db)
+            },
+        )
+        val db = migrateHelper.writableDatabase
+
+        db.query("PRAGMA table_info(messages)").use { cursor ->
+            val nameIndex = cursor.getColumnIndexOrThrow("name")
+            val defaultIndex = cursor.getColumnIndexOrThrow("dflt_value")
+            var found = false
+            while (cursor.moveToNext()) {
+                if (cursor.getString(nameIndex) == "storageFingerprint") {
+                    found = true
+                    assertEquals("''", cursor.getString(defaultIndex))
+                }
+            }
+            assertTrue(found)
+        }
+        val indexes = mutableSetOf<String>()
+        db.query("SELECT name FROM sqlite_master WHERE type = 'index'").use { cursor ->
+            while (cursor.moveToNext()) indexes += cursor.getString(0)
+        }
+        assertTrue("index_messages_sessionId_timestamp" in indexes)
+        assertTrue("index_chat_sessions_isImageGeneration_lastModifiedTimestamp" in indexes)
+
+        db.close()
+        migrateHelper.close()
+    }
+
     private fun openHelper(
         version: Int,
         onCreate: (SupportSQLiteDatabase) -> Unit = {},

@@ -192,8 +192,9 @@ data class Message(
                         parts.addAll(mediaItem.toAttachmentContextParts().map { ApiContentPart.Text(it) })
                     }
                     is SelectedMediaItem.Audio -> {
-                        // 音频数据已经是base64格式
-                        parts.add(ApiContentPart.InlineData(base64Data = mediaItem.data, mimeType = mediaItem.mimeType))
+                        mediaItem.base64DataOrNull()?.let { data ->
+                            parts.add(ApiContentPart.InlineData(base64Data = data, mimeType = mediaItem.mimeType))
+                        }
                     }
                 }
             }
@@ -233,8 +234,9 @@ data class Message(
                         parts.addAll(mediaItem.toAttachmentContextParts().map { ApiContentPart.Text(it) })
                     }
                     is SelectedMediaItem.Audio -> {
-                        // 音频数据已经是base64格式
-                        parts.add(ApiContentPart.InlineData(base64Data = mediaItem.data, mimeType = mediaItem.mimeType))
+                        mediaItem.base64DataOrNull()?.let { data ->
+                            parts.add(ApiContentPart.InlineData(base64Data = data, mimeType = mediaItem.mimeType))
+                        }
                     }
                 }
             }

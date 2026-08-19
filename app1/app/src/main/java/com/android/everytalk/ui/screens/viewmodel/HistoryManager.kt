@@ -21,7 +21,6 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.security.MessageDigest
-import java.util.IdentityHashMap
 
 internal fun resolveHistoryExpectedStableConversationId(
     isImageGeneration: Boolean,
@@ -85,8 +84,6 @@ private fun MessageDigest.toHexString(): String {
         }
     }.concatToString()
 }
-private const val HISTORY_FINGERPRINT_BACKGROUND_THRESHOLD_CHARS = 64_000L
-
 class HistoryManager(
     private val stateHolder: ViewModelStateHolder,
     private val persistenceManager: DataPersistenceManager,
@@ -112,8 +109,8 @@ class HistoryManager(
     private var debouncedImageSaveJob: Job? = null
     private val DEBOUNCE_SAVE_MS = 1800L
 
-    // 去重稳态：最近一次插入的指纹与时间，用于吸收 forceSave + debounce 双触发
-    private var lastInsertFingerprint: String? = null
+    // 最近一次插入的稳定会话 ID 与时间，用于吸收 forceSave + debounce 双触发。
+    private var lastInsertedStableId: String? = null
     private var lastInsertAtMs: Long = 0L
     private var lastPersistedConversationApiConfigIds: Map<String, String>? = null
 
@@ -132,7 +129,8 @@ class HistoryManager(
                 is com.android.everytalk.models.SelectedMediaItem.ImageFromUri -> it.uri.toString()
                 is com.android.everytalk.models.SelectedMediaItem.GenericFile -> it.uri.toString()
                 // 音频可能是数 MB Base64。先压成固定摘要，禁止把完整数据复制进判重字符串。
-                is com.android.everytalk.models.SelectedMediaItem.Audio -> "audio:${stableTextFingerprint(it.data)}"
+                is com.android.everytalk.models.SelectedMediaItem.Audio ->
+                    it.filePath ?: "audio:${stableTextFingerprint(it.data)}"
                 is com.android.everytalk.models.SelectedMediaItem.ImageFromBitmap -> it.filePath ?: ""
             }
         }.toSet().sorted().joinToString("|")
@@ -142,20 +140,6 @@ class HistoryManager(
         digest.updateFingerprintField("img=$hasImages")
         digest.updateFingerprintField("att={$attachmentsSet}")
         return digest.toHexString()
-    }
-
-    // 会话稳定指纹：为判重目的，忽略一切 System 消息（标题/提示均不计入）
-    private fun conversationFingerprint(messages: List<Message>): String {
-        val digest = MessageDigest.getInstance("SHA-256")
-        var hasComparableMessage = false
-        filterMessagesForSaving(messages)
-            .asSequence()
-            .filter { it.sender != Sender.System }
-            .forEach {
-                hasComparableMessage = true
-                digest.updateFingerprintField(messageFingerprint(it))
-            }
-        return if (hasComparableMessage) digest.toHexString() else ""
     }
 
     private fun stableConversationId(messages: List<Message>): String? =
@@ -543,34 +527,6 @@ class HistoryManager(
 
         val historicalConversations = if (isImageGeneration) stateHolder._imageGenerationHistoricalConversations else stateHolder._historicalConversations
         val currentHistory = historicalConversations.value
-        // 大会话指纹在后台线程一次算完。IdentityHashMap 按列表实例缓存，避免一次保存流程重复扫描同一份正文。
-        val buildFingerprintCache = {
-            IdentityHashMap<List<Message>, String>().apply {
-                put(messagesToSave, conversationFingerprint(messagesToSave))
-                currentHistory.forEach { conversation ->
-                    put(conversation, conversationFingerprint(conversation))
-                }
-            }
-        }
-        val fingerprintWorkChars = (currentHistory.asSequence().flatten() + messagesToSave.asSequence())
-            .sumOf { message ->
-                message.text.length.toLong() +
-                    message.reasoning.orEmpty().length +
-                    message.attachments.sumOf { attachment ->
-                        (attachment as? com.android.everytalk.models.SelectedMediaItem.Audio)
-                            ?.data?.length?.toLong() ?: 0L
-                    }
-            }
-        val fingerprintCache = if (fingerprintWorkChars >= HISTORY_FINGERPRINT_BACKGROUND_THRESHOLD_CHARS) {
-            withContext(Dispatchers.Default) { buildFingerprintCache() }
-        } else {
-            buildFingerprintCache()
-        }
-        fun fingerprint(messages: List<Message>): String =
-            fingerprintCache[messages] ?: conversationFingerprint(messages).also {
-                fingerprintCache[messages] = it
-            }
-        val newConversationFingerprint = fingerprint(messagesToSave)
         val mutableHistory = currentHistory.toMutableList()
         val requestedLoadedIdx = loadedHistoryIndex
         val stableIdFromMessages = stableConversationId(messagesToSave)
@@ -581,10 +537,15 @@ class HistoryManager(
             stableIdFromMessages = stableIdFromMessages,
             currentConversationIdInMessages = messagesToSave.any { it.id == currentConversationId },
         )
-        val requestedConversation = requestedLoadedIdx
-            ?.takeIf { it >= 0 && it < mutableHistory.size }
-            ?.let(mutableHistory::get)
-        val compareRequestedDraft = {
+        val requestedIndexIsValid = requestedLoadedIdx != null && requestedLoadedIdx in mutableHistory.indices
+        val requestedConversation = requestedLoadedIdx?.takeIf { requestedIndexIsValid }?.let(mutableHistory::get)
+        val requestedMatchesIdentity = requestedConversation != null && (
+            expectedStableId == null ||
+                stableConversationId(requestedConversation) == expectedStableId ||
+                conversationContainsMessageId(requestedConversation, expectedStableId)
+            )
+        // 只有索引和稳定 ID 对不上时，才比较目标会话前缀，处理旧数据 ID 漂移。
+        val requestedLooksLikeDraftOfCurrent = if (!requestedMatchesIdentity) {
             requestedConversation?.let { stored ->
                 val comparableStored = filterMessagesForSaving(stored)
                 messagesToSave.size >= comparableStored.size &&
@@ -592,23 +553,11 @@ class HistoryManager(
                         messageFingerprint(comparableStored[index]) == messageFingerprint(messagesToSave[index])
                     }
             } ?: false
+        } else {
+            false
         }
-        val requestedLooksLikeDraftOfCurrent =
-            if (fingerprintWorkChars >= HISTORY_FINGERPRINT_BACKGROUND_THRESHOLD_CHARS) {
-                withContext(Dispatchers.Default) { compareRequestedDraft() }
-            } else {
-                compareRequestedDraft()
-            }
         val currentLoadedIdx = if (
-            requestedLoadedIdx != null &&
-            requestedLoadedIdx >= 0 &&
-            requestedLoadedIdx < mutableHistory.size &&
-            (
-                expectedStableId == null ||
-                    stableConversationId(mutableHistory[requestedLoadedIdx]) == expectedStableId ||
-                    conversationContainsMessageId(mutableHistory[requestedLoadedIdx], expectedStableId) ||
-                    requestedLooksLikeDraftOfCurrent
-            )
+            requestedIndexIsValid && (requestedMatchesIdentity || requestedLooksLikeDraftOfCurrent)
         ) {
             requestedLoadedIdx
         } else {
@@ -642,7 +591,7 @@ class HistoryManager(
                         finalNewLoadedIndex = currentLoadedIdx
                     }
                     historyListModified = true
-                    Log.d(TAG_HM, "Updated existing history at index=$currentLoadedIdx, fp=${newConversationFingerprint.take(64)}")
+                    Log.d(TAG_HM, "Updated existing history at index=$currentLoadedIdx")
                 }
                 conversationToPersist = updatedConversation
             } else if (!contentChanged) {
@@ -651,33 +600,26 @@ class HistoryManager(
                 Log.d(TAG_HM, "History index $currentLoadedIdx changed but is not marked dirty or contains no savable messages.")
             }
         } else if (messagesToSave.isNotEmpty()) {
-            val headDeepEqual = mutableHistory.firstOrNull()?.let { head ->
-                compareMessageLists(filterMessagesForSaving(head), messagesToSave)
+            val head = mutableHistory.firstOrNull()
+            val headMatchesStableId = stableIdFromMessages != null &&
+                head?.let(::stableConversationId) == stableIdFromMessages
+            val headDeepEqual = !headMatchesStableId && head?.let { conversation ->
+                compareMessageLists(filterMessagesForSaving(conversation), messagesToSave)
             } ?: false
-            val headFingerprint = mutableHistory.firstOrNull()?.let(::fingerprint)
 
-            if (headFingerprint == newConversationFingerprint || headDeepEqual) {
-                Log.i(TAG_HM, "Skip insert: head equals new conversation (fingerprint/deep head guard)")
+            if (headMatchesStableId || headDeepEqual) {
+                Log.i(TAG_HM, "Skip insert: head equals new conversation")
                 finalNewLoadedIndex = 0
-            } else if (lastInsertFingerprint == newConversationFingerprint && (nowMs - lastInsertAtMs) < 3000L) {
+            } else if (
+                stableIdFromMessages != null &&
+                lastInsertedStableId == stableIdFromMessages &&
+                (nowMs - lastInsertAtMs) < 3000L
+            ) {
                 Log.i(TAG_HM, "Skip insert: same conversation within 3s window (force+debounce guard)")
             } else {
-                var duplicateIndex = stableIdFromMessages?.let { stableId ->
+                val duplicateIndex = stableIdFromMessages?.let { stableId ->
                     mutableHistory.indexOfFirst { historyChat -> stableConversationId(historyChat) == stableId }
                 } ?: -1
-                if (duplicateIndex == -1) {
-                    duplicateIndex = mutableHistory.indexOfFirst { historyChat ->
-                        fingerprint(historyChat) == newConversationFingerprint
-                    }
-                }
-                if (duplicateIndex == -1) {
-                    for ((index, historyChat) in mutableHistory.withIndex()) {
-                        if (compareMessageLists(filterMessagesForSaving(historyChat), messagesToSave)) {
-                            duplicateIndex = index
-                            break
-                        }
-                    }
-                }
                 if (duplicateIndex == -1) {
                     mutableHistory.add(0, messagesToSave)
                     finalNewLoadedIndex = 0
@@ -704,27 +646,19 @@ class HistoryManager(
             Log.d(TAG_HM, "Current new conversation is empty, not adding to history.")
         }
 
-        val seenStableIds = mutableSetOf<String>()
-        val seenFingerprints = mutableSetOf<String>()
+        val keptIndexByStableId = mutableMapOf<String, Int>()
         val deduped = mutableListOf<List<Message>>()
         var removed = 0
         for ((index, conversation) in mutableHistory.withIndex()) {
             val stableId = stableConversationId(conversation)
-            val conversationFingerprint = fingerprint(conversation)
-            val duplicateByStableId = stableId != null && !seenStableIds.add(stableId)
-            val duplicateByFingerprint = conversationFingerprint.isNotEmpty() &&
-                !seenFingerprints.add(conversationFingerprint)
-            if (!duplicateByStableId && !duplicateByFingerprint) {
+            val keptIndex = stableId?.let(keptIndexByStableId::get)
+            if (keptIndex == null) {
+                if (stableId != null) keptIndexByStableId[stableId] = deduped.size
                 deduped += conversation
             } else {
                 if (finalNewLoadedIndex == index) {
-                    val keptIndex = deduped.indexOfFirst { kept ->
-                        (stableId != null && stableConversationId(kept) == stableId) ||
-                            (conversationFingerprint.isNotEmpty() &&
-                                fingerprint(kept) == conversationFingerprint)
-                    }
-                    finalNewLoadedIndex = keptIndex.takeIf { it >= 0 }
-                    if (keptIndex >= 0) deduped[keptIndex] = conversation
+                    finalNewLoadedIndex = keptIndex
+                    deduped[keptIndex] = conversation
                 } else if (finalNewLoadedIndex != null && index < finalNewLoadedIndex) {
                     finalNewLoadedIndex -= 1
                 }
@@ -732,7 +666,7 @@ class HistoryManager(
             }
         }
         if (removed > 0) {
-            Log.w(TAG_HM, "Global dedup removed $removed duplicate conversations (stableId/fingerprint-based)")
+            Log.w(TAG_HM, "Global dedup removed $removed duplicate conversations by stable ID")
             historyListModified = true
         }
         val latestHistory = historicalConversations.value
@@ -774,11 +708,11 @@ class HistoryManager(
             Log.d(TAG_HM, "Dirty history session persisted and dirty flag reset.")
         }
 
-        // 更新最近一次插入指纹/时间（仅当本次实际新增时）
+        // 更新最近一次插入会话与时间（仅当本次实际新增时）。
         if (addedNewConversation) {
-            lastInsertFingerprint = newConversationFingerprint
+            lastInsertedStableId = stableIdFromMessages
             lastInsertAtMs = nowMs
-            Log.d(TAG_HM, "Recorded last insert fingerprint (len=${newConversationFingerprint.length}) at=$nowMs")
+            Log.d(TAG_HM, "Recorded last inserted stable ID at=$nowMs")
         }
         
         // 迁移会话ID和配置绑定到稳定key
@@ -1026,6 +960,11 @@ class HistoryManager(
                 completion = CompletableDeferred(),
             )
         )
+    }
+
+    /** 重命名只更新会话元数据，禁止为了改标题重写全部历史消息。 */
+    suspend fun renameHistorySession(sessionId: String, title: String) {
+        persistenceManager.renameHistorySession(sessionId, title)
     }
 
     private suspend fun persistHistoryListDirectlyInternal(isImageGeneration: Boolean) {
