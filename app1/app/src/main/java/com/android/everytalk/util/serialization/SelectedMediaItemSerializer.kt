@@ -64,6 +64,9 @@ object SelectedMediaItemSerializer : KSerializer<SelectedMediaItem> {
                     encodeStringElement(buildClassSerialDescriptor("id"), 0, value.id)
                     encodeStringElement(buildClassSerialDescriptor("mimeType"), 1, value.mimeType)
                     encodeStringElement(buildClassSerialDescriptor("data"), 2, value.data)
+                    value.filePath?.let {
+                        encodeStringElement(buildClassSerialDescriptor("filePath"), 3, it)
+                    }
                 }
             }
         }

@@ -120,8 +120,23 @@ sealed class SelectedMediaItem : IMediaItem {
     data class Audio(
         override val id: String,
         override val mimeType: String,
-        val data: String
-    ) : SelectedMediaItem()
+        /** 仅兼容发送前和旧数据。新消息持久化后这里为空，避免 Base64 进入 Room。 */
+        val data: String = "",
+        /** 应用私有附件目录中的音频路径。 */
+        val filePath: String? = null,
+    ) : SelectedMediaItem() {
+        /**
+         * 请求模型时才把音频文件编码为 Base64。
+         * 调用方必须位于后台线程，因为读取较大的音频文件会产生磁盘和内存开销。
+         */
+        fun base64DataOrNull(maxBytes: Long = 64L * 1024L * 1024L): String? {
+            data.takeIf(String::isNotBlank)?.let { return it }
+            val file = filePath?.let(::File)?.takeIf { it.isFile && it.length() in 1..maxBytes } ?: return null
+            return runCatching {
+                android.util.Base64.encodeToString(file.readBytes(), android.util.Base64.NO_WRAP)
+            }.getOrNull()
+        }
+    }
 }
 
 internal const val ATTACHMENT_MANIFEST_MARKER = "[附件清单]"

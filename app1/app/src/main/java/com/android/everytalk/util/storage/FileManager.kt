@@ -180,6 +180,48 @@ class FileManager(internal val context: Context) {
             null
         }
     }
+
+    /**
+     * 把发送阶段持有的 Base64 音频写入应用私有附件目录。
+     * 返回值只包含本地路径，聊天消息落库时无需再保存整段 Base64。
+     */
+    suspend fun persistBase64Attachment(
+        base64Data: String,
+        mimeType: String,
+        messageIdHint: String,
+        attachmentIndex: Int,
+    ): String? = withContext(Dispatchers.IO) {
+        var temporaryFile: File? = null
+        try {
+            val encodedLength = base64Data.count { !it.isWhitespace() }.toLong()
+            val estimatedBytes = ((encodedLength + 3L) / 4L) * 3L
+            if (estimatedBytes <= 0L || estimatedBytes > MAX_FILE_SIZE_BYTES) return@withContext null
+
+            val bytes = Base64.decode(base64Data, Base64.DEFAULT)
+            if (bytes.isEmpty() || bytes.size.toLong() > MAX_FILE_SIZE_BYTES) return@withContext null
+
+            val extension = android.webkit.MimeTypeMap.getSingleton()
+                .getExtensionFromMimeType(mimeType)
+                ?.takeIf { it.all(Char::isLetterOrDigit) }
+                ?: "audio"
+            val attachmentDir = getChatAttachmentsDir()
+            temporaryFile = File.createTempFile(".audio_", ".part", attachmentDir)
+            temporaryFile.outputStream().buffered().use { it.write(bytes) }
+            val destination = File(
+                attachmentDir,
+                "audio_${messageIdHint}_${attachmentIndex}_${UUID.randomUUID().toString().take(8)}.$extension",
+            )
+            if (!temporaryFile.renameTo(destination)) return@withContext null
+            destination.absolutePath
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            logger.error("Failed to persist Base64 attachment", exception)
+            null
+        } finally {
+            temporaryFile?.takeIf(File::exists)?.delete()
+        }
+    }
     
     /**
      * 删除文件

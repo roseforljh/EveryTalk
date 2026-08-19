@@ -602,8 +602,16 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
                         )
                     }
                     is SelectedMediaItem.Audio -> {
-                        // 音频数据已为Base64，无需额外处理
-                        null
+                        originalMediaItem.filePath
+                            ?.let(::File)
+                            ?.takeIf { it.isFile && it.length() > 0L }
+                            ?.absolutePath
+                            ?: fileManager.persistBase64Attachment(
+                                base64Data = originalMediaItem.data,
+                                mimeType = originalMediaItem.mimeType,
+                                messageIdHint = tempMessageIdForNaming,
+                                attachmentIndex = index,
+                            )
                     }
                 }
             } finally {
@@ -612,7 +620,7 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
                     ?.let(::deleteTemporaryCameraUri)
             }
 
-            if (persistentFilePath == null && originalMediaItem !is SelectedMediaItem.Audio) {
+            if (persistentFilePath == null) {
                 showSnackbar("无法处理附件: $originalFileNameForHint")
                 return@withContext AttachmentProcessingResult(success = false)
             }
@@ -654,8 +662,13 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
                     )
                 }
                 is SelectedMediaItem.Audio -> {
-                    apiContentParts.add(ApiContentPart.InlineData(mimeType = originalMediaItem.mimeType, base64Data = originalMediaItem.data))
-                    originalMediaItem
+                    val base64Data = originalMediaItem.base64DataOrNull()
+                    if (base64Data == null) {
+                        withContext(Dispatchers.Main.immediate) { showSnackbar("无法读取音频附件") }
+                        return@withContext AttachmentProcessingResult(success = false)
+                    }
+                    apiContentParts.add(ApiContentPart.InlineData(mimeType = originalMediaItem.mimeType, base64Data = base64Data))
+                    originalMediaItem.copy(data = "", filePath = persistentFilePath)
                 }
             }
             processedAttachmentsForUi.add(processedItemForUi)
