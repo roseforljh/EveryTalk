@@ -628,9 +628,13 @@ import java.util.TimeZone
         viewModelScope.launch {
             try {
                 val title = conversationPreviewController.getConversationPreviewText(index, isImageGeneration)
+                val stableId = resolveStableConversationId(conversation)
+                val completeConversation = stableId
+                    ?.let { persistenceManager.loadHistorySession(it) }
+                    ?: conversation
                 com.android.everytalk.util.share.ConversationExporter.shareConversation(
                     context = getApplication(),
-                    messages = conversation,
+                    messages = completeConversation,
                     title = title
                 )
                 Log.d("AppViewModel", "会话分享已启动: index=$index, isImageGen=$isImageGeneration")

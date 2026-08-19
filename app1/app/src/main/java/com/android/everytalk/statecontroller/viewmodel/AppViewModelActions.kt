@@ -288,7 +288,7 @@ import java.util.TimeZone
                     when (it) {
                         is SelectedMediaItem.ImageFromUri -> it.uri
                         is SelectedMediaItem.GenericFile -> it.uri
-                        is SelectedMediaItem.Audio -> it.data
+                        is SelectedMediaItem.Audio -> it.filePath ?: it.data
                         is SelectedMediaItem.ImageFromBitmap -> it.filePath
                     }
                 }.filterNotNull().toSet() ==
@@ -296,7 +296,7 @@ import java.util.TimeZone
                     when (it) {
                         is SelectedMediaItem.ImageFromUri -> it.uri
                         is SelectedMediaItem.GenericFile -> it.uri
-                        is SelectedMediaItem.Audio -> it.data
+                        is SelectedMediaItem.Audio -> it.filePath ?: it.data
                         is SelectedMediaItem.ImageFromBitmap -> it.filePath
                     }
                 }.filterNotNull().toSet()

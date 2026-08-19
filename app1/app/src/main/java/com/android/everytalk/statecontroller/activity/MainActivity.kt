@@ -46,6 +46,7 @@ import com.android.everytalk.ui.screens.MainScreen.AppDrawerContent
 import com.android.everytalk.ui.screens.MainScreen.ChatScreen
 import com.android.everytalk.ui.screens.ImageGeneration.ImageGenerationScreen
 import com.android.everytalk.ui.screens.appinfo.AppInfoScreen
+import com.android.everytalk.ui.screens.appinfo.DataManagementScreen
 import com.android.everytalk.ui.screens.appinfo.PrivacyPolicyScreen
 import com.android.everytalk.ui.screens.settings.SettingsScreen
 import com.android.everytalk.ui.components.splash.PixelPenguinSplash
@@ -667,11 +668,47 @@ class MainActivity : AppCompatActivity() {
                                 ) {
                                     AppInfoScreen(
                                         onBack = { navController.popBackStack() },
+                                        onOpenDataManagement = {
+                                            navController.navigate(Screen.DATA_MANAGEMENT_SCREEN) {
+                                                launchSingleTop = true
+                                            }
+                                        },
                                         onOpenPrivacyPolicy = {
                                             navController.navigate(Screen.PRIVACY_POLICY_SCREEN) {
                                                 launchSingleTop = true
                                             }
                                         },
+                                    )
+                                }
+                                composable(
+                                    route = Screen.DATA_MANAGEMENT_SCREEN,
+                                    enterTransition = {
+                                        androidx.compose.animation.slideInHorizontally(
+                                            initialOffsetX = { fullWidth -> fullWidth },
+                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
+                                        )
+                                    },
+                                    exitTransition = {
+                                        androidx.compose.animation.slideOutHorizontally(
+                                            targetOffsetX = { fullWidth -> -fullWidth / 4 },
+                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
+                                        )
+                                    },
+                                    popEnterTransition = {
+                                        androidx.compose.animation.slideInHorizontally(
+                                            initialOffsetX = { fullWidth -> -fullWidth / 4 },
+                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
+                                        )
+                                    },
+                                    popExitTransition = {
+                                        androidx.compose.animation.slideOutHorizontally(
+                                            targetOffsetX = { fullWidth -> fullWidth },
+                                            animationSpec = tween(300, easing = FastOutSlowInEasing),
+                                        )
+                                    },
+                                ) {
+                                    DataManagementScreen(
+                                        onBack = { navController.popBackStack() },
                                     )
                                 }
                                 composable(

@@ -9,6 +9,7 @@ object Screen {
     const val SKILL_DOWNLOAD_SCREEN = "skill_download_screen"
     const val SKILL_DETAIL_SCREEN = "skill_detail/{skillId}"
     const val APP_INFO_SCREEN = "app_info_screen"
+    const val DATA_MANAGEMENT_SCREEN = "data_management_screen"
     const val PRIVACY_POLICY_SCREEN = "privacy_policy_screen"
     const val IMAGE_GENERATION_SCREEN = "image_generation_screen"
     const val IMAGE_GENERATION_SETTINGS_SCREEN = "image_generation_settings_screen"

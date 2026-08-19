@@ -28,6 +28,7 @@ class SimpleModeManager(
     private val historyManager: HistoryManager,
     private val scope: CoroutineScope,
     private val onTextHistoryLoaded: suspend () -> Unit = {},
+    private val loadHistorySession: suspend (sessionId: String) -> List<com.android.everytalk.data.DataClass.Message>? = { null },
 ) {
     private val TAG = "SimpleModeManager"
     
@@ -285,7 +286,17 @@ class SimpleModeManager(
             return
         }
 
-        val conversationToLoad = conversationList[index]
+        val previewConversation = conversationList[index]
+        val previewStableId = ConversationNameHelper.resolveStableId(previewConversation)
+            ?: "history_${UUID.randomUUID()}"
+        val conversationToLoad = loadHistorySession(previewStableId) ?: previewConversation
+        if (conversationToLoad !== previewConversation) {
+            withContext(Dispatchers.Main.immediate) {
+                stateHolder._historicalConversations.value = conversationList.toMutableList().apply {
+                    this[index] = conversationToLoad
+                }
+            }
+        }
         Log.d(TAG, "🔥 Found conversation to load with ${conversationToLoad.size} messages.")
         val stableId = conversationToLoad.firstOrNull { it.sender == Sender.User }?.id
             ?: conversationToLoad.firstOrNull { it.sender == Sender.System && !it.isPlaceholderName }?.id
@@ -441,7 +452,17 @@ class SimpleModeManager(
         stateHolder._loadedImageGenerationHistoryIndex.value = null
         
         // 4. 加载历史对话
-        val conversationToLoad = conversationList[index]
+        val previewConversation = conversationList[index]
+        val previewStableId = ConversationNameHelper.resolveStableId(previewConversation)
+            ?: "image_history_${UUID.randomUUID()}"
+        val conversationToLoad = loadHistorySession(previewStableId) ?: previewConversation
+        if (conversationToLoad !== previewConversation) {
+            withContext(Dispatchers.Main.immediate) {
+                stateHolder._imageGenerationHistoricalConversations.value = conversationList.toMutableList().apply {
+                    this[index] = conversationToLoad
+                }
+            }
+        }
         
         // 5. 设置对话ID（必须在消息加载前设置）
         val stableId = ConversationNameHelper.resolveStableId(conversationToLoad)

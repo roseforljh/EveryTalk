@@ -232,6 +232,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         historyManager = historyManager,
         scope = viewModelScope,
         onTextHistoryLoaded = { apiHandler.restoreVisibleAgentState() },
+        loadHistorySession = persistenceManager::loadHistorySession,
     )
 
     // MCP Manager

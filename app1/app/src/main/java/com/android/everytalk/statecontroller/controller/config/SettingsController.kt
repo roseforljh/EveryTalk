@@ -280,13 +280,13 @@ class SettingsController(
                 
                 // 4. 导出聊天历史（可选）
                 val chatHistoryToExport = if (includeHistory) {
-                    stateHolder._historicalConversations.value.mapNotNull { conversation ->
+                    persistenceManager.loadCompleteHistory(isImageGeneration = false).mapNotNull { conversation ->
                         exportConversation(conversation)
                     }
                 } else emptyList()
                 
                 val imageHistoryToExport = if (includeHistory) {
-                    stateHolder._imageGenerationHistoricalConversations.value.mapNotNull { conversation ->
+                    persistenceManager.loadCompleteHistory(isImageGeneration = true).mapNotNull { conversation ->
                         exportConversation(conversation)
                     }
                 } else emptyList()
@@ -379,6 +379,8 @@ class SettingsController(
             val result = ImportResult()
             
             // 保存当前状态用于回滚
+            val completeTextHistory = persistenceManager.loadCompleteHistory(isImageGeneration = false)
+            val completeImageHistory = persistenceManager.loadCompleteHistory(isImageGeneration = true)
             val backupState = BackupState(
                 apiConfigs = stateHolder._apiConfigs.value.toList(),
                 imageGenApiConfigs = stateHolder._imageGenApiConfigs.value.toList(),
@@ -386,8 +388,8 @@ class SettingsController(
                 selectedImageGenApiConfig = stateHolder._selectedImageGenApiConfig.value,
                 voiceBackendConfigs = stateHolder._voiceBackendConfigs.value.toList(),
                 selectedVoiceConfig = stateHolder._selectedVoiceConfig.value,
-                historicalConversations = stateHolder._historicalConversations.value.toList(),
-                imageGenerationHistoricalConversations = stateHolder._imageGenerationHistoricalConversations.value.toList(),
+                historicalConversations = completeTextHistory,
+                imageGenerationHistoricalConversations = completeImageHistory,
                 pinnedTextConversationIds = stateHolder.pinnedTextConversationIds.value.toSet(),
                 pinnedImageConversationIds = stateHolder.pinnedImageConversationIds.value.toSet(),
                 conversationGroups = stateHolder.conversationGroups.value.toMap()

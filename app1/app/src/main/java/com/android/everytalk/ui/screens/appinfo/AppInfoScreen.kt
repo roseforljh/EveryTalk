@@ -108,6 +108,7 @@ private val privacySections = listOf(
 @Composable
 fun AppInfoScreen(
     onBack: () -> Unit,
+    onOpenDataManagement: () -> Unit,
     onOpenPrivacyPolicy: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -161,6 +162,16 @@ fun AppInfoScreen(
                         title = stringResource(R.string.app_info_theme_title),
                         description = stringResource(currentTheme.labelRes),
                         onClick = { showThemeDialog = true },
+                    )
+                    HorizontalDivider(
+                        modifier = Modifier.padding(start = 80.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f),
+                    )
+                    AppInfoEntry(
+                        iconRes = R.drawable.ic_folder,
+                        title = stringResource(R.string.app_info_data_management_title),
+                        description = stringResource(R.string.app_info_data_management_description),
+                        onClick = onOpenDataManagement,
                     )
                     HorizontalDivider(
                         modifier = Modifier.padding(start = 80.dp),
@@ -507,7 +518,7 @@ private fun PrivacySectionCard(section: PrivacySection) {
 }
 
 @Composable
-private fun ImmersiveInfoPage(
+internal fun ImmersiveInfoPage(
     title: String,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
