@@ -6,6 +6,9 @@ import com.android.everytalk.data.DataClass.ProviderTurnContinuation
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.database.daos.AgentDao
 import com.android.everytalk.data.database.entities.ProviderContinuationStateEntity
+import com.android.everytalk.data.database.entities.AgentContextSnapshotEntity
+import com.android.everytalk.data.database.entities.AgentRequestEntity
+import com.android.everytalk.data.database.entities.AgentRunEntity
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
@@ -28,9 +31,17 @@ class AgentRunStoreContinuationTest {
         model = "model-1",
     )
 
+    init {
+        coEvery { dao.hasFinalAssistantForRequest(any()) } returns true
+    }
+
     @Test
     fun `匹配全部身份和指纹时恢复continuation`() = runBlocking {
-        val continuation = ProviderTurnContinuation(ModelParameterProtocol.OPENAI_COMPATIBLE, "{\"id\":\"assistant-1\"}")
+        val continuation = ProviderTurnContinuation(
+            ModelParameterProtocol.OPENAI_COMPATIBLE,
+            "{\"id\":\"assistant-1\"}",
+            assistantMessageId = "assistant:request-1",
+        )
         coEvery { dao.getContinuationState(any(), any(), any(), any(), any(), any()) } returns state(
             opaqueStateJson = Json.encodeToString(ProviderTurnContinuation.serializer(), continuation),
         )
@@ -66,6 +77,16 @@ class AgentRunStoreContinuationTest {
         assertNull(store.loadContinuation("session-1", "config-1", request, "system-1", "tools-1", null))
 
         coVerify(exactly = 2) { dao.deleteContinuationState("state-1") }
+    }
+
+    @Test
+    fun `continuation找不到所属完整Assistant时删除`() = runBlocking {
+        coEvery { dao.getContinuationState(any(), any(), any(), any(), any(), any()) } returns state()
+        coEvery { dao.hasFinalAssistantForRequest("request-1") } returns false
+
+        assertNull(store.loadContinuation("session-1", "config-1", request, "system-1", "tools-1", null))
+
+        coVerify(exactly = 1) { dao.deleteContinuationState("state-1") }
     }
 
     @Test
@@ -131,6 +152,73 @@ class AgentRunStoreContinuationTest {
     }
 
     @Test
+    fun `恢复请求关联旧请求并递增attempt`() = runBlocking {
+        val run = AgentRunEntity(
+            id = "run-retry",
+            sessionId = "session-1",
+            userMessageId = "user-1",
+            visibleAssistantMessageId = "assistant-1",
+            configIdSnapshot = "config-1",
+            requestSnapshotJson = null,
+            status = AgentRunStatus.MODEL_CONTINUATION_PENDING.name,
+            currentRequestOrdinal = 1,
+            terminalReason = null,
+            createdAt = 1L,
+            updatedAt = 1L,
+        )
+        val interrupted = AgentRequestEntity(
+            id = "request-old",
+            runId = run.id,
+            ordinal = 1,
+            purpose = AgentRequestPurpose.AGENT_TURN.name,
+            modelTurnOrdinal = 1,
+            attempt = 2,
+            retryOfRequestId = null,
+            provider = "OpenAI",
+            endpoint = "https://example.test/v1",
+            model = "model-1",
+            payloadFingerprint = "old",
+            status = AgentRequestStatus.INTERRUPTED.name,
+            finishReason = "connection_failed",
+            startedAt = 1L,
+            firstEventAt = null,
+            finishedAt = 2L,
+        )
+        val snapshot = AgentContextSnapshotEntity(
+            requestId = "request-new",
+            systemPromptTokens = 0,
+            conversationTextTokens = 0,
+            mediaTokens = 0,
+            toolSchemaTokens = 0,
+            protocolOverheadTokens = 0,
+            estimatedPromptTokens = 0,
+            reservedOutputTokens = 0,
+            contextWindowTokens = 8_192,
+            activeContextTokens = 0,
+            calibrationTokens = 0,
+            compactionId = null,
+            transcriptFingerprint = "new",
+            source = "TEST",
+        )
+
+        val created = store.createRequest(
+            run = run,
+            ordinal = 2,
+            purpose = AgentRequestPurpose.AGENT_TURN,
+            modelTurnOrdinal = 1,
+            provider = "OpenAI",
+            endpoint = "https://example.test/v1",
+            model = "model-1",
+            transcriptFingerprint = "new",
+            snapshot = snapshot,
+            retryOfRequest = interrupted,
+        )
+
+        assertEquals(3, created.attempt)
+        assertEquals("request-old", created.retryOfRequestId)
+    }
+
+    @Test
     fun `新恢复快照分块落库并可完整还原`() = runBlocking {
         val runSlot = slot<com.android.everytalk.data.database.entities.AgentRunEntity>()
         val chunksSlot = slot<List<com.android.everytalk.data.database.entities.AgentRunSnapshotChunkEntity>>()
@@ -179,7 +267,11 @@ class AgentRunStoreContinuationTest {
 
     private fun state(opaqueStateJson: String = Json.encodeToString(
         ProviderTurnContinuation.serializer(),
-        ProviderTurnContinuation(ModelParameterProtocol.OPENAI_COMPATIBLE, "{}"),
+        ProviderTurnContinuation(
+            protocol = ModelParameterProtocol.OPENAI_COMPATIBLE,
+            payloadJson = "{}",
+            assistantMessageId = "assistant:request-1",
+        ),
     )) = ProviderContinuationStateEntity(
         id = "state-1",
         sessionId = "session-1",

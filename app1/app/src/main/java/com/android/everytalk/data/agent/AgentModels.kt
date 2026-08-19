@@ -199,11 +199,17 @@ data class AgentToolExecutionRecord(
 sealed class AgentContentBlock {
     @Serializable
     @SerialName("text")
-    data class Text(val text: String) : AgentContentBlock()
+    data class Text(
+        val text: String,
+        val thoughtSignature: String? = null,
+    ) : AgentContentBlock()
 
     @Serializable
     @SerialName("reasoning")
-    data class Reasoning(val text: String) : AgentContentBlock()
+    data class Reasoning(
+        val text: String,
+        val thoughtSignature: String? = null,
+    ) : AgentContentBlock()
 
     @Serializable
     @SerialName("tool_call")
@@ -211,6 +217,7 @@ sealed class AgentContentBlock {
         val id: String,
         val name: String,
         val arguments: JsonObject,
+        val thoughtSignature: String? = null,
     ) : AgentContentBlock()
 
     @Serializable

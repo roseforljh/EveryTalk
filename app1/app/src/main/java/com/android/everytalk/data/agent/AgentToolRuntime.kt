@@ -13,6 +13,8 @@ import com.android.everytalk.data.network.truncateToolOutput
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import com.android.everytalk.data.skill.SkillRuntimeTools
 
 private const val MAX_AGENT_TOOL_RESULT_TOKENS = 64_000L
@@ -92,10 +94,16 @@ class AgentToolRuntime(
                 result = modelRaw,
                 maxTokens = maxModelResultTokens.coerceIn(64L, MAX_AGENT_TOOL_RESULT_TOKENS),
             )
+            val isError = (modelRaw as? JsonObject)
+                ?.get("ok")
+                ?.jsonPrimitive
+                ?.booleanOrNull == false
             AgentContentBlock.ToolResult(
                 toolCallId = call.id,
                 toolName = call.name,
                 content = bounded.content,
+                // Computer、附件、Web 工具都用 ok=false 表示业务失败；不能继续伪装成成功结果。
+                isError = isError,
                 truncated = bounded.truncated,
                 fullResultPath = archive?.relativePath,
                 fullResultBytes = archive?.byteCount,

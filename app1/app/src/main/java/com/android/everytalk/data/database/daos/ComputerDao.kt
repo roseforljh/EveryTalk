@@ -15,6 +15,10 @@ import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ComputerDao {
+    /** 只作为 Room 表变更信号，Service 收到后再执行带恢复语义的活动任务查询。 */
+    @Query("SELECT COUNT(*) FROM computer_executions")
+    fun observeExecutionChanges(): Flow<Int>
+
     @Query("SELECT * FROM computers WHERE status != 'DELETED' ORDER BY createdAt ASC")
     fun observeComputers(): Flow<List<ComputerEntity>>
 

@@ -12,6 +12,7 @@ import com.android.everytalk.data.database.entities.AgentRequestUsageEntity
 import com.android.everytalk.data.database.entities.AgentRunEntity
 import com.android.everytalk.data.database.entities.AgentRunSnapshotChunkEntity
 import com.android.everytalk.data.database.entities.ProviderContinuationStateEntity
+import kotlinx.coroutines.flow.Flow
 
 data class AgentTokenTotalsRow(
     val requestCount: Int,
@@ -81,8 +82,24 @@ interface AgentDao {
     @Query("DELETE FROM agent_run_snapshot_chunks WHERE runId = :runId")
     suspend fun deleteRunSnapshotChunks(runId: String)
 
-    @Query("SELECT * FROM agent_runs WHERE status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED')")
+    @Query(
+        """
+        SELECT * FROM agent_runs
+        WHERE status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED')
+           OR (status = 'INTERRUPTED' AND terminalReason IN ('APP_PROCESS_RESTARTED', 'APPROVAL_DECIDED_PENDING_RESUME'))
+        """
+    )
     suspend fun getActiveRuns(): List<AgentRunEntity>
+
+    @Query(
+        """
+        SELECT * FROM agent_runs
+        WHERE status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED')
+           OR (status = 'INTERRUPTED' AND terminalReason IN ('APP_PROCESS_RESTARTED', 'APPROVAL_DECIDED_PENDING_RESUME'))
+        ORDER BY updatedAt ASC
+        """
+    )
+    fun observeServiceRuns(): Flow<List<AgentRunEntity>>
 
     /** 多条历史脏记录并存时先展示当前最新申请，禁止旧卡片抢走用户点击。 */
     @Query("SELECT * FROM agent_runs WHERE status = 'WAITING_APPROVAL' ORDER BY updatedAt DESC")
@@ -114,14 +131,25 @@ interface AgentDao {
     @Query("SELECT * FROM agent_runs WHERE status = 'INTERRUPTED' ORDER BY updatedAt ASC")
     suspend fun getInterruptedRuns(): List<AgentRunEntity>
 
+    /** 模型流随进程消失后可以从已保存快照续写，不能永久停在旧中间态。 */
+    @Query(
+        """
+        UPDATE agent_runs
+        SET status = 'MODEL_CONTINUATION_PENDING', terminalReason = 'MODEL_CONTINUATION_PENDING', updatedAt = :updatedAt
+        WHERE status IN ('CREATED', 'PREPARING_CONTEXT', 'COMPACTING_CONTEXT', 'WAITING_MODEL', 'STREAMING_MODEL', 'RETRYING')
+        """
+    )
+    suspend fun markModelRunsPendingContinuation(updatedAt: Long)
+
+    /** 工具可能已经产生副作用，进程重启后先标成未知中断，交给工具恢复逻辑对账。 */
     @Query(
         """
         UPDATE agent_runs
         SET status = 'INTERRUPTED', terminalReason = :reason, updatedAt = :updatedAt
-        WHERE status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED', 'WAITING_APPROVAL', 'WAITING_REMOTE_EXECUTION', 'MODEL_CONTINUATION_PENDING')
+        WHERE status IN ('CHECKING_PERMISSION', 'EXECUTING_TOOL', 'PERSISTING_RESULT')
         """
     )
-    suspend fun markActiveRunsInterrupted(reason: String, updatedAt: Long)
+    suspend fun markToolRunsInterrupted(reason: String, updatedAt: Long)
 
     @Query(
         """
@@ -135,8 +163,35 @@ interface AgentDao {
     @Query("SELECT * FROM agent_entries WHERE runId = :runId ORDER BY sequence ASC")
     suspend fun getEntries(runId: String): List<AgentEntryEntity>
 
+    @Query(
+        """
+        SELECT * FROM agent_entries
+        WHERE runId = :runId AND requestId = :requestId AND kind = 'ASSISTANT' AND status = 'PARTIAL'
+        ORDER BY sequence DESC LIMIT 1
+        """
+    )
+    suspend fun getPartialAssistantEntry(runId: String, requestId: String): AgentEntryEntity?
+
+    @Query(
+        """
+        DELETE FROM agent_entries
+        WHERE runId = :runId AND kind = 'ASSISTANT' AND status = 'PARTIAL'
+        """
+    )
+    suspend fun deletePartialAssistantEntries(runId: String)
+
     @Query("SELECT * FROM agent_requests WHERE runId = :runId ORDER BY ordinal ASC")
     suspend fun getRequests(runId: String): List<AgentRequestEntity>
+
+    @Query(
+        """
+        SELECT EXISTS(
+            SELECT 1 FROM agent_entries
+            WHERE requestId = :requestId AND kind = 'ASSISTANT' AND status = 'FINAL'
+        )
+        """
+    )
+    suspend fun hasFinalAssistantForRequest(requestId: String): Boolean
 
     @Query("SELECT * FROM agent_request_usage WHERE requestId = :requestId LIMIT 1")
     suspend fun getUsage(requestId: String): AgentRequestUsageEntity?
@@ -254,13 +309,14 @@ interface AgentDao {
     }
 
 
-    /** App 进程已经消失，旧 HTTP 流无法继续，统一封存为中断状态。 */
+    /** App 进程已经消失：模型流等待续写，可能产生副作用的工具流等待对账。 */
     @Transaction
     suspend fun recoverInterruptedAgentRuns(
         reason: String = "APP_PROCESS_RESTARTED",
         timestamp: Long = System.currentTimeMillis(),
     ) {
         markActiveRequestsInterrupted(reason, timestamp)
-        markActiveRunsInterrupted(reason, timestamp)
+        markModelRunsPendingContinuation(timestamp)
+        markToolRunsInterrupted(reason, timestamp)
     }
 }

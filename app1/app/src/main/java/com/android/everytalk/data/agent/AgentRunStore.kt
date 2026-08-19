@@ -11,6 +11,7 @@ import com.android.everytalk.data.database.entities.AgentRunSnapshotChunkEntity
 import com.android.everytalk.data.database.entities.ProviderContinuationStateEntity
 import com.android.everytalk.data.DataClass.AbstractApiMessage
 import com.android.everytalk.data.DataClass.AgentAssistantApiMessage
+import com.android.everytalk.data.DataClass.AgentAssistantContentApiPart
 import com.android.everytalk.data.DataClass.AgentToolCallApiPart
 import com.android.everytalk.data.DataClass.AgentToolResultApiMessage
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
@@ -97,6 +98,9 @@ class AgentRunStore(
 
     suspend fun getRunByVisibleMessage(messageId: String): AgentRunEntity? =
         dao.getRunByVisibleMessage(messageId)
+
+    suspend fun getRunsForSession(sessionId: String): List<AgentRunEntity> =
+        dao.getRunsForSession(sessionId)
 
     suspend fun getWaitingApprovalRuns(): List<AgentRunEntity> = dao.getWaitingApprovalRuns()
 
@@ -301,6 +305,7 @@ class AgentRunStore(
         model: String,
         transcriptFingerprint: String,
         snapshot: AgentContextSnapshotEntity,
+        retryOfRequest: AgentRequestEntity? = null,
     ): AgentRequestEntity {
         val request = AgentRequestEntity(
             id = snapshot.requestId,
@@ -308,8 +313,8 @@ class AgentRunStore(
             ordinal = ordinal,
             purpose = purpose.name,
             modelTurnOrdinal = modelTurnOrdinal,
-            attempt = 1,
-            retryOfRequestId = null,
+            attempt = (retryOfRequest?.attempt ?: 0) + 1,
+            retryOfRequestId = retryOfRequest?.id,
             provider = provider,
             endpoint = endpoint,
             model = model,
@@ -392,17 +397,49 @@ class AgentRunStore(
         requestId: String,
         turn: AgentAssistantTurn,
         status: AgentEntryStatus = AgentEntryStatus.FINAL,
-    ): AgentEntryEntity = appendEntry(
-        runId = runId,
-        kind = AgentEntryKind.ASSISTANT,
-        requestId = requestId,
-        toolCallId = null,
-        payloadJson = json.encodeToString(
+    ): AgentEntryEntity = entryAppendLock.withLock {
+        val payloadJson = json.encodeToString(
             kotlinx.serialization.builtins.ListSerializer(AgentContentBlock.serializer()),
             turn.blocks,
-        ),
-        status = status,
-    )
+        )
+        val now = System.currentTimeMillis()
+        if (status == AgentEntryStatus.PARTIAL) {
+            val existing = dao.getPartialAssistantEntry(runId, requestId)
+            val checkpoint = existing?.copy(payloadJson = payloadJson) ?: newEntry(
+                runId = runId,
+                sequence = dao.nextEntrySequence(runId),
+                kind = AgentEntryKind.ASSISTANT,
+                requestId = requestId,
+                toolCallId = null,
+                payloadJson = payloadJson,
+                status = status,
+                now = now,
+            ).copy(id = "assistant-partial:$requestId")
+            dao.upsertEntry(checkpoint)
+            checkpoint
+        } else {
+            // 先写最终事实，再清理检查点。即使两步之间进程退出，恢复读取也会优先最终事实。
+            val finalEntry = newEntry(
+                runId = runId,
+                sequence = dao.nextEntrySequence(runId),
+                kind = AgentEntryKind.ASSISTANT,
+                requestId = requestId,
+                toolCallId = null,
+                payloadJson = payloadJson,
+                status = status,
+                now = now,
+            )
+            dao.upsertEntry(finalEntry)
+            dao.deletePartialAssistantEntries(runId)
+            finalEntry
+        }
+    }
+
+    suspend fun latestInterruptedAgentRequest(runId: String): AgentRequestEntity? =
+        dao.getRequests(runId).lastOrNull { request ->
+            request.purpose == AgentRequestPurpose.AGENT_TURN.name &&
+                request.status == AgentRequestStatus.INTERRUPTED.name
+        }
 
     suspend fun appendToolResult(
         runId: String,
@@ -775,6 +812,13 @@ class AgentRunStore(
             dao.deleteContinuationState(state.id)
             return null
         }
+        val continuationRequestId = continuation.assistantMessageId
+            ?.removePrefix("assistant:")
+            ?.takeIf(String::isNotBlank)
+        if (continuationRequestId == null || !dao.hasFinalAssistantForRequest(continuationRequestId)) {
+            dao.deleteContinuationState(state.id)
+            return null
+        }
         return continuation
     }
 
@@ -847,7 +891,23 @@ class AgentRunStore(
             }
         }
 
-        dao.getEntries(runId).forEach { entry ->
+        val entries = dao.getEntries(runId)
+        val finalizedAssistantRequests = entries.asSequence()
+            .filter { entry ->
+                entry.kind == AgentEntryKind.ASSISTANT.name && entry.status == AgentEntryStatus.FINAL.name
+            }
+            .mapNotNullTo(hashSetOf()) { it.requestId }
+        val latestFinalAssistantSequence = entries.asSequence()
+            .filter { entry ->
+                entry.kind == AgentEntryKind.ASSISTANT.name && entry.status == AgentEntryStatus.FINAL.name
+            }
+            .maxOfOrNull { it.sequence }
+        entries.forEach { entry ->
+            if (entry.status == AgentEntryStatus.PARTIAL.name &&
+                (entry.requestId in finalizedAssistantRequests || entry.sequence < (latestFinalAssistantSequence ?: Long.MIN_VALUE))
+            ) {
+                return@forEach
+            }
             when (entry.kind) {
                 AgentEntryKind.ASSISTANT.name -> {
                     val blocks = decodeAssistantBlocks(entry)
@@ -955,18 +1015,23 @@ class AgentRunStore(
             finalizedAt = now.takeIf { status == AgentEntryStatus.FINAL },
         )
 
-    private suspend fun decodeFinalTranscriptEntries(runId: String): List<AbstractApiMessage> =
-        dao.getEntries(runId).mapNotNull { entry ->
+    private suspend fun decodeFinalTranscriptEntries(runId: String): List<AbstractApiMessage> {
+        val requestsById = dao.getRequests(runId).associateBy(AgentRequestEntity::id)
+        return dao.getEntries(runId).mapNotNull { entry ->
             if (entry.status != AgentEntryStatus.FINAL.name) return@mapNotNull null
             when (entry.kind) {
-                AgentEntryKind.ASSISTANT.name -> decodeAssistantEntry(entry)
+                AgentEntryKind.ASSISTANT.name -> decodeAssistantEntry(entry, entry.requestId?.let(requestsById::get))
                 AgentEntryKind.TOOL_RESULT.name -> decodeToolResultEntry(entry)
                 AgentEntryKind.STATUS.name -> decodeStatusEntry(entry)
                 else -> null
             }
         }
+    }
 
-    private fun decodeAssistantEntry(entry: AgentEntryEntity): AgentAssistantApiMessage? =
+    private fun decodeAssistantEntry(
+        entry: AgentEntryEntity,
+        request: AgentRequestEntity?,
+    ): AgentAssistantApiMessage? =
         runCatching {
             val blocks = json.decodeFromString(
                 kotlinx.serialization.builtins.ListSerializer(AgentContentBlock.serializer()),
@@ -977,8 +1042,22 @@ class AgentRunStore(
                 text = blocks.filterIsInstance<AgentContentBlock.Text>().joinToString("") { it.text },
                 reasoning = blocks.filterIsInstance<AgentContentBlock.Reasoning>().joinToString("") { it.text },
                 toolCalls = blocks.filterIsInstance<AgentContentBlock.ToolCall>().map { call ->
-                    AgentToolCallApiPart(call.id, call.name, call.arguments)
+                    AgentToolCallApiPart(call.id, call.name, call.arguments, call.thoughtSignature)
                 },
+                contentParts = blocks.mapNotNull { block ->
+                    when (block) {
+                        is AgentContentBlock.Text -> AgentAssistantContentApiPart.Text(block.text, block.thoughtSignature)
+                        is AgentContentBlock.Reasoning ->
+                            AgentAssistantContentApiPart.Reasoning(block.text, block.thoughtSignature)
+                        is AgentContentBlock.ToolCall -> AgentAssistantContentApiPart.ToolCall(
+                            AgentToolCallApiPart(block.id, block.name, block.arguments, block.thoughtSignature),
+                        )
+                        is AgentContentBlock.ToolResult -> null
+                    }
+                },
+                sourceProvider = request?.provider,
+                sourceEndpoint = request?.endpoint,
+                sourceModel = request?.model,
             )
         }.getOrNull()
 

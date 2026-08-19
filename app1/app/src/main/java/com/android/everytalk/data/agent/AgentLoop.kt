@@ -2,6 +2,7 @@ package com.android.everytalk.data.agent
 
 import android.util.Log
 import com.android.everytalk.data.DataClass.AgentAssistantApiMessage
+import com.android.everytalk.data.DataClass.AgentAssistantContentApiPart
 import com.android.everytalk.data.DataClass.AgentToolCallApiPart
 import com.android.everytalk.data.DataClass.AgentToolResultApiMessage
 import com.android.everytalk.data.DataClass.ChatRequest
@@ -52,6 +53,8 @@ internal const val MAX_AGENT_CONSECUTIVE_TOOL_CALLS = 100
 internal const val MAX_IDENTICAL_TOOL_CALLS = 3
 internal const val MAX_PARALLEL_TOOL_CALLS = 4
 private const val COMPACTION_OUTPUT_TOKENS = 4_096
+private const val PARTIAL_ASSISTANT_CHECKPOINT_INTERVAL_MILLIS = 500L
+private const val PARTIAL_ASSISTANT_CHECKPOINT_CHARACTERS = 512
 
 private class AgentRetryableNetworkException(
     message: String,
@@ -306,6 +309,11 @@ class AgentLoop(
                     messages = prepared.messages,
                     localProviderContinuation = providerContinuation,
                 )
+                val retryOfRequest = if (input.existingRun != null && modelTurnOrdinal == firstModelTurnOrdinal) {
+                    runStore.latestInterruptedAgentRequest(checkNotNull(run).id)
+                } else {
+                    null
+                }
                 var requestFact = runStore.createRequest(
                     run = checkNotNull(run),
                     ordinal = ordinal,
@@ -316,6 +324,7 @@ class AgentLoop(
                     model = turnRequest.model,
                     transcriptFingerprint = prepared.transcriptFingerprint,
                     snapshot = prepared.snapshot,
+                    retryOfRequest = retryOfRequest,
                 )
                 val startedAt = System.currentTimeMillis()
                 requestFact = runStore.updateRequest(
@@ -334,18 +343,41 @@ class AgentLoop(
                 var failure: AppStreamEvent.Error? = null
                 var finalText: String? = null
                 var nextProviderContinuation: ProviderTurnContinuation? = null
+                var partialCheckpointDirty = false
+                var partialCharactersSinceCheckpoint = 0
+                var lastPartialCheckpointAt = startedAt
                 val roundContentBuffer = ToolRoundContentBuffer { event -> emit(event) }
 
-                modelTransport.streamTurn(
-                    ModelTurnRequest(
-                        requestId = requestId,
+                /** 500ms 或新增 512 字符时覆盖检查点，工具调用和取消会强制立即保存。 */
+                suspend fun checkpointPartialAssistant(force: Boolean = false) {
+                    if (!partialCheckpointDirty || blocks.isEmpty()) return
+                    val now = System.currentTimeMillis()
+                    if (!force &&
+                        now - lastPartialCheckpointAt < PARTIAL_ASSISTANT_CHECKPOINT_INTERVAL_MILLIS &&
+                        partialCharactersSinceCheckpoint < PARTIAL_ASSISTANT_CHECKPOINT_CHARACTERS
+                    ) return
+                    runStore.appendAssistant(
                         runId = checkNotNull(run).id,
-                        ordinal = ordinal,
-                        request = turnRequest,
-                    ),
-                )
-                    .withFirstMeaningfulEventTimeout()
-                    .collect { event ->
+                        requestId = requestId,
+                        turn = AgentAssistantTurn(blocks = blocks.toList(), finishReason = finishReason),
+                        status = AgentEntryStatus.PARTIAL,
+                    )
+                    partialCheckpointDirty = false
+                    partialCharactersSinceCheckpoint = 0
+                    lastPartialCheckpointAt = now
+                }
+
+                try {
+                    modelTransport.streamTurn(
+                        ModelTurnRequest(
+                            requestId = requestId,
+                            runId = checkNotNull(run).id,
+                            ordinal = ordinal,
+                            request = turnRequest,
+                        ),
+                    )
+                        .withFirstMeaningfulEventTimeout()
+                        .collect { event ->
                     if (firstEventAt == null && event.isMeaningfulModelEvent()) {
                         firstEventAt = System.currentTimeMillis()
                     }
@@ -353,11 +385,15 @@ class AgentLoop(
                         is AppStreamEvent.Text -> {
                             if (firstTextAt == null && event.text.isNotBlank()) firstTextAt = System.currentTimeMillis()
                             blocks.appendText(event.text)
+                            partialCheckpointDirty = true
+                            partialCharactersSinceCheckpoint += event.text.length
                             roundContentBuffer.accept(event)
                         }
                         is AppStreamEvent.Content -> {
                             if (firstTextAt == null && event.text.isNotBlank()) firstTextAt = System.currentTimeMillis()
-                            blocks.appendText(event.text)
+                            blocks.appendText(event.text, event.thoughtSignature)
+                            partialCheckpointDirty = true
+                            partialCharactersSinceCheckpoint += event.text.length
                             roundContentBuffer.accept(event)
                         }
                         is AppStreamEvent.ContentFinal -> {
@@ -365,20 +401,26 @@ class AgentLoop(
                             roundContentBuffer.accept(event)
                         }
                         is AppStreamEvent.Reasoning -> {
-                            blocks.appendReasoning(event.text)
+                            blocks.appendReasoning(event.text, event.thoughtSignature)
+                            partialCheckpointDirty = true
+                            partialCharactersSinceCheckpoint += event.text.length
                             roundContentBuffer.accept(event)
                         }
                         is AppStreamEvent.ToolCall -> {
+                            val previous = toolCalls[event.id]
                             val call = AgentContentBlock.ToolCall(
                                 id = event.id,
                                 name = event.name,
                                 arguments = event.argumentsObj,
+                                // 部分流只在第一个增量携带签名，后续更新不能把它覆盖成 null。
+                                thoughtSignature = event.thoughtSignature ?: previous?.thoughtSignature,
                             )
                             toolCalls[event.id] = call
                             val existingIndex = blocks.indexOfFirst {
                                 it is AgentContentBlock.ToolCall && it.id == event.id
                             }
                             if (existingIndex < 0) blocks += call else blocks[existingIndex] = call
+                            partialCheckpointDirty = true
                             roundContentBuffer.accept(event)
                         }
                         is AppStreamEvent.Usage -> {
@@ -418,6 +460,12 @@ class AgentLoop(
                         }
                         else -> roundContentBuffer.accept(event)
                     }
+                    checkpointPartialAssistant(force = event is AppStreamEvent.ToolCall)
+                    }
+                } catch (error: CancellationException) {
+                    partialCheckpointDirty = blocks.isNotEmpty()
+                    withContext(NonCancellable) { checkpointPartialAssistant(force = true) }
+                    throw error
                 }
                 if (blocks.none { it is AgentContentBlock.Text }) finalText?.let(blocks::appendText)
                 roundContentBuffer.finish(hasToolCalls = toolCalls.isNotEmpty())
@@ -436,14 +484,8 @@ class AgentLoop(
 
                 val turnFailure = failure
                 if (turnFailure != null) {
-                    if (blocks.isNotEmpty()) {
-                        runStore.appendAssistant(
-                            runId = checkNotNull(run).id,
-                            requestId = requestId,
-                            turn = assistant,
-                            status = AgentEntryStatus.PARTIAL,
-                        )
-                    }
+                    partialCheckpointDirty = blocks.isNotEmpty()
+                    checkpointPartialAssistant(force = true)
                     usage?.let { runStore.saveUsage(requestId, it.copy(requestOrdinal = ordinal)) }
 
                     val isRetryable = turnFailure.isRetryableNetworkError(finishReason)
@@ -505,7 +547,7 @@ class AgentLoop(
                     firstEventAt = firstEventAt,
                     finishedAt = finishedAt,
                 )
-                transcript = transcript + assistant.toApiMessage(requestId)
+                transcript = transcript + assistant.toApiMessage(requestId, turnRequest)
                 providerContinuation = nextProviderContinuation
                 nextProviderContinuation?.let { continuation ->
                     runStore.saveContinuation(
@@ -907,15 +949,32 @@ class AgentLoop(
         )
     }
 
-    private fun AgentAssistantTurn.toApiMessage(requestId: String): AgentAssistantApiMessage =
+    private fun AgentAssistantTurn.toApiMessage(
+        requestId: String,
+        request: ChatRequest,
+    ): AgentAssistantApiMessage =
         AgentAssistantApiMessage(
             id = "assistant:$requestId",
             text = blocks.filterIsInstance<AgentContentBlock.Text>().joinToString("") { it.text },
             reasoning = blocks.filterIsInstance<AgentContentBlock.Reasoning>().joinToString("") { it.text },
             toolCalls = toolCalls.map { call ->
-                AgentToolCallApiPart(call.id, call.name, call.arguments)
+                AgentToolCallApiPart(call.id, call.name, call.arguments, call.thoughtSignature)
             },
+            contentParts = blocks.map { block -> block.toApiContentPart() },
+            sourceProvider = request.provider,
+            sourceEndpoint = request.apiAddress,
+            sourceModel = request.model,
         )
+
+    /** 保留原始块顺序和块级签名，避免下一轮只能依赖易失的 continuation。 */
+    private fun AgentContentBlock.toApiContentPart(): AgentAssistantContentApiPart = when (this) {
+        is AgentContentBlock.Text -> AgentAssistantContentApiPart.Text(text, thoughtSignature)
+        is AgentContentBlock.Reasoning -> AgentAssistantContentApiPart.Reasoning(text, thoughtSignature)
+        is AgentContentBlock.ToolCall -> AgentAssistantContentApiPart.ToolCall(
+            AgentToolCallApiPart(id, name, arguments, thoughtSignature),
+        )
+        is AgentContentBlock.ToolResult -> error("Assistant 中不能包含 Tool Result")
+    }
 
     private fun AgentContentBlock.ToolResult.toApiMessage(): AgentToolResultApiMessage =
         AgentToolResultApiMessage(
@@ -1168,18 +1227,24 @@ internal class ToolLoopGuard {
 
 private class AgentToolLoopException(message: String) : IllegalStateException(message)
 
-private fun MutableList<AgentContentBlock>.appendText(text: String) {
-    if (text.isEmpty()) return
+private fun MutableList<AgentContentBlock>.appendText(text: String, thoughtSignature: String? = null) {
+    if (text.isEmpty() && thoughtSignature.isNullOrEmpty()) return
     val last = lastOrNull()
-    if (last is AgentContentBlock.Text) this[lastIndex] = last.copy(text = last.text + text)
-    else add(AgentContentBlock.Text(text))
+    if (last is AgentContentBlock.Text && last.thoughtSignature == null && thoughtSignature == null) {
+        this[lastIndex] = last.copy(text = last.text + text)
+    } else {
+        add(AgentContentBlock.Text(text, thoughtSignature))
+    }
 }
 
-private fun MutableList<AgentContentBlock>.appendReasoning(text: String) {
-    if (text.isEmpty()) return
+private fun MutableList<AgentContentBlock>.appendReasoning(text: String, thoughtSignature: String? = null) {
+    if (text.isEmpty() && thoughtSignature.isNullOrEmpty()) return
     val last = lastOrNull()
-    if (last is AgentContentBlock.Reasoning) this[lastIndex] = last.copy(text = last.text + text)
-    else add(AgentContentBlock.Reasoning(text))
+    if (last is AgentContentBlock.Reasoning && last.thoughtSignature == null && thoughtSignature == null) {
+        this[lastIndex] = last.copy(text = last.text + text)
+    } else {
+        add(AgentContentBlock.Reasoning(text, thoughtSignature))
+    }
 }
 
 private fun AppStreamEvent.isMeaningfulModelEvent(): Boolean = when (this) {

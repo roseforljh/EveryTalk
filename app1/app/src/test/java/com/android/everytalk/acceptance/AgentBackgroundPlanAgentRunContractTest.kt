@@ -9,6 +9,7 @@ import org.junit.Test
 class AgentBackgroundPlanAgentRunContractTest {
     private val dao = AgentBackgroundPlanTestFiles.source("data/database/daos/AgentDao.kt")
     private val runStore = AgentBackgroundPlanTestFiles.source("data/agent/AgentRunStore.kt")
+    private val agentLoop = AgentBackgroundPlanTestFiles.source("data/agent/AgentLoop.kt")
     private val allSources = AgentBackgroundPlanTestFiles.allProductionKotlin()
     private val allCode = AgentBackgroundPlanTestFiles.allProductionCode()
 
@@ -92,6 +93,24 @@ class AgentBackgroundPlanAgentRunContractTest {
             "续写暂时失败不能直接把 Run 永久标为 FAILED",
             continuationSource.contains("MODEL_CONTINUATION_PENDING") && continuationSource.contains("markApprovalResumeFailure"),
         )
+    }
+
+    @Test
+    fun `流式检查点必须覆盖时间字符工具调用和取消四个边界`() {
+        assertTrue(agentLoop.contains("PARTIAL_ASSISTANT_CHECKPOINT_INTERVAL_MILLIS = 500L"))
+        assertTrue(agentLoop.contains("PARTIAL_ASSISTANT_CHECKPOINT_CHARACTERS = 512"))
+        assertTrue(agentLoop.contains("checkpointPartialAssistant(force = event is AppStreamEvent.ToolCall)"))
+        val cancellationBlock = agentLoop.substringAfter("catch (error: CancellationException)")
+            .substringBefore("if (blocks.none")
+        assertTrue(cancellationBlock.contains("withContext(NonCancellable)"))
+        assertTrue(cancellationBlock.contains("checkpointPartialAssistant(force = true)"))
+    }
+
+    @Test
+    fun `恢复请求必须关联旧请求并递增attempt`() {
+        assertTrue(runStore.contains("retryOfRequestId = retryOfRequest?.id"))
+        assertTrue(runStore.contains("attempt = (retryOfRequest?.attempt ?: 0) + 1"))
+        assertTrue(agentLoop.contains("latestInterruptedAgentRequest"))
     }
 
     @Test

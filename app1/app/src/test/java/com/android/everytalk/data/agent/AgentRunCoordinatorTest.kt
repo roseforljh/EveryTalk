@@ -70,6 +70,17 @@ class AgentRunCoordinatorTest {
         assertFalse(firstRunCollector.contains("trySend(event)"))
     }
 
+    @Test
+    fun `中断工具恢复必须把账本决策交回同一个AgentLoop`() {
+        val source = agentRunCoordinatorSource()
+        val recovery = source.substringAfter("suspend fun resumeInterruptedToolRuns")
+            .substringBefore("fun cancelRun")
+
+        assertTrue(recovery.contains("resumableApprovalRuns(computerDao)"))
+        assertTrue(recovery.contains("resumeRun(run, record)"))
+        assertTrue(source.contains("approvalDecision = approvalDecision"))
+    }
+
     private fun agentRunCoordinatorSource(): String {
         val relativePath = "data/agent/AgentRunCoordinator.kt"
         val candidates = listOf(

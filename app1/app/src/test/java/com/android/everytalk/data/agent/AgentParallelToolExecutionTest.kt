@@ -5,6 +5,8 @@ import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.android.everytalk.data.DataClass.AgentToolResultApiMessage
+import com.android.everytalk.data.DataClass.AgentAssistantApiMessage
+import com.android.everytalk.data.DataClass.AgentAssistantContentApiPart
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.ModelTokenLimits
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
@@ -113,6 +115,90 @@ class AgentParallelToolExecutionTest {
                 .toSet(),
         )
         assertTrue(events.any { it is AppStreamEvent.Content && it.text == "并发结果已处理" })
+    }
+
+    @Test
+    fun `工具返回ok false时模型收到失败结果`() = runBlocking {
+        val runtime = AgentToolRuntime(
+            executorProvider = {
+                { _, _, _, _, _ -> buildJsonObject { put("ok", false); put("error", "执行失败") } }
+            },
+            approvalProvider = { null },
+        )
+
+        val result = runtime.execute(
+            call = AgentContentBlock.ToolCall("call-failed", "exec", buildJsonObject {}),
+            computerContext = null,
+            emit = {},
+        )
+
+        assertTrue(result.isError)
+    }
+
+    @Test
+    fun `Gemini块级签名随每轮消息落库并可恢复`() = runBlocking {
+        seedSession("gemini-signature-session")
+        val observedRequests = mutableListOf<ChatRequest>()
+        val executor: AppToolExecutor = { _, _, _, _, _ -> buildJsonObject { put("ok", true) } }
+        var turn = 0
+        val loop = AgentLoop(
+            runStore = store,
+            toolRuntime = AgentToolRuntime(
+                executorProvider = { executor },
+                approvalProvider = { null },
+            ),
+            modelTransport = ModelTurnTransport { modelRequest ->
+                observedRequests += modelRequest.request
+                turn += 1
+                if (turn == 1) {
+                    flowOf(
+                        AppStreamEvent.Reasoning("", thoughtSignature = "cmVhc29uaW5nLXNpZw=="),
+                        AppStreamEvent.ToolCall(
+                            id = "call-signed",
+                            name = "exec",
+                            argumentsObj = buildJsonObject {},
+                            thoughtSignature = "dG9vbC1zaWc=",
+                        ),
+                        AppStreamEvent.Finish("tool_calls"),
+                    )
+                } else {
+                    flowOf(AppStreamEvent.Content("完成"), AppStreamEvent.Finish("stop"))
+                }
+            },
+        )
+        val request = ChatRequest(
+            messages = listOf(SimpleTextApiMessage(role = "user", content = "执行")),
+            provider = "Google",
+            channel = "Gemini",
+            apiAddress = "https://generativelanguage.googleapis.com",
+            apiKey = "test-key",
+            model = "gemini-3.7-flash",
+        )
+
+        loop.run(
+            AgentLoopRequest(
+                request = request,
+                sessionId = "gemini-signature-session",
+                userMessageId = "user-gemini-signature",
+                visibleAssistantMessageId = "assistant-gemini-signature",
+                tokenLimits = ModelTokenLimits(maxOutputTokens = 512, maxContextTokens = 8_192),
+            )
+        ).toList()
+
+        val liveAssistant = observedRequests[1].messages.filterIsInstance<AgentAssistantApiMessage>().single()
+        assertEquals("dG9vbC1zaWc=", liveAssistant.toolCalls.single().thoughtSignature)
+        assertTrue(liveAssistant.contentParts.first() is AgentAssistantContentApiPart.Reasoning)
+        val run = store.getRunsForSession("gemini-signature-session").single()
+        val restoredAssistant = store.appendRunTranscript(run.id, emptyList())
+            .filterIsInstance<AgentAssistantApiMessage>()
+            .first()
+        assertEquals("Google", restoredAssistant.sourceProvider)
+        assertEquals("gemini-3.7-flash", restoredAssistant.sourceModel)
+        assertEquals("dG9vbC1zaWc=", restoredAssistant.toolCalls.single().thoughtSignature)
+        assertEquals(
+            "cmVhc29uaW5nLXNpZw==",
+            (restoredAssistant.contentParts.first() as AgentAssistantContentApiPart.Reasoning).thoughtSignature,
+        )
     }
 
     @Test

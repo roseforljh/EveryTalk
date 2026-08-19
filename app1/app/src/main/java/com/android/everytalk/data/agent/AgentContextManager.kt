@@ -13,6 +13,7 @@ import com.android.everytalk.data.database.entities.AgentContextSnapshotEntity
 import com.android.everytalk.data.network.AnthropicDirectClient
 import com.android.everytalk.data.network.isOfficialAnthropicMessagesAddress
 import com.android.everytalk.data.network.isOfficialOpenAIResponsesAddress
+import com.android.everytalk.data.network.repairAgentToolHistory
 import com.android.everytalk.statecontroller.RequestTokenEstimator
 import com.android.everytalk.statecontroller.calibratedInputTokens
 import com.android.everytalk.statecontroller.trimMessagesToContextWindow
@@ -150,47 +151,9 @@ class AgentContextManager(
         )
     }
 
-    /**
-     * 只接受结果齐全的工具组。Assistant 一次返回的多个 Tool Call 共同组成一个原子组。
-     */
-    internal fun removeOrphanToolResults(messages: List<AbstractApiMessage>): List<AbstractApiMessage> {
-        val retained = mutableListOf<AbstractApiMessage>()
-        var cursor = 0
-        while (cursor < messages.size) {
-            val message = messages[cursor]
-            when {
-                message is AgentAssistantApiMessage && message.toolCalls.isNotEmpty() -> {
-                    val callsById = message.toolCalls.associateBy { it.id }
-                    val seenResults = mutableSetOf<String>()
-                    val results = mutableListOf<AgentToolResultApiMessage>()
-                    var next = cursor + 1
-                    var valid = callsById.size == message.toolCalls.size
-                    while (next < messages.size && messages[next] is AgentToolResultApiMessage) {
-                        val result = messages[next] as AgentToolResultApiMessage
-                        val call = callsById[result.toolCallId]
-                        if (call == null || !seenResults.add(result.toolCallId)) {
-                            valid = false
-                        } else {
-                            // Provider 历史以调用记录为准，修正可能漂移的结果名称。
-                            results += result.copy(toolName = call.name, name = call.name)
-                        }
-                        next++
-                    }
-                    if (valid && seenResults == callsById.keys) {
-                        retained += message
-                        retained += results
-                    }
-                    cursor = next
-                }
-                message is AgentToolResultApiMessage -> cursor++
-                else -> {
-                    retained += message
-                    cursor++
-                }
-            }
-        }
-        return retained
-    }
+    /** 缺失结果统一补成明确失败，避免裁剪或恢复时把已经发生的调用事实静默删除。 */
+    internal fun removeOrphanToolResults(messages: List<AbstractApiMessage>): List<AbstractApiMessage> =
+        messages.repairAgentToolHistory()
 
     /** 摘要输入使用数据标签，工具结果只取 2,000 字符，避免摘要请求再次被输出淹没。 */
     fun serializeForCompaction(plan: AgentCompactionPlan): String = buildString {
@@ -420,10 +383,14 @@ class AgentContextManager(
         }
         is AgentAssistantApiMessage -> buildString {
             append(message.id).append('|').append(message.role).append('|')
+            append(message.sourceProvider).append('|').append(message.sourceEndpoint).append('|')
+                .append(message.sourceModel).append('|')
             append(message.reasoning).append('|').append(message.text)
             message.toolCalls.forEach { call ->
                 append('|').append(call.id).append('|').append(call.name).append('|').append(call.arguments)
+                    .append('|').append(call.thoughtSignature)
             }
+            message.contentParts.forEach { append('|').append(it) }
         }
         is AgentToolResultApiMessage ->
             "${message.id}|${message.role}|${message.toolCallId}|${message.toolName}|${message.content}|${message.isError}"
@@ -452,7 +419,8 @@ private fun AbstractApiMessage.compactionText(): String = when (this) {
         val limited = if (raw.length <= 2_000) raw else {
             raw.take(1_000) + "\n…省略 ${raw.length - 2_000} 字符…\n" + raw.takeLast(1_000)
         }
-        "[工具结果 $toolName] ${limited.escapeBoundary()}"
+        "[工具结果 id=$toolCallId name=$toolName status=${if (isError) "失败" else "成功"}] " +
+            limited.escapeBoundary()
     }
 }
 

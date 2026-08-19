@@ -163,10 +163,13 @@ class AgentRunCoordinator(
         return resumeRun(run)
     }
 
-    suspend fun resumeRun(run: AgentRunEntity): Boolean {
+    suspend fun resumeRun(
+        run: AgentRunEntity,
+        approvalDecision: AgentApprovalRecord? = null,
+    ): Boolean {
         if (!canAttemptResume(run.id) || !recoveringRunIds.add(run.id)) return false
         return try {
-            resumeMutex.withLock { resumeRunLocked(run) }
+            resumeMutex.withLock { resumeRunLocked(run, approvalDecision) }
         } catch (exception: CancellationException) {
             throw exception
         } catch (exception: Exception) {
@@ -178,17 +181,23 @@ class AgentRunCoordinator(
         }
     }
 
-    private suspend fun resumeRunLocked(run: AgentRunEntity): Boolean {
+    private suspend fun resumeRunLocked(
+        run: AgentRunEntity,
+        approvalDecision: AgentApprovalRecord?,
+    ): Boolean {
         val jobKey = "run:${run.id}"
         if (isRunActive(run)) return false
-        if (!AgentNotificationManager.canUseAgentNotifications(appContext)) {
-            AppLogger.warn("AgentRunCoordinator", "Notification permission not available, skipping resume for run ${run.id}")
-            return false
-        }
 
         val configId = run.configIdSnapshot ?: return resumeFailed(run.id)
         val config = database.apiConfigDao().getTextConfig(configId)?.toApiConfig() ?: return resumeFailed(run.id)
         val chatRequest = agentRunStore.restoreChatRequest(run, config.key) ?: return resumeFailed(run.id)
+        AgentRecoveryDiagnostics.record(
+            run = run,
+            recoveryDecision = "RESUME_AGENT_LOOP",
+            serviceStartReason = "COORDINATOR",
+            requestId = agentRunStore.latestInterruptedAgentRequest(run.id)?.id,
+            providerProtocol = config.channel,
+        )
 
         // 读取 VPS 最终 stdout/stderr，沿用 ComputerToolExecutor 的 Secret 过滤和输出截断，
         // 成功写入 ToolResult 后才声明 Execution 已接回。
@@ -212,6 +221,7 @@ class AgentRunCoordinator(
             visibleAssistantMessageId = run.visibleAssistantMessageId,
             tokenLimits = limits,
             existingRun = run,
+            approvalDecision = approvalDecision,
         )
 
         val job = scope.launch {
@@ -251,7 +261,6 @@ class AgentRunCoordinator(
     }
 
     suspend fun resumePendingContinuationRuns(): Int {
-        if (!AgentNotificationManager.canUseAgentNotifications(appContext)) return 0
         val pendingRuns = agentDao.getPendingModelContinuationRuns()
         var resumedCount = 0
         for (run in pendingRuns) {
@@ -260,6 +269,21 @@ class AgentRunCoordinator(
                 resumedCount++
             }
         }
+        return resumedCount
+    }
+
+    /**
+     * 恢复工具结果落库窗口中的 Run。
+     * AgentRunStore 会先检查最终 ToolResult 和原 ComputerExecution：结果已存在就直接续写，
+     * 远端仍在运行就继续等待，执行事实缺失且可能有副作用时改为等待用户确认。
+     */
+    suspend fun resumeInterruptedToolRuns(): Int {
+        var resumedCount = 0
+        agentRunStore.resumableApprovalRuns(computerDao)
+            .filter { (run, _) -> run.status == AgentRunStatus.INTERRUPTED.name }
+            .forEach { (run, record) ->
+                if (resumeRun(run, record)) resumedCount++
+            }
         return resumedCount
     }
 
@@ -274,6 +298,25 @@ class AgentRunCoordinator(
                 terminalReason = reason,
             )
         }
+    }
+
+    /** 全局停止必须等待 Job 收尾，再统一封存 Room，防止服务消失后模型流继续写入。 */
+    suspend fun cancelAllActiveRuns(reason: String = AgentTerminalReasons.USER_STOP) {
+        val jobs = activeJobs.values.distinct()
+        activeJobs.clear()
+        jobs.forEach { job -> job.cancel(CancellationException(reason)) }
+        jobs.forEach { job -> job.join() }
+        agentDao.getActiveRuns().forEach { run ->
+            agentRunStore.cancelOpenRequests(run.id, reason)
+            agentRunStore.updateRunStatus(
+                run = run,
+                status = AgentRunStatus.CANCELLED,
+                terminalReason = reason,
+            )
+        }
+        visibleRunCancellationReasons.clear()
+        recoveringRunIds.clear()
+        resumeRetryStates.clear()
     }
 
     /** 用户第一次点击就登记停止；即使 Run 尚未写入 Room，稍后登记的 Job 也会立即取消。 */

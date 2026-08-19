@@ -20,7 +20,7 @@ class AgentContextManagerTest {
     private val manager = AgentContextManager()
 
     @Test
-    fun `多工具调用缺少一个结果时整组都不进入上下文`() {
+    fun `多工具调用缺少一个结果时保留已有事实并补失败结果`() {
         val assistant = assistantWithCalls("call-1", "call-2")
         val messages = listOf(
             SimpleTextApiMessage(id = "user-1", role = "user", content = "检查服务器"),
@@ -30,7 +30,10 @@ class AgentContextManagerTest {
 
         val cleaned = manager.removeOrphanToolResults(messages)
 
-        assertEquals(listOf("user-1"), cleaned.map { it.id })
+        assertEquals(listOf("user-1", "assistant-1", "result-call-1", "missing:assistant-1:call-2"), cleaned.map { it.id })
+        val missing = cleaned.last() as AgentToolResultApiMessage
+        assertTrue(missing.isError)
+        assertEquals("call-2", missing.toolCallId)
     }
 
     @Test
@@ -49,7 +52,7 @@ class AgentContextManagerTest {
     }
 
     @Test
-    fun `工具结果没有紧跟调用时丢弃整个工具组`() {
+    fun `工具结果没有紧跟调用时仍保留调用和已知结果`() {
         val messages = listOf(
             assistantWithCalls("call-1", "call-2"),
             toolResult("call-1"),
@@ -59,7 +62,11 @@ class AgentContextManagerTest {
 
         val cleaned = manager.removeOrphanToolResults(messages)
 
-        assertEquals(listOf("user-2"), cleaned.map { it.id })
+        assertTrue(cleaned.any { it.id == "assistant-1" })
+        assertTrue(cleaned.any { it.id == "result-call-1" })
+        assertTrue(cleaned.any { it.id == "missing:assistant-1:call-2" })
+        assertTrue(cleaned.any { it.id == "user-2" })
+        assertTrue(cleaned.any { it.id == "history:result-call-2" })
     }
 
     @Test
@@ -212,6 +219,27 @@ class AgentContextManagerTest {
         assertTrue(plan.retainedTailIds.contains("user-5"))
         assertTrue(plan.retainedTailIds.contains("user-6"))
         assertFalse(plan.retainedTailIds.contains("user-1"))
+    }
+
+    @Test
+    fun `压缩文本保留工具调用ID和失败状态`() {
+        val plan = AgentCompactionPlan(
+            messagesToSummarize = listOf(
+                toolResult("call-failed", "permission denied").copy(isError = true),
+            ),
+            previousSummary = null,
+            summarizedThroughItemId = "result-call-failed",
+            prefixFingerprint = "fingerprint",
+            retainedTailIds = emptyList(),
+            summaryRole = "user",
+            tokensBefore = 100,
+        )
+
+        val serialized = manager.serializeForCompaction(plan)
+
+        assertTrue(serialized.contains("id=call-failed"))
+        assertTrue(serialized.contains("status=失败"))
+        assertTrue(serialized.contains("permission denied"))
     }
 
     @Test
