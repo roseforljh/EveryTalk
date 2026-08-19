@@ -119,6 +119,25 @@ class DirectClientLifecycleTest {
     }
 
     @Test
+    fun `Gemini流解析保留空思考块和工具调用签名`() = runBlocking {
+        val body =
+            """data: {"candidates":[{"content":{"role":"model","parts":[{"thought":true,"text":"","thoughtSignature":"cmVhc29uaW5nLXNpZw=="},{"functionCall":{"id":"call-1","name":"exec","args":{}},"thoughtSignature":"dG9vbC1zaWc="}]},"finishReason":"STOP"}]}
+
+"""
+        withHttpClient(body = body) { client ->
+            val events = GeminiDirectClient.streamChatDirect(client, request("Google", "Gemini")).toList()
+
+            val reasoning = events.filterIsInstance<AppStreamEvent.Reasoning>().single()
+            val toolCall = events.filterIsInstance<AppStreamEvent.ToolCall>().single()
+            val continuation = events.filterIsInstance<AppStreamEvent.ProviderContinuation>().single()
+            assertEquals("", reasoning.text)
+            assertEquals("cmVhc29uaW5nLXNpZw==", reasoning.thoughtSignature)
+            assertEquals("dG9vbC1zaWc=", toolCall.thoughtSignature)
+            assertTrue(continuation.payloadJson.contains("thoughtSignature"))
+        }
+    }
+
+    @Test
     fun `OpenAI Chat原生引用发布网页来源事件`() = runBlocking {
         val body = buildString {
             append("data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\n")

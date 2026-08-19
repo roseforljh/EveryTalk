@@ -44,7 +44,13 @@ sealed class AppStreamEvent {
 
     @Serializable
     @SerialName("content")
-    data class Content(val text: String, val output_type: String? = null, val block_type: String? = null, val timestamp: String? = null) : AppStreamEvent()
+    data class Content(
+        val text: String,
+        val output_type: String? = null,
+        val block_type: String? = null,
+        val timestamp: String? = null,
+        val thoughtSignature: String? = null,
+    ) : AppStreamEvent()
     
     @Serializable
     @SerialName("content_final")
@@ -52,7 +58,10 @@ sealed class AppStreamEvent {
 
     @Serializable
     @SerialName("reasoning")
-    data class Reasoning(val text: String) : AppStreamEvent()
+    data class Reasoning(
+        val text: String,
+        val thoughtSignature: String? = null,
+    ) : AppStreamEvent()
 
     @Serializable
     @SerialName("reasoning_finish")
@@ -142,7 +151,9 @@ sealed class AppStreamEvent {
         val name: String,
         val argumentsObj: JsonObject,
         val isReasoningStep: Boolean? = null,
-        val status: String? = null
+        val status: String? = null,
+        /** Gemini 加密思考签名。AgentLoop 必须随当前 Assistant 一起持久化。 */
+        val thoughtSignature: String? = null,
     ) : AppStreamEvent()
 
     @Serializable

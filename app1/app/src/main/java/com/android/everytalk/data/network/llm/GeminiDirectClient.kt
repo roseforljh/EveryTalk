@@ -7,6 +7,7 @@ import com.android.everytalk.data.DataClass.AbstractApiMessage
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.DataClass.PartsApiMessage
 import com.android.everytalk.data.DataClass.AgentAssistantApiMessage
+import com.android.everytalk.data.DataClass.AgentAssistantContentApiPart
 import com.android.everytalk.data.DataClass.AgentToolCallApiPart
 import com.android.everytalk.data.DataClass.AgentToolResultApiMessage
 import com.android.everytalk.data.DataClass.ProviderTurnContinuation
@@ -24,6 +25,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.*
 import java.util.UUID
+import java.util.Base64
 
 object GeminiDirectClient {
     private const val TAG = "GeminiDirectClient"
@@ -186,7 +188,7 @@ object GeminiDirectClient {
                 }
             }
 
-            put("contents", buildGeminiContents(mergedMessages, request.localProviderContinuation))
+            put("contents", buildGeminiContents(mergedMessages, request))
             
             // 添加生成配置（包含 thinkingConfig）
             putJsonObject("generationConfig") {
@@ -330,15 +332,15 @@ object GeminiDirectClient {
     private fun isLocalGeminiToolCallId(id: String): Boolean = id.startsWith(LOCAL_TOOL_CALL_ID_PREFIX)
 
     /**
-     * 按 Gemini 官方协议组装工具历史。
-     * 当前工具回合原样回传服务端 Content；缺少签名的旧工具回合整组移除。
+     * 按 Pi 的 Gemini 语义逐轮回放历史。
+     * Tool Call/Result 永远保持原生结构；签名只在来源 Provider、地址、模型都一致时恢复。
      */
     private fun buildGeminiContents(
         messages: List<AbstractApiMessage>,
-        continuation: ProviderTurnContinuation?,
+        request: ChatRequest,
     ): JsonArray {
         val latestAssistant = messages.filterIsInstance<AgentAssistantApiMessage>().lastOrNull()
-        val nativeAssistant = continuation
+        val nativeAssistant = request.localProviderContinuation
             ?.takeIf { it.protocol == ModelParameterProtocol.GEMINI }
             ?.takeIf { it.assistantMessageId == null || it.assistantMessageId == latestAssistant?.id }
             ?.payloadJson
@@ -349,17 +351,11 @@ object GeminiDirectClient {
         val nativeAssistantId = latestAssistant?.id?.takeIf { nativeAssistant != null }
         val legacyAssistantId = latestAssistant
             ?.takeIf { assistant ->
-                continuation == null &&
+                request.localProviderContinuation == null &&
                     assistant.toolCalls.isNotEmpty() &&
                     assistant.toolCalls.all { isLocalGeminiToolCallId(it.id) }
             }
             ?.id
-        val protocolAssistantId = nativeAssistantId ?: legacyAssistantId
-        val protocolCallIds = latestAssistant
-            ?.takeIf { it.id == protocolAssistantId }
-            ?.toolCalls
-            ?.mapTo(mutableSetOf()) { it.id }
-            .orEmpty()
 
         val contents = mutableListOf<JsonObject>()
         var messageIndex = 0
@@ -369,17 +365,17 @@ object GeminiDirectClient {
                 val results = messages.drop(messageIndex)
                     .takeWhile { it is AgentToolResultApiMessage }
                     .filterIsInstance<AgentToolResultApiMessage>()
-                if (results.all { it.toolCallId in protocolCallIds }) {
-                    appendGeminiContent(contents, geminiFunctionResponseContent(results))
-                }
+                appendGeminiContent(contents, geminiFunctionResponseContent(results))
                 messageIndex += results.size
                 continue
             }
 
             val content: JsonObject? = when {
                 message is AgentAssistantApiMessage && message.id == nativeAssistantId -> checkNotNull(nativeAssistant)
-                message is AgentAssistantApiMessage &&
-                    message.toolCalls.isNotEmpty() && message.id != legacyAssistantId -> null
+                message is AgentAssistantApiMessage -> message.toGeminiAssistantContent(
+                    request = request,
+                    omitLocalIds = message.id == legacyAssistantId,
+                )
                 else -> message.toGeminiContent(message.id == legacyAssistantId)
             }
             content?.let { appendGeminiContent(contents, it) }
@@ -388,10 +384,95 @@ object GeminiDirectClient {
         return JsonArray(contents)
     }
 
+    /** 中立 Assistant 恢复成 Gemini Content；跨模型保留语义和工具协议，只移除不可复用签名。 */
+    private fun AgentAssistantApiMessage.toGeminiAssistantContent(
+        request: ChatRequest,
+        omitLocalIds: Boolean,
+    ): JsonObject = buildJsonObject {
+        put("role", "model")
+        putJsonArray("parts") {
+            val sameSource = sourceProvider == request.provider &&
+                sourceEndpoint == request.apiAddress &&
+                sourceModel == request.model
+            if (contentParts.isNotEmpty()) {
+                contentParts.forEach { part ->
+                    when (part) {
+                        is AgentAssistantContentApiPart.Text -> {
+                            val signature = part.thoughtSignature.validForReplay(sameSource)
+                            if (part.text.isNotEmpty() || signature != null) addJsonObject {
+                                put("text", part.text)
+                                signature?.let { put("thoughtSignature", it) }
+                            }
+                        }
+                        is AgentAssistantContentApiPart.Reasoning -> {
+                            val signature = part.thoughtSignature.validForReplay(sameSource)
+                            if (sameSource && (part.text.isNotEmpty() || signature != null)) {
+                                addJsonObject {
+                                    put("thought", true)
+                                    put("text", part.text)
+                                    signature?.let { put("thoughtSignature", it) }
+                                }
+                            } else if (part.text.isNotBlank()) {
+                                addJsonObject { put("text", part.text) }
+                            }
+                        }
+                        is AgentAssistantContentApiPart.ToolCall -> addGeminiFunctionCall(
+                            call = part.call,
+                            includeId = !omitLocalIds && !isLocalGeminiToolCallId(part.call.id),
+                            includeSignature = sameSource,
+                        )
+                    }
+                }
+            } else {
+                reasoning.takeIf(String::isNotBlank)?.let { addJsonObject { put("text", it) } }
+                text.takeIf(String::isNotBlank)?.let { addJsonObject { put("text", it) } }
+                toolCalls.forEach { call ->
+                    addGeminiFunctionCall(
+                        call = call,
+                        includeId = !omitLocalIds && !isLocalGeminiToolCallId(call.id),
+                        includeSignature = sameSource,
+                    )
+                }
+            }
+        }
+    }
+
+    private fun JsonArrayBuilder.addGeminiFunctionCall(
+        call: AgentToolCallApiPart,
+        includeId: Boolean,
+        includeSignature: Boolean,
+    ) {
+        addJsonObject {
+            putJsonObject("functionCall") {
+                if (includeId) put("id", call.id)
+                put("name", call.name)
+                put("args", call.arguments)
+            }
+            call.thoughtSignature.validForReplay(includeSignature)?.let { put("thoughtSignature", it) }
+        }
+    }
+
+    /** Google 的 thoughtSignature 是标准 Base64；无效值不能回放给接口。 */
+    private fun String?.validForReplay(sameSource: Boolean): String? = takeIf { signature ->
+        sameSource && !signature.isNullOrEmpty() && signature.length % 4 == 0 &&
+            runCatching { Base64.getDecoder().decode(signature) }.isSuccess
+    }
+
     /** 原生 Content 只允许替换同一个工具回合，名称和服务端 ID 都要完全对应。 */
     private fun JsonObject.matchesGeminiAssistant(assistant: AgentAssistantApiMessage): Boolean {
-        if (assistant.toolCalls.isEmpty()) return false
         if (this["role"]?.jsonPrimitive?.contentOrNull != "model") return false
+        if (assistant.toolCalls.isEmpty()) {
+            val nativeParts = (this["parts"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
+            val nativeText = nativeParts
+                .filter { it["thought"]?.jsonPrimitive?.booleanOrNull != true }
+                .mapNotNull { it["text"]?.jsonPrimitive?.contentOrNull }
+                .joinToString("")
+            val nativeReasoning = nativeParts
+                .filter { it["thought"]?.jsonPrimitive?.booleanOrNull == true }
+                .mapNotNull { it["text"]?.jsonPrimitive?.contentOrNull }
+                .joinToString("")
+            return nativeText == assistant.text && nativeReasoning == assistant.reasoning
+        }
         val nativeCalls = (this["parts"] as? JsonArray).orEmpty().mapNotNull { part ->
             (part as? JsonObject)?.get("functionCall") as? JsonObject
         }
@@ -428,18 +509,7 @@ object GeminiDirectClient {
                             addJsonObject { put("text", "[Image: ${part.uri}]") }
                     }
                 }
-                is AgentAssistantApiMessage -> {
-                    reasoning.takeIf(String::isNotBlank)?.let { addJsonObject { put("text", it) } }
-                    text.takeIf(String::isNotBlank)?.let { addJsonObject { put("text", it) } }
-                    if (useLegacyFunctionCalls) toolCalls.forEach { call ->
-                        addJsonObject {
-                            putJsonObject("functionCall") {
-                                put("name", call.name)
-                                put("args", call.arguments)
-                            }
-                        }
-                    }
-                }
+                is AgentAssistantApiMessage -> error("Assistant 应由 toGeminiAssistantContent 处理")
                 is AgentToolResultApiMessage -> error("工具结果应按连续批次处理")
             }
         }
@@ -581,14 +651,26 @@ object GeminiDirectClient {
                                     }
                                     candidateContent?.get("parts")?.jsonArray?.forEach { part ->
                                         val partObj = part.jsonObject
+                                        val thoughtSignature = partObj["thoughtSignature"]
+                                            ?.jsonPrimitive
+                                            ?.contentOrNull
                                         
                                         val isThought = partObj["thought"]?.jsonPrimitive?.booleanOrNull == true
                                         val textContent = partObj["text"]?.jsonPrimitive?.contentOrNull
                                         
-                                        if (isThought && !textContent.isNullOrEmpty()) {
+                                        if (isThought && (!textContent.isNullOrEmpty() || thoughtSignature != null)) {
                                             if (!reasoningStarted) reasoningStarted = true
-                                            fullReasoning.append(textContent)
-                                            emitEvent(AppStreamEvent.Reasoning(textContent))
+                                            fullReasoning.append(textContent.orEmpty())
+                                            emitEvent(AppStreamEvent.Reasoning(textContent.orEmpty(), thoughtSignature))
+                                        } else if (thoughtSignature != null && textContent != null) {
+                                            if (reasoningStarted && !reasoningFinished) {
+                                                emitEvent(AppStreamEvent.ReasoningFinish(null))
+                                                reasoningFinished = true
+                                            }
+                                            if (!contentStarted) contentStarted = true
+                                            eventCount++
+                                            fullText.append(textContent)
+                                            emitEvent(AppStreamEvent.Content(textContent, thoughtSignature = thoughtSignature))
                                         } else if (!textContent.isNullOrEmpty()) {
                                             val routed = thinkRouter.feed(textContent)
                                             for (routedChunk in routed) {
@@ -622,7 +704,8 @@ object GeminiDirectClient {
                                             emitEvent(AppStreamEvent.ToolCall(
                                                 id = toolCallId,
                                                 name = name,
-                                                argumentsObj = args
+                                                argumentsObj = args,
+                                                thoughtSignature = thoughtSignature,
                                             ))
                                             Log.i(TAG, "🔧 捕获 functionCall: $name")
                                         }

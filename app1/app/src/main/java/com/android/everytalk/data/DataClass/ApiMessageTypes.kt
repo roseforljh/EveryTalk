@@ -59,15 +59,52 @@ data class AgentAssistantApiMessage(
     val reasoning: String = "",
     @SerialName("tool_calls")
     val toolCalls: List<AgentToolCallApiPart> = emptyList(),
+    /**
+     * Assistant 的真实块顺序。Gemini 的签名属于具体 Part，不能只保存拼接后的正文。
+     * 旧记录没有该字段时，Provider 继续使用 text、reasoning、toolCalls 兼容恢复。
+     */
+    @SerialName("content_parts")
+    val contentParts: List<AgentAssistantContentApiPart> = emptyList(),
+    /** 下面三个来源字段用于判断加密签名能否安全回放给当前模型。 */
+    @SerialName("source_provider")
+    val sourceProvider: String? = null,
+    @SerialName("source_endpoint")
+    val sourceEndpoint: String? = null,
+    @SerialName("source_model")
+    val sourceModel: String? = null,
     @SerialName("name")
     override val name: String? = null,
 ) : AbstractApiMessage()
+
+/** Provider 中立的 Assistant 块。签名只作为可选元数据保存，不改变块的业务语义。 */
+@Serializable
+sealed class AgentAssistantContentApiPart {
+    @Serializable
+    @SerialName("text")
+    data class Text(
+        val text: String,
+        @SerialName("thought_signature") val thoughtSignature: String? = null,
+    ) : AgentAssistantContentApiPart()
+
+    @Serializable
+    @SerialName("reasoning")
+    data class Reasoning(
+        val text: String,
+        @SerialName("thought_signature") val thoughtSignature: String? = null,
+    ) : AgentAssistantContentApiPart()
+
+    @Serializable
+    @SerialName("tool_call")
+    data class ToolCall(val call: AgentToolCallApiPart) : AgentAssistantContentApiPart()
+}
 
 @Serializable
 data class AgentToolCallApiPart(
     val id: String,
     val name: String,
     val arguments: JsonObject,
+    @SerialName("thought_signature")
+    val thoughtSignature: String? = null,
 )
 
 /** Tool Result 独立成消息，保证上下文裁剪时能和 Tool Call 成组处理。 */

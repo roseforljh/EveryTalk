@@ -2,6 +2,7 @@ package com.android.everytalk.data.network
 
 import android.app.Application
 import com.android.everytalk.data.DataClass.AgentAssistantApiMessage
+import com.android.everytalk.data.DataClass.AgentAssistantContentApiPart
 import com.android.everytalk.data.DataClass.AgentToolCallApiPart
 import com.android.everytalk.data.DataClass.AgentToolResultApiMessage
 import com.android.everytalk.data.DataClass.ChatRequest
@@ -41,7 +42,10 @@ class GeminiDirectClientPayloadTest {
         )
 
         val payload = Json.parseToJsonElement(GeminiDirectClient.buildGeminiPayload(request)).jsonObject
-        val modelParts = payload.getValue("contents").jsonArray.last().jsonObject.getValue("parts").jsonArray
+        val modelParts = payload.getValue("contents").jsonArray
+            .map { it.jsonObject }
+            .last { it.getValue("role").jsonPrimitive.content == "model" }
+            .getValue("parts").jsonArray
 
         assertEquals("分析", modelParts.first().jsonObject.getValue("text").jsonPrimitive.content)
     }
@@ -81,6 +85,38 @@ class GeminiDirectClientPayloadTest {
         val thought = modelContent.getValue("parts").jsonArray.first().jsonObject
 
         assertEquals("sig", thought.getValue("thoughtSignature").jsonPrimitive.content)
+    }
+
+    @Test
+    fun `普通文本轮也恢复原生空签名块`() {
+        val request = ChatRequest(
+            messages = listOf(
+                SimpleTextApiMessage(role = "user", content = "总结"),
+                AgentAssistantApiMessage(id = "assistant-text", text = "完成"),
+                SimpleTextApiMessage(role = "user", content = "继续"),
+            ),
+            provider = "Google",
+            channel = "Gemini",
+            apiAddress = "https://generativelanguage.googleapis.com",
+            apiKey = "test-key",
+            model = "gemini-3.7-flash",
+            localProviderContinuation = ProviderTurnContinuation(
+                protocol = ModelParameterProtocol.GEMINI,
+                assistantMessageId = "assistant-text",
+                payloadJson =
+                    """{"role":"model","parts":[{"text":"","thoughtSignature":"ZW1wdHktc2ln"},{"text":"完成"}]}""",
+            ),
+        )
+
+        val contents = Json.parseToJsonElement(GeminiDirectClient.buildGeminiPayload(request))
+            .jsonObject.getValue("contents").jsonArray
+        val modelParts = contents[1].jsonObject.getValue("parts").jsonArray
+
+        assertEquals("", modelParts.first().jsonObject.getValue("text").jsonPrimitive.content)
+        assertEquals(
+            "ZW1wdHktc2ln",
+            modelParts.first().jsonObject.getValue("thoughtSignature").jsonPrimitive.content,
+        )
     }
 
     @Test
@@ -197,14 +233,19 @@ class GeminiDirectClientPayloadTest {
         val contents = Json.parseToJsonElement(GeminiDirectClient.buildGeminiPayload(request))
             .jsonObject.getValue("contents").jsonArray
 
+        assertTrue(contents.any { content ->
+            content.jsonObject.getValue("parts").jsonArray.any { part ->
+                part.jsonObject["functionCall"]?.jsonObject?.get("name")?.jsonPrimitive?.content == "exec"
+            }
+        })
         assertFalse(contents.any { content ->
             content.jsonObject.getValue("parts").jsonArray.any { part ->
                 part.jsonObject["functionCall"]?.jsonObject?.get("name")?.jsonPrimitive?.content == "edit"
             }
         })
-        assertFalse(contents.any { content ->
+        assertTrue(contents.any { content ->
             content.jsonObject.getValue("parts").jsonArray.any { part ->
-                part.jsonObject["functionResponse"] != null
+                part.jsonObject["functionResponse"]?.jsonObject?.get("id")?.jsonPrimitive?.content == "call-current"
             }
         })
         assertTrue(contents.any { content ->
@@ -215,13 +256,23 @@ class GeminiDirectClientPayloadTest {
     }
 
     @Test
-    fun `多轮工具历史只保留最新原生签名回合`() {
+    fun `多轮工具历史全部保留原生调用结果和各轮签名`() {
         val request = ChatRequest(
             messages = listOf(
                 SimpleTextApiMessage(role = "user", content = "先读取再修改"),
                 AgentAssistantApiMessage(
                     id = "assistant-old",
-                    toolCalls = listOf(AgentToolCallApiPart("call-old", "read_file", JsonObject(emptyMap()))),
+                    toolCalls = listOf(
+                        AgentToolCallApiPart(
+                            "call-old",
+                            "read_file",
+                            JsonObject(mapOf("path" to JsonPrimitive("first-script"))),
+                            thoughtSignature = "b2xkLXNpZw==",
+                        ),
+                    ),
+                    sourceProvider = "Google",
+                    sourceEndpoint = "https://generativelanguage.googleapis.com",
+                    sourceModel = "gemini-3.7-flash",
                 ),
                 AgentToolResultApiMessage(
                     toolCallId = "call-old",
@@ -259,17 +310,68 @@ class GeminiDirectClientPayloadTest {
             content.jsonObject.getValue("parts").jsonArray.mapNotNull { it.jsonObject["functionResponse"] }
         }
         val signedPart = contents.flatMap { it.jsonObject.getValue("parts").jsonArray }
-            .single { it.jsonObject["thoughtSignature"] != null }
+            .map { it.jsonObject }
+            .single { part ->
+                part["functionCall"]?.jsonObject?.get("id")?.jsonPrimitive?.content == "call-current"
+            }
             .jsonObject
 
-        assertEquals(1, functionCalls.size)
-        assertEquals("call-current", functionCalls.single().jsonObject.getValue("id").jsonPrimitive.content)
-        assertEquals(1, functionResponses.size)
-        assertEquals("call-current", functionResponses.single().jsonObject.getValue("id").jsonPrimitive.content)
+        assertEquals(listOf("call-old", "call-current"), functionCalls.map {
+            it.jsonObject.getValue("id").jsonPrimitive.content
+        })
+        assertEquals(listOf("call-old", "call-current"), functionResponses.map {
+            it.jsonObject.getValue("id").jsonPrimitive.content
+        })
         assertEquals("current-sig", signedPart.getValue("thoughtSignature").jsonPrimitive.content)
+        assertTrue(contents.toString().contains("b2xkLXNpZw=="))
         assertFalse(contents.toString().contains("历史工具调用"))
         assertFalse(contents.toString().contains("历史工具结果"))
-        assertFalse(contents.toString().contains("call-old"))
+    }
+
+    @Test
+    fun `同模型恢复空思考签名块且跨模型剥离签名`() {
+        val contentParts = listOf(
+            AgentAssistantContentApiPart.Reasoning("", "c2lnbmF0dXJl"),
+            AgentAssistantContentApiPart.ToolCall(
+                AgentToolCallApiPart("call-1", "exec", JsonObject(emptyMap()), "dG9vbC1zaWc="),
+            ),
+        )
+        fun payload(model: String) = Json.parseToJsonElement(
+            GeminiDirectClient.buildGeminiPayload(
+                ChatRequest(
+                    messages = listOf(
+                        SimpleTextApiMessage(role = "user", content = "继续"),
+                        AgentAssistantApiMessage(
+                            id = "assistant-1",
+                            toolCalls = listOf(AgentToolCallApiPart("call-1", "exec", JsonObject(emptyMap()))),
+                            contentParts = contentParts,
+                            sourceProvider = "Google",
+                            sourceEndpoint = "https://generativelanguage.googleapis.com",
+                            sourceModel = "gemini-3.7-flash",
+                        ),
+                        AgentToolResultApiMessage(
+                            toolCallId = "call-1",
+                            toolName = "exec",
+                            content = JsonPrimitive("ok"),
+                        ),
+                    ),
+                    provider = "Google",
+                    channel = "Gemini",
+                    apiAddress = "https://generativelanguage.googleapis.com",
+                    apiKey = "test-key",
+                    model = model,
+                )
+            )
+        ).jsonObject.getValue("contents").jsonArray
+
+        val sameModel = payload("gemini-3.7-flash").toString()
+        val otherModel = payload("gemini-3.8-flash").toString()
+
+        assertTrue(sameModel.contains("c2lnbmF0dXJl"))
+        assertTrue(sameModel.contains("dG9vbC1zaWc="))
+        assertFalse(otherModel.contains("thoughtSignature"))
+        assertTrue(otherModel.contains("functionCall"))
+        assertTrue(otherModel.contains("functionResponse"))
     }
 
     @Test
