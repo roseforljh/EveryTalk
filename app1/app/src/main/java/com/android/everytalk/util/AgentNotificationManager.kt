@@ -19,9 +19,7 @@ import com.android.everytalk.statecontroller.MainActivity
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
-/**
- * 统一通知管理器与权限门槛。
- */
+/** 普通 Agent 事件通知。前台服务能否启动不由这里判断。 */
 object AgentNotificationManager {
     const val CHANNEL_EVENTS_ID = "agent_events_channel"
     private val notifiedEvents = ConcurrentHashMap<String, Long>()
@@ -29,10 +27,8 @@ object AgentNotificationManager {
     private val lostConnections = ConcurrentHashMap.newKeySet<String>()
     private val appInForeground = AtomicBoolean(false)
 
-    /**
-     * 统一通知可用性检查：运行时权限、全局开关、渠道三者必须同时判断。
-     */
-    fun canUseAgentNotifications(context: Context): Boolean {
+    /** 普通事件能否出现在通知栏，只影响提醒，不影响 Agent 和前台服务运行。 */
+    fun canPostAgentEventNotifications(context: Context): Boolean {
         val appContext = context.applicationContext
         val notificationManager = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
             ?: return false
@@ -167,7 +163,7 @@ object AgentNotificationManager {
         title: String,
         message: String,
     ) {
-        if (!canUseAgentNotifications(context)) return
+        if (!canPostAgentEventNotifications(context)) return
 
         val isTerminal = eventType == "SUCCEEDED" || eventType == "FAILED" || eventType == "CANCELLED" || eventType == "TIMED_OUT"
 

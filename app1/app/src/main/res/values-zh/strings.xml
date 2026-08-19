@@ -571,7 +571,7 @@
     <string name="chat_input_choose_agent_server">选择 Agent 服务器</string>
     <string name="agent_server_picker_title">Agent 服务器</string>
     <string name="agent_server_picker_description">选择当前会话可以使用的服务器</string>
-    <string name="agent_notification_permission_required">Agent 需要通知权限以在后台跟踪与恢复任务，请在系统设置中开启通知权限。</string>
+    <string name="agent_notification_permission_required">开启通知后可接收 Agent 任务提醒；拒绝权限不影响任务继续运行。</string>
     <string name="agent_server_picker_empty">还没有服务器，请前往“设置 › 服务器”添加</string>
     <string name="agent_server_ready">可用</string>
     <string name="agent_server_offline">离线</string>

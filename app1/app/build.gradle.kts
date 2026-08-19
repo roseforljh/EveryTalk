@@ -377,6 +377,7 @@ ksp {
         // ===== Room Database =====
         implementation(libs.room.runtime)
         implementation(libs.room.ktx)
+        implementation(libs.androidx.work.runtime.ktx)
         ksp(libs.room.compiler)
 
         // ===== Hilt Dependency Injection =====

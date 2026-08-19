@@ -13,6 +13,10 @@ class AgentBackgroundPlanServiceContractTest {
     private val wrapper = AgentBackgroundPlanTestFiles.asset("runtime-wrapper.sh")
     private val repository = AgentBackgroundPlanTestFiles.source("data/computer/ComputerRepository.kt")
     private val dao = AgentBackgroundPlanTestFiles.source("data/database/daos/ComputerDao.kt")
+    private val agentDao = AgentBackgroundPlanTestFiles.source("data/database/daos/AgentDao.kt")
+    private val worker = AgentBackgroundPlanTestFiles.source("service/AgentRecoveryWorker.kt")
+    private val workerCode = AgentBackgroundPlanTestFiles.code("service/AgentRecoveryWorker.kt")
+    private val coordinator = AgentBackgroundPlanTestFiles.source("data/agent/AgentRunCoordinator.kt")
 
     @Test
     fun `AgentLoop不能继续由ViewModel协程持有`() {
@@ -43,15 +47,16 @@ class AgentBackgroundPlanServiceContractTest {
     }
 
     @Test
-    fun `前台服务只能把当前进程真实运行的AgentRun算作活动任务`() {
+    fun `前台服务同时对账进程内任务和Room持久任务`() {
         assertTrue(
             "服务没有读取当前进程真实运行的 AgentRun 数量",
             serviceCode.contains("activeAgentRunCount("),
         )
-        assertFalse(
-            "Room 中可能残留旧 Run，禁止把所有未结束 Run 直接显示成正在运行",
+        assertTrue(
+            "进程死亡后必须从 Room 找回持久任务",
             serviceCode.contains("agentDao.getActiveRuns("),
         )
+        assertTrue("Room 查询必须排除普通历史 INTERRUPTED", agentDao.contains("terminalReason IN"))
     }
 
     @Test
@@ -63,19 +68,69 @@ class AgentBackgroundPlanServiceContractTest {
         val recoveryBranch = service.substringAfter("ACTION_RESUME_RECOVERY", missingDelimiterValue = "")
             .substringBefore("return START_STICKY", missingDelimiterValue = "")
         assertTrue(
-            "恢复分支必须在返回前调用 start/recover/resume 之一",
-            listOf(".start(", ".recover(", ".resume(", "startTaskMonitoring(").any(recoveryBranch::contains),
+            "恢复分支必须在返回前启动等待恢复完成的任务监听",
+            listOf(".start(", ".recover(", ".resume(", "startTaskMonitoringAfterRecovery(").any(recoveryBranch::contains),
         )
     }
 
     @Test
     fun `系统用空Intent重建服务时仍会从持久状态恢复`() {
         val afterActionDispatch = service.substringAfter("when (intent?.action)", "")
-        assertTrue("null intent 默认路径必须启动任务监听", afterActionDispatch.contains("startTaskMonitoring()"))
+        assertTrue("null intent 默认路径必须等待恢复后启动任务监听", afterActionDispatch.contains("startTaskMonitoringAfterRecovery()"))
         assertFalse(
             "服务不能仅凭进程内 activeTokens 判断是否立即退出",
             service.contains("if (!ComputerConnectionServiceController.hasActiveTokens()) {\n            stopForeground"),
         )
+    }
+
+    @Test
+    fun `服务必须先恢复持久状态再判断空闲`() {
+        assertTrue("服务缺少进程恢复 Job", service.contains("recoveryJob"))
+        assertTrue("空闲判断前必须等待恢复事务", service.contains("recoveryJob?.join()"))
+        val recoveryBlock = service.substringAfter("recoveryJob = serviceScope.launch", "")
+            .substringBefore("startTaskMonitoringAfterRecovery()", "")
+        assertTrue("服务没有恢复进程死亡遗留的 AgentRun", recoveryBlock.contains("recoverInterruptedAgentRuns()"))
+    }
+
+    @Test
+    fun `ViewModel不得再次执行进程死亡恢复事务`() {
+        assertFalse(
+            "恢复入口必须统一归 Service 和 Worker，ViewModel 重建不能把当前进程任务误标为中断",
+            viewModel.contains("recoverInterruptedAgentRuns()"),
+        )
+    }
+
+    @Test
+    fun `Room变更和网络恢复必须立即触发对账`() {
+        assertTrue("服务必须观察 AgentRun 的 Room Flow", service.contains("agentDao.observeServiceRuns()"))
+        assertTrue("服务必须观察 Execution 的 Room Flow", service.contains("computerDao.observeExecutionChanges()"))
+        assertTrue("两个 Room 信号必须合并到同一对账入口", service.contains("combine("))
+        assertTrue("网络恢复必须立即触发对账", service.contains("onAvailable") && service.contains("network_available"))
+        assertFalse("禁止恢复三秒数据库轮询", service.contains("delay(3_000L)"))
+    }
+
+    @Test
+    fun `WorkManager只能修复状态并唤醒前台服务`() {
+        assertTrue(worker.contains("recoverInterruptedAgentRuns()"))
+        assertTrue(worker.contains("ComputerConnectionServiceController.resumeActiveTasks"))
+        assertTrue(worker.contains("Result.success()"))
+        assertTrue(worker.contains("BackoffPolicy.EXPONENTIAL"))
+        assertFalse("Worker 禁止直接执行模型循环", workerCode.contains("AgentLoop("))
+        assertFalse("Worker 禁止直接恢复协调器", workerCode.contains("AgentRunCoordinator"))
+    }
+
+    @Test
+    fun `工具结果落库中断必须走账本恢复不能直接模型续写`() {
+        assertFalse(
+            "PERSISTING_RESULT 不能再归到模型流恢复 SQL",
+            agentDao.contains("'WAITING_MODEL', 'STREAMING_MODEL', 'PERSISTING_RESULT'"),
+        )
+        assertTrue(
+            "PERSISTING_RESULT 必须归到工具中断恢复 SQL",
+            agentDao.contains("'CHECKING_PERMISSION', 'EXECUTING_TOOL', 'PERSISTING_RESULT'"),
+        )
+        assertTrue(service.contains("resumeInterruptedToolRuns()"))
+        assertTrue(coordinator.contains("resumableApprovalRuns(computerDao)"))
     }
 
     @Test
@@ -145,11 +200,22 @@ class AgentBackgroundPlanServiceContractTest {
     }
 
     @Test
-    fun `后台监听不能设置十分钟或六十分钟硬停止`() {
-        assertFalse(service.contains("10 * 60"))
-        assertFalse(service.contains("60 * 60"))
-        assertFalse(service.contains("600_000"))
-        assertFalse(service.contains("3_600_000"))
+    fun `WakeLock必须有界续期并在全部退出路径释放`() {
+        assertTrue("WakeLock 必须使用有界 acquire", service.contains("wakeLock.acquire(WAKE_LOCK_TIMEOUT_MILLIS)"))
+        assertTrue("WakeLock 必须在任务持续时续期", service.contains("WAKE_LOCK_RENEW_MILLIS"))
+        assertTrue("空闲和销毁路径必须统一释放 WakeLock", service.contains("updateWakeLock(false)"))
+        assertTrue("服务销毁必须释放 WakeLock", service.substringAfter("override fun onDestroy").contains("updateWakeLock(false)"))
+        assertFalse("任务生命周期禁止用 withTimeout 硬切断", service.contains("withTimeout("))
+    }
+
+    @Test
+    fun `用户停止必须等待AgentJob并封存请求再停服务`() {
+        val stopBranch = service.substringAfter("ACTION_STOP ->").substringBefore("ACTION_RESUME_RECOVERY")
+        assertTrue(stopBranch.contains("cancelAllActiveRuns()"))
+        assertTrue(stopBranch.indexOf("cancelAllActiveRuns()") < stopBranch.indexOf("stopSelf(startId)"))
+        assertTrue("协调器必须等待所有 Job 结束", coordinator.contains("jobs.forEach { job -> job.join() }"))
+        assertTrue("停止时必须封存开放请求", coordinator.contains("cancelOpenRequests(run.id, reason)"))
+        assertTrue("停止时必须把 Run 写成 CANCELLED", coordinator.contains("AgentRunStatus.CANCELLED"))
     }
 
     @Test

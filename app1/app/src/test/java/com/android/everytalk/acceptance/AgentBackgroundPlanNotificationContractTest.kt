@@ -10,7 +10,7 @@ import com.android.everytalk.service.agentNotificationElapsedText
 import com.android.everytalk.data.agent.AgentRunStatus
 import com.android.everytalk.util.AgentNotificationManager
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.After
 import org.junit.Before
@@ -24,13 +24,14 @@ import org.robolectric.annotation.Config
 import org.robolectric.Shadows.shadowOf
 import java.util.UUID
 
-/** 验证通知权限硬门槛和通知只承担状态展示、会话跳转。 */
+/** 验证通知只承担状态展示和会话跳转，不反向控制 Agent 生命周期。 */
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class AgentBackgroundPlanNotificationContractTest {
     private val serviceSource = AgentBackgroundPlanTestFiles.source("service/ComputerConnectionService.kt")
     private val sendFlow = AgentBackgroundPlanTestFiles.source("statecontroller/message/MessageSenderSendFlow.kt")
     private val toggleFlow = AgentBackgroundPlanTestFiles.source("statecontroller/viewmodel/AppViewModelActions.kt")
+    private val coordinator = AgentBackgroundPlanTestFiles.source("data/agent/AgentRunCoordinator.kt")
     private val allSources = AgentBackgroundPlanTestFiles.allProductionKotlin()
 
     @Before
@@ -155,17 +156,11 @@ class AgentBackgroundPlanNotificationContractTest {
     }
 
     @Test
-    fun `开启发送和模型恢复三个入口都必须调用统一权限门槛`() {
-        val gateName = listOf("canUseAgentNotifications", "isAgentNotificationAvailable", "requireAgentNotifications")
-            .firstOrNull { candidate -> allSources.any { it.second.contains(candidate) } }
-        assertNotNull("请建立一个统一通知门槛函数，禁止三个入口各写一套判断", gateName)
-        val marker = requireNotNull(gateName)
-        assertTrue("开启 Agent 前没有检查通知门槛", toggleFlow.contains(marker))
-        assertTrue("发送 Agent 消息前没有检查通知门槛", sendFlow.contains(marker))
-        val recoverySources = allSources
-            .filter { (_, text) -> text.contains("MODEL_CONTINUATION_PENDING") || text.contains("resumeActiveTasks") }
-            .joinToString("\n") { it.second }
-        assertTrue("模型恢复前没有检查通知门槛", recoverySources.contains(marker))
+    fun `通知权限不得阻断Agent开启发送和模型恢复`() {
+        val marker = "canPostAgentEventNotifications"
+        assertFalse("开启 Agent 仍被通知权限阻断", toggleFlow.contains(marker))
+        assertFalse("发送 Agent 消息仍被通知权限阻断", sendFlow.contains(marker))
+        assertFalse("模型恢复仍被通知权限阻断", coordinator.contains(marker))
     }
 
     @Test
@@ -218,12 +213,16 @@ class AgentBackgroundPlanNotificationContractTest {
     }
 
     @Test
-    fun `通知权限撤销后保留远端任务但暂停模型续写`() {
+    fun `通知权限撤销后保留远端任务并继续模型续写`() {
         val recoverySources = allSources
             .filter { (_, text) -> text.contains("MODEL_CONTINUATION_PENDING") }
             .joinToString("\n") { it.second }
-        assertTrue("权限不可用时必须保留 MODEL_CONTINUATION_PENDING", recoverySources.contains("notification") || recoverySources.contains("Notification"))
-        assertTrue("已有 VPS 任务不能因通知权限撤销而调用 cancel", !recoverySources.contains("cancelRemoteExecution"))
+        assertTrue("必须保留 MODEL_CONTINUATION_PENDING 恢复链路", recoverySources.contains("resumePendingContinuationRuns"))
+        assertFalse("模型续写不能依赖通知权限", coordinator.contains("canPostAgentEventNotifications"))
+        val permissionSources = allSources
+            .filter { (_, text) -> text.contains("POST_NOTIFICATIONS") }
+            .joinToString("\n") { it.second }
+        assertFalse("通知权限处理代码不得取消 VPS 任务", permissionSources.contains("cancelRemoteExecution"))
     }
 
     @Test

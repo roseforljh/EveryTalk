@@ -573,7 +573,7 @@
     <string name="chat_input_choose_agent_server">Choose Agent server</string>
     <string name="agent_server_picker_title">Agent server</string>
     <string name="agent_server_picker_description">Choose the server this conversation can use</string>
-    <string name="agent_notification_permission_required">Agent requires notification permission to track tasks in the background. Please grant it in Settings.</string>
+    <string name="agent_notification_permission_required">Enable notifications to receive Agent task updates. Agent tasks continue without this permission.</string>
     <string name="agent_server_picker_empty">No servers yet. Add one from Settings › Servers.</string>
     <string name="agent_server_ready">Ready</string>
     <string name="agent_server_offline">Offline</string>
