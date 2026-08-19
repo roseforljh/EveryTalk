@@ -241,7 +241,7 @@ fun ChatInputArea(
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) {
-        // 权限结果返回后再继续原动作。即使用户拒绝，也交给统一开关检查显示原因并触发失败回调。
+        // 权限只控制结果提醒。即使用户拒绝，Agent 仍继续开启和执行。
         pendingNotificationPermissionAction?.let(::performAgentAction)
         pendingNotificationPermissionAction = null
     }

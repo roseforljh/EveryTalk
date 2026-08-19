@@ -59,7 +59,7 @@ class ChatInputAgentInteractionTest {
         val actionsSource = viewModelActionsSource().readText(Charsets.UTF_8)
         val selectionFlow = actionsSource.substringAfter("internal fun AppViewModel.selectComputerForCurrentConversation(")
             .substringBefore("internal fun AppViewModel.respondToAgentEnableApproval(")
-        assertTrue(selectionFlow.contains("canUseAgentNotifications"))
+        assertFalse(selectionFlow.contains("canPostAgentEventNotifications"))
         assertTrue(selectionFlow.contains("onFailure?.invoke()"))
     }
 

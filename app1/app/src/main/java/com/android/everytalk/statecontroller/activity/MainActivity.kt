@@ -877,6 +877,7 @@ class MainActivity : AppCompatActivity() {
        }
        if (this::appViewModel.isInitialized) {
            appViewModel.retryPendingAiContentReports()
+           appViewModel.reconcileVisibleAgentState()
        }
    }
 

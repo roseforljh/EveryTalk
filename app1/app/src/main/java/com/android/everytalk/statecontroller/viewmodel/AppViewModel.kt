@@ -227,7 +227,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                      },
              )
 
-    val simpleModeManager = SimpleModeManager(stateHolder, historyManager, viewModelScope)
+    val simpleModeManager = SimpleModeManager(
+        stateHolder = stateHolder,
+        historyManager = historyManager,
+        scope = viewModelScope,
+        onTextHistoryLoaded = { apiHandler.restoreVisibleAgentState() },
+    )
 
     // MCP Manager
     val mcpManager = McpManager(application.applicationContext)
@@ -710,7 +715,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
           viewModelScope.launch(Dispatchers.IO) {
               computerManager.awaitLocalRecovery()
               val agentDao = AppDatabase.getDatabase(getApplication()).agentDao()
-              agentDao.recoverInterruptedAgentRuns()
               val recoverableConversationIds = mutableSetOf<String>().apply {
                   stateHolder._currentConversationId.value.takeIf(String::isNotBlank)?.let(::add)
                   agentDao.getWaitingRemoteExecutionRuns().forEach { run -> add(run.sessionId) }
@@ -735,6 +739,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                   )
               }
               apiHandler.restorePendingAgentApproval()
+              apiHandler.restoreVisibleAgentState()
               // 启动后台服务以恢复并监听持久化活动任务，避免在 ViewModel 中无限轮询
               com.android.everytalk.service.ComputerConnectionServiceController.resumeActiveTasks(getApplication())
           }

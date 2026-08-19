@@ -1,6 +1,7 @@
 package com.android.everytalk.statecontroller
 
 import com.android.everytalk.data.network.AppStreamEvent
+import com.android.everytalk.data.agent.AgentRunStatus
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -51,5 +52,14 @@ class ApiHandlerApprovalUiStateTest {
         assertFalse(shouldKeepResumedAgentUiActive(AppStreamEvent.Finish("stop")))
         assertFalse(shouldKeepResumedAgentUiActive(AppStreamEvent.StreamEnd("message-1")))
         assertFalse(shouldKeepResumedAgentUiActive(AppStreamEvent.Error("永久失败")))
+    }
+
+    @Test
+    fun `Room恢复状态只让未结束Run占用界面`() {
+        assertTrue(isActiveAgentUiStatus(AgentRunStatus.WAITING_REMOTE_EXECUTION))
+        assertTrue(isActiveAgentUiStatus(AgentRunStatus.MODEL_CONTINUATION_PENDING))
+        assertFalse(isActiveAgentUiStatus(AgentRunStatus.INTERRUPTED))
+        assertFalse(isActiveAgentUiStatus(AgentRunStatus.COMPLETED))
+        assertTrue(restoredAgentExecutionStatus(AgentRunStatus.MODEL_CONTINUATION_PENDING)?.contains("恢复") == true)
     }
 }

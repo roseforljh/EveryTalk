@@ -3,12 +3,11 @@ package com.android.everytalk.statecontroller
 
 import com.android.everytalk.data.agent.AgentTerminalReasons
 
-import com.android.everytalk.util.AgentNotificationManager.canUseAgentNotifications
-
 import android.content.Context
 import com.android.everytalk.R
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.ContextUsageSnapshot
 import com.android.everytalk.data.DataClass.ContextCompressionState
@@ -105,6 +104,25 @@ internal fun shouldKeepResumedAgentUiActive(event: AppStreamEvent): Boolean = wh
     is AppStreamEvent.Error -> event.type == "retryable_network" || event.code == "connection_aborted"
     else -> true
 }
+
+/** Room 中的 Run 状态投影成用户能看懂的页面状态。 */
+internal fun restoredAgentExecutionStatus(status: AgentRunStatus): String? = when (status) {
+    AgentRunStatus.WAITING_APPROVAL -> "等待确认"
+    AgentRunStatus.WAITING_REMOTE_EXECUTION -> "正在恢复远端任务"
+    AgentRunStatus.MODEL_CONTINUATION_PENDING -> "正在恢复回复..."
+    AgentRunStatus.INTERRUPTED -> "等待恢复确认"
+    AgentRunStatus.COMPLETED -> null
+    AgentRunStatus.FAILED -> "任务失败"
+    AgentRunStatus.CANCELLED -> "任务已取消"
+    else -> "正在继续任务"
+}
+
+internal fun isActiveAgentUiStatus(status: AgentRunStatus): Boolean = status !in setOf(
+    AgentRunStatus.COMPLETED,
+    AgentRunStatus.FAILED,
+    AgentRunStatus.CANCELLED,
+    AgentRunStatus.INTERRUPTED,
+)
 
 internal fun mergeStreamingCompletionMessage(syncedMessage: Message, finalizedMessage: Message): Message {
     val syncedThinkExtraction = extractThinkTagContent(syncedMessage.text)
@@ -336,6 +354,7 @@ class ApiHandler(
                     processStreamEvent(event, messageId, isImageGeneration = false)
                 } finally {
                     if (!keepUiActive) {
+                        restoreVisibleAgentState()
                         withContext(Dispatchers.Main.immediate) {
                             stateHolder.detachTextAgentUi(messageId)
                         }
@@ -361,6 +380,53 @@ class ApiHandler(
             resumePendingContinuationRuns()
         }
         refreshPendingAgentApprovals()
+    }
+
+    /**
+     * 页面或进程重建后，以 Room 中的 AgentRun 和 AgentEntry 为准恢复当前会话。
+     * SharedFlow 只负责实时增量，缺席期间丢掉的事件由这里补齐。
+     */
+    suspend fun restoreVisibleAgentState() {
+        val sessionId = withContext(Dispatchers.Main.immediate) {
+            stateHolder._currentConversationId.value
+        }.takeIf(String::isNotBlank) ?: return
+        val visibleMessageIds = withContext(Dispatchers.Main.immediate) {
+            stateHolder.messages.mapTo(hashSetOf()) { it.id }
+        }
+        if (visibleMessageIds.isEmpty()) return
+        val projections = agentRunStore.getRunsForSession(sessionId)
+            .filter { run -> run.visibleAssistantMessageId in visibleMessageIds }
+            .map { run ->
+                val status = runCatching { AgentRunStatus.valueOf(run.status) }.getOrNull()
+                Triple(run, status, agentRunStore.executionTrace(run.id))
+            }
+
+        withContext(Dispatchers.Main.immediate) {
+            projections.forEach { (run, status, trace) ->
+                if (status == null) return@forEach
+                val index = stateHolder.messages.indexOfFirst { it.id == run.visibleAssistantMessageId }
+                if (index < 0) return@forEach
+                val current = stateHolder.messages[index]
+                val restoredText = trace.filterIsInstance<ExecutionTraceEvent.Content>()
+                    .joinToString(separator = "") { it.text }
+                val restoredReasoning = trace.filterIsInstance<ExecutionTraceEvent.Reasoning>()
+                    .joinToString(separator = "") { it.text }
+                stateHolder.messages[index] = current.copy(
+                    text = current.text.ifBlank { restoredText },
+                    reasoning = current.reasoning?.takeIf(String::isNotBlank)
+                        ?: restoredReasoning.takeIf(String::isNotBlank),
+                    contentStarted = current.contentStarted || restoredText.isNotBlank(),
+                    executionStatus = restoredAgentExecutionStatus(status),
+                    executionTrace = trace.ifEmpty { current.executionTrace },
+                    executionFinishedAt = run.updatedAt.takeIf { !isActiveAgentUiStatus(status) },
+                )
+            }
+            projections.asSequence()
+                .filter { (_, status, _) -> status?.let(::isActiveAgentUiStatus) == true }
+                .maxByOrNull { (run, _, _) -> run.updatedAt }
+                ?.first
+                ?.let { run -> stateHolder.attachTextAgentUi(run.visibleAssistantMessageId) }
+        }
     }
 
     /** 扫描并调度 MODEL_CONTINUATION_PENDING 状态的 AgentRun 进行模型续写。 */

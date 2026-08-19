@@ -26,7 +26,8 @@ import kotlinx.coroutines.launch
 class SimpleModeManager(
     private val stateHolder: ViewModelStateHolder,
     private val historyManager: HistoryManager,
-    private val scope: CoroutineScope
+    private val scope: CoroutineScope,
+    private val onTextHistoryLoaded: suspend () -> Unit = {},
 ) {
     private val TAG = "SimpleModeManager"
     
@@ -400,7 +401,8 @@ class SimpleModeManager(
             stateHolder.isTextConversationDirty.value = false
         
         Log.d(TAG, "🔥 [END] Loaded TEXT history successfully: ${conversationToLoad.size} messages")
-    }
+        }
+        onTextHistoryLoaded()
     }
     
     /**

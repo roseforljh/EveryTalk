@@ -1,7 +1,5 @@
 package com.android.everytalk.statecontroller
 
-import com.android.everytalk.util.AgentNotificationManager.canUseAgentNotifications
-
 import android.app.Application
 import android.util.Log
 import androidx.annotation.Keep
@@ -512,11 +510,6 @@ import java.util.TimeZone
             return true
         }
 
-        if (!canUseAgentNotifications(getApplication())) {
-            showSnackbar("Agent 需要通知权限以在后台继续运行并提醒结果")
-            return false
-        }
-
         if (!computerManager.supportsToolCalls(stateHolder._selectedApiConfig.value)) {
             showSnackbar("当前模型不支持 Agent Tool Call")
             return false
@@ -578,11 +571,6 @@ import java.util.TimeZone
     ) {
         val generation = stateHolder.agentActionGeneration.incrementAndGet()
         val shouldPrepareWorkspace = stateHolder._isAgentEnabled.value || enableAgentAfterSelection
-        if (enableAgentAfterSelection && !canUseAgentNotifications(getApplication())) {
-            showSnackbar("Agent 需要通知权限以在后台继续运行并提醒结果")
-            onFailure?.invoke()
-            return
-        }
         if (enableAgentAfterSelection && !computerManager.supportsToolCalls(stateHolder._selectedApiConfig.value)) {
             showSnackbar("当前模型不支持 Agent Tool Call")
             onFailure?.invoke()
@@ -898,6 +886,14 @@ import java.util.TimeZone
     internal fun AppViewModel.retryPendingAiContentReports() {
         viewModelScope.launch(Dispatchers.IO) {
             aiContentReportRepository.retryPendingReports()
+        }
+    }
+
+    /** App 回到前台时从 Room 对账，补齐页面缺席期间的 Agent 结果。 */
+    internal fun AppViewModel.reconcileVisibleAgentState() {
+        viewModelScope.launch(Dispatchers.IO) {
+            apiHandler.restoreVisibleAgentState()
+            apiHandler.restorePendingAgentApproval()
         }
     }
 
