@@ -134,6 +134,27 @@ class RoomDataSourceBatchHistoryTest {
     }
 
     @Test
+    fun `轻量历史快照回滚时保留旧正文并删除新增会话`() = runBlocking {
+        val original = Message(
+            id = "rollback-original",
+            text = "旧正文",
+            sender = Sender.AI,
+            reasoning = "旧思考",
+        )
+        dataSource.saveChatHistory(listOf(listOf(original)))
+        val lightweightBackup = dataSource.loadChatHistoryPreviewResult().sessions.map { it.messages }
+
+        val imported = Message(id = "rollback-imported", text = "导入正文", sender = Sender.User)
+        dataSource.saveChatHistory(lightweightBackup + listOf(listOf(imported)))
+        assertEquals("导入正文", dataSource.loadHistorySession("rollback-imported")!!.single().text)
+
+        dataSource.saveChatHistory(lightweightBackup)
+
+        assertEquals("旧思考", dataSource.loadHistorySession("rollback-original")!!.single().reasoning)
+        assertEquals(null, dataSource.loadHistorySession("rollback-imported"))
+    }
+
+    @Test
     fun `重命名只更新会话元数据且后续保存保留标题`() = runBlocking {
         val original = Message(id = "renamed-session", text = "问题", sender = Sender.User)
         dataSource.saveChatHistory(listOf(listOf(original)))

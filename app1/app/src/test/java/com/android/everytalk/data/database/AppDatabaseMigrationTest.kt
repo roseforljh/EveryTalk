@@ -966,6 +966,182 @@ class AppDatabaseMigrationTest {
         migrateHelper.close()
     }
 
+    @Test
+    fun `migration 26 to 27 adds recovery indexes without changing data`() {
+        val createHelper = openHelper(
+            version = 26,
+            onCreate = { db ->
+                db.execSQL(
+                    "CREATE TABLE agent_runs (id TEXT NOT NULL PRIMARY KEY, sessionId TEXT NOT NULL, " +
+                        "status TEXT NOT NULL, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL)",
+                )
+                db.execSQL("CREATE INDEX index_agent_runs_sessionId ON agent_runs(sessionId)")
+                db.execSQL("CREATE INDEX index_agent_runs_status ON agent_runs(status)")
+                db.execSQL(
+                    "CREATE TABLE computer_workspaces (id TEXT NOT NULL PRIMARY KEY, computerId TEXT NOT NULL, " +
+                        "conversationId TEXT NOT NULL, lastUsedAt INTEGER NOT NULL)",
+                )
+                db.execSQL("CREATE INDEX index_computer_workspaces_computerId ON computer_workspaces(computerId)")
+                db.execSQL(
+                    "CREATE TABLE computer_executions (id TEXT NOT NULL PRIMARY KEY, toolName TEXT NOT NULL, " +
+                        "remoteStatus TEXT, status TEXT NOT NULL, finishedAt INTEGER)",
+                )
+                db.execSQL(
+                    "CREATE TABLE computer_previews (id TEXT NOT NULL PRIMARY KEY, workspaceId TEXT NOT NULL, " +
+                        "visibility TEXT NOT NULL, status TEXT NOT NULL, createdAt INTEGER NOT NULL, expiresAt INTEGER)",
+                )
+                db.execSQL("CREATE INDEX index_computer_previews_workspaceId ON computer_previews(workspaceId)")
+                db.execSQL("INSERT INTO agent_runs VALUES ('run-1', 'chat-1', 'WAITING_APPROVAL', 1, 2)")
+            },
+        )
+        createHelper.writableDatabase.close()
+        createHelper.close()
+
+        val migrateHelper = openHelper(
+            version = 27,
+            onUpgrade = { db, oldVersion, newVersion ->
+                assertEquals(26, oldVersion)
+                assertEquals(27, newVersion)
+                AppDatabase.MIGRATION_26_27.migrate(db)
+            },
+        )
+        val db = migrateHelper.writableDatabase
+        val indexes = mutableSetOf<String>()
+        db.query("SELECT name FROM sqlite_master WHERE type = 'index'").use { cursor ->
+            while (cursor.moveToNext()) indexes += cursor.getString(0)
+        }
+
+        assertFalse("index_agent_runs_sessionId" in indexes)
+        assertFalse("index_agent_runs_status" in indexes)
+        assertFalse("index_computer_workspaces_computerId" in indexes)
+        assertFalse("index_computer_previews_workspaceId" in indexes)
+        listOf(
+            "index_agent_runs_sessionId_createdAt",
+            "index_agent_runs_status_updatedAt",
+            "index_computer_workspaces_conversationId",
+            "index_computer_workspaces_computerId_lastUsedAt",
+            "index_computer_executions_toolName_remoteStatus_status",
+            "index_computer_executions_status_finishedAt",
+            "index_computer_previews_visibility_status_expiresAt",
+            "index_computer_previews_workspaceId_createdAt",
+        ).forEach { index -> assertTrue("缺少索引：$index", index in indexes) }
+        val queryPlans = listOf(
+            "SELECT * FROM agent_runs WHERE status = 'WAITING_APPROVAL' ORDER BY updatedAt DESC" to
+                "index_agent_runs_status_updatedAt",
+            "SELECT * FROM computer_workspaces WHERE conversationId = 'chat-1'" to
+                "index_computer_workspaces_conversationId",
+            "SELECT * FROM computer_workspaces WHERE computerId = 'computer-1' ORDER BY lastUsedAt DESC" to
+                "index_computer_workspaces_computerId_lastUsedAt",
+            "SELECT * FROM computer_executions WHERE status = 'UNKNOWN' ORDER BY finishedAt ASC" to
+                "index_computer_executions_status_finishedAt",
+            "SELECT * FROM computer_previews WHERE visibility = 'PUBLIC' AND status = 'ACTIVE' " +
+                "AND expiresAt <= 3" to "index_computer_previews_visibility_status_expiresAt",
+            "SELECT * FROM computer_previews WHERE workspaceId = 'workspace-1' ORDER BY createdAt DESC" to
+                "index_computer_previews_workspaceId_createdAt",
+        )
+        queryPlans.forEach { (query, expectedIndex) ->
+            val plan = db.query("EXPLAIN QUERY PLAN $query").use { cursor ->
+                buildString {
+                    while (cursor.moveToNext()) append(cursor.getString(3))
+                }
+            }
+            assertTrue("查询没有使用索引 $expectedIndex：$plan", expectedIndex in plan)
+        }
+        db.query("SELECT COUNT(*) FROM agent_runs WHERE id = 'run-1'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(1, cursor.getInt(0))
+        }
+
+        db.close()
+        migrateHelper.close()
+    }
+
+    @Test
+    fun `migration 27 to 28 removes obsolete recovery snapshots and compacts database`() {
+        val largeSnapshot = "x".repeat(4_000_000)
+        val createHelper = openHelper(
+            version = 27,
+            onCreate = { db ->
+                db.execSQL(
+                    """
+                    CREATE TABLE agent_runs (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        visibleAssistantMessageId TEXT NOT NULL,
+                        requestSnapshotJson TEXT,
+                        status TEXT NOT NULL,
+                        terminalReason TEXT
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE TABLE messages (id TEXT NOT NULL PRIMARY KEY, isError INTEGER NOT NULL, executionFinishedAt INTEGER)",
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE agent_run_snapshot_chunks (
+                        runId TEXT NOT NULL,
+                        chunkIndex INTEGER NOT NULL,
+                        payload TEXT NOT NULL,
+                        PRIMARY KEY(runId, chunkIndex)
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE TABLE system_settings (`key` TEXT NOT NULL PRIMARY KEY, value TEXT NOT NULL)")
+                db.execSQL("INSERT INTO messages VALUES ('message-terminal', 0, 2)")
+                db.execSQL("INSERT INTO messages VALUES ('message-active', 0, NULL)")
+                db.execSQL(
+                    "INSERT INTO agent_runs VALUES ('run-terminal', 'message-terminal', NULL, 'COMPLETED', NULL)",
+                )
+                db.execSQL(
+                    "INSERT INTO agent_runs VALUES ('run-active', 'message-active', NULL, 'STREAMING_MODEL', NULL)",
+                )
+                db.execSQL(
+                    "INSERT INTO agent_run_snapshot_chunks VALUES ('run-terminal', 0, ?)",
+                    arrayOf<Any>(largeSnapshot),
+                )
+                db.execSQL(
+                    "INSERT INTO agent_run_snapshot_chunks VALUES ('run-active', 0, ?)",
+                    arrayOf<Any>(largeSnapshot),
+                )
+            },
+        )
+        createHelper.writableDatabase.apply {
+            // 改变 auto_vacuum 必须配合 VACUUM，模拟真机旧数据库没有自动回收的状态。
+            execSQL("PRAGMA auto_vacuum = NONE")
+            execSQL("VACUUM")
+            close()
+        }
+        createHelper.close()
+
+        val migrateHelper = openHelper(
+            version = 28,
+            onUpgrade = { db, oldVersion, newVersion ->
+                assertEquals(27, oldVersion)
+                assertEquals(28, newVersion)
+                AppDatabase.MIGRATION_27_28.migrate(db)
+            },
+        )
+        val db = migrateHelper.writableDatabase
+        val beforeCompaction = context.getDatabasePath(TEST_DB).length()
+
+        db.query("SELECT runId FROM agent_run_snapshot_chunks ORDER BY runId").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("run-active", cursor.getString(0))
+            assertFalse(cursor.moveToNext())
+        }
+        AppDatabase.compactIfPending(db)
+        val afterCompaction = context.getDatabasePath(TEST_DB).length()
+
+        assertTrue("压缩前=$beforeCompaction 压缩后=$afterCompaction", afterCompaction < beforeCompaction)
+        db.query("SELECT COUNT(*) FROM system_settings WHERE `key` = 'database_compaction_v28_pending'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals(0, cursor.getInt(0))
+        }
+
+        db.close()
+        migrateHelper.close()
+    }
+
     private fun openHelper(
         version: Int,
         onCreate: (SupportSQLiteDatabase) -> Unit = {},

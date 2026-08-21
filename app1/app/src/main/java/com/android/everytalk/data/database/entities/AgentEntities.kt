@@ -16,9 +16,9 @@ import androidx.room.PrimaryKey
         )
     ],
     indices = [
-        Index("sessionId"),
+        Index(value = ["sessionId", "createdAt"]),
         Index(value = ["visibleAssistantMessageId"], unique = true),
-        Index("status"),
+        Index(value = ["status", "updatedAt"]),
     ],
 )
 data class AgentRunEntity(

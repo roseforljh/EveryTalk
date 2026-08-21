@@ -154,6 +154,48 @@ internal data class InlineImageMigrationResult(
     val persistedSources: Set<String> = emptySet(),
 )
 
+internal data class AttachmentPayloadMigrationResult(
+    val messages: List<Message>,
+    val changed: Boolean,
+    val persistedSources: Set<String> = emptySet(),
+)
+
+/**
+ * 把旧消息附件中的 Base64 迁移到文件。
+ * 持久化失败时保留原附件，避免因为性能迁移丢失用户数据。
+ */
+internal suspend fun migrateLegacyAttachmentPayloads(
+    messages: List<Message>,
+    persistBitmap: suspend (SelectedMediaItem.ImageFromBitmap, messageId: String, index: Int) -> String?,
+    persistAudio: suspend (SelectedMediaItem.Audio, messageId: String, index: Int) -> String?,
+): AttachmentPayloadMigrationResult {
+    var changed = false
+    val createdSources = linkedSetOf<String>()
+    val migrated = messages.map { message ->
+        val attachments = message.attachments.mapIndexed { index, attachment ->
+            when {
+                attachment is SelectedMediaItem.ImageFromBitmap && attachment.bitmapData.isNotBlank() -> {
+                    val path = persistBitmap(attachment, message.id, index)
+                    if (path == null) attachment else attachment.copy(bitmapData = "", filePath = path).also {
+                        changed = true
+                        if (path != attachment.filePath) createdSources += path
+                    }
+                }
+                attachment is SelectedMediaItem.Audio && attachment.data.isNotBlank() -> {
+                    val path = persistAudio(attachment, message.id, index)
+                    if (path == null) attachment else attachment.copy(data = "", filePath = path).also {
+                        changed = true
+                        if (path != attachment.filePath) createdSources += path
+                    }
+                }
+                else -> attachment
+            }
+        }
+        if (attachments == message.attachments) message else message.copy(attachments = attachments)
+    }
+    return AttachmentPayloadMigrationResult(migrated, changed, createdSources)
+}
+
 internal fun collectReferencedAttachmentPaths(messages: Iterable<Message>): Set<String> = buildSet {
     fun addLocalPath(source: String?) {
         source?.let(::mediaSourceToLocalPath)
@@ -673,35 +715,57 @@ class DataPersistenceManager(
     /** 打开、分享时按会话读取完整消息，启动阶段不调用。 */
     suspend fun loadHistorySession(sessionId: String): List<Message>? = withContext(Dispatchers.IO) {
         val original = roomDataSource.loadHistorySession(sessionId) ?: return@withContext null
-        var changed = false
-        val migrated = original.map { message ->
-            var attachmentChanged = false
-            val attachments = message.attachments.mapIndexed { index, attachment ->
-                if (attachment !is SelectedMediaItem.Audio || attachment.data.isBlank()) return@mapIndexed attachment
-                val existingPath = attachment.filePath
+        val inlineImages = migrateConversationInlineImages(
+            messages = original,
+            persistSource = ::persistGeneratedImagePath,
+            deletePersistedSource = ::deleteMigratedImageFile,
+        )
+        val messagesAfterInlineMigration = if (inlineImages.failed) original else inlineImages.messages
+        val payloads = migrateLegacyAttachmentPayloads(
+            messages = messagesAfterInlineMigration,
+            persistBitmap = { attachment, messageId, index ->
+                attachment.filePath
                     ?.let(::File)
                     ?.takeIf { it.isFile && it.length() > 0L }
                     ?.absolutePath
-                val path = existingPath ?: fileManager.persistBase64Attachment(
-                    base64Data = attachment.data,
-                    mimeType = attachment.mimeType,
-                    messageIdHint = message.id,
-                    attachmentIndex = index,
-                )
-                if (path == null) attachment else attachment.copy(data = "", filePath = path).also {
-                    attachmentChanged = true
-                }
-            }
-            if (attachmentChanged) {
-                changed = true
-                message.copy(attachments = attachments)
-            } else {
-                message
-            }
-        }
+                    ?: imagePersistenceService.persistEncodedUserImage(
+                        base64Data = attachment.bitmapData,
+                        declaredMimeType = attachment.mimeType,
+                        messageIdHint = messageId,
+                        attachmentIndex = index,
+                    ).pathOrNull()
+            },
+            persistAudio = { attachment, messageId, index ->
+                attachment.filePath
+                    ?.let(::File)
+                    ?.takeIf { it.isFile && it.length() > 0L }
+                    ?.absolutePath
+                    ?: fileManager.persistBase64Attachment(
+                        base64Data = attachment.data,
+                        mimeType = attachment.mimeType,
+                        messageIdHint = messageId,
+                        attachmentIndex = index,
+                    )
+            },
+        )
+        val migrated = payloads.messages
+        val changed = inlineImages.changed || payloads.changed
         if (changed) {
             val isImageGeneration = roomDataSource.isImageGenerationSession(sessionId)
-            roomDataSource.saveLoadedHistorySession(sessionId, migrated, isImageGeneration)
+            try {
+                roomDataSource.saveLoadedHistorySession(sessionId, migrated, isImageGeneration)
+            } catch (exception: CancellationException) {
+                (inlineImages.persistedSources + payloads.persistedSources).forEach(::deleteMigratedImageFile)
+                throw exception
+            } catch (exception: Exception) {
+                // 文件迁移只是性能优化。数据库回写失败时恢复原消息，页面仍然可以正常打开。
+                (inlineImages.persistedSources + payloads.persistedSources).forEach(::deleteMigratedImageFile)
+                Log.w(
+                    TAG,
+                    "History attachment migration writeback failed: sessionId=$sessionId, type=${exception::class.simpleName}",
+                )
+                return@withContext original
+            }
         }
         migrated
     }

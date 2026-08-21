@@ -65,8 +65,9 @@ data class ComputerEntity(
         ),
     ],
     indices = [
-        Index(value = ["computerId"]),
+        Index(value = ["computerId", "lastUsedAt"]),
         Index(value = ["computerId", "conversationId"], unique = true),
+        Index(value = ["conversationId"]),
     ],
 )
 data class ComputerWorkspaceEntity(
@@ -121,6 +122,8 @@ data class ConversationComputerSelectionEntity(
         Index(value = ["workspaceId"]),
         Index(value = ["toolCallId"], unique = true),
         Index(value = ["runId"]),
+        Index(value = ["toolName", "remoteStatus", "status"]),
+        Index(value = ["status", "finishedAt"]),
     ],
 )
 data class ComputerExecutionEntity(
@@ -176,7 +179,10 @@ data class ComputerExecutionEntity(
             onDelete = ForeignKey.CASCADE,
         ),
     ],
-    indices = [Index(value = ["workspaceId"])],
+    indices = [
+        Index(value = ["workspaceId", "createdAt"]),
+        Index(value = ["visibility", "status", "expiresAt"]),
+    ],
 )
 data class ComputerPreviewEntity(
     @PrimaryKey val id: String,

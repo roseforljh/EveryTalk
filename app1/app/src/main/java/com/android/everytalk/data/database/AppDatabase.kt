@@ -1,6 +1,7 @@
 package com.android.everytalk.data.database
 
 import android.content.Context
+import android.util.Log
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
@@ -71,7 +72,7 @@ import com.android.everytalk.data.database.entities.WorkspaceSecretMetadataEntit
         SkillInstallationEntity::class,
         SkillVersionEntity::class,
     ],
-    version = 26,
+    version = 28,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -124,7 +125,10 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_23_24,
                     MIGRATION_24_25,
                     MIGRATION_25_26,
+                    MIGRATION_26_27,
+                    MIGRATION_27_28,
                 )
+                .addCallback(DATABASE_MAINTENANCE_CALLBACK)
                 .build()
                 INSTANCE = instance
                 instance
@@ -881,6 +885,120 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * 为 Agent 恢复排序、会话 Workspace 反查和 Computer 活动任务扫描补联合索引。
+         * 本次只创建索引，不重写表和用户数据。
+         */
+        val MIGRATION_26_27 = object : Migration(26, 27) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("DROP INDEX IF EXISTS index_agent_runs_sessionId")
+                db.execSQL("DROP INDEX IF EXISTS index_agent_runs_status")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_agent_runs_sessionId_createdAt " +
+                        "ON agent_runs(sessionId, createdAt)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_agent_runs_status_updatedAt " +
+                        "ON agent_runs(status, updatedAt)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_computer_workspaces_conversationId " +
+                        "ON computer_workspaces(conversationId)",
+                )
+                db.execSQL("DROP INDEX IF EXISTS index_computer_workspaces_computerId")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_computer_workspaces_computerId_lastUsedAt " +
+                        "ON computer_workspaces(computerId, lastUsedAt)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_computer_executions_toolName_remoteStatus_status " +
+                        "ON computer_executions(toolName, remoteStatus, status)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_computer_executions_status_finishedAt " +
+                        "ON computer_executions(status, finishedAt)",
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_computer_previews_visibility_status_expiresAt " +
+                        "ON computer_previews(visibility, status, expiresAt)",
+                )
+                db.execSQL("DROP INDEX IF EXISTS index_computer_previews_workspaceId")
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_computer_previews_workspaceId_createdAt " +
+                        "ON computer_previews(workspaceId, createdAt)",
+                )
+            }
+        }
+
+        /**
+         * 已结束的 AgentRun 不再需要请求恢复快照。
+         *
+         * 旧版本长期保留整份请求上下文，少量会话也能把数据库撑到上百 MB。
+         * 迁移先删除无恢复价值的快照，再留下标记，由数据库打开回调在事务外执行 VACUUM。
+         */
+        val MIGRATION_27_28 = object : Migration(27, 28) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    DELETE FROM agent_run_snapshot_chunks
+                    WHERE runId IN (
+                        SELECT run.id
+                        FROM agent_runs AS run
+                        LEFT JOIN messages AS message ON message.id = run.visibleAssistantMessageId
+                        WHERE run.status IN ('COMPLETED', 'FAILED', 'CANCELLED')
+                           OR message.id IS NULL
+                           OR message.isError = 1
+                           OR message.executionFinishedAt IS NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    UPDATE agent_runs
+                    SET requestSnapshotJson = NULL
+                    WHERE status IN ('COMPLETED', 'FAILED', 'CANCELLED')
+                       OR visibleAssistantMessageId NOT IN (SELECT id FROM messages)
+                       OR visibleAssistantMessageId IN (
+                           SELECT id FROM messages
+                           WHERE isError = 1 OR executionFinishedAt IS NOT NULL
+                       )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "INSERT OR REPLACE INTO system_settings (`key`, value) VALUES ('$DATABASE_COMPACTION_KEY', '1')",
+                )
+            }
+        }
+
+        /**
+         * VACUUM 不能在 Room 迁移事务里执行，因此在数据库完成升级并打开后再压缩。
+         * 标记只在成功后删除；空间不足或系统中断时，下次启动会自动重试。
+         */
+        internal fun compactIfPending(db: SupportSQLiteDatabase) {
+            val pending = db.query(
+                "SELECT 1 FROM system_settings WHERE `key` = '$DATABASE_COMPACTION_KEY' LIMIT 1",
+            ).use { cursor -> cursor.moveToFirst() }
+            if (!pending) {
+                runCatching { db.execSQL("PRAGMA incremental_vacuum") }
+                return
+            }
+            runCatching {
+                db.query("PRAGMA wal_checkpoint(TRUNCATE)").use { cursor -> cursor.moveToFirst() }
+                db.execSQL("PRAGMA auto_vacuum = INCREMENTAL")
+                db.execSQL("VACUUM")
+                db.execSQL("DELETE FROM system_settings WHERE `key` = '$DATABASE_COMPACTION_KEY'")
+            }.onFailure { error ->
+                Log.w("AppDatabase", "Database compaction will retry on next open", error)
+            }
+        }
+
+        private val DATABASE_MAINTENANCE_CALLBACK = object : RoomDatabase.Callback() {
+            override fun onOpen(db: SupportSQLiteDatabase) {
+                compactIfPending(db)
+            }
+        }
+
         private const val AGENT_SNAPSHOT_CHUNK_CHARS = 65_536L
+        private const val DATABASE_COMPACTION_KEY = "database_compaction_v28_pending"
     }
 }

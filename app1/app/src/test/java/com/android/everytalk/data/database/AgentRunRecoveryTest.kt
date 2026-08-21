@@ -6,12 +6,17 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.android.everytalk.data.database.entities.AgentRequestEntity
 import com.android.everytalk.data.database.entities.AgentRunEntity
+import com.android.everytalk.data.database.entities.AgentRunSnapshotChunkEntity
 import com.android.everytalk.data.database.entities.ChatSessionEntity
 import com.android.everytalk.data.agent.AgentAssistantTurn
 import com.android.everytalk.data.agent.AgentContentBlock
 import com.android.everytalk.data.agent.AgentEntryStatus
+import com.android.everytalk.data.agent.AgentRunStatus
 import com.android.everytalk.data.agent.AgentRunStore
 import com.android.everytalk.data.DataClass.ExecutionTraceEvent
+import com.android.everytalk.data.DataClass.Message
+import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.data.database.entities.toEntity
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -39,6 +44,98 @@ class AgentRunRecoveryTest {
     @After
     fun tearDown() {
         database.close()
+    }
+
+    @Test
+    fun `消息已经报错的脏Run不得在冷启动时恢复`() = runBlocking {
+        val dao = database.agentDao()
+        val sessionId = "session-stale"
+        val assistantId = "assistant-stale"
+        val activeAssistantId = "assistant-active"
+        database.chatDao().insertSession(
+            ChatSessionEntity(sessionId, 1L, 1L, isImageGeneration = false),
+        )
+        database.chatDao().upsertMessages(
+            listOf(
+                Message(
+                    id = assistantId,
+                    text = "请求失败",
+                    sender = Sender.AI,
+                    isError = true,
+                    executionFinishedAt = 2L,
+                ).toEntity(sessionId),
+                Message(
+                    id = activeAssistantId,
+                    text = "正在回答",
+                    sender = Sender.AI,
+                ).toEntity(sessionId),
+            ),
+        )
+        dao.upsertRun(
+            AgentRunEntity(
+                id = "run-stale",
+                sessionId = sessionId,
+                userMessageId = "user-stale",
+                visibleAssistantMessageId = assistantId,
+                configIdSnapshot = "config-1",
+                requestSnapshotJson = "{}",
+                status = "MODEL_CONTINUATION_PENDING",
+                currentRequestOrdinal = 1,
+                terminalReason = "MODEL_CONTINUATION_PENDING",
+                createdAt = 1L,
+                updatedAt = 1L,
+            ),
+        )
+        dao.upsertRun(
+            AgentRunEntity(
+                id = "run-active",
+                sessionId = sessionId,
+                userMessageId = "user-active",
+                visibleAssistantMessageId = activeAssistantId,
+                configIdSnapshot = "config-1",
+                requestSnapshotJson = "{}",
+                status = "STREAMING_MODEL",
+                currentRequestOrdinal = 1,
+                terminalReason = null,
+                createdAt = 2L,
+                updatedAt = 2L,
+            ),
+        )
+
+        val cancelled = dao.cancelStaleVisibleMessageRuns("VISIBLE_MESSAGE_TERMINAL", 10L)
+
+        assertEquals(1, cancelled)
+        assertEquals("CANCELLED", dao.getRun("run-stale")?.status)
+        assertEquals(listOf("run-active"), dao.getActiveRuns().map { it.id })
+    }
+
+    @Test
+    fun `Run结束后立即释放恢复快照`() = runBlocking {
+        val dao = database.agentDao()
+        database.chatDao().insertSession(
+            ChatSessionEntity("session-finished", 1L, 1L, isImageGeneration = false),
+        )
+        val run = AgentRunEntity(
+            id = "run-finished",
+            sessionId = "session-finished",
+            userMessageId = "user-finished",
+            visibleAssistantMessageId = "assistant-finished",
+            configIdSnapshot = "config-1",
+            requestSnapshotJson = null,
+            status = "STREAMING_MODEL",
+            currentRequestOrdinal = 1,
+            terminalReason = null,
+            createdAt = 1L,
+            updatedAt = 1L,
+        )
+        dao.upsertRun(run)
+        dao.upsertRunSnapshotChunks(
+            listOf(AgentRunSnapshotChunkEntity(run.id, 0, "large recovery payload")),
+        )
+
+        AgentRunStore(dao).updateRunStatus(run, AgentRunStatus.COMPLETED)
+
+        assertTrue(dao.getRunSnapshotChunkPage(run.id, -1, 8).isEmpty())
     }
 
     @Test

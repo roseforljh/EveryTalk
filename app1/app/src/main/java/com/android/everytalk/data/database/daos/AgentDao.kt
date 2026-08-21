@@ -82,6 +82,60 @@ interface AgentDao {
     @Query("DELETE FROM agent_run_snapshot_chunks WHERE runId = :runId")
     suspend fun deleteRunSnapshotChunks(runId: String)
 
+    /**
+     * 清理消息已经结束、但 Run 仍停在活动状态的历史脏记录。
+     *
+     * 可见消息被删除、已经报错或已经写入结束时间时，都不能再次恢复对应 Run。
+     */
+    @Query(
+        """
+        UPDATE agent_runs
+        SET status = 'CANCELLED', terminalReason = :reason, updatedAt = :updatedAt
+        WHERE (
+            status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED')
+            OR (status = 'INTERRUPTED' AND terminalReason IN ('APP_PROCESS_RESTARTED', 'APPROVAL_DECIDED_PENDING_RESUME'))
+        )
+        AND (
+            NOT EXISTS (
+                SELECT 1 FROM messages
+                WHERE messages.id = agent_runs.visibleAssistantMessageId
+            )
+            OR EXISTS (
+                SELECT 1 FROM messages
+                WHERE messages.id = agent_runs.visibleAssistantMessageId
+                  AND (messages.isError = 1 OR messages.executionFinishedAt IS NOT NULL)
+            )
+        )
+        """
+    )
+    suspend fun markStaleVisibleMessageRunsCancelled(
+        reason: String,
+        updatedAt: Long,
+    ): Int
+
+    /** 恢复快照只服务于未结束 Run，终态后继续保留会造成数据库无限增长。 */
+    @Query(
+        """
+        DELETE FROM agent_run_snapshot_chunks
+        WHERE runId IN (
+            SELECT id FROM agent_runs
+            WHERE status IN ('COMPLETED', 'FAILED', 'CANCELLED')
+        )
+        """
+    )
+    suspend fun deleteTerminalRunSnapshotChunks(): Int
+
+    /** 标记脏 Run 与释放其恢复快照必须一起完成，避免下次启动继续占用磁盘。 */
+    @Transaction
+    suspend fun cancelStaleVisibleMessageRuns(
+        reason: String,
+        updatedAt: Long,
+    ): Int {
+        val changed = markStaleVisibleMessageRunsCancelled(reason, updatedAt)
+        if (changed > 0) deleteTerminalRunSnapshotChunks()
+        return changed
+    }
+
     @Query(
         """
         SELECT * FROM agent_runs
@@ -292,6 +346,7 @@ interface AgentDao {
         reason: String,
     ) {
         cancelSupersededApprovalRunsForSession(run.sessionId, reason, run.createdAt)
+        deleteTerminalRunSnapshotChunks()
         upsertRun(run)
         deleteRunSnapshotChunks(run.id)
         if (snapshotChunks.isNotEmpty()) upsertRunSnapshotChunks(snapshotChunks)
