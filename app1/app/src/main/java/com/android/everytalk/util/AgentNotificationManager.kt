@@ -23,8 +23,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 object AgentNotificationManager {
     const val CHANNEL_EVENTS_ID = "agent_events_channel"
     private val notifiedEvents = ConcurrentHashMap<String, Long>()
-    private val executionTerminalStates = ConcurrentHashMap<String, String>()
-    private val lostConnections = ConcurrentHashMap.newKeySet<String>()
+    private val executionTerminalStates = ConcurrentHashMap<String, TerminalEvent>()
+    private val lostConnections = ConcurrentHashMap<String, Long>()
     private val appInForeground = AtomicBoolean(false)
 
     /** 普通事件能否出现在通知栏，只影响提醒，不影响 Agent 和前台服务运行。 */
@@ -166,25 +166,27 @@ object AgentNotificationManager {
         if (!canPostAgentEventNotifications(context)) return
 
         val isTerminal = eventType == "SUCCEEDED" || eventType == "FAILED" || eventType == "CANCELLED" || eventType == "TIMED_OUT"
+        val now = System.currentTimeMillis()
 
         // 1. 同一 Execution 或 AgentRun 只接受第一个终态，丢弃重复终态和迟到过程事件。
+        trimOldEventState(now)
         val terminal = executionTerminalStates[executionId]
         if (terminal != null) return
 
         // 2. 从未通知断线时禁止单独发送重新连接通知
-        if (eventType == "RECONNECTED" && !lostConnections.contains(executionId)) {
+        if (eventType == "RECONNECTED" && !lostConnections.containsKey(executionId)) {
             return
         }
 
         if (eventType == "CONNECTION_LOST") {
             // 同一 Execution 的自动重试只允许发第一次断线通知，恢复前不再每分钟刷屏。
-            if (!lostConnections.add(executionId)) return
+            if (lostConnections.putIfAbsent(executionId, now) != null) return
         } else if (eventType == "RECONNECTED") {
             lostConnections.remove(executionId)
         }
 
         if (isTerminal) {
-            executionTerminalStates[executionId] = eventType
+            executionTerminalStates[executionId] = TerminalEvent(now)
             lostConnections.remove(executionId)
         }
 
@@ -192,7 +194,6 @@ object AgentNotificationManager {
         if (appInForeground.get()) return
 
         val dedupKey = "${executionId}_${eventType}"
-        val now = System.currentTimeMillis()
         val lastNotified = notifiedEvents[dedupKey] ?: 0L
         if (now - lastNotified < 60_000L) {
             return // dedup within 60s
@@ -234,4 +235,36 @@ object AgentNotificationManager {
         val notificationId = (executionId.hashCode().let { if (it < 0) -it else it } % 100000) + 10000
         manager.notify(notificationId, notification)
     }
+
+    /**
+     * 通知状态只负责拦截短期重复事件，不能永久保存所有历史任务 ID。
+     * 超过一天的终态已经没有再次到达过程事件的实际意义；数量异常增长时再保留最新记录。
+     */
+    private fun trimOldEventState(now: Long) {
+        executionTerminalStates.entries.removeIf { now - it.value.savedAt > EVENT_STATE_TTL_MILLIS }
+        notifiedEvents.entries.removeIf { now - it.value > EVENT_STATE_TTL_MILLIS }
+        lostConnections.entries.removeIf { now - it.value > EVENT_STATE_TTL_MILLIS }
+        if (executionTerminalStates.size >= MAX_EVENT_STATE_ENTRIES) {
+            executionTerminalStates.entries
+                .sortedBy { it.value.savedAt }
+                .take(executionTerminalStates.size - MAX_EVENT_STATE_ENTRIES + 1)
+                .forEach { executionTerminalStates.remove(it.key, it.value) }
+        }
+        if (notifiedEvents.size >= MAX_EVENT_STATE_ENTRIES) {
+            notifiedEvents.entries
+                .sortedBy { it.value }
+                .take(notifiedEvents.size - MAX_EVENT_STATE_ENTRIES + 1)
+                .forEach { notifiedEvents.remove(it.key, it.value) }
+        }
+        if (lostConnections.size >= MAX_EVENT_STATE_ENTRIES) {
+            lostConnections.entries
+                .sortedBy { it.value }
+                .take(lostConnections.size - MAX_EVENT_STATE_ENTRIES + 1)
+                .forEach { lostConnections.remove(it.key, it.value) }
+        }
+    }
+
+    private data class TerminalEvent(val savedAt: Long)
+    private const val EVENT_STATE_TTL_MILLIS = 24 * 60 * 60 * 1_000L
+    private const val MAX_EVENT_STATE_ENTRIES = 2_048
 }

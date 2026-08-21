@@ -174,6 +174,36 @@ class AgentContextManagerTest {
     }
 
     @Test
+    fun `Pi触发语义下最大输出不参与当前上下文压缩判断`() {
+        val messages = buildList {
+            repeat(4) { index ->
+                add(SimpleTextApiMessage(id = "user-$index", role = "user", content = "问".repeat(9_650)))
+                add(SimpleTextApiMessage(id = "assistant-$index", role = "assistant", content = "答".repeat(9_650)))
+            }
+        }
+
+        val belowThreshold = manager.prepare(
+            requestId = "request-below-pi-threshold",
+            request = request(messages, maxContextTokens = 256_000, compactThresholdTokens = 204_800),
+            limits = ModelTokenLimits(maxOutputTokens = 128_000, maxContextTokens = 256_000),
+        )
+        val aboveThreshold = manager.prepare(
+            requestId = "request-above-pi-threshold",
+            request = request(
+                messages = messages.map { message ->
+                    message.copy(content = message.content.repeat(3))
+                },
+                maxContextTokens = 256_000,
+                compactThresholdTokens = 204_800,
+            ),
+            limits = ModelTokenLimits(maxOutputTokens = 128_000, maxContextTokens = 256_000),
+        )
+
+        assertNull(belowThreshold.compactionPlan)
+        assertTrue(aboveThreshold.compactionPlan != null)
+    }
+
+    @Test
     fun `单个用户任务产生多轮工具调用时从原子组边界切分`() {
         val messages = buildList {
             add(SimpleTextApiMessage(id = "user-1", role = "user", content = "持续检查服务器"))

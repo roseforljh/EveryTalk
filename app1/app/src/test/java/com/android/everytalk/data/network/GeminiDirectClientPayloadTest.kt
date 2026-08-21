@@ -120,24 +120,24 @@ class GeminiDirectClientPayloadTest {
     }
 
     @Test
-    fun `并行工具结果合并为一条user消息并原样带回调用ID`() {
+    fun `并行工具结果按调用顺序合并并原样带回调用ID`() {
         val request = ChatRequest(
             messages = listOf(
                 SimpleTextApiMessage(role = "user", content = "检查服务"),
                 AgentAssistantApiMessage(
                     toolCalls = listOf(
-                        AgentToolCallApiPart("call-1", "exec", JsonObject(emptyMap())),
-                        AgentToolCallApiPart("call-2", "read_file", JsonObject(emptyMap())),
+                        AgentToolCallApiPart("call-1", "get_current_datetime", JsonObject(emptyMap())),
+                        AgentToolCallApiPart("call-2", "webfetch", JsonObject(emptyMap())),
                     ),
                 ),
                 AgentToolResultApiMessage(
                     toolCallId = "call-2",
-                    toolName = "exec",
+                    toolName = "get_current_datetime",
                     content = JsonPrimitive("content"),
                 ),
                 AgentToolResultApiMessage(
                     toolCallId = "call-1",
-                    toolName = "read_file",
+                    toolName = "webfetch",
                     content = JsonPrimitive("ok"),
                 ),
             ),
@@ -146,7 +146,7 @@ class GeminiDirectClientPayloadTest {
             localProviderContinuation = ProviderTurnContinuation(
                 protocol = ModelParameterProtocol.GEMINI,
                 payloadJson =
-                    """{"role":"model","parts":[{"thought":true,"text":"分析","thoughtSignature":"sig"},{"functionCall":{"id":"call-1","name":"exec","args":{}}},{"functionCall":{"id":"call-2","name":"read_file","args":{}}}]}""",
+                    """{"role":"model","parts":[{"thought":true,"text":"分析","thoughtSignature":"sig"},{"functionCall":{"id":"call-1","name":"get_current_datetime","args":{}}},{"functionCall":{"id":"call-2","name":"webfetch","args":{}}}]}""",
             ),
         )
 
@@ -164,8 +164,8 @@ class GeminiDirectClientPayloadTest {
 
         assertEquals(listOf("call-1", "call-2"), modelCalls)
         assertEquals("user", resultContent.getValue("role").jsonPrimitive.content)
-        assertEquals(listOf("call-2", "call-1"), resultIds)
-        assertEquals(listOf("read_file", "exec"), resultNames)
+        assertEquals(listOf("call-1", "call-2"), resultIds)
+        assertEquals(listOf("get_current_datetime", "webfetch"), resultNames)
     }
 
     @Test
@@ -201,6 +201,46 @@ class GeminiDirectClientPayloadTest {
 
         assertEquals("call-1", response.getValue("id").jsonPrimitive.content)
         assertEquals("edit", response.getValue("name").jsonPrimitive.content)
+    }
+
+    @Test
+    fun `工具摘要与真实内容名字不同时按真实调用修正结果`() {
+        val mcpToolName = "mcp_686a8a1a60fb12a1e9a97e319918c03c_web_search_exa"
+        val request = ChatRequest(
+            messages = listOf(
+                SimpleTextApiMessage(role = "user", content = "搜索网页"),
+                AgentAssistantApiMessage(
+                    toolCalls = listOf(
+                        AgentToolCallApiPart("call-1", "webfetch", JsonObject(emptyMap())),
+                    ),
+                    contentParts = listOf(
+                        AgentAssistantContentApiPart.ToolCall(
+                            AgentToolCallApiPart("call-1", mcpToolName, JsonObject(emptyMap())),
+                        ),
+                    ),
+                ),
+                AgentToolResultApiMessage(
+                    toolCallId = "call-1",
+                    toolName = "webfetch",
+                    content = JsonPrimitive("ok"),
+                ),
+            ),
+            provider = "Google",
+            channel = "Gemini",
+            apiAddress = "https://generativelanguage.googleapis.com",
+            apiKey = "test-key",
+            model = "gemini-3.7-flash",
+        )
+
+        val contents = Json.parseToJsonElement(GeminiDirectClient.buildGeminiPayload(request))
+            .jsonObject.getValue("contents").jsonArray
+        val callName = contents[1].jsonObject.getValue("parts").jsonArray.single().jsonObject
+            .getValue("functionCall").jsonObject.getValue("name").jsonPrimitive.content
+        val resultName = contents.last().jsonObject.getValue("parts").jsonArray.single().jsonObject
+            .getValue("functionResponse").jsonObject.getValue("name").jsonPrimitive.content
+
+        assertEquals(mcpToolName, callName)
+        assertEquals(mcpToolName, resultName)
     }
 
     @Test

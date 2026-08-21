@@ -16,12 +16,14 @@ import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import java.io.IOException
 import java.security.MessageDigest
+import java.util.Collections
+import java.util.LinkedHashMap
 import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
 import com.android.everytalk.util.AppLogger
 import com.android.everytalk.data.skill.SkillSecretSessionStore
 
 private const val DEFAULT_FILE_READ_LIMIT = 256 * 1024
+private const val MAX_COMPLETED_RESULTS_IN_MEMORY = 32
 
 /** 八个 Computer Tool 的统一参数校验、幂等、状态和路由入口。 */
 class ComputerToolExecutor(
@@ -37,7 +39,16 @@ class ComputerToolExecutor(
     private val fileTransfer = ComputerFileTransfer()
     private val runtimeEnvelope = ComputerRuntimeEnvelope(context.applicationContext)
     private val terminalManager = ComputerTerminalManager(repository)
-    private val completedResults = ConcurrentHashMap<String, JsonElement>()
+    /**
+     * 只缓存最近的完整工具结果，保证短期重试能拿到原响应。
+     * 历史幂等事实已经落在 Room，不能再让可能包含文件正文的 Json 永久占用内存。
+     */
+    private val completedResults = Collections.synchronizedMap(
+        object : LinkedHashMap<String, JsonElement>(MAX_COMPLETED_RESULTS_IN_MEMORY, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, JsonElement>?): Boolean =
+                size > MAX_COMPLETED_RESULTS_IN_MEMORY
+        },
+    )
 
     suspend fun execute(
         toolName: String,

@@ -267,8 +267,6 @@ class ComputerManager(
                 repository.recoverLocalState()
                 localRecovery.complete(Unit)
                 previewManager.reconcileExpirations()
-                // 冷启动后，若有未完成的后台任务，拉起前台服务保持监听
-                ComputerConnectionServiceController.resumeActiveTasks(context)
             } catch (error: Throwable) {
                 if (!localRecovery.isCompleted) localRecovery.completeExceptionally(error)
                 throw error

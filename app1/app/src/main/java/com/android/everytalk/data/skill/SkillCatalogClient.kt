@@ -4,6 +4,7 @@ import android.content.Context
 import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
+import java.util.LinkedHashMap
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlinx.serialization.Serializable
@@ -24,11 +25,18 @@ enum class SkillCatalogCollection(val path: String) {
  */
 class SkillCatalogClient(
     context: Context? = null,
-    private val client: OkHttpClient = OkHttpClient(),
+    private val client: OkHttpClient = sharedClient,
     private val json: Json = Json { ignoreUnknownKeys = true },
 ) {
     private val cacheDirectory = context?.applicationContext?.filesDir?.resolve("skill-catalog")
-    private val detailCache = mutableMapOf<String, CachedPackageDetail>()
+    /**
+     * 详情里包含完整仓库文件树，单项可能很大，必须限制常驻数量。
+     * 使用访问顺序淘汰，用户刚看过的条目仍能直接复用。
+     */
+    private val detailCache = object : LinkedHashMap<String, CachedPackageDetail>(DETAIL_CACHE_MAX_ENTRIES, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, CachedPackageDetail>?): Boolean =
+            size > DETAIL_CACHE_MAX_ENTRIES
+    }
     private val collectionPageLocks = ConcurrentHashMap<String, Any>()
     @Volatile
     var usedOfflineCache: Boolean = false
@@ -268,9 +276,12 @@ class SkillCatalogClient(
     }
 
     private companion object {
+        // 三个 Skill 页面共享连接池，避免每次页面跳转都新建 OkHttp 线程和连接。
+        val sharedClient = OkHttpClient()
         const val SKILLS_HOST = "skills.sh"
         const val CATALOG_CACHE_MILLIS = 10 * 60 * 1_000L
         const val DETAIL_CACHE_MILLIS = 5 * 60 * 1_000L
+        const val DETAIL_CACHE_MAX_ENTRIES = 24
         const val METADATA_CALL_TIMEOUT_SECONDS = 15L
         const val ARCHIVE_CALL_TIMEOUT_SECONDS = 120L
         const val MAX_REMOTE_ARCHIVE_BYTES = 200L * 1024L * 1024L

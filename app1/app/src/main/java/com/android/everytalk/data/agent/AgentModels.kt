@@ -53,6 +53,7 @@ object AgentTerminalReasons {
     const val REMOTE_TASK_MISSING = "REMOTE_TASK_MISSING"
     const val REMOTE_PROCESS_TERMINATED = "REMOTE_PROCESS_TERMINATED"
     const val CONFIG_ERROR = "CONFIG_ERROR"
+    const val VISIBLE_MESSAGE_TERMINAL = "VISIBLE_MESSAGE_TERMINAL"
 }
 
 /** Agent 编排、状态或持久化失败，禁止在 UI 层伪装成网络错误。 */

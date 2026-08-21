@@ -6,11 +6,13 @@ import android.content.ContextWrapper
 import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.After
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.koin.core.context.stopKoin
+import kotlinx.coroutines.test.runTest
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
@@ -41,7 +43,7 @@ class ComputerConnectionServiceControllerTest {
     }
 
     @Test
-    fun `Agent运行令牌关闭后不再计入运行中任务`() {
+    fun `Agent运行令牌关闭后不再计入运行中任务并请求空闲停服`() {
         val context = RecordingServiceContext(ApplicationProvider.getApplicationContext())
 
         val token = ComputerConnectionServiceController.acquireAgentRun(context)
@@ -49,6 +51,17 @@ class ComputerConnectionServiceControllerTest {
 
         token.close()
         assertEquals(0, ComputerConnectionServiceController.activeAgentRunCount())
+        assertEquals(2, context.foregroundStartActions.size)
+    }
+
+    @Test
+    fun `冷启动没有内存令牌和持久任务时不启动前台服务`() = runTest {
+        val context = RecordingServiceContext(ApplicationProvider.getApplicationContext())
+
+        val started = ComputerConnectionServiceController.resumeActiveTasksIfNeeded(context) { false }
+
+        assertFalse(started)
+        assertEquals(emptyList<String?>(), context.foregroundStartActions)
     }
 
     /** 只记录服务调度方式，不创建真实 Android Service。 */

@@ -1,6 +1,5 @@
 package com.android.everytalk.data.computer
 
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import net.schmizz.sshj.sftp.FileMode
 import net.schmizz.sshj.sftp.FileAttributes
@@ -14,7 +13,6 @@ import java.io.OutputStream
 import java.security.MessageDigest
 import java.util.Base64
 import java.util.EnumSet
-import java.util.concurrent.ConcurrentHashMap
 
 private const val MAX_READ_BYTES = 1024 * 1024
 private const val MAX_WRITE_BYTES = 8 * 1024 * 1024
@@ -55,7 +53,7 @@ data class ComputerStreamTransferResult(
 
 /** SFTP 文件读写只允许当前 Workspace，逐级拒绝符号链接。 */
 class ComputerFileTransfer {
-    private val writeLocks = ConcurrentHashMap<String, Mutex>()
+    private val writeLocks = ComputerKeyedMutexPool()
 
     suspend fun read(
         connection: ComputerSshConnection,
@@ -123,7 +121,7 @@ class ComputerFileTransfer {
             throw ComputerException(ComputerErrorCodes.WORKSPACE_PATH_INVALID, "单次写入不能超过 8 MiB")
         }
 
-        val lock = writeLocks.computeIfAbsent("${workspace.id}\u0000$relative") { Mutex() }
+        val lock = writeLocks.forKey("${workspace.id}\u0000$relative")
         return try {
             lock.withLock {
                 connection.withSftp { sftp ->
@@ -163,7 +161,7 @@ class ComputerFileTransfer {
     ): ComputerFileEditResult {
         ComputerIdentifier.requireValid(toolCallId, "Tool Call ID")
         val relative = ComputerWorkspacePath.normalize(path)
-        val lock = writeLocks.computeIfAbsent("${workspace.id}\u0000$relative") { Mutex() }
+        val lock = writeLocks.forKey("${workspace.id}\u0000$relative")
         return lock.withLock {
             connection.withSftp { sftp ->
                 val target = resolveExistingFile(sftp, workspace, relative)
@@ -221,7 +219,7 @@ class ComputerFileTransfer {
     ): ComputerStreamTransferResult {
         ComputerIdentifier.requireValid(toolCallId, "Tool Call ID")
         val relative = ComputerWorkspacePath.normalize(destinationPath)
-        val lock = writeLocks.computeIfAbsent("${workspace.id}\u0000$relative") { Mutex() }
+        val lock = writeLocks.forKey("${workspace.id}\u0000$relative")
         return lock.withLock {
             connection.withSftp { sftp ->
                 val root = resolveWorkspaceRoot(sftp, workspace)

@@ -3,6 +3,7 @@ package com.android.everytalk.data.network
 import android.app.Application
 import android.content.Context
 import android.net.Uri
+import android.util.Base64
 import androidx.test.core.app.ApplicationProvider
 import com.android.everytalk.data.DataClass.ApiContentPart
 import com.android.everytalk.data.DataClass.ChatRequest
@@ -267,6 +268,37 @@ class AttachmentToolExecutorTest {
         assertEquals(true, html in content)
         assertEquals(true, "attachment_id: ${attachment.id}" in content)
         assertEquals(true, "read_attachment" in content)
+    }
+
+    @Test
+    fun `已落盘音频仍会进入直连请求`() = runTest {
+        val audioBytes = "audio-payload".toByteArray()
+        val file = File(attachmentDir, "voice.wav").apply { writeBytes(audioBytes) }
+        val attachment = SelectedMediaItem.Audio(
+            id = "audio-from-file",
+            mimeType = "audio/wav",
+            data = "",
+            filePath = file.absolutePath,
+        )
+
+        val result = buildDirectMultimodalRequest(
+            request = ChatRequest(
+                messages = listOf(SimpleTextApiMessage(role = "user", content = "分析音频")),
+                provider = "test",
+                channel = "OpenAI兼容",
+                apiAddress = "https://example.com/v1",
+                apiKey = "",
+                model = "test-model",
+            ),
+            attachments = listOf(attachment),
+            context = context,
+        )
+
+        val audioPart = (result.messages.single() as PartsApiMessage).parts
+            .filterIsInstance<ApiContentPart.InlineData>()
+            .single()
+        assertEquals("audio/wav", audioPart.mimeType)
+        assertEquals(Base64.encodeToString(audioBytes, Base64.NO_WRAP), audioPart.base64Data)
     }
 
     @Test

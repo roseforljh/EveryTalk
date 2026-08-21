@@ -143,6 +143,35 @@ object ComputerConnectionServiceController {
         )
     }
 
+    /**
+     * 冷启动恢复入口。
+     *
+     * 只有进程内令牌、Room AgentRun 或远端 Execution 至少存在一项时才启动前台服务。
+     * 返回值表示是否真的发出了服务启动请求，方便调用方和测试确认空闲启动不会弹通知。
+     */
+    suspend fun resumeActiveTasksIfNeeded(context: Context): Boolean {
+        val appContext = context.applicationContext
+        return resumeActiveTasksIfNeeded(appContext) {
+            val database = AppDatabase.getDatabase(appContext)
+            database.agentDao().cancelStaleVisibleMessageRuns(
+                AgentTerminalReasons.VISIBLE_MESSAGE_TERMINAL,
+                System.currentTimeMillis(),
+            )
+            database.agentDao().getActiveRuns().isNotEmpty() ||
+                database.computerDao().getActiveRemoteExecutions().isNotEmpty()
+        }
+    }
+
+    /** 测试缝隙只替换持久任务查询，服务启动行为仍走真实控制器。 */
+    internal suspend fun resumeActiveTasksIfNeeded(
+        context: Context,
+        hasPersistedWork: suspend () -> Boolean,
+    ): Boolean {
+        if (!hasActiveTokens() && activeAgentRunCount() == 0 && !hasPersistedWork()) return false
+        resumeActiveTasks(context.applicationContext)
+        return true
+    }
+
     fun addStopListener(listener: () -> Unit): Closeable {
         stopListeners += listener
         return Closeable { stopListeners -= listener }
@@ -244,6 +273,10 @@ class ComputerConnectionService : Service() {
             if (!ComputerConnectionServiceController.hasActiveTokens() &&
                 ComputerConnectionServiceController.activeAgentRunCount() == 0
             ) {
+                agentDao.cancelStaleVisibleMessageRuns(
+                    AgentTerminalReasons.VISIBLE_MESSAGE_TERMINAL,
+                    System.currentTimeMillis(),
+                )
                 val interruptedRuns = agentDao.getActiveRuns()
                 agentDao.recoverInterruptedAgentRuns()
                 interruptedRuns.forEach { run ->
@@ -289,6 +322,14 @@ class ComputerConnectionService : Service() {
                 serviceScope.launch {
                     recoveryJob?.join()
                     val activeExecutions = computerDao.getActiveRemoteExecutions()
+                    if (!ComputerConnectionServiceController.hasActiveTokens() &&
+                        ComputerConnectionServiceController.activeAgentRunCount() == 0
+                    ) {
+                        agentDao.cancelStaleVisibleMessageRuns(
+                            AgentTerminalReasons.VISIBLE_MESSAGE_TERMINAL,
+                            System.currentTimeMillis(),
+                        )
+                    }
                     val activeRuns = agentDao.getActiveRuns()
                     val activeAgentRunCount = ComputerConnectionServiceController.activeAgentRunCount()
                     if (!ComputerConnectionServiceController.hasActiveTokens() &&

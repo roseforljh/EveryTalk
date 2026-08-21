@@ -11,6 +11,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.data.agent.AgentRecoveryDiagnostics
+import com.android.everytalk.data.agent.AgentTerminalReasons
 import com.android.everytalk.util.AppLogger
 import java.util.concurrent.TimeUnit
 
@@ -32,6 +33,10 @@ class AgentRecoveryWorker(
         if (!ComputerConnectionServiceController.hasActiveTokens() &&
             ComputerConnectionServiceController.activeAgentRunCount() == 0
         ) {
+            agentDao.cancelStaleVisibleMessageRuns(
+                AgentTerminalReasons.VISIBLE_MESSAGE_TERMINAL,
+                System.currentTimeMillis(),
+            )
             val interruptedRuns = agentDao.getActiveRuns()
             agentDao.recoverInterruptedAgentRuns()
             interruptedRuns.forEach { run ->

@@ -84,12 +84,14 @@ internal suspend fun buildDirectMultimodalRequest(
                 }
             }
             is com.android.everytalk.models.SelectedMediaItem.Audio -> {
-                // Audio item already contains base64 data
                 val mime = item.mimeType
-                ensureInlineAttachmentSize("音频", item.data.length * 3L / 4L)
+                // 新消息落盘后会清空 data。直连接口在真正发送时才从文件恢复 Base64。
+                val audioBase64 = item.base64DataOrNull(MAX_INLINE_NON_IMAGE_BYTES)
+                    ?: throw IOException("音频附件无法读取或超过 10MB 限制")
+                ensureInlineAttachmentSize("音频", audioBase64.length * 3L / 4L)
                 inlineParts.add(
                     com.android.everytalk.data.DataClass.ApiContentPart.InlineData(
-                        base64Data = item.data,
+                        base64Data = audioBase64,
                         mimeType = mime
                     )
                 )

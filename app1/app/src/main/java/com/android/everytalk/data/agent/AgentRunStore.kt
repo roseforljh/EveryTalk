@@ -274,6 +274,7 @@ class AgentRunStore(
     ).also {
         dao.upsertRun(it)
         if (status in AGENT_TERMINAL_RUN_STATUSES) snapshotCache.remove(run.id)
+        if (status in AGENT_FINAL_RUN_STATUSES) dao.deleteRunSnapshotChunks(run.id)
         if (status == AgentRunStatus.CANCELLED) dao.deleteContinuationStates(run.sessionId)
     }
 
@@ -290,6 +291,7 @@ class AgentRunStore(
         val run = dao.getRunByVisibleMessage(messageId)
         if (changed > 0 && run != null) {
             snapshotCache.remove(run.id)
+            dao.deleteRunSnapshotChunks(run.id)
             dao.deleteContinuationStates(run.sessionId)
         }
         return run
@@ -1163,6 +1165,11 @@ private val AGENT_TERMINAL_RUN_STATUSES = setOf(
     AgentRunStatus.FAILED,
     AgentRunStatus.CANCELLED,
     AgentRunStatus.INTERRUPTED,
+)
+private val AGENT_FINAL_RUN_STATUSES = setOf(
+    AgentRunStatus.COMPLETED,
+    AgentRunStatus.FAILED,
+    AgentRunStatus.CANCELLED,
 )
 
 /**

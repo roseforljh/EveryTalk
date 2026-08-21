@@ -35,7 +35,7 @@ import kotlinx.serialization.modules.subclass
 import android.util.Base64
 import kotlinx.coroutines.CancellationException as CoroutineCancellationException
 
-private const val MAX_INLINE_NON_IMAGE_BYTES = 10L * 1024L * 1024L
+internal const val MAX_INLINE_NON_IMAGE_BYTES = 10L * 1024L * 1024L
 
 private class AttachmentTooLargeException(message: String) : IllegalStateException(message)
 

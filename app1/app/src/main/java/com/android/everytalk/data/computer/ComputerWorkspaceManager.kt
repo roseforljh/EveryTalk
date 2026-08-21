@@ -2,17 +2,15 @@ package com.android.everytalk.data.computer
 
 import com.android.everytalk.data.database.entities.toEntity
 import com.android.everytalk.data.database.entities.toModel
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
 
 private const val WORKSPACE_COMMAND_TIMEOUT_MILLIS = 30_000L
 private const val CONTAINER_HELPER = "/usr/local/libexec/everytalk-containerctl"
 
 /** 会话在每台服务器上拥有独立持久 Workspace，关闭 Agent 或切换服务器都不会删除它。 */
 class ComputerWorkspaceManager(private val repository: ComputerRepository) {
-    private val workspaceLocks = ConcurrentHashMap<String, Mutex>()
+    private val workspaceLocks = ComputerKeyedMutexPool()
 
     /**
      * 在模型请求前只创建本地 Workspace 映射，不连接 VPS。
@@ -21,7 +19,7 @@ class ComputerWorkspaceManager(private val repository: ComputerRepository) {
     suspend fun getOrCreateLocal(computerId: String, conversationId: String): ComputerWorkspace {
         require(conversationId.isNotBlank()) { "Conversation ID 不能为空" }
         val lockKey = "$computerId\u0000$conversationId"
-        return workspaceLocks.computeIfAbsent(lockKey) { Mutex() }.withLock {
+        return workspaceLocks.forKey(lockKey).withLock {
             val dao = repository.dao()
             dao.getWorkspace(computerId, conversationId)?.toModel()?.let { return@withLock it }
             val computer = repository.getComputer(computerId)
@@ -38,7 +36,7 @@ class ComputerWorkspaceManager(private val repository: ComputerRepository) {
      */
     suspend fun prepare(workspaceId: String): ComputerWorkspace {
         ComputerIdentifier.requireValid(workspaceId, "Workspace ID")
-        return workspaceLocks.computeIfAbsent(workspaceId) { Mutex() }.withLock {
+        return workspaceLocks.forKey(workspaceId).withLock {
             val dao = repository.dao()
             val existing = dao.getWorkspaceById(workspaceId)?.toModel()
                 ?: throw ComputerException(ComputerErrorCodes.WORKSPACE_NOT_READY, "Workspace 不存在")
@@ -90,7 +88,7 @@ class ComputerWorkspaceManager(private val repository: ComputerRepository) {
     /** 只有模型明确选择 CONTAINER 时才启动或创建容器，Host SSH 不受容器故障影响。 */
     suspend fun prepareContainer(workspaceId: String) {
         ComputerIdentifier.requireValid(workspaceId, "Workspace ID")
-        workspaceLocks.computeIfAbsent(workspaceId) { Mutex() }.withLock {
+        workspaceLocks.forKey(workspaceId).withLock {
             val workspace = repository.dao().getWorkspaceById(workspaceId)?.toModel()
                 ?: throw ComputerException(ComputerErrorCodes.WORKSPACE_NOT_READY, "Workspace 不存在")
             if (workspace.runMode != ComputerRunMode.CONTAINER) {

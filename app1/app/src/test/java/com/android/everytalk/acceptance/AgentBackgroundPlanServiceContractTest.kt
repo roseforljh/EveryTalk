@@ -9,6 +9,7 @@ class AgentBackgroundPlanServiceContractTest {
     private val service = AgentBackgroundPlanTestFiles.source("service/ComputerConnectionService.kt")
     private val serviceCode = AgentBackgroundPlanTestFiles.code("service/ComputerConnectionService.kt")
     private val viewModel = AgentBackgroundPlanTestFiles.source("statecontroller/viewmodel/AppViewModel.kt")
+    private val computerManager = AgentBackgroundPlanTestFiles.source("statecontroller/viewmodel/ComputerManager.kt")
     private val apiHandlerCode = AgentBackgroundPlanTestFiles.code("statecontroller/api/ApiHandler.kt")
     private val wrapper = AgentBackgroundPlanTestFiles.asset("runtime-wrapper.sh")
     private val repository = AgentBackgroundPlanTestFiles.source("data/computer/ComputerRepository.kt")
@@ -97,6 +98,22 @@ class AgentBackgroundPlanServiceContractTest {
         assertFalse(
             "恢复入口必须统一归 Service 和 Worker，ViewModel 重建不能把当前进程任务误标为中断",
             viewModel.contains("recoverInterruptedAgentRuns()"),
+        )
+    }
+
+    @Test
+    fun `冷启动无持久任务时不得直接拉起前台服务`() {
+        assertTrue(
+            "App 启动必须先检查 Room 是否存在可恢复任务",
+            viewModel.contains("resumeActiveTasksIfNeeded"),
+        )
+        assertFalse(
+            "AppViewModel 仍在无条件启动前台服务",
+            viewModel.contains("ComputerConnectionServiceController.resumeActiveTasks(getApplication())"),
+        )
+        assertFalse(
+            "ComputerManager 重复无条件启动前台服务",
+            computerManager.contains("ComputerConnectionServiceController.resumeActiveTasks(context)"),
         )
     }
 

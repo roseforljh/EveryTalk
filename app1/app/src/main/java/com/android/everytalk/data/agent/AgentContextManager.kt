@@ -95,7 +95,8 @@ class AgentContextManager(
         val needsCompaction = request.contextManagement?.autoCompressionEnabled == true &&
             !hasActiveNativeCompaction &&
             hasNewCompactionSource &&
-            activeBeforeTrim + reservedOutput >= genericCompactionThreshold
+            // Pi 只比较当前上下文与压缩线；最大输出不参与触发，否则大输出模型会过早反复压缩。
+            activeBeforeTrim > genericCompactionThreshold
         val plan = if (needsCompaction) {
             planCompaction(
                 canonical = canonical,

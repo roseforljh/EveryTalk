@@ -2,10 +2,8 @@ package com.android.everytalk.data.computer
 
 import com.android.everytalk.data.database.daos.ComputerDao
 import com.android.everytalk.data.database.entities.ComputerExecutionEntity
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlin.coroutines.cancellation.CancellationException
-import java.util.concurrent.ConcurrentHashMap
 
 /** Runtime 查询的结果，不把网络失败误判为 VPS 命令失败。 */
 sealed interface ComputerRemoteExecutionQuery {
@@ -95,7 +93,7 @@ class ComputerExecutionReconciler(
     private val gateway: ComputerRemoteExecutionGateway,
     private val nowMillis: () -> Long = { System.currentTimeMillis() },
 ) {
-    private val executionLocks = ConcurrentHashMap<String, Mutex>()
+    private val executionLocks = ComputerKeyedMutexPool()
 
     /** 根据 ID 查询并对账，执行不存在时返回 null。 */
     suspend fun reconcile(executionId: String): ComputerExecutionReconciliation? {
@@ -105,7 +103,7 @@ class ComputerExecutionReconciler(
 
     /** 对账单条执行，调用方可以把结果交给 AgentRun 恢复逻辑。 */
     suspend fun reconcile(execution: ComputerExecutionEntity): ComputerExecutionReconciliation {
-        val lock = executionLocks.getOrPut(execution.id) { Mutex() }
+        val lock = executionLocks.forKey(execution.id)
         return lock.withLock {
             // 启动确认、轮询和恢复扫描可能同时持有旧快照；锁内重新取一次，避免旧本地状态覆盖新观察结果。
             reconcileLocked(dao.getExecutionById(execution.id) ?: execution)
