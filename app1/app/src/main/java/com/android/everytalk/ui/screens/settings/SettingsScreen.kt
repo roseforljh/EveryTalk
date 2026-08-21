@@ -185,10 +185,11 @@ fun SettingsScreen(
         onResult = { uri ->
             val exportData = viewModel.consumeSettingsExport()
             if (uri == null) {
+                exportData?.file?.delete()
                 return@rememberLauncherForActivityResult
             } else {
-                val jsonContent = exportData?.second
-                if (jsonContent == null) {
+                val sourceFile = exportData?.file?.takeIf { it.isFile }
+                if (sourceFile == null) {
                     viewModel.showToast(exportContentExpiredMessage)
                 } else {
                     scope.launch {
@@ -197,8 +198,8 @@ fun SettingsScreen(
                             context.contentResolver.openFileDescriptor(uri, "w")?.use { pfd ->
                                 java.io.FileOutputStream(pfd.fileDescriptor).use { outputStream ->
                                     outputStream.channel.truncate(0)
-                                    outputStream.bufferedWriter(Charsets.UTF_8).use { writer ->
-                                        writer.write(jsonContent)
+                                    sourceFile.inputStream().buffered().use { input ->
+                                        input.copyTo(outputStream)
                                     }
                                 }
                             }
@@ -212,6 +213,8 @@ fun SettingsScreen(
                                 e.message ?: context.getString(R.string.unknown_error),
                             )
                         )
+                    } finally {
+                        sourceFile.delete()
                     }
                 }
             }
@@ -257,7 +260,7 @@ fun SettingsScreen(
     LaunchedEffect(Unit) {
         viewModel.settingsExportRequest.collect { data ->
             viewModel.stageSettingsExport(data)
-            exportSettingsLauncher.launch(data.first)
+            exportSettingsLauncher.launch(data.fileName)
         }
     }
     

@@ -114,6 +114,7 @@ class ChatScrollStateManager(
     private var suppressTopAnchorBottomScroll by mutableStateOf(false)
     private var topAnchorRuntimeClearer: (() -> Unit)? = null
     private var topAnchorUserScrollReleaser: (() -> Unit)? = null
+    private var topAnchorReserveReleaseRequester: ((Float) -> Unit)? = null
     private var lastLoggedStrictBottom: Boolean? = null
     private val stateObserverJob: Job
     private val contentObserverJob: Job
@@ -129,6 +130,7 @@ class ChatScrollStateManager(
                 )
             }
             if (source == NestedScrollSource.UserInput && available.y != 0f) {
+                topAnchorReserveReleaseRequester?.invoke(available.y)
                 cancelContentFollowJob()
                 preventAutoScroll = true
                 contentFollowArmed = false
@@ -359,6 +361,10 @@ class ChatScrollStateManager(
 
     fun setTopAnchorUserScrollReleaser(releaser: (() -> Unit)?) {
         topAnchorUserScrollReleaser = releaser
+    }
+
+    fun setTopAnchorReserveReleaseRequester(requester: ((Float) -> Unit)?) {
+        topAnchorReserveReleaseRequester = requester
     }
 
     fun lockAutoScroll() {
@@ -680,6 +686,7 @@ class ChatScrollStateManager(
         contentObserverJob.cancel()
         topAnchorRuntimeClearer = null
         topAnchorUserScrollReleaser = null
+        topAnchorReserveReleaseRequester = null
     }
 
     private fun jumpToBottomInternal(isUserAction: Boolean, smooth: Boolean) {

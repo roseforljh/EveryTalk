@@ -25,6 +25,8 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.encodeToStream
+import java.io.File
 import java.util.UUID
 
 /**
@@ -226,6 +228,7 @@ class SettingsController(
     @OptIn(ExperimentalSerializationApi::class)
     fun exportSettings(includeHistory: Boolean = false) {
         scope.launch(Dispatchers.IO) {
+            var pendingExportFile: File? = null
             try {
                 // 1. 导出所有 API 配置 (文本/图像) - 混淆密钥后导出
                 val mainConfigsToExport = stateHolder._apiConfigs.value.map { obfuscateApiConfig(it) }
@@ -319,9 +322,16 @@ class SettingsController(
                     ignoreUnknownKeys = true
                 }
 
-                val finalJson = exportJson.encodeToString(settingsToExport)
                 val fileName = if (includeHistory) "eztalk_full_backup" else "eztalk_settings"
-                exportManager.requestSettingsExport(fileName, finalJson)
+                val exportDirectory = File(context.cacheDir, "settings_exports").apply { mkdirs() }
+                exportDirectory.listFiles()?.forEach(File::delete)
+                val exportFile = File.createTempFile("${fileName}_", ".json", exportDirectory)
+                pendingExportFile = exportFile
+                exportFile.outputStream().buffered().use { output ->
+                    exportJson.encodeToStream(settingsToExport, output)
+                }
+                exportManager.requestSettingsExport(fileName, exportFile)
+                pendingExportFile = null
                 
                 Log.i(TAG, "=== 导出配置完成 ===")
                 Log.i(TAG, "总配置数: ${allConfigsToExport.size}, 聊天历史: ${chatHistoryToExport.size}, 图像历史: ${imageHistoryToExport.size}")
@@ -332,6 +342,7 @@ class SettingsController(
                 }
                     
             } catch (e: Exception) {
+                pendingExportFile?.delete()
                 e.rethrowIfCancellation()
                 Log.e(TAG, "Export failed", e)
                 withContext(Dispatchers.Main) {
@@ -378,9 +389,8 @@ class SettingsController(
         scope.launch(Dispatchers.IO) {
             val result = ImportResult()
             
-            // 保存当前状态用于回滚
-            val completeTextHistory = persistenceManager.loadCompleteHistory(isImageGeneration = false)
-            val completeImageHistory = persistenceManager.loadCompleteHistory(isImageGeneration = true)
+            // 启动时的轻量历史已经包含稳定会话 ID，足够用于回滚。
+            // 禁止在导入前反序列化整个数据库，否则大历史会和导入 JSON 同时占用内存。
             val backupState = BackupState(
                 apiConfigs = stateHolder._apiConfigs.value.toList(),
                 imageGenApiConfigs = stateHolder._imageGenApiConfigs.value.toList(),
@@ -388,8 +398,8 @@ class SettingsController(
                 selectedImageGenApiConfig = stateHolder._selectedImageGenApiConfig.value,
                 voiceBackendConfigs = stateHolder._voiceBackendConfigs.value.toList(),
                 selectedVoiceConfig = stateHolder._selectedVoiceConfig.value,
-                historicalConversations = completeTextHistory,
-                imageGenerationHistoricalConversations = completeImageHistory,
+                historicalConversations = stateHolder._historicalConversations.value.toList(),
+                imageGenerationHistoricalConversations = stateHolder._imageGenerationHistoricalConversations.value.toList(),
                 pinnedTextConversationIds = stateHolder.pinnedTextConversationIds.value.toSet(),
                 pinnedImageConversationIds = stateHolder.pinnedImageConversationIds.value.toSet(),
                 conversationGroups = stateHolder.conversationGroups.value.toMap()

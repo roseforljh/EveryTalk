@@ -1,6 +1,9 @@
 package com.android.everytalk.ui.topanchor
 import com.android.everytalk.statecontroller.*
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
@@ -50,6 +53,9 @@ class TopAnchorReserveEngineState {
     var runtime by mutableStateOf(TopAnchorRuntimeState())
         private set
 
+    var reserveReleaseRequested by mutableStateOf(false)
+        private set
+
     val reservePx: Int
         get() = runtime.reservePx
 
@@ -69,11 +75,13 @@ class TopAnchorReserveEngineState {
 
     fun clearRuntime() {
         interactiveExpansionKeys.clear()
+        reserveReleaseRequested = false
         runtime = TopAnchorRuntimeState()
     }
 
     fun activateTurn(turn: TopAnchorTurn) {
         interactiveExpansionKeys.clear()
+        reserveReleaseRequested = false
         nextTurnGeneration += 1
         val activatedTurn = turn.copy(generation = nextTurnGeneration)
         val previousTurn = runtime.currentTurn
@@ -108,6 +116,39 @@ class TopAnchorReserveEngineState {
             return
         }
         runtime = runtime.copy(phase = TopAnchorPhase.UserControlled)
+    }
+
+    /**
+     * 回答结束后继续保留 reserve，避免用户正在看历史内容时列表总高度突变。
+     * 只有用户已经滑到真实回复底部并继续向下时，才请求平滑收回这段虚拟空间。
+     */
+    fun requestRetainedReserveRelease(
+        scrollDeltaY: Float,
+        listState: LazyListState,
+        trailingRealItemIndex: Int,
+        reserveInsideTrailingItem: Boolean,
+    ) {
+        if (
+            scrollDeltaY >= 0f ||
+            reserveReleaseRequested ||
+            runtime.phase != TopAnchorPhase.UserControlled ||
+            runtime.activeTurn != null ||
+            runtime.retainedTurn == null ||
+            runtime.reservePx <= 0
+        ) {
+            return
+        }
+        val layoutInfo = listState.layoutInfo
+        val trailingItem = layoutInfo.visibleItemsInfo.firstOrNull {
+            it.index == trailingRealItemIndex
+        } ?: return
+        val reserveInTrailingItem = if (reserveInsideTrailingItem) runtime.reservePx else 0
+        val realContentBottom = trailingItem.offset +
+            (trailingItem.size - reserveInTrailingItem).coerceAtLeast(0)
+        val viewportContentBottom = layoutInfo.viewportEndOffset - layoutInfo.afterContentPadding
+        if (realContentBottom <= viewportContentBottom + 1) {
+            reserveReleaseRequested = true
+        }
     }
 
     fun attachResponseTarget(expectedTurn: TopAnchorTurn, targetItemId: String) {
@@ -262,6 +303,37 @@ fun RunTopAnchorReserveEngine(
             )
         }
     }
+
+    LaunchedEffect(state.reserveReleaseRequested, currentTurnKey) {
+        val turn = state.runtime.retainedTurn
+        if (!state.reserveReleaseRequested || turn == null || state.reservePx <= 0) {
+            return@LaunchedEffect
+        }
+        val reserveAnimation = Animatable(state.reservePx.toFloat())
+        reserveAnimation.animateTo(
+            targetValue = 0f,
+            animationSpec = tween(durationMillis = 320, easing = FastOutSlowInEasing),
+        ) {
+            if (
+                state.reserveReleaseRequested &&
+                state.runtime.phase == TopAnchorPhase.UserControlled &&
+                state.runtime.activeTurn == null &&
+                isTopAnchorCorrectionCurrent(state.runtime, turn)
+            ) {
+                val animatedReservePx = value.roundToInt().coerceAtLeast(0)
+                if (animatedReservePx != state.reservePx) {
+                    state.updateRuntime(state.runtime.copy(reservePx = animatedReservePx))
+                }
+            }
+        }
+        if (
+            state.reserveReleaseRequested &&
+            state.runtime.activeTurn == null &&
+            isTopAnchorCorrectionCurrent(state.runtime, turn)
+        ) {
+            state.clearRuntime()
+        }
+    }
 }
 
 private suspend fun correctTopAnchorOnce(
@@ -388,7 +460,12 @@ private suspend fun runTopAnchorCorrectionLoop(
         if (!corrected) {
             val currentTrailingIndex = trailingRealItemIndex()
             val reserveRepresentedBySnapshot = state.reservePx
-                if (
+                if (state.reserveReleaseRequested) {
+                    // 手势触发的退出动画已经接管 reserve，禁止内容差分逻辑重复收缩。
+                    previousUserControlledSnapshot = null
+                    previousUserControlledReservePx = 0
+                    previousUserControlledTrailingIndex = -1
+                } else if (
                     state.runtime.phase == TopAnchorPhase.UserControlled &&
                     !state.holdsReserveForInteractiveExpansion
                 ) {

@@ -522,6 +522,8 @@ internal fun ImmersiveInfoPage(
     title: String,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
+    opaqueTopBar: Boolean = false,
+    bottomBar: (@Composable () -> Unit)? = null,
     content: LazyListScope.() -> Unit,
 ) {
     val backgroundColor = MaterialTheme.colorScheme.background
@@ -543,16 +545,29 @@ internal fun ImmersiveInfoPage(
                 start = 20.dp,
                 top = topChromeHeight + 12.dp,
                 end = 20.dp,
-                bottom = bottomChromeHeight + 20.dp,
+                bottom = if (bottomBar == null) bottomChromeHeight + 20.dp else navigationBarInset + 96.dp,
             ),
             verticalArrangement = Arrangement.spacedBy(16.dp),
             content = content,
         )
+        if (bottomBar != null) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.BottomCenter)
+                    .zIndex(3f),
+            ) {
+                bottomBar()
+            }
+        }
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(topChromeHeight)
-                .floatingEdgeGradient(backgroundColor, fromTop = true)
+                .then(
+                    if (opaqueTopBar) Modifier.background(backgroundColor)
+                    else Modifier.floatingEdgeGradient(backgroundColor, fromTop = true),
+                )
                 .align(Alignment.TopCenter)
                 .zIndex(1f),
         )

@@ -820,7 +820,7 @@ class TopAnchorReserveEngineComposeAdditionalTest {
     }
 
     @Test
-    fun `manual user drag keeps anchored item stable while releasing automatic correction`() {
+    fun `short answer keeps reserve after finish and releases it smoothly at real bottom`() {
         composeRule.mainClock.autoAdvance = false
         val turn = TopAnchorTurn("u2", "a2", "s1", 2L)
         val items = listOf(
@@ -833,6 +833,7 @@ class TopAnchorReserveEngineComposeAdditionalTest {
         lateinit var listState: LazyListState
         lateinit var scrollStateManager: ChatScrollStateManager
         lateinit var scrollBackward: () -> Unit
+        lateinit var scrollToAnswerBottom: () -> Unit
         lateinit var finishAnswer: () -> Unit
         var targetAnchorYPx = 0
         var consumedScrollPx = 0f
@@ -852,6 +853,11 @@ class TopAnchorReserveEngineComposeAdditionalTest {
                     consumedScrollPx = listState.scrollBy(-24f)
                 }
             }
+            scrollToAnswerBottom = {
+                coroutineScope.launch {
+                    listState.scrollToItem(items.lastIndex + if (showFooter) 1 else 0)
+                }
+            }
             finishAnswer = {
                 showFooter = true
                 isRunning = false
@@ -867,13 +873,22 @@ class TopAnchorReserveEngineComposeAdditionalTest {
                 }
             }
             scrollStateManager = rememberChatScrollStateManager(listState, coroutineScope)
-            DisposableEffect(scrollStateManager, engineState) {
+            DisposableEffect(scrollStateManager, engineState, showFooter) {
                 scrollStateManager.setTopAnchorRuntimeClearer(engineState::clearRuntime)
                 scrollStateManager.setTopAnchorUserScrollReleaser(engineState::releaseForUserScroll)
+                scrollStateManager.setTopAnchorReserveReleaseRequester { scrollDeltaY ->
+                    engineState.requestRetainedReserveRelease(
+                        scrollDeltaY = scrollDeltaY,
+                        listState = listState,
+                        trailingRealItemIndex = items.lastIndex + if (showFooter) 1 else 0,
+                        reserveInsideTrailingItem = false,
+                    )
+                }
                 scrollStateManager.updateTopAnchorBottomScrollSuppression(true)
                 onDispose {
                     scrollStateManager.setTopAnchorRuntimeClearer(null)
                     scrollStateManager.setTopAnchorUserScrollReleaser(null)
+                    scrollStateManager.setTopAnchorReserveReleaseRequester(null)
                 }
             }
 
@@ -982,6 +997,38 @@ class TopAnchorReserveEngineComposeAdditionalTest {
             assertEquals(firstVisibleKeyBeforeFinish, firstVisible.key)
             assertTrue(abs(firstVisibleOffsetBeforeFinish - firstVisible.offset) <= 1)
             assertEquals(items.size + 2, listState.layoutInfo.totalItemsCount)
+            scrollToAnswerBottom()
+        }
+        repeat(4) {
+            composeRule.mainClock.advanceTimeByFrame()
+            composeRule.waitForIdle()
+        }
+
+        var reserveBeforeRelease = 0
+        composeRule.runOnIdle {
+            reserveBeforeRelease = engineState.reservePx
+            scrollStateManager.nestedScrollConnection.onPreScroll(
+                available = Offset(0f, -24f),
+                source = NestedScrollSource.UserInput,
+            )
+            assertTrue(engineState.reserveReleaseRequested)
+        }
+        repeat(6) {
+            composeRule.mainClock.advanceTimeByFrame()
+            composeRule.waitForIdle()
+        }
+        composeRule.runOnIdle {
+            assertTrue(engineState.reservePx in 1 until reserveBeforeRelease)
+            assertTrue(engineState.runtime.hasRuntime)
+        }
+        repeat(24) {
+            composeRule.mainClock.advanceTimeByFrame()
+            composeRule.waitForIdle()
+        }
+        composeRule.runOnIdle {
+            assertEquals(0, engineState.reservePx)
+            assertFalse(engineState.runtime.hasRuntime)
+            assertEquals(items.size + 1, listState.layoutInfo.totalItemsCount)
         }
     }
 }

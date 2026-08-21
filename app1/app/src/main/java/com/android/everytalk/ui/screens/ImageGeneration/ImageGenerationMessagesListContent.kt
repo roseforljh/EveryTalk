@@ -230,8 +230,15 @@ fun ImageGenerationMessagesList(
         }
     }
 
-    suspend fun cacheImageModelForEditing(model: Any): Uri? = withContext(Dispatchers.IO) {
+    suspend fun cacheImageModelForEditing(model: Any): Pair<Uri, String?>? = withContext(Dispatchers.IO) {
         try {
+            val localFile = resolveLocalPreviewImageFile(model)
+            if (localFile != null) {
+                val directUri = runCatching {
+                    FileProvider.getUriForFile(context, "${context.packageName}.provider", localFile)
+                }.getOrNull()
+                if (directUri != null) return@withContext directUri to localFile.absolutePath
+            }
             val bytesAndMime = when (model) {
                 is String -> {
                     if (model.startsWith("data:", ignoreCase = true)) {
@@ -275,7 +282,7 @@ fun ImageGenerationMessagesList(
             }
             val file = createTemporaryImageFile(context, "preview_cache", "img", ext)
             FileOutputStream(file).use { it.write(bytes) }
-            FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
+            FileProvider.getUriForFile(context, "${context.packageName}.provider", file) to file.absolutePath
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -366,12 +373,21 @@ fun ImageGenerationMessagesList(
         scrollStateManager.updateTopAnchorBottomScrollSuppression(false)
     }
 
-    DisposableEffect(scrollStateManager, topAnchorEngine) {
+    DisposableEffect(scrollStateManager, topAnchorEngine, chatItems.lastIndex) {
         scrollStateManager.setTopAnchorRuntimeClearer(topAnchorEngine::clearRuntime)
         scrollStateManager.setTopAnchorUserScrollReleaser(topAnchorEngine::releaseForUserScroll)
+        scrollStateManager.setTopAnchorReserveReleaseRequester { scrollDeltaY ->
+            topAnchorEngine.requestRetainedReserveRelease(
+                scrollDeltaY = scrollDeltaY,
+                listState = listState,
+                trailingRealItemIndex = chatItems.lastIndex,
+                reserveInsideTrailingItem = true,
+            )
+        }
         onDispose {
             scrollStateManager.setTopAnchorRuntimeClearer(null)
             scrollStateManager.setTopAnchorUserScrollReleaser(null)
+            scrollStateManager.setTopAnchorReserveReleaseRequester(null)
         }
     }
 
@@ -723,16 +739,17 @@ fun ImageGenerationMessagesList(
                     val firstUrl = msg.imageUrls?.firstOrNull()
                     if (!firstUrl.isNullOrBlank()) {
                         scope.launch {
-                            val uri = cacheImageModelForEditing(firstUrl)
-                            if (uri == null) {
+                            val cached = cacheImageModelForEditing(firstUrl)
+                            if (cached == null) {
                                 viewModel.showSnackbar(imageLoadFailedMessage)
                                 return@launch
                             }
+                            val (uri, path) = cached
                             viewModel.addMediaItem(
                                 SelectedMediaItem.ImageFromUri(
                                     uri = uri,
                                     id = UUID.randomUUID().toString(),
-                                    filePath = null
+                                    filePath = path,
                                 )
                             )
                             viewModel.showSnackbar(imageSelectedMessage)

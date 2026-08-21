@@ -8,6 +8,7 @@ import androidx.profileinstaller.ProfileInstaller
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -709,6 +710,26 @@ class MainActivity : AppCompatActivity() {
                                 ) {
                                     DataManagementScreen(
                                         onBack = { navController.popBackStack() },
+                                        onDeleteConversations = { selectedIds ->
+                                            val textIndexes = appViewModel.historicalConversations.value
+                                                .mapIndexedNotNull { index, conversation ->
+                                                    index.takeIf {
+                                                        appViewModel.resolveStableConversationId(conversation) in selectedIds
+                                                    }
+                                                }
+                                                .sortedDescending()
+                                            val imageIndexes = appViewModel.imageGenerationHistoricalConversations.value
+                                                .mapIndexedNotNull { index, conversation ->
+                                                    index.takeIf {
+                                                        appViewModel.resolveStableConversationId(conversation) in selectedIds
+                                                    }
+                                                }
+                                                .sortedDescending()
+                                            // 先删较大的索引，前面的索引不会因列表收缩而漂移。
+                                            textIndexes.forEach(appViewModel::deleteConversation)
+                                            imageIndexes.forEach(appViewModel::deleteImageGenerationConversation)
+                                            delay(500)
+                                        },
                                     )
                                 }
                                 composable(

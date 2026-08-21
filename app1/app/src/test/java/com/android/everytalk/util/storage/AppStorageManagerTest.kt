@@ -1,6 +1,7 @@
 package com.android.everytalk.util.storage
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -39,5 +40,16 @@ class AppStorageManagerTest {
         )
 
         assertEquals(snapshot.dataBytes, snapshot.details.sumOf(StorageDetail::bytes))
+    }
+
+    @Test
+    fun safeChildOf_onlyAcceptsItemsInsideAllowedDirectory() {
+        val allowed = temporaryFolder.newFolder("attachments").canonicalFile
+        val child = allowed.resolve("photo.png").apply { writeBytes(ByteArray(3)) }
+        val outside = temporaryFolder.newFile("outside.txt")
+
+        assertEquals(child.canonicalFile, safeChildOf(child, listOf(allowed)))
+        assertNull(safeChildOf(allowed, listOf(allowed)))
+        assertNull(safeChildOf(outside, listOf(allowed)))
     }
 }

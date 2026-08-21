@@ -102,15 +102,38 @@ class AppStorageManager(context: Context) {
 
     /** 清理安全的垃圾文件，并返回实际释放的字节数。 */
     suspend fun clearJunk(): Long = withContext(Dispatchers.IO) {
-        val targets = listOfNotNull(
+        clearTargets(
+            listOfNotNull(
             appContext.cacheDir,
             appContext.codeCacheDir,
             appContext.externalCacheDir,
             File(appContext.filesDir, "chat_images_temp"),
-        ).distinctFiles()
+            ),
+        )
+    }
+
+    /**
+     * 清理用户明确选择的数据类型。
+     * 会话与 Skills 需要同步业务状态，由各自现有业务层处理，不在这里直接删库。
+     */
+    suspend fun clearCategory(type: StorageDetailType): Long = withContext(Dispatchers.IO) {
+        val targets = when (type) {
+            StorageDetailType.ATTACHMENTS -> listOf(
+                File(appContext.filesDir, FileManager.CHAT_ATTACHMENTS_DIR),
+                File(appContext.filesDir, "chat_images"),
+            )
+            StorageDetailType.TOOL_RESULTS -> listOf(File(appContext.filesDir, "agent_tool_results"))
+            StorageDetailType.TEMPORARY_FILES -> listOf(File(appContext.filesDir, "chat_images_temp"))
+            else -> emptyList()
+        }
+        clearTargets(targets)
+    }
+
+    private fun clearTargets(rawTargets: List<File>): Long {
+        val targets = rawTargets.distinctFiles()
         val before = targets.sumOf(::directorySize)
         targets.forEach(::deleteDirectoryContents)
-        (before - targets.sumOf(::directorySize)).coerceAtLeast(0L)
+        return (before - targets.sumOf(::directorySize)).coerceAtLeast(0L)
     }
 
     /** 获取与 Android“存储占用”设置页相同口径的应用、数据、缓存三项统计。 */

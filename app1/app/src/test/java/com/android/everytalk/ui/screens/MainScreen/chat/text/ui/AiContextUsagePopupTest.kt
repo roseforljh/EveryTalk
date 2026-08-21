@@ -41,6 +41,14 @@ class AiContextUsagePopupTest {
     val composeRule = createComposeRule()
 
     @Test
+    fun `会话累计消耗使用KMB缩写`() {
+        assertEquals("999", formatCompactUsageTokens(999))
+        assertEquals("1K", formatCompactUsageTokens(1_000))
+        assertEquals("41.8M", formatCompactUsageTokens(41_845_406))
+        assertEquals("1.2B", formatCompactUsageTokens(1_200_000_000))
+    }
+
+    @Test
     fun `用量摘要使用本轮输入输出和上下文快照`() {
         val summary = aiContextUsageSummary(
             message = usageMessage(),

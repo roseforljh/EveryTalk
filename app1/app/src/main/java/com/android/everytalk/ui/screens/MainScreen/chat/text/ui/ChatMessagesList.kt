@@ -368,12 +368,21 @@ fun ChatMessagesList(
         scrollStateManager.updateTopAnchorBottomScrollSuppression(false)
     }
 
-    DisposableEffect(scrollStateManager, topAnchorEngine) {
+    DisposableEffect(scrollStateManager, topAnchorEngine, chatItems.lastIndex) {
         scrollStateManager.setTopAnchorRuntimeClearer(topAnchorEngine::clearRuntime)
         scrollStateManager.setTopAnchorUserScrollReleaser(topAnchorEngine::releaseForUserScroll)
+        scrollStateManager.setTopAnchorReserveReleaseRequester { scrollDeltaY ->
+            topAnchorEngine.requestRetainedReserveRelease(
+                scrollDeltaY = scrollDeltaY,
+                listState = listState,
+                trailingRealItemIndex = chatItems.lastIndex,
+                reserveInsideTrailingItem = true,
+            )
+        }
         onDispose {
             scrollStateManager.setTopAnchorRuntimeClearer(null)
             scrollStateManager.setTopAnchorUserScrollReleaser(null)
+            scrollStateManager.setTopAnchorReserveReleaseRequester(null)
         }
     }
 

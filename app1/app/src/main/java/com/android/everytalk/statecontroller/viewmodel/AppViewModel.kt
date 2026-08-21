@@ -59,6 +59,7 @@ import com.android.everytalk.statecontroller.viewmodel.ConversationSearchManager
 import com.android.everytalk.statecontroller.viewmodel.DrawerManager
 import com.android.everytalk.statecontroller.viewmodel.ProviderManager
 import com.android.everytalk.statecontroller.viewmodel.ExportManager
+import com.android.everytalk.statecontroller.viewmodel.SettingsExportRequest
 import com.android.everytalk.statecontroller.facade.MessageItemsController
 import com.android.everytalk.statecontroller.mcp.dispatch.McpToolCategory
 import com.android.everytalk.statecontroller.controller.systemprompt.SystemPromptController
@@ -85,6 +86,7 @@ import com.android.everytalk.data.mcp.McpServerConfig
 import com.android.everytalk.data.mcp.McpServerState
 import com.android.everytalk.data.mcp.McpStatus
 import com.android.everytalk.data.agent.AgentToolExecutorRegistry
+import com.android.everytalk.data.agent.AgentTerminalReasons
 import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.data.computer.hostConfirmationRequest
 import com.android.everytalk.data.computer.publicPreviewRequest
@@ -418,8 +420,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     // 重构：使用管理器类来组织代码
     internal val exportManager = ExportManager()
     val exportRequest: Flow<Pair<String, String>> = exportManager.exportRequest
-    val settingsExportRequest: Flow<Pair<String, String>> = exportManager.settingsExportRequest
-    internal var pendingSettingsExport: Pair<String, String>? = null
+    val settingsExportRequest: Flow<SettingsExportRequest> = exportManager.settingsExportRequest
+    internal var pendingSettingsExport: SettingsExportRequest? = null
 
     internal val dialogManager = DialogManager()
     internal val editMessageController = EditMessageController(
@@ -716,6 +718,15 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
           viewModelScope.launch(Dispatchers.IO) {
               computerManager.awaitLocalRecovery()
               val agentDao = AppDatabase.getDatabase(getApplication()).agentDao()
+              // 进程内没有真实任务时，先封存消息已经结束的旧 Run，禁止冷启动把它恢复成运行中。
+              if (!com.android.everytalk.service.ComputerConnectionServiceController.hasActiveTokens() &&
+                  com.android.everytalk.service.ComputerConnectionServiceController.activeAgentRunCount() == 0
+              ) {
+                  agentDao.cancelStaleVisibleMessageRuns(
+                      AgentTerminalReasons.VISIBLE_MESSAGE_TERMINAL,
+                      System.currentTimeMillis(),
+                  )
+              }
               val recoverableConversationIds = mutableSetOf<String>().apply {
                   stateHolder._currentConversationId.value.takeIf(String::isNotBlank)?.let(::add)
                   agentDao.getWaitingRemoteExecutionRuns().forEach { run -> add(run.sessionId) }
@@ -741,8 +752,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
               }
               apiHandler.restorePendingAgentApproval()
               apiHandler.restoreVisibleAgentState()
-              // 启动后台服务以恢复并监听持久化活动任务，避免在 ViewModel 中无限轮询
-              com.android.everytalk.service.ComputerConnectionServiceController.resumeActiveTasks(getApplication())
+              // 空闲冷启动不能先弹前台服务通知；真实任务仍由统一服务继续恢复和监听。
+              com.android.everytalk.service.ComputerConnectionServiceController.resumeActiveTasksIfNeeded(getApplication())
           }
 
         viewModelScope.launch(Dispatchers.IO) {

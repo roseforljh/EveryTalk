@@ -527,16 +527,18 @@ internal fun ImageGenerationImagePreview(
             fun saveToAlbum() {
                 scope.launch {
                     try {
-                        val pair = loadBytesAndMime(imagePreviewModel!!)
-                        if (pair == null) {
+                        val model = imagePreviewModel!!
+                        val localFile = resolveLocalPreviewImageFile(model)
+                        val pair = if (localFile == null) loadBytesAndMime(model) else null
+                        if (localFile == null && pair == null) {
                             android.util.Log.e(
                                 "ImagePreview",
-                                "saveToAlbum failed: modelType=${imagePreviewModel?.javaClass?.simpleName} chars=${imagePreviewModel.toString().length}",
+                                "saveToAlbum failed: modelType=${model.javaClass.simpleName} chars=${model.toString().length}",
                             )
                             viewModel.showSnackbar(loadFailedMessage)
                             return@launch
                         }
-                        val (bytes, mime) = pair
+                        val mime = localFile?.let { mimeFromImagePath(it.path) } ?: pair!!.second
                         val ext = when (mime.lowercase()) {
                             "image/png" -> "png"
                             "image/jpeg", "image/jpg" -> "jpg"
@@ -561,7 +563,11 @@ internal fun ImageGenerationImagePreview(
                                 val uri = checkNotNull(resolver.insert(collection, values)) { "无法创建相册文件" }
                                 insertedUri = uri
                                 checkNotNull(resolver.openOutputStream(uri)) { "无法写入相册文件" }.use { output ->
-                                    output.write(bytes)
+                                    if (localFile != null) {
+                                        localFile.inputStream().buffered().use { input -> input.copyTo(output) }
+                                    } else {
+                                        output.write(pair!!.first)
+                                    }
                                 }
                                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
                                     values.clear()
@@ -584,8 +590,16 @@ internal fun ImageGenerationImagePreview(
             }
 
             // 将当前模型转为可编辑/可分享的本地缓存文件Uri（FileProvider）- 无损写原始字节
-            suspend fun ensureCacheFileUri(): Uri? {
-                val pair = loadBytesAndMime(imagePreviewModel!!)
+            suspend fun ensureCacheFileUri(): Pair<Uri, String?>? {
+                val model = imagePreviewModel!!
+                val localFile = resolveLocalPreviewImageFile(model)
+                if (localFile != null) {
+                    val directUri = runCatching {
+                        FileProvider.getUriForFile(context, "${context.packageName}.provider", localFile)
+                    }.getOrNull()
+                    if (directUri != null) return directUri to localFile.absolutePath
+                }
+                val pair = loadBytesAndMime(model)
                 if (pair == null) {
                     viewModel.showSnackbar(loadFailedMessage)
                     return null
@@ -600,7 +614,7 @@ internal fun ImageGenerationImagePreview(
                 return withContext(Dispatchers.IO) {
                     val file = createTemporaryImageFile(context, "preview_cache", "img", ext)
                     FileOutputStream(file).use { output -> output.write(bytes) }
-                    FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
+                    FileProvider.getUriForFile(context, "${context.packageName}.provider", file) to file.absolutePath
                 }
             }
 
@@ -640,21 +654,30 @@ internal fun ImageGenerationImagePreview(
             fun shareImage() {
                 scope.launch {
                     try {
-                        val pair = loadBytesAndMime(imagePreviewModel!!)
-                        if (pair == null) {
+                        val model = imagePreviewModel!!
+                        val localFile = resolveLocalPreviewImageFile(model)
+                        val directUri = localFile?.let { file ->
+                            runCatching {
+                                FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
+                            }.getOrNull()
+                        }
+                        val pair = if (directUri == null) loadBytesAndMime(model) else null
+                        if (directUri == null && pair == null) {
                             viewModel.showSnackbar(loadFailedMessage)
                             return@launch
                         }
-                        val (bytes, mime) = pair
+                        val mime = localFile?.takeIf { directUri != null }
+                            ?.let { mimeFromImagePath(it.path) }
+                            ?: pair!!.second
                         val ext = when (mime.lowercase()) {
                             "image/png" -> "png"
                             "image/jpeg", "image/jpg" -> "jpg"
                             "image/webp" -> "webp"
                             else -> "img"
                         }
-                        val uri = withContext(Dispatchers.IO) {
+                        val uri = directUri ?: withContext(Dispatchers.IO) {
                             val file = createTemporaryImageFile(context, "share_images", "share", ext)
-                            FileOutputStream(file).use { output -> output.write(bytes) }
+                            FileOutputStream(file).use { output -> output.write(pair!!.first) }
                             FileProvider.getUriForFile(context, "${context.packageName}.provider", file)
                         }
                         val intent = android.content.Intent(android.content.Intent.ACTION_SEND).apply {
@@ -677,12 +700,12 @@ internal fun ImageGenerationImagePreview(
             fun selectCurrentImage() {
                 scope.launch {
                     try {
-                        val uri = ensureCacheFileUri() ?: return@launch
+                        val (uri, path) = ensureCacheFileUri() ?: return@launch
                         viewModel.addMediaItem(
                             com.android.everytalk.models.SelectedMediaItem.ImageFromUri(
                                 uri = uri,
                                 id = UUID.randomUUID().toString(),
-                                filePath = null
+                                filePath = path,
                             )
                         )
                         viewModel.showSnackbar(selectedMessage)
@@ -697,16 +720,17 @@ internal fun ImageGenerationImagePreview(
             // 编辑：改为"现在的选择功能"：加入已选择媒体并关闭预览返回
             fun editCurrentImage() {
                 scope.launch {
-                    val uri = ensureCacheFileUri()
-                    if (uri == null) {
+                    val cached = ensureCacheFileUri()
+                    if (cached == null) {
                         viewModel.showSnackbar(loadFailedMessage)
                         return@launch
                     }
+                    val (uri, path) = cached
                     viewModel.addMediaItem(
                         com.android.everytalk.models.SelectedMediaItem.ImageFromUri(
                             uri = uri,
                             id = UUID.randomUUID().toString(),
-                            filePath = null
+                            filePath = path,
                         )
                     )
                     viewModel.showSnackbar(selectedMessage)

@@ -326,6 +326,29 @@ internal fun mimeFromImagePath(path: String): String {
 
 internal fun File.readImageBytesAtMost(): ByteArray = readAtMost(MAX_IMAGE_RAW_BYTES)
 
+/**
+ * 返回预览模型已经对应的本地图片文件。
+ * 远程地址、Content URI 和 Base64 仍走原有受限读取流程。
+ */
+internal fun resolveLocalPreviewImageFile(model: Any): File? {
+    val file = when (model) {
+        is Uri -> model.takeIf { it.scheme.equals("file", ignoreCase = true) }
+            ?.path
+            ?.let(::File)
+        is String -> {
+            val uri = runCatching { model.toUri() }.getOrNull()
+            when (uri?.scheme?.lowercase()) {
+                "file" -> runCatching { File(java.net.URI(model)) }.getOrNull()
+                    ?: uri.path?.let(::File)
+                null -> File(model)
+                else -> null
+            }
+        }
+        else -> null
+    }
+    return file?.takeIf { it.isFile && it.length() in 1..MAX_IMAGE_RAW_BYTES }
+}
+
 internal fun createTemporaryImageFile(
     context: Context,
     directoryName: String,

@@ -89,6 +89,11 @@ object PerformanceMonitor {
     /** 只记录一条首字耗时，不受详细性能日志开关影响。 */
     fun startFirstResponse(messageId: String, startedAt: Long = System.currentTimeMillis()) {
         firstResponseStartedAt.putIfAbsent(messageId, startedAt)
+        if (firstResponseStartedAt.size > MAX_PENDING_FIRST_RESPONSES) {
+            firstResponseStartedAt.entries
+                .minByOrNull { it.value }
+                ?.let { oldest -> firstResponseStartedAt.remove(oldest.key, oldest.value) }
+        }
     }
 
     fun recordFirstVisibleText(messageId: String, now: Long = System.currentTimeMillis()) {
@@ -208,6 +213,8 @@ object PerformanceMonitor {
         s.endTs = System.currentTimeMillis()
         emitSummary("SESSION_ABORT", s, extra = mapOf("reason" to reason))
     }
+
+    private const val MAX_PENDING_FIRST_RESPONSES = 256
 
     private fun maybeEmitInterim(messageId: String) {
         if (!enabled || interimSummaryIntervalMs <= 0) return

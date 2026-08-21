@@ -205,6 +205,19 @@ internal fun contextUsageColor(fraction: Float): Color {
 internal fun formatUsageTokens(tokens: Long): String =
     String.format(Locale.US, "%,d", tokens.coerceAtLeast(0L))
 
+/** 会话累计值可能很大，只保留一位小数并使用 K、M、B 缩写。 */
+internal fun formatCompactUsageTokens(tokens: Long): String {
+    val value = tokens.coerceAtLeast(0L)
+    val (divisor, suffix) = when {
+        value >= 1_000_000_000L -> 1_000_000_000L to "B"
+        value >= 1_000_000L -> 1_000_000L to "M"
+        value >= 1_000L -> 1_000L to "K"
+        else -> return value.toString()
+    }
+    return String.format(Locale.US, "%.1f", value.toDouble() / divisor)
+        .removeSuffix(".0") + suffix
+}
+
 @Composable
 internal fun AiContextUsageButton(
     message: Message,
@@ -391,7 +404,7 @@ private fun AiContextUsagePopupContent(summary: AiContextUsageSummary?) {
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.62f),
             )
             Text(
-                text = formatUsageTokens(summary.conversationTotalTokens),
+                text = formatCompactUsageTokens(summary.conversationTotalTokens),
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurface,

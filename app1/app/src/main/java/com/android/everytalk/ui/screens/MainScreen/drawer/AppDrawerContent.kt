@@ -115,23 +115,20 @@ fun AppDrawerContent(
                 val stableId = resolveStableId(conversation) ?: "unknown_$index"
                 FilteredConversationItem(index, conversation, stableId)
             }
-            val pinned = baseItems.filter {
-                val stableId = resolveStableId(it.conversation)
-                stableId != null && pinnedIds.contains(stableId)
-            }
+            val pinned = baseItems.filter { it.stableId in pinnedIds }
+            val pinnedIndexes = pinned.mapTo(hashSetOf()) { it.originalIndex }
             val custom = mutableMapOf<String, MutableList<FilteredConversationItem>>()
             val ungrouped = mutableListOf<FilteredConversationItem>()
             val groupByConversationId = conversationGroups.entries
                 .flatMap { (groupName, ids) -> ids.map { id -> id to groupName } }
                 .toMap()
             baseItems.forEach { item ->
-                val stableId = resolveStableId(item.conversation)
-                val groupName = stableId?.let { groupByConversationId[it] }
+                val groupName = groupByConversationId[item.stableId]
                 if (groupName != null) {
                     custom.getOrPut(groupName) { mutableListOf() }.add(item)
                 } else {
                     // 如果一个项目同时被置顶，它也会出现在“对话”中
-                    if (!pinned.any { p -> p.originalIndex == item.originalIndex}) {
+                    if (item.originalIndex !in pinnedIndexes) {
                         ungrouped.add(item)
                     }
                 }
@@ -141,8 +138,7 @@ fun AppDrawerContent(
     }.value
     @Composable
     fun ConversationItem(itemData: FilteredConversationItem, modifier: Modifier = Modifier) {
-        val stableId = resolveStableId(itemData.conversation)
-        val isPinned = stableId != null && pinnedIds.contains(stableId)
+        val isPinned = itemData.stableId in pinnedIds
         Box(
             modifier = modifier
                 .fillMaxWidth()

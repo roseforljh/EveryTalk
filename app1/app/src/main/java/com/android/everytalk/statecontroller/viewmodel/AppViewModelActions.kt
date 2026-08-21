@@ -72,6 +72,7 @@ import com.android.everytalk.statecontroller.viewmodel.DialogManager
 import com.android.everytalk.statecontroller.viewmodel.DrawerManager
 import com.android.everytalk.statecontroller.viewmodel.ProviderManager
 import com.android.everytalk.statecontroller.viewmodel.ExportManager
+import com.android.everytalk.statecontroller.viewmodel.SettingsExportRequest
 import com.android.everytalk.statecontroller.facade.MessageItemsController
 import com.android.everytalk.statecontroller.mcp.dispatch.McpToolCategory
 import com.android.everytalk.statecontroller.controller.systemprompt.SystemPromptController
@@ -132,11 +133,12 @@ import java.util.TimeZone
         stateHolder._lastSentImageUserMessageId.compareAndSet(messageId, null)
     }
 
-    internal fun AppViewModel.stageSettingsExport(data: Pair<String, String>) {
+    internal fun AppViewModel.stageSettingsExport(data: SettingsExportRequest) {
+        pendingSettingsExport?.file?.takeIf { it != data.file }?.delete()
         pendingSettingsExport = data
     }
 
-    internal fun AppViewModel.consumeSettingsExport(): Pair<String, String>? = pendingSettingsExport.also {
+    internal fun AppViewModel.consumeSettingsExport(): SettingsExportRequest? = pendingSettingsExport.also {
         pendingSettingsExport = null
     }
 
