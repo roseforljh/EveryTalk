@@ -420,12 +420,11 @@
     <string name="computer_field_password">SSH 密码</string>
     <string name="computer_field_private_key">OpenSSH 私钥</string>
     <string name="computer_field_private_key_passphrase">私钥口令（可选）</string>
-    <string name="computer_field_mode">运行模式</string>
-    <string name="computer_mode_container">SSH + Container</string>
-    <string name="computer_mode_direct">Direct SSH</string>
-    <string name="computer_mode_container_description">Agent 在 Docker Workspace 中工作，不设置 CPU、内存、磁盘和 PID 配额。</string>
-    <string name="computer_mode_direct_description">Agent 使用 SSH 账号的实际权限执行操作。</string>
-    <string name="computer_mode_hybrid_description">EveryTalk 会直接连接服务器，运行代码时自动使用隔离环境。</string>
+    <string name="computer_mode_container">SSH + Docker 沙箱</string>
+    <string name="computer_mode_direct">直接 SSH</string>
+    <string name="computer_sandbox_title">启用 Docker 沙箱</string>
+    <string name="computer_sandbox_enabled_description">启用可以更安全。保存后会检查并按需安装 Docker。</string>
+    <string name="computer_sandbox_disabled_description">不启用将直接使用 SSH，不安装 Docker，适合低配服务器。</string>
     <string name="computer_field_sudo_password">sudo 密码（免密 sudo 时可留空）</string>
     <string name="computer_add_save">检查并保存</string>
     <string name="computer_edit_title">编辑服务器</string>
@@ -706,6 +705,7 @@
     <string name="chat_input_file_processing_error">处理文件时发生错误</string>
     <string name="chat_input_select_api_configuration">请先选择 API 配置</string>
     <string name="chat_input_send_failed">发送消息失败</string>
+    <string name="chat_input_long_text_converting">正在生成文本附件，请稍候</string>
     <string name="chat_attachment_too_large">文件“%1$s”过大（%2$s），最大支持 50 MB</string>
     <string name="chat_attachment_size_check_failed">无法检查文件大小，请选择较小的文件</string>
     <string name="chat_attachment_unknown_file">未知文件</string>

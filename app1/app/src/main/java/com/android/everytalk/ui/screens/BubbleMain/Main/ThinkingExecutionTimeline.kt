@@ -38,6 +38,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
@@ -524,6 +526,7 @@ private fun TimelineNode(
     content: @Composable () -> Unit = {},
 ) {
     val lineColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.75f)
+    val flatDarkStyle = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val density = androidx.compose.ui.platform.LocalDensity.current
     Row(
         modifier = modifier
@@ -549,7 +552,7 @@ private fun TimelineNode(
                 modifier = Modifier
                     .size(22.dp)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surface),
+                    .background(if (flatDarkStyle) Color.Transparent else MaterialTheme.colorScheme.surface),
                 contentAlignment = Alignment.Center,
             ) {
                 TimelineNodeIcon(
@@ -785,16 +788,17 @@ private fun CapsuleSurface(
     content: @Composable () -> Unit,
 ) {
     val surfaceModifier = modifier.widthIn(max = maxWidth)
-    val color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f)
+    val flatDarkStyle = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val color = if (flatDarkStyle) Color.Transparent else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f)
     val contentColor = MaterialTheme.colorScheme.onSurfaceVariant
-    val border = BorderStroke(
+    val border = if (flatDarkStyle) null else BorderStroke(
         width = 1.dp,
         color = MaterialTheme.colorScheme.outline.copy(alpha = 0.5f),
     )
     if (onClick == null) {
         Surface(
             modifier = surfaceModifier,
-            shape = CircleShape,
+            shape = if (flatDarkStyle) RectangleShape else CircleShape,
             color = color,
             contentColor = contentColor,
             border = border,
@@ -804,7 +808,7 @@ private fun CapsuleSurface(
         Surface(
             onClick = onClick,
             modifier = surfaceModifier,
-            shape = CircleShape,
+            shape = if (flatDarkStyle) RectangleShape else CircleShape,
             color = color,
             contentColor = contentColor,
             border = border,
@@ -818,6 +822,7 @@ private fun WebsiteCapsule(
     source: WebSearchResult,
     modifier: Modifier = Modifier,
 ) {
+    val flatDarkStyle = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val host = linkHost(source.href).ifBlank { source.title.ifBlank { source.href } }
     val onClick = webLinkClick(LocalUriHandler.current, source.href)
     CapsuleSurface(
@@ -834,7 +839,7 @@ private fun WebsiteCapsule(
                 modifier = Modifier
                     .size(18.dp)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surface),
+                    .background(if (flatDarkStyle) Color.Transparent else MaterialTheme.colorScheme.surface),
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(

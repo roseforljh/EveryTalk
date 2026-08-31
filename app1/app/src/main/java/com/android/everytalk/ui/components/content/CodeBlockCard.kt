@@ -28,6 +28,7 @@ import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.onGloballyPositioned
@@ -116,9 +117,11 @@ fun CodeBlockCard(
     suppressInitialAsyncResizeAnimation: Boolean = false,
     onCopy: (() -> Unit)? = null,
     onPreviewRequested: (() -> Unit)? = null,
-    onLongPress: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null
+    onLongPress: ((androidx.compose.ui.geometry.Offset) -> Unit)? = null,
+    /** AI 深色气泡中的代码块不单独画卡片。 */
+    flatDarkStyle: Boolean = false,
 ) {
-    val shape = RoundedCornerShape(24.dp)
+    val shape = if (flatDarkStyle) RectangleShape else RoundedCornerShape(24.dp)
     val clipboard = LocalClipboard.current
     val scope = rememberCoroutineScope()
     val isDarkTheme = isSystemInDarkTheme()
@@ -126,7 +129,7 @@ fun CodeBlockCard(
     val copyDescription = stringResource(R.string.action_copy)
     val previewDescription = stringResource(R.string.code_preview)
     val openFullScreenPreviewDescription = stringResource(R.string.code_open_fullscreen_preview)
-    val bg = MaterialTheme.chatColors.codeBlockBackground
+    val bg = if (flatDarkStyle) Color.Transparent else MaterialTheme.chatColors.codeBlockBackground
     // 夜间模式使用白色边框，白天模式使用 outline 颜色
     val outline = if (isDarkTheme) {
         Color.White.copy(alpha = 0.3f)
@@ -208,8 +211,8 @@ fun CodeBlockCard(
 
     // 胶囊组件底色与选中颜色
     // 由于代码块背景现在是深黑(0xFF2A2A2A)，胶囊背景需要稍微亮一点以产生对比，选中的按钮则更亮
-    val capsuleBgColor = if (isDarkTheme) Color(0xFF383838) else Color(0xFFE2E2E2)
-    val capsuleSelectedBgColor = if (isDarkTheme) Color(0xFF505050) else Color.White
+    val capsuleBgColor = if (flatDarkStyle) Color.Transparent else if (isDarkTheme) Color(0xFF383838) else Color(0xFFE2E2E2)
+    val capsuleSelectedBgColor = if (flatDarkStyle) Color.Transparent else if (isDarkTheme) Color(0xFF505050) else Color.White
     val pageBgColor = MaterialTheme.colorScheme.background
     val previewBgColor = pageBgColor
     val previewTextColor = if (isDarkTheme) Color(0xFFEAEAEA) else Color.Black

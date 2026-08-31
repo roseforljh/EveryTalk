@@ -63,6 +63,22 @@ class ImageGenerationMessagesListRenderRouteTest {
     }
 
     @Test
+    fun `image history initial bottom waits for image history loading state`() {
+        val source = imageGenerationScreenSource()
+
+        assertTrue(
+            source.contains(
+                "val isLoadingHistory by viewModel.isLoadingImageHistory.collectAsState()",
+            ),
+        )
+        assertFalse(
+            source.contains(
+                "val isLoadingHistory by viewModel.isLoadingHistory.collectAsState()",
+            ),
+        )
+    }
+
+    @Test
     fun `image base64 decoding is centralized behind decoded byte limit`() {
         val source = imageGenerationMessagesListSource()
         val gateIndex = source.indexOf("isImageBase64WithinDecodedLimit(dataUri, payloadStart)")

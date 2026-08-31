@@ -421,12 +421,11 @@
     <string name="computer_field_password">SSH password</string>
     <string name="computer_field_private_key">OpenSSH private key</string>
     <string name="computer_field_private_key_passphrase">Private key passphrase (optional)</string>
-    <string name="computer_field_mode">Runtime mode</string>
-    <string name="computer_mode_container">SSH + Container</string>
+    <string name="computer_mode_container">SSH + Docker sandbox</string>
     <string name="computer_mode_direct">Direct SSH</string>
-    <string name="computer_mode_container_description">Runs Agent work inside a Docker workspace. No CPU, memory, disk, or PID quotas are applied.</string>
-    <string name="computer_mode_direct_description">Runs with the SSH account’s actual permissions.</string>
-    <string name="computer_mode_hybrid_description">EveryTalk connects directly to the server and automatically isolates code execution.</string>
+    <string name="computer_sandbox_title">Enable Docker sandbox</string>
+    <string name="computer_sandbox_enabled_description">Enabling it is safer. Docker is checked and installed when needed.</string>
+    <string name="computer_sandbox_disabled_description">Uses SSH directly without installing Docker. Suitable for low-resource servers.</string>
     <string name="computer_field_sudo_password">sudo password (optional with passwordless sudo)</string>
     <string name="computer_add_save">Check and save</string>
     <string name="computer_edit_title">Edit server</string>
@@ -708,6 +707,7 @@
     <string name="chat_input_file_processing_error">An error occurred while processing the file</string>
     <string name="chat_input_select_api_configuration">Select an API configuration first</string>
     <string name="chat_input_send_failed">Failed to send message</string>
+    <string name="chat_input_long_text_converting">Creating the text attachment, please wait.</string>
     <string name="chat_attachment_too_large">“%1$s” is too large (%2$s). The maximum size is 50 MB.</string>
     <string name="chat_attachment_size_check_failed">Could not check the file size. Select a smaller file.</string>
     <string name="chat_attachment_unknown_file">Unknown file</string>

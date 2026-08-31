@@ -102,7 +102,7 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
         }
     }
     val loadedImageHistoryIndex by viewModel.loadedImageGenerationHistoryIndex.collectAsState()
-    val isLoadingHistory by viewModel.isLoadingHistory.collectAsState()
+    val isLoadingHistory by viewModel.isLoadingImageHistory.collectAsState()
     var historySkeletonKey by remember { mutableStateOf<String?>(null) }
     var isHistorySkeletonReadyToReveal by remember { mutableStateOf(false) }
     var previousConversationIdForSkeleton by remember { mutableStateOf<String?>(null) }

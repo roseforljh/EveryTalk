@@ -34,8 +34,8 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -133,12 +133,8 @@ internal fun PageSourcesButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val isDarkTheme = isSystemInDarkTheme()
-    val buttonColor = if (isDarkTheme) {
-        Color(0xFF2B2B2D)
-    } else {
-        Color(0xFFF1F1EF)
-    }
+    val isDarkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
+    val buttonColor = if (isDarkTheme) Color.Transparent else Color(0xFFF1F1EF)
     Surface(
         onClick = onClick,
         modifier = modifier.wrapContentWidth(align = Alignment.Start),
@@ -171,6 +167,7 @@ internal fun PageSourcesButton(
 private fun PageSourceIconStack(
     pageSources: List<WebSearchResult>,
 ) {
+    val isDarkTheme = MaterialTheme.colorScheme.background.luminance() < 0.5f
     val icons = pageSources.take(3)
     if (icons.isEmpty()) return
 
@@ -189,7 +186,7 @@ private fun PageSourceIconStack(
                     .offset(x = overlapOffset * index)
                     .size(iconSize)
                     .clip(CircleShape)
-                    .background(MaterialTheme.colorScheme.surfaceVariant),
+                    .background(if (isDarkTheme) Color.Transparent else MaterialTheme.colorScheme.surfaceVariant),
                 contentAlignment = Alignment.Center
             ) {
                 Text(

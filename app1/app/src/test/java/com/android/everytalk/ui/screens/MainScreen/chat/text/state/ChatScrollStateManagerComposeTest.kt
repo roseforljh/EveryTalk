@@ -16,6 +16,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -219,6 +220,70 @@ class ChatScrollStateManagerComposeTest {
 
         composeRule.runOnIdle {
             assertTrue(displacedPx < 0f)
+            assertFalse(listState.canScrollForward)
+        }
+    }
+
+    @Test
+    fun `底部校正期间再次扩高不会丢失最新布局`() {
+        composeRule.mainClock.autoAdvance = false
+        lateinit var listState: androidx.compose.foundation.lazy.LazyListState
+        lateinit var scrollStateManager: ChatScrollStateManager
+        var lastItemHeight by mutableIntStateOf(180)
+        var shouldExpandAgain = false
+
+        composeRule.setContent {
+            val coroutineScope = rememberCoroutineScope()
+            listState = rememberLazyListState()
+            scrollStateManager = rememberChatScrollStateManager(listState, coroutineScope)
+
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.height(320.dp),
+            ) {
+                items(12, key = { "double_growth_message_$it" }) { index ->
+                    Spacer(
+                        Modifier
+                            .height(if (index == 11) lastItemHeight.dp else 180.dp)
+                            .onGloballyPositioned {
+                                // 第一次扩高触发底部校正。校正刚到旧底部时立刻再次扩高，
+                                // 复现真实消息在图片或 Markdown 二次排版时连续变高的时序。
+                                if (
+                                    index == 11 &&
+                                    shouldExpandAgain &&
+                                    lastItemHeight == 600 &&
+                                    !listState.canScrollForward
+                                ) {
+                                    shouldExpandAgain = false
+                                    lastItemHeight = 900
+                                }
+                            }
+                    )
+                }
+            }
+        }
+
+        composeRule.mainClock.advanceTimeByFrame()
+        composeRule.waitForIdle()
+        composeRule.runOnIdle {
+            scrollStateManager.pinToRealBottomUntilUserScroll()
+        }
+        repeat(10) {
+            composeRule.mainClock.advanceTimeByFrame()
+            composeRule.waitForIdle()
+        }
+        composeRule.runOnIdle {
+            assertFalse(listState.canScrollForward)
+            shouldExpandAgain = true
+            lastItemHeight = 600
+        }
+        repeat(20) {
+            composeRule.mainClock.advanceTimeByFrame()
+            composeRule.waitForIdle()
+        }
+
+        composeRule.runOnIdle {
+            assertEquals(900, lastItemHeight)
             assertFalse(listState.canScrollForward)
         }
     }

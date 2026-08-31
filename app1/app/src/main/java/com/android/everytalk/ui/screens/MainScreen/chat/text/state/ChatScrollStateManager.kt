@@ -626,7 +626,9 @@ class ChatScrollStateManager(
             )
             performBottomCorrection(correction, remainingPx)
             if (correction != BottomCorrection.None) withFrameNanos { }
-            handledRevision = bottomContentRevision()
+            // 只标记本轮真正处理过的布局。校正期间产生的新布局必须留给下一轮，
+            // 否则图片或 Markdown 连续扩高时会被误判为已处理，列表停在旧底部。
+            handledRevision = changedRevision
         }
     }
 

@@ -49,6 +49,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.BlendMode
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.CompositingStrategy
 import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.graphicsLayer
@@ -366,6 +368,7 @@ internal fun ReasoningToggleAndContent(
         focusManager.clearFocus()
         showReasoningSheet = true
     }
+    val flatDarkStyle = MaterialTheme.colorScheme.background.luminance() < 0.5f
 
     Column(
         modifier = modifier,
@@ -383,8 +386,8 @@ internal fun ReasoningToggleAndContent(
             ),
         ) {
             Surface(
-                shape = RoundedCornerShape(16.dp),
-                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.52f),
+                shape = if (flatDarkStyle) RectangleShape else RoundedCornerShape(16.dp),
+                color = if (flatDarkStyle) Color.Transparent else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.52f),
                 contentColor = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier
                     .fillMaxWidth()
@@ -651,8 +654,8 @@ private fun ReasoningPreviewCard(
         ),
     ) {
         Surface(
-            shape = RoundedCornerShape(12.dp),
-            color = MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
+            shape = if (MaterialTheme.colorScheme.background.luminance() < 0.5f) RectangleShape else RoundedCornerShape(12.dp),
+            color = if (MaterialTheme.colorScheme.background.luminance() < 0.5f) Color.Transparent else MaterialTheme.colorScheme.surface.copy(alpha = 0.72f),
             modifier = Modifier
                 .fillMaxWidth()
                 .testTag("reasoning-chain-summary-$sectionIndex")

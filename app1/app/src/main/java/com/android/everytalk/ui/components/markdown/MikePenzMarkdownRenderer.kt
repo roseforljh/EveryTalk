@@ -286,6 +286,7 @@ fun MikePenzMarkdownRenderer(
     } else {
         MARKDOWN_LINK_LIGHT_COLOR
     }
+    val flatDarkStyle = sender == Sender.AI && MaterialTheme.colorScheme.background.luminance() < 0.5f
     val typography = markdownTypography(
         h1 = bodyStyle.copy(
             fontSize = ChatMarkdownTextStyle.headingFontSizeSp(1).sp,
@@ -701,6 +702,7 @@ fun MikePenzMarkdownRenderer(
                                         suppressInitialAsyncResizeAnimation =
                                             currentSuppressInitialCodeBlockResizeAnimation.value,
                                         onCopy = currentCodeCopiedCallback.value,
+                                        flatDarkStyle = flatDarkStyle,
                                     )
                                 } else {
                                 MathBlock(
@@ -725,6 +727,7 @@ fun MikePenzMarkdownRenderer(
                                         suppressInitialAsyncResizeAnimation =
                                             currentSuppressInitialCodeBlockResizeAnimation.value,
                                         onCopy = currentCodeCopiedCallback.value,
+                                        flatDarkStyle = flatDarkStyle,
                                     )
                                     return@MarkdownCodeFence
                                 }
@@ -774,6 +777,7 @@ fun MikePenzMarkdownRenderer(
                                         request = details,
                                         summary = summary,
                                         summaryInlineContent = currentInlineContentMap.value,
+                                        flatDarkStyle = flatDarkStyle,
                                         modifier = targetModifier,
                                     ) {
                                         MikePenzMarkdownRenderer(
@@ -800,6 +804,7 @@ fun MikePenzMarkdownRenderer(
                                     onPreviewRequested = currentCodePreviewCallback.value?.let { callback ->
                                         { callback(language.orEmpty(), code) }
                                     },
+                                    flatDarkStyle = flatDarkStyle,
                                 )
                             }
                         }
@@ -817,6 +822,7 @@ fun MikePenzMarkdownRenderer(
                             onPreviewRequested = currentCodePreviewCallback.value?.let { callback ->
                                 { callback(language.orEmpty(), code) }
                             },
+                            flatDarkStyle = flatDarkStyle,
                         )
                     }
                 },

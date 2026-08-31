@@ -88,6 +88,7 @@ import com.android.everytalk.data.computer.ComputerStatus
 import com.android.everytalk.models.ImageSourceOption
 import com.android.everytalk.models.MoreOptionsType
 import com.android.everytalk.models.SelectedMediaItem
+import com.android.everytalk.models.createTextAttachment
 import com.android.everytalk.ui.components.dialog.AppDialogButtonShape
 import com.android.everytalk.ui.components.dialog.AppDialogShape
 import com.android.everytalk.ui.components.dialog.AppDialogTextFieldShape
@@ -439,6 +440,7 @@ fun ChatInputArea(
         mutableStateOf(TextFieldValue(text, TextRange(text.length)))
     }
     var skillReferences by remember { mutableStateOf<List<MessageSkillReference>>(emptyList()) }
+    var isConvertingLongText by remember { mutableStateOf(false) }
     
     // 防抖同步 Job，用于取消上一次未完成的同步
     var syncJob by remember { mutableStateOf<Job?>(null) }
@@ -498,6 +500,39 @@ fun ChatInputArea(
         dismissedSlashQueryStart = slashQuery?.start
     }
     LaunchedEffect(localText) {
+        if (localText.length < LONG_TEXT_ATTACHMENT_THRESHOLD_CHARS) {
+            isConvertingLongText = false
+            return@LaunchedEffect
+        }
+
+        // 只在用户短暂停止输入后写文件，连续输入时不会每个字符都触发磁盘操作。
+        isConvertingLongText = true
+        delay(120L)
+        val sourceText = localText
+        val sourceReferences = skillReferences
+        try {
+            val attachment = createTextAttachment(
+                context = context,
+                text = displaySkillEditorText(sourceText, sourceReferences),
+            )
+            if (attachment == null || localTextFieldValue.text != sourceText || skillReferences != sourceReferences) {
+                attachment?.filePath?.let(::File)?.takeIf(File::isFile)?.delete()
+                return@LaunchedEffect
+            }
+
+            // 只清空正文，保留刚生成的附件；附件会由现有组件自动显示在输入框上方。
+            localTextFieldValue = TextFieldValue("", TextRange(0))
+            skillReferences = emptyList()
+            lastExternalText = ""
+            onTextChange("")
+            onAddMediaItem(attachment)
+            syncJob?.cancel()
+        } finally {
+            isConvertingLongText = false
+        }
+    }
+
+    LaunchedEffect(localText) {
         // 取消上一次的同步任务
         syncJob?.cancel()
         syncJob = coroutineScope.launch {
@@ -539,23 +574,43 @@ fun ChatInputArea(
         }
     }
 
-    val onClearContent = remember {
-        {
-            onTextChange("")
-            onClearMediaItems()
-            Unit
+    /** 只回收输入阶段自动生成且尚未发送的文本附件，用户主动选择的文件不受影响。 */
+    fun deleteDraftTextAttachments(items: List<SelectedMediaItem>) {
+        val paths = items.mapNotNull { item ->
+            (item as? SelectedMediaItem.GenericFile)
+                ?.takeIf { it.displayName.startsWith("pasted-text-") }
+                ?.filePath
+                ?.takeIf { File(it).name.startsWith("pasted_text_") }
         }
+        if (paths.isEmpty()) return
+        coroutineScope.launch(Dispatchers.IO) {
+            paths.forEach { path -> runCatching { File(path).takeIf(File::isFile)?.delete() } }
+        }
+    }
+
+    val onClearContent = {
+        onTextChange("")
+        deleteDraftTextAttachments(selectedMediaItems)
+        onClearMediaItems()
+    }
+
+    val onRemoveSelectedMedia: (Int) -> Unit = { index ->
+        val item = selectedMediaItems.getOrNull(index)
+        onRemoveMediaItemAtIndex(index)
+        if (item != null) deleteDraftTextAttachments(listOf(item))
     }
 
     // 🎯 性能优化：发送时使用本地文本，确保发送最新内容
     val onSendClick =
-        remember(isApiCalling, isRemoteCancellationPending, localText, selectedMediaItems, selectedApiConfig, imeInsets, density) {
+        remember(isApiCalling, isRemoteCancellationPending, isConvertingLongText, localText, selectedMediaItems, selectedApiConfig, imeInsets, density) {
             {
                 try {
                     if (isRemoteCancellationPending) {
                         // 远端取消尚未确认，固定按钮只展示加载，不重复发起取消或新消息。
                     } else if (isApiCalling) {
                         onStopApiCall()
+                    } else if (isConvertingLongText) {
+                        onShowSnackbar(context.getString(R.string.chat_input_long_text_converting))
                     } else if (localText.isBlank() && selectedMediaItems.isEmpty()) {
                         onShowVoiceInput()
                     } else if (selectedApiConfig != null) {
@@ -647,7 +702,7 @@ fun ChatInputArea(
                 // 使用优化的组件。只给普通附件自身保留输入区的水平留白。
                 OptimizedMediaItemsList(
                     selectedMediaItems = selectedMediaItems,
-                    onRemoveMediaItemAtIndex = onRemoveMediaItemAtIndex,
+                    onRemoveMediaItemAtIndex = onRemoveSelectedMedia,
                     modifier = Modifier.padding(horizontal = 10.dp),
                 )
 
@@ -978,6 +1033,7 @@ fun ChatInputArea(
                                         skillReferences = emptyList()
                                         lastExternalText = ""
                                         onTextChange("")
+                                        deleteDraftTextAttachments(selectedMediaItems)
                                         onClearMediaItems()
                                         syncJob?.cancel()
                                     },

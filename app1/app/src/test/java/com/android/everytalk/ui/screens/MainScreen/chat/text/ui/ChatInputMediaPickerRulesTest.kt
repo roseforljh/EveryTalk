@@ -19,6 +19,18 @@ class ChatInputMediaPickerRulesTest {
         assertTrue(photoPicker.contains("catch (e: CancellationException)"))
     }
 
+    @Test
+    fun `long text is converted in input area before sending`() {
+        val source = chatInputSource().readText(Charsets.UTF_8)
+
+        assertTrue(source.contains("LONG_TEXT_ATTACHMENT_THRESHOLD_CHARS"))
+        assertTrue(source.contains("createTextAttachment("))
+        assertTrue(source.contains("onAddMediaItem(attachment)"))
+        assertTrue(source.contains("chat_input_long_text_converting"))
+        assertTrue(source.contains("deleteDraftTextAttachments"))
+        assertTrue(source.contains("pasted_text_"))
+    }
+
     private fun chatInputSource(): File {
         val relativePath = "ui/screens/MainScreen/chat/text/ui/ChatInputArea.kt"
         val candidates = listOf(

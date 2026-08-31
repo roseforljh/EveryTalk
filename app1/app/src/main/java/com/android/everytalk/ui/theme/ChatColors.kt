@@ -42,8 +42,10 @@ fun getChatColors(): ChatColors {
         // 亮色模式：使用为聊天定制的配色（适配白天）
         lightChatColors
     } else {
-        // 深色模式：使用为聊天定制的配色（适配夜晚）
-        darkChatColors
+        // 深色模式下 AI 气泡必须融入页面，不能再使用独立的灰黑色卡片。
+        darkChatColors.copy(
+            aiBubble = colorScheme.background,
+        )
     }
 }
 
