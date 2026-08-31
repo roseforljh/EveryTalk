@@ -1,14 +1,19 @@
 package com.android.everytalk.data.database.daos
 
 import androidx.room.Dao
+import androidx.room.Insert
 import androidx.room.Query
 import androidx.room.Transaction
 import androidx.room.Upsert
+import com.android.everytalk.data.DataClass.MessageContentPart
 import com.android.everytalk.data.database.entities.ChatSessionEntity
 import com.android.everytalk.data.database.entities.MessageEntity
 import com.android.everytalk.data.database.entities.MessageStorageState
 import com.android.everytalk.data.database.entities.LightweightMessageRow
+import com.android.everytalk.data.database.entities.PendingMessageEntity
 import com.android.everytalk.data.database.entities.RawMessageRow
+import com.android.everytalk.models.SelectedMediaItem
+import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ChatDao {
@@ -88,10 +93,108 @@ interface ChatDao {
         """
     )
     suspend fun getLightweightMessagesForMode(isImageGen: Boolean): List<LightweightMessageRow>
-    
+
+    @Query(
+        "SELECT * FROM pending_messages WHERE conversationId = :conversationId " +
+            "ORDER BY queuePosition ASC, id ASC",
+    )
+    fun observePendingMessages(conversationId: String): Flow<List<PendingMessageEntity>>
+
+    @Query(
+        "SELECT COALESCE(MAX(queuePosition), -1) + 1 FROM pending_messages " +
+            "WHERE conversationId = :conversationId",
+    )
+    suspend fun nextPendingQueuePosition(conversationId: String): Long
+
+    @Insert
+    suspend fun insertPendingMessage(message: PendingMessageEntity)
+
+    /** 同一事务内分配位置并插入，快速连续发送也不会拿到相同顺序。 */
+    @Transaction
+    suspend fun enqueuePendingMessage(message: PendingMessageEntity) {
+        insertPendingMessage(
+            message.copy(queuePosition = nextPendingQueuePosition(message.conversationId)),
+        )
+    }
+
+    @Query(
+        """
+        UPDATE pending_messages
+        SET content = :content,
+            composerText = :composerText,
+            contentParts = :contentParts,
+            attachments = :attachments,
+            updatedAt = :updatedAt,
+            status = 'PENDING'
+        WHERE id = :id AND status = 'EDITING'
+        """,
+    )
+    suspend fun updatePendingMessage(
+        id: String,
+        content: String,
+        composerText: String,
+        contentParts: List<MessageContentPart>,
+        attachments: List<SelectedMediaItem>,
+        updatedAt: Long,
+    ): Int
+
+    @Query("UPDATE pending_messages SET status = 'EDITING' WHERE id = :id AND status = 'PENDING'")
+    suspend fun detachPendingMessageForEdit(id: String): Int
+
+    @Query("UPDATE pending_messages SET status = 'PENDING' WHERE id = :id AND status = 'EDITING'")
+    suspend fun cancelPendingMessageEdit(id: String): Int
+
+    @Query("DELETE FROM pending_messages WHERE id = :id AND status = 'PENDING'")
+    suspend fun deletePendingMessage(id: String): Int
+
+    @Query("UPDATE pending_messages SET status = 'DISPATCHING' WHERE id = :id AND status = 'PENDING'")
+    suspend fun claimPendingMessage(id: String): Int
+
+    @Query("DELETE FROM pending_messages WHERE id = :id AND status = 'DISPATCHING'")
+    suspend fun finishPendingDispatch(id: String): Int
+
+    @Query("UPDATE pending_messages SET status = 'PENDING' WHERE id = :id AND status = 'DISPATCHING'")
+    suspend fun restorePendingDispatch(id: String): Int
+
+    @Query("DELETE FROM pending_messages WHERE status = 'DISPATCHING' AND id IN (SELECT id FROM messages)")
+    suspend fun deletePersistedPendingDispatches()
+
+    // 进程恢复时只能回滚未完成的派发。EDITING 是 Composer 的持久状态，必须保留，
+    // 这样控制器才能恢复原 ID、原位置和输入内容，避免编辑项重新进入可发送队列。
+    @Query("UPDATE pending_messages SET status = 'PENDING' WHERE status = 'DISPATCHING'")
+    suspend fun restoreInterruptedPendingDispatches()
+
+    /** 正式消息已落库的记录直接清掉，其余中断记录恢复为待发送。 */
+    @Transaction
+    suspend fun recoverPendingDispatches() {
+        deletePersistedPendingDispatches()
+        restoreInterruptedPendingDispatches()
+    }
+
+    @Query("UPDATE pending_messages SET conversationId = :newId WHERE conversationId = :oldId")
+    suspend fun migratePendingConversationId(oldId: String, newId: String)
+
+    @Query("DELETE FROM pending_messages WHERE conversationId = :conversationId")
+    suspend fun deletePendingMessagesForConversation(conversationId: String)
+
+    @Query("DELETE FROM pending_messages")
+    suspend fun deleteAllPendingMessages()
+
     @Query("DELETE FROM chat_sessions WHERE isImageGeneration = :isImageGen")
-    suspend fun clearAllSessions(isImageGen: Boolean)
+    suspend fun clearAllSessionRows(isImageGen: Boolean)
+
+    @Transaction
+    suspend fun clearAllSessions(isImageGen: Boolean) {
+        if (!isImageGen) deleteAllPendingMessages()
+        clearAllSessionRows(isImageGen)
+    }
 
     @Query("DELETE FROM chat_sessions WHERE id = :sessionId")
-    suspend fun deleteSession(sessionId: String)
+    suspend fun deleteSessionRow(sessionId: String)
+
+    @Transaction
+    suspend fun deleteSession(sessionId: String) {
+        deletePendingMessagesForConversation(sessionId)
+        deleteSessionRow(sessionId)
+    }
 }

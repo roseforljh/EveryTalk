@@ -45,6 +45,7 @@ data class ChatSessionEntity(
     ],
     indices = [Index(value = ["sessionId", "timestamp"])]
 )
+
 data class MessageEntity(
     @PrimaryKey
     val id: String,
@@ -81,6 +82,29 @@ data class MessageEntity(
      * 保存会话时只查询这个小字段，避免为了判断消息是否变化而读取并解析整行 JSON。
      */
     val storageFingerprint: String,
+)
+
+/**
+ * AI 正在回答时暂存的用户消息。
+ *
+ * Pending 在真正派发前不会进入 messages 表。queuePosition 独立于创建时间，
+ * 因此编辑能保留原位置，“立即发送”也只需安全地提升排序。
+ */
+@Entity(
+    tableName = "pending_messages",
+    indices = [Index(value = ["conversationId", "status", "queuePosition"])],
+)
+data class PendingMessageEntity(
+    @PrimaryKey val id: String,
+    val conversationId: String,
+    val content: String,
+    val composerText: String,
+    val contentParts: List<MessageContentPart> = emptyList(),
+    val attachments: List<SelectedMediaItem> = emptyList(),
+    val createdAt: Long,
+    val updatedAt: Long,
+    val status: String,
+    val queuePosition: Long,
 )
 
 /** 保存事务判断增量变化时使用的轻量投影。 */

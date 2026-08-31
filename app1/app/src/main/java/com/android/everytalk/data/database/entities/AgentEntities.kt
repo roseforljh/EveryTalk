@@ -88,6 +88,32 @@ data class AgentEntryEntity(
     val finalizedAt: Long?,
 )
 
+/**
+ * 当前 AgentRun 的 steering 队列。
+ *
+ * UI 只负责原子登记；AgentLoop 在模型轮次或工具批次完成后的安全边界消费。
+ */
+@Entity(
+    tableName = "agent_steering_messages",
+    foreignKeys = [
+        ForeignKey(
+            entity = AgentRunEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["runId"],
+            onDelete = ForeignKey.CASCADE,
+        )
+    ],
+    indices = [Index(value = ["runId", "status", "createdAt"])],
+)
+data class AgentSteeringMessageEntity(
+    @PrimaryKey val id: String,
+    val runId: String,
+    val content: String,
+    val status: String,
+    val createdAt: Long,
+    val consumedAt: Long? = null,
+)
+
 @Entity(
     tableName = "agent_requests",
     foreignKeys = [

@@ -24,6 +24,7 @@ import com.android.everytalk.data.database.entities.AgentRequestEntity
 import com.android.everytalk.data.database.entities.AgentRequestUsageEntity
 import com.android.everytalk.data.database.entities.AgentRunEntity
 import com.android.everytalk.data.database.entities.AgentRunSnapshotChunkEntity
+import com.android.everytalk.data.database.entities.AgentSteeringMessageEntity
 import com.android.everytalk.data.database.entities.ChatSessionEntity
 import com.android.everytalk.data.database.entities.ConversationGroupEntity
 import com.android.everytalk.data.database.entities.ComputerAuditEventEntity
@@ -35,6 +36,7 @@ import com.android.everytalk.data.database.entities.ConversationComputerSelectio
 import com.android.everytalk.data.database.entities.ExpandedGroupEntity
 import com.android.everytalk.data.database.entities.McpServerConfigEntity
 import com.android.everytalk.data.database.entities.MessageEntity
+import com.android.everytalk.data.database.entities.PendingMessageEntity
 import com.android.everytalk.data.database.entities.PinnedItemEntity
 import com.android.everytalk.data.database.entities.ProviderContinuationStateEntity
 import com.android.everytalk.data.database.entities.SystemSettingEntity
@@ -49,6 +51,7 @@ import com.android.everytalk.data.database.entities.WorkspaceSecretMetadataEntit
         VoiceBackendConfigEntity::class,
         ChatSessionEntity::class,
         MessageEntity::class,
+        PendingMessageEntity::class,
         SystemSettingEntity::class,
         PinnedItemEntity::class,
         ConversationGroupEntity::class,
@@ -63,6 +66,7 @@ import com.android.everytalk.data.database.entities.WorkspaceSecretMetadataEntit
         ComputerAuditEventEntity::class,
         AgentRunEntity::class,
         AgentRunSnapshotChunkEntity::class,
+        AgentSteeringMessageEntity::class,
         AgentEntryEntity::class,
         AgentRequestEntity::class,
         AgentRequestUsageEntity::class,
@@ -72,7 +76,7 @@ import com.android.everytalk.data.database.entities.WorkspaceSecretMetadataEntit
         SkillInstallationEntity::class,
         SkillVersionEntity::class,
     ],
-    version = 28,
+    version = 30,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -127,6 +131,8 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_25_26,
                     MIGRATION_26_27,
                     MIGRATION_27_28,
+                    MIGRATION_28_29,
+                    MIGRATION_29_30,
                 )
                 .addCallback(DATABASE_MAINTENANCE_CALLBACK)
                 .build()
@@ -966,6 +972,55 @@ abstract class AppDatabase : RoomDatabase() {
                 )
                 db.execSQL(
                     "INSERT OR REPLACE INTO system_settings (`key`, value) VALUES ('$DATABASE_COMPACTION_KEY', '1')",
+                )
+            }
+        }
+
+        /** 为运行中输入增加独立队列表，Pending 在派发前不会污染正式消息历史。 */
+        val MIGRATION_28_29 = object : Migration(28, 29) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS pending_messages (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        conversationId TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        composerText TEXT NOT NULL,
+                        contentParts TEXT NOT NULL,
+                        attachments TEXT NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        updatedAt INTEGER NOT NULL,
+                        status TEXT NOT NULL,
+                        queuePosition INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_pending_messages_conversationId_status_queuePosition " +
+                        "ON pending_messages(conversationId, status, queuePosition)",
+                )
+            }
+        }
+
+        /** 为二改 AgentLoop 增加持久化 steering 队列，工具完成后在合法边界消费。 */
+        val MIGRATION_29_30 = object : Migration(29, 30) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS agent_steering_messages (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        runId TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        consumedAt INTEGER,
+                        FOREIGN KEY(runId) REFERENCES agent_runs(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_agent_steering_messages_runId_status_createdAt " +
+                        "ON agent_steering_messages(runId, status, createdAt)",
                 )
             }
         }

@@ -11,6 +11,7 @@ import com.android.everytalk.data.database.entities.AgentRequestEntity
 import com.android.everytalk.data.database.entities.AgentRequestUsageEntity
 import com.android.everytalk.data.database.entities.AgentRunEntity
 import com.android.everytalk.data.database.entities.AgentRunSnapshotChunkEntity
+import com.android.everytalk.data.database.entities.AgentSteeringMessageEntity
 import com.android.everytalk.data.database.entities.ProviderContinuationStateEntity
 import kotlinx.coroutines.flow.Flow
 
@@ -58,6 +59,73 @@ interface AgentDao {
 
     @Query("SELECT * FROM agent_runs WHERE sessionId = :sessionId ORDER BY createdAt ASC")
     suspend fun getRunsForSession(sessionId: String): List<AgentRunEntity>
+
+    @Query(
+        """
+        SELECT * FROM agent_runs
+        WHERE sessionId = :sessionId
+          AND status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED')
+        ORDER BY updatedAt DESC
+        LIMIT 1
+        """,
+    )
+    suspend fun getLatestSteerableRun(sessionId: String): AgentRunEntity?
+
+    @Query(
+        """
+        INSERT OR IGNORE INTO agent_steering_messages(id, runId, content, status, createdAt, consumedAt)
+        SELECT :id, :runId, :content, 'PENDING', :createdAt, NULL
+        FROM agent_runs
+        WHERE id = :runId
+          AND status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED')
+        """,
+    )
+    suspend fun enqueueSteeringIfRunActive(
+        id: String,
+        runId: String,
+        content: String,
+        createdAt: Long,
+    ): Long
+
+    @Query(
+        "SELECT * FROM agent_steering_messages WHERE runId = :runId AND status = 'PENDING' " +
+            "ORDER BY createdAt ASC, id ASC",
+    )
+    suspend fun getPendingSteering(runId: String): List<AgentSteeringMessageEntity>
+
+    @Query(
+        "UPDATE agent_steering_messages SET status = 'CONSUMED', consumedAt = :consumedAt " +
+            "WHERE id = :id AND status = 'PENDING'",
+    )
+    suspend fun markSteeringConsumed(id: String, consumedAt: Long): Int
+
+    /** steering 的 Transcript 事实和已消费状态必须一起提交，进程退出后不能丢失或重复。 */
+    @Transaction
+    suspend fun consumeSteering(entry: AgentEntryEntity, steeringId: String, consumedAt: Long): Boolean {
+        if (markSteeringConsumed(steeringId, consumedAt) != 1) return false
+        upsertEntry(entry)
+        return true
+    }
+
+    @Query(
+        """
+        UPDATE agent_runs
+        SET status = 'COMPLETED', currentRequestOrdinal = :requestOrdinal,
+            terminalReason = :terminalReason, updatedAt = :updatedAt
+        WHERE id = :runId
+          AND status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED')
+          AND NOT EXISTS (
+              SELECT 1 FROM agent_steering_messages
+              WHERE runId = :runId AND status = 'PENDING'
+          )
+        """,
+    )
+    suspend fun completeRunIfNoPendingSteering(
+        runId: String,
+        requestOrdinal: Int,
+        terminalReason: String?,
+        updatedAt: Long,
+    ): Int
 
     /**
      * 分页读取恢复快照。

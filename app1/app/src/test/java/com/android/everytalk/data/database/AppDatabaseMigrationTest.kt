@@ -1142,6 +1142,41 @@ class AppDatabaseMigrationTest {
         migrateHelper.close()
     }
 
+    @Test
+    fun `migration 28 to 29 creates persistent pending queue`() {
+        val createHelper = openHelper(version = 28)
+        createHelper.writableDatabase.close()
+        createHelper.close()
+
+        val migrateHelper = openHelper(
+            version = 29,
+            onUpgrade = { db, oldVersion, newVersion ->
+                assertEquals(28, oldVersion)
+                assertEquals(29, newVersion)
+                AppDatabase.MIGRATION_28_29.migrate(db)
+            },
+        )
+        val db = migrateHelper.writableDatabase
+        val columns = mutableListOf<String>()
+        db.query("PRAGMA table_info(pending_messages)").use { cursor ->
+            while (cursor.moveToNext()) columns += cursor.getString(1)
+        }
+        assertEquals(
+            listOf(
+                "id", "conversationId", "content", "composerText", "contentParts", "attachments",
+                "createdAt", "updatedAt", "status", "queuePosition",
+            ),
+            columns,
+        )
+        db.query(
+            "SELECT name FROM sqlite_master WHERE type='index' " +
+                "AND name='index_pending_messages_conversationId_status_queuePosition'",
+        ).use { cursor -> assertTrue(cursor.moveToFirst()) }
+
+        db.close()
+        migrateHelper.close()
+    }
+
     private fun openHelper(
         version: Int,
         onCreate: (SupportSQLiteDatabase) -> Unit = {},
