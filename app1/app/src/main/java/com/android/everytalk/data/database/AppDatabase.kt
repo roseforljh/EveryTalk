@@ -25,6 +25,12 @@ import com.android.everytalk.data.database.entities.AgentRequestUsageEntity
 import com.android.everytalk.data.database.entities.AgentRunEntity
 import com.android.everytalk.data.database.entities.AgentRunSnapshotChunkEntity
 import com.android.everytalk.data.database.entities.AgentSteeringMessageEntity
+import com.android.everytalk.data.database.entities.AgentSuspensionEntity
+import com.android.everytalk.data.database.entities.AgentCapabilityGrantEntity
+import com.android.everytalk.data.database.entities.AgentResourceLeaseEntity
+import com.android.everytalk.data.database.entities.AgentExecutionSlotEntity
+import com.android.everytalk.data.database.entities.AgentStoredAuthorizationEntity
+import com.android.everytalk.data.database.entities.AgentOAuthStateEntity
 import com.android.everytalk.data.database.entities.ChatSessionEntity
 import com.android.everytalk.data.database.entities.ConversationGroupEntity
 import com.android.everytalk.data.database.entities.ComputerAuditEventEntity
@@ -75,8 +81,14 @@ import com.android.everytalk.data.database.entities.WorkspaceSecretMetadataEntit
         ProviderContinuationStateEntity::class,
         SkillInstallationEntity::class,
         SkillVersionEntity::class,
+        AgentSuspensionEntity::class,
+        AgentCapabilityGrantEntity::class,
+        AgentResourceLeaseEntity::class,
+        AgentExecutionSlotEntity::class,
+        AgentStoredAuthorizationEntity::class,
+        AgentOAuthStateEntity::class,
     ],
-    version = 30,
+    version = 31,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -133,6 +145,7 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_27_28,
                     MIGRATION_28_29,
                     MIGRATION_29_30,
+                    MIGRATION_30_31,
                 )
                 .addCallback(DATABASE_MAINTENANCE_CALLBACK)
                 .build()
@@ -1022,6 +1035,155 @@ abstract class AppDatabase : RoomDatabase() {
                     "CREATE INDEX IF NOT EXISTS index_agent_steering_messages_runId_status_createdAt " +
                         "ON agent_steering_messages(runId, status, createdAt)",
                 )
+            }
+        }
+
+        /** Agent 执行期人类接力的持久化账本。只保存摘要、状态和 CAS 字段，不保存 Secret。 */
+        val MIGRATION_30_31 = object : Migration(30, 31) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE agent_runs ADD COLUMN runGeneration INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE agent_runs ADD COLUMN loopState TEXT NOT NULL DEFAULT 'RUNNING'")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS agent_suspensions (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        runId TEXT NOT NULL,
+                        runGeneration INTEGER NOT NULL,
+                        turnId TEXT NOT NULL,
+                        requestId TEXT NOT NULL,
+                        toolCallId TEXT NOT NULL,
+                        executionSlot TEXT NOT NULL,
+                        requestHash TEXT NOT NULL,
+                        capabilityId TEXT NOT NULL,
+                        targetBindingRef TEXT NOT NULL,
+                        requestSource TEXT NOT NULL,
+                        policyVersion TEXT NOT NULL,
+                        adapterContractVersion TEXT NOT NULL,
+                        bindingGeneration INTEGER NOT NULL,
+                        executionGeneration INTEGER NOT NULL,
+                        resourceEpoch INTEGER NOT NULL,
+                        activeSuspensionIdempotencyKey TEXT NOT NULL,
+                        resolutionMaterialKind TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        continuationKind TEXT NOT NULL,
+                        reconciliationPhase TEXT,
+                        resolutionNonceHash TEXT,
+                        fulfillmentAttemptId TEXT,
+                        resumeAttemptId TEXT,
+                        rowVersion INTEGER NOT NULL,
+                        createdAt INTEGER NOT NULL,
+                        updatedAt INTEGER NOT NULL,
+                        expiresAt INTEGER,
+                        failureCode TEXT,
+                        FOREIGN KEY(runId) REFERENCES agent_runs(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_agent_suspensions_activeSuspensionIdempotencyKey ON agent_suspensions(activeSuspensionIdempotencyKey)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_agent_suspensions_runId_status ON agent_suspensions(runId, status)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_agent_suspensions_runId_executionSlot ON agent_suspensions(runId, executionSlot)")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS agent_execution_slots (
+                        runId TEXT NOT NULL,
+                        executionSlot TEXT NOT NULL,
+                        toolCallId TEXT NOT NULL,
+                        executionGeneration INTEGER NOT NULL,
+                        state TEXT NOT NULL,
+                        suspensionId TEXT,
+                        updatedAt INTEGER NOT NULL,
+                        PRIMARY KEY(runId, executionSlot),
+                        FOREIGN KEY(runId) REFERENCES agent_runs(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_agent_execution_slots_runId_state ON agent_execution_slots(runId, state)")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS agent_capability_grants (
+                        grantId TEXT NOT NULL PRIMARY KEY,
+                        capability TEXT NOT NULL,
+                        runId TEXT NOT NULL,
+                        runGeneration INTEGER NOT NULL,
+                        toolCallId TEXT NOT NULL,
+                        executionSlot TEXT NOT NULL,
+                        operation TEXT NOT NULL,
+                        targetBinding TEXT NOT NULL,
+                        audience TEXT NOT NULL,
+                        scope TEXT NOT NULL,
+                        issuedAt INTEGER NOT NULL,
+                        expiresAt INTEGER NOT NULL,
+                        maxUses INTEGER NOT NULL,
+                        usageCount INTEGER NOT NULL,
+                        grantUseAttemptId TEXT,
+                        status TEXT NOT NULL,
+                        generation INTEGER NOT NULL,
+                        revoked INTEGER NOT NULL,
+                        rowVersion INTEGER NOT NULL,
+                        FOREIGN KEY(runId) REFERENCES agent_runs(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_agent_capability_grants_runId_executionSlot ON agent_capability_grants(runId, executionSlot)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_agent_capability_grants_status_expiresAt ON agent_capability_grants(status, expiresAt)")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS agent_resource_leases (
+                        resourceRef TEXT NOT NULL,
+                        leaseOwner TEXT NOT NULL,
+                        leaseKind TEXT NOT NULL,
+                        leaseGeneration INTEGER NOT NULL,
+                        runId TEXT NOT NULL,
+                        runGeneration INTEGER NOT NULL,
+                        issuedAt INTEGER NOT NULL,
+                        expiresAt INTEGER NOT NULL,
+                        revoked INTEGER NOT NULL,
+                        PRIMARY KEY(resourceRef, leaseKind),
+                        FOREIGN KEY(runId) REFERENCES agent_runs(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_agent_resource_leases_runId_leaseOwner ON agent_resource_leases(runId, leaseOwner)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_agent_resource_leases_expiresAt ON agent_resource_leases(expiresAt)")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS agent_stored_authorizations (
+                        authorizationId TEXT NOT NULL PRIMARY KEY,
+                        provider TEXT NOT NULL,
+                        credentialReference TEXT NOT NULL,
+                        userConsentScope TEXT NOT NULL,
+                        workspaceId TEXT,
+                        computerId TEXT,
+                        issuedAt INTEGER NOT NULL,
+                        expiresAt INTEGER,
+                        revoked INTEGER NOT NULL,
+                        generation INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_agent_stored_authorizations_provider_workspaceId_computerId ON agent_stored_authorizations(provider, workspaceId, computerId)")
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS agent_oauth_states (
+                        stateHash TEXT NOT NULL PRIMARY KEY,
+                        runId TEXT NOT NULL,
+                        runGeneration INTEGER NOT NULL,
+                        capability TEXT NOT NULL,
+                        targetBinding TEXT NOT NULL,
+                        clientId TEXT NOT NULL,
+                        redirectUri TEXT NOT NULL,
+                        verifierReference TEXT NOT NULL,
+                        verifierGeneration INTEGER NOT NULL,
+                        issuedAt INTEGER NOT NULL,
+                        expiresAt INTEGER NOT NULL,
+                        consumed INTEGER NOT NULL,
+                        callbackAttemptId TEXT,
+                        rowVersion INTEGER NOT NULL,
+                        FOREIGN KEY(runId) REFERENCES agent_runs(id) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_agent_oauth_states_runId_consumed_expiresAt ON agent_oauth_states(runId, consumed, expiresAt)")
             }
         }
 

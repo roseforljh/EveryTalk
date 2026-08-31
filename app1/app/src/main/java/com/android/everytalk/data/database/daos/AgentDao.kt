@@ -12,6 +12,12 @@ import com.android.everytalk.data.database.entities.AgentRequestUsageEntity
 import com.android.everytalk.data.database.entities.AgentRunEntity
 import com.android.everytalk.data.database.entities.AgentRunSnapshotChunkEntity
 import com.android.everytalk.data.database.entities.AgentSteeringMessageEntity
+import com.android.everytalk.data.database.entities.AgentSuspensionEntity
+import com.android.everytalk.data.database.entities.AgentCapabilityGrantEntity
+import com.android.everytalk.data.database.entities.AgentResourceLeaseEntity
+import com.android.everytalk.data.database.entities.AgentExecutionSlotEntity
+import com.android.everytalk.data.database.entities.AgentStoredAuthorizationEntity
+import com.android.everytalk.data.database.entities.AgentOAuthStateEntity
 import com.android.everytalk.data.database.entities.ProviderContinuationStateEntity
 import kotlinx.coroutines.flow.Flow
 
@@ -32,12 +38,398 @@ interface AgentDao {
     @Upsert suspend fun upsertContextSnapshot(snapshot: AgentContextSnapshotEntity)
     @Upsert suspend fun upsertCompaction(compaction: AgentCompactionEntryEntity)
     @Upsert suspend fun upsertContinuationState(state: ProviderContinuationStateEntity)
+    @androidx.room.Insert(onConflict = androidx.room.OnConflictStrategy.IGNORE)
+    suspend fun insertSuspensionIfAbsent(suspension: AgentSuspensionEntity): Long
+    @Upsert suspend fun upsertSuspension(suspension: AgentSuspensionEntity)
+    @androidx.room.Insert(onConflict = androidx.room.OnConflictStrategy.IGNORE)
+    suspend fun insertCapabilityGrantIfAbsent(grant: AgentCapabilityGrantEntity): Long
+    @Upsert suspend fun upsertResourceLease(lease: AgentResourceLeaseEntity)
+    @Upsert suspend fun upsertExecutionSlot(slot: AgentExecutionSlotEntity)
+    @androidx.room.Insert(onConflict = androidx.room.OnConflictStrategy.IGNORE)
+    suspend fun insertStoredAuthorizationIfAbsent(authorization: AgentStoredAuthorizationEntity): Long
+    /** OAuth state 只能为 generation 匹配的非终态 Run 创建。 */
+    @Query(
+        """
+        INSERT OR IGNORE INTO agent_oauth_states(
+            stateHash, runId, runGeneration, capability, targetBinding, clientId,
+            redirectUri, verifierReference, verifierGeneration, issuedAt, expiresAt,
+            consumed, callbackAttemptId, rowVersion
+        )
+        SELECT :stateHash, :runId, :runGeneration, :capability, :targetBinding, :clientId,
+               :redirectUri, :verifierReference, :verifierGeneration, :issuedAt, :expiresAt,
+               0, NULL, 0
+        FROM agent_runs
+        WHERE id = :runId AND runGeneration = :runGeneration
+          AND status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED')
+        """,
+    )
+    suspend fun insertOAuthStateIfRunActive(
+        stateHash: String,
+        runId: String,
+        runGeneration: Long,
+        capability: String,
+        targetBinding: String,
+        clientId: String,
+        redirectUri: String,
+        verifierReference: String,
+        verifierGeneration: Long,
+        issuedAt: Long,
+        expiresAt: Long,
+    ): Long
+
+    @Query("SELECT * FROM agent_oauth_states WHERE stateHash = :stateHash LIMIT 1")
+    suspend fun getOAuthState(stateHash: String): AgentOAuthStateEntity?
+
+    @Query("SELECT * FROM agent_stored_authorizations WHERE authorizationId = :id LIMIT 1")
+    suspend fun getStoredAuthorization(id: String): AgentStoredAuthorizationEntity?
+
+    /** Grant 创建也必须和 Run generation 校验放在同一事务，禁止终止竞态穿透。 */
+    @Transaction
+    suspend fun insertCapabilityGrantForActiveRun(grant: AgentCapabilityGrantEntity): Boolean {
+        val run = getRun(grant.runId) ?: return false
+        if (run.runGeneration != grant.runGeneration) return false
+        if (run.status in setOf("COMPLETED", "FAILED", "CANCELLED", "INTERRUPTED")) return false
+        return insertCapabilityGrantIfAbsent(grant) != -1L
+    }
+
+    @Query("UPDATE agent_stored_authorizations SET revoked = 1, generation = generation + 1 WHERE authorizationId = :id AND revoked = 0")
+    suspend fun revokeStoredAuthorization(id: String): Int
+
+    @Query("""
+        UPDATE agent_oauth_states SET consumed = 1, callbackAttemptId = :attemptId,
+            rowVersion = rowVersion + 1
+        WHERE stateHash = :stateHash AND consumed = 0 AND expiresAt > :now
+          AND runGeneration = :runGeneration AND clientId = :clientId
+          AND redirectUri = :redirectUri AND verifierGeneration = :verifierGeneration
+          AND EXISTS (
+              SELECT 1 FROM agent_runs WHERE id = agent_oauth_states.runId
+                AND runGeneration = :runGeneration
+                AND status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED')
+          )
+    """)
+    suspend fun claimOAuthCallback(
+        stateHash: String,
+        runGeneration: Long,
+        clientId: String,
+        redirectUri: String,
+        verifierGeneration: Long,
+        attemptId: String,
+        now: Long,
+    ): Int
+
+    @Query("DELETE FROM agent_oauth_states WHERE stateHash = :stateHash AND consumed = 1")
+    suspend fun deleteConsumedOAuthState(stateHash: String): Int
+
+    @Query("SELECT * FROM agent_execution_slots WHERE runId = :runId AND executionSlot = :slot LIMIT 1")
+    suspend fun getExecutionSlot(runId: String, slot: String): AgentExecutionSlotEntity?
+
+    @Query("SELECT * FROM agent_suspensions WHERE activeSuspensionIdempotencyKey = :key LIMIT 1")
+    suspend fun findSuspensionByIdempotencyKey(key: String): AgentSuspensionEntity?
+
+    @Query("SELECT * FROM agent_suspensions WHERE id = :id LIMIT 1")
+    suspend fun getSuspension(id: String): AgentSuspensionEntity?
+
+    @Query("SELECT * FROM agent_suspensions WHERE status IN (:statuses) ORDER BY updatedAt ASC")
+    suspend fun getSuspensionsByStatuses(statuses: List<String>): List<AgentSuspensionEntity>
+
+    @Query("""
+        UPDATE agent_suspensions SET status = :nextStatus, rowVersion = rowVersion + 1,
+            updatedAt = :updatedAt, resolutionNonceHash = :resolutionNonceHash
+        WHERE id = :id AND status = :expectedStatus AND rowVersion = :expectedVersion
+          AND EXISTS (
+              SELECT 1 FROM agent_runs WHERE agent_runs.id = agent_suspensions.runId
+                AND agent_runs.runGeneration = agent_suspensions.runGeneration
+                AND agent_runs.status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')
+          )
+    """)
+    suspend fun compareAndSetSuspension(
+        id: String,
+        expectedStatus: String,
+        nextStatus: String,
+        expectedVersion: Long,
+        updatedAt: Long,
+        resolutionNonceHash: String? = null,
+    ): Int
+
+    @Query("""
+        UPDATE agent_suspensions SET status = :nextStatus, failureCode = :failureCode,
+            rowVersion = rowVersion + 1, updatedAt = :updatedAt
+        WHERE id = :id AND status = :expectedStatus AND rowVersion = :expectedVersion
+          AND EXISTS (
+              SELECT 1 FROM agent_runs WHERE agent_runs.id = agent_suspensions.runId
+                AND agent_runs.runGeneration = agent_suspensions.runGeneration
+                AND agent_runs.status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')
+          )
+    """)
+    suspend fun transitionSuspensionOutcome(
+        id: String,
+        expectedStatus: String,
+        nextStatus: String,
+        expectedVersion: Long,
+        failureCode: String?,
+        updatedAt: Long,
+    ): Int
+
+    @Query("""
+        UPDATE agent_suspensions SET status = 'RESOLUTION_RECEIVED', rowVersion = rowVersion + 1,
+            updatedAt = :updatedAt
+        WHERE id = :id AND status = :expectedStatus AND rowVersion = :expectedVersion
+          AND resolutionNonceHash = :resolutionNonceHash
+          AND EXISTS (
+              SELECT 1 FROM agent_runs WHERE agent_runs.id = agent_suspensions.runId
+                AND agent_runs.runGeneration = agent_suspensions.runGeneration
+                AND agent_runs.status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')
+          )
+    """)
+    suspend fun resolveSuspension(
+        id: String,
+        expectedStatus: String,
+        expectedVersion: Long,
+        resolutionNonceHash: String,
+        updatedAt: Long,
+    ): Int
+
+    @Query("""
+        UPDATE agent_suspensions SET requestSource = :requestSource,
+            bindingGeneration = :bindingGeneration, rowVersion = rowVersion + 1, updatedAt = :updatedAt
+        WHERE id = :id AND status = 'WAITING_USER' AND requestSource = 'MODEL_HINT'
+          AND rowVersion = :expectedVersion
+    """)
+    suspend fun upgradeSuspensionEvidence(
+        id: String,
+        expectedVersion: Long,
+        requestSource: String,
+        bindingGeneration: Long,
+        updatedAt: Long,
+    ): Int
+
+    @Query("""
+        UPDATE agent_suspensions SET status = 'FULFILLING', fulfillmentAttemptId = :attemptId,
+            rowVersion = rowVersion + 1, updatedAt = :updatedAt
+        WHERE id = :id AND status = 'RESOLUTION_RECEIVED' AND rowVersion = :expectedVersion
+          AND runGeneration = :runGeneration
+          AND EXISTS (
+              SELECT 1 FROM agent_runs WHERE agent_runs.id = agent_suspensions.runId
+                AND agent_runs.runGeneration = :runGeneration
+                AND agent_runs.status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED')
+          )
+    """)
+    suspend fun claimSuspensionFulfillment(
+        id: String,
+        expectedVersion: Long,
+        runGeneration: Long,
+        attemptId: String,
+        updatedAt: Long,
+    ): Int
+
+    @Query("""
+        UPDATE agent_suspensions SET status = 'RESUMING', resumeAttemptId = :attemptId,
+            rowVersion = rowVersion + 1, updatedAt = :updatedAt
+        WHERE id = :id AND status = 'READY_TO_RESUME' AND rowVersion = :expectedVersion
+          AND runGeneration = :runGeneration
+          AND EXISTS (
+              SELECT 1 FROM agent_runs WHERE agent_runs.id = agent_suspensions.runId
+                AND agent_runs.runGeneration = :runGeneration
+                AND agent_runs.status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED')
+          )
+    """)
+    suspend fun claimSuspensionResume(
+        id: String,
+        expectedVersion: Long,
+        runGeneration: Long,
+        attemptId: String,
+        updatedAt: Long,
+    ): Int
+
+    @Query("UPDATE agent_capability_grants SET revoked = 1, status = 'REVOKED', rowVersion = rowVersion + 1 WHERE runId = :runId AND revoked = 0")
+    suspend fun revokeGrantsForRun(runId: String): Int
+
+    @Query("UPDATE agent_resource_leases SET revoked = 1 WHERE runId = :runId AND revoked = 0")
+    suspend fun revokeResourceLeasesForRun(runId: String): Int
+
+    @Query("""
+        UPDATE agent_capability_grants SET status = 'RESERVED', grantUseAttemptId = :attemptId,
+            usageCount = usageCount + 1, rowVersion = rowVersion + 1
+        WHERE grantId = :grantId AND status = 'AVAILABLE' AND revoked = 0
+          AND runId = :runId AND runGeneration = :runGeneration
+          AND toolCallId = :toolCallId AND executionSlot = :executionSlot
+          AND operation = :operation AND targetBinding = :targetBinding
+          AND audience = :audience AND generation = :generation AND expiresAt > :now
+          AND EXISTS (
+              SELECT 1 FROM agent_runs
+              WHERE id = :runId AND runGeneration = :runGeneration
+                AND status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED')
+          )
+          AND usageCount < maxUses
+    """)
+    suspend fun claimGrantUse(
+        grantId: String,
+        runId: String,
+        runGeneration: Long,
+        toolCallId: String,
+        executionSlot: String,
+        operation: String,
+        targetBinding: String,
+        audience: String,
+        generation: Long,
+        now: Long,
+        attemptId: String,
+    ): Int
+
+    @Query("UPDATE agent_capability_grants SET status = 'CONSUMED', rowVersion = rowVersion + 1 WHERE grantId = :grantId AND status = 'RESERVED' AND grantUseAttemptId = :attemptId")
+    suspend fun consumeGrant(grantId: String, attemptId: String): Int
+
+    @Query("UPDATE agent_capability_grants SET revoked = 1, status = 'REVOKED', rowVersion = rowVersion + 1 WHERE grantId = :grantId AND revoked = 0")
+    suspend fun revokeGrant(grantId: String): Int
+
+    @Query(
+        """
+        INSERT OR IGNORE INTO agent_resource_leases(
+            resourceRef, leaseOwner, leaseKind, leaseGeneration, runId, runGeneration,
+            issuedAt, expiresAt, revoked
+        )
+        SELECT :resourceRef, :leaseOwner, :leaseKind, :leaseGeneration, :runId, :runGeneration,
+               :issuedAt, :expiresAt, 0
+        FROM agent_runs
+        WHERE id = :runId AND runGeneration = :runGeneration
+          AND status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED')
+        """,
+    )
+    suspend fun insertResourceLeaseIfAbsent(
+        resourceRef: String,
+        leaseOwner: String,
+        leaseKind: String,
+        leaseGeneration: Long,
+        runId: String,
+        runGeneration: Long,
+        issuedAt: Long,
+        expiresAt: Long,
+    ): Long
+
+    /** 只有已撤销或已过期的旧 Lease 才能被更高 generation 接管。 */
+    @Query(
+        """
+        UPDATE agent_resource_leases
+        SET leaseOwner = :leaseOwner, leaseGeneration = :leaseGeneration,
+            runId = :runId, runGeneration = :runGeneration,
+            issuedAt = :issuedAt, expiresAt = :expiresAt, revoked = 0
+        WHERE resourceRef = :resourceRef AND leaseKind = :leaseKind
+          AND leaseGeneration < :leaseGeneration
+          AND (revoked = 1 OR expiresAt <= :issuedAt)
+          AND EXISTS (
+              SELECT 1 FROM agent_runs WHERE id = :runId
+                AND runGeneration = :runGeneration
+                AND status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED')
+          )
+        """,
+    )
+    suspend fun replaceReclaimableResourceLease(
+        resourceRef: String,
+        leaseOwner: String,
+        leaseKind: String,
+        leaseGeneration: Long,
+        runId: String,
+        runGeneration: Long,
+        issuedAt: Long,
+        expiresAt: Long,
+    ): Int
+
+    /** ResourceLease 的首次占用和过期接管必须放在同一数据库事务中。 */
+    @Transaction
+    suspend fun claimResourceLease(
+        resourceRef: String,
+        leaseOwner: String,
+        leaseKind: String,
+        leaseGeneration: Long,
+        runId: String,
+        runGeneration: Long,
+        issuedAt: Long,
+        expiresAt: Long,
+    ): Boolean {
+        if (
+            replaceReclaimableResourceLease(
+                resourceRef,
+                leaseOwner,
+                leaseKind,
+                leaseGeneration,
+                runId,
+                runGeneration,
+                issuedAt,
+                expiresAt,
+            ) == 1
+        ) return true
+        return insertResourceLeaseIfAbsent(
+            resourceRef,
+            leaseOwner,
+            leaseKind,
+            leaseGeneration,
+            runId,
+            runGeneration,
+            issuedAt,
+            expiresAt,
+        ) != -1L
+    }
+
+    @Query("UPDATE agent_resource_leases SET revoked = 1 WHERE resourceRef = :resourceRef AND leaseKind = :leaseKind AND leaseOwner = :owner")
+    suspend fun revokeResourceLease(resourceRef: String, leaseKind: String, owner: String): Int
+
+    /** Suspension、Run 等待状态和事件必须在同一事务提交。事件沿用 agent_entries 账本。 */
+    @Transaction
+    suspend fun persistSuspensionAndPauseRun(
+        suspension: AgentSuspensionEntity,
+        waitingRun: AgentRunEntity,
+        slot: AgentExecutionSlotEntity,
+        event: AgentEntryEntity,
+    ): AgentSuspensionEntity {
+        val currentRun = getRun(suspension.runId) ?: error("Suspension run does not exist")
+        check(currentRun.runGeneration == suspension.runGeneration) { "Suspension run generation is stale" }
+        check(currentRun.status !in setOf("COMPLETED", "FAILED", "CANCELLED")) {
+            "Terminal AgentRun cannot be suspended"
+        }
+        val inserted = insertSuspensionIfAbsent(suspension)
+        val existing = if (inserted == -1L) {
+            findSuspensionByIdempotencyKey(suspension.activeSuspensionIdempotencyKey)
+        } else {
+            suspension
+        } ?: error("Suspension insert lost without existing record")
+        if (inserted != -1L) {
+            upsertRun(
+                currentRun.copy(
+                    status = waitingRun.status,
+                    loopState = waitingRun.loopState,
+                    updatedAt = waitingRun.updatedAt,
+                ),
+            )
+            upsertExecutionSlot(slot)
+            upsertEntry(event)
+        }
+        return existing
+    }
 
     @Query("SELECT * FROM agent_runs WHERE id = :runId LIMIT 1")
     suspend fun getRun(runId: String): AgentRunEntity?
 
     @Query("SELECT * FROM agent_runs WHERE visibleAssistantMessageId = :messageId LIMIT 1")
     suspend fun getRunByVisibleMessage(messageId: String): AgentRunEntity?
+
+    /** 旧执行协程不得用整行 Upsert 覆盖已经终止或 generation 已变化的 Run。 */
+    @Query(
+        """
+        UPDATE agent_runs
+        SET status = :status, currentRequestOrdinal = :requestOrdinal,
+            terminalReason = :terminalReason, updatedAt = :updatedAt
+        WHERE id = :runId AND runGeneration = :expectedGeneration
+          AND status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED')
+        """,
+    )
+    suspend fun updateRunStatusIfActive(
+        runId: String,
+        expectedGeneration: Long,
+        status: String,
+        requestOrdinal: Int,
+        terminalReason: String?,
+        updatedAt: Long,
+    ): Int
 
     /**
      * 用户点击停止时按可见消息原子封存 Run。
@@ -46,7 +438,8 @@ interface AgentDao {
     @Query(
         """
         UPDATE agent_runs
-        SET status = 'CANCELLED', terminalReason = :reason, updatedAt = :updatedAt
+        SET status = 'CANCELLED', terminalReason = :reason, updatedAt = :updatedAt,
+            runGeneration = runGeneration + 1
         WHERE visibleAssistantMessageId = :messageId
           AND status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED')
         """
@@ -56,6 +449,17 @@ interface AgentDao {
         reason: String,
         updatedAt: Long,
     ): Int
+
+    @Query(
+        """
+        UPDATE agent_runs
+        SET status = 'CANCELLED', terminalReason = :reason, updatedAt = :updatedAt,
+            runGeneration = runGeneration + 1
+        WHERE id = :runId
+          AND status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED')
+        """,
+    )
+    suspend fun cancelActiveRunById(runId: String, reason: String, updatedAt: Long): Int
 
     @Query("SELECT * FROM agent_runs WHERE sessionId = :sessionId ORDER BY createdAt ASC")
     suspend fun getRunsForSession(sessionId: String): List<AgentRunEntity>
@@ -158,7 +562,8 @@ interface AgentDao {
     @Query(
         """
         UPDATE agent_runs
-        SET status = 'CANCELLED', terminalReason = :reason, updatedAt = :updatedAt
+        SET status = 'CANCELLED', terminalReason = :reason, updatedAt = :updatedAt,
+            runGeneration = runGeneration + 1
         WHERE (
             status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED')
             OR (status = 'INTERRUPTED' AND terminalReason IN ('APP_PROCESS_RESTARTED', 'APPROVAL_DECIDED_PENDING_RESUME'))
@@ -230,7 +635,8 @@ interface AgentDao {
     @Query(
         """
         UPDATE agent_runs
-        SET status = 'CANCELLED', terminalReason = :reason, updatedAt = :updatedAt
+        SET status = 'CANCELLED', terminalReason = :reason, updatedAt = :updatedAt,
+            runGeneration = runGeneration + 1
         WHERE sessionId = :sessionId
           AND (
               status = 'WAITING_APPROVAL'

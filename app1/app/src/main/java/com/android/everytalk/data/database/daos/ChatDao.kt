@@ -144,7 +144,7 @@ interface ChatDao {
     @Query("UPDATE pending_messages SET status = 'PENDING' WHERE id = :id AND status = 'EDITING'")
     suspend fun cancelPendingMessageEdit(id: String): Int
 
-    @Query("DELETE FROM pending_messages WHERE id = :id AND status = 'PENDING'")
+    @Query("DELETE FROM pending_messages WHERE id = :id AND status IN ('PENDING', 'EDITING')")
     suspend fun deletePendingMessage(id: String): Int
 
     @Query("UPDATE pending_messages SET status = 'DISPATCHING' WHERE id = :id AND status = 'PENDING'")

@@ -33,6 +33,10 @@ data class AgentRunEntity(
     val terminalReason: String?,
     val createdAt: Long,
     val updatedAt: Long,
+    /** 每次 Run 终止递增，用于使旧 resolve/fulfill/resume claim 失效。 */
+    val runGeneration: Long = 0,
+    /** 模型循环投影，与既有 status 兼容并逐步迁移。 */
+    val loopState: String = "RUNNING",
 )
 
 /**

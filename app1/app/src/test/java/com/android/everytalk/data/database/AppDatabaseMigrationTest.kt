@@ -35,6 +35,57 @@ class AppDatabaseMigrationTest {
     }
 
     @Test
+    fun `migration 30 to 31 creates intervention ledger without secret columns`() {
+        val createHelper = openHelper(
+            version = 30,
+            onCreate = { db ->
+                db.execSQL(
+                    """
+                    CREATE TABLE agent_runs (
+                        id TEXT NOT NULL PRIMARY KEY, sessionId TEXT NOT NULL, userMessageId TEXT NOT NULL,
+                        visibleAssistantMessageId TEXT NOT NULL, configIdSnapshot TEXT, requestSnapshotJson TEXT,
+                        status TEXT NOT NULL, currentRequestOrdinal INTEGER NOT NULL, terminalReason TEXT,
+                        createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+            },
+        )
+        createHelper.writableDatabase.close()
+        createHelper.close()
+
+        val migrateHelper = openHelper(
+            version = 31,
+            onUpgrade = { db, oldVersion, newVersion ->
+                assertEquals(30, oldVersion)
+                assertEquals(31, newVersion)
+                AppDatabase.MIGRATION_30_31.migrate(db)
+            },
+        )
+        val db = migrateHelper.writableDatabase
+        val runColumns = columns(db, "agent_runs")
+        val suspensionColumns = columns(db, "agent_suspensions")
+        val grantColumns = columns(db, "agent_capability_grants")
+        val slotColumns = columns(db, "agent_execution_slots")
+
+        assertTrue(runColumns.contains("runGeneration"))
+        assertTrue(runColumns.contains("loopState"))
+        assertTrue(suspensionColumns.contains("resolutionNonceHash"))
+        assertTrue(suspensionColumns.contains("targetBindingRef"))
+        assertTrue(grantColumns.containsAll(listOf("usageCount", "grantUseAttemptId", "rowVersion")))
+        assertTrue(slotColumns.containsAll(listOf("executionGeneration", "state", "suspensionId")))
+        assertFalse(suspensionColumns.any { it in setOf("password", "token", "otp", "secret", "codeVerifier") })
+        db.close()
+        migrateHelper.close()
+    }
+
+    private fun columns(db: SupportSQLiteDatabase, table: String): Set<String> = buildSet {
+        db.query("PRAGMA table_info($table)").use { cursor ->
+            while (cursor.moveToNext()) add(cursor.getString(1))
+        }
+    }
+
+    @Test
     fun `migration 6 to 7 preserves common api config data`() {
         val createHelper = openHelper(
             version = 6,
