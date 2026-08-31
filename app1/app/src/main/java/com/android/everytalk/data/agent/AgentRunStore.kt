@@ -8,6 +8,7 @@ import com.android.everytalk.data.database.entities.AgentRequestEntity
 import com.android.everytalk.data.database.entities.AgentRequestUsageEntity
 import com.android.everytalk.data.database.entities.AgentRunEntity
 import com.android.everytalk.data.database.entities.AgentRunSnapshotChunkEntity
+import com.android.everytalk.data.database.entities.AgentSteeringMessageEntity
 import com.android.everytalk.data.database.entities.ProviderContinuationStateEntity
 import com.android.everytalk.data.DataClass.AbstractApiMessage
 import com.android.everytalk.data.DataClass.AgentAssistantApiMessage
@@ -950,6 +951,61 @@ class AgentRunStore(
     suspend fun latestCompaction(sessionId: String): AgentCompactionEntryEntity? =
         dao.getLatestCompaction(sessionId)
 
+    /**
+     * 在模型轮次之间消费 steering。先把 steering 事实写入 Agent transcript，
+     * 再标记队列已消费，进程中断后不会丢失或重复送入模型。
+     */
+    suspend fun consumePendingSteering(runId: String): List<SimpleTextApiMessage> = buildList {
+        dao.getPendingSteering(runId).forEach { steering ->
+            val instruction = AgentSteeringInstruction(
+                id = steering.id,
+                content = steering.content,
+                createdAt = steering.createdAt,
+            )
+            val entry = AgentEntryEntity(
+                id = "steering:${steering.id}",
+                runId = runId,
+                sequence = dao.nextEntrySequence(runId),
+                kind = AgentEntryKind.STEERING.name,
+                requestId = null,
+                toolCallId = null,
+                payloadJson = json.encodeToString(AgentSteeringInstruction.serializer(), instruction),
+                status = AgentEntryStatus.FINAL.name,
+                createdAt = steering.createdAt,
+                finalizedAt = System.currentTimeMillis(),
+            )
+            if (dao.consumeSteering(entry, steering.id, System.currentTimeMillis())) {
+                add(
+                    SimpleTextApiMessage(
+                        id = "steering:${steering.id}",
+                        role = "user",
+                        content = steering.content,
+                    ),
+                )
+            }
+        }
+    }
+
+    /** 只有没有待处理 steering 时才能把 Run 原子结束，避免 steer 与完成竞态。 */
+    suspend fun completeRunIfNoPendingSteering(
+        run: AgentRunEntity,
+        requestOrdinal: Int,
+        terminalReason: String?,
+    ): AgentRunEntity? {
+        val updated = dao.completeRunIfNoPendingSteering(
+            runId = run.id,
+            requestOrdinal = requestOrdinal,
+            terminalReason = terminalReason,
+            updatedAt = System.currentTimeMillis(),
+        )
+        return run.copy(
+            status = AgentRunStatus.COMPLETED.name,
+            currentRequestOrdinal = requestOrdinal,
+            terminalReason = terminalReason,
+            updatedAt = System.currentTimeMillis(),
+        ).takeIf { updated == 1 }
+    }
+
     /** 摘要完整生成后一次写入有效检查点，失败或取消不会覆盖旧检查点。 */
     suspend fun saveCompaction(
         sessionId: String,
@@ -1025,6 +1081,7 @@ class AgentRunStore(
                 AgentEntryKind.ASSISTANT.name -> decodeAssistantEntry(entry, entry.requestId?.let(requestsById::get))
                 AgentEntryKind.TOOL_RESULT.name -> decodeToolResultEntry(entry)
                 AgentEntryKind.STATUS.name -> decodeStatusEntry(entry)
+                AgentEntryKind.STEERING.name -> decodeSteeringEntry(entry)
                 else -> null
             }
         }
@@ -1099,6 +1156,15 @@ class AgentRunStore(
                 executionId?.let { append("，execution_id=").append(it) }
                 append("。这是已有任务的状态，禁止重复创建或重跑命令。")
             },
+        )
+    }.getOrNull()
+
+    private fun decodeSteeringEntry(entry: AgentEntryEntity): SimpleTextApiMessage? = runCatching {
+        val instruction = json.decodeFromString(AgentSteeringInstruction.serializer(), entry.payloadJson)
+        SimpleTextApiMessage(
+            id = "steering:${instruction.id}",
+            role = "user",
+            content = instruction.content,
         )
     }.getOrNull()
 

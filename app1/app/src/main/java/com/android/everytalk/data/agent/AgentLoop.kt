@@ -102,6 +102,7 @@ class AgentLoop(
     private val contextManager: AgentContextManager = AgentContextManager(),
     private val toolRuntime: AgentToolRuntime = AgentToolRuntime(AgentToolExecutorRegistry::current),
     private val computerSessionStateProvider: suspend (ComputerRequestContext?) -> String? = { null },
+    private val pauseController: AgentRunPauseController = AgentRunPauseController(),
     private val modelTransport: ModelTurnTransport = ModelTurnTransport { turn ->
         ApiClient.streamModelTurn(turn.request)
     },
@@ -116,6 +117,7 @@ class AgentLoop(
                 configIdSnapshot = input.request.contextManagement?.configId,
                 request = input.request,
             )
+            pauseController.bind(checkNotNull(run).id, input.visibleAssistantMessageId)
             var transcript = runStore.expandTranscript(input.sessionId, input.request.messages)
             if (input.existingRun != null) transcript = runStore.appendRunTranscript(checkNotNull(run).id, transcript)
             var providerContinuation: ProviderTurnContinuation? = null
@@ -195,6 +197,12 @@ class AgentLoop(
 
             // modelTurnOrdinal 从 1 开始；恢复 Run 时只能使用剩余额度，不能重新获得 50 轮。
             for (modelTurnOrdinal in remainingAgentModelTurnOrdinals(firstModelTurnOrdinal)) {
+                // 每轮开始前统一经过安全暂停门，Resume 后从当前循环位置继续。
+                pauseController.awaitIfPaused(checkNotNull(run).id)
+                val steeringAtBoundary = runStore.consumePendingSteering(checkNotNull(run).id)
+                if (steeringAtBoundary.isNotEmpty()) {
+                    transcript = transcript + steeringAtBoundary
+                }
                 val preparationStartedAt = System.currentTimeMillis()
                 run = runStore.updateRunStatus(
                     run = checkNotNull(run),
@@ -326,6 +334,8 @@ class AgentLoop(
                     snapshot = prepared.snapshot,
                     retryOfRequest = retryOfRequest,
                 )
+                // 上下文准备或压缩期间到达的 Pause，在真正发起网络请求前生效。
+                pauseController.awaitIfPaused(checkNotNull(run).id)
                 val startedAt = System.currentTimeMillis()
                 requestFact = runStore.updateRequest(
                     request = requestFact,
@@ -561,12 +571,22 @@ class AgentLoop(
                 }
 
                 if (assistant.toolCalls.isEmpty()) {
-                    runStore.updateRunStatus(
+                    // steer 可能正好在模型结束边界到达。CAS 完成失败时优先消费 steering，
+                    // 不能把它误转成普通 follow-up 或丢在已结束的 Run 外。
+                    val completedRun = runStore.completeRunIfNoPendingSteering(
                         run = checkNotNull(run),
-                        status = AgentRunStatus.COMPLETED,
                         requestOrdinal = ordinal,
                         terminalReason = finishReason,
                     )
+                    if (completedRun == null) {
+                        val lateSteering = runStore.consumePendingSteering(checkNotNull(run).id)
+                        if (lateSteering.isNotEmpty()) {
+                            transcript = transcript + lateSteering
+                            continue
+                        }
+                        return@flow
+                    }
+                    run = completedRun
                     val summary = runStore.usageSummary(checkNotNull(run).id)
                     emit(
                         AppStreamEvent.AgentUsage(
@@ -596,6 +616,8 @@ class AgentLoop(
                     return@flow
                 }
 
+                // 只有确实存在下一批 Tool 时才暂停。最终回答已经没有后续工作，必须自然完成 Run。
+                pauseController.awaitIfPaused(checkNotNull(run).id)
                 run = runStore.updateRunStatus(checkNotNull(run), AgentRunStatus.CHECKING_PERMISSION, ordinal)
                 val toolOutcome = executeToolCallsUntilApproval(
                     run = checkNotNull(run),
@@ -609,6 +631,8 @@ class AgentLoop(
                 )
                 transcript = toolOutcome.transcript
                 if (toolOutcome.paused) return@flow
+                // 当前 Tool batch 和全部 ToolResult 已落库，下一轮 LLM 必须先经过暂停门。
+                pauseController.awaitIfPaused(checkNotNull(run).id)
                 emit(AppStreamEvent.ExecutionStatusUpdate("正在分析工具结果"))
             }
 
@@ -660,6 +684,8 @@ class AgentLoop(
                 )
             )
             emit(AppStreamEvent.Finish("agent_failed"))
+        } finally {
+            pauseController.finish(input.visibleAssistantMessageId)
         }
     }
 

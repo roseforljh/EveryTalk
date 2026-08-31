@@ -21,6 +21,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.channels.ClosedSendChannelException
@@ -41,8 +42,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 class AgentRunCoordinator(
     private val context: Context,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO),
-    private val injectedAgentLoop: AgentLoop? = null,
     private val computerSessionStateProvider: suspend (ComputerRequestContext?) -> String? = { null },
+    private val pauseController: AgentRunPauseController = AgentRunPauseController(),
 ) {
     companion object {
         @Volatile private var sharedInstance: AgentRunCoordinator? = null
@@ -50,12 +51,10 @@ class AgentRunCoordinator(
         /** UI 与前台服务必须共用同一个协调器，避免同一 Run 被两套恢复循环重复驱动。 */
         fun shared(
             context: Context,
-            injectedAgentLoop: AgentLoop? = null,
             computerSessionStateProvider: suspend (ComputerRequestContext?) -> String? = { null },
         ): AgentRunCoordinator = sharedInstance ?: synchronized(this) {
             sharedInstance ?: AgentRunCoordinator(
                 context = context.applicationContext,
-                injectedAgentLoop = injectedAgentLoop,
                 computerSessionStateProvider = computerSessionStateProvider,
             ).also { sharedInstance = it }
         }
@@ -86,7 +85,7 @@ class AgentRunCoordinator(
     val events = _events.asSharedFlow()
 
     private val agentLoop by lazy {
-        injectedAgentLoop ?: AgentLoop(
+        AgentLoop(
             runStore = agentRunStore,
             toolRuntime = AgentToolRuntime(
                 executorProvider = AgentToolExecutorRegistry::current,
@@ -94,8 +93,18 @@ class AgentRunCoordinator(
                 skillRuntimeTools = skillRuntimeTools,
             ),
             computerSessionStateProvider = computerSessionStateProvider,
+            pauseController = pauseController,
         )
     }
+
+    /** UI 只读投影；真实状态由应用级 pauseController 持有。 */
+    val runControlSnapshots: StateFlow<Map<String, AgentRunControlSnapshot>> = pauseController.snapshots
+
+    fun requestPause(visibleAssistantMessageId: String): Boolean =
+        pauseController.requestPause(visibleAssistantMessageId)
+
+    fun resumePausedRun(visibleAssistantMessageId: String): Boolean =
+        pauseController.resume(visibleAssistantMessageId)
 
     /**
      * 首次启动时 Run 还没创建，只能按可见消息 ID 登记 Job；恢复启动才按 Run ID 登记。
@@ -110,6 +119,7 @@ class AgentRunCoordinator(
     fun run(request: AgentLoopRequest): Flow<AppStreamEvent> = callbackFlow {
         val jobKey = request.existingRun?.id?.let { "run:$it" }
             ?: "message:${request.visibleAssistantMessageId}"
+        pauseController.register(request.visibleAssistantMessageId)
         val uiAttached = AtomicBoolean(true)
         val job = scope.launch {
             val foregroundActivity = ComputerConnectionServiceController.acquireAgentRun(appContext)
@@ -137,6 +147,7 @@ class AgentRunCoordinator(
             } finally {
                 foregroundActivity.close()
                 activeJobs.remove(jobKey)
+                pauseController.finish(request.visibleAssistantMessageId)
                 visibleRunCancellationReasons[request.visibleAssistantMessageId]?.let { reason ->
                     withContext(NonCancellable) {
                         agentRunStore.cancelActiveRunByVisibleMessage(
@@ -179,6 +190,21 @@ class AgentRunCoordinator(
         } finally {
             recoveringRunIds.remove(run.id)
         }
+    }
+
+    /**
+     * 正式 steering API。只把指令写入当前 Run 的 steering queue，不取消当前模型或工具 Job。
+     * AgentLoop 在工具结果落库后的下一个模型边界消费它。
+     */
+    suspend fun steer(sessionId: String, steeringId: String, content: String): Boolean {
+        if (content.isBlank() || steeringId.isBlank()) return false
+        val run = agentDao.getLatestSteerableRun(sessionId) ?: return false
+        return agentDao.enqueueSteeringIfRunActive(
+            id = steeringId,
+            runId = run.id,
+            content = content,
+            createdAt = System.currentTimeMillis(),
+        ) == 1L
     }
 
     private suspend fun resumeRunLocked(
@@ -224,6 +250,7 @@ class AgentRunCoordinator(
             approvalDecision = approvalDecision,
         )
 
+        pauseController.register(run.visibleAssistantMessageId)
         val job = scope.launch {
             val foregroundActivity = ComputerConnectionServiceController.acquireAgentRun(appContext)
             try {
@@ -244,6 +271,7 @@ class AgentRunCoordinator(
             } finally {
                 foregroundActivity.close()
                 activeJobs.remove(jobKey)
+                pauseController.finish(run.visibleAssistantMessageId)
                 visibleRunCancellationReasons[run.visibleAssistantMessageId]?.let { reason ->
                     withContext(NonCancellable) {
                         agentRunStore.cancelActiveRunByVisibleMessage(run.visibleAssistantMessageId, reason)

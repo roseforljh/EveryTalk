@@ -66,7 +66,16 @@ enum class AgentEntryKind {
     APPROVAL_REQUEST,
     APPROVAL_DECISION,
     STATUS,
+    STEERING,
 }
+
+/** 持久化 steering 的最小事实，消费后会作为 user 消息进入下一次模型上下文。 */
+@Serializable
+data class AgentSteeringInstruction(
+    val id: String,
+    val content: String,
+    val createdAt: Long,
+)
 
 enum class AgentEntryStatus {
     STREAMING,
