@@ -41,15 +41,7 @@ object ComputerToolCatalog {
                         "additionalProperties" to mapOf("type" to "string"),
                     ),
                 )
-                put(
-                    "secret_names",
-                    mapOf(
-                        "type" to "array",
-                        "description" to "Names of workspace secrets to inject for target=container only.",
-                        "items" to mapOf("type" to "string"),
-                        "uniqueItems" to true,
-                    ),
-                )
+                // Secret 不再作为通用 exec 参数暴露；必须由可信语义 Adapter 履行。
                 put("stdin", string("Optional UTF-8 stdin for target=container only."))
                 put("timeout_ms", integer("Foreground timeout in milliseconds.", 1, 3_600_000))
                 put("background", boolean("Start a persistent background process inside the Container only."))

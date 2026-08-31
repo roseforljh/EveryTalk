@@ -326,6 +326,25 @@ class ComputerCredentialStore(private val context: Context) {
         cryptoShred(fileForScope("workspace-secret:$secretId"))
     }
 
+    /** OAuth PKCE verifier 只进入 Keystore 封装的文件，Room 仅保存 opaque reference。 */
+    suspend fun saveOAuthVerifier(reference: String, verifier: CharArray) =
+        saveCredential("oauth-verifier:$reference", ComputerCredential.Password(verifier))
+
+    suspend fun loadOAuthVerifier(reference: String): CharArray? {
+        val credential = loadOptionalCredential("oauth-verifier:$reference") ?: return null
+        return when (credential) {
+            is ComputerCredential.Password -> credential.password
+            else -> {
+                credential.clear()
+                null
+            }
+        }
+    }
+
+    suspend fun deleteOAuthVerifier(reference: String) = withContext(Dispatchers.IO) {
+        cryptoShred(fileForScope("oauth-verifier:$reference"))
+    }
+
     private suspend fun saveCredential(scope: String, credential: ComputerCredential) = withContext(Dispatchers.IO) {
         val plaintext = ComputerCredentialCodec.encode(credential)
         try {

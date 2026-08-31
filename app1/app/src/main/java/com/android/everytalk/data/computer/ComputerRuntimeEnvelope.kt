@@ -138,7 +138,6 @@ data class ComputerExecRequest(
     val command: String,
     val cwd: String = "/workspace",
     val environment: Map<String, String> = emptyMap(),
-    val secrets: Map<String, CharArray> = emptyMap(),
     val stdin: String? = null,
     val timeoutMillis: Long = 120_000,
     val background: Boolean = false,
@@ -166,7 +165,7 @@ data class ComputerExecResult(
 
 /** 生成单 Channel Runtime Envelope，调用完成后由调用方覆盖返回的敏感字节。 */
 internal fun buildComputerRuntimeEnvelope(request: ComputerExecRequest): ByteArray {
-    val environmentBytes = buildRuntimeEnvironment(request.environment, request.secrets)
+    val environmentBytes = buildRuntimeEnvironment(request.environment)
     val cwdBytes = normalizeExecWorkingDirectory(request).toByteArray(Charsets.UTF_8)
     val commandBytes = request.command.toByteArray(Charsets.UTF_8)
     val stdinBytes = request.stdin?.toByteArray(Charsets.UTF_8) ?: ByteArray(0)
@@ -228,10 +227,6 @@ internal object ComputerHostWorkingDirectory {
 internal fun requireValidExecTargetOptions(request: ComputerExecRequest) {
     if (request.target != ComputerExecTarget.HOST) return
     when {
-        request.secrets.isNotEmpty() -> throw ComputerException(
-            ComputerErrorCodes.WORKSPACE_PATH_INVALID,
-            "VPS 主机命令不允许注入 Workspace Secret",
-        )
         request.environment.isNotEmpty() -> throw ComputerException(
             ComputerErrorCodes.WORKSPACE_PATH_INVALID,
             "VPS 主机命令不允许使用隐藏环境变量，请把必要参数写入可确认的完整命令",
@@ -269,23 +264,16 @@ internal fun requireValidComputerExecRequest(request: ComputerExecRequest) {
         ComputerEnvironmentName.requireValid(name)
         if ('\u0000' in value) throw ComputerException(ComputerErrorCodes.WORKSPACE_PATH_INVALID, "环境变量值无效")
     }
-    request.secrets.keys.forEach(ComputerEnvironmentName::requireValid)
     val stdinBytes = request.stdin?.toByteArray(Charsets.UTF_8)?.size ?: 0
     if (stdinBytes > MAX_STDIN_BYTES) {
         throw ComputerException(ComputerErrorCodes.WORKSPACE_PATH_INVALID, "exec stdin 过大")
     }
 }
 
-private fun buildRuntimeEnvironment(
-    environment: Map<String, String>,
-    secrets: Map<String, CharArray>,
-): ByteArray {
+private fun buildRuntimeEnvironment(environment: Map<String, String>): ByteArray {
     val content = buildString {
         environment.toSortedMap().forEach { (name, value) ->
             append(name).append('=').append(runtimeShellQuote(value)).append('\n')
-        }
-        secrets.toSortedMap().forEach { (name, value) ->
-            append(name).append('=').append(runtimeShellQuote(String(value))).append('\n')
         }
     }
     val bytes = content.toByteArray(Charsets.UTF_8)
@@ -866,8 +854,8 @@ class ComputerRuntimeEnvelope(
         )
         return ComputerExecResult(
             exitCode = result.exitCode,
-            stdout = redact(result.stdout, request.secrets.values),
-            stderr = redact(result.stderr, request.secrets.values),
+            stdout = result.stdout,
+            stderr = result.stderr,
             timedOut = result.timedOut || result.exitCode == 124,
             stdoutTruncated = result.stdoutTruncated,
             stderrTruncated = result.stderrTruncated,
@@ -909,7 +897,7 @@ class ComputerRuntimeEnvelope(
             val separator = line.indexOf('=')
             if (separator <= 0) null else line.substring(0, separator) to line.substring(separator + 1)
         }.toMap()
-        val redactedStderr = redact(result.stderr, request.secrets.values)
+        val redactedStderr = result.stderr
         return ComputerExecResult(
             exitCode = 0,
             stdout = "",
@@ -990,13 +978,6 @@ class ComputerRuntimeEnvelope(
         "sudo -n -- $CONTAINER_HELPER_PATH"
     }
 
-    private fun redact(output: String, secrets: Collection<CharArray>): String {
-        var redacted = output
-        secrets.forEach { value ->
-            if (value.isNotEmpty()) redacted = redacted.replace(String(value), "[REDACTED]")
-        }
-        return redacted
-    }
 
     private fun sha256(bytes: ByteArray): ByteArray = MessageDigest.getInstance("SHA-256").digest(bytes)
 

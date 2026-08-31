@@ -203,22 +203,6 @@ class ComputerHostCommandPolicyTest {
     }
 
     @Test
-    fun `Workspace Secret禁止注入VPS主机`() {
-        val error = runCatching {
-            requireValidExecTargetOptions(
-                ComputerExecRequest(
-                    command = "env",
-                    cwd = "~",
-                    secrets = mapOf("TOKEN" to "secret".toCharArray()),
-                    target = ComputerExecTarget.HOST,
-                ),
-            )
-        }.exceptionOrNull()
-
-        assertTrue(error is ComputerException)
-    }
-
-    @Test
     fun `主机后台参数被拒绝避免留下无法管理的进程`() {
         val error = runCatching {
             requireValidExecTargetOptions(

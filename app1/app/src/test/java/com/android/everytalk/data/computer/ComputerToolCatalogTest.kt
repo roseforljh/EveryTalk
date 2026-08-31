@@ -20,6 +20,7 @@ class ComputerToolCatalogTest {
         assertFalse("computer_id" in schemaText)
         assertFalse("workspace_id" in schemaText)
         assertFalse("host_key" in schemaText)
+        assertFalse("secret_names" in schemaText)
     }
 
     @Test

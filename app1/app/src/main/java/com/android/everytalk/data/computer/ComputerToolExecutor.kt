@@ -20,7 +20,6 @@ import java.util.Collections
 import java.util.LinkedHashMap
 import java.util.UUID
 import com.android.everytalk.util.AppLogger
-import com.android.everytalk.data.skill.SkillSecretSessionStore
 
 private const val DEFAULT_FILE_READ_LIMIT = 256 * 1024
 private const val MAX_COMPLETED_RESULTS_IN_MEMORY = 32
@@ -453,9 +452,8 @@ class ComputerToolExecutor(
         updateStatus: suspend (String?) -> Unit,
     ): JsonElement {
         val request = parseExecRequest(arguments, context, loadSecrets = true)
-        val secrets = request.secrets
         val readOnlyRequest = ComputerToolCallSafety.isReadOnly(ComputerToolNames.EXEC, arguments)
-        val result = try {
+        val result = run {
             if (request.target == ComputerExecTarget.CONTAINER) {
                 workspaceManager.prepareContainer(workspace.id)
             }
@@ -496,8 +494,6 @@ class ComputerToolExecutor(
             } else {
                 runRequest(request)
             }
-        } finally {
-            secrets.values.forEach { it.fill('\u0000') }
         }
         return buildJsonObject {
             val status = result.remoteStatus ?: when {
@@ -705,8 +701,8 @@ class ComputerToolExecutor(
         )
         ComputerExecResult(
             exitCode = remoteResult.snapshot.exitCode,
-            stdout = redact(remoteResult.stdout, request.secrets.values),
-            stderr = redact(remoteResult.stderr, request.secrets.values),
+            stdout = remoteResult.stdout,
+            stderr = remoteResult.stderr,
             timedOut = remoteResult.snapshot.status == ComputerRemoteStatus.TIMED_OUT,
             stdoutTruncated = remoteResult.stdoutTruncated,
             stderrTruncated = remoteResult.stderrTruncated,
@@ -766,8 +762,8 @@ class ComputerToolExecutor(
                 put("ok", remoteResult.snapshot.status == ComputerRemoteStatus.SUCCEEDED)
                 put("status", remoteResult.snapshot.status.name)
                 put("exit_code", remoteResult.snapshot.exitCode?.let(::JsonPrimitive) ?: JsonNull)
-                put("stdout", redact(remoteResult.stdout, request.secrets.values))
-                put("stderr", redact(remoteResult.stderr, request.secrets.values))
+                put("stdout", remoteResult.stdout)
+                put("stderr", remoteResult.stderr)
                 put("timed_out", remoteResult.snapshot.status == ComputerRemoteStatus.TIMED_OUT)
                 put("stdout_truncated", remoteResult.stdoutTruncated)
                 put("stderr_truncated", remoteResult.stderrTruncated)
@@ -789,7 +785,6 @@ class ComputerToolExecutor(
             completedResults[execution.toolCallId] = response
             response
         } finally {
-            request.secrets.values.forEach { it.fill('\u0000') }
         }
     }
 
@@ -840,14 +835,6 @@ class ComputerToolExecutor(
         )
     }
 
-    /** 只在回填模型前过滤本次请求携带的 Secret，Room 和 VPS 日志不保存过滤后的副本。 */
-    private fun redact(output: String, secrets: Collection<CharArray>): String {
-        var redacted = output
-        secrets.forEach { secret ->
-            if (secret.isNotEmpty()) redacted = redacted.replace(String(secret), "[REDACTED]")
-        }
-        return redacted
-    }
 
     /** 执行链只显示短时间，不把轮询细节写入 AgentEntry。 */
     private fun formatElapsed(millis: Long): String {
@@ -1252,15 +1239,10 @@ class ComputerToolExecutor(
         if (!loadSecrets) return request
         val secretNames = arguments.stringList("secret_names")
         if (secretNames.isEmpty()) return request
-        val workspaceSecrets = runCatching { secretManager.loadSelected(context.workspaceId, secretNames) }.getOrDefault(emptyMap())
-        val missing = secretNames.filterNot(workspaceSecrets::containsKey)
-        val sessionSecrets = SkillSecretSessionStore.loadSelected(context.runId, missing)
-        if (workspaceSecrets.size + sessionSecrets.size != secretNames.distinct().size) {
-            workspaceSecrets.values.forEach { it.fill('\u0000') }
-            sessionSecrets.values.forEach { it.fill('\u0000') }
-            throw ComputerException(ComputerErrorCodes.CREDENTIAL_MISSING, "请求的 Secret 不存在")
-        }
-        return request.copy(secrets = workspaceSecrets + sessionSecrets)
+        throw ComputerException(
+            ComputerErrorCodes.CREDENTIAL_MISSING,
+            "通用 exec 禁止通过 secret_names 注入 Secret，请使用已注册的语义 capability Adapter",
+        )
     }
 
     /** 审批预检只解析参数，不读取 Keystore，避免用户批准前触碰 Secret。 */
@@ -1271,14 +1253,16 @@ class ComputerToolExecutor(
             else -> throw invalidArgument("target")
         }
         val secretNames = arguments.stringList("secret_names")
-        if (target == ComputerExecTarget.HOST && secretNames.isNotEmpty()) {
-            throw ComputerException(ComputerErrorCodes.WORKSPACE_PATH_INVALID, "VPS 主机命令不允许注入 Workspace Secret")
+        if (secretNames.isNotEmpty()) {
+            throw ComputerException(
+                ComputerErrorCodes.CREDENTIAL_MISSING,
+                "通用 exec 不允许携带 Secret；请使用已注册的语义 capability Adapter",
+            )
         }
         return ComputerExecRequest(
             command = arguments.requiredString("command"),
             cwd = arguments.optionalString("cwd") ?: if (target == ComputerExecTarget.HOST) "~" else "/workspace",
             environment = arguments.objectOrEmpty("env").mapValues { (name, value) -> value.stringValue("env.$name") },
-            secrets = emptyMap(),
             stdin = arguments.optionalString("stdin"),
             timeoutMillis = arguments.optionalLong("timeout_ms") ?: 120_000,
             background = arguments.optionalBoolean("background") ?: false,
