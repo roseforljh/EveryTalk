@@ -109,7 +109,6 @@ fun ChatScreen(
         }
     }
 
-    val isApiCalling by viewModel.isTextApiCalling.collectAsState()
     val isRemoteCancellationPending by viewModel.isRemoteCancellationPending.collectAsState()
     val currentStreamingAiMessageId by viewModel.currentTextStreamingAiMessageId.collectAsState()
     val isWebSearchEnabled by viewModel.isWebSearchEnabled.collectAsState()
@@ -670,7 +669,6 @@ fun ChatScreen(
                 onAddMediaItem = { viewModel.addMediaItem(it) },
                 onRemoveMediaItemAtIndex = { viewModel.removeMediaItemAtIndex(it) },
                 onClearMediaItems = { viewModel.clearMediaItems() },
-                isApiCalling = isApiCalling,
                 isRemoteCancellationPending = isRemoteCancellationPending,
                 isWebSearchEnabled = isWebSearchEnabled,
                 isWebSearchAvailable = canUseWebSearch,
@@ -685,10 +683,7 @@ fun ChatScreen(
                 onToggleCodeExecution = {
                     viewModel.toggleCodeExecutionEnabled()
                 },
-                onStopApiCall = {
-                    viewModel.onCancelAPICall()
-                    scrollStateManager.stopStreamingAndJumpToRealBottom()
-                },
+                onToggleStreamingPause = viewModel::toggleStreamingPause,
                 focusRequester = focusRequester,
                 selectedApiConfig = selectedApiConfig,
                 onShowSnackbar = { viewModel.showSnackbar(it) },

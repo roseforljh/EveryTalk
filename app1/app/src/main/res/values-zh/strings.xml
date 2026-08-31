@@ -694,6 +694,8 @@
     <string name="thinking_remote_cancel_failed">远端取消失败，等待恢复确认</string>
     <string name="thinking_remote_task_cancelled">远端任务已取消</string>
     <string name="chat_input_stop">停止</string>
+    <string name="chat_input_pause">暂停</string>
+    <string name="chat_input_resume">继续</string>
     <string name="chat_input_send">发送</string>
     <string name="chat_input_voice">语音输入</string>
     <string name="chat_input_search_unavailable">搜索不可用</string>
@@ -705,6 +707,12 @@
     <string name="chat_input_file_processing_error">处理文件时发生错误</string>
     <string name="chat_input_select_api_configuration">请先选择 API 配置</string>
     <string name="chat_input_send_failed">发送消息失败</string>
+    <string name="pending_message_edit">编辑队列消息</string>
+    <string name="pending_message_delete">删除队列消息</string>
+    <string name="pending_message_send_now">立即调整方案</string>
+    <string name="pending_message_empty">消息内容不能为空</string>
+    <string name="pending_message_finish_current_draft">请先处理当前输入内容</string>
+    <string name="pending_message_attachments_only">附件消息</string>
     <string name="chat_input_long_text_converting">正在生成文本附件，请稍候</string>
     <string name="chat_attachment_too_large">文件“%1$s”过大（%2$s），最大支持 50 MB</string>
     <string name="chat_attachment_size_check_failed">无法检查文件大小，请选择较小的文件</string>

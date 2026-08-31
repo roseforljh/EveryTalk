@@ -152,14 +152,13 @@ fun ChatInputArea(
     onAddMediaItem: (SelectedMediaItem) -> Unit,
     onRemoveMediaItemAtIndex: (Int) -> Unit,
     onClearMediaItems: () -> Unit,
-    isApiCalling: Boolean,
     isRemoteCancellationPending: Boolean = false,
     isWebSearchEnabled: Boolean,
     isWebSearchAvailable: Boolean,
     onToggleWebSearch: () -> Unit,
     isCodeExecutionEnabled: Boolean = false,
     onToggleCodeExecution: () -> Unit = {},
-    onStopApiCall: () -> Unit,
+    onToggleStreamingPause: () -> Unit,
     focusRequester: FocusRequester,
     selectedApiConfig: ApiConfig? = null,
     onShowSnackbar: (String) -> Unit,
@@ -203,6 +202,9 @@ fun ChatInputArea(
     val computers by viewModel.computers.collectAsState()
     val computerSelections by viewModel.computerSelections.collectAsState()
     val currentConversationId by viewModel.currentConversationId.collectAsState()
+    val pendingMessages by viewModel.pendingMessages.collectAsState()
+    val composerMode by viewModel.composerMode.collectAsState()
+    val chatRunState by viewModel.chatRunState.collectAsState()
     val conversationFunctionStates by viewModel.stateHolder.conversationFunctionToggleStates.collectAsState()
     val currentAgentResourceState = conversationFunctionStates[currentConversationId]?.agentResourceState
     val detachedComputerName = conversationFunctionStates[currentConversationId]?.detachedComputerName
@@ -215,6 +217,10 @@ fun ChatInputArea(
     var pendingWorkspaceRecreationAction by remember { mutableStateOf<PendingAgentAction?>(null) }
     var pendingNotificationPermissionAction by remember { mutableStateOf<PendingAgentAction?>(null) }
     var showDeletedServerDialog by remember { mutableStateOf(false) }
+
+    BackHandler(enabled = composerMode is ComposerMode.EditingPending) {
+        viewModel.cancelPendingMessageEdit()
+    }
 
     /** 真正执行 Agent 开关。系统权限申请必须结束后才能进入这里。 */
     fun performAgentAction(action: PendingAgentAction) {
@@ -448,12 +454,19 @@ fun ChatInputArea(
     // 当外部 text 变化时（如清空、恢复草稿），同步到本地状态
     // 使用 key 来区分外部变化和本地变化
     var lastExternalText by remember { mutableStateOf(text) }
-    LaunchedEffect(text) {
+    LaunchedEffect(text, composerMode) {
         if (text != lastExternalText) {
             lastExternalText = text
             // 更新 TextFieldValue，保持光标在末尾
             localTextFieldValue = TextFieldValue(text, TextRange(text.length))
-            skillReferences = emptyList()
+            val editing = composerMode as? ComposerMode.EditingPending
+            skillReferences = if (editing?.originalComposerText == text) {
+                editing.originalContentParts
+                    .filterIsInstance<MessageContentPart.SkillReference>()
+                    .map { it.reference }
+            } else {
+                emptyList()
+            }
         }
     }
     
@@ -600,43 +613,69 @@ fun ChatInputArea(
         if (item != null) deleteDraftTextAttachments(listOf(item))
     }
 
+    fun clearSubmittedComposer() {
+        localTextFieldValue = TextFieldValue("", TextRange(0))
+        skillReferences = emptyList()
+        lastExternalText = ""
+        onTextChange("")
+        onClearMediaItems()
+        syncJob?.cancel()
+        if (imeInsets.getBottom(density) > 0) keyboardController?.hide()
+    }
+
     // 🎯 性能优化：发送时使用本地文本，确保发送最新内容
     val onSendClick =
-        remember(isApiCalling, isRemoteCancellationPending, isConvertingLongText, localText, selectedMediaItems, selectedApiConfig, imeInsets, density) {
+        remember(chatRunState, composerMode, isRemoteCancellationPending, isConvertingLongText, localText, selectedMediaItems, selectedApiConfig, imeInsets, density) {
             {
                 try {
+                    val hasDraft = localText.isNotBlank() || selectedMediaItems.isNotEmpty()
+                    val contentParts = buildSkillContentParts(localText, skillReferences)
+                    val displayText = displaySkillEditorText(localText, skillReferences)
                     if (isRemoteCancellationPending) {
                         // 远端取消尚未确认，固定按钮只展示加载，不重复发起取消或新消息。
-                    } else if (isApiCalling) {
-                        onStopApiCall()
                     } else if (isConvertingLongText) {
                         onShowSnackbar(context.getString(R.string.chat_input_long_text_converting))
-                    } else if (localText.isBlank() && selectedMediaItems.isEmpty()) {
+                    } else if (composerMode is ComposerMode.EditingPending) {
+                        if (!hasDraft) {
+                            onShowSnackbar(context.getString(R.string.pending_message_empty))
+                        } else {
+                            viewModel.commitPendingMessageEdit(
+                                content = displayText,
+                                composerText = localText,
+                                contentParts = contentParts,
+                                attachments = selectedMediaItems.toList(),
+                                onStored = ::clearSubmittedComposer,
+                            )
+                        }
+                    } else if (chatRunState != ChatRunState.Idle && !hasDraft) {
+                        onToggleStreamingPause()
+                    } else if (chatRunState != ChatRunState.Idle) {
+                        if (selectedApiConfig == null) {
+                            onShowSnackbar(context.getString(R.string.chat_input_select_api_configuration))
+                        } else {
+                            viewModel.enqueuePendingMessage(
+                                content = displayText,
+                                composerText = localText,
+                                contentParts = contentParts,
+                                attachments = selectedMediaItems.toList(),
+                                onStored = {
+                                    clearSubmittedComposer()
+                                },
+                            )
+                        }
+                    } else if (!hasDraft) {
                         onShowVoiceInput()
                     } else if (selectedApiConfig != null) {
                         val audioItem = selectedMediaItems.firstOrNull { it is SelectedMediaItem.Audio } as? SelectedMediaItem.Audio
                         val mimeType = audioItem?.mimeType
-                        // 使用本地文本发送消息
-                        val contentParts = buildSkillContentParts(localText, skillReferences)
                         onSendMessageRequest(
-                            displaySkillEditorText(localText, skillReferences),
+                            displayText,
                             false,
                             selectedMediaItems.toList(),
                             mimeType,
                             contentParts,
                         )
-                        // 同时清空本地状态和 ViewModel 状态
-                        localTextFieldValue = TextFieldValue("", TextRange(0))
-                        skillReferences = emptyList()
-                        lastExternalText = ""
-                        onTextChange("")
-                        onClearMediaItems()
-                        // 取消待处理的同步任务
-                        syncJob?.cancel()
-                        
-                        if (imeInsets.getBottom(density) > 0) {
-                            keyboardController?.hide()
-                        }
+                        clearSubmittedComposer()
                     } else {
                         Log.w("SendMessage", "请先选择 API 配置")
                         onShowSnackbar(context.getString(R.string.chat_input_select_api_configuration))
@@ -698,6 +737,19 @@ fun ChatInputArea(
                 modifier = Modifier
                     .fillMaxWidth()
             ) {
+                PendingMessageQueue(
+                    messages = pendingMessages,
+                    onEdit = { id ->
+                        if (localText.isNotBlank() || selectedMediaItems.isNotEmpty()) {
+                            onShowSnackbar(context.getString(R.string.pending_message_finish_current_draft))
+                        } else {
+                            viewModel.beginPendingMessageEdit(id)
+                        }
+                    },
+                    onDelete = viewModel::deletePendingMessage,
+                    onSendNow = viewModel::sendPendingMessageNow,
+                )
+
                 // 普通输入附件继续沿用输入框的水平留白，权限卡片单独占满统一悬浮层宽度。
                 // 使用优化的组件。只给普通附件自身保留输入区的水平留白。
                 OptimizedMediaItemsList(
@@ -1328,12 +1380,12 @@ fun ChatInputArea(
                                         innerTextField()
                                     }
                                     Spacer(Modifier.width(8.dp))
-                                    val buttonState = when {
-                                        isRemoteCancellationPending -> 3
-                                        isApiCalling -> 2
-                                        hasContent -> 1
-                                        else -> 0
-                                    }
+                                    val buttonState = resolveComposerPrimaryAction(
+                                        runState = chatRunState,
+                                        composerMode = composerMode,
+                                        hasDraft = hasContent,
+                                        isRemoteCancellationPending = isRemoteCancellationPending,
+                                    )
                                     AnimatedContent(
                                         targetState = buttonState,
                                         transitionSpec = {
@@ -1358,7 +1410,7 @@ fun ChatInputArea(
                                             ),
                                             modifier = Modifier.size(36.dp)
                                         ) {
-                                            if (state == 3) {
+                                            if (state == ComposerPrimaryAction.LOADING) {
                                                 CircularProgressIndicator(
                                                     modifier = Modifier.size(18.dp),
                                                     color = iconColor,
@@ -1367,13 +1419,15 @@ fun ChatInputArea(
                                             } else {
                                                 Icon(
                                                     painter = when (state) {
-                                                        2 -> painterResource(R.drawable.ic_stop)
-                                                        1 -> painterResource(R.drawable.ic_arrow_up)
+                                                        ComposerPrimaryAction.PAUSE -> painterResource(R.drawable.ic_stop)
+                                                        ComposerPrimaryAction.RESUME -> painterResource(R.drawable.ic_gpt_play)
+                                                        ComposerPrimaryAction.SEND -> painterResource(R.drawable.ic_arrow_up)
                                                         else -> painterResource(R.drawable.ic_voice_bold)
                                                     },
                                                     contentDescription = when (state) {
-                                                        2 -> stringResource(R.string.chat_input_stop)
-                                                        1 -> stringResource(R.string.chat_input_send)
+                                                        ComposerPrimaryAction.PAUSE -> stringResource(R.string.chat_input_pause)
+                                                        ComposerPrimaryAction.RESUME -> stringResource(R.string.chat_input_resume)
+                                                        ComposerPrimaryAction.SEND -> stringResource(R.string.chat_input_send)
                                                         else -> stringResource(R.string.chat_input_voice)
                                                     },
                                                     modifier = Modifier.size(20.dp)

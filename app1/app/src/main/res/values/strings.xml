@@ -696,6 +696,8 @@
     <string name="thinking_remote_cancel_failed">Remote cancellation failed; waiting for confirmation</string>
     <string name="thinking_remote_task_cancelled">Remote task cancelled</string>
     <string name="chat_input_stop">Stop</string>
+    <string name="chat_input_pause">Pause</string>
+    <string name="chat_input_resume">Resume</string>
     <string name="chat_input_send">Send</string>
     <string name="chat_input_voice">Voice input</string>
     <string name="chat_input_search_unavailable">Search unavailable</string>
@@ -707,6 +709,12 @@
     <string name="chat_input_file_processing_error">An error occurred while processing the file</string>
     <string name="chat_input_select_api_configuration">Select an API configuration first</string>
     <string name="chat_input_send_failed">Failed to send message</string>
+    <string name="pending_message_edit">Edit queued message</string>
+    <string name="pending_message_delete">Delete queued message</string>
+    <string name="pending_message_send_now">Adjust plan now</string>
+    <string name="pending_message_empty">Message cannot be empty</string>
+    <string name="pending_message_finish_current_draft">Finish the current draft first</string>
+    <string name="pending_message_attachments_only">Attachments</string>
     <string name="chat_input_long_text_converting">Creating the text attachment, please wait.</string>
     <string name="chat_attachment_too_large">“%1$s” is too large (%2$s). The maximum size is 50 MB.</string>
     <string name="chat_attachment_size_check_failed">Could not check the file size. Select a smaller file.</string>

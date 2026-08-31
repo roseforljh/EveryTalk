@@ -9,6 +9,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.isSystemInDarkTheme
@@ -16,6 +17,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -41,6 +44,10 @@ import com.android.everytalk.R
 import com.android.everytalk.models.ImageSourceOption
 import com.android.everytalk.models.MoreOptionsType
 import com.android.everytalk.models.SelectedMediaItem
+import com.android.everytalk.data.database.entities.PendingMessageEntity
+import com.android.everytalk.statecontroller.ChatRunState
+import com.android.everytalk.statecontroller.ComposerMode
+import com.android.everytalk.statecontroller.PENDING_MESSAGE_STATUS_PENDING
 import com.android.everytalk.ui.theme.SeaBlue
 
 internal val ChatAgentColor = Color(0xFF009688)
@@ -51,6 +58,30 @@ internal enum class AgentToggleAction {
     OPEN_SERVER_PICKER,
     CONFIRM_WORKSPACE_RECREATION,
     ENABLE_SELECTED,
+}
+
+internal enum class ComposerPrimaryAction {
+    VOICE,
+    SEND,
+    PAUSE,
+    RESUME,
+    LOADING,
+}
+
+/** 主按钮完全由运行状态、编辑模式和草稿派生，避免互相冲突的布尔判断。 */
+internal fun resolveComposerPrimaryAction(
+    runState: ChatRunState,
+    composerMode: ComposerMode,
+    hasDraft: Boolean,
+    isRemoteCancellationPending: Boolean,
+): ComposerPrimaryAction = when {
+    isRemoteCancellationPending -> ComposerPrimaryAction.LOADING
+    composerMode is ComposerMode.EditingPending -> ComposerPrimaryAction.SEND
+    runState == ChatRunState.PauseRequested -> ComposerPrimaryAction.LOADING
+    hasDraft -> ComposerPrimaryAction.SEND
+    runState == ChatRunState.Streaming -> ComposerPrimaryAction.PAUSE
+    runState == ChatRunState.Paused -> ComposerPrimaryAction.RESUME
+    else -> ComposerPrimaryAction.VOICE
 }
 
 /** 短按 Agent 的决定保持纯函数，避免准备中重复发起连接。 */
@@ -432,6 +463,89 @@ fun OptimizedMediaItemsList(
                     mediaItem = media,
                     onRemoveClicked = { onRemoveMediaItemAtIndex(index) }
                 )
+            }
+        }
+    }
+}
+
+/** 输入框上方的紧凑 Pending 队列，最多占用约三行高度。 */
+@Composable
+internal fun PendingMessageQueue(
+    messages: List<PendingMessageEntity>,
+    onEdit: (String) -> Unit,
+    onDelete: (String) -> Unit,
+    onSendNow: (String) -> Unit,
+) {
+    if (messages.isEmpty()) return
+
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(max = 142.dp)
+            .padding(horizontal = 10.dp, vertical = 4.dp)
+            .animateContentSize(),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        items(messages, key = PendingMessageEntity::id) { message ->
+            val editable = message.status == PENDING_MESSAGE_STATUS_PENDING
+            Surface(
+                shape = RoundedCornerShape(12.dp),
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
+                border = BorderStroke(
+                    1.dp,
+                    MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f),
+                ),
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 10.dp, end = 2.dp, top = 4.dp, bottom = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = message.content.ifBlank {
+                            stringResource(R.string.pending_message_attachments_only)
+                        },
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.weight(1f),
+                    )
+                    IconButton(
+                        onClick = { onEdit(message.id) },
+                        enabled = editable,
+                        modifier = Modifier.size(30.dp),
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_gpt_edit),
+                            contentDescription = stringResource(R.string.pending_message_edit),
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                    IconButton(
+                        onClick = { onDelete(message.id) },
+                        enabled = editable,
+                        modifier = Modifier.size(30.dp),
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_trash),
+                            contentDescription = stringResource(R.string.pending_message_delete),
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                    IconButton(
+                        onClick = { onSendNow(message.id) },
+                        enabled = editable,
+                        modifier = Modifier.size(30.dp),
+                    ) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_gpt_play),
+                            contentDescription = stringResource(R.string.pending_message_send_now),
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                }
             }
         }
     }
