@@ -296,6 +296,31 @@ class AgentContextManagerTest {
         assertEquals(messages.map { it.id }, prepared.messages.map { it.id })
     }
 
+    @Test
+    fun `bash工具压缩保留命令退出码和尾部错误`() {
+        val result = AgentToolResultApiMessage(
+            id = "tool-exec",
+            toolCallId = "call-exec",
+            toolName = "exec",
+            content = JsonObject(
+                mapOf(
+                    "command" to JsonPrimitive("bun test"),
+                    "cwd" to JsonPrimitive("/workspace"),
+                    "exit_code" to JsonPrimitive(1),
+                    "stdout" to JsonPrimitive("正常输出"),
+                    "stderr" to JsonPrimitive("x".repeat(2_000) + "\nERROR: failed at /workspace/src/App.kt:42"),
+                )
+            ),
+            isError = true,
+        )
+
+        val compacted = compactAgentToolResultForCompaction(result)
+
+        assertTrue(compacted.contains("command: bun test"))
+        assertTrue(compacted.contains("exitCode: 1"))
+        assertTrue(compacted.contains("ERROR: failed at /workspace/src/App.kt:42"))
+    }
+
     private fun assistantWithCalls(vararg ids: String): AgentAssistantApiMessage =
         AgentAssistantApiMessage(
             id = "assistant-1",

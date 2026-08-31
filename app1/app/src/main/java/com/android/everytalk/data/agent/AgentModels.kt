@@ -67,7 +67,24 @@ enum class AgentEntryKind {
     APPROVAL_DECISION,
     STATUS,
     STEERING,
+    /** 当前任务的最小执行真相，只用于内部上下文投影，不进入可见聊天记录。 */
+    EXECUTION_CHECKPOINT,
 }
+
+/**
+ * 抵抗多次压缩造成的当前任务漂移。
+ *
+ * 这里只保存继续执行必需的四项事实。完整历史、Todo 和通用记忆仍由原有 Transcript
+ * 与 Compaction Summary 负责，禁止把该结构扩成第二套 Agent 状态机。
+ */
+@Serializable
+data class ExecutionCheckpoint(
+    val currentGoal: String? = null,
+    val hardConstraints: List<String> = emptyList(),
+    val currentStep: String? = null,
+    val resumeInstruction: String? = null,
+    val updatedAt: Long = System.currentTimeMillis(),
+)
 
 /** 持久化 steering 的最小事实，消费后会作为 user 消息进入下一次模型上下文。 */
 @Serializable

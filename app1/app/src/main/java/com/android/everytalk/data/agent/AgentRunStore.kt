@@ -15,6 +15,8 @@ import com.android.everytalk.data.DataClass.AgentAssistantApiMessage
 import com.android.everytalk.data.DataClass.AgentAssistantContentApiPart
 import com.android.everytalk.data.DataClass.AgentToolCallApiPart
 import com.android.everytalk.data.DataClass.AgentToolResultApiMessage
+import com.android.everytalk.data.DataClass.ApiContentPart
+import com.android.everytalk.data.DataClass.PartsApiMessage
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.DataClass.ExecutionStep
 import com.android.everytalk.data.DataClass.ExecutionStepType
@@ -72,7 +74,7 @@ class AgentRunStore(
         val now = System.currentTimeMillis()
         val snapshot = request.toRecoverySnapshot()
         val encodedSnapshot = json.encodeToString(AgentRequestSnapshot.serializer(), snapshot)
-        return AgentRunEntity(
+        val run = AgentRunEntity(
             id = UUID.randomUUID().toString(),
             sessionId = sessionId,
             userMessageId = userMessageId,
@@ -85,14 +87,17 @@ class AgentRunStore(
             terminalReason = null,
             createdAt = now,
             updatedAt = now,
-        ).also { run ->
-            dao.startRunSupersedingWaitingApprovals(
-                run = run,
-                snapshotChunks = agentRequestSnapshotChunks(run.id, encodedSnapshot),
-                reason = AgentTerminalReasons.SUPERSEDED_BY_NEW_RUN,
-            )
-            snapshotCache[run.id] = snapshot
+        )
+        dao.startRunSupersedingWaitingApprovals(
+            run = run,
+            snapshotChunks = agentRequestSnapshotChunks(run.id, encodedSnapshot),
+            reason = AgentTerminalReasons.SUPERSEDED_BY_NEW_RUN,
+        )
+        snapshotCache[run.id] = snapshot
+        request.initialExecutionCheckpoint(now)?.let { checkpoint ->
+            saveExecutionCheckpoint(run.id, checkpoint)
         }
+        return run
     }
 
     suspend fun getRun(runId: String): AgentRunEntity? = dao.getRun(runId)
@@ -121,6 +126,71 @@ class AgentRunStore(
 
     suspend fun completedCompactionCount(runId: String): Int = dao.getRequests(runId)
         .count { it.purpose == AgentRequestPurpose.COMPACTION.name && it.status == AgentRequestStatus.COMPLETED.name }
+
+    /** 老 Run 没有该 Entry 时返回 null，不需要数据库迁移或补写默认值。 */
+    suspend fun executionCheckpoint(runId: String): ExecutionCheckpoint? = dao.getEntries(runId)
+        .lastOrNull { entry -> entry.kind == AgentEntryKind.EXECUTION_CHECKPOINT.name }
+        ?.let(::decodeExecutionCheckpoint)
+
+    /**
+     * 使用固定 Entry ID 原地更新当前检查点，避免每次状态变化都让 agent_entries 无限增长。
+     * Entry 的 sequence 首次创建后保持不变，恢复时仍能稳定读取最新内容。
+     */
+    suspend fun updateExecutionCheckpoint(
+        runId: String,
+        update: (ExecutionCheckpoint) -> ExecutionCheckpoint,
+    ): ExecutionCheckpoint = entryAppendLock.withLock {
+        val existing = dao.getEntries(runId)
+            .lastOrNull { entry -> entry.kind == AgentEntryKind.EXECUTION_CHECKPOINT.name }
+        val current = existing?.let(::decodeExecutionCheckpoint) ?: ExecutionCheckpoint()
+        val now = System.currentTimeMillis()
+        val updated = update(current).copy(updatedAt = now)
+        val payload = json.encodeToString(ExecutionCheckpoint.serializer(), updated)
+        val entry = existing?.copy(
+            payloadJson = payload,
+            status = AgentEntryStatus.FINAL.name,
+            finalizedAt = now,
+        ) ?: newEntry(
+            runId = runId,
+            sequence = dao.nextEntrySequence(runId),
+            kind = AgentEntryKind.EXECUTION_CHECKPOINT,
+            requestId = null,
+            toolCallId = null,
+            payloadJson = payload,
+            status = AgentEntryStatus.FINAL,
+            now = now,
+        ).copy(id = "execution-checkpoint:$runId")
+        dao.upsertEntry(entry)
+        updated
+    }
+
+    suspend fun updateExecutionStep(
+        runId: String,
+        currentStep: String?,
+        resumeInstruction: String? = null,
+    ): ExecutionCheckpoint = updateExecutionCheckpoint(runId) { current ->
+        current.copy(
+            currentStep = currentStep?.compactCheckpointText(),
+            resumeInstruction = resumeInstruction?.compactCheckpointText(),
+        )
+    }
+
+    /** steering 是最新用户明确要求，机械覆盖 Goal 和恢复指令，并追加明确写出的硬约束。 */
+    private suspend fun mergeExecutionCheckpointInstruction(runId: String, content: String) {
+        val instruction = content.compactCheckpointText()
+        val constraints = content.explicitConstraintLines()
+        updateExecutionCheckpoint(runId) { current ->
+            current.copy(
+                currentGoal = instruction,
+                hardConstraints = (current.hardConstraints + constraints).distinct().takeLast(MAX_CHECKPOINT_CONSTRAINTS),
+                resumeInstruction = instruction,
+            )
+        }
+    }
+
+    private suspend fun saveExecutionCheckpoint(runId: String, checkpoint: ExecutionCheckpoint) {
+        updateExecutionCheckpoint(runId) { checkpoint }
+    }
 
     suspend fun finalExecutedToolCalls(runId: String): List<AgentContentBlock.ToolCall> {
         val entries = dao.getEntries(runId)
@@ -995,6 +1065,7 @@ class AgentRunStore(
                 finalizedAt = System.currentTimeMillis(),
             )
             if (dao.consumeSteering(entry, steering.id, System.currentTimeMillis())) {
+                mergeExecutionCheckpointInstruction(runId, steering.content)
                 add(
                     SimpleTextApiMessage(
                         id = "steering:${steering.id}",
@@ -1188,10 +1259,80 @@ class AgentRunStore(
         )
     }.getOrNull()
 
+    private fun decodeExecutionCheckpoint(entry: AgentEntryEntity): ExecutionCheckpoint? = runCatching {
+        json.decodeFromString(ExecutionCheckpoint.serializer(), entry.payloadJson)
+    }.getOrNull()
+
     private fun decodeApproval(payloadJson: String): AgentApprovalRecord? = runCatching {
         json.decodeFromString(AgentApprovalRecord.serializer(), payloadJson)
     }.getOrNull()
 }
+
+private const val MAX_CHECKPOINT_TEXT_CHARS = 4_000
+private const val MAX_CHECKPOINT_CONSTRAINT_CHARS = 500
+private const val MAX_CHECKPOINT_CONSTRAINTS = 16
+
+/** 初始用户消息是当前 Run 唯一可靠的 Goal 来源，其他字段等待明确事件再更新。 */
+private fun ChatRequest.initialExecutionCheckpoint(now: Long): ExecutionCheckpoint? {
+    val instruction = messages.asReversed()
+        .firstOrNull { message -> message.role.equals("user", ignoreCase = true) }
+        ?.executionCheckpointText()
+        ?.takeIf(String::isNotBlank)
+        ?: return null
+    return ExecutionCheckpoint(
+        currentGoal = instruction.compactCheckpointText(),
+        hardConstraints = instruction.explicitConstraintLines(),
+        updatedAt = now,
+    )
+}
+
+private fun AbstractApiMessage.executionCheckpointText(): String = when (this) {
+    is SimpleTextApiMessage -> content
+    is PartsApiMessage -> parts.filterIsInstance<ApiContentPart.Text>().joinToString("\n") { it.text }
+    is AgentAssistantApiMessage -> text
+    is AgentToolResultApiMessage -> content.toString()
+}
+
+/** 保留首尾，防止超长用户输入反过来挤满待保护的 Context。 */
+private fun String.compactCheckpointText(): String {
+    val normalized = trim()
+    if (normalized.length <= MAX_CHECKPOINT_TEXT_CHARS) return normalized
+    val side = MAX_CHECKPOINT_TEXT_CHARS / 2
+    return normalized.take(side) + "\n…执行检查点已省略中间内容…\n" + normalized.takeLast(side)
+}
+
+/** 只提取以明确约束词开头的行。无法机械确认的内容保持在原始用户消息中。 */
+private fun String.explicitConstraintLines(): List<String> = lineSequence()
+    .map(String::trim)
+    .map { line ->
+        var value = line
+        listOf("-", "*", "•").forEach { prefix ->
+            if (value.startsWith(prefix)) value = value.removePrefix(prefix).trimStart()
+        }
+        value
+    }
+    .filter { line ->
+        val lower = line.lowercase()
+        CHECKPOINT_CONSTRAINT_PREFIXES.any(lower::startsWith)
+    }
+    .map { it.take(MAX_CHECKPOINT_CONSTRAINT_CHARS) }
+    .distinct()
+    .take(MAX_CHECKPOINT_CONSTRAINTS)
+    .toList()
+
+private val CHECKPOINT_CONSTRAINT_PREFIXES = listOf(
+    "必须",
+    "禁止",
+    "不能",
+    "不要",
+    "只允许",
+    "务必",
+    "must ",
+    "do not ",
+    "don't ",
+    "never ",
+    "only ",
+)
 
 private fun interruptedToolResult(call: AgentContentBlock.ToolCall): AgentContentBlock.ToolResult =
     AgentContentBlock.ToolResult(

@@ -213,6 +213,69 @@ class ModelAndConfigControllerTest {
     }
 
     @Test
+    fun `目录只有模型名时添加配置会自动补拉模型参数`() = runTest(UnconfinedTestDispatcher()) {
+        mockkObject(ApiClient)
+        val detail = ModelCapabilityCandidate(
+            modelId = "model-a",
+            protocol = ModelParameterProtocol.GEMINI,
+            endpointIdentity = "https://api.example.com",
+            contextWindowTokens = 256_000,
+            maxOutputTokens = 16_000,
+            source = ModelCapabilitySource.LIVE_ENDPOINT,
+        )
+        coEvery {
+            ApiClient.getModelCapabilities(
+                "https://api.example.com",
+                "secret",
+                "Gemini",
+                "model-a",
+                "Gemini",
+            )
+        } returns listOf(detail)
+
+        val modelFetchManager = ModelFetchManager().apply {
+            setFetchedCatalog(
+                listOf(
+                    ModelCapabilityCandidate(
+                        modelId = "model-a",
+                        protocol = ModelParameterProtocol.GEMINI,
+                        source = ModelCapabilitySource.LIVE_ENDPOINT,
+                    )
+                )
+            )
+        }
+        val configManager = mockk<ConfigManager>(relaxed = true)
+        val controller = controller(
+            scope = this,
+            stateHolder = ViewModelStateHolder(),
+            modelFetchManager = modelFetchManager,
+            configManager = configManager,
+        )
+
+        controller.createMultipleConfigs(
+            provider = "Gemini",
+            address = "https://api.example.com",
+            key = "secret",
+            modelNames = listOf("model-a"),
+            channel = "Gemini",
+        )
+
+        val configSlot = slot<ApiConfig>()
+        verify { configManager.addConfig(capture(configSlot), false) }
+        assertEquals(16_000, configSlot.captured.maxTokens)
+        assertEquals(256_000, configSlot.captured.modelParameters.maxContextTokens)
+        coVerify(exactly = 1) {
+            ApiClient.getModelCapabilities(
+                "https://api.example.com",
+                "secret",
+                "Gemini",
+                "model-a",
+                "Gemini",
+            )
+        }
+    }
+
+    @Test
     fun `配置组新增模型采用端点报告的 token 限制`() = runTest(UnconfinedTestDispatcher()) {
         val modelFetchManager = ModelFetchManager().apply {
             setFetchedCatalog(

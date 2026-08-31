@@ -26,7 +26,13 @@ import kotlinx.serialization.json.jsonPrimitive
 
 private const val COMPACTION_META_SUMMARY_ROLE = "summary_role"
 private const val COMPACTION_META_RETAINED_IDS = "retained_ids"
-private const val COMPACTION_RECENT_CONTEXT_PERCENT = 25L
+private const val EXECUTION_CHECKPOINT_MESSAGE_ID = "agent-execution-checkpoint"
+private const val NORMAL_RECENT_RATIO_PERCENT = 20L
+private const val TOOL_HEAVY_RECENT_RATIO_PERCENT = 30L
+private const val MIN_RECENT_CONTEXT_PERCENT = 10L
+private const val MAX_RECENT_CONTEXT_PERCENT = 35L
+private const val HYSTERESIS_CONTEXT_PERCENT = 10L
+private const val MIN_COMPACTION_SUMMARY_TOKENS = 32L
 
 data class PreparedAgentContext(
     val messages: List<AbstractApiMessage>,
@@ -44,10 +50,24 @@ data class AgentCompactionPlan(
     val retainedTailIds: List<String>,
     val summaryRole: String,
     val tokensBefore: Long,
+    val triggerThreshold: Long = 0L,
+    val recentTargetTokens: Long = 0L,
+    val targetAfterCompaction: Long = 0L,
+    val summaryOutputTokenLimit: Int = Int.MAX_VALUE,
 ) {
     val isSplitTurn: Boolean
         get() = summaryRole == "user"
 }
+
+/** 一次 prepare 使用的唯一预算口径，所有值均为当前请求的输入 token。 */
+internal data class AgentContextBudget(
+    val contextWindow: Long,
+    val reserveTokens: Long,
+    val triggerThreshold: Long,
+    val recentTarget: Long,
+    val targetAfterCompaction: Long,
+    val fixedOverheadTokens: Long,
+)
 
 class AgentContextWindowException(message: String) : IllegalStateException(message)
 
@@ -63,20 +83,26 @@ class AgentContextManager(
         request: ChatRequest,
         limits: ModelTokenLimits,
         checkpoint: AgentCompactionEntryEntity? = null,
+        executionCheckpoint: ExecutionCheckpoint? = null,
+        forceLocalCompaction: Boolean = false,
     ): PreparedAgentContext {
         val canonical = removeOrphanToolResults(request.messages)
         val acceptedCheckpoint = checkpoint?.takeIf { it.matches(canonical) }
-        val effective = acceptedCheckpoint?.let { applyCheckpoint(canonical, it) } ?: canonical
+        val compacted = acceptedCheckpoint?.let { applyCheckpoint(canonical, it) } ?: canonical
+        val effective = injectExecutionCheckpoint(compacted, executionCheckpoint)
         val calibration = request.contextManagement?.inputTokenCalibration ?: 0L
         val estimateBeforeTrim = RequestTokenEstimator.estimate(effective, request.tools)
         val activeBeforeTrim = calibratedInputTokens(estimateBeforeTrim, calibration)
         val reservedOutput = limits.maxOutputTokens.toLong()
         val contextWindow = limits.maxContextTokens.toLong()
         val inputBudget = contextWindow - reservedOutput
-        val configuredThreshold = request.contextManagement
-            ?.compactThresholdTokens
-            ?.coerceIn(1L, contextWindow.coerceAtLeast(1L))
-            ?: inputBudget
+        val budget = contextBudget(
+            request = request,
+            limits = limits,
+            effectiveMessages = effective,
+            estimate = estimateBeforeTrim,
+            acceptedCheckpoint = acceptedCheckpoint,
+        )
         val prefersNativeCompaction = request.prefersNativeCompaction()
         val providerContinuation = request.localProviderContinuation
         val nativeThroughMessageId = providerContinuation?.compactedThroughMessageId
@@ -85,7 +111,11 @@ class AgentContextManager(
             !nativeThroughMessageId.isNullOrBlank() &&
             effective.any { it.id == nativeThroughMessageId }
         // 官方原生压缩先使用用户配置的软阈值。本地通用压缩保留到硬窗口前兜底。
-        val genericCompactionThreshold = if (prefersNativeCompaction) contextWindow else configuredThreshold
+        val genericCompactionThreshold = if (prefersNativeCompaction && !forceLocalCompaction) {
+            contextWindow
+        } else {
+            budget.triggerThreshold
+        }
         val compactedThroughIndex = acceptedCheckpoint
             ?.let { saved -> canonical.indexOfFirst { it.id == saved.summarizedThroughItemId } }
             ?: -1
@@ -93,17 +123,16 @@ class AgentContextManager(
             .drop(compactedThroughIndex + 1)
             .any { !it.role.equals("system", true) }
         val needsCompaction = request.contextManagement?.autoCompressionEnabled == true &&
-            !hasActiveNativeCompaction &&
+            (forceLocalCompaction || !hasActiveNativeCompaction) &&
             hasNewCompactionSource &&
             // Pi 只比较当前上下文与压缩线；最大输出不参与触发，否则大输出模型会过早反复压缩。
-            activeBeforeTrim > genericCompactionThreshold
+            (forceLocalCompaction || activeBeforeTrim > genericCompactionThreshold)
         val plan = if (needsCompaction) {
             planCompaction(
                 canonical = canonical,
                 checkpoint = acceptedCheckpoint,
-                tokensBefore = activeBeforeTrim + reservedOutput,
-                keepRecentTokens = (contextWindow * COMPACTION_RECENT_CONTEXT_PERCENT / 100L)
-                    .coerceAtLeast(1L),
+                tokensBefore = activeBeforeTrim,
+                budget = budget,
             )
         } else {
             null
@@ -190,8 +219,13 @@ class AgentContextManager(
         }
         val sourceTokens = RequestTokenEstimator.estimate(sourceMessages, tools = null).totalInputTokens
         return (sourceTokens / 3L)
-            .coerceAtLeast(32L)
-            .coerceAtMost(hardLimit.coerceAtLeast(1).toLong())
+            .coerceAtLeast(MIN_COMPACTION_SUMMARY_TOKENS)
+            .coerceAtMost(
+                minOf(
+                    hardLimit.coerceAtLeast(1).toLong(),
+                    plan.summaryOutputTokenLimit.coerceAtLeast(1).toLong(),
+                )
+            )
             .toInt()
     }
 
@@ -224,15 +258,97 @@ class AgentContextManager(
         }
         val estimate = RequestTokenEstimator.estimate(compactedMessages, request.tools)
         val calibration = request.contextManagement?.inputTokenCalibration ?: 0L
-        return calibratedInputTokens(estimate, calibration) +
-            (request.contextManagement?.reservedOutputTokens?.toLong() ?: 0L)
+        return calibratedInputTokens(estimate, calibration)
+    }
+
+    /**
+     * 统一预算公式：
+     * contextWindow 是完整模型窗口；reserveTokens 只服务硬窗口输出预留；
+     * triggerThreshold 只比较当前输入；targetAfterCompaction 比触发线低 10% 窗口；
+     * recentTarget 在工具密集场景取可用输入的 30%，普通场景取 20%。
+     */
+    internal fun contextBudget(
+        request: ChatRequest,
+        limits: ModelTokenLimits,
+        effectiveMessages: List<AbstractApiMessage>,
+        estimate: com.android.everytalk.statecontroller.RequestTokenEstimate,
+        acceptedCheckpoint: AgentCompactionEntryEntity?,
+    ): AgentContextBudget {
+        val contextWindow = limits.maxContextTokens.toLong().coerceAtLeast(1L)
+        val reserveTokens = limits.maxOutputTokens.toLong().coerceAtLeast(0L)
+        val configuredTrigger = request.contextManagement
+            ?.compactThresholdTokens
+            ?.coerceIn(1L, contextWindow)
+            ?: (contextWindow - reserveTokens).coerceAtLeast(1L)
+        val hysteresisGap = (contextWindow * HYSTERESIS_CONTEXT_PERCENT / 100L).coerceAtLeast(1L)
+        val checkpointRetrigger = acceptedCheckpoint
+            ?.estimatedTokensAfter
+            ?.takeIf { it > 0L }
+            ?.plus(hysteresisGap)
+            ?.coerceAtMost(contextWindow)
+        val triggerThreshold = maxOf(configuredTrigger, checkpointRetrigger ?: 1L)
+            .coerceAtMost(contextWindow)
+        val targetAfterCompaction = (triggerThreshold - hysteresisGap).coerceAtLeast(1L)
+        val fixedOverhead = estimate.systemPromptTokens + estimate.toolSchemaTokens +
+            estimate.protocolOverheadTokens
+        val availableBeforeTrigger = (triggerThreshold - fixedOverhead).coerceAtLeast(1L)
+        val toolHeavy = estimate.toolSchemaTokens > 0L || effectiveMessages.any { message ->
+            message is AgentAssistantApiMessage && message.toolCalls.isNotEmpty() ||
+                message is AgentToolResultApiMessage
+        }
+        val recentRatio = if (toolHeavy) TOOL_HEAVY_RECENT_RATIO_PERCENT else NORMAL_RECENT_RATIO_PERCENT
+        val desiredRecent = (availableBeforeTrigger * recentRatio / 100L).coerceAtLeast(1L)
+        val minimumRecent = (contextWindow * MIN_RECENT_CONTEXT_PERCENT / 100L).coerceAtLeast(1L)
+        val maximumRecent = (contextWindow * MAX_RECENT_CONTEXT_PERCENT / 100L).coerceAtLeast(1L)
+        val maximumAllowedByTarget = (
+            targetAfterCompaction - fixedOverhead - MIN_COMPACTION_SUMMARY_TOKENS
+            ).coerceAtLeast(1L)
+        val upperRecent = minOf(maximumRecent, maximumAllowedByTarget).coerceAtLeast(1L)
+        val lowerRecent = minOf(minimumRecent, upperRecent)
+        val recentTarget = desiredRecent.coerceIn(lowerRecent, upperRecent)
+        return AgentContextBudget(
+            contextWindow = contextWindow,
+            reserveTokens = reserveTokens,
+            triggerThreshold = triggerThreshold,
+            recentTarget = recentTarget,
+            targetAfterCompaction = targetAfterCompaction,
+            fixedOverheadTokens = fixedOverhead,
+        )
+    }
+
+    /** ExecutionCheckpoint 是内部投影，位置固定在永久 system 后、历史摘要前。 */
+    private fun injectExecutionCheckpoint(
+        messages: List<AbstractApiMessage>,
+        checkpoint: ExecutionCheckpoint?,
+    ): List<AbstractApiMessage> {
+        val active = checkpoint?.takeIf { value ->
+            !value.currentGoal.isNullOrBlank() || value.hardConstraints.isNotEmpty() ||
+                !value.currentStep.isNullOrBlank() || !value.resumeInstruction.isNullOrBlank()
+        } ?: return messages
+        val sanitized = messages.filterNot { it.id == EXECUTION_CHECKPOINT_MESSAGE_ID }
+        val permanentSystem = sanitized.filter { message ->
+            message.role.equals("system", ignoreCase = true) &&
+                !message.id.startsWith("agent-compaction:")
+        }
+        val projectedHistory = sanitized.filterNot { it in permanentSystem }
+        return buildList {
+            addAll(permanentSystem)
+            add(
+                SimpleTextApiMessage(
+                    id = EXECUTION_CHECKPOINT_MESSAGE_ID,
+                    role = "system",
+                    content = active.toContextProjection(),
+                )
+            )
+            addAll(projectedHistory)
+        }
     }
 
     private fun planCompaction(
         canonical: List<AbstractApiMessage>,
         checkpoint: AgentCompactionEntryEntity?,
         tokensBefore: Long,
-        keepRecentTokens: Long,
+        budget: AgentContextBudget,
     ): AgentCompactionPlan? {
         val systemIndexes = canonical.indices.filter { canonical[it].role.equals("system", true) }.toSet()
         val sourceStart = checkpoint
@@ -249,17 +365,23 @@ class AgentContextManager(
         var retainedGroupStart = groups.lastIndex
         var retainedTokens = 0L
         for (groupIndex in groups.lastIndex downTo 1) {
-            retainedGroupStart = groupIndex
-            retainedTokens += groups[groupIndex].sumOf { index ->
+            val groupTokens = groups[groupIndex].sumOf { index ->
                 RequestTokenEstimator.estimateMessageTokens(canonical[index])
             }
-            if (retainedTokens >= keepRecentTokens) break
+            if (retainedTokens > 0L && retainedTokens + groupTokens > budget.recentTarget) break
+            retainedGroupStart = groupIndex
+            retainedTokens += groupTokens
+            if (retainedTokens >= budget.recentTarget) break
         }
         val summarizedGroups = groups.take(retainedGroupStart)
         if (summarizedGroups.isEmpty()) return null
         val retainedGroups = groups.drop(retainedGroupStart)
         val firstRetainedMessage = canonical[retainedGroups.first().first()]
         val splitsTurn = !firstRetainedMessage.role.equals("user", true)
+        val summaryOutputLimit = (budget.targetAfterCompaction - budget.fixedOverheadTokens - retainedTokens)
+            .coerceAtLeast(MIN_COMPACTION_SUMMARY_TOKENS)
+            .coerceAtMost(Int.MAX_VALUE.toLong())
+            .toInt()
 
         return createPlan(
             canonical = canonical,
@@ -268,6 +390,8 @@ class AgentContextManager(
             checkpoint = checkpoint,
             summaryRole = if (splitsTurn) "user" else "system",
             tokensBefore = tokensBefore,
+            budget = budget,
+            summaryOutputTokenLimit = summaryOutputLimit,
         )
     }
 
@@ -278,6 +402,8 @@ class AgentContextManager(
         checkpoint: AgentCompactionEntryEntity?,
         summaryRole: String,
         tokensBefore: Long,
+        budget: AgentContextBudget,
+        summaryOutputTokenLimit: Int,
     ): AgentCompactionPlan? {
         val normalizedIndexes = summarizedIndexes.distinct().sorted()
         val throughIndex = normalizedIndexes.lastOrNull() ?: return null
@@ -290,6 +416,10 @@ class AgentContextManager(
             retainedTailIds = retainedIndexes.map { canonical[it].id },
             summaryRole = summaryRole,
             tokensBefore = tokensBefore,
+            triggerThreshold = budget.triggerThreshold,
+            recentTargetTokens = budget.recentTarget,
+            targetAfterCompaction = budget.targetAfterCompaction,
+            summaryOutputTokenLimit = summaryOutputTokenLimit,
         )
     }
 
@@ -415,15 +545,75 @@ private fun AbstractApiMessage.compactionText(): String = when (this) {
                 .append(call.arguments.toString().escapeBoundary()).append('\n')
         }
     }.trimEnd()
-    is AgentToolResultApiMessage -> {
-        val raw = content.toString()
-        val limited = if (raw.length <= 2_000) raw else {
-            raw.take(1_000) + "\n…省略 ${raw.length - 2_000} 字符…\n" + raw.takeLast(1_000)
+    is AgentToolResultApiMessage -> toolResultCompactionText(this)
+}
+
+/** 按 ET 现有 Computer 工具信封提取关键字段，未知工具保留首尾避免丢失尾部错误。 */
+internal fun compactAgentToolResultForCompaction(message: AgentToolResultApiMessage): String {
+    val raw = message.content.toString()
+    val parsed = runCatching { Json.parseToJsonElement(raw) as? JsonObject }.getOrNull()
+    val data = parsed?.get("data") as? JsonObject
+    val error = parsed?.get("error") as? JsonObject
+    fun value(key: String): String? = (parsed?.get(key) ?: data?.get(key) ?: error?.get(key))
+        ?.toString()?.trim('"')?.takeIf(String::isNotBlank)
+    val head = when {
+        message.toolName in setOf("read_file", "read") -> buildString {
+            append("tool: read\n")
+            value("path")?.let { append("file: ").append(it).append('\n') }
+            value("offset")?.let { append("range offset: ").append(it).append('\n') }
+            value("next_offset")?.let { append("next_offset: ").append(it).append('\n') }
+            append("result:\n")
+            value("content")?.let(::append)
         }
-        "[工具结果 id=$toolCallId name=$toolName status=${if (isError) "失败" else "成功"}] " +
-            limited.escapeBoundary()
+        message.toolName.contains("grep", true) || message.toolName.contains("search", true) -> buildString {
+            append("tool: search\n")
+            value("query")?.let { append("query: ").append(it).append('\n') }
+            value("match_count")?.let { append("match_count: ").append(it).append('\n') }
+            append("result:\n")
+            append(compactHeadTail(raw, 1_800))
+        }
+        message.toolName in setOf("exec", "bash", "terminal") -> buildString {
+            append("tool: bash\n")
+            value("command")?.let { append("command: ").append(it).append('\n') }
+            value("cwd")?.let { append("cwd: ").append(it).append('\n') }
+            value("exit_code")?.let { append("exitCode: ").append(it).append('\n') }
+            value("stderr")?.let { append("stderr: ").append(compactHeadTail(it, 1_000)).append('\n') }
+            value("stdout")?.let { append("stdout: ").append(compactHeadTail(it, 1_000)).append('\n') }
+            error?.get("message")?.let { append("error: ").append(it).append('\n') }
+        }
+        message.toolName in setOf("edit", "write_file", "write") -> buildString {
+            append("tool: ").append(message.toolName).append('\n')
+            value("path")?.let { append("file: ").append(it).append('\n') }
+            value("replacements")?.let { append("replacements: ").append(it).append('\n') }
+            value("bytes_written")?.let { append("bytesWritten: ").append(it).append('\n') }
+            append("status: ").append(if (message.isError) "失败" else "成功")
+        }
+        else -> "tool: ${message.toolName}\nresult:\n${compactHeadTail(raw, 2_000)}"
     }
+    return "[工具结果 id=${message.toolCallId} name=${message.toolName} status=${if (message.isError) "失败" else "成功"}] " +
+        head.escapeBoundary()
+}
+
+private fun toolResultCompactionText(message: AgentToolResultApiMessage): String =
+    compactAgentToolResultForCompaction(message)
+
+private fun compactHeadTail(value: String, maxChars: Int): String {
+    if (value.length <= maxChars) return value
+    val side = maxChars / 2
+    return value.take(side) + "\n…省略 ${value.length - maxChars} 字符…\n" + value.takeLast(side)
 }
 
 private fun String.escapeBoundary(): String =
     replace("</conversation>", "&lt;/conversation&gt;", ignoreCase = true)
+
+private fun ExecutionCheckpoint.toContextProjection(): String = buildString {
+    append("[EveryTalk Execution Checkpoint]\n")
+    currentGoal?.takeIf(String::isNotBlank)?.let { append("目标：").append(it).append('\n') }
+    if (hardConstraints.isNotEmpty()) {
+        append("硬约束：\n")
+        hardConstraints.forEach { append("- ").append(it).append('\n') }
+    }
+    currentStep?.takeIf(String::isNotBlank)?.let { append("当前步骤：").append(it).append('\n') }
+    resumeInstruction?.takeIf(String::isNotBlank)?.let { append("恢复指令：").append(it).append('\n') }
+    append("以上是当前执行检查点，优先级高于历史摘要；不要用历史摘要覆盖这些事实。")
+}

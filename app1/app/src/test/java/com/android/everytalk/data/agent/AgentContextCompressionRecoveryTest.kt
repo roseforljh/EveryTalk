@@ -146,6 +146,54 @@ class AgentContextCompressionRecoveryTest {
         assertTrue(events.any { it is AppStreamEvent.Content && it.text == "主请求继续完成" })
     }
 
+    @Test
+    fun `执行检查点随AgentRun持久化并可恢复`() = runBlocking {
+        val sessionId = "execution-checkpoint"
+        seedSession(sessionId)
+        val loop = AgentLoop(
+            runStore = store,
+            modelTransport = ModelTurnTransport {
+                flowOf(AppStreamEvent.Content("已完成"), AppStreamEvent.Finish("stop"))
+            },
+        )
+
+        loop.run(loopRequest(sessionId)).toList()
+
+        val run = checkNotNull(database.agentDao().getRunsForSession(sessionId).single())
+        val checkpoint = checkNotNull(store.executionCheckpoint(run.id))
+        assertEquals("继续处理", checkpoint.currentGoal)
+        assertTrue(checkpoint.currentStep?.contains("模型请求") == true)
+    }
+
+    @Test
+    fun `Provider上下文超限只执行一次紧急压缩恢复`() = runBlocking {
+        val sessionId = "overflow-recovery"
+        seedSession(sessionId)
+        var requestCount = 0
+        val loop = AgentLoop(
+            runStore = store,
+            modelTransport = ModelTurnTransport {
+                requestCount++
+                when (requestCount) {
+                    1 -> flowOf(
+                        AppStreamEvent.Error(
+                            message = "context length exceeded",
+                            code = "context_length_exceeded",
+                        ),
+                        AppStreamEvent.Finish("error"),
+                    )
+                    2 -> flowOf(AppStreamEvent.Content("压缩摘要"), AppStreamEvent.Finish("stop"))
+                    else -> flowOf(AppStreamEvent.Content("恢复成功"), AppStreamEvent.Finish("stop"))
+                }
+            },
+        )
+
+        val events = loop.run(loopRequest(sessionId)).toList()
+
+        assertEquals(3, requestCount)
+        assertTrue(events.any { it is AppStreamEvent.Content && it.text == "恢复成功" })
+    }
+
     private suspend fun seedSession(sessionId: String) {
         database.chatDao().insertSession(ChatSessionEntity(sessionId, 1L, 1L, false))
     }
