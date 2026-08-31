@@ -372,7 +372,10 @@ class HistoryManager(
             val hasReasoning = !msg.reasoning.isNullOrBlank()
             val hasParts = hasValidParts(msg.parts)
             val hasImages = !msg.imageUrls.isNullOrEmpty()
-            return hasText || hasReasoning || hasParts || hasImages
+            // Agent 开始执行时正文通常还是空的，但 executionStatus 是 Run 与可见消息之间的持久锚点。
+            // 丢掉这条占位会让前台服务把真实 Run 误判为孤儿任务并提前取消。
+            val hasExecutionStatus = !msg.executionStatus.isNullOrBlank()
+            return hasText || hasReasoning || hasParts || hasImages || hasExecutionStatus
         }
         return stripLeadingLegacySystemPromptMessages(messagesToFilter)
             .filter { msg ->

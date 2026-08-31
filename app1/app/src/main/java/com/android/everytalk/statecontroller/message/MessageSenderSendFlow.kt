@@ -11,6 +11,7 @@ import android.util.Log
 import androidx.compose.runtime.snapshots.Snapshot
 import androidx.core.content.FileProvider
 import com.android.everytalk.models.SelectedMediaItem
+import com.android.everytalk.models.createTextAttachment
 import com.android.everytalk.util.image.ImagePersistenceResult
 import com.android.everytalk.util.image.USER_IMAGE_PERSISTENCE_POLICY
 import com.android.everytalk.data.DataClass.AbstractApiMessage
@@ -109,6 +110,17 @@ internal fun isFirstUserMessageForNewChat(
     loadedHistoryIndex: Int?,
 ): Boolean = loadedHistoryIndex == null && messages.count { it.sender == UiSender.User } == 1
 
+internal const val LONG_TEXT_ATTACHMENT_THRESHOLD_CHARS = 2_000
+
+/** 普通聊天正文超过边界时转成文本附件；图片生成仍需要直接使用提示词。 */
+internal fun shouldConvertMessageTextToAttachment(text: String, isImageGeneration: Boolean): Boolean =
+    !isImageGeneration && text.length >= LONG_TEXT_ATTACHMENT_THRESHOLD_CHARS
+
+/**
+ * 创建由输入框正文生成的受管文本附件。
+ *
+ * 文件创建或 URI 转换失败时返回 null，发送流程会保留原正文继续发送。
+ */
 internal fun MessageSender.sendMessageInternal(
         messageText: String,
         isFromRegeneration: Boolean = false,
@@ -120,20 +132,20 @@ internal fun MessageSender.sendMessageInternal(
         manualMessageId: String? = null,
         contentParts: List<MessageContentPart> = emptyList(),
     ) {
-        val textToActuallySend = messageText.trim()
-        val allAttachments = attachments.toMutableList()
+        val originalText = messageText.trim()
+        val initialAttachments = attachments.toMutableList()
         if (audioBase64 != null) {
-            allAttachments.add(SelectedMediaItem.Audio(id = "audio_${UUID.randomUUID()}", mimeType = mimeType ?: "audio/3gpp", data = audioBase64))
+            initialAttachments.add(SelectedMediaItem.Audio(id = "audio_${UUID.randomUUID()}", mimeType = mimeType ?: "audio/3gpp", data = audioBase64))
         }
 
-        if (textToActuallySend.isBlank() && allAttachments.isEmpty()) {
+        if (originalText.isBlank() && initialAttachments.isEmpty()) {
             viewModelScope.launch { showSnackbar("请输入消息内容或选择项目") }
             return
         }
 
         when (
             val safetyDecision = AiContentSafetyPolicy.evaluateUserInput(
-                text = textToActuallySend,
+                text = originalText,
                 isImageGeneration = isImageGeneration,
             )
         ) {
@@ -150,7 +162,7 @@ internal fun MessageSender.sendMessageInternal(
         
         // 🔥 关键调试：检查配置状态
         Log.d("MessageSender", "=== SEND MESSAGE DEBUG ===")
-        Log.d("MessageSender", "inputChars=${messageText.length}, trimmedChars=${textToActuallySend.length}, attachments=${allAttachments.size}")
+        Log.d("MessageSender", "inputChars=${messageText.length}, trimmedChars=${originalText.length}, attachments=${initialAttachments.size}")
         Log.d("MessageSender", "textConversationId=${stateHolder._currentConversationId.value}")
         Log.d("MessageSender", "imageConversationId=${stateHolder._currentImageGenerationConversationId.value}")
         Log.d("MessageSender", "isImageGeneration: $isImageGeneration")
@@ -240,6 +252,22 @@ internal fun MessageSender.sendMessageInternal(
                 emptyMap()
             }
 
+            val longTextAttachment = if (shouldConvertMessageTextToAttachment(originalText, isImageGeneration)) {
+                createTextAttachment(application, originalText)
+            } else {
+                null
+            }
+            val textToActuallySend = if (longTextAttachment == null) originalText else ""
+            val contentPartsToActuallySend = if (longTextAttachment == null) {
+                contentParts
+            } else {
+                // 文本已经进入附件，仅保留技能引用，防止正文通过 contentParts 重复发送。
+                contentParts.filterIsInstance<MessageContentPart.SkillReference>()
+            }
+            val allAttachments = initialAttachments.toMutableList().apply {
+                if (longTextAttachment != null) add(longTextAttachment)
+            }
+
             // 自动注入"上一轮AI出图"作为参考，以支持"在上一张基础上修改"等编辑语义
             if (isImageGeneration && allAttachments.isEmpty()) {
                 val t = textToActuallySend.lowercase()
@@ -305,7 +333,7 @@ internal fun MessageSender.sendMessageInternal(
 
             val newUserMessageForUi = UiMessage(
                 id = manualMessageId ?: "user_${UUID.randomUUID()}", text = textToActuallySend, sender = UiSender.User,
-                contentParts = contentParts,
+                contentParts = contentPartsToActuallySend,
                 timestamp = System.currentTimeMillis(), contentStarted = true,
                 imageUrls = attachmentResult.imageUriStringsForUi,
                 attachments = attachmentResult.processedAttachmentsForUi,
@@ -430,10 +458,12 @@ internal fun MessageSender.sendMessageInternal(
             }
 
             // Workspace 快照已经冻结，此时再入库并迁移会话 ID，映射不会遗留在临时会话下。
-            if (isNewTextChatFirstMessage || isNewImageChatFirstMessage) {
+            // Agent 必须在模型请求前同步保存用户消息和 AI 占位。否则首轮返回 Tool Call 后，
+            // 服务空闲对账会因 Room 查不到可见消息而误取消 Run，工具和模型续写都无法继续。
+            if (isNewTextChatFirstMessage || isNewImageChatFirstMessage || isAgentEnabledForRequest) {
                 withContext(Dispatchers.IO) {
-                    // AgentRun 使用会话外键。首条消息必须等 chat_sessions 真正落库后再启动 Agent，
-                    // 不能只把保存命令放进队列，否则极快的模型请求会先插入 AgentRun 并触发外键错误。
+                    // AgentRun 使用会话和可见消息事实。必须等它们真正落库后再启动 Agent，
+                    // 不能只把保存命令放进队列，否则极快的模型请求会先进入审批暂停并触发误清理。
                     historyManager.saveCurrentChatToHistoryNow(
                         forceSave = true,
                         isImageGeneration = isImageGeneration,
@@ -586,12 +616,12 @@ internal fun MessageSender.sendMessageInternal(
                 )
                 val preparedMcpDispatch = if (isMcpEnabledForRequest && dispatchCandidates.isNotEmpty()) {
                     prepareMcpDispatch(
-                        messageText = textToActuallySend,
+                        messageText = originalText,
                         allCandidates = dispatchCandidates,
                     )
                 } else {
                     PreparedMcpDispatch(
-                        intent = classifyMcpIntent(textToActuallySend),
+                        intent = classifyMcpIntent(originalText),
                         tools = emptyList(),
                     )
                 }

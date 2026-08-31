@@ -594,12 +594,13 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
                             }
                     }
                     is SelectedMediaItem.GenericFile -> {
-                        fileManager.copyUriToAppInternalStorage(
-                            sourceUri = originalMediaItem.uri,
-                            messageIdHint = tempMessageIdForNaming,
-                            attachmentIndex = index,
-                            originalFileName = originalMediaItem.displayName,
-                        )
+                        fileManager.existingManagedAttachmentPath(originalMediaItem.filePath)
+                            ?: fileManager.copyUriToAppInternalStorage(
+                                sourceUri = originalMediaItem.uri,
+                                messageIdHint = tempMessageIdForNaming,
+                                attachmentIndex = index,
+                                originalFileName = originalMediaItem.displayName,
+                            )
                     }
                     is SelectedMediaItem.Audio -> {
                         originalMediaItem.filePath

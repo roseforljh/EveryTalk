@@ -182,6 +182,59 @@ class FileManager(internal val context: Context) {
     }
 
     /**
+     * 返回已经位于应用聊天附件目录中的有效文件路径。
+     *
+     * 只接受附件目录的直接子文件，防止外部传入的任意路径绕过复制和校验。
+     */
+    internal fun existingManagedAttachmentPath(path: String?): String? {
+        val file = path?.takeIf(String::isNotBlank)?.let(::File) ?: return null
+        val attachmentDirectory = runCatching { getChatAttachmentsDir().canonicalFile }.getOrNull() ?: return null
+        val candidate = runCatching { file.canonicalFile }.getOrNull() ?: return null
+        return candidate
+            .takeIf {
+                it.isFile &&
+                    it.length() in 1..MAX_FILE_SIZE_BYTES.toLong() &&
+                    it.parentFile == attachmentDirectory
+            }
+            ?.absolutePath
+    }
+
+    /**
+     * 把超长输入原样保存成 UTF-8 文本附件。
+     *
+     * 写入先落到临时文件，完整写完后再改名。失败时返回 null，调用方会继续发送原正文。
+     */
+    suspend fun persistTextAttachment(text: String, messageIdHint: String): String? = withContext(Dispatchers.IO) {
+        if (text.isEmpty()) return@withContext null
+
+        var temporaryFile: File? = null
+        try {
+            val attachmentDirectory = getChatAttachmentsDir()
+            temporaryFile = File.createTempFile(".text_", ".part", attachmentDirectory)
+            temporaryFile.bufferedWriter(Charsets.UTF_8).use { writer -> writer.write(text) }
+            if (temporaryFile.length() !in 1..MAX_FILE_SIZE_BYTES.toLong()) return@withContext null
+
+            val safeMessageId = messageIdHint
+                .filter { it.isLetterOrDigit() || it == '_' || it == '-' }
+                .take(48)
+                .ifBlank { "message" }
+            val destination = File(
+                attachmentDirectory,
+                "pasted_text_${safeMessageId}_${UUID.randomUUID().toString().take(8)}.txt",
+            )
+            if (!temporaryFile.renameTo(destination)) return@withContext null
+            destination.absolutePath
+        } catch (exception: CancellationException) {
+            throw exception
+        } catch (exception: Exception) {
+            logger.error("Failed to persist text attachment", exception)
+            null
+        } finally {
+            temporaryFile?.takeIf(File::exists)?.delete()
+        }
+    }
+
+    /**
      * 把发送阶段持有的 Base64 音频写入应用私有附件目录。
      * 返回值只包含本地路径，聊天消息落库时无需再保存整段 Base64。
      */

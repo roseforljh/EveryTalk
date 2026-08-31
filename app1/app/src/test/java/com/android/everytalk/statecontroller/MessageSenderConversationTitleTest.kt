@@ -54,6 +54,19 @@ class MessageSenderConversationTitleTest {
     }
 
     @Test
+    fun `Agent每次请求都在模型调用前同步保存可见消息`() {
+        val source = messageSenderSendFlowSource()
+        val saveCondition = source
+            .substringBefore("historyManager.saveCurrentChatToHistoryNow(")
+            .substringAfterLast("if (")
+        val historySaveIndex = source.indexOf("historyManager.saveCurrentChatToHistoryNow(")
+        val modelRequestIndex = source.indexOf("apiHandler.streamChatResponse(")
+
+        assertTrue("已有会话的 Agent 请求也必须同步保存 AI 占位", saveCondition.contains("isAgentEnabledForRequest"))
+        assertTrue("可见消息必须先落库，随后才能启动模型请求", historySaveIndex in 0 until modelRequestIndex)
+    }
+
+    @Test
     fun `Agent预创建占位前取消旧请求且创建后不再取消当前发送任务`() {
         val source = messageSenderSendFlowSource()
         val preparationBlock = source

@@ -1,6 +1,7 @@
 package com.android.everytalk.models
 
 import android.graphics.Bitmap
+import android.content.Context
 import android.net.Uri
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
@@ -11,9 +12,12 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.Contextual
 import com.android.everytalk.util.serialization.UriSerializer
 import com.android.everytalk.util.storage.CappedByteArrayOutputStream
+import com.android.everytalk.util.storage.FileManager
 import com.android.everytalk.util.image.ImageHandlingLimits
 import com.android.everytalk.util.image.decodedBase64SizeOrNull
+import androidx.core.content.FileProvider
 import java.io.File
+import java.util.UUID
 
 interface IMediaItem {
     val id: String
@@ -137,6 +141,30 @@ sealed class SelectedMediaItem : IMediaItem {
             }.getOrNull()
         }
     }
+}
+
+/**
+ * 把输入框中的长文本保存为应用附件。
+ *
+ * 返回的 GenericFile 可直接交给输入框附件列表或发送流程；失败时返回 null，调用方保留原文本。
+ */
+internal suspend fun createTextAttachment(context: Context, text: String): SelectedMediaItem.GenericFile? {
+    if (text.isEmpty()) return null
+    val attachmentId = "text_${UUID.randomUUID()}"
+    val filePath = FileManager(context).persistTextAttachment(text, attachmentId) ?: return null
+    return runCatching {
+        SelectedMediaItem.GenericFile(
+            uri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.provider",
+                File(filePath),
+            ),
+            id = attachmentId,
+            displayName = "pasted-text-${attachmentId.removePrefix("text_").take(8)}.txt",
+            mimeType = "text/plain",
+            filePath = filePath,
+        )
+    }.onFailure { File(filePath).delete() }.getOrNull()
 }
 
 internal const val ATTACHMENT_MANIFEST_MARKER = "[附件清单]"

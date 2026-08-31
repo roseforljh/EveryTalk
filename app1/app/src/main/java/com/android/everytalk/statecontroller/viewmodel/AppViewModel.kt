@@ -360,6 +360,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         get() = stateHolder._loadedImageGenerationHistoryIndex.asStateFlow()
     val isLoadingHistory: StateFlow<Boolean>
         get() = stateHolder._isLoadingHistory.asStateFlow()
+    val isLoadingImageHistory: StateFlow<Boolean>
+        get() = stateHolder._isLoadingImageHistory.asStateFlow()
     val historyLoadGeneration: StateFlow<Long>
         get() = stateHolder._historyLoadGeneration.asStateFlow()
     val isLoadingHistoryData: StateFlow<Boolean>

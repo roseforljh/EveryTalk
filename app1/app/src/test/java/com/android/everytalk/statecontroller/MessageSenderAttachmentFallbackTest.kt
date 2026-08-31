@@ -15,6 +15,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -99,6 +100,15 @@ class MessageSenderAttachmentFallbackTest {
 
         assertEquals(1, result.size)
         assertSame(currentUserMessage, result.single())
+    }
+
+    @Test
+    fun `普通聊天正文达到两千字符时转成附件`() {
+        val boundaryText = "a".repeat(LONG_TEXT_ATTACHMENT_THRESHOLD_CHARS)
+
+        assertFalse(shouldConvertMessageTextToAttachment(boundaryText.dropLast(1), isImageGeneration = false))
+        assertTrue(shouldConvertMessageTextToAttachment(boundaryText, isImageGeneration = false))
+        assertFalse(shouldConvertMessageTextToAttachment(boundaryText, isImageGeneration = true))
     }
 
 }

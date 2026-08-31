@@ -714,6 +714,42 @@ class HistoryManagerCustomPromptPersistenceTest {
     }
 
     @Test
+    fun `保存Agent执行状态占位供后台Run对账`() = runBlocking {
+        val stateHolder = ViewModelStateHolder()
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Unconfined)
+        val persistenceManager = mockk<DataPersistenceManager>(relaxed = true)
+        val historyManager = HistoryManager(
+            stateHolder = stateHolder,
+            persistenceManager = persistenceManager,
+            compareMessageLists = { left, right -> left == right },
+            onHistoryModified = {},
+            scope = scope,
+        )
+        val userMessage = Message(id = "user-agent", text = "检查服务器", sender = Sender.User)
+        val agentPlaceholder = Message(
+            id = "ai-agent",
+            text = "",
+            sender = Sender.AI,
+            executionStatus = "正在准备服务器",
+        )
+        stateHolder.setCurrentConversationId(userMessage.id)
+        stateHolder.messages.addAll(listOf(userMessage, agentPlaceholder))
+        stateHolder.isTextConversationDirty.value = true
+
+        try {
+            historyManager.saveCurrentChatToHistoryNow(forceSave = true)
+
+            val saved = stateHolder._historicalConversations.value.single()
+            assertEquals(listOf("user-agent", "ai-agent"), saved.map(Message::id))
+            coVerify(exactly = 1) {
+                persistenceManager.saveHistorySession("user-agent", saved, false)
+            }
+        } finally {
+            scope.coroutineContext[Job]?.cancelAndJoin()
+        }
+    }
+
+    @Test
     fun `排队保存后删除同一会话不会被旧快照重新写回`() = runBlocking {
         val stateHolder = ViewModelStateHolder()
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
