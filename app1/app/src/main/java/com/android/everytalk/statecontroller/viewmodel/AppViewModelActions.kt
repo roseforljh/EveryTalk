@@ -564,6 +564,32 @@ import java.util.TimeZone
         return true
     }
 
+    internal fun AppViewModel.enqueuePendingMessage(
+        content: String,
+        composerText: String,
+        contentParts: List<com.android.everytalk.data.DataClass.MessageContentPart>,
+        attachments: List<SelectedMediaItem>,
+        onStored: () -> Unit,
+    ) = pendingMessageController.enqueue(content, composerText, contentParts, attachments, onStored)
+
+    internal fun AppViewModel.beginPendingMessageEdit(id: String) = pendingMessageController.beginEdit(id)
+
+    internal fun AppViewModel.commitPendingMessageEdit(
+        content: String,
+        composerText: String,
+        contentParts: List<com.android.everytalk.data.DataClass.MessageContentPart>,
+        attachments: List<SelectedMediaItem>,
+        onStored: () -> Unit,
+    ) = pendingMessageController.commitEdit(content, composerText, contentParts, attachments, onStored)
+
+    internal fun AppViewModel.cancelPendingMessageEdit() = pendingMessageController.cancelEdit()
+
+    internal fun AppViewModel.deletePendingMessage(id: String) = pendingMessageController.delete(id)
+
+    internal fun AppViewModel.sendPendingMessageNow(id: String) = pendingMessageController.sendNow(id)
+
+    internal fun AppViewModel.resumeStreaming() = streamingControls.resume()
+
     /** 长按选服使用；选择落库后立即更新 Agent，Workspace 在后台准备。 */
     internal fun AppViewModel.selectComputerForCurrentConversation(
         computerId: String,

@@ -705,8 +705,24 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
         isImageGeneration: Boolean = false,
         manualMessageId: String? = null,
         contentParts: List<MessageContentPart> = emptyList(),
+        onUserMessageAccepted: (() -> Unit)? = null,
+        onSendRejected: (() -> Unit)? = null,
+        onTurnFinished: (() -> Unit)? = null,
     ) {
-        sendMessageInternal(messageText, isFromRegeneration, attachments, audioBase64, mimeType, systemPrompt, isImageGeneration, manualMessageId, contentParts)
+        sendMessageInternal(
+            messageText,
+            isFromRegeneration,
+            attachments,
+            audioBase64,
+            mimeType,
+            systemPrompt,
+            isImageGeneration,
+            manualMessageId,
+            contentParts,
+            onUserMessageAccepted,
+            onSendRejected,
+            onTurnFinished,
+        )
     }
     private fun getFileName(contentResolver: ContentResolver, uri: Uri): String? {
         if (uri == Uri.EMPTY) return null

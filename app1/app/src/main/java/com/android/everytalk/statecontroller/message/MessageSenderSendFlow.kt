@@ -66,6 +66,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -131,6 +132,9 @@ internal fun MessageSender.sendMessageInternal(
         isImageGeneration: Boolean = false,
         manualMessageId: String? = null,
         contentParts: List<MessageContentPart> = emptyList(),
+        onUserMessageAccepted: (() -> Unit)? = null,
+        onSendRejected: (() -> Unit)? = null,
+        onTurnFinished: (() -> Unit)? = null,
     ) {
         val originalText = messageText.trim()
         val initialAttachments = attachments.toMutableList()
@@ -140,6 +144,7 @@ internal fun MessageSender.sendMessageInternal(
 
         if (originalText.isBlank() && initialAttachments.isEmpty()) {
             viewModelScope.launch { showSnackbar("请输入消息内容或选择项目") }
+            onSendRejected?.invoke()
             return
         }
 
@@ -156,6 +161,7 @@ internal fun MessageSender.sendMessageInternal(
                     "AI 内容安全过滤已拦截请求：category=${safetyDecision.category}",
                 )
                 viewModelScope.launch { showSnackbar(safetyDecision.userMessage) }
+                onSendRejected?.invoke()
                 return
             }
         }
@@ -174,6 +180,7 @@ internal fun MessageSender.sendMessageInternal(
         val currentConfig = (if (isImageGeneration) stateHolder._selectedImageGenApiConfig.value else stateHolder._selectedApiConfig.value) ?: run {
             Log.e("MessageSender", "❌ No API config selected! isImageGeneration=$isImageGeneration")
             viewModelScope.launch { showSnackbar(if (isImageGeneration) "请先选择 图像生成 的API配置" else "请先选择 API 配置") }
+            onSendRejected?.invoke()
             return
         }
 
@@ -207,7 +214,13 @@ internal fun MessageSender.sendMessageInternal(
             Log.d("MessageSender", "ModalityType: ${currentConfig.modalityType}")
         }
 
-        viewModelScope.launch {
+        val accepted = AtomicBoolean(false)
+        val handedToApi = AtomicBoolean(false)
+        val finished = AtomicBoolean(false)
+        fun notifyTurnFinished() {
+            if (finished.compareAndSet(false, true)) onTurnFinished?.invoke()
+        }
+        val sendJob = viewModelScope.launch {
             val effectiveModelChannel = currentConfig.effectiveModelChannel()
             val parameterProtocol = modelParameterProtocol(effectiveModelChannel)
             val modelIsGeminiType = parameterProtocol == ModelParameterProtocol.GEMINI
@@ -362,6 +375,27 @@ internal fun MessageSender.sendMessageInternal(
                    stateHolder.clearSelectedMedia()
                 }
             }
+
+            if (onUserMessageAccepted != null) {
+                val persisted = runCatching {
+                    withContext(Dispatchers.IO) {
+                        historyManager.saveCurrentChatToHistoryNow(
+                            forceSave = true,
+                            isImageGeneration = isImageGeneration,
+                        )
+                    }
+                }.isSuccess
+                if (!persisted) {
+                    withContext(Dispatchers.Main.immediate) {
+                        val messages = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
+                        messages.removeAll { it.id == newUserMessageForUi.id }
+                        showSnackbar("暂存消息落库失败，请重试")
+                    }
+                    return@launch
+                }
+            }
+            accepted.set(true)
+            onUserMessageAccepted?.invoke()
 
             // 先判断首条消息。Agent 的 AI 加载占位也会进入 messages，不能让它改变会话入库判断。
             val isNewTextChatFirstMessage = !isImageGeneration &&
@@ -1073,7 +1107,16 @@ internal fun MessageSender.sendMessageInternal(
                     isImageGeneration = isImageGeneration,
                     preCreatedAiMessageId = preCreatedAiMessageId,
                     contextUsageSnapshot = if (isImageGeneration) null else contextUsageSnapshot,
+                    onRequestFinished = ::notifyTurnFinished,
                 )
+                handedToApi.set(true)
+            }
+        }
+        sendJob.invokeOnCompletion {
+            if (!accepted.get()) {
+                onSendRejected?.invoke()
+            } else if (!handedToApi.get()) {
+                notifyTurnFinished()
             }
         }
     }

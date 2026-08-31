@@ -14,8 +14,8 @@ import com.android.everytalk.data.DataClass.ContextCompressionState
 import com.android.everytalk.ui.components.MarkdownPart
 import com.android.everytalk.ui.components.toRecoveredMarkdown
 import com.android.everytalk.data.network.AppStreamEvent
-import com.android.everytalk.data.agent.AgentLoop
 import com.android.everytalk.data.agent.AgentLoopRequest
+import com.android.everytalk.data.agent.AgentRunControlSnapshot
 import com.android.everytalk.data.agent.AgentRunStore
 import com.android.everytalk.data.agent.AgentApprovalDecision
 import com.android.everytalk.data.agent.AgentApprovalRecord
@@ -23,7 +23,6 @@ import com.android.everytalk.data.agent.AgentPauseRequest
 import com.android.everytalk.data.agent.PendingAgentEnableApproval
 import com.android.everytalk.data.agent.PendingSkillSecretApproval
 import com.android.everytalk.data.agent.AgentRunStatus
-import com.android.everytalk.data.agent.AgentToolResultStore
 import com.android.everytalk.data.computer.PendingComputerToolApproval
 import com.android.everytalk.data.computer.ComputerRequestContext
 import com.android.everytalk.data.database.entities.toApiConfig
@@ -322,23 +321,21 @@ class ApiHandler(
     private val skillSecretStore by lazy { com.android.everytalk.data.skill.SkillSecretStore(context) }
     private val agentResumeMutex = Mutex()
     private val resumingAgentRunIds = ConcurrentHashMap.newKeySet<String>()
-    private val agentLoop by lazy {
-        AgentLoop(
-            runStore = agentRunStore,
-            toolRuntime = com.android.everytalk.data.agent.AgentToolRuntime(
-                executorProvider = com.android.everytalk.data.agent.AgentToolExecutorRegistry::current,
-                resultStore = AgentToolResultStore(context),
-                skillRuntimeTools = com.android.everytalk.data.skill.SkillRuntimeTools(skillRepository, agentRunStore),
-            ),
-            computerSessionStateProvider = computerSessionStateProvider,
-        )
-    }
     private val agentRunCoordinator by lazy {
         com.android.everytalk.data.agent.AgentRunCoordinator.shared(
             context = context,
-            injectedAgentLoop = agentLoop,
+            computerSessionStateProvider = computerSessionStateProvider,
         )
     }
+
+    val agentRunControlSnapshots: StateFlow<Map<String, AgentRunControlSnapshot>>
+        get() = agentRunCoordinator.runControlSnapshots
+
+    fun requestPauseCurrentAgent(visibleAssistantMessageId: String): Boolean =
+        agentRunCoordinator.requestPause(visibleAssistantMessageId)
+
+    fun resumePausedAgent(visibleAssistantMessageId: String): Boolean =
+        agentRunCoordinator.resumePausedRun(visibleAssistantMessageId)
 
     init {
         // 页面 Collector 离开后，应用级 Agent 继续运行；回到进程后仍把事件写回原消息。
@@ -1105,6 +1102,7 @@ class ApiHandler(
         isImageGeneration: Boolean = false,
         preCreatedAiMessageId: String? = null,
         contextUsageSnapshot: ContextUsageSnapshot? = null,
+        onRequestFinished: () -> Unit = {},
     ) {
         logger.debug(
             "streamChatResponse request summary: inputChars=${userMessageTextForContext.length}, trimmedChars=${userMessageTextForContext.trim().length}, messages.size=${requestBody.messages.size}, conversationId=${requestBody.conversationId}, preCreatedId=$preCreatedAiMessageId"
@@ -1417,7 +1415,10 @@ class ApiHandler(
                     }
                 }
                 if (clearedCurrentTextJob) restorePendingAgentApproval()
-            }
+                runCatching(onRequestFinished).onFailure { error ->
+                    logger.warn("Request finished callback failed: ${error.message}")
+                }
+             }
         }
     }
 
@@ -1448,6 +1449,10 @@ class ApiHandler(
             }
         }
     }
+
+    /** 将用户调整方向提交给当前 AgentRun 的真实 steering queue，不中断工具执行。 */
+    suspend fun steerCurrentAgent(conversationId: String, steeringId: String, content: String): Boolean =
+        agentRunCoordinator.steer(conversationId, steeringId, content)
 
     /** 手动停止属于本次回复的终点；远端取消结果只更新提示，不再延长气泡耗时。 */
     private fun finishMessageExecutionForUserStop(messageId: String) {

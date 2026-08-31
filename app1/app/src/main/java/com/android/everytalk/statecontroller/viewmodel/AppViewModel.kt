@@ -87,6 +87,7 @@ import com.android.everytalk.data.mcp.McpServerState
 import com.android.everytalk.data.mcp.McpStatus
 import com.android.everytalk.data.agent.AgentToolExecutorRegistry
 import com.android.everytalk.data.agent.AgentTerminalReasons
+import com.android.everytalk.data.agent.AgentRunControlState
 import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.data.computer.hostConfirmationRequest
 import com.android.everytalk.data.computer.publicPreviewRequest
@@ -220,7 +221,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                         conversationPreviewController.clearAllCaches()
                     },
                      scope = viewModelScope,
-                     onConversationIdMigrated = computerManager::migrateConversationId,
+                     onConversationIdMigrated = { oldId, newId ->
+                         computerManager.migrateConversationId(oldId, newId)
+                         pendingMessageController.migrateConversationId(oldId, newId)
+                     },
                      deleteConversationWorkspaces = { conversationId ->
                          computerManager.deleteWorkspacesForConversation(
                              conversationId = conversationId,
@@ -339,6 +343,64 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 getSelectedExternalWebSearchProvider = { selectedExternalWebSearchProvider },
                 getSelectedExternalWebSearchProviderApiKey = { selectedExternalWebSearchProviderApiKey },
                 prepareComputerRequest = computerManager::prepareRequest,
+        )
+    }
+
+    /** 当前可见 AgentRun 的真实安全暂停状态。UI 只消费 Coordinator 投影。 */
+    internal val currentAgentRunControlState: StateFlow<AgentRunControlState> =
+        kotlinx.coroutines.flow.combine(
+            stateHolder._currentTextStreamingAiMessageId,
+            apiHandler.agentRunControlSnapshots,
+        ) { messageId, snapshots ->
+            messageId?.let(snapshots::get)?.state ?: AgentRunControlState.RUNNING
+        }.stateIn(viewModelScope, SharingStarted.Eagerly, AgentRunControlState.RUNNING)
+
+    /** Pending 复用现有 Room、Composer 状态和 MessageSender，不建立第二套发送链路。 */
+    internal val pendingMessageController: PendingMessageController by lazy {
+        PendingMessageController(
+            chatDao = AppDatabase.getDatabase(getApplication()).chatDao(),
+            scope = viewModelScope,
+            currentConversationId = stateHolder._currentConversationId,
+            isApiCalling = stateHolder._isTextApiCalling,
+            isAbortInProgress = stateHolder._isRemoteCancellationPending,
+            agentRunControlState = currentAgentRunControlState,
+            hasComposerContent = {
+                stateHolder._text.value.isNotBlank() || stateHolder.selectedMediaItems.isNotEmpty()
+            },
+            replaceComposer = { text, attachments ->
+                stateHolder._text.value = text
+                stateHolder.selectedMediaItems.clear()
+                stateHolder.selectedMediaItems.addAll(attachments)
+            },
+            persistAttachments = { attachments, content ->
+                messageSender.processAttachments(
+                    attachments = attachments,
+                    shouldUsePartsApiMessage = false,
+                    textToActuallySend = content,
+                ).takeIf { it.success }?.processedAttachmentsForUi
+            },
+            resumeStreaming = streamingControls::resume,
+            steerCurrentRun = { pending ->
+                apiHandler.steerCurrentAgent(
+                    conversationId = pending.conversationId,
+                    steeringId = pending.id,
+                    content = pending.content,
+                )
+            },
+            showMessage = ::showSnackbar,
+            dispatch = { pending, onAccepted, onRejected, onFinished ->
+                val engaged = stateHolder.systemPromptEngagedState[pending.conversationId] ?: false
+                messageSender.sendMessage(
+                    messageText = pending.content,
+                    attachments = pending.attachments,
+                    systemPrompt = systemPrompt.value.takeIf { engaged },
+                    manualMessageId = pending.id,
+                    contentParts = pending.contentParts,
+                    onUserMessageAccepted = onAccepted,
+                    onSendRejected = onRejected,
+                    onTurnFinished = onFinished,
+                )
+            },
         )
     }
 
@@ -524,6 +586,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         get() = stateHolder._sourcesForDialog.asStateFlow()
     val isStreamingPaused: StateFlow<Boolean>
         get() = stateHolder._isStreamingPaused.asStateFlow()
+    val pendingMessages get() = pendingMessageController.visiblePendingMessages
+    val composerMode get() = pendingMessageController.composerMode
+    val chatRunState get() = pendingMessageController.runState
 
     val systemPrompt: StateFlow<String> = stateHolder._currentConversationId.flatMapLatest { id ->
         snapshotFlow { stateHolder.systemPrompts[id] ?: "" }
@@ -660,6 +725,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
        stateHolder = stateHolder,
        apiHandler = apiHandler,
        scope = viewModelScope,
+       agentRunControlState = currentAgentRunControlState,
+       requestPause = {
+           stateHolder._currentTextStreamingAiMessageId.value
+               ?.let(apiHandler::requestPauseCurrentAgent)
+               ?: false
+       },
+       resumeAgent = {
+           stateHolder._currentTextStreamingAiMessageId.value
+               ?.let(apiHandler::resumePausedAgent)
+               ?: false
+       },
        isImageModeProvider = { simpleModeManager.isInImageMode() },
        triggerScrollToBottom = { triggerScrollToBottom() },
        showSnackbar = ::showSnackbar

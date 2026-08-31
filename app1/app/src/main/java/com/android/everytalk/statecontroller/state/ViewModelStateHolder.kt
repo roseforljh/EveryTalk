@@ -115,7 +115,7 @@ import java.util.concurrent.atomic.AtomicLong
     val _currentTextStreamingAiMessageId = MutableStateFlow<String?>(null)
     val _currentImageStreamingAiMessageId = MutableStateFlow<String?>(null)
 
-// 全局流式暂停状态（文本/图像共用）
+// 仅用于冻结渲染的镜像；AgentRunPauseController 才是 Safe Pause 的运行事实。
 val _isStreamingPaused = MutableStateFlow(false)
     // 分离的API Job
     var textApiJob: Job? = null
