@@ -103,6 +103,7 @@ class AgentLoop(
     private val toolRuntime: AgentToolRuntime = AgentToolRuntime(AgentToolExecutorRegistry::current),
     private val computerSessionStateProvider: suspend (ComputerRequestContext?) -> String? = { null },
     private val pauseController: AgentRunPauseController = AgentRunPauseController(),
+    private val interventionBroker: AgentInterventionBroker? = null,
     private val modelTransport: ModelTurnTransport = ModelTurnTransport { turn ->
         ApiClient.streamModelTurn(turn.request)
     },
@@ -753,6 +754,40 @@ class AgentLoop(
             val agentRequest = pauseRequest.getOrNull()
             if (agentRequest != null) {
                 flushParallelCalls()
+                if (agentRequest is AgentPauseRequest.Capability) {
+                    val broker = interventionBroker
+                    if (broker == null) {
+                        val result = AgentContentBlock.ToolResult(
+                            toolCallId = call.id,
+                            toolName = call.name,
+                            content = kotlinx.serialization.json.JsonPrimitive("当前运行环境未启用统一人类接力 Broker"),
+                            isError = true,
+                        )
+                        runStore.appendToolResult(run.id, requestId, result)
+                        currentTranscript = currentTranscript + result.toApiMessage()
+                        continue
+                    }
+                    val requestHash = java.security.MessageDigest.getInstance("SHA-256")
+                        .digest("${call.name}|${call.arguments}".toByteArray(Charsets.UTF_8))
+                        .joinToString("") { "%02x".format(it) }
+                    val ticket = broker.suspend(
+                        run = run,
+                        capabilityRequest = agentRequest.request,
+                        turnId = requestId,
+                        requestId = requestId,
+                        toolCallId = call.id,
+                        executionSlot = call.id,
+                        requestHash = requestHash,
+                        requestSource = "MODEL_HINT",
+                        targetBindingRef = contextualComputerContext?.let { "computer:${it.computerId}:workspace:${it.workspaceId}" }
+                            ?: "current-run-resource",
+                        bindingGeneration = 0,
+                        executionGeneration = 0,
+                    )
+                    emit(AppStreamEvent.ExecutionStatusUpdate("等待你提供执行所需能力"))
+                    emit(AppStreamEvent.AgentInterventionRequired(run.id, ticket.suspension.id))
+                    return ToolBatchOutcome(currentTranscript, paused = true)
+                }
                 val record = AgentApprovalRecord(
                     approvalRequestId = UUID.randomUUID().toString(),
                     requestId = requestId,
@@ -949,7 +984,7 @@ class AgentLoop(
                     content = kotlinx.serialization.json.buildJsonObject {
                         put("available", kotlinx.serialization.json.JsonPrimitive(true))
                         put("name", kotlinx.serialization.json.JsonPrimitive(record.agentRequest.name))
-                        put("message", kotlinx.serialization.json.JsonPrimitive("用户已提供该密钥；正文不会返回，执行命令时通过 secret_names 按名称注入"))
+                        put("message", kotlinx.serialization.json.JsonPrimitive("用户已完成授权；正文不会返回，后续只能由已注册的语义 capability Adapter 使用"))
                     },
                 ),
             )

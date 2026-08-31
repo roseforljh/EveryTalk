@@ -176,6 +176,13 @@ sealed class AgentPauseRequest {
         val name: String,
         val reason: String,
     ) : AgentPauseRequest()
+
+    /** 新统一协议入口。旧 EnableAgent / SkillSecret 只保留兼容映射。 */
+    @Serializable
+    @SerialName("capability")
+    data class Capability(
+        val request: CapabilityRequest,
+    ) : AgentPauseRequest()
 }
 
 data class PendingAgentEnableApproval(

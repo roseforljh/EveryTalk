@@ -72,4 +72,22 @@ class AgentControlToolsTest {
             ),
         )
     }
+
+    @Test
+    fun `request_capability 只接受 capability 和安全原因`() {
+        val request = agentPauseRequest(
+            AgentContentBlock.ToolCall(
+                "call-capability",
+                AgentControlToolNames.REQUEST_CAPABILITY,
+                buildJsonObject {
+                    put("requested_capability", "git.push")
+                    put("reason_safe", "推送当前仓库需要认证")
+                    put("user_visible_context", "当前仓库")
+                },
+            ),
+        ) as AgentPauseRequest.Capability
+
+        assertEquals("git.push", request.request.requestedCapability)
+        assertEquals("推送当前仓库需要认证", request.request.reasonSafe)
+    }
 }

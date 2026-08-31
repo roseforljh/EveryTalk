@@ -7,8 +7,9 @@ import kotlinx.serialization.json.contentOrNull
 object AgentControlToolNames {
     const val REQUEST_AGENT = "request_agent"
     const val REQUEST_SKILL_SECRET = "request_skill_secret"
+    const val REQUEST_CAPABILITY = "request_capability"
 
-    val all = setOf(REQUEST_AGENT, REQUEST_SKILL_SECRET)
+    val all = setOf(REQUEST_AGENT, REQUEST_SKILL_SECRET, REQUEST_CAPABILITY)
 }
 
 fun agentRequestToolDefinition(): Map<String, Any> = mapOf(
@@ -36,7 +37,7 @@ fun skillSecretRequestToolDefinition(): Map<String, Any> = mapOf(
     "type" to "function",
     "function" to mapOf(
         "name" to AgentControlToolNames.REQUEST_SKILL_SECRET,
-        "description" to "申请当前 Skill 所需的环境变量密钥。密钥正文不会返回给模型，只会在当前 Agent 进程执行时按变量名注入。",
+        "description" to "旧 Skill 授权兼容入口。凭据正文不会返回模型；应用会映射为受限 capability，不向任意命令注入 Secret。",
         "parameters" to mapOf(
             "type" to "object",
             "properties" to mapOf(
@@ -50,10 +51,36 @@ fun skillSecretRequestToolDefinition(): Map<String, Any> = mapOf(
     ),
 )
 
+fun capabilityRequestToolDefinition(): Map<String, Any> = mapOf(
+    "type" to "function",
+    "function" to mapOf(
+        "name" to AgentControlToolNames.REQUEST_CAPABILITY,
+        "description" to "执行中缺少外部能力时申请用户接力。只能填写已注册 capability、原因和安全上下文，字段、目标、Adapter 与投递方式由本地策略决定。",
+        "parameters" to mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "requested_capability" to mapOf("type" to "string"),
+                "reason_safe" to mapOf("type" to "string"),
+                "user_visible_context" to mapOf("type" to "string"),
+            ),
+            "required" to listOf("requested_capability", "reason_safe"),
+            "additionalProperties" to false,
+        ),
+    ),
+)
+
 fun agentPauseRequest(
     call: AgentContentBlock.ToolCall,
     allowedSkillIds: Set<String> = emptySet(),
 ): AgentPauseRequest? {
+    if (call.name.equals(AgentControlToolNames.REQUEST_CAPABILITY, ignoreCase = true)) {
+        val capability = (call.arguments["requested_capability"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+        require(capability.isNotBlank() && capability.length <= 128) { "capability 无效" }
+        val reason = (call.arguments["reason_safe"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
+        require(reason.isNotBlank()) { "reason_safe 不能为空" }
+        val context = (call.arguments["user_visible_context"] as? JsonPrimitive)?.contentOrNull?.trim()?.take(500)
+        return AgentPauseRequest.Capability(CapabilityRequest(capability, reason.take(500), context))
+    }
     if (call.name.equals(AgentControlToolNames.REQUEST_SKILL_SECRET, ignoreCase = true)) {
         val skillId = (call.arguments["skill_id"] as? JsonPrimitive)?.contentOrNull?.trim().orEmpty()
         require(skillId in allowedSkillIds) { "只能为当前请求快照中的 Skill 申请密钥" }

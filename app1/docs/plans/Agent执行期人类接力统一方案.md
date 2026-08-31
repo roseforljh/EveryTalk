@@ -224,6 +224,8 @@ Binding、Adapter、Target Attestation 和 Continuation 由 Broker 调用 Policy
 
 `active suspension idempotency key` 由 `run_id`、`turn_id`、`execution_slot`、`capability_id`、`target_binding`、`request_hash` 和 `execution_generation` 稳定生成。Room 对未进入终态的 Suspension 建立唯一约束或等价事务检查。相同请求再次 `suspend()` 时返回已有记录，不创建第二张接力卡片。后到的更高可信证据只能通过 CAS 更新原记录。
 
+如果原记录已经 resolve、fulfill 或进入不可安全升级阶段，禁止覆盖原决策；由原 Continuation 进入明确失败或 `REPLAN_REQUIRED`，不得另建并行 Suspension。
+
 `request()` 和 `pause()` 不作为公开的分离动作，内部只承担校验，不承担持久化。
 
 它负责以下实现细节：
@@ -277,6 +279,15 @@ SuspensionState
 `DELIVERY_UNKNOWN` 不能直接进入 `READY_TO_RESUME`。它先持久化为 `RECONCILIATION_REQUIRED`，再由唯一的 reconcile claim 进入 `RECONCILING`。用户拒绝、取消、过期和目标丢失会形成失败型 `ContinuationResult`，恢复被 suspend 的 slot，让 Agent 得到明确结果。`UNKNOWN` 只表示外部事实无法确认，不能转换为 Intervention。
 
 Run 终止优先于全部 Suspension 状态。`AgentRunState = CANCELLED` 或 `TERMINATED` 后，任何旧 Suspension 都不能正常 resume；正在跨外部边界的 Fulfillment 仍必须对账，但只记录事实，不恢复 AgentLoop。
+
+状态优先级固定为：
+
+```text
+AgentRun terminal
+    > Approval / Intervention Gate
+    > ExecutionSlotState
+    > AgentLoopState resume
+```
 
 ### 3.5 与现有审批的关系
 
@@ -368,6 +379,8 @@ trusted_scope
 trusted_continuation
 trusted_cancel_policy
 ~~~
+
+`trusted_scope` 若涉及长期保存，只能决定 StoredAuthorization 的 `WORKSPACE` 或 `COMPUTER` 范围；执行期 Grant 的操作 scope 仍由 Broker 按当前 Run、Tool Call、slot 和 target 单独派生。
 
 模型给出的 reason 只作为用户可见说明候选，必须经过长度限制、敏感信息过滤和本地策略校验。
 
@@ -554,11 +567,11 @@ WORKSPACE
 COMPUTER
 ```
 
-执行期 CapabilityGrant 不使用长期 scope。它默认是当前一次执行的短 Lease，具体 TTL、次数和 target 由 Registry 决定。StoredAuthorization 扩大到 `WORKSPACE` 或 `COMPUTER` 必须明确展示保存范围，并经过用户确认。
+执行期 CapabilityGrant 的 `scope` 只表示本次 Lease 的操作范围，不表示长期授权范围。它默认是当前一次执行的短 Lease，具体 TTL、次数和 target 由 Registry 决定。StoredAuthorization 扩大到 `WORKSPACE` 或 `COMPUTER` 必须明确展示保存范围，并经过用户确认。
 
 #### `resolution_material_kind`
 
-可信 Registry 为每个 Intervention 标注解决材料的生命周期：
+可信 Registry 为每个 Intervention 标注 `ResolutionMaterialKind` 的解决材料生命周期：
 
 ```text
 NONE
@@ -662,6 +675,7 @@ revoked
 6. Grant generation 必须和 Binding generation、Policy version 兼容。
 7. Tool Executor 每次使用前都校验 TTL、次数、revoked、audience、scope 和 execution slot。
 8. 模型只能知道 capability 是否可用，不能持有真正的授权 token。
+9. Grant 使用必须执行原子 claim/consume：同一 Grant 的资格校验、`max_uses` 扣减、generation 标记和本次投递绑定在同一持久化 CAS 或等价原子操作中，失败调用不得继续使用该 Grant。
 
 ## 6. Agent 如何发起请求
 
@@ -794,6 +808,7 @@ Adapter 必须返回履行事实和可验证的状态。无法确认是否已经
 6. 禁止把 Secret 放入 Agent 可任意读取的 ENV、文件或模型可控 stdin。
 7. Tool Result 只返回 capability 可用状态，不返回正文。
 8. 完成、失败、取消、超时后清理可控明文和一次性句柄。
+9. `EPHEMERAL` resolution 在 `RESOLUTION_RECEIVED` 后若尚未开始 fulfillment 即丢失，重启只能进入 `WAITING_USER_REENTRY`；不把一次性明文写入 Room。
 
 ### 8.1.1 Capability Proxy
 
@@ -1054,6 +1069,8 @@ RESUMING
 
 `RECONCILIATION_REQUIRED` 是持久化的待对账标记，适用于 Fulfillment 和 Resume 两个阶段；记录中的 `reconciliation_phase` 分别取 `FULFILLMENT` 或 `RESUME`。`RECONCILING` 是获得 CAS claim 后的进行中状态，二者不能混用。
 
+`USER_DECISION_REQUIRED` 只有一个统一含义：系统已经掌握部分外部事实，但无法安全地自动决定下一步，需要用户明确选择继续、放弃或重新规划。它不是 capability 缺失的别名，也不表示执行事实本身未知；执行事实未知仍使用 `UNKNOWN` 或 `DELIVERY_UNKNOWN`。
+
 `FULFILLING` 表示 Adapter 正在跨越外部边界投递动作。App 崩溃、连接中断或 Adapter 超时后必须先 `reconcile()`，且至少返回 `DELIVERED`、`NOT_DELIVERED` 或 `UNKNOWN`。不能因为看不到完成记录就重新投递。`RESOLUTION_RECEIVED + EPHEMERAL` 在 fulfillment 尚未开始时如果明文已丢失，必须回到 `WAITING_USER_REENTRY`，不能假装仍可履行、标记 FAILED、标记 UNKNOWN 或自动重试。
 
 ### 10.1.1 状态转换表
@@ -1062,7 +1079,7 @@ RESUMING
 | --- | --- | --- | --- |
 | `WAITING_USER` | `resolve` | `RESOLUTION_RECEIVED` | resolution nonce 只能消费一次 |
 | `RESOLUTION_RECEIVED` + `EPHEMERAL` | 冷启动发现明文已丢失且尚未 claim fulfillment | `WAITING_USER_REENTRY` | 不能伪造继续履行、失败或自动重试 |
-| `WAITING_USER_REENTRY` | `resolve` | `RESOLUTION_RECEIVED` | 必须重新输入新的 resolution，旧明文不可恢复 |
+| `WAITING_USER_REENTRY` | `resolve` | `RESOLUTION_RECEIVED` | 必须重新输入新的 resolution，并轮换 `resolution_nonce`；旧 nonce 立即失效 |
 | `WAITING_USER` | `reject/cancel/expire` | `READY_TO_RESUME_WITH_FAILURE` | 生成失败型 ContinuationResult |
 | `RESOLUTION_RECEIVED` | `claimFulfillment` | `FULFILLING` | CAS 只能一个 attempt 获胜 |
 | `FULFILLING` | Adapter 完成 | `DELIVERED` | 保存可验证 delivery fact |
@@ -1085,7 +1102,7 @@ RESUMING
 2. Broker 从 Room 重新读取待处理记录，不信任 UI 内存副本。
 3. 校验 Run、会话、字段 schema、目标句柄、execution slot、过期时间和一次性消费状态。
 4. 敏感值直接交给 Adapter，不写入 Resolution 文本。
-5. 写入 `RESOLUTION_RECEIVED`，再进入 `FULFILLING`。
+5. 写入 `RESOLUTION_RECEIVED`。只有 resolution material 仍可用且 Run 非 terminal 时，才能 claim 并进入 `FULFILLING`；`EPHEMERAL` 明文丢失时转入 `WAITING_USER_REENTRY`。
 6. Adapter 履行成功后写入最小化 resolution metadata，进入 `DELIVERED` 和 `READY_TO_RESUME`。
 7. 按 Continuation 恢复正确的 Tool 或 AgentLoop，禁止重新生成不同的请求参数。
 
@@ -1127,6 +1144,8 @@ Resume 使用独立 `resume_attempt_id` 和 CAS。Fulfillment 已幂等不代表
 ~~~text
 READY_TO_RESUME
 RESUMING
+RESOLUTION_RECEIVED
+DELIVERED
 RECONCILIATION_REQUIRED / RECONCILING
 WAITING_USER
 WAITING_USER_REENTRY
@@ -1140,6 +1159,7 @@ DELIVERY_UNKNOWN
 - Room 中的 `WAITING_USER` 请求重新投影到统一 UI。
 - Room 中的 `WAITING_USER_REENTRY` 请求重新投影为“请重新输入一次性凭据”，不恢复旧明文。
 - `RESOLUTION_RECEIVED` 且 `resolution_material_kind = EPHEMERAL` 时，如果 fulfillment 尚未 claim 或明文已丢失，必须转为 `WAITING_USER_REENTRY`，重新请求用户输入，不能标记 FAILED、UNKNOWN 或自动重试。
+- 进入 `WAITING_USER_REENTRY` 时必须轮换 `resolution_nonce` 并只保存新 nonce 的哈希；旧 nonce 的 resolve 请求全部拒绝。
 - `DURABLE_REFERENCE` 只从 Secure Store 读取非敏感引用，再由 Broker 为当前 Run、Tool Call 和 slot 重新派生短期 CapabilityGrant。
 - StoredAuthorization 可以跨 Run 保存，但每个新 Run 仍必须派生新的 Grant；一次性内存 Secret 不恢复。
 - PTY Binding 属于不可恢复资源，默认标记 `TARGET_LOST`，禁止伪造恢复。
@@ -1168,11 +1188,22 @@ DELIVERY_UNKNOWN
 
 `Run termination dominates Suspension`。用户将 AgentRun 标记为 `CANCELLED` 或 `TERMINATED` 后，先递增 `run_generation`，再由所有 resolve、fulfill、resume 和 ResourceLease claim 校验 `run_generation == expected` 且 AgentRun 仍非 terminal。
 
-- Run 尚未进入外部副作用时，禁止新的 resolve、fulfillment 和 resume；撤销尚未消费的 CapabilityGrant，释放可安全撤销的 ResourceLease；所有未履行 Suspension 生成明确 `RunCancelled` 结果，不再恢复 AgentLoop。
+- Run 尚未进入外部副作用时，禁止新的 resolve、fulfillment 和 resume；撤销尚未消费的 CapabilityGrant，释放可安全撤销的 ResourceLease；所有未履行 Suspension 生成明确 `RUN_TERMINATED` 结果，不再恢复 AgentLoop。
 - Run 处于 `FULFILLING` 时不能假装动作未发生。必须完成外部事实对账，记录 `DELIVERED`、`NOT_DELIVERED` 或 `UNKNOWN`，绝不恢复 AgentLoop。
 - `DELIVERED`、`READY_TO_RESUME`、`RESUMING` 和已打开 OAuth 浏览器的旧 Suspension 也只允许清理或生成取消结果，不能正常 resume。
 - Run 终止后到达 OAuth callback 必须拒绝，或只执行安全 cleanup；不得创建新的 CapabilityGrant，也不得推进正常 resume。
 - 拒绝、取消、过期和目标丢失都生成失败型 `ContinuationResult`，恢复目标 slot 后交给 Agent 调整方案。
+
+Run terminal 下的结果必须使用独立的终止语义，不能把 Run 终止伪装成普通 Tool 失败：
+
+| 情况 | 结构化结果 code | 用户可见文案 | 是否恢复 AgentLoop |
+| --- | --- | --- | --- |
+| 外部副作用尚未开始，Run 被终止 | `RUN_TERMINATED` | “Agent 已停止，未继续执行此操作。” | 否 |
+| `FULFILLING` 对账为 `DELIVERED` | `RUN_TERMINATED_AFTER_DELIVERY` | “Agent 已停止，但外部操作已完成；系统不会继续运行。” | 否 |
+| `FULFILLING` 对账为 `NOT_DELIVERED` | `RUN_TERMINATED_NOT_DELIVERED` | “Agent 已停止，已确认外部操作未完成。” | 否 |
+| `FULFILLING` 对账为 `UNKNOWN` | `RUN_TERMINATED_EXTERNAL_STATE_UNKNOWN` | “Agent 已停止，外部操作结果无法确认；系统不会重试或继续运行。” | 否 |
+
+`INTERVENTION_REJECTED`、`CAPABILITY_UNAVAILABLE` 和 `USER_DECISION_REQUIRED` 只用于 Run 仍可继续时的业务结果。Run 进入 terminal 后统一使用上述 `RUN_TERMINATED*` code，避免用户误以为只是当前 Tool 失败或仍可点击继续。
 
 ## 11. UI 设计
 
@@ -1289,7 +1320,7 @@ slot B = SUSPENDED
 slot C = RUNNING
 ~~~
 
-解决一个 Intervention 只推进对应 slot。只有所有 blocking slot 都产生最终 Tool Result，RunGateCoordinator 才允许 AgentLoop 进入下一轮模型请求。
+解决一个 Intervention 只推进对应 slot。若该 slot 同时存在 Approval Gate，解决 Intervention 只更新 capability 条件，不更新 Approval 条件。只有所有 blocking slot 都产生最终 Tool Result，且每个待执行副作用 slot 同时满足 Approval 和 Capability，RunGateCoordinator 才允许 AgentLoop 进入下一轮模型请求。
 
 以下 slot 状态仍然阻塞 Batch：
 
@@ -1325,7 +1356,7 @@ revoked
 3. 同一个 OAuth state 必须单消费者。
 4. 不可重入 Adapter target 必须独占。
 5. Adapter 不支持并发敏感操作时，同一个 SSH connection 必须持有资源 Lease。
-6. Lease 失效、generation 改变、owner 不匹配或 revoked 时不得继续投递。
+6. Lease 失效、generation 改变、owner 不匹配、Run generation 不匹配或 revoked 时不得继续投递。
 7. Lease claim 使用 CAS，不能只依赖内存 Mutex。
 8. Lease 到期不代表外部动作未发生，过期后先 reconcile，再决定是否释放或进入 `DELIVERY_UNKNOWN`。
 
@@ -1550,7 +1581,7 @@ V1 UI 可以限制同一时间只展开一个卡片，但数据模型不能使�
 35. `FULFILLING` 期间的取消、拒绝、过期或超时必须进入 reconcile，不能直接当作未投递。
 36. Suspension 必须绑定 Policy、Adapter 合约和 Binding generation；版本不兼容时写入 `failure_code = POLICY_STALE` 并使用 `REPLAN_REQUIRED`，禁止静默重解释。
 37. CapabilityGrant 必须校验 audience、operation、target、scope、TTL、使用次数、generation、revoked、Run 和 execution slot。
-38. ResourceLease 与 execution slot 分层管理；Lease owner、generation、TTL 或 revoked 校验失败时禁止投递。
+38. ResourceLease 与 execution slot 分层管理；Lease owner、generation、Run generation、TTL 或 revoked 校验失败时禁止投递。
 39. OAuth state、authorization code 和 callback 必须单次消费，过期、重放或绑定不匹配时直接拒绝。
 40. `resolution_material_kind = EPHEMERAL` 的明文丢失后必须进入 `WAITING_USER_REENTRY`，不得伪造继续履行、FAILED、UNKNOWN 或自动重试。
 41. Adapter reconcile 至少区分 `DELIVERED`、`NOT_DELIVERED` 和 `UNKNOWN`；`NOT_DELIVERED + EPHEMERAL_LOST` 只能重新请求用户输入。
@@ -1560,6 +1591,10 @@ V1 UI 可以限制同一时间只展开一个卡片，但数据模型不能使�
 45. Intervention Resolution 不满足 Approval Gate；Approval 也不创建 CapabilityGrant。只有 Approval 允许且 Capability 可用时才能执行副作用 Tool。
 46. `AgentLoopState`、`ExecutionSlotState`、`SuspensionState` 各自只承担声明的职责；Barrier 以持久化 Suspension、Run terminal 状态和 checkpoint 为事实源重建投影。
 47. OAuth `code_verifier` 只能位于 Secure Store 或短生命周期内存，Room 只保存 `verifier_reference` 和 `verifier_generation`，完成、取消、过期后必须清理。
+48. CapabilityGrant 使用必须原子 claim/consume；校验、占用次数和副作用投递不能拆成可被并发调用插入的多个非原子步骤。
+49. `RESOLUTION_RECEIVED` 和 `DELIVERED` 必须显式参与启动恢复扫描，不能只扫描 `READY_TO_RESUME` 或等待内存 wake-up。
+50. `USER_DECISION_REQUIRED` 统一表示外部事实无法安全自动判定，需要用户做出明确继续、放弃或重新规划决定；它不表示普通 capability 缺失，也不等同于 `UNKNOWN`。
+51. `WAITING_USER_REENTRY` 必须轮换 `resolution_nonce`，旧 nonce 立即失效，重新输入只能创建新的 resolution。
 
 ## 17. 验收标准
 
@@ -1618,6 +1653,7 @@ V1 UI 可以限制同一时间只展开一个卡片，但数据模型不能使�
 - PTY Binding 在 App 进程死亡后进入 `TARGET_LOST`。
 - `RESOLUTION_RECEIVED + EPHEMERAL` 在 fulfillment 尚未开始且明文丢失时进入 `WAITING_USER_REENTRY`，不会伪造继续履行、FAILED、UNKNOWN 或自动重试。
 - Run 进入 `CANCELLED` 或 `TERMINATED` 后，旧 Suspension 只能生成取消结果或执行清理，不能恢复 AgentLoop。
+- Run terminal 结果使用 `RUN_TERMINATED*` 独立 code；文案明确区分“未开始”“已完成”“已确认未完成”和“结果未知”，不显示普通 Tool 失败或可继续执行的提示。
 
 ### 17.6 Fulfillment 恢复
 
@@ -1625,9 +1661,11 @@ V1 UI 可以限制同一时间只展开一个卡片，但数据模型不能使�
 - Adapter 崩溃或 App 重启后会执行 `reconcile()`。
 - `DELIVERY_UNKNOWN` 不会重复输入密码、OTP 或授权码。
 - 同一 suspension 重复点击不会重复履行。
+- `WAITING_USER_REENTRY` 必须轮换 resolution nonce，旧 nonce 无法再次 resolve。
 - 两个 UI 和 OAuth callback 同时 resolve 时，只有一个 resolution nonce 和 fulfillment CAS claim 成功。
 - Fulfillment 和 Resume 使用不同 attempt ID，两个阶段都不能重复。
 - `READY_TO_RESUME`、`RESUMING`、`FULFILLING` 和 reconcile 状态在 App 重启后由持久状态主动扫描并重新 claim。
+- 启动恢复明确扫描 `RESOLUTION_RECEIVED` 和 `DELIVERED`，根据 material、Run terminal 状态和未完成 attempt 决定继续履行、进入 `WAITING_USER_REENTRY` 或进入对账，不能遗漏这两个状态。
 - 丢失内存 wake-up 不会让 Suspension 永久卡住。
 - Room / AgentRunStore 是恢复事实源，内存事件、Flow 和 wake-up 全部允许丢失。
 - `reconcile()` 能明确区分 `DELIVERED`、`NOT_DELIVERED` 和 `UNKNOWN`；`NOT_DELIVERED + EPHEMERAL_LOST` 只进入 `WAITING_USER_REENTRY`。
@@ -1727,6 +1765,7 @@ V1 UI 可以限制同一时间只展开一个卡片，但数据模型不能使�
 22. 用户提供 Token、sudo 密码或完成 OAuth 后，Approval Gate 仍为未允许时 Tool 不执行；Approval 允许但 capability 不可用时同样不执行。
 23. Room 投影与内存 Flow 故意不一致时，RunGateCoordinator 以持久化 Suspension、Run terminal 状态和 checkpoint 重建 Barrier。
 24. OAuth `code_verifier` 只在 Secure Store 存在，完成、取消、过期后清理；Room、日志、聊天和通知中均无 verifier 明文。
+25. Run terminal 的四种对账结果分别返回 `RUN_TERMINATED`、`RUN_TERMINATED_AFTER_DELIVERY`、`RUN_TERMINATED_NOT_DELIVERED`、`RUN_TERMINATED_EXTERNAL_STATE_UNKNOWN`，文案不产生“Tool 失败但可重试”的歧义。
 
 ## 18. 最终结论
 
@@ -1752,7 +1791,9 @@ EveryTalk 当前缺少的能力可以归纳为一个问题：
 
 ~~~text
 Suspension
+StoredAuthorization
 Capability
+CapabilityGrant
 Binding
 Fulfillment
 Continuation

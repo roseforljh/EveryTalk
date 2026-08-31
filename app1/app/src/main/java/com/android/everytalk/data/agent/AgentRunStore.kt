@@ -267,16 +267,34 @@ class AgentRunStore(
         status: AgentRunStatus,
         requestOrdinal: Int = run.currentRequestOrdinal,
         terminalReason: String? = run.terminalReason,
-    ): AgentRunEntity = run.copy(
-        status = status.name,
-        currentRequestOrdinal = requestOrdinal,
-        terminalReason = terminalReason,
-        updatedAt = System.currentTimeMillis(),
-    ).also {
-        dao.upsertRun(it)
-        if (status in AGENT_TERMINAL_RUN_STATUSES) snapshotCache.remove(run.id)
-        if (status in AGENT_FINAL_RUN_STATUSES) dao.deleteRunSnapshotChunks(run.id)
-        if (status == AgentRunStatus.CANCELLED) dao.deleteContinuationStates(run.sessionId)
+    ): AgentRunEntity {
+        val now = System.currentTimeMillis()
+        if (status == AgentRunStatus.CANCELLED) {
+            dao.cancelActiveRunById(run.id, terminalReason ?: AgentTerminalReasons.USER_STOP, now)
+            dao.revokeGrantsForRun(run.id)
+            dao.revokeResourceLeasesForRun(run.id)
+            snapshotCache.remove(run.id)
+            dao.deleteRunSnapshotChunks(run.id)
+            dao.deleteContinuationStates(run.sessionId)
+            return dao.getRun(run.id) ?: run.copy(
+                status = status.name,
+                terminalReason = terminalReason,
+                updatedAt = now,
+                runGeneration = run.runGeneration + 1,
+            )
+        }
+        val changed = dao.updateRunStatusIfActive(
+            runId = run.id,
+            expectedGeneration = run.runGeneration,
+            status = status.name,
+            requestOrdinal = requestOrdinal,
+            terminalReason = terminalReason,
+            updatedAt = now,
+        )
+        val persisted = dao.getRun(run.id) ?: run
+        if (changed == 1 && status in AGENT_TERMINAL_RUN_STATUSES) snapshotCache.remove(run.id)
+        if (changed == 1 && status in AGENT_FINAL_RUN_STATUSES) dao.deleteRunSnapshotChunks(run.id)
+        return persisted
     }
 
     /** 按消息 ID 原子记录用户停止，并清掉只服务于恢复的内存快照。 */
@@ -291,6 +309,8 @@ class AgentRunStore(
         )
         val run = dao.getRunByVisibleMessage(messageId)
         if (changed > 0 && run != null) {
+            dao.revokeGrantsForRun(run.id)
+            dao.revokeResourceLeasesForRun(run.id)
             snapshotCache.remove(run.id)
             dao.deleteRunSnapshotChunks(run.id)
             dao.deleteContinuationStates(run.sessionId)
