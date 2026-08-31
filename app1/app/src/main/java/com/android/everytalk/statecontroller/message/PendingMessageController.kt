@@ -272,8 +272,17 @@ internal class PendingMessageController(
 
     fun delete(id: String) {
         scope.launch {
-            val deleted = withContext(Dispatchers.IO) { chatDao.deletePendingMessage(id) }
-            if (deleted == 0) showMessage("这条消息已开始发送，无法删除")
+            operationMutex.withLock {
+                val deleted = withContext(Dispatchers.IO) { chatDao.deletePendingMessage(id) }
+                if (deleted == 0) {
+                    showMessage("这条消息已开始发送，无法删除")
+                    return@withLock
+                }
+                if ((_composerMode.value as? ComposerMode.EditingPending)?.pendingId == id) {
+                    _composerMode.value = ComposerMode.Normal
+                    replaceComposer("", emptyList())
+                }
+            }
         }
     }
 
@@ -323,7 +332,9 @@ internal class PendingMessageController(
                 ) return@withLock
                 val editingPosition = (_composerMode.value as? ComposerMode.EditingPending)?.originalPosition
                 val next = nextDispatchablePending(
-                    messages = pendingMessages.value.filter { it.status == PENDING_MESSAGE_STATUS_PENDING },
+                    // 必须保留 EDITING / DISPATCHING 行。它们是尚未完成的逻辑槽位，
+                    // 过滤掉以后会让后面的 Pending 越过队首。
+                    messages = pendingMessages.value,
                     editingPosition = editingPosition,
                 ) ?: return@withLock
                 if (next.id == blockedPendingId) return@withLock
@@ -374,11 +385,21 @@ internal fun nextDispatchablePending(
     messages: List<PendingMessageEntity>,
     editingPosition: Long? = null,
 ): PendingMessageEntity? {
-    return messages
+    val head = messages
         .asSequence()
-        .filter { it.status == PENDING_MESSAGE_STATUS_PENDING }
-        .filter { editingPosition == null || it.queuePosition < editingPosition }
+        .filter {
+            it.status == PENDING_MESSAGE_STATUS_PENDING ||
+                it.status == PENDING_MESSAGE_STATUS_EDITING ||
+                it.status == PENDING_MESSAGE_STATUS_DISPATCHING
+        }
         .minWithOrNull(compareBy<PendingMessageEntity> { it.queuePosition }.thenBy { it.id })
+        ?: return null
+
+    // Composer 尚未恢复到数据库行时，用原位置保留同一个编辑屏障。
+    if (editingPosition != null && head.queuePosition >= editingPosition) return null
+
+    // 最早槽位只有 PENDING 才能派发。EDITING 和 DISPATCHING 都必须等它完成。
+    return head.takeIf { it.status == PENDING_MESSAGE_STATUS_PENDING }
 }
 
 private fun PendingMessageEntity.toEditingMode() = ComposerMode.EditingPending(

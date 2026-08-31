@@ -92,6 +92,14 @@ sealed class AppStreamEvent {
         val approvalRequestId: String,
     ) : AppStreamEvent()
 
+    /** 统一人类接力记录已持久化，UI 应从 Room/Coordinator 重新投影。 */
+    @Serializable
+    @SerialName("agent_intervention_required")
+    data class AgentInterventionRequired(
+        val runId: String,
+        val suspensionId: String,
+    ) : AppStreamEvent()
+
     /** AgentLoop 内部消费的供应商原生 Assistant 数据，UI 不展示。 */
     @Serializable
     @SerialName("provider_continuation")

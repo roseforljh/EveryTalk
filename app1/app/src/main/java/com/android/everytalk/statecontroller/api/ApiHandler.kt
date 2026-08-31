@@ -330,6 +330,14 @@ class ApiHandler(
 
     val agentRunControlSnapshots: StateFlow<Map<String, AgentRunControlSnapshot>>
         get() = agentRunCoordinator.runControlSnapshots
+    val pendingInterventions: StateFlow<List<com.android.everytalk.data.agent.PendingIntervention>>
+        get() = agentRunCoordinator.pendingInterventions
+
+    fun resolveIntervention(suspensionId: String, expectedVersion: Long, resolutionNonce: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            agentRunCoordinator.resolveIntervention(suspensionId, expectedVersion, resolutionNonce)
+        }
+    }
 
     fun requestPauseCurrentAgent(visibleAssistantMessageId: String): Boolean =
         agentRunCoordinator.requestPause(visibleAssistantMessageId)
@@ -370,6 +378,7 @@ class ApiHandler(
 
     /** ViewModel 初始化或前台服务对账完成后从 Room 恢复待续写及待审批的 Run。 */
     suspend fun restorePendingAgentApproval(resumeDecided: Boolean = true) {
+        agentRunCoordinator.recoverInterventions()
         if (resumeDecided) {
             agentRunStore.recoverUnknownComputerExecutions(AppDatabase.getDatabase(context).computerDao())
             // 自动恢复扫描可能新建 UNKNOWN 卡片，先完成扫描再投影，避免卡片延迟到下次刷新。
@@ -1428,7 +1437,9 @@ class ApiHandler(
         isImageGeneration: Boolean = false,
     ) {
         streamProcessor.processStreamEvent(appEvent, aiMessageId, isImageGeneration)
-        if (appEvent is AppStreamEvent.AgentApprovalRequired) restorePendingAgentApproval()
+        if (appEvent is AppStreamEvent.AgentApprovalRequired || appEvent is AppStreamEvent.AgentInterventionRequired) {
+            restorePendingAgentApproval()
+        }
         if (appEvent is AppStreamEvent.Finish && !isImageGeneration) {
             agentRunStore.getRunByVisibleMessage(aiMessageId)?.let { run ->
                 if (run.status in setOf(AgentRunStatus.COMPLETED.name, AgentRunStatus.FAILED.name, AgentRunStatus.CANCELLED.name)) {

@@ -88,7 +88,8 @@ internal sealed interface AutoContextCompressionOutcome {
 }
 
 /**
- * 先应用已有检查点，再以“估算输入 + 预留输出”计算占用。
+ * 先应用已有检查点，再按当前输入占用判断是否达到压缩线。
+ * 最大输出只是硬窗口预留，不能参与软阈值判断，否则大输出模型会提前压缩。
  * 切分只发生在完整 user 轮次之间，工具结果会跟随所属轮次保留或总结。
  */
 internal fun planAutoContextCompression(
@@ -111,8 +112,7 @@ internal fun planAutoContextCompression(
             additionalContextTokens = additionalContextTokens,
         ),
         inputTokenCalibration,
-    ) +
-        limits.maxOutputTokens.toLong()
+    )
     val effectiveThresholdPercent = thresholdPercent.coerceIn(
         1,
         MAX_AUTO_CONTEXT_COMPRESSION_THRESHOLD_PERCENT,

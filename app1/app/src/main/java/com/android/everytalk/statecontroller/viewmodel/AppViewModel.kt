@@ -554,6 +554,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val computers get() = computerManager.computers
     val computerSelections get() = computerManager.selections
     val pendingComputerAgentApprovals = apiHandler.pendingAgentApprovals
+    val pendingInterventions = apiHandler.pendingInterventions
     val pendingAgentEnableApproval = kotlinx.coroutines.flow.combine(
         apiHandler.pendingAgentEnableApprovals,
         stateHolder._currentConversationId,

@@ -879,6 +879,7 @@ internal class ApiHandlerStreamProcessor(
                 }
                 // 审批事实和卡片由 AgentApprovalCoordinator 从 Room 投影，这里不改消息正文。
                 is AppStreamEvent.AgentApprovalRequired -> Unit
+                is AppStreamEvent.AgentInterventionRequired -> Unit
                 // ProviderContinuation 仅在 AgentLoop 内用于下一轮协议连续状态，不投影到界面。
                 is AppStreamEvent.ProviderContinuation -> Unit
                 is AppStreamEvent.NativeContextCompaction -> {

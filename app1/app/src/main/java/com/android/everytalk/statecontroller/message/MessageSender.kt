@@ -291,6 +291,7 @@ internal fun appendAgentRequestTool(
     return tools + listOf(
         com.android.everytalk.data.agent.agentRequestToolDefinition(),
         com.android.everytalk.data.agent.skillSecretRequestToolDefinition(),
+        com.android.everytalk.data.agent.capabilityRequestToolDefinition(),
     )
 }
 

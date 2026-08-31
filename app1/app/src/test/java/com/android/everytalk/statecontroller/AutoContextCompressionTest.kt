@@ -27,6 +27,21 @@ class AutoContextCompressionTest {
     }
 
     @Test
+    fun `最大输出预留不参与自动压缩触发判断`() {
+        val messages = conversation(turns = 4, repeatedChars = 9_650)
+
+        val plan = planAutoContextCompression(
+            messages = messages,
+            tools = null,
+            limits = ModelTokenLimits(maxOutputTokens = 128_000, maxContextTokens = 256_000),
+            thresholdPercent = 80,
+        )
+
+        assertFalse(plan.needsSummary)
+        assertTrue(plan.usedTokens < plan.triggerTokens)
+    }
+
+    @Test
     fun `达到阈值时总结旧轮次并保留最近两轮`() {
         val messages = listOf(
             SimpleTextApiMessage(id = "system", role = "system", content = "系统提示"),
