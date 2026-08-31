@@ -49,18 +49,34 @@ class ComputerAddFormTest {
         val prepared = form.prepare()
         assertTrue(prepared.request.credential is ComputerCredential.Password)
         assertEquals(2222, prepared.request.port)
-        assertEquals(com.android.everytalk.data.computer.ComputerRunMode.CONTAINER, prepared.request.runMode)
+        assertEquals(ComputerRunMode.CONTAINER, prepared.request.runMode)
         assertEquals("sudo-password", prepared.sudoPassword?.concatToString())
         prepared.clear()
     }
 
     @Test
-    fun `添加表单不再暴露Direct与Container模式选择`() {
+    fun `关闭沙箱后直接使用SSH`() {
+        val prepared = ComputerAddFormState(
+            host = "tiny.example.com",
+            username = "root",
+            password = "ssh-password",
+            sandboxEnabled = false,
+        ).prepare()
+
+        assertEquals(ComputerRunMode.DIRECT, prepared.request.runMode)
+        prepared.clear()
+    }
+
+    @Test
+    fun `添加表单明确展示沙箱安全说明和Direct选择`() {
         val source = sourceFile("ComputerAddCard.kt")
 
-        org.junit.Assert.assertFalse(source.contains("computer_field_mode"))
-        org.junit.Assert.assertFalse(source.contains("ComputerRunMode.DIRECT"))
-        assertTrue(source.contains("computer_mode_hybrid_description"))
+        assertTrue(source.contains("computer_sandbox_title"))
+        assertTrue(source.contains("computer_sandbox_enabled_description"))
+        assertTrue(source.contains("computer_sandbox_disabled_description"))
+        assertTrue(source.contains("form.copy(sandboxEnabled = it)"))
+        assertTrue(source.contains("uncheckedTrackColor"))
+        assertTrue(source.contains("uncheckedBorderColor"))
     }
 
     @Test

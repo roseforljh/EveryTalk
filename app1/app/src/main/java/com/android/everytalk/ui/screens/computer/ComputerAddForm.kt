@@ -4,6 +4,7 @@ import com.android.everytalk.data.computer.AddComputerRequest
 import com.android.everytalk.data.computer.Computer
 import com.android.everytalk.data.computer.ComputerAuthKind
 import com.android.everytalk.data.computer.ComputerCredential
+import com.android.everytalk.data.computer.ComputerRunMode
 import com.android.everytalk.data.computer.UpdateComputerRequest
 import java.util.UUID
 
@@ -27,6 +28,8 @@ internal data class ComputerAddFormState(
     val privateKey: String = "",
     val privateKeyPassphrase: String = "",
     val sudoPassword: String = "",
+    /** 默认启用更安全的沙箱；低配服务器可在添加时关闭并直接使用 SSH。 */
+    val sandboxEnabled: Boolean = true,
 ) {
     fun validationError(reusableAuthKind: ComputerAuthKind? = null): ComputerAddFormError? = when {
         host.isBlank() -> ComputerAddFormError.HOST_REQUIRED
@@ -56,7 +59,7 @@ internal data class ComputerAddFormState(
                 port = requireNotNull(port.toIntOrNull()),
                 username = username,
                 credential = credential,
-                runMode = com.android.everytalk.data.computer.ComputerRunMode.CONTAINER,
+                runMode = if (sandboxEnabled) ComputerRunMode.CONTAINER else ComputerRunMode.DIRECT,
             ),
             sudoPassword = sudoPassword.takeIf { username.trim() != "root" && it.isNotEmpty() }?.toCharArray(),
         )
@@ -100,6 +103,7 @@ internal fun Computer.toEditFormState(): ComputerAddFormState = ComputerAddFormS
     port = port.toString(),
     username = username,
     authKind = authKind,
+    sandboxEnabled = runMode == ComputerRunMode.CONTAINER,
 )
 
 internal data class PreparedComputerAdd(

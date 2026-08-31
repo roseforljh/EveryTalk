@@ -227,33 +227,6 @@ data class ComputerWorkspace(
     val lastUsedAt: Long = System.currentTimeMillis(),
 )
 
-/** 旧 Direct 记录只迁移本地路由字段，Host、凭据和远端文件位置保持原值。 */
-internal fun migrateLegacyDirectComputer(computer: Computer): Computer =
-    if (computer.runMode == ComputerRunMode.DIRECT) {
-        computer.copy(
-            runMode = ComputerRunMode.CONTAINER,
-            status = ComputerStatus.CONFIGURATION_REQUIRED,
-            updatedAt = System.currentTimeMillis(),
-        )
-    } else {
-        computer
-    }
-
-/** 原 Host Workspace 继续作为 Container 的 bind mount，迁移过程中不移动或删除文件。 */
-internal fun migrateLegacyDirectWorkspace(
-    workspace: ComputerWorkspace,
-    containerImage: String?,
-): ComputerWorkspace = if (workspace.runMode == ComputerRunMode.DIRECT) {
-    workspace.copy(
-        runMode = ComputerRunMode.CONTAINER,
-        containerName = "everytalk-${workspace.id}",
-        containerImage = containerImage,
-        status = ComputerWorkspaceStatus.RECOVERING,
-    )
-} else {
-    workspace
-}
-
 @Serializable
 data class ComputerExecution(
     val id: String = "execution_${UUID.randomUUID()}",

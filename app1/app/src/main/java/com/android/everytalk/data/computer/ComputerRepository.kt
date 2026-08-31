@@ -598,7 +598,6 @@ class ComputerRepository(
     }
 
     suspend fun recoverLocalState() {
-        migrateLegacyDirectRecords()
         // 普通工具无法从 VPS 续接；exec 保留原状态交给 ExecutionReconciler 查询。
         dao.markInterruptedNonExecExecutionsUnknown()
         dao.markPrivatePreviewsStopped()
@@ -889,22 +888,6 @@ class ComputerRepository(
     private suspend fun markComputerReadyAfterRecovery(computer: Computer) {
         if (computer.status == ComputerStatus.OFFLINE || computer.status == ComputerStatus.DISCONNECTED) {
             dao.updateComputerStatus(computer.id, ComputerStatus.READY.name, null)
-        }
-    }
-
-    /**
-     * v2.0 的 Direct 服务器升级后统一进入混合模式。
-     * 这里只更新 Room，用户点击修复前绝不连接或修改 VPS。
-     */
-    private suspend fun migrateLegacyDirectRecords() {
-        dao.getLegacyDirectComputers().forEach { entity ->
-            val migratedComputer = migrateLegacyDirectComputer(entity.toModel(json))
-            dao.getWorkspacesForComputer(entity.id).forEach { workspaceEntity ->
-                dao.upsertWorkspace(
-                    migrateLegacyDirectWorkspace(workspaceEntity.toModel(), migratedComputer.sandboxImage).toEntity(),
-                )
-            }
-            dao.upsertComputer(migratedComputer.toEntity(json))
         }
     }
 

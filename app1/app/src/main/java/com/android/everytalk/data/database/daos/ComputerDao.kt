@@ -25,9 +25,6 @@ interface ComputerDao {
     @Query("SELECT * FROM computers WHERE id = :computerId LIMIT 1")
     suspend fun getComputer(computerId: String): ComputerEntity?
 
-    @Query("SELECT * FROM computers WHERE runMode = 'DIRECT' AND status != 'DELETED'")
-    suspend fun getLegacyDirectComputers(): List<ComputerEntity>
-
     @Upsert
     suspend fun upsertComputer(computer: ComputerEntity)
 
