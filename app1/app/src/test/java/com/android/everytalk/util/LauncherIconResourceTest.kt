@@ -254,8 +254,15 @@ class LauncherIconResourceTest {
             lightColors.readText().contains("<color name=\"splash_screen_background\">#FFFFFFFF</color>"),
         )
         assertTrue(
-            "Dark splash background must stay white to match the GIF",
-            darkColors.readText().contains("<color name=\"splash_screen_background\">#FFFFFFFF</color>"),
+            "Dark splash background must be black",
+            darkColors.readText().contains("<color name=\"splash_screen_background\">#FF000000</color>"),
+        )
+        assertTrue(
+            "GIF splash must invert its content in dark mode",
+            splashSourceText.contains("isSystemInDarkTheme()") &&
+                splashSourceText.contains("ColorFilter.colorMatrix") &&
+                splashSourceText.contains("Color.Black") &&
+                splashSourceText.contains("255f"),
         )
     }
 

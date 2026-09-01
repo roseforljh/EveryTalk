@@ -5,6 +5,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.mutableStateOf
@@ -12,6 +13,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ColorFilter
+import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -34,6 +37,7 @@ fun PixelPenguinSplash(
     onFinished: () -> Unit,
 ) {
     val context = LocalContext.current
+    val isDarkTheme = isSystemInDarkTheme()
     val currentOnFinalFrameVisible = rememberUpdatedState(onFinalFrameVisible)
     val currentOnFinished = rememberUpdatedState(onFinished)
     val animationFinished = remember { mutableStateOf(false) }
@@ -87,13 +91,29 @@ fun PixelPenguinSplash(
         modifier = modifier
             .fillMaxSize()
             .graphicsLayer { alpha = splashAlpha.value }
-            .background(Color.White),
+            .background(if (isDarkTheme) Color.Black else Color.White),
     ) {
         AsyncImage(
             model = request,
             contentDescription = null,
             modifier = Modifier.fillMaxSize(),
             contentScale = ContentScale.Fit,
+            // 夜间模式对整张 GIF 做反色，白底变黑底，黑色图案变白色。
+            colorFilter = if (isDarkTheme) {
+                ColorFilter.colorMatrix(
+                    ColorMatrix(
+                        // Android ColorMatrix 使用 0..255 的颜色通道值，反色偏移必须是 255。
+                        floatArrayOf(
+                            -1f, 0f, 0f, 0f, 255f,
+                            0f, -1f, 0f, 0f, 255f,
+                            0f, 0f, -1f, 0f, 255f,
+                            0f, 0f, 0f, 1f, 0f,
+                        )
+                    )
+                )
+            } else {
+                null
+            },
             onError = { finishSplash() },
         )
     }
