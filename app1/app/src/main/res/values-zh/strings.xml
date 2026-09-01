@@ -988,7 +988,7 @@
     <string name="settings_enter_model_manually">手动输入模型</string>
     <string name="settings_add_all_models">全部添加</string>
     <string name="settings_add_selected_models">添加（%1$d）</string>
-    <string name="settings_remove_selected_models">删除（%1$d）</string>
+    <string name="settings_apply_model_changes">应用</string>
 
     <string name="auto_compression_title">自动压缩</string>
     <string name="auto_compression_description">接近上限时总结较早内容，保留最近完整轮次</string>

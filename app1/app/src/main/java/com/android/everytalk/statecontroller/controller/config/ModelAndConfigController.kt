@@ -347,7 +347,6 @@ class ModelAndConfigController(
                 showSnackbar("没有可添加的新模型")
                 return@launch
             }
-            val template = oldGroup.first()
             // 刷新得到的目录可能只有模型名。对真正要新增的模型补拉详情参数。
             val capabilitiesByModel = modelsToAdd.associateWith { modelName ->
                 loadCapabilitiesForModel(
@@ -359,8 +358,25 @@ class ModelAndConfigController(
                     cachedCandidate = catalogSnapshot[modelName],
                 )
             }
-            val additions = modelsToAdd.map { modelName ->
-                template.copy(
+
+            // 详情请求期间可能同时执行了“删除已下架模型”。重新读取，避免用旧快照把刚删的配置写回来。
+            val latestConfigs = if (params.isImageGen) {
+                stateHolder._imageGenApiConfigs.value
+            } else {
+                stateHolder._apiConfigs.value
+            }
+            val latestGroup = latestConfigs.filter(belongsToGroup)
+            if (latestGroup.isEmpty()) {
+                showSnackbar("配置组已不存在")
+                return@launch
+            }
+            val latestExistingModelIds = latestGroup.mapTo(mutableSetOf()) {
+                it.model.trim().lowercase(Locale.ROOT)
+            }
+            val additions = modelsToAdd.filter {
+                it.lowercase(Locale.ROOT) !in latestExistingModelIds
+            }.map { modelName ->
+                latestGroup.first().copy(
                     id = UUID.randomUUID().toString(),
                     model = modelName,
                     name = modelName,
@@ -368,7 +384,7 @@ class ModelAndConfigController(
                     modelParameters = ModelParameters(),
                 ).withModelCapabilityDefaults(capabilitiesByModel[modelName].orEmpty())
             }
-            val finalConfigs = currentConfigs + additions
+            val finalConfigs = latestConfigs + additions
 
             if (params.isImageGen) {
                 stateHolder._imageGenApiConfigs.value = finalConfigs

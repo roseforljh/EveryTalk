@@ -15,4 +15,23 @@ class ModelSelectionDialogTest {
         assertEquals(listOf("model-kept"), groups.addedModels)
         assertEquals(listOf("model-removed"), groups.removedModels)
     }
+
+    @Test
+    fun `switching tabs keeps new and removed selections independently`() {
+        var selections = emptyMap<ModelCatalogTab, Set<String>>()
+
+        selections = updateModelCatalogTabSelection(
+            selections,
+            ModelCatalogTab.NEW,
+            setOf("model-new"),
+        )
+        selections = updateModelCatalogTabSelection(
+            selections,
+            ModelCatalogTab.REMOVED,
+            setOf("model-removed"),
+        )
+
+        assertEquals(setOf("model-new"), selections[ModelCatalogTab.NEW])
+        assertEquals(setOf("model-removed"), selections[ModelCatalogTab.REMOVED])
+    }
 }

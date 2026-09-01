@@ -296,36 +296,39 @@ import java.util.TimeZone
         // Also clear Markdown cache for this message to force re-rendering
     }
 
-    internal fun AppViewModel.onSelectModels(selectedModels: List<String>) {
+    /** 一次应用模型新增和已下架删除，避免两个页签分别提交导致另一边选择丢失。 */
+    internal fun AppViewModel.onApplyModelSelection(
+        modelsToAdd: List<String>,
+        modelsToRemove: List<String>,
+    ) {
         val params = stateHolder._pendingConfigParams.value ?: return
-        if (selectedModels.isEmpty()) {
+        if (modelsToAdd.isEmpty() && modelsToRemove.isEmpty()) {
             showSnackbar("请至少选择一个模型")
             return
         }
 
-        if (params.isRefresh) {
-            modelAndConfigController.appendModelsToConfigGroup(params, selectedModels)
-        } else {
-            modelAndConfigController.createMultipleConfigs(
-                provider = params.provider,
-                address = params.address,
-                key = params.key,
-                modelNames = selectedModels,
-                channel = params.channel,
-                isImageGen = params.isImageGen,
-                enableCodeExecution = params.enableCodeExecution,
-                toolsJson = params.toolsJson,
-                imageSize = params.imageSize,
-                numInferenceSteps = params.numInferenceSteps,
-                guidanceScale = params.guidanceScale,
-            )
+        if (modelsToAdd.isNotEmpty()) {
+            if (params.isRefresh) {
+                modelAndConfigController.appendModelsToConfigGroup(params, modelsToAdd)
+            } else {
+                modelAndConfigController.createMultipleConfigs(
+                    provider = params.provider,
+                    address = params.address,
+                    key = params.key,
+                    modelNames = modelsToAdd,
+                    channel = params.channel,
+                    isImageGen = params.isImageGen,
+                    enableCodeExecution = params.enableCodeExecution,
+                    toolsJson = params.toolsJson,
+                    imageSize = params.imageSize,
+                    numInferenceSteps = params.numInferenceSteps,
+                    guidanceScale = params.guidanceScale,
+                )
+            }
         }
-        clearFetchedModels()
-    }
-
-    internal fun AppViewModel.onRemoveUnavailableModels(selectedModels: List<String>) {
-        val params = stateHolder._pendingConfigParams.value ?: return
-        modelAndConfigController.removeModelsFromConfigGroup(params, selectedModels)
+        if (modelsToRemove.isNotEmpty() && params.isRefresh) {
+            modelAndConfigController.removeModelsFromConfigGroup(params, modelsToRemove)
+        }
         clearFetchedModels()
     }
 

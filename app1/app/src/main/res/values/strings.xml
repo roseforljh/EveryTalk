@@ -994,7 +994,7 @@
     <string name="settings_enter_model_manually">Enter model manually</string>
     <string name="settings_add_all_models">Add all</string>
     <string name="settings_add_selected_models">Add (%1$d)</string>
-    <string name="settings_remove_selected_models">Remove (%1$d)</string>
+    <string name="settings_apply_model_changes">Apply</string>
 
     <string name="auto_compression_title">Automatic compression</string>
     <string name="auto_compression_description">Summarize older content near the limit while preserving the latest complete turns</string>

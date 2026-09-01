@@ -41,6 +41,13 @@ internal data class ModelCatalogGroups(
     val removedModels: List<String>,
 )
 
+/** 更新单个页签的选中项，同时保留其他页签已经做出的选择。 */
+internal fun updateModelCatalogTabSelection(
+    selections: Map<ModelCatalogTab, Set<String>>,
+    tab: ModelCatalogTab,
+    selectedModels: Set<String>,
+): Map<ModelCatalogTab, Set<String>> = selections + (tab to selectedModels)
+
 /** 按远端最新列表和本地已添加列表，把模型分成互不重叠的三类。 */
 internal fun classifyModelCatalog(
     remoteModels: List<String>,
@@ -68,8 +75,7 @@ fun ModelSelectionDialog(
     models: List<String>,
     existingModels: List<String>,
     onDismiss: () -> Unit,
-    onSelectModels: (List<String>) -> Unit,
-    onRemoveModels: (List<String>) -> Unit,
+    onApply: (modelsToAdd: List<String>, modelsToRemove: List<String>) -> Unit,
     onManualInput: () -> Unit
 ) {
     if (!showDialog) return
@@ -81,7 +87,9 @@ fun ModelSelectionDialog(
     val subtextColor = if (isDark) Color.White.copy(alpha = 0.6f) else Color(0xFF0D0D0D).copy(alpha = 0.6f)
     val selectedColor = if (isDark) Color(0xFF6EB5FF) else Color(0xFF3B82F6)
 
-    var selectedModels by remember { mutableStateOf(setOf<String>()) }
+    var selectedModelsByTab by remember {
+        mutableStateOf<Map<ModelCatalogTab, Set<String>>>(emptyMap())
+    }
     var searchText by remember { mutableStateOf("") }
     var isSearchExpanded by remember { mutableStateOf(false) }
     var selectedTab by remember { mutableStateOf(ModelCatalogTab.NEW) }
@@ -89,7 +97,7 @@ fun ModelSelectionDialog(
 
     LaunchedEffect(showDialog, models, existingModels) {
         if (showDialog) {
-            selectedModels = emptySet()
+            selectedModelsByTab = emptyMap()
             searchText = ""
             isSearchExpanded = false
             selectedTab = ModelCatalogTab.NEW
@@ -100,6 +108,18 @@ fun ModelSelectionDialog(
         ModelCatalogTab.NEW -> groups.newModels
         ModelCatalogTab.ADDED -> groups.addedModels
         ModelCatalogTab.REMOVED -> groups.removedModels
+    }
+    val selectedModels = selectedModelsByTab[selectedTab].orEmpty()
+    val selectedNewModels = selectedModelsByTab[ModelCatalogTab.NEW].orEmpty()
+    val selectedRemovedModels = selectedModelsByTab[ModelCatalogTab.REMOVED].orEmpty()
+    val hasPendingChanges = selectedNewModels.isNotEmpty() || selectedRemovedModels.isNotEmpty()
+    val canApply = hasPendingChanges || (selectedTab == ModelCatalogTab.NEW && groups.newModels.isNotEmpty())
+    val updateSelectedModels: (Set<String>) -> Unit = { modelsForTab ->
+        selectedModelsByTab = updateModelCatalogTabSelection(
+            selections = selectedModelsByTab,
+            tab = selectedTab,
+            selectedModels = modelsForTab,
+        )
     }
     val filteredModels = remember(currentModels, searchText) {
         if (searchText.isBlank()) currentModels
@@ -145,11 +165,11 @@ fun ModelSelectionDialog(
                     if (selectedTab != ModelCatalogTab.ADDED && currentModels.isNotEmpty()) {
                         TextButton(
                             onClick = {
-                                selectedModels = if (selectedModels.size == currentModels.size) {
+                                updateSelectedModels(if (selectedModels.size == currentModels.size) {
                                     emptySet()
                                 } else {
                                     currentModels.toSet()
-                                }
+                                })
                             }
                         ) {
                             Text(
@@ -186,7 +206,6 @@ fun ModelSelectionDialog(
                             groups = groups,
                             onSelect = {
                                 selectedTab = it
-                                selectedModels = emptySet()
                                 searchText = ""
                             },
                         )
@@ -234,11 +253,11 @@ fun ModelSelectionDialog(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .clickable(enabled = canSelect) {
-                                            selectedModels = if (isSelected) {
+                                            updateSelectedModels(if (isSelected) {
                                                 selectedModels - model
                                             } else {
                                                 selectedModels + model
-                                            }
+                                            })
                                         }
                                         .padding(vertical = 12.dp, horizontal = 8.dp),
                                     verticalAlignment = Alignment.CenterVertically,
@@ -342,19 +361,16 @@ fun ModelSelectionDialog(
 
                     Button(
                         onClick = {
-                            when (selectedTab) {
-                                ModelCatalogTab.NEW -> onSelectModels(
-                                    selectedModels.ifEmpty { groups.newModels.toSet() }.toList()
-                                )
-                                ModelCatalogTab.REMOVED -> onRemoveModels(selectedModels.toList())
-                                ModelCatalogTab.ADDED -> Unit
+                            val modelsToAdd = if (selectedNewModels.isNotEmpty()) {
+                                selectedNewModels.toList()
+                            } else if (selectedRemovedModels.isEmpty()) {
+                                groups.newModels
+                            } else {
+                                emptyList()
                             }
+                            onApply(modelsToAdd, selectedRemovedModels.toList())
                         },
-                        enabled = when (selectedTab) {
-                            ModelCatalogTab.NEW -> groups.newModels.isNotEmpty()
-                            ModelCatalogTab.REMOVED -> selectedModels.isNotEmpty()
-                            ModelCatalogTab.ADDED -> false
-                        },
+                        enabled = canApply,
                         modifier = Modifier.weight(1f).height(44.dp),
                         shape = RoundedCornerShape(22.dp),
                         colors = ButtonDefaults.buttonColors(
@@ -365,15 +381,7 @@ fun ModelSelectionDialog(
                         )
                     ) {
                         Text(
-                            when {
-                                selectedTab == ModelCatalogTab.REMOVED -> stringResource(
-                                    R.string.settings_remove_selected_models,
-                                    selectedModels.size,
-                                )
-                                selectedTab == ModelCatalogTab.ADDED -> stringResource(R.string.settings_models_no_action)
-                                selectedModels.isEmpty() -> stringResource(R.string.settings_add_all_models)
-                                else -> stringResource(R.string.settings_add_selected_models, selectedModels.size)
-                            },
+                            stringResource(R.string.settings_apply_model_changes),
                             fontWeight = FontWeight.SemiBold
                         )
                     }
