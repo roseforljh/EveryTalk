@@ -30,6 +30,15 @@ import java.util.Base64
 object GeminiDirectClient {
     private const val TAG = "GeminiDirectClient"
     private const val LOCAL_TOOL_CALL_ID_PREFIX = "fc_local_"
+    private val GEMINI_PART_DATA_FIELDS = setOf(
+        "text",
+        "inlineData",
+        "fileData",
+        "functionCall",
+        "functionResponse",
+        "executableCode",
+        "codeExecutionResult",
+    )
     
     @OptIn(ExperimentalCoroutinesApi::class)
     internal fun streamSingleTurn(
@@ -331,6 +340,17 @@ object GeminiDirectClient {
     
     private fun isLocalGeminiToolCallId(id: String): Boolean = id.startsWith(LOCAL_TOOL_CALL_ID_PREFIX)
 
+    /** Gemini 3.x 的函数调用协议带服务端 ID；明确的 2.x 模型必须移除该字段。 */
+    private fun supportsGeminiFunctionCallIds(model: String): Boolean {
+        val normalized = model.lowercase()
+        val markerIndex = normalized.indexOf("gemini-")
+        if (markerIndex < 0) return true
+        val majorText = normalized.substring(markerIndex + "gemini-".length)
+            .takeWhile(Char::isDigit)
+        val major = majorText.toIntOrNull() ?: return true
+        return major >= 3
+    }
+
     /**
      * 按 Pi 的 Gemini 语义逐轮回放历史。
      * Tool Call/Result 永远保持原生结构；签名只在来源 Provider、地址、模型都一致时恢复。
@@ -356,6 +376,7 @@ object GeminiDirectClient {
                     assistant.toolCalls.all { isLocalGeminiToolCallId(it.id) }
             }
             ?.id
+        val includeFunctionCallIds = supportsGeminiFunctionCallIds(request.model)
 
         val contents = mutableListOf<JsonObject>()
         var messageIndex = 0
@@ -365,16 +386,23 @@ object GeminiDirectClient {
                 val results = messages.drop(messageIndex)
                     .takeWhile { it is AgentToolResultApiMessage }
                     .filterIsInstance<AgentToolResultApiMessage>()
-                appendGeminiContent(contents, geminiFunctionResponseContent(results))
+                appendGeminiContent(
+                    contents,
+                    geminiFunctionResponseContent(results, includeFunctionCallIds),
+                )
                 messageIndex += results.size
                 continue
             }
 
             val content: JsonObject? = when {
-                message is AgentAssistantApiMessage && message.id == nativeAssistantId -> checkNotNull(nativeAssistant)
+                message is AgentAssistantApiMessage && message.id == nativeAssistantId -> {
+                    val content = checkNotNull(nativeAssistant)
+                    if (includeFunctionCallIds) content else content.withoutGeminiFunctionCallIds()
+                }
                 message is AgentAssistantApiMessage -> message.toGeminiAssistantContent(
                     request = request,
                     omitLocalIds = message.id == legacyAssistantId,
+                    includeFunctionCallIds = includeFunctionCallIds,
                 )
                 else -> message.toGeminiContent(message.id == legacyAssistantId)
             }
@@ -384,10 +412,25 @@ object GeminiDirectClient {
         return JsonArray(contents)
     }
 
+    /** 2.x 不接受 3.x 的调用 ID；仅删除该字段，其余原生 Part 及顺序保持不变。 */
+    private fun JsonObject.withoutGeminiFunctionCallIds(): JsonObject {
+        val parts = this["parts"] as? JsonArray ?: return this
+        return JsonObject(toMutableMap().apply {
+            put("parts", JsonArray(parts.map { part ->
+                val objectPart = part as? JsonObject ?: return@map part
+                val functionCall = objectPart["functionCall"] as? JsonObject ?: return@map part
+                JsonObject(objectPart.toMutableMap().apply {
+                    put("functionCall", JsonObject(functionCall - "id"))
+                })
+            }))
+        })
+    }
+
     /** 中立 Assistant 恢复成 Gemini Content；跨模型保留语义和工具协议，只移除不可复用签名。 */
     private fun AgentAssistantApiMessage.toGeminiAssistantContent(
         request: ChatRequest,
         omitLocalIds: Boolean,
+        includeFunctionCallIds: Boolean,
     ): JsonObject = buildJsonObject {
         put("role", "model")
         putJsonArray("parts") {
@@ -418,7 +461,8 @@ object GeminiDirectClient {
                         }
                         is AgentAssistantContentApiPart.ToolCall -> addGeminiFunctionCall(
                             call = part.call,
-                            includeId = !omitLocalIds && !isLocalGeminiToolCallId(part.call.id),
+                            includeId = includeFunctionCallIds && !omitLocalIds &&
+                                !isLocalGeminiToolCallId(part.call.id),
                             includeSignature = sameSource,
                         )
                     }
@@ -429,7 +473,8 @@ object GeminiDirectClient {
                 toolCalls.forEach { call ->
                     addGeminiFunctionCall(
                         call = call,
-                        includeId = !omitLocalIds && !isLocalGeminiToolCallId(call.id),
+                        includeId = includeFunctionCallIds && !omitLocalIds &&
+                            !isLocalGeminiToolCallId(call.id),
                         includeSignature = sameSource,
                     )
                 }
@@ -515,17 +560,26 @@ object GeminiDirectClient {
         }
     }
 
-    private fun geminiFunctionResponseContent(results: List<AgentToolResultApiMessage>): JsonObject = buildJsonObject {
+    /**
+     * 内部 ToolResult 只在这里转换成 Gemini FunctionResponse。
+     * 任意对象或数组转成 JSON 文本，避免工具输出中的 Schema 关键字被 Gemini 当成协议字段解释。
+     */
+    private fun geminiFunctionResponseContent(
+        results: List<AgentToolResultApiMessage>,
+        includeFunctionCallIds: Boolean,
+    ): JsonObject = buildJsonObject {
         put("role", "user")
         putJsonArray("parts") {
             results.forEach { result ->
                 addJsonObject {
                     putJsonObject("functionResponse") {
                         put("name", result.toolName)
-                        result.toolCallId.takeUnless(::isLocalGeminiToolCallId)?.let { put("id", it) }
+                        if (includeFunctionCallIds) {
+                            result.toolCallId.takeUnless(::isLocalGeminiToolCallId)?.let { put("id", it) }
+                        }
                         putJsonObject("response") {
-                            if (result.isError) put("error", result.content)
-                            else put("result", result.content)
+                            if (result.isError) put("error", result.content.toGeminiToolErrorText())
+                            else put("output", result.content.toGeminiFunctionResponseValue())
                         }
                     }
                 }
@@ -533,27 +587,56 @@ object GeminiDirectClient {
         }
     }
 
+    private fun JsonElement.toGeminiFunctionResponseValue(): JsonElement = when (this) {
+        is JsonPrimitive, JsonNull -> this
+        else -> JsonPrimitive(toString())
+    }
+
+    private fun JsonElement.toGeminiToolErrorText(): String =
+        (this as? JsonPrimitive)?.contentOrNull ?: toString()
+
     /** 只合并普通文本 Content，带签名或工具协议的 Part 必须保持原位置。 */
     private fun appendGeminiContent(contents: MutableList<JsonObject>, content: JsonObject) {
-        val parts = content["parts"] as? JsonArray ?: return
+        val normalizedContent = content.normalizeGeminiContentForRequest()
+        val parts = normalizedContent["parts"] as? JsonArray ?: return
         if (parts.isEmpty()) return
         val previous = contents.lastOrNull()
         if (
             previous != null &&
-            previous["role"] == content["role"] &&
+            previous["role"] == normalizedContent["role"] &&
             previous.isMergeableGeminiTextContent() &&
-            content.isMergeableGeminiTextContent()
+            normalizedContent.isMergeableGeminiTextContent()
         ) {
             contents[contents.lastIndex] = buildJsonObject {
-                put("role", checkNotNull(content["role"]))
+                put("role", checkNotNull(normalizedContent["role"]))
                 putJsonArray("parts") {
                     (previous["parts"] as? JsonArray).orEmpty().forEach(::add)
                     parts.forEach(::add)
                 }
             }
         } else {
-            contents += content
+            contents += normalizedContent
         }
+    }
+
+    /**
+     * Gemini Part 必须初始化一个 data oneof 字段。
+     * 流式接口可能单独返回 thoughtSignature；回放时用空 text 承载签名，纯空 Part 直接删除。
+     */
+    private fun JsonObject.normalizeGeminiContentForRequest(): JsonObject {
+        val parts = this["parts"] as? JsonArray ?: return this
+        return JsonObject(toMutableMap().apply {
+            put("parts", JsonArray(parts.mapNotNull { element ->
+                val part = element as? JsonObject ?: return@mapNotNull null
+                val hasData = GEMINI_PART_DATA_FIELDS.any { field ->
+                    part[field]?.let { it !is JsonNull } == true
+                }
+                if (hasData) return@mapNotNull part
+                val signature = part["thoughtSignature"]?.jsonPrimitive?.contentOrNull
+                if (signature.isNullOrEmpty()) return@mapNotNull null
+                JsonObject(part.toMutableMap().apply { put("text", JsonPrimitive("")) })
+            }))
+        })
     }
 
     private fun JsonObject.isMergeableGeminiTextContent(): Boolean =

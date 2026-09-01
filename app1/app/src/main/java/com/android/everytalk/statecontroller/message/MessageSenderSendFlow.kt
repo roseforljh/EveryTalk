@@ -852,6 +852,7 @@ internal fun MessageSender.sendMessageInternal(
                                 apiAddress = currentConfig.address,
                                 apiKey = currentConfig.key,
                                 model = currentConfig.model,
+                                tools = requestTools,
                             ),
                             attachments = attachmentsForApiClient,
                             context = application,

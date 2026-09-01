@@ -4,8 +4,11 @@ import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import android.webkit.MimeTypeMap
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.ImageGenerationResponse
+import com.android.everytalk.data.computer.ComputerToolNames
+import com.android.everytalk.models.ATTACHMENT_MANIFEST_MARKER
 import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.models.toAttachmentContextParts
 import com.android.everytalk.util.image.ImageHandlingLimits
@@ -45,10 +48,16 @@ internal suspend fun buildDirectMultimodalRequest(
 ): ChatRequest {
     val inlineParts = mutableListOf<com.android.everytalk.data.DataClass.ApiContentPart.InlineData>()
     val documentTexts = mutableListOf<String>()
+    val workspaceUploadEnabled = request.tools.orEmpty().any { definition ->
+        val function = definition["function"] as? Map<*, *>
+        val name = (function?.get("name") ?: definition["name"]) as? String
+        name == ComputerToolNames.UPLOAD
+    }
 
     attachments.forEach { item ->
         when (item) {
             is com.android.everytalk.models.SelectedMediaItem.ImageFromUri -> {
+                if (workspaceUploadEnabled) documentTexts += item.toWorkspaceUploadManifest(context)
                 val mime = context.contentResolver.getType(item.uri) ?: item.mimeType
                 val bytes = readInlineAttachmentBytes(
                     context,
@@ -67,6 +76,7 @@ internal suspend fun buildDirectMultimodalRequest(
                 }
             }
             is com.android.everytalk.models.SelectedMediaItem.ImageFromBitmap -> {
+                if (workspaceUploadEnabled) documentTexts += item.toWorkspaceUploadManifest(context)
                 if (item.bitmapData.isNotBlank() && isImageMime(item.mimeType)) {
                     val decodedSize = decodedBase64SizeOrNull(item.bitmapData)
                         ?: throw IOException("图片 Base64 数据无效")
@@ -84,6 +94,7 @@ internal suspend fun buildDirectMultimodalRequest(
                 }
             }
             is com.android.everytalk.models.SelectedMediaItem.Audio -> {
+                if (workspaceUploadEnabled) documentTexts += item.toWorkspaceUploadManifest(context)
                 val mime = item.mimeType
                 // 新消息落盘后会清空 data。直连接口在真正发送时才从文件恢复 Base64。
                 val audioBase64 = item.base64DataOrNull(MAX_INLINE_NON_IMAGE_BYTES)
@@ -99,6 +110,11 @@ internal suspend fun buildDirectMultimodalRequest(
             is com.android.everytalk.models.SelectedMediaItem.GenericFile -> {
                 val mime = item.mimeType
                 if (isImageMime(mime) || isAudioMime(mime) || isVideoMime(mime)) {
+                    if (workspaceUploadEnabled) {
+                        documentTexts += item.toAttachmentContextParts(
+                            uploadWith = ComputerToolNames.UPLOAD,
+                        ).first()
+                    }
                     val bytes = readInlineAttachmentBytes(
                         context,
                         item.uri,
@@ -138,7 +154,11 @@ internal suspend fun buildDirectMultimodalRequest(
                                     mimeType = "file_upload_marker|$mime|$fileName" // 使用特殊 mimeType 标记，携带文件名
                                 )
                             )
-                            documentTexts.addAll(item.toAttachmentContextParts())
+                            documentTexts.addAll(
+                                item.toAttachmentContextParts(
+                                    uploadWith = ComputerToolNames.UPLOAD.takeIf { workspaceUploadEnabled },
+                                )
+                            )
                         }
                     } else if (isGemini && isPdf) {
                         // Gemini 原生支持 PDF，直接通过 inlineData 传递
@@ -152,7 +172,11 @@ internal suspend fun buildDirectMultimodalRequest(
                                     mimeType = mime
                                 )
                             )
-                            documentTexts.addAll(item.toAttachmentContextParts())
+                            documentTexts.addAll(
+                                item.toAttachmentContextParts(
+                                    uploadWith = ComputerToolNames.UPLOAD.takeIf { workspaceUploadEnabled },
+                                )
+                            )
                         }
                     } else {
                         val page = DocumentProcessor.extractTextPage(
@@ -170,6 +194,7 @@ internal suspend fun buildDirectMultimodalRequest(
                                 content = page.content,
                                 nextOffset = page.nextOffset,
                                 contentComplete = !page.truncated,
+                                uploadWith = ComputerToolNames.UPLOAD.takeIf { workspaceUploadEnabled },
                             )
                         )
                     }
@@ -227,6 +252,35 @@ internal suspend fun buildDirectMultimodalRequest(
     )
     msgs[lastUserIdx] = upgraded
     return request.copy(messages = msgs)
+}
+
+/** 图片和音频仍以内联内容供模型理解，同时给服务器 Agent 一个真实可用的附件 ID。 */
+private fun SelectedMediaItem.toWorkspaceUploadManifest(context: Context): String {
+    val extension = MimeTypeMap.getSingleton().getExtensionFromMimeType(mimeType)
+        ?.takeIf(String::isNotBlank)
+        ?: "bin"
+    val displayName = when (this) {
+        is SelectedMediaItem.ImageFromUri -> context.contentResolver.query(
+            uri,
+            arrayOf(OpenableColumns.DISPLAY_NAME),
+            null,
+            null,
+            null,
+        )?.use { cursor ->
+            val index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (cursor.moveToFirst() && index >= 0 && !cursor.isNull(index)) cursor.getString(index) else null
+        }?.takeIf(String::isNotBlank) ?: "image-${id.take(8)}.$extension"
+        is SelectedMediaItem.ImageFromBitmap -> "image-${id.take(8)}.$extension"
+        is SelectedMediaItem.Audio -> "audio-${id.take(8)}.$extension"
+        is SelectedMediaItem.GenericFile -> displayName
+    }.map { if (it == '\r' || it == '\n' || it == '\t') ' ' else it }.joinToString("").trim()
+    return buildString {
+        appendLine(ATTACHMENT_MANIFEST_MARKER)
+        appendLine("attachment_id: $id")
+        appendLine("name: $displayName")
+        appendLine("mime_type: $mimeType")
+        append("upload_with: ${ComputerToolNames.UPLOAD}")
+    }
 }
 
 private fun isImageMime(mime: String?): Boolean {

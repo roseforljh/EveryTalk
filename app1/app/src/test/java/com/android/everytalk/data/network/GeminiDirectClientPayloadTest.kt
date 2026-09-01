@@ -13,6 +13,7 @@ import com.android.everytalk.data.computer.ComputerToolCatalog
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -120,6 +121,47 @@ class GeminiDirectClientPayloadTest {
     }
 
     @Test
+    fun `原生签名单独成Part时补空text并删除纯空Part`() {
+        val request = ChatRequest(
+            messages = listOf(
+                SimpleTextApiMessage(role = "user", content = "执行命令"),
+                AgentAssistantApiMessage(
+                    id = "assistant-signature-only",
+                    toolCalls = listOf(AgentToolCallApiPart("call-1", "exec", JsonObject(emptyMap()))),
+                ),
+                AgentToolResultApiMessage(
+                    toolCallId = "call-1",
+                    toolName = "exec",
+                    content = JsonPrimitive("ok"),
+                ),
+            ),
+            provider = "Google",
+            channel = "Gemini",
+            apiAddress = "https://generativelanguage.googleapis.com",
+            apiKey = "test-key",
+            model = "gemini-3.7-flash",
+            localProviderContinuation = ProviderTurnContinuation(
+                protocol = ModelParameterProtocol.GEMINI,
+                assistantMessageId = "assistant-signature-only",
+                payloadJson =
+                    """{"role":"model","parts":[{}, {"thought":true,"thoughtSignature":"c2ln"},{"functionCall":{"id":"call-1","name":"exec","args":{}}}]}""",
+            ),
+        )
+
+        val modelParts = Json.parseToJsonElement(GeminiDirectClient.buildGeminiPayload(request))
+            .jsonObject.getValue("contents").jsonArray[1].jsonObject
+            .getValue("parts").jsonArray.map { it.jsonObject }
+        val signedPart = modelParts.single { it.containsKey("thoughtSignature") }
+
+        assertEquals("", signedPart.getValue("text").jsonPrimitive.content)
+        assertTrue(modelParts.none(JsonObject::isEmpty))
+        assertTrue(modelParts.all { part ->
+            listOf("text", "inlineData", "fileData", "functionCall", "functionResponse", "executableCode", "codeExecutionResult")
+                .any(part::containsKey)
+        })
+    }
+
+    @Test
     fun `并行工具结果按调用顺序合并并原样带回调用ID`() {
         val request = ChatRequest(
             messages = listOf(
@@ -201,6 +243,93 @@ class GeminiDirectClientPayloadTest {
 
         assertEquals("call-1", response.getValue("id").jsonPrimitive.content)
         assertEquals("edit", response.getValue("name").jsonPrimitive.content)
+    }
+
+    @Test
+    fun `Gemini三点七工具成功和失败都使用受控FunctionResponse`() {
+        val request = ChatRequest(
+            messages = listOf(
+                SimpleTextApiMessage(role = "user", content = "执行两个操作"),
+                AgentAssistantApiMessage(
+                    toolCalls = listOf(
+                        AgentToolCallApiPart("call-ok", "read_file", JsonObject(emptyMap())),
+                        AgentToolCallApiPart("call-error", "exec", JsonObject(emptyMap())),
+                    ),
+                ),
+                AgentToolResultApiMessage(
+                    toolCallId = "call-ok",
+                    toolName = "read_file",
+                    content = JsonPrimitive("内容"),
+                ),
+                AgentToolResultApiMessage(
+                    toolCallId = "call-error",
+                    toolName = "exec",
+                    content = buildJsonObject {
+                        put("message", JsonPrimitive("权限不足"))
+                        put("\$ref", JsonPrimitive("不得解释为Schema"))
+                    },
+                    isError = true,
+                ),
+            ),
+            provider = "Google",
+            channel = "Gemini",
+            apiAddress = "https://generativelanguage.googleapis.com",
+            apiKey = "test-key",
+            model = "gemini-3.7-flash",
+        )
+
+        val responses = Json.parseToJsonElement(GeminiDirectClient.buildGeminiPayload(request))
+            .jsonObject.getValue("contents").jsonArray.last().jsonObject
+            .getValue("parts").jsonArray.map {
+                it.jsonObject.getValue("functionResponse").jsonObject
+            }
+        val success = responses[0]
+        val failure = responses[1]
+
+        assertEquals("call-ok", success.getValue("id").jsonPrimitive.content)
+        assertEquals("内容", success.getValue("response").jsonObject.getValue("output").jsonPrimitive.content)
+        assertFalse(success.getValue("response").jsonObject.containsKey("result"))
+        assertEquals("call-error", failure.getValue("id").jsonPrimitive.content)
+        assertTrue(failure.getValue("response").jsonObject.getValue("error").jsonPrimitive.content.contains("权限不足"))
+    }
+
+    @Test
+    fun `Gemini二点五移除原生调用和结果ID`() {
+        val request = ChatRequest(
+            messages = listOf(
+                SimpleTextApiMessage(role = "user", content = "检查服务"),
+                AgentAssistantApiMessage(
+                    id = "assistant-2x",
+                    toolCalls = listOf(AgentToolCallApiPart("call-1", "exec", JsonObject(emptyMap()))),
+                ),
+                AgentToolResultApiMessage(
+                    toolCallId = "call-1",
+                    toolName = "exec",
+                    content = JsonPrimitive("ok"),
+                ),
+            ),
+            provider = "Google",
+            channel = "Gemini",
+            apiAddress = "https://generativelanguage.googleapis.com",
+            apiKey = "test-key",
+            model = "gemini-2.5-pro",
+            localProviderContinuation = ProviderTurnContinuation(
+                protocol = ModelParameterProtocol.GEMINI,
+                assistantMessageId = "assistant-2x",
+                payloadJson =
+                    """{"role":"model","parts":[{"functionCall":{"id":"call-1","name":"exec","args":{}},"thoughtSignature":"c2ln"}]}""",
+            ),
+        )
+
+        val contents = Json.parseToJsonElement(GeminiDirectClient.buildGeminiPayload(request))
+            .jsonObject.getValue("contents").jsonArray
+        val functionCall = contents[1].jsonObject.getValue("parts").jsonArray.single().jsonObject
+            .getValue("functionCall").jsonObject
+        val functionResponse = contents.last().jsonObject.getValue("parts").jsonArray.single().jsonObject
+            .getValue("functionResponse").jsonObject
+
+        assertFalse(functionCall.containsKey("id"))
+        assertFalse(functionResponse.containsKey("id"))
     }
 
     @Test

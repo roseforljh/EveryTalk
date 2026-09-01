@@ -174,6 +174,7 @@ internal fun SelectedMediaItem.GenericFile.toAttachmentContextParts(
     content: String? = null,
     nextOffset: Long? = null,
     contentComplete: Boolean? = null,
+    uploadWith: String? = null,
 ): List<String> {
     val actualSize = filePath?.let(::File)?.takeIf(File::isFile)?.length()
     val safeName = displayName.map { if (it == '\r' || it == '\n' || it == '\t') ' ' else it }
@@ -186,7 +187,12 @@ internal fun SelectedMediaItem.GenericFile.toAttachmentContextParts(
             appendLine("name: $safeName")
             appendLine("mime_type: $mimeType")
             actualSize?.let { appendLine("source_size_bytes: $it") }
-            append("read_with: read_attachment")
+            if (uploadWith == null) {
+                append("read_with: read_attachment")
+            } else {
+                appendLine("read_with: read_attachment")
+                append("upload_with: $uploadWith")
+            }
         })
         if (content != null) add(buildString {
             appendLine(ATTACHMENT_CONTENT_PAGE_MARKER)

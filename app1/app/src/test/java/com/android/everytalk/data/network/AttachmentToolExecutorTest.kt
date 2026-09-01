@@ -10,6 +10,7 @@ import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.ModelTokenLimits
 import com.android.everytalk.data.DataClass.PartsApiMessage
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
+import com.android.everytalk.data.computer.ComputerToolCatalog
 import com.android.everytalk.models.ATTACHMENT_CONTENT_PAGE_MARKER
 import com.android.everytalk.models.ATTACHMENT_MANIFEST_MARKER
 import com.android.everytalk.models.SelectedMediaItem
@@ -299,6 +300,36 @@ class AttachmentToolExecutorTest {
             .single()
         assertEquals("audio/wav", audioPart.mimeType)
         assertEquals(Base64.encodeToString(audioBytes, Base64.NO_WRAP), audioPart.base64Data)
+    }
+
+    @Test
+    fun `图片在Computer启用时同时提供内联内容和Workspace附件ID`() = runTest {
+        val bytes = "image-payload".toByteArray()
+        val attachment = SelectedMediaItem.ImageFromBitmap(
+            bitmapData = Base64.encodeToString(bytes, Base64.NO_WRAP),
+            id = "image-for-workspace",
+            mimeType = "image/png",
+        )
+
+        val result = buildDirectMultimodalRequest(
+            request = ChatRequest(
+                messages = listOf(SimpleTextApiMessage(role = "user", content = "处理这张图片")),
+                provider = "test",
+                channel = "Gemini",
+                apiAddress = "https://example.com",
+                apiKey = "",
+                model = "gemini-3.7-flash",
+                tools = ComputerToolCatalog.definitions(),
+            ),
+            attachments = listOf(attachment),
+            context = context,
+        )
+
+        val parts = (result.messages.single() as PartsApiMessage).parts
+        val text = parts.filterIsInstance<ApiContentPart.Text>().joinToString("\n") { it.text }
+        assertTrue(parts.any { it is ApiContentPart.InlineData })
+        assertTrue("attachment_id: ${attachment.id}" in text)
+        assertTrue("upload_with: upload" in text)
     }
 
     @Test
