@@ -323,6 +323,12 @@ import java.util.TimeZone
         clearFetchedModels()
     }
 
+    internal fun AppViewModel.onRemoveUnavailableModels(selectedModels: List<String>) {
+        val params = stateHolder._pendingConfigParams.value ?: return
+        modelAndConfigController.removeModelsFromConfigGroup(params, selectedModels)
+        clearFetchedModels()
+    }
+
     internal fun AppViewModel.addMcpServer(config: com.android.everytalk.data.mcp.McpServerConfig) {
         viewModelScope.launch {
             try {

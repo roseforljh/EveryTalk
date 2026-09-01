@@ -13,6 +13,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.flow.updateAndGet
 import kotlinx.coroutines.launch
+import java.util.Locale
 import java.util.UUID
 
 class ConfigManager(
@@ -323,11 +324,39 @@ class ConfigManager(
 
     /** 成组删除：同一平台、地址和密钥下的模型属于同一配置组。 */
     fun deleteConfigGroup(representativeConfig: ApiConfig, isImageGen: Boolean = false) {
+        deleteMatchingConfigs(
+            isImageGen = isImageGen,
+            cancelReason = "Selected config group removed",
+        ) { belongsToGroup(it, representativeConfig) }
+    }
+
+    /** 删除配置组中用户明确勾选的已下架模型。 */
+    fun deleteModelsFromConfigGroup(
+        representativeConfig: ApiConfig,
+        modelNames: Collection<String>,
+        isImageGen: Boolean = false,
+    ) {
+        val normalizedModels = modelNames
+            .mapTo(mutableSetOf()) { it.trim().lowercase(Locale.ROOT) }
+        if (normalizedModels.isEmpty()) return
+        deleteMatchingConfigs(
+            isImageGen = isImageGen,
+            cancelReason = "Selected unavailable models removed",
+        ) {
+            belongsToGroup(it, representativeConfig) &&
+                it.model.trim().lowercase(Locale.ROOT) in normalizedModels
+        }
+    }
+
+    /** 单次更新内存和持久化，避免批量删除时多个保存任务互相覆盖。 */
+    private fun deleteMatchingConfigs(
+        isImageGen: Boolean,
+        cancelReason: String,
+        matches: (ApiConfig) -> Boolean,
+    ) {
         viewModelScope.launch {
             val originalConfigs = if (isImageGen) stateHolder._imageGenApiConfigs.value else stateHolder._apiConfigs.value
-            val configsToKeep = originalConfigs.filterNot {
-                belongsToGroup(it, representativeConfig)
-            }
+            val configsToKeep = originalConfigs.filterNot(matches)
 
             if (configsToKeep.size != originalConfigs.size) {
                 val removedIds = originalConfigs
@@ -358,7 +387,7 @@ class ConfigManager(
                     stateHolder._apiConfigs.value = configsToKeep
                     persistenceManager.saveApiConfigs(configsToKeep)
                     if (stateHolder._selectedApiConfig.value?.id != newSelectedConfig?.id) {
-                        apiHandler.cancelCurrentApiJob("Selected config group removed")
+                        apiHandler.cancelCurrentApiJob(cancelReason)
                         stateHolder._selectedApiConfig.value = newSelectedConfig
                         persistenceManager.saveSelectedConfigIdentifier(newSelectedConfig?.id)
                     }

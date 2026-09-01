@@ -408,6 +408,7 @@ fun ImageGenerationSettingsScreen(
             existingModels = existingModelsForSelection,
             onDismiss = { viewModel.dismissModelSelectionDialog() },
             onSelectModels = { selected -> viewModel.onSelectModels(selected) },
+            onRemoveModels = { selected -> viewModel.onRemoveUnavailableModels(selected) },
             onManualInput = { viewModel.onManualInput() }
         )
     }

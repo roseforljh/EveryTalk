@@ -76,6 +76,33 @@ class ConfigManagerConversationBindingTest {
     }
 
     @Test
+    fun `删除勾选的已下架模型时保留同组其他配置`() = runTest(UnconfinedTestDispatcher()) {
+        val removed = config("removed", "model-removed")
+        val retained = config("retained", "model-retained")
+        val unrelated = config("unrelated", "model-other", address = "https://other.example")
+        val stateHolder = ViewModelStateHolder().apply {
+            _apiConfigs.value = listOf(removed, retained, unrelated)
+            _selectedApiConfig.value = removed
+            conversationApiConfigIds.value = mapOf("conversation" to removed.id)
+        }
+        val persistenceManager = mockk<DataPersistenceManager>(relaxed = true)
+        val manager = ConfigManager(
+            stateHolder = stateHolder,
+            persistenceManager = persistenceManager,
+            apiHandler = mockk<ApiHandler>(relaxed = true),
+            viewModelScope = this,
+        )
+
+        manager.deleteModelsFromConfigGroup(removed, listOf("MODEL-REMOVED"))
+        advanceUntilIdle()
+
+        assertEquals(listOf(retained, unrelated), stateHolder._apiConfigs.value)
+        assertEquals(retained, stateHolder._selectedApiConfig.value)
+        assertEquals(mapOf("conversation" to retained.id), stateHolder.conversationApiConfigIds.value)
+        coVerify { persistenceManager.saveApiConfigs(listOf(retained, unrelated), false) }
+    }
+
+    @Test
     fun `清空文本配置不会清除图像配置及其会话绑定`() = runTest(UnconfinedTestDispatcher()) {
         val text = config("text", "text-model")
         val image = config("image", "image-model", modalityType = ModalityType.IMAGE)

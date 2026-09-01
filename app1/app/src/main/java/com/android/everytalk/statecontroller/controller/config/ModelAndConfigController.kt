@@ -380,6 +380,38 @@ class ModelAndConfigController(
         }
     }
 
+    /** 删除刷新结果中由用户明确勾选的已下架模型配置。 */
+    fun removeModelsFromConfigGroup(
+        params: com.android.everytalk.statecontroller.PendingConfigParams,
+        modelNames: List<String>,
+    ) {
+        val normalizedModels = modelNames
+            .map(String::trim)
+            .filter(String::isNotEmpty)
+            .distinctBy { it.lowercase(Locale.ROOT) }
+        if (normalizedModels.isEmpty()) return
+
+        val currentConfigs = if (params.isImageGen) {
+            stateHolder._imageGenApiConfigs.value
+        } else {
+            stateHolder._apiConfigs.value
+        }
+        val representative = currentConfigs.firstOrNull {
+            it.key == params.key && it.provider == params.provider && it.address == params.address
+        }
+        if (representative == null) {
+            showSnackbar("配置组已不存在")
+            return
+        }
+
+        configManager.deleteModelsFromConfigGroup(
+            representativeConfig = representative,
+            modelNames = normalizedModels,
+            isImageGen = params.isImageGen,
+        )
+        showSnackbar("已删除 ${normalizedModels.size} 个已下架模型")
+    }
+
     /**
      * 返回模型的端点能力候选。目录已有完整参数时不重复请求，目录不完整时调用详情接口补齐。
      * 详情接口失败只影响能力增强，调用方仍会使用官方、家族和保守默认值。

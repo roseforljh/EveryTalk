@@ -69,6 +69,7 @@ fun ModelSelectionDialog(
     existingModels: List<String>,
     onDismiss: () -> Unit,
     onSelectModels: (List<String>) -> Unit,
+    onRemoveModels: (List<String>) -> Unit,
     onManualInput: () -> Unit
 ) {
     if (!showDialog) return
@@ -141,19 +142,19 @@ fun ModelSelectionDialog(
                             color = subtextColor
                         )
                     }
-                    if (selectedTab == ModelCatalogTab.NEW && groups.newModels.isNotEmpty()) {
+                    if (selectedTab != ModelCatalogTab.ADDED && currentModels.isNotEmpty()) {
                         TextButton(
                             onClick = {
-                                selectedModels = if (selectedModels.size == groups.newModels.size) {
+                                selectedModels = if (selectedModels.size == currentModels.size) {
                                     emptySet()
                                 } else {
-                                    groups.newModels.toSet()
+                                    currentModels.toSet()
                                 }
                             }
                         ) {
                             Text(
                                 stringResource(
-                                    if (selectedModels.size == groups.newModels.size) {
+                                    if (selectedModels.size == currentModels.size) {
                                         R.string.action_clear_selection
                                     } else {
                                         R.string.action_select_all
@@ -185,6 +186,7 @@ fun ModelSelectionDialog(
                             groups = groups,
                             onSelect = {
                                 selectedTab = it
+                                selectedModels = emptySet()
                                 searchText = ""
                             },
                         )
@@ -227,7 +229,7 @@ fun ModelSelectionDialog(
                         ) {
                             items(filteredModels) { model ->
                                 val isSelected = model in selectedModels
-                                val canSelect = selectedTab == ModelCatalogTab.NEW
+                                val canSelect = selectedTab != ModelCatalogTab.ADDED
                                 Row(
                                     modifier = Modifier
                                         .fillMaxWidth()
@@ -340,13 +342,19 @@ fun ModelSelectionDialog(
 
                     Button(
                         onClick = {
-                            if (selectedModels.isNotEmpty()) {
-                                onSelectModels(selectedModels.toList())
-                            } else {
-                                onSelectModels(groups.newModels)
+                            when (selectedTab) {
+                                ModelCatalogTab.NEW -> onSelectModels(
+                                    selectedModels.ifEmpty { groups.newModels.toSet() }.toList()
+                                )
+                                ModelCatalogTab.REMOVED -> onRemoveModels(selectedModels.toList())
+                                ModelCatalogTab.ADDED -> Unit
                             }
                         },
-                        enabled = selectedTab == ModelCatalogTab.NEW && groups.newModels.isNotEmpty(),
+                        enabled = when (selectedTab) {
+                            ModelCatalogTab.NEW -> groups.newModels.isNotEmpty()
+                            ModelCatalogTab.REMOVED -> selectedModels.isNotEmpty()
+                            ModelCatalogTab.ADDED -> false
+                        },
                         modifier = Modifier.weight(1f).height(44.dp),
                         shape = RoundedCornerShape(22.dp),
                         colors = ButtonDefaults.buttonColors(
@@ -358,7 +366,11 @@ fun ModelSelectionDialog(
                     ) {
                         Text(
                             when {
-                                selectedTab != ModelCatalogTab.NEW -> stringResource(R.string.settings_models_no_action)
+                                selectedTab == ModelCatalogTab.REMOVED -> stringResource(
+                                    R.string.settings_remove_selected_models,
+                                    selectedModels.size,
+                                )
+                                selectedTab == ModelCatalogTab.ADDED -> stringResource(R.string.settings_models_no_action)
                                 selectedModels.isEmpty() -> stringResource(R.string.settings_add_all_models)
                                 else -> stringResource(R.string.settings_add_selected_models, selectedModels.size)
                             },
