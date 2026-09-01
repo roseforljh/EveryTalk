@@ -193,7 +193,6 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             } else {
                 stateHolder.messages
                     .flatMap(Message::attachments)
-                    .filterIsInstance<SelectedMediaItem.GenericFile>()
             }
         },
         onDownloaded = { conversationId, attachment ->

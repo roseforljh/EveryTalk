@@ -172,7 +172,7 @@ internal fun requireSelectedReadyComputer(
 class ComputerManager(
     context: Context,
     private val scope: CoroutineScope,
-    attachmentsForConversation: (String) -> List<SelectedMediaItem.GenericFile>,
+    attachmentsForConversation: (String) -> List<SelectedMediaItem>,
     onDownloaded: suspend (String, SelectedMediaItem.GenericFile) -> Unit,
 ) : AutoCloseable {
     private val repository = ComputerRepository(context.applicationContext)
