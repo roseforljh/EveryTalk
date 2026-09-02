@@ -50,6 +50,8 @@ sealed class AppStreamEvent {
         val block_type: String? = null,
         val timestamp: String? = null,
         val thoughtSignature: String? = null,
+        /** OpenAI Responses 的 message id/phase 在正文增量后到达时，只更新最近文本块。 */
+        val signatureOnlyUpdate: Boolean = false,
     ) : AppStreamEvent()
     
     @Serializable
@@ -61,6 +63,10 @@ sealed class AppStreamEvent {
     data class Reasoning(
         val text: String,
         val thoughtSignature: String? = null,
+        /** Anthropic redacted_thinking 的 opaque 数据，不得当正文显示。 */
+        val redacted: Boolean = false,
+        /** 流末签名增量只更新最近的 reasoning 块，禁止重复正文。 */
+        val signatureOnlyUpdate: Boolean = false,
     ) : AppStreamEvent()
 
     @Serializable
@@ -162,6 +168,8 @@ sealed class AppStreamEvent {
         val status: String? = null,
         /** Gemini 加密思考签名。AgentLoop 必须随当前 Assistant 一起持久化。 */
         val thoughtSignature: String? = null,
+        /** OpenAI Responses custom/deferred tool 的命名空间。 */
+        val namespace: String? = null,
     ) : AppStreamEvent()
 
     @Serializable

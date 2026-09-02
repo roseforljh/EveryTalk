@@ -4,7 +4,9 @@ import android.app.Application
 import com.android.everytalk.data.DataClass.AbstractApiMessage
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.GenerationConfig
+import com.android.everytalk.data.DataClass.ModelParameterProtocol
 import com.android.everytalk.data.DataClass.AgentAssistantApiMessage
+import com.android.everytalk.data.DataClass.AgentAssistantContentApiPart
 import com.android.everytalk.data.DataClass.AgentToolCallApiPart
 import com.android.everytalk.data.DataClass.AgentToolResultApiMessage
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
@@ -15,6 +17,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.JsonNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -175,7 +178,100 @@ class OpenAIDirectClientPayloadTest {
     }
 
     @Test
-    fun `中断后的孤立工具调用和结果不会进入Chat Completions`() {
+    fun `OpenAI兼容端点原样回放Pi reasoningDetails`() {
+        val details = """[{"type":"reasoning.encrypted","id":"r1","data":"opaque"}]"""
+        val payload = Json.parseToJsonElement(
+            buildPayload(
+                request(
+                    apiAddress = "https://openrouter.ai/api/v1",
+                    messages = listOf(
+                        AgentAssistantApiMessage(
+                            reasoning = "分析",
+                            contentParts = listOf(
+                                AgentAssistantContentApiPart.Reasoning("分析", details),
+                                AgentAssistantContentApiPart.ToolCall(
+                                    AgentToolCallApiPart("call-1", "exec", JsonObject(emptyMap())),
+                                ),
+                            ),
+                            toolCalls = listOf(AgentToolCallApiPart("call-1", "exec", JsonObject(emptyMap()))),
+                            sourceProvider = "OpenAI",
+                            sourceEndpoint = "https://openrouter.ai/api/v1",
+                            sourceModel = "gpt-5.4",
+                        ),
+                        AgentToolResultApiMessage(
+                            toolCallId = "call-1",
+                            toolName = "exec",
+                            content = JsonPrimitive("ok"),
+                        ),
+                    ),
+                ),
+            ),
+        ).jsonObject
+
+        val assistant = payload.getValue("messages").jsonArray
+            .first { it.jsonObject["role"]?.jsonPrimitive?.content == "assistant" }
+            .jsonObject
+        assertEquals("reasoning.encrypted", assistant.getValue("reasoning_details").jsonArray
+            .single().jsonObject.getValue("type").jsonPrimitive.content)
+    }
+
+    @Test
+    fun `跨协议reasoning按Pi规则降级为普通assistant文本`() {
+        val payload = Json.parseToJsonElement(
+            buildPayload(
+                request(
+                    apiAddress = "https://openrouter.ai/api/v1",
+                    messages = listOf(
+                        AgentAssistantApiMessage(
+                            text = "答复",
+                            reasoning = "内部分析",
+                            contentParts = listOf(
+                                AgentAssistantContentApiPart.Reasoning("内部分析", "opaque"),
+                                AgentAssistantContentApiPart.Text("答复"),
+                            ),
+                            sourceProvider = "Anthropic",
+                            sourceEndpoint = "https://api.anthropic.com",
+                            sourceModel = "claude-sonnet",
+                            sourceProtocol = ModelParameterProtocol.ANTHROPIC,
+                        ),
+                    ),
+                ),
+            ),
+        ).jsonObject
+
+        val assistant = payload.getValue("messages").jsonArray
+            .single { it.jsonObject["role"]?.jsonPrimitive?.content == "assistant" }
+            .jsonObject
+        assertEquals("内部分析答复", assistant.getValue("content").jsonPrimitive.content)
+        assertFalse(assistant.containsKey("reasoning_content"))
+        assertFalse(assistant.containsKey("reasoning_details"))
+    }
+
+    @Test
+    fun `OpenAI官方纯工具调用assistant使用null content`() {
+        val payload = Json.parseToJsonElement(
+            buildPayload(
+                request(
+                    apiAddress = "https://api.openai.com/v1",
+                    model = "gpt-5.6",
+                    messages = listOf(
+                        AgentAssistantApiMessage(
+                            toolCalls = listOf(AgentToolCallApiPart("call-1", "exec", JsonObject(emptyMap()))),
+                        ),
+                    ),
+                ),
+            ),
+        ).jsonObject
+
+        val assistant = payload.getValue("messages").jsonArray
+            .single { it.jsonObject["role"]?.jsonPrimitive?.content == "assistant" }
+            .jsonObject
+        assertEquals(JsonNull, assistant.getValue("content"))
+        assertTrue(assistant.containsKey("tool_calls"))
+    }
+
+    @Test
+    fun `中断后的孤立工具调用按Pi规则补失败结果`() {
         val payload = Json.parseToJsonElement(
             buildPayload(
                 request(
@@ -196,13 +292,18 @@ class OpenAIDirectClientPayloadTest {
         ).jsonObject
         val messages = payload.getValue("messages").jsonArray
 
-        assertFalse(messages.any { it.jsonObject["tool_calls"] != null })
-        assertFalse(messages.any { it.jsonObject["role"]?.jsonPrimitive?.content == "tool" })
+        assertTrue(messages.any { it.jsonObject["tool_calls"] != null })
+        assertTrue(messages.any {
+            it.jsonObject["role"]?.jsonPrimitive?.content == "tool" &&
+                it.jsonObject["tool_call_id"]?.jsonPrimitive?.content == "call-orphan" &&
+                it.jsonObject["content"]?.jsonPrimitive?.content == "No result provided"
+        })
+        assertTrue(messages.any { it.jsonObject["tool_call_id"]?.jsonPrimitive?.content == "result-orphan" })
         assertTrue(messages.any { it.jsonObject["content"]?.jsonPrimitive?.content == "中断后继续" })
     }
 
     @Test
-    fun `被普通消息打断的工具组整体移除`() {
+    fun `被普通消息打断的工具组按Pi规则在用户消息前补结果`() {
         val payload = Json.parseToJsonElement(
             buildPayload(
                 request(
@@ -222,8 +323,12 @@ class OpenAIDirectClientPayloadTest {
         ).jsonObject
         val messages = payload.getValue("messages").jsonArray
 
-        assertFalse(messages.any { it.jsonObject["tool_calls"] != null })
-        assertFalse(messages.any { it.jsonObject["role"]?.jsonPrimitive?.content == "tool" })
+        assertTrue(messages.any { it.jsonObject["tool_calls"] != null })
+        assertTrue(messages.any {
+            it.jsonObject["role"]?.jsonPrimitive?.content == "tool" &&
+                it.jsonObject["tool_call_id"]?.jsonPrimitive?.content == "call-late" &&
+                it.jsonObject["content"]?.jsonPrimitive?.content == "No result provided"
+        })
         assertTrue(messages.any { it.jsonObject["content"]?.jsonPrimitive?.content == "先停一下" })
     }
 

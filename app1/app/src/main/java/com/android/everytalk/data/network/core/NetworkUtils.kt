@@ -93,7 +93,11 @@ object NetworkUtils {
         exception: Exception,
         apiName: String
     ): ErrorWithFinish {
-        Log.e(TAG, "$apiName 连接失败", exception)
+        // 网络库异常可能把带 key 的完整 URL 写进 message。日志保留类型和栈，丢弃原始 message。
+        val safeLogException = RuntimeException(exception.javaClass.name).apply {
+            stackTrace = exception.stackTrace.copyOf()
+        }
+        Log.e(TAG, "$apiName 连接失败 type=${exception.javaClass.name}", safeLogException)
 
         val isAborted = exception is java.net.SocketException &&
             exception.message?.contains("Software caused connection abort", ignoreCase = true) == true

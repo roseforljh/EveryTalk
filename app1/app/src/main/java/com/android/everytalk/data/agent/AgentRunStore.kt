@@ -22,6 +22,7 @@ import com.android.everytalk.data.DataClass.ExecutionStep
 import com.android.everytalk.data.DataClass.ExecutionStepType
 import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.ChatRequest
+import com.android.everytalk.data.DataClass.ModelParameterProtocol
 import com.android.everytalk.data.DataClass.ProviderTurnContinuation
 import com.android.everytalk.data.DataClass.modelParameterProtocol
 import com.android.everytalk.data.network.TokenUsage
@@ -194,22 +195,36 @@ class AgentRunStore(
 
     suspend fun finalExecutedToolCalls(runId: String): List<AgentContentBlock.ToolCall> {
         val entries = dao.getEntries(runId)
-        val completedIds = entries.asSequence()
+        val completedCalls = entries.asSequence()
             .filter { it.kind == AgentEntryKind.TOOL_RESULT.name && it.status == AgentEntryStatus.FINAL.name }
-            .mapNotNull(AgentEntryEntity::toolCallId)
+            .mapNotNull { entry -> entry.toolCallId?.let { callId -> entry.requestId to callId } }
             .toSet()
         return entries
             .filter { it.kind == AgentEntryKind.ASSISTANT.name && it.status == AgentEntryStatus.FINAL.name }
-            .flatMap(::decodeAssistantToolCalls)
-            .filter { it.id in completedIds }
+            .flatMap { entry ->
+                decodeAssistantToolCalls(entry).filter { call -> (entry.requestId to call.id) in completedCalls }
+            }
     }
 
-    suspend fun hasFinalToolResult(runId: String, toolCallId: String): Boolean =
-        dao.getEntries(runId).any { entry ->
+    /** ToolResult 必须同时绑定模型回合，防止 Provider 在后续回合复用 Tool Call ID。 */
+    suspend fun finalToolResult(
+        runId: String,
+        requestId: String,
+        toolCallId: String,
+    ): AgentContentBlock.ToolResult? = dao.getEntries(runId).asReversed().firstNotNullOfOrNull { entry ->
+        if (
             entry.kind == AgentEntryKind.TOOL_RESULT.name &&
                 entry.status == AgentEntryStatus.FINAL.name &&
-                entry.toolCallId == toolCallId
+                entry.toolCallId == toolCallId &&
+                entry.requestId == requestId
+        ) {
+            runCatching {
+                json.decodeFromString(AgentContentBlock.ToolResult.serializer(), entry.payloadJson)
+            }.getOrNull()
+        } else {
+            null
         }
+    }
 
     /**
      * 保存需要让模型知道的手机生命周期或 SSH 事件。
@@ -251,9 +266,16 @@ class AgentRunStore(
     }
 
     /** 根据持久化 Assistant Entry 找回原 Tool Call，供远端完成后读取真实结果。 */
-    suspend fun findToolCall(runId: String, toolCallId: String): AgentContentBlock.ToolCall? =
+    suspend fun findToolCall(
+        runId: String,
+        toolCallId: String,
+        requestId: String? = null,
+    ): AgentContentBlock.ToolCall? =
         dao.getEntries(runId).asReversed().firstNotNullOfOrNull { entry ->
-            if (entry.kind != AgentEntryKind.ASSISTANT.name) return@firstNotNullOfOrNull null
+            if (
+                entry.kind != AgentEntryKind.ASSISTANT.name ||
+                (requestId != null && entry.requestId != requestId)
+            ) return@firstNotNullOfOrNull null
             decodeAssistantToolCalls(entry).firstOrNull { it.id == toolCallId }
         }
 
@@ -538,14 +560,28 @@ class AgentRunStore(
         runId: String,
         requestId: String,
         result: AgentContentBlock.ToolResult,
-    ): AgentEntryEntity = appendEntry(
-        runId = runId,
-        kind = AgentEntryKind.TOOL_RESULT,
-        requestId = requestId,
-        toolCallId = result.toolCallId,
-        payloadJson = json.encodeToString(AgentContentBlock.ToolResult.serializer(), result),
-        status = AgentEntryStatus.FINAL,
-    )
+    ): AgentEntryEntity = entryAppendLock.withLock {
+        // 第一个最终结果就是事实源。恢复、重复 callback 或双重调度都不能追加第二份结果。
+        dao.getEntries(runId).firstOrNull { entry ->
+            entry.kind == AgentEntryKind.TOOL_RESULT.name &&
+                entry.status == AgentEntryStatus.FINAL.name &&
+                entry.requestId == requestId &&
+                entry.toolCallId == result.toolCallId
+        } ?: run {
+            val now = System.currentTimeMillis()
+            newEntry(
+                runId = runId,
+                sequence = dao.nextEntrySequence(runId),
+                kind = AgentEntryKind.TOOL_RESULT,
+                requestId = requestId,
+                toolCallId = result.toolCallId,
+                payloadJson = json.encodeToString(AgentContentBlock.ToolResult.serializer(), result),
+                status = AgentEntryStatus.FINAL,
+                now = now,
+            ).copy(id = stableToolResultEntryId(runId, requestId, result.toolCallId))
+                .also { dao.upsertEntry(it) }
+        }
+    }
 
     /** Executor 调用前保存开始事实。进程退出后可区分“尚未开始”和“结果未落库”。 */
     suspend fun appendToolExecutionStarted(
@@ -563,6 +599,37 @@ class AgentRunStore(
         ),
         status = AgentEntryStatus.FINAL,
     )
+
+    /**
+     * 判断最近一轮 Assistant 的完整工具批次是否已经按 Pi 语义要求结束 Agent。
+     *
+     * `terminate` 属于受信 Executor 控制元数据，随 ToolResult 账本持久化。App 如果在
+     * ToolResult 落库后、Run 标记完成前退出，恢复流程必须读取这份事实，不能额外请求一次模型。
+     */
+    suspend fun latestCompletedToolBatchTerminates(runId: String): Boolean {
+        val entries = dao.getEntries(runId)
+        val assistant = entries.asReversed().firstOrNull { entry ->
+            entry.kind == AgentEntryKind.ASSISTANT.name && entry.status == AgentEntryStatus.FINAL.name
+        } ?: return false
+        val calls = decodeAssistantToolCalls(assistant)
+        if (calls.isEmpty()) return false
+        val requestId = assistant.requestId ?: return false
+        val callIds = calls.mapTo(hashSetOf(), AgentContentBlock.ToolCall::id)
+        val resultsByCallId = entries.asSequence()
+            .filter { entry ->
+                entry.kind == AgentEntryKind.TOOL_RESULT.name &&
+                    entry.status == AgentEntryStatus.FINAL.name &&
+                    entry.requestId == requestId &&
+                    entry.toolCallId in callIds
+            }
+            .mapNotNull { entry ->
+                runCatching {
+                    json.decodeFromString(AgentContentBlock.ToolResult.serializer(), entry.payloadJson)
+                }.getOrNull()
+            }
+            .associateBy(AgentContentBlock.ToolResult::toolCallId)
+        return calls.all { call -> resultsByCallId[call.id]?.terminate == true }
+    }
 
     /** 审批请求和 WAITING_APPROVAL 原子写入，进程退出时不会产生隐藏审批。 */
     suspend fun pauseForApproval(
@@ -607,14 +674,14 @@ class AgentRunStore(
         // 新审批可能是执行后产生的 UNKNOWN 卡片，必须先等用户处理，禁止旧决定越过它。
         if (pendingApproval(runId) != null) return null
         val entries = dao.getEntries(runId)
-        val completedToolCallIds = entries.asSequence()
+        val completedToolCalls = entries.asSequence()
             .filter { it.kind == AgentEntryKind.TOOL_RESULT.name && it.status == AgentEntryStatus.FINAL.name }
-            .mapNotNull(AgentEntryEntity::toolCallId)
+            .mapNotNull { entry -> entry.toolCallId?.let { callId -> entry.requestId to callId } }
             .toSet()
         return entries.asReversed().firstNotNullOfOrNull { entry ->
             if (entry.kind != AgentEntryKind.APPROVAL_DECISION.name) return@firstNotNullOfOrNull null
             decodeApproval(entry.payloadJson)?.takeIf { record ->
-                record.decision != null && record.toolCall.id !in completedToolCallIds
+                record.decision != null && (record.requestId to record.toolCall.id) !in completedToolCalls
             }
         }
     }
@@ -632,14 +699,23 @@ class AgentRunStore(
         val assistantEntry = entries.asReversed().firstOrNull { entry ->
             entry.kind == AgentEntryKind.ASSISTANT.name && entry.status == AgentEntryStatus.FINAL.name
         } ?: return null
+        val assistantRequestId = assistantEntry.requestId ?: return null
         val calls = decodeAssistantToolCalls(assistantEntry)
         if (calls.isEmpty()) return null
         val completedIds = entries.asSequence()
-            .filter { it.kind == AgentEntryKind.TOOL_RESULT.name && it.status == AgentEntryStatus.FINAL.name }
+            .filter {
+                it.kind == AgentEntryKind.TOOL_RESULT.name &&
+                    it.status == AgentEntryStatus.FINAL.name &&
+                    it.requestId == assistantRequestId
+            }
             .mapNotNull(AgentEntryEntity::toolCallId)
             .toSet()
         val startedIds = entries.asSequence()
-            .filter { it.kind == AgentEntryKind.TOOL_EXECUTION_STARTED.name && it.status == AgentEntryStatus.FINAL.name }
+            .filter {
+                it.kind == AgentEntryKind.TOOL_EXECUTION_STARTED.name &&
+                    it.status == AgentEntryStatus.FINAL.name &&
+                    it.requestId == assistantRequestId
+            }
             .mapNotNull(AgentEntryEntity::toolCallId)
             .toSet()
         val context = decodeRequestSnapshot(dao.getRun(runId) ?: return null)?.computerRequestContext
@@ -654,12 +730,12 @@ class AgentRunStore(
                     // 开始事实与 ComputerExecution 分属两个存储事务，崩溃可能发生在二者之间。
                     // 只读调用直接回填错误给 AI；可能修改服务器的调用才交给用户决定。
                     if (!ComputerToolCallSafety.requiresUnknownApproval(call.name, call.arguments, context.permissionMode)) {
-                        appendToolResult(runId, assistantEntry.requestId ?: return null, resolvedUnknownToolResult(call))
+                        appendToolResult(runId, assistantRequestId, resolvedUnknownToolResult(call))
                         continue
                     }
                     return pauseRecoveredUnknownExecution(
                         run = dao.getRun(runId) ?: return null,
-                        requestId = assistantEntry.requestId ?: return null,
+                        requestId = assistantRequestId,
                         call = call,
                         pendingCalls = calls.dropWhile { it.id != call.id },
                         context = context,
@@ -679,10 +755,10 @@ class AgentRunStore(
                 ) return null
             } else {
                 if (call.name in ComputerToolNames.all) return null
-                if (!hasFinalToolResult(runId, call.id)) {
+                if (finalToolResult(runId, assistantRequestId, call.id) == null) {
                     appendToolResult(
                         runId,
-                        assistantEntry.requestId ?: return null,
+                        assistantRequestId,
                         interruptedToolResult(call),
                     )
                 }
@@ -690,7 +766,11 @@ class AgentRunStore(
         }
 
         val refreshedCompletedIds = dao.getEntries(runId).asSequence()
-            .filter { it.kind == AgentEntryKind.TOOL_RESULT.name && it.status == AgentEntryStatus.FINAL.name }
+            .filter {
+                it.kind == AgentEntryKind.TOOL_RESULT.name &&
+                    it.status == AgentEntryStatus.FINAL.name &&
+                    it.requestId == assistantRequestId
+            }
             .mapNotNull(AgentEntryEntity::toolCallId)
             .toSet()
         val nextCall = calls.firstOrNull { it.id !in refreshedCompletedIds }
@@ -699,7 +779,7 @@ class AgentRunStore(
         val resumePendingOnly = !replayCurrentCall && nextCall != null
         return AgentApprovalRecord(
             approvalRequestId = "recovered:${anchor.id}",
-            requestId = assistantEntry.requestId ?: return null,
+            requestId = assistantRequestId,
             toolCall = anchor,
             pendingToolCalls = if (nextCall == null) emptyList() else calls.dropWhile { it.id != nextCall.id },
             decision = if (replayCurrentCall) AgentApprovalDecision.APPROVED else AgentApprovalDecision.KEEP_UNKNOWN,
@@ -1089,6 +1169,10 @@ class AgentRunStore(
             terminalReason = terminalReason,
             updatedAt = System.currentTimeMillis(),
         )
+        if (updated == 1) {
+            snapshotCache.remove(run.id)
+            dao.deleteRunSnapshotChunks(run.id)
+        }
         return run.copy(
             status = AgentRunStatus.COMPLETED.name,
             currentRequestOrdinal = requestOrdinal,
@@ -1166,10 +1250,18 @@ class AgentRunStore(
 
     private suspend fun decodeFinalTranscriptEntries(runId: String): List<AbstractApiMessage> {
         val requestsById = dao.getRequests(runId).associateBy(AgentRequestEntity::id)
+        val sourceProtocol = dao.getRun(runId)
+            ?.let { run -> decodeRequestSnapshot(run) }
+            ?.channel
+            ?.let(::modelParameterProtocol)
         return dao.getEntries(runId).mapNotNull { entry ->
             if (entry.status != AgentEntryStatus.FINAL.name) return@mapNotNull null
             when (entry.kind) {
-                AgentEntryKind.ASSISTANT.name -> decodeAssistantEntry(entry, entry.requestId?.let(requestsById::get))
+                AgentEntryKind.ASSISTANT.name -> decodeAssistantEntry(
+                    entry,
+                    entry.requestId?.let(requestsById::get),
+                    sourceProtocol,
+                )
                 AgentEntryKind.TOOL_RESULT.name -> decodeToolResultEntry(entry)
                 AgentEntryKind.STATUS.name -> decodeStatusEntry(entry)
                 AgentEntryKind.STEERING.name -> decodeSteeringEntry(entry)
@@ -1181,6 +1273,7 @@ class AgentRunStore(
     private fun decodeAssistantEntry(
         entry: AgentEntryEntity,
         request: AgentRequestEntity?,
+        sourceProtocol: ModelParameterProtocol?,
     ): AgentAssistantApiMessage? =
         runCatching {
             val blocks = json.decodeFromString(
@@ -1192,15 +1285,31 @@ class AgentRunStore(
                 text = blocks.filterIsInstance<AgentContentBlock.Text>().joinToString("") { it.text },
                 reasoning = blocks.filterIsInstance<AgentContentBlock.Reasoning>().joinToString("") { it.text },
                 toolCalls = blocks.filterIsInstance<AgentContentBlock.ToolCall>().map { call ->
-                    AgentToolCallApiPart(call.id, call.name, call.arguments, call.thoughtSignature)
+                    AgentToolCallApiPart(
+                        call.id,
+                        call.name,
+                        call.arguments,
+                        call.thoughtSignature,
+                        call.namespace,
+                    )
                 },
                 contentParts = blocks.mapNotNull { block ->
                     when (block) {
                         is AgentContentBlock.Text -> AgentAssistantContentApiPart.Text(block.text, block.thoughtSignature)
                         is AgentContentBlock.Reasoning ->
-                            AgentAssistantContentApiPart.Reasoning(block.text, block.thoughtSignature)
+                            AgentAssistantContentApiPart.Reasoning(
+                                block.text,
+                                block.thoughtSignature,
+                                block.redacted,
+                            )
                         is AgentContentBlock.ToolCall -> AgentAssistantContentApiPart.ToolCall(
-                            AgentToolCallApiPart(block.id, block.name, block.arguments, block.thoughtSignature),
+                            AgentToolCallApiPart(
+                                block.id,
+                                block.name,
+                                block.arguments,
+                                block.thoughtSignature,
+                                block.namespace,
+                            ),
                         )
                         is AgentContentBlock.ToolResult -> null
                     }
@@ -1208,6 +1317,8 @@ class AgentRunStore(
                 sourceProvider = request?.provider,
                 sourceEndpoint = request?.endpoint,
                 sourceModel = request?.model,
+                sourceProtocol = AgentAssistantTurn(blocks).sourceProtocol ?: sourceProtocol,
+                stopReason = request?.finishReason,
             )
         }.getOrNull()
 
@@ -1230,6 +1341,7 @@ class AgentRunStore(
                 toolName = result.toolName,
                 content = result.content,
                 isError = result.isError,
+                contentBlocks = result.contentBlocks,
             )
         }.getOrNull()
 
@@ -1513,6 +1625,9 @@ private fun continuationStateId(
     endpoint: String,
     model: String,
 ): String = agentTranscriptFingerprint(listOf(sessionId, configId, protocol, provider, endpoint, model))
+
+private fun stableToolResultEntryId(runId: String, requestId: String, toolCallId: String): String =
+    "tool-result:" + agentTranscriptFingerprint(listOf(runId, requestId, toolCallId))
 
 internal fun agentTranscriptFingerprint(parts: Iterable<String>): String {
     val digest = MessageDigest.getInstance("SHA-256")

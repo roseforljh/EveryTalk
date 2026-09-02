@@ -116,6 +116,28 @@ class AgentApprovalPersistenceTest {
     }
 
     @Test
+    fun `同一模型回合的重复ToolResult只保留第一份事实`() = runBlocking {
+        seedRun()
+        val first = AgentContentBlock.ToolResult(
+            toolCallId = "call-once",
+            toolName = "exec",
+            content = kotlinx.serialization.json.JsonPrimitive("first"),
+        )
+        val duplicate = first.copy(content = kotlinx.serialization.json.JsonPrimitive("duplicate"))
+
+        store.appendToolResult("run-1", "request-1", first)
+        store.appendToolResult("run-1", "request-1", duplicate)
+
+        assertEquals(first, store.finalToolResult("run-1", "request-1", "call-once"))
+        assertEquals(
+            1,
+            database.agentDao().getEntries("run-1").count {
+                it.kind == AgentEntryKind.TOOL_RESULT.name && it.toolCallId == "call-once"
+            },
+        )
+    }
+
+    @Test
     fun `审批请求可恢复且同一请求只能决策一次`() = runBlocking {
         seedRun()
         val record = approvalRecord()

@@ -38,7 +38,9 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.put
 import kotlinx.serialization.ExperimentalSerializationApi
 import okhttp3.OkHttpClient
 import java.nio.charset.StandardCharsets
@@ -149,14 +151,14 @@ class McpClientManager(
 
     suspend fun callTool(toolName: String, args: JsonObject): JsonElement {
         val initialRoute = resolveMcpToolWithServer(_serverStates.value.values, toolName)
-            ?: return JsonPrimitive("Failed to execute tool: no such tool '$toolName'")
+            ?: return mcpToolFailure("Failed to execute tool: no such tool '$toolName'")
 
         return try {
             withServerLock(initialRoute.first.id) {
                 val (config, tool) = resolveMcpToolWithServer(_serverStates.value.values, toolName)
-                    ?: return@withServerLock JsonPrimitive("Failed to execute tool: no such tool '$toolName'")
+                    ?: return@withServerLock mcpToolFailure("Failed to execute tool: no such tool '$toolName'")
                 val client = clients[config.id]
-                    ?: return@withServerLock JsonPrimitive("Failed to execute tool: no client for server '${config.name}'")
+                    ?: return@withServerLock mcpToolFailure("Failed to execute tool: no client for server '${config.name}'")
 
                 Log.i(TAG, "callTool: $toolName -> ${config.name}/${tool.name} / argumentKeys=${args.keys}")
                 Log.d(TAG, "callTool: transport=${client.transport?.javaClass?.simpleName}, connected=${client.transport != null}")
@@ -178,19 +180,26 @@ class McpClientManager(
                         options = RequestOptions(timeout = 60.seconds),
                     )
                     Log.d(TAG, "callTool: got result with ${result.content.size} content items")
-                    McpJson.encodeToJsonElement(result.content)
+                    val content = McpJson.encodeToJsonElement(result.content)
+                    if (result.isError == true) mcpToolFailure(content.toString()) else content
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
                     Log.e(TAG, "callTool error: ${e.javaClass.simpleName}: ${e.message}", e)
-                    JsonPrimitive("Error executing tool '$toolName': ${e.message}")
+                    mcpToolFailure("Error executing tool '$toolName': ${e.message}")
                 }
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            JsonPrimitive("Failed to execute tool '$toolName': ${e.message}")
+            mcpToolFailure("Failed to execute tool '$toolName': ${e.message}")
         }
+    }
+
+    /** MCP 协议失败必须保留 isError 语义，不能仅靠正文里的英文单词让模型猜。 */
+    private fun mcpToolFailure(message: String): JsonObject = buildJsonObject {
+        put("ok", false)
+        put("error", message)
     }
 
     private fun getTransport(config: McpServerConfig): AbstractTransport = when (config) {

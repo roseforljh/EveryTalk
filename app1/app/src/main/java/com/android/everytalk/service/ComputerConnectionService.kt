@@ -23,6 +23,7 @@ import com.android.everytalk.data.agent.AgentRunStatus
 import com.android.everytalk.data.agent.AgentRecoveryDiagnostics
 import com.android.everytalk.data.agent.AgentRunStore
 import com.android.everytalk.data.agent.AgentToolExecutorRegistry
+import com.android.everytalk.data.network.AppToolExecutionResult
 import com.android.everytalk.data.agent.AgentTerminalReasons
 import com.android.everytalk.data.computer.ComputerException
 import com.android.everytalk.data.computer.ComputerExecutionReconciliationOutcome
@@ -249,9 +250,11 @@ class ComputerConnectionService : Service() {
             owner = this,
             executor = { toolName, arguments, toolCallId, requestContext, updateStatus ->
                 if (requestContext == null) {
-                    JsonPrimitive("Agent 服务器上下文已丢失")
+                    AppToolExecutionResult(JsonPrimitive("Agent 服务器上下文已丢失"))
                 } else {
-                    serviceToolExecutor.execute(toolName, arguments, toolCallId, requestContext, updateStatus)
+                    AppToolExecutionResult(
+                        serviceToolExecutor.execute(toolName, arguments, toolCallId, requestContext, updateStatus),
+                    )
                 }
             },
             approvalProvider = { toolName, arguments, toolCallId, requestContext, phase ->

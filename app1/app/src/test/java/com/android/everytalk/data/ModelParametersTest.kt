@@ -6,7 +6,9 @@ import com.android.everytalk.data.DataClass.DEFAULT_AUTO_CONTEXT_COMPRESSION_THR
 import com.android.everytalk.data.DataClass.DEFAULT_MAX_CONTEXT_TOKENS
 import com.android.everytalk.data.DataClass.DEFAULT_MAX_OUTPUT_TOKENS
 import com.android.everytalk.data.DataClass.ModelParameters
+import com.android.everytalk.data.DataClass.ModelParameterProtocol
 import com.android.everytalk.data.DataClass.ReasoningMode
+import com.android.everytalk.data.DataClass.modelParameterProtocol
 import com.android.everytalk.data.DataClass.openAICompatibleRequestParameters
 import com.android.everytalk.data.DataClass.toThinkingConfig
 import com.android.everytalk.data.DataClass.validateModelTokenLimits
@@ -18,6 +20,11 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class ModelParametersTest {
+    @Test
+    fun `responses历史渠道名仍路由到Codex协议`() {
+        assertEquals(ModelParameterProtocol.CODEX, modelParameterProtocol("OpenAI Responses"))
+    }
+
     @Test
     fun `all new model parameters default to medium`() {
         val parameters = ModelParameters()

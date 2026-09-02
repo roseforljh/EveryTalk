@@ -56,6 +56,9 @@ class MessageProcessor {
         return messagesMutex.withLock {
             when (event) {
                 is AppStreamEvent.Text, is AppStreamEvent.Content -> {
+                    if (event is AppStreamEvent.Content && event.signatureOnlyUpdate) {
+                        return@withLock ProcessedEventResult.NoChange
+                    }
                     val eventText = when (event) {
                         is AppStreamEvent.Text -> event.text
                         is AppStreamEvent.Content -> event.text
@@ -101,6 +104,7 @@ class MessageProcessor {
                     }
                 }
                 is AppStreamEvent.Reasoning -> {
+                    if (event.signatureOnlyUpdate || event.redacted) return@withLock ProcessedEventResult.NoChange
                     if (event.text.isNotEmpty()) {
                         currentReasoningBuilder.get().append(lightweightCleanup(event.text))
                     }

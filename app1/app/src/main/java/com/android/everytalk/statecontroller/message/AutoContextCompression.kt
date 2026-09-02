@@ -439,6 +439,7 @@ private fun messageListFingerprint(messages: List<AbstractApiMessage>): String {
                 update(message.toolCallId)
                 update(message.toolName)
                 update(message.content.toString())
+                message.contentBlocks.forEach { block -> update(block.toString()) }
             }
         }
     }

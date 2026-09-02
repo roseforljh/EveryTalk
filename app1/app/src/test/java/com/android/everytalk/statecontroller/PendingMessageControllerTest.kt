@@ -94,10 +94,12 @@ class PendingMessageControllerTest {
         val isRunning = MutableStateFlow(true)
         var steerCount = 0
         val steered = mutableListOf<String>()
+        val recorded = mutableListOf<String>()
         val steerSignal = CompletableDeferred<Unit>()
         val controller = controller(
             isRunning = isRunning,
             steer = { steerCount++; steered += "adjust"; steerSignal.complete(Unit); true },
+            recordSteered = { recorded += it.id },
             dispatch = { _, accepted, _, _ -> accepted() },
         )
         controller.pendingMessages.first { it.size == 1 }
@@ -110,6 +112,7 @@ class PendingMessageControllerTest {
 
         assertEquals(1, steerCount)
         assertEquals(listOf("adjust"), steered)
+        assertEquals(listOf("adjust"), recorded)
         assertTrue(controller.visiblePendingMessages.first { it.isEmpty() }.isEmpty())
     }
 
@@ -397,6 +400,7 @@ class PendingMessageControllerTest {
         isRunning: MutableStateFlow<Boolean>,
         replaceComposer: (String) -> Unit = {},
         steer: () -> Boolean = { true },
+        recordSteered: suspend (PendingMessageEntity) -> Unit = {},
         isAbortInProgress: MutableStateFlow<Boolean> = MutableStateFlow(false),
         agentRunControlState: MutableStateFlow<AgentRunControlState> =
             MutableStateFlow(AgentRunControlState.RUNNING),
@@ -413,6 +417,7 @@ class PendingMessageControllerTest {
         persistAttachments = { attachments, _ -> attachments },
         resumeStreaming = {},
         steerCurrentRun = { steer() },
+        recordSteeredMessage = recordSteered,
         showMessage = {},
         dispatch = dispatch,
     )

@@ -21,6 +21,10 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import io.mockk.every
 import io.mockk.mockkStatic
 import io.mockk.unmockkStatic
@@ -134,6 +138,76 @@ class DirectClientLifecycleTest {
             assertEquals("cmVhc29uaW5nLXNpZw==", reasoning.thoughtSignature)
             assertEquals("dG9vbC1zaWc=", toolCall.thoughtSignature)
             assertTrue(continuation.payloadJson.contains("thoughtSignature"))
+            assertEquals("tool_use", events.filterIsInstance<AppStreamEvent.Finish>().single().reason)
+        }
+    }
+
+    @Test
+    fun `Gemini跨SSE分片合并文本并保留首个签名`() = runBlocking {
+        val body = buildString {
+            append("data: ")
+            append("""{"candidates":[{"content":{"role":"model","parts":[{"thought":true,"text":"分析","thoughtSignature":"dGhpbmstc2ln"}]}}]}""")
+            append("\n\ndata: ")
+            append("""{"candidates":[{"content":{"role":"model","parts":[{"thought":true,"text":"完成"},{"text":"结果","thoughtSignature":"dGV4dC1zaWc="}]}}]}""")
+            append("\n\ndata: ")
+            append("""{"candidates":[{"content":{"role":"model","parts":[{"text":"已生成"}]},"finishReason":"STOP"}]}""")
+            append("\n\n")
+        }
+        withHttpClient(body = body) { client ->
+            val continuation = GeminiDirectClient.streamChatDirect(client, request("Google", "Gemini"))
+                .toList().filterIsInstance<AppStreamEvent.ProviderContinuation>().single()
+            val parts = Json.parseToJsonElement(continuation.payloadJson).jsonObject
+                .getValue("parts").jsonArray.map { it.jsonObject }
+
+            assertEquals(2, parts.size)
+            assertEquals("分析完成", parts[0].getValue("text").jsonPrimitive.content)
+            assertEquals("dGhpbmstc2ln", parts[0].getValue("thoughtSignature").jsonPrimitive.content)
+            assertEquals("结果已生成", parts[1].getValue("text").jsonPrimitive.content)
+            assertEquals("dGV4dC1zaWc=", parts[1].getValue("thoughtSignature").jsonPrimitive.content)
+        }
+    }
+
+    @Test
+    fun `Gemini同一回复的重复工具ID会被拆成两个ID`() = runBlocking {
+        val body =
+            """data: {"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"id":"same-id","name":"first","args":{}}},{"functionCall":{"id":"same-id","name":"second","args":{}}}]},"finishReason":"STOP"}]}
+
+"""
+        withHttpClient(body = body) { client ->
+            val calls = GeminiDirectClient.streamChatDirect(client, request("Google", "Gemini"))
+                .toList().filterIsInstance<AppStreamEvent.ToolCall>()
+
+            assertEquals(2, calls.size)
+            assertEquals("same-id", calls[0].id)
+            assertTrue(calls[1].id.startsWith("fc_local_"))
+            assertTrue(calls[0].id != calls[1].id)
+        }
+    }
+
+    @Test
+    fun `Gemini最大输出长度映射成length`() = runBlocking {
+        val body =
+            """data: {"candidates":[{"content":{"role":"model","parts":[{"functionCall":{"id":"call-1","name":"exec","args":{}}} ]},"finishReason":"MAX_TOKENS"}]}
+
+"""
+        withHttpClient(body = body) { client ->
+            val events = GeminiDirectClient.streamChatDirect(client, request("Google", "Gemini")).toList()
+
+            assertEquals("length", events.filterIsInstance<AppStreamEvent.Finish>().single().reason)
+        }
+    }
+
+    @Test
+    fun `Gemini异常终止原因按Pi语义返回错误`() = runBlocking {
+        val body =
+            """data: {"candidates":[{"content":{"role":"model","parts":[]} ,"finishReason":"MALFORMED_FUNCTION_CALL"}]}
+
+"""
+        withHttpClient(body = body) { client ->
+            val events = GeminiDirectClient.streamChatDirect(client, request("Google", "Gemini")).toList()
+
+            assertEquals("malformed_function_call", events.filterIsInstance<AppStreamEvent.Error>().single().code)
+            assertEquals("error", events.filterIsInstance<AppStreamEvent.Finish>().single().reason)
         }
     }
 
@@ -155,6 +229,7 @@ class DirectClientLifecycleTest {
                 "data: {\"choices\":[],\"search_info\":{\"search_results\":[" +
                     "{\"url\":\"https://example.com/qwen\",\"title\":\"Qwen\"}]}}\n\n"
             )
+            append("data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n")
             append("data: [DONE]\n\n")
         }
 
@@ -242,7 +317,7 @@ class DirectClientLifecycleTest {
         val body = buildString {
             append("data: ")
             append(
-                """{"candidates":[{"content":{"parts":[{"text":"answer"}]},"groundingMetadata":{"groundingChunks":[{"web":{"uri":"https://example.com/gemini","title":"Gemini"}}]}}]}"""
+                """{"candidates":[{"content":{"parts":[{"text":"answer"}]},"finishReason":"STOP","groundingMetadata":{"groundingChunks":[{"web":{"uri":"https://example.com/gemini","title":"Gemini"}}]}}]}"""
             )
             append("\n\ndata: [DONE]\n\n")
         }
@@ -292,8 +367,136 @@ class DirectClientLifecycleTest {
             ).toList()
 
             assertEquals(expected, events.filterIsInstance<AppStreamEvent.ContentFinal>().single().text)
-            assertEquals(listOf("turn_complete"), events.filterIsInstance<AppStreamEvent.Finish>().map { it.reason })
+            assertEquals(listOf("stop"), events.filterIsInstance<AppStreamEvent.Finish>().map { it.reason })
             assertFalse(events.any { it is AppStreamEvent.Error })
+        }
+    }
+
+    @Test
+    fun `三个Provider把输出上限统一映射为length`() = runBlocking {
+        val openAiBody = "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"length\"}]}\n\ndata: [DONE]\n\n"
+        withHttpClient(body = openAiBody) { client ->
+            val reason = OpenAIDirectClient.streamChatDirect(client, request("OpenAI", "OpenAI"))
+                .toList().filterIsInstance<AppStreamEvent.Finish>().single().reason
+            assertEquals("length", reason)
+        }
+
+        val anthropicBody = buildString {
+            append("data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"max_tokens\"}}\n\n")
+            append("data: {\"type\":\"message_stop\"}\n\n")
+        }
+        withHttpClient(body = anthropicBody) { client ->
+            val reason = AnthropicDirectClient.streamChatDirect(client, request("Anthropic", "Anthropic"))
+                .toList().filterIsInstance<AppStreamEvent.Finish>().single().reason
+            assertEquals("length", reason)
+        }
+
+        val responsesBody = buildString {
+            appendResponsesEvent(
+                """{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[]}}""",
+            )
+            append("data: [DONE]\n\n")
+        }
+        withHttpClient(body = responsesBody) { client ->
+            val reason = OpenAIResponsesClient.streamChatResponses(client, request("OpenAI", "OpenAI"))
+                .toList().filterIsInstance<AppStreamEvent.Finish>().single().reason
+            assertEquals("length", reason)
+        }
+    }
+
+    @Test
+    fun `OpenAI Responses的incomplete终止事件保留回放签名`() = runBlocking {
+        val body = buildString {
+            appendResponsesEvent(
+                """{"type":"response.incomplete","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[{"id":"rs-1","type":"reasoning","encrypted_content":"opaque"},{"id":"msg-1","type":"message","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"partial","annotations":[]}]}]}}""",
+            )
+            append("data: [DONE]\n\n")
+        }
+
+        withHttpClient(body = body) { client ->
+            val events = OpenAIResponsesClient.streamChatResponses(client, request("OpenAI", "OpenAI")).toList()
+            val reasoningSignature = events.filterIsInstance<AppStreamEvent.Reasoning>()
+                .single { it.signatureOnlyUpdate }
+            val messageSignature = events.filterIsInstance<AppStreamEvent.Content>()
+                .single { it.signatureOnlyUpdate }
+
+            assertTrue(reasoningSignature.thoughtSignature.orEmpty().contains("\"id\":\"rs-1\""))
+            assertTrue(messageSignature.thoughtSignature.orEmpty().contains("\"id\":\"msg-1\""))
+            assertEquals("partial", events.filterIsInstance<AppStreamEvent.ContentFinal>().single().text)
+            assertEquals("length", events.filterIsInstance<AppStreamEvent.Finish>().single().reason)
+        }
+    }
+
+    @Test
+    fun `OpenAI Responses按outputIndex合并缺少ID的参数分片`() = runBlocking {
+        val body = buildString {
+            appendResponsesEvent(
+                """{"type":"response.output_item.added","output_index":0,"item":{"id":"fc-1","type":"function_call","call_id":"call-1","name":"exec","arguments":""}}""",
+            )
+            appendResponsesEvent(
+                """{"type":"response.function_call_arguments.delta","output_index":0,"delta":"{\"command\":\"pwd\"}"}""",
+            )
+            appendResponsesEvent(
+                """{"type":"response.output_item.done","output_index":0,"item":{"id":"fc-1","type":"function_call","call_id":"call-1","name":"exec"}}""",
+            )
+            appendResponsesEvent("""{"type":"response.completed","response":{"output":[]}}""")
+            append("data: [DONE]\n\n")
+        }
+
+        withHttpClient(body = body) { client ->
+            val call = OpenAIResponsesClient.streamChatResponses(client, request("OpenAI", "OpenAI"))
+                .toList()
+                .filterIsInstance<AppStreamEvent.ToolCall>()
+                .single()
+
+            assertEquals("call-1|fc-1", call.id)
+            assertEquals("exec", call.name)
+            assertEquals("pwd", call.argumentsObj.getValue("command").jsonPrimitive.content)
+        }
+    }
+
+    @Test
+    fun `OpenAI Chat缺少最终finishReason时禁止把半截工具调用当成功`() = runBlocking {
+        val body = buildString {
+            append(
+                "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-1\"," +
+                    "\"function\":{\"name\":\"exec\",\"arguments\":\"{\\\"command\\\":\"}}]}}]}\n\n",
+            )
+            append("data: [DONE]\n\n")
+        }
+
+        withHttpClient(body = body) { client ->
+            val events = OpenAIDirectClient.streamChatDirect(client, request("OpenAI", "OpenAI")).toList()
+
+            assertTrue(events.any { it is AppStreamEvent.Error })
+            assertTrue(events.none { it is AppStreamEvent.Finish && it.reason == "tool_use" })
+        }
+    }
+
+    @Test
+    fun `OpenAI Chat流式工具id和名称晚到时仍合并为同一调用`() = runBlocking {
+        val body = buildString {
+            append(
+                "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0," +
+                    "\"function\":{\"arguments\":\"{\\\"command\\\":\"}}]}}]}\n\n",
+            )
+            append(
+                "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call-real\"," +
+                    "\"function\":{\"name\":\"exec\",\"arguments\":\"\\\"pwd\\\"}\"}}]}," +
+                    "\"finish_reason\":\"tool_calls\"}]}\n\n",
+            )
+            append("data: [DONE]\n\n")
+        }
+
+        withHttpClient(body = body) { client ->
+            val call = OpenAIDirectClient.streamChatDirect(client, request("OpenAI", "OpenAI"))
+                .toList()
+                .filterIsInstance<AppStreamEvent.ToolCall>()
+                .single()
+
+            assertEquals("call-real", call.id)
+            assertEquals("exec", call.name)
+            assertEquals("pwd", call.argumentsObj.getValue("command").jsonPrimitive.content)
         }
     }
 
@@ -376,7 +579,7 @@ class DirectClientLifecycleTest {
         val body = buildString {
             append("data: ")
             append(
-                """{"candidates":[{"content":{"parts":[{"text":"ok"}]}}],"usageMetadata":{"promptTokenCount":300,"candidatesTokenCount":40,"thoughtsTokenCount":11,"cachedContentTokenCount":50,"totalTokenCount":340}}"""
+                """{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":300,"candidatesTokenCount":40,"thoughtsTokenCount":11,"cachedContentTokenCount":50,"totalTokenCount":340}}"""
             )
             append("\n\ndata: [DONE]\n\n")
         }

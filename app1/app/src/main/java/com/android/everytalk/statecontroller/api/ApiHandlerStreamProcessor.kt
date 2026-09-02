@@ -392,10 +392,14 @@ internal fun reduceExecutionTrace(
     event: AppStreamEvent,
     nowMillis: Long = System.currentTimeMillis(),
 ): List<ExecutionTraceEvent> = when (event) {
-    is AppStreamEvent.Reasoning -> trace.appendReasoningChunk(
-        chunk = TextSanitizer.removeUnicodeReplacementCharacters(event.text),
-        nowMillis = nowMillis,
-    )
+    is AppStreamEvent.Reasoning -> if (event.signatureOnlyUpdate || event.redacted) {
+        trace
+    } else {
+        trace.appendReasoningChunk(
+            chunk = TextSanitizer.removeUnicodeReplacementCharacters(event.text),
+            nowMillis = nowMillis,
+        )
+    }
     is AppStreamEvent.ToolCall -> trace.mergeToolStep(
         step = executionStepForToolCall(event),
         nowMillis = nowMillis,
@@ -682,6 +686,7 @@ internal class ApiHandlerStreamProcessor(
     
             when (appEvent) {
                 is AppStreamEvent.Content -> {
+                    if (appEvent.signatureOnlyUpdate) return@withContext
                     if (processedResult is com.android.everytalk.util.messageprocessor.ProcessedEventResult.ContentUpdated) {
                         val deltaChunk = processedResult.text
                         // 过滤无结构意义的纯空白内容，保留 Markdown 结构所需换行

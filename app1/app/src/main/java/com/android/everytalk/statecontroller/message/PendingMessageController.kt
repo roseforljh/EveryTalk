@@ -70,6 +70,7 @@ internal class PendingMessageController(
     private val persistAttachments: suspend (List<SelectedMediaItem>, String) -> List<SelectedMediaItem>?,
     private val resumeStreaming: () -> Unit,
     private val steerCurrentRun: suspend (PendingMessageEntity) -> Boolean,
+    private val recordSteeredMessage: suspend (PendingMessageEntity) -> Unit,
     private val showMessage: (String) -> Unit,
     private val dispatch: (
         message: PendingMessageEntity,
@@ -300,6 +301,8 @@ internal class PendingMessageController(
                 _isDispatchingPending.value = true
                 val steered = runCatching { steerCurrentRun(pending) }.getOrDefault(false)
                 if (steered) {
+                    val recorded = runCatching { recordSteeredMessage(pending) }.isSuccess
+                    if (!recorded) showMessage("调整方向已发送，但消息气泡显示失败")
                     withContext(Dispatchers.IO) { chatDao.finishPendingDispatch(id) }
                     activeDispatchId = null
                     _isDispatchingPending.value = false

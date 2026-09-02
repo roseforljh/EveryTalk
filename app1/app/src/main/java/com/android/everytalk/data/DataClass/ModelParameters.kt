@@ -112,7 +112,7 @@ enum class ModelParameterProtocol {
 fun modelParameterProtocol(channel: String): ModelParameterProtocol {
     val normalized = channel.trim().lowercase()
     return when {
-        "codex" in normalized -> ModelParameterProtocol.CODEX
+        "codex" in normalized || "responses" in normalized -> ModelParameterProtocol.CODEX
         "anthropic" in normalized -> ModelParameterProtocol.ANTHROPIC
         "gemini" in normalized -> ModelParameterProtocol.GEMINI
         else -> ModelParameterProtocol.OPENAI_COMPATIBLE

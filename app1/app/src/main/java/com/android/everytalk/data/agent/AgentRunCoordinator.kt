@@ -6,6 +6,7 @@ import com.android.everytalk.data.database.entities.AgentRunEntity
 import com.android.everytalk.data.database.entities.ComputerExecutionEntity
 import com.android.everytalk.data.database.entities.toApiConfig
 import com.android.everytalk.data.computer.ComputerRequestContext
+import com.android.everytalk.data.computer.ComputerToolRequestHasher
 import com.android.everytalk.data.network.AppStreamEvent
 import com.android.everytalk.service.ComputerConnectionServiceController
 import com.android.everytalk.util.AgentNotificationManager
@@ -476,21 +477,26 @@ class AgentRunCoordinator(
         execution: ComputerExecutionEntity,
         computerContext: ComputerRequestContext?,
     ): Boolean {
-        if (!agentRunStore.hasFinalToolResult(run.id, execution.toolCallId)) {
-            val startedEntry = agentDao.getEntries(run.id).lastOrNull { entry ->
-                entry.toolCallId == execution.toolCallId &&
-                    entry.kind == AgentEntryKind.TOOL_EXECUTION_STARTED.name
-            } ?: return false
-            val call = agentRunStore.findToolCall(run.id, execution.toolCallId) ?: return false
+        val context = computerContext ?: return false
+        val startedEntry = agentDao.getEntries(run.id).lastOrNull { entry ->
+            entry.kind == AgentEntryKind.TOOL_EXECUTION_STARTED.name &&
+                entry.toolCallId?.let { rawToolCallId ->
+                    runCatching { ComputerToolRequestHasher.toolCallKey(rawToolCallId, context) }.getOrNull()
+                } == execution.toolCallId
+        } ?: return false
+        val requestId = startedEntry.requestId ?: return false
+        val rawToolCallId = startedEntry.toolCallId ?: return false
+        if (agentRunStore.finalToolResult(run.id, requestId, rawToolCallId) == null) {
+            val call = agentRunStore.findToolCall(run.id, rawToolCallId, requestId) ?: return false
             val recovered = recoveryToolRuntime.execute(
                 call = call,
-                computerContext = computerContext,
+                computerContext = context,
                 runId = run.id,
                 emit = {},
             )
             agentRunStore.appendToolResult(
                 runId = run.id,
-                requestId = startedEntry.requestId ?: return false,
+                requestId = requestId,
                 result = recovered,
             )
         }

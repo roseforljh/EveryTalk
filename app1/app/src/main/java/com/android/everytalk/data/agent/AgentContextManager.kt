@@ -515,16 +515,18 @@ class AgentContextManager(
         is AgentAssistantApiMessage -> buildString {
             append(message.id).append('|').append(message.role).append('|')
             append(message.sourceProvider).append('|').append(message.sourceEndpoint).append('|')
-                .append(message.sourceModel).append('|')
+                .append(message.sourceModel).append('|').append(message.sourceProtocol).append('|')
+                .append(message.stopReason).append('|')
             append(message.reasoning).append('|').append(message.text)
             message.toolCalls.forEach { call ->
                 append('|').append(call.id).append('|').append(call.name).append('|').append(call.arguments)
-                    .append('|').append(call.thoughtSignature)
+                    .append('|').append(call.thoughtSignature).append('|').append(call.namespace)
             }
             message.contentParts.forEach { append('|').append(it) }
         }
         is AgentToolResultApiMessage ->
-            "${message.id}|${message.role}|${message.toolCallId}|${message.toolName}|${message.content}|${message.isError}"
+            "${message.id}|${message.role}|${message.toolCallId}|${message.toolName}|${message.content}|" +
+                "${message.contentBlocks}|${message.isError}"
     }
 }
 

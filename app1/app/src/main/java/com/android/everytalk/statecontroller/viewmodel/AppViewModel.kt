@@ -92,6 +92,7 @@ import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.data.computer.hostConfirmationRequest
 import com.android.everytalk.data.computer.publicPreviewRequest
 import com.android.everytalk.data.network.AppToolExecutor
+import com.android.everytalk.data.network.AppToolExecutionResult
 import com.android.everytalk.data.network.ExternalWebSearchProvider
 import com.android.everytalk.data.network.ExternalWebSearchProviderConfig
 import com.android.everytalk.data.network.ExternalWebSearchService
@@ -384,6 +385,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     conversationId = pending.conversationId,
                     steeringId = pending.id,
                     content = pending.content,
+                )
+            },
+            recordSteeredMessage = { pending ->
+                messageSender.recordSteeredUserMessage(
+                    messageId = pending.id,
+                    text = pending.content,
+                    contentParts = pending.contentParts,
+                    attachments = pending.attachments,
                 )
             },
             showMessage = ::showSnackbar,
@@ -764,27 +773,29 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
              computerRequestContext,
              updateStatus,
          ->
-            executeSharedToolCall(
-                toolName = toolName,
-                arguments = arguments,
-                toolCallId = toolCallId,
-                computerRequestContext = computerRequestContext,
-                updateStatus = updateStatus,
-                mcpWebFetchFallback = buildMcpWebFetchFallback(),
-                localWebSearchExecutor = buildLocalWebSearchExecutor(),
-                localAttachmentExecutor = buildLocalAttachmentExecutor(),
-                localComputerExecutor = { localToolName, localArguments, localToolCallId, requestContext, updateComputerStatus ->
-                    computerManager.execute(
-                        localToolName,
-                        localArguments,
-                        localToolCallId,
-                        requestContext,
-                        updateComputerStatus,
-                    )
-                },
-                fallbackExecutor = { fallbackToolName, fallbackArguments ->
-                    mcpManager.callTool(fallbackToolName, fallbackArguments)
-                }
+            AppToolExecutionResult(
+                executeSharedToolCall(
+                    toolName = toolName,
+                    arguments = arguments,
+                    toolCallId = toolCallId,
+                    computerRequestContext = computerRequestContext,
+                    updateStatus = updateStatus,
+                    mcpWebFetchFallback = buildMcpWebFetchFallback(),
+                    localWebSearchExecutor = buildLocalWebSearchExecutor(),
+                    localAttachmentExecutor = buildLocalAttachmentExecutor(),
+                    localComputerExecutor = { localToolName, localArguments, localToolCallId, requestContext, updateComputerStatus ->
+                        computerManager.execute(
+                            localToolName,
+                            localArguments,
+                            localToolCallId,
+                            requestContext,
+                            updateComputerStatus,
+                        )
+                    },
+                    fallbackExecutor = { fallbackToolName, fallbackArguments ->
+                        mcpManager.callTool(fallbackToolName, fallbackArguments)
+                    },
+                ),
             )
          }
          AgentToolExecutorRegistry.register(

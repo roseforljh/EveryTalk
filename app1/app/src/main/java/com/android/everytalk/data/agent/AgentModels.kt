@@ -7,7 +7,9 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import com.android.everytalk.data.DataClass.AbstractApiMessage
 import com.android.everytalk.data.DataClass.GenerationConfig
+import com.android.everytalk.data.DataClass.ModelParameterProtocol
 import com.android.everytalk.data.DataClass.RequestContextManagement
+import com.android.everytalk.data.DataClass.AgentToolResultContentApiPart
 import com.android.everytalk.data.computer.ComputerRequestContext
 import com.android.everytalk.data.computer.ComputerToolApprovalRequest
 import com.android.everytalk.data.skill.SkillRequestSnapshot
@@ -175,6 +177,8 @@ data class AgentApprovalRecord(
     val toolResultAlreadyPersisted: Boolean = false,
     /** 恢复批次时从 pendingToolCalls 重新进入正常预检，不直接处理 toolCall。 */
     val resumePendingToolCallsOnly: Boolean = false,
+    /** 并行批次在执行前遇到 Gate 时，恢复后必须从整批开头重放预检，不能丢掉 Gate 前的调用。 */
+    val resumeWholeBatchWithApprovedGate: Boolean = false,
 )
 
 @Serializable
@@ -236,6 +240,8 @@ sealed class AgentContentBlock {
     data class Text(
         val text: String,
         val thoughtSignature: String? = null,
+        /** 仅在块携带原生签名时用于跨进程回放绑定。 */
+        val sourceProtocol: String? = null,
     ) : AgentContentBlock()
 
     @Serializable
@@ -243,6 +249,8 @@ sealed class AgentContentBlock {
     data class Reasoning(
         val text: String,
         val thoughtSignature: String? = null,
+        val redacted: Boolean = false,
+        val sourceProtocol: String? = null,
     ) : AgentContentBlock()
 
     @Serializable
@@ -252,6 +260,8 @@ sealed class AgentContentBlock {
         val name: String,
         val arguments: JsonObject,
         val thoughtSignature: String? = null,
+        val namespace: String? = null,
+        val sourceProtocol: String? = null,
     ) : AgentContentBlock()
 
     @Serializable
@@ -265,6 +275,9 @@ sealed class AgentContentBlock {
         val fullResultPath: String? = null,
         val fullResultBytes: Long? = null,
         val fullResultSha256: String? = null,
+        val contentBlocks: List<AgentToolResultContentApiPart> = emptyList(),
+        /** Pi 控制元数据，只由受信 Executor 设置，不进入 Provider ToolResult。 */
+        val terminate: Boolean = false,
     ) : AgentContentBlock()
 }
 
@@ -275,6 +288,16 @@ data class AgentAssistantTurn(
 ) {
     val toolCalls: List<AgentContentBlock.ToolCall>
         get() = blocks.filterIsInstance<AgentContentBlock.ToolCall>()
+
+    val sourceProtocol: ModelParameterProtocol?
+        get() = blocks.asSequence().mapNotNull { block ->
+            when (block) {
+                is AgentContentBlock.Text -> block.sourceProtocol
+                is AgentContentBlock.Reasoning -> block.sourceProtocol
+                is AgentContentBlock.ToolCall -> block.sourceProtocol
+                is AgentContentBlock.ToolResult -> null
+            }
+        }.firstOrNull()?.let { value -> runCatching { ModelParameterProtocol.valueOf(value) }.getOrNull() }
 }
 
 /** 当前 Run 的三套 Token 口径。 */

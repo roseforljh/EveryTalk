@@ -39,7 +39,7 @@ class GeminiDirectClientPayloadTest {
                 ),
             ),
             provider = "Google", channel = "Gemini", apiAddress = "https://generativelanguage.googleapis.com",
-            apiKey = "test-key", model = "gemini-test",
+            apiKey = "test-key", model = "gemini-3.7-flash",
         )
 
         val payload = Json.parseToJsonElement(GeminiDirectClient.buildGeminiPayload(request)).jsonObject
@@ -75,7 +75,7 @@ class GeminiDirectClientPayloadTest {
             model = "gemini-test",
             localProviderContinuation = ProviderTurnContinuation(
                 protocol = ModelParameterProtocol.GEMINI,
-                payloadJson = """{"role":"model","parts":[{"thought":true,"text":"分析","thoughtSignature":"sig"},{"functionCall":{"id":"call-1","name":"exec","args":{}}}]}""",
+                payloadJson = """{"role":"model","parts":[{"thought":true,"text":"分析","thoughtSignature":"c2ln"},{"functionCall":{"id":"call-1","name":"exec","args":{}}}]}""",
             ),
         )
 
@@ -85,7 +85,7 @@ class GeminiDirectClientPayloadTest {
             .last { it.getValue("role").jsonPrimitive.content == "model" }
         val thought = modelContent.getValue("parts").jsonArray.first().jsonObject
 
-        assertEquals("sig", thought.getValue("thoughtSignature").jsonPrimitive.content)
+        assertEquals("c2ln", thought.getValue("thoughtSignature").jsonPrimitive.content)
     }
 
     @Test
@@ -157,12 +157,12 @@ class GeminiDirectClientPayloadTest {
         assertTrue(modelParts.none(JsonObject::isEmpty))
         assertTrue(modelParts.all { part ->
             listOf("text", "inlineData", "fileData", "functionCall", "functionResponse", "executableCode", "codeExecutionResult")
-                .any(part::containsKey)
+                .count(part::containsKey) == 1
         })
     }
 
     @Test
-    fun `并行工具结果按调用顺序合并并原样带回调用ID`() {
+    fun `并行工具结果保留历史顺序并原样带回调用ID`() {
         val request = ChatRequest(
             messages = listOf(
                 SimpleTextApiMessage(role = "user", content = "检查服务"),
@@ -184,11 +184,11 @@ class GeminiDirectClientPayloadTest {
                 ),
             ),
             provider = "Google", channel = "Gemini", apiAddress = "https://generativelanguage.googleapis.com",
-            apiKey = "test-key", model = "gemini-test",
+            apiKey = "test-key", model = "gemini-3.7-flash",
             localProviderContinuation = ProviderTurnContinuation(
                 protocol = ModelParameterProtocol.GEMINI,
                 payloadJson =
-                    """{"role":"model","parts":[{"thought":true,"text":"分析","thoughtSignature":"sig"},{"functionCall":{"id":"call-1","name":"get_current_datetime","args":{}}},{"functionCall":{"id":"call-2","name":"webfetch","args":{}}}]}""",
+                    """{"role":"model","parts":[{"thought":true,"text":"分析","thoughtSignature":"c2ln"},{"functionCall":{"id":"call-1","name":"get_current_datetime","args":{}}},{"functionCall":{"id":"call-2","name":"webfetch","args":{}}}]}""",
             ),
         )
 
@@ -206,8 +206,8 @@ class GeminiDirectClientPayloadTest {
 
         assertEquals(listOf("call-1", "call-2"), modelCalls)
         assertEquals("user", resultContent.getValue("role").jsonPrimitive.content)
-        assertEquals(listOf("call-1", "call-2"), resultIds)
-        assertEquals(listOf("get_current_datetime", "webfetch"), resultNames)
+        assertEquals(listOf("call-2", "call-1"), resultIds)
+        assertEquals(listOf("webfetch", "get_current_datetime"), resultNames)
     }
 
     @Test
@@ -232,7 +232,7 @@ class GeminiDirectClientPayloadTest {
             localProviderContinuation = ProviderTurnContinuation(
                 protocol = ModelParameterProtocol.GEMINI,
                 payloadJson =
-                    """{"role":"model","parts":[{"functionCall":{"id":"call-1","name":"edit","args":{}},"thoughtSignature":"sig"}]}""",
+                    """{"role":"model","parts":[{"functionCall":{"id":"call-1","name":"edit","args":{}},"thoughtSignature":"c2ln"}]}""",
             ),
         )
 
@@ -395,7 +395,7 @@ class GeminiDirectClientPayloadTest {
             localProviderContinuation = ProviderTurnContinuation(
                 protocol = ModelParameterProtocol.GEMINI,
                 payloadJson =
-                    """{"role":"model","parts":[{"functionCall":{"id":"call-old","name":"edit","args":{}},"thoughtSignature":"old-sig"}]}""",
+                    """{"role":"model","parts":[{"functionCall":{"id":"call-old","name":"edit","args":{}},"thoughtSignature":"b2xkLXNpZw=="}]}""",
             ),
         )
 
@@ -466,7 +466,7 @@ class GeminiDirectClientPayloadTest {
             localProviderContinuation = ProviderTurnContinuation(
                 protocol = ModelParameterProtocol.GEMINI,
                 payloadJson =
-                    """{"role":"model","parts":[{"functionCall":{"id":"call-current","name":"edit","args":{}},"thoughtSignature":"current-sig"}]}""",
+                    """{"role":"model","parts":[{"functionCall":{"id":"call-current","name":"edit","args":{}},"thoughtSignature":"Y3VycmVudC1zaWc="}]}""",
             ),
         )
 
@@ -491,7 +491,7 @@ class GeminiDirectClientPayloadTest {
         assertEquals(listOf("call-old", "call-current"), functionResponses.map {
             it.jsonObject.getValue("id").jsonPrimitive.content
         })
-        assertEquals("current-sig", signedPart.getValue("thoughtSignature").jsonPrimitive.content)
+        assertEquals("Y3VycmVudC1zaWc=", signedPart.getValue("thoughtSignature").jsonPrimitive.content)
         assertTrue(contents.toString().contains("b2xkLXNpZw=="))
         assertFalse(contents.toString().contains("历史工具调用"))
         assertFalse(contents.toString().contains("历史工具结果"))
@@ -544,7 +544,7 @@ class GeminiDirectClientPayloadTest {
     }
 
     @Test
-    fun `本地补位调用ID不会冒充Gemini服务端ID回传`() {
+    fun `Gemini三代把本地稳定调用ID同时写入Call和Response`() {
         val request = ChatRequest(
             messages = listOf(
                 SimpleTextApiMessage(role = "user", content = "检查服务"),
@@ -560,7 +560,7 @@ class GeminiDirectClientPayloadTest {
                 ),
             ),
             provider = "Google", channel = "Gemini", apiAddress = "https://generativelanguage.googleapis.com",
-            apiKey = "test-key", model = "gemini-test",
+            apiKey = "test-key", model = "gemini-3.7-flash",
         )
 
         val contents = Json.parseToJsonElement(GeminiDirectClient.buildGeminiPayload(request))
@@ -570,8 +570,8 @@ class GeminiDirectClientPayloadTest {
         val functionResponse = contents.last().jsonObject.getValue("parts").jsonArray.single()
             .jsonObject.getValue("functionResponse").jsonObject
 
-        assertFalse(functionCall.containsKey("id"))
-        assertFalse(functionResponse.containsKey("id"))
+        assertEquals("fc_local_test", functionCall.getValue("id").jsonPrimitive.content)
+        assertEquals("fc_local_test", functionResponse.getValue("id").jsonPrimitive.content)
     }
 
     @Test
@@ -593,5 +593,26 @@ class GeminiDirectClientPayloadTest {
         assertTrue(schema.getValue("properties").jsonObject.containsKey("suggested_name"))
         assertFalse(schema.getValue("required").jsonArray.any { it.jsonPrimitive.content == "suggested_name" })
         assertFalse(declaration.containsKey("parameters"))
+    }
+
+    @Test
+    fun `Gemini工具选择按Pi映射为官方模式`() {
+        val request = ChatRequest(
+            messages = listOf(SimpleTextApiMessage(role = "user", content = "只回答，不调用工具")),
+            provider = "Google",
+            channel = "Gemini",
+            apiAddress = "https://generativelanguage.googleapis.com",
+            apiKey = "test-key",
+            model = "gemini-3.7-flash",
+            tools = ComputerToolCatalog.definitions(),
+            toolChoice = "none",
+        )
+
+        val mode = Json.parseToJsonElement(GeminiDirectClient.buildGeminiPayload(request))
+            .jsonObject.getValue("toolConfig").jsonObject
+            .getValue("functionCallingConfig").jsonObject
+            .getValue("mode").jsonPrimitive.content
+
+        assertEquals("NONE", mode)
     }
 }

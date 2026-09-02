@@ -23,6 +23,7 @@ internal data class OpenAIParseResult(
     val reasoningContent: String = "",
     val usage: TokenUsage? = null,
     val toolCalls: List<OpenAiToolCallInfo> = emptyList(),
+    val stopReason: String = "stop",
 )
 
 internal fun mapToJsonElement(map: Map<String, Any>): JsonElement {

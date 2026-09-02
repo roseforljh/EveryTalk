@@ -21,6 +21,7 @@ import io.ktor.client.request.forms.*
 import io.ktor.http.content.*
 import android.util.Base64
 import kotlinx.coroutines.CancellationException
+import java.util.UUID
 
 object OpenAIDirectClient {
     private const val TAG = "OpenAIDirectClient"
@@ -63,13 +64,17 @@ object OpenAIDirectClient {
                     send(result.finish)
                     return@execute
                 }
-                parseOpenAISSEStreamWithTools(
+                val parsed = parseOpenAISSEStreamWithTools(
                     channel = response.bodyAsChannel(),
                     onToolCall = {},
                     emitEvent = { send(it) },
                 )
+                if (!terminalSent) {
+                    terminalSent = true
+                    send(AppStreamEvent.Finish(parsed.stopReason))
+                }
             }
-            if (!terminalSent) send(AppStreamEvent.Finish("turn_complete"))
+            if (!terminalSent) send(AppStreamEvent.Finish("stop"))
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
@@ -91,8 +96,13 @@ object OpenAIDirectClient {
     internal fun buildOpenAIPayload(request: ChatRequest): String {
         // 首先注入系统提示词（如果消息中没有系统消息，则自动注入）
         val messagesWithSystemPrompt = SystemPromptInjector.smartInjectSystemPrompt(request.messages)
-            .normalizeAgentToolHistory()
+            .let { messages ->
+                PiMessageTransformer.transform(messages, request) { id, _ ->
+                    PiOpenAIChatMessageAdapter.normalizeToolCallId(id, request.provider)
+                }
+            }
         val normalizedTools = PromptCachePolicy.normalizeTools(request.tools)
+        val officialOpenAIEndpoint = PromptCachePolicy.isOfficialOpenAIEndpoint(resolvedOpenAIApiAddress(request))
         val promptCacheKey = PromptCachePolicy.buildOpenAICacheKey(
             apiAddress = resolvedOpenAIApiAddress(request),
             model = request.model,
@@ -133,9 +143,13 @@ object OpenAIDirectClient {
         return buildJsonObject {
             put("model", request.model)
             put("stream", true)
+            if (officialOpenAIEndpoint) {
+                // Pi 的官方 OpenAI 适配器明确关闭服务端存储，并始终请求最终 usage。
+                put("store", false)
+                putJsonObject("stream_options") { put("include_usage", true) }
+            }
             promptCacheKey?.let { cacheKey ->
                 put("prompt_cache_key", cacheKey)
-                putJsonObject("stream_options") { put("include_usage", true) }
             }
 
             // 转换消息（支持多模态：text + image_url(data URI) + input_audio）
@@ -153,7 +167,8 @@ object OpenAIDirectClient {
                 }
 
                 // 2. 处理消息
-                messagesWithSystemPrompt.forEach { message ->
+                val pendingToolResultImages = mutableListOf<com.android.everytalk.data.DataClass.AgentToolResultContentApiPart.Image>()
+                messagesWithSystemPrompt.forEachIndexed { messageIndex, message ->
                     // 如果是系统消息，且是第一个系统消息，则在其后注入文件 ID 系统消息
                     // 或者如果还没有注入过文件 ID，且当前不是系统消息，则在当前消息前注入（针对没有系统消息的情况）
                     
@@ -287,9 +302,35 @@ object OpenAIDirectClient {
                         }
                         is AgentAssistantApiMessage -> addAgentAssistantMessage(
                             message = message,
-                            includeReasoningContent = !PromptCachePolicy.isOfficialOpenAIEndpoint(request.apiAddress),
+                            includeReasoningContent = !officialOpenAIEndpoint,
                         )
-                        is AgentToolResultApiMessage -> addAgentToolResultMessage(message)
+                        is AgentToolResultApiMessage -> {
+                            pendingToolResultImages += addAgentToolResultMessage(message)
+                            val nextIsToolResult = messagesWithSystemPrompt.getOrNull(messageIndex + 1) is AgentToolResultApiMessage
+                            if (!nextIsToolResult) {
+                                if (pendingToolResultImages.isNotEmpty() && "image" in request.localInputModalities) {
+                                    addJsonObject {
+                                        put("role", "user")
+                                        putJsonArray("content") {
+                                            addJsonObject {
+                                                put("type", "text")
+                                                put("text", "Attached image(s) from tool result:")
+                                            }
+                                            pendingToolResultImages.forEach { image -> addJsonObject {
+                                                put("type", "image_url")
+                                                putJsonObject("image_url") {
+                                                    put(
+                                                        "url",
+                                                        "data:${image.mimeType};base64,${image.data.substringAfter(";base64,", image.data)}",
+                                                    )
+                                                }
+                                            } }
+                                        }
+                                    }
+                                }
+                                pendingToolResultImages.clear()
+                            }
+                        }
                     }
                 }
                 
@@ -305,7 +346,7 @@ object OpenAIDirectClient {
                 config.temperature?.let { put("temperature", it) }
                 config.topP?.let { put("top_p", it) }
                 config.maxOutputTokens?.let { maxOutputTokens ->
-                    val parameterName = if (PromptCachePolicy.isOfficialOpenAIEndpoint(request.apiAddress)) {
+                    val parameterName = if (officialOpenAIEndpoint) {
                         "max_completion_tokens"
                     } else {
                         "max_tokens"
@@ -349,7 +390,7 @@ object OpenAIDirectClient {
                             add(mapToJsonElement(toolDef))
                         }
                     }
-                    put("tool_choice", "auto")
+                    put("tool_choice", request.toolChoice?.let(::anyToJsonElement) ?: JsonPrimitive("auto"))
                 }
             }
         }.toString()
@@ -419,9 +460,12 @@ object OpenAIDirectClient {
         var hasToolCalls = false
         var safetyBlocked = false
         var latestUsage: TokenUsage? = null
+        val reasoningDetails = mutableListOf<JsonObject>()
+        var rawFinishReason: String? = null
+        var sawFinishReason = false
 
-        // 用于聚合流式的 tool_calls（OpenAI 会分多个 chunk 发送）
-        val toolCallsMap = mutableMapOf<Int, Triple<String, String, StringBuilder>>() // index -> (id, name, arguments)
+        // 兼容端点可能把 id、name、arguments 拆到不同 chunk，必须按 index 更新同一个调用。
+        val toolCallsMap = mutableMapOf<Int, OpenAIStreamingToolCall>()
 
         try {
             while (true) {
@@ -472,6 +516,11 @@ object OpenAIDirectClient {
                                         emitEvent(AppStreamEvent.Reasoning(reasoningText))
                                     }
 
+                                    (delta?.get("reasoning_details") as? JsonArray)?.forEach { detail ->
+                                        val objectDetail = detail as? JsonObject ?: return@forEach
+                                        appendReasoningDetail(reasoningDetails, objectDetail)
+                                    }
+
                                     // 处理正文内容（支持 <think> 标签检测）
                                     val contentText = delta?.get("content")?.jsonPrimitive?.contentOrNull
                                     if (!contentText.isNullOrEmpty()) {
@@ -504,22 +553,20 @@ object OpenAIDirectClient {
                                             val name = function?.get("name")?.jsonPrimitive?.contentOrNull
                                             val argumentsDelta = function?.get("arguments")?.jsonPrimitive?.contentOrNull ?: ""
 
-                                            val existing = toolCallsMap[index]
-                                            if (existing != null) {
-                                                existing.third.append(argumentsDelta)
-                                            } else {
-                                                toolCallsMap[index] = Triple(
-                                                    id ?: "call_${System.currentTimeMillis()}_$index",
-                                                    name ?: "",
-                                                    StringBuilder(argumentsDelta)
-                                                )
-                                            }
+                                            val state = toolCallsMap.getOrPut(index) { OpenAIStreamingToolCall() }
+                                            id?.takeIf(String::isNotBlank)?.let { state.id = it }
+                                            name?.takeIf(String::isNotBlank)?.let { state.name = it }
+                                            state.arguments.append(argumentsDelta)
                                             hasToolCalls = true
                                         }
                                     }
 
                                     // 检查 finish_reason
                                     val finishReason = choice["finish_reason"]?.jsonPrimitive?.contentOrNull
+                                    if (finishReason != null) {
+                                        rawFinishReason = finishReason
+                                        sawFinishReason = true
+                                    }
                                     if (finishReason == "tool_calls") {
                                         Log.d(TAG, "Finish reason: tool_calls, 准备处理工具调用")
                                     } else if (ProviderSafetyResponse.isSafetyReason(finishReason)) {
@@ -554,7 +601,12 @@ object OpenAIDirectClient {
                     hasToolCalls = false,
                     fullText = "",
                     reasoningContent = "",
+                    stopReason = "error",
                 )
+            }
+
+            if (!sawFinishReason) {
+                throw IllegalStateException("OpenAI Chat stream ended before a finish_reason")
             }
 
             // 冲刷 thinkRouter 剩余内容
@@ -575,8 +627,18 @@ object OpenAIDirectClient {
             }
 
             // 处理完成后，发送聚合的工具调用
+            if (reasoningDetails.isNotEmpty()) {
+                emitEvent(
+                    AppStreamEvent.Reasoning(
+                        text = "",
+                        thoughtSignature = JsonArray(reasoningDetails).toString(),
+                        signatureOnlyUpdate = true,
+                    ),
+                )
+            }
             if (toolCallsMap.isNotEmpty()) {
-                toolCallsMap.values.forEach { (id, name, argsBuilder) ->
+                toolCallsMap.toSortedMap().forEach { (index, state) ->
+                    val (id, name, argsBuilder) = state.finalize(index)
                     if (name.isNotBlank()) {
                         val toolInfo = OpenAiToolCallInfo(id, name, argsBuilder.toString())
                         onToolCall(toolInfo)
@@ -613,10 +675,35 @@ object OpenAIDirectClient {
             fullText = completedText,
             reasoningContent = completedReasoning,
             usage = latestUsage,
-            toolCalls = toolCallsMap.values.filter { (_, name, _) -> name.isNotBlank() }.map { (id, name, argsBuilder) ->
-                OpenAiToolCallInfo(id, name, argsBuilder.toString())
+            toolCalls = toolCallsMap.toSortedMap().mapNotNull { (index, state) ->
+                val (id, name, argsBuilder) = state.finalize(index)
+                name.takeIf(String::isNotBlank)?.let { OpenAiToolCallInfo(id, it, argsBuilder.toString()) }
             },
+            stopReason = mapOpenAIChatStopReason(rawFinishReason, hasToolCalls),
         )
+    }
+
+    /** 同一流式工具块的聚合状态，id/name 晚到时覆盖空占位。 */
+    private data class OpenAIStreamingToolCall(
+        var id: String = "",
+        var name: String = "",
+        val arguments: StringBuilder = StringBuilder(),
+    ) {
+        fun finalize(index: Int): Triple<String, String, StringBuilder> {
+            if (id.isBlank()) id = "call_local_${UUID.randomUUID()}_$index"
+            return Triple(id, name, arguments)
+        }
+    }
+
+    /** Pi OpenAI Chat Completions stopReason 映射。 */
+    private fun mapOpenAIChatStopReason(reason: String?, hasToolCalls: Boolean): String = when (reason) {
+        null -> if (hasToolCalls) "tool_use" else "stop"
+        "stop", "end" -> "stop"
+        "length" -> "length"
+        "function_call", "tool_calls" -> "tool_use"
+        "content_filter" -> "error"
+        "network_error" -> throw IllegalStateException("Provider finish_reason: network_error")
+        else -> throw IllegalStateException("Provider finish_reason: $reason")
     }
 
     private fun parseOpenAIChatTokenUsage(usage: JsonObject): TokenUsage? {
@@ -638,20 +725,76 @@ object OpenAIDirectClient {
         }
     }
 
+    /** OpenRouter 等端点会把 reasoning_details 分片发送，按 Pi 规则合并相邻文本和摘要。 */
+    private fun appendReasoningDetail(target: MutableList<JsonObject>, detail: JsonObject) {
+        val type = detail["type"]?.jsonPrimitive?.contentOrNull ?: return
+        if (type !in setOf("reasoning.text", "reasoning.summary", "reasoning.encrypted")) return
+        val last = target.lastOrNull()
+        val field = when (type) {
+            "reasoning.text" -> "text"
+            "reasoning.summary" -> "summary"
+            else -> null
+        }
+        if (field != null && last?.get("type")?.jsonPrimitive?.contentOrNull == type) {
+            target[target.lastIndex] = JsonObject(last.toMutableMap().apply {
+                val previous = last[field]?.jsonPrimitive?.contentOrNull.orEmpty()
+                val next = detail[field]?.jsonPrimitive?.contentOrNull.orEmpty()
+                put(field, JsonPrimitive(previous + next))
+                if (get("id") == null) detail["id"]?.let { put("id", it) }
+                if (get("format") == null) detail["format"]?.let { put("format", it) }
+                if (get("index") == null) detail["index"]?.let { put("index", it) }
+                if (get("signature") == null) detail["signature"]?.let { put("signature", it) }
+            })
+        } else {
+            target += detail
+        }
+    }
+
     private fun JsonArrayBuilder.addAgentAssistantMessage(
         message: AgentAssistantApiMessage,
         includeReasoningContent: Boolean,
     ) {
+        // PiMessageTransformer 已把跨协议 reasoning 降级成 Text，并剥离不可回放签名。
+        // 这里只认规范块，不能再从旧 summary 字段把 reasoning 私自塞回目标 Provider。
+        val text = message.contentParts
+            .filterIsInstance<com.android.everytalk.data.DataClass.AgentAssistantContentApiPart.Text>()
+            .filter { it.text.isNotBlank() }
+            .joinToString("") { it.text }
+        val reasoningBlocks = message.contentParts
+            .filterIsInstance<com.android.everytalk.data.DataClass.AgentAssistantContentApiPart.Reasoning>()
+        val reasoning = reasoningBlocks
+            .filter { !it.redacted && it.text.isNotBlank() }
+            .joinToString("\n") { it.text }
+        val toolCalls = message.contentParts.mapNotNull { part ->
+            (part as? com.android.everytalk.data.DataClass.AgentAssistantContentApiPart.ToolCall)?.call
+        }
+        if (text.isEmpty() && toolCalls.isEmpty() && (!includeReasoningContent || reasoning.isEmpty())) return
+
         addJsonObject {
             put("role", "assistant")
-            put("content", message.text)
+            if (text.isNotEmpty()) {
+                put("content", text)
+            } else if (includeReasoningContent) {
+                // 兼容端点沿用旧行为；OpenAI 官方在纯 Tool Call 消息中使用 null。
+                put("content", "")
+            } else {
+                put("content", JsonNull)
+            }
             // DeepSeek、Kimi 等 OpenAI 兼容推理模型要求工具下一轮回传 reasoning_content。
             // OpenAI 官方 Chat Completions 没有该字段，发送过去会触发参数校验错误。
-            message.reasoning.takeIf { includeReasoningContent && it.isNotBlank() }
+            reasoning.takeIf { includeReasoningContent && it.isNotBlank() }
                 ?.let { put("reasoning_content", it) }
-            if (message.toolCalls.isNotEmpty()) {
+            reasoningBlocks
+                .mapNotNull { part ->
+                    part.thoughtSignature?.let { raw ->
+                        runCatching { Json.parseToJsonElement(raw) as? JsonArray }.getOrNull()
+                    }
+                }
+                .firstOrNull()
+                ?.let { put("reasoning_details", it) }
+            if (toolCalls.isNotEmpty()) {
                 putJsonArray("tool_calls") {
-                    message.toolCalls.forEach { call ->
+                    toolCalls.forEach { call ->
                         addJsonObject {
                             put("id", call.id)
                             put("type", "function")
@@ -666,11 +809,25 @@ object OpenAIDirectClient {
         }
     }
 
-    private fun JsonArrayBuilder.addAgentToolResultMessage(message: AgentToolResultApiMessage) {
+    private fun JsonArrayBuilder.addAgentToolResultMessage(
+        message: AgentToolResultApiMessage,
+    ): List<com.android.everytalk.data.DataClass.AgentToolResultContentApiPart.Image> {
+        val blocks = message.canonicalContentBlocks()
+        val text = blocks.filterIsInstance<com.android.everytalk.data.DataClass.AgentToolResultContentApiPart.Text>()
+            .joinToString("\n") { it.text }
+        val images = blocks.filterIsInstance<com.android.everytalk.data.DataClass.AgentToolResultContentApiPart.Image>()
         addJsonObject {
             put("role", "tool")
             put("tool_call_id", message.toolCallId)
-            put("content", message.content.toString())
+            put(
+                "content",
+                when {
+                    text.isNotEmpty() -> text
+                    images.isNotEmpty() -> "(see attached image)"
+                    else -> "(no tool output)"
+                },
+            )
         }
+        return images
     }
 }

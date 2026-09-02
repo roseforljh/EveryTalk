@@ -7,10 +7,7 @@ import com.android.everytalk.data.DataClass.AbstractApiMessage
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
 import com.android.everytalk.data.DataClass.PartsApiMessage
 import com.android.everytalk.data.DataClass.AgentAssistantApiMessage
-import com.android.everytalk.data.DataClass.AgentAssistantContentApiPart
-import com.android.everytalk.data.DataClass.AgentToolCallApiPart
 import com.android.everytalk.data.DataClass.AgentToolResultApiMessage
-import com.android.everytalk.data.DataClass.ProviderTurnContinuation
 import com.android.everytalk.data.network.NetworkUtils.configureSSERequest
 import com.android.everytalk.util.AiContentSafetyPolicy
 import io.ktor.client.*
@@ -25,12 +22,11 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
 import kotlinx.serialization.json.*
 import java.util.UUID
-import java.util.Base64
 
 object GeminiDirectClient {
     private const val TAG = "GeminiDirectClient"
     private const val LOCAL_TOOL_CALL_ID_PREFIX = "fc_local_"
-    private val GEMINI_PART_DATA_FIELDS = setOf(
+    private val PART_DATA_FIELDS = setOf(
         "text",
         "inlineData",
         "fileData",
@@ -87,6 +83,8 @@ object GeminiDirectClient {
                         )
                     )
                 }
+                terminalSent = true
+                send(AppStreamEvent.Finish(parsed.finishReason))
             }
             if (!terminalSent) send(AppStreamEvent.Finish("turn_complete"))
         } catch (error: CancellationException) {
@@ -110,7 +108,6 @@ object GeminiDirectClient {
     internal fun buildGeminiPayload(request: ChatRequest): String {
         // 首先注入系统提示词（如果消息中没有系统消息，则自动注入）
         val messagesWithSystemPrompt = SystemPromptInjector.smartInjectSystemPrompt(request.messages)
-            .normalizeAgentToolHistory()
         
         // 提取系统消息内容用于 systemInstruction
         val systemMessages = messagesWithSystemPrompt.filter { it.role == "system" }
@@ -122,17 +119,12 @@ object GeminiDirectClient {
                 is AgentAssistantApiMessage -> msg.text.takeIf { it.isNotBlank() }
                 is AgentToolResultApiMessage -> null
             }
-        }.joinToString("\n\n")
+        }.joinToString("\n\n").piSanitizeSurrogates()
         
         val enableWebSearch = request.useWebSearch == true
         val enableCodeExecution = shouldEnableCodeExecution(request)
 
-        return buildJsonObject {
-            // 转换消息格式
-            // 🔥 修复：合并连续的相同角色消息，防止 Gemini API 报错 400 (INVALID_ARGUMENT)
-            // Gemini 要求 user 和 model 必须交替出现，不能有连续的 user 或 model
-            val mergedMessages = mutableListOf<com.android.everytalk.data.DataClass.AbstractApiMessage>()
-            
+        val payload = buildJsonObject {
             // 准备系统指令内容
             var effectiveSystemContent = systemContent
             if (enableCodeExecution) {
@@ -154,50 +146,13 @@ object GeminiDirectClient {
                 Log.i(TAG, "📝 已注入系统指令 (${effectiveSystemContent.length} 字符)")
             }
 
-            messagesWithSystemPrompt.forEach { message ->
-                if (message.role == "system") return@forEach // 跳过系统消息（已处理或降级）
-
-                val lastMsg = mergedMessages.lastOrNull()
-                val currentRole = if (message.role == "assistant") "model" else message.role
-                val lastRole = if (lastMsg?.role == "assistant") "model" else lastMsg?.role
-
-                if (lastMsg != null && currentRole == lastRole) {
-                    if (message is AgentAssistantApiMessage || message is AgentToolResultApiMessage ||
-                        lastMsg is AgentAssistantApiMessage || lastMsg is AgentToolResultApiMessage
-                    ) {
-                        mergedMessages.add(message)
-                        return@forEach
-                    }
-                    // 合并到上一条消息
-                    val mergedParts = mutableListOf<com.android.everytalk.data.DataClass.ApiContentPart>()
-                    
-                    // 提取上一条消息的内容
-                    when (lastMsg) {
-                        is SimpleTextApiMessage -> mergedParts.add(com.android.everytalk.data.DataClass.ApiContentPart.Text(lastMsg.content))
-                        is PartsApiMessage -> mergedParts.addAll(lastMsg.parts)
-                        else -> Unit
-                    }
-                    
-                    // 提取当前消息的内容
-                    when (message) {
-                        is SimpleTextApiMessage -> mergedParts.add(com.android.everytalk.data.DataClass.ApiContentPart.Text(message.content))
-                        is PartsApiMessage -> mergedParts.addAll(message.parts)
-                        else -> Unit
-                    }
-                    
-                    // 替换上一条消息为合并后的 PartsApiMessage
-                    mergedMessages[mergedMessages.lastIndex] = PartsApiMessage(
-                        id = lastMsg.id, // 保持 ID 不变
-                        role = lastMsg.role,
-                        parts = mergedParts,
-                        name = lastMsg.name
-                    )
-                } else {
-                    mergedMessages.add(message)
-                }
-            }
-
-            put("contents", buildGeminiContents(mergedMessages, request))
+            put(
+                "contents",
+                PiGeminiMessageAdapter.buildContents(
+                    messagesWithSystemPrompt.filterNot { it.role == "system" },
+                    request,
+                ),
+            )
             
             // 添加生成配置（包含 thinkingConfig）
             putJsonObject("generationConfig") {
@@ -274,8 +229,24 @@ object GeminiDirectClient {
                         Log.i(TAG, "🔧 注入 ${mcpTools.size} 个 MCP 工具到 functionDeclarations")
                     }
                 }
+                if (hasMcpTools) {
+                    geminiFunctionCallingMode(request.toolChoice)?.let { mode ->
+                        putJsonObject("toolConfig") {
+                            putJsonObject("functionCallingConfig") { put("mode", mode) }
+                        }
+                    }
+                }
             }
-        }.toString()
+        }
+        return PiGeminiMessageAdapter.normalizePayload(payload).toString()
+    }
+
+    /** Pi Google Adapter 的 toolChoice 映射，只接受三种官方模式。 */
+    private fun geminiFunctionCallingMode(toolChoice: Any?): String? = when ((toolChoice as? String)?.lowercase()) {
+        "auto" -> "AUTO"
+        "none" -> "NONE"
+        "any", "required" -> "ANY"
+        else -> null
     }
     
     /**
@@ -331,322 +302,6 @@ object GeminiDirectClient {
         else -> JsonPrimitive(value.toString())
     }
 
-    private fun stripDataUriPrefix(value: String): String {
-        if (!value.startsWith("data:", ignoreCase = true)) return value
-        val marker = ";base64,"
-        val markerIndex = value.indexOf(marker, ignoreCase = true)
-        return if (markerIndex >= 0) value.substring(markerIndex + marker.length) else value
-    }
-    
-    private fun isLocalGeminiToolCallId(id: String): Boolean = id.startsWith(LOCAL_TOOL_CALL_ID_PREFIX)
-
-    /** Gemini 3.x 的函数调用协议带服务端 ID；明确的 2.x 模型必须移除该字段。 */
-    private fun supportsGeminiFunctionCallIds(model: String): Boolean {
-        val normalized = model.lowercase()
-        val markerIndex = normalized.indexOf("gemini-")
-        if (markerIndex < 0) return true
-        val majorText = normalized.substring(markerIndex + "gemini-".length)
-            .takeWhile(Char::isDigit)
-        val major = majorText.toIntOrNull() ?: return true
-        return major >= 3
-    }
-
-    /**
-     * 按 Pi 的 Gemini 语义逐轮回放历史。
-     * Tool Call/Result 永远保持原生结构；签名只在来源 Provider、地址、模型都一致时恢复。
-     */
-    private fun buildGeminiContents(
-        messages: List<AbstractApiMessage>,
-        request: ChatRequest,
-    ): JsonArray {
-        val latestAssistant = messages.filterIsInstance<AgentAssistantApiMessage>().lastOrNull()
-        val nativeAssistant = request.localProviderContinuation
-            ?.takeIf { it.protocol == ModelParameterProtocol.GEMINI }
-            ?.takeIf { it.assistantMessageId == null || it.assistantMessageId == latestAssistant?.id }
-            ?.payloadJson
-            ?.let { raw -> runCatching { Json.parseToJsonElement(raw) as? JsonObject }.getOrNull() }
-            ?.takeIf { content ->
-                latestAssistant != null && content.matchesGeminiAssistant(latestAssistant)
-            }
-        val nativeAssistantId = latestAssistant?.id?.takeIf { nativeAssistant != null }
-        val legacyAssistantId = latestAssistant
-            ?.takeIf { assistant ->
-                request.localProviderContinuation == null &&
-                    assistant.toolCalls.isNotEmpty() &&
-                    assistant.toolCalls.all { isLocalGeminiToolCallId(it.id) }
-            }
-            ?.id
-        val includeFunctionCallIds = supportsGeminiFunctionCallIds(request.model)
-
-        val contents = mutableListOf<JsonObject>()
-        var messageIndex = 0
-        while (messageIndex < messages.size) {
-            val message = messages[messageIndex]
-            if (message is AgentToolResultApiMessage) {
-                val results = messages.drop(messageIndex)
-                    .takeWhile { it is AgentToolResultApiMessage }
-                    .filterIsInstance<AgentToolResultApiMessage>()
-                appendGeminiContent(
-                    contents,
-                    geminiFunctionResponseContent(results, includeFunctionCallIds),
-                )
-                messageIndex += results.size
-                continue
-            }
-
-            val content: JsonObject? = when {
-                message is AgentAssistantApiMessage && message.id == nativeAssistantId -> {
-                    val content = checkNotNull(nativeAssistant)
-                    if (includeFunctionCallIds) content else content.withoutGeminiFunctionCallIds()
-                }
-                message is AgentAssistantApiMessage -> message.toGeminiAssistantContent(
-                    request = request,
-                    omitLocalIds = message.id == legacyAssistantId,
-                    includeFunctionCallIds = includeFunctionCallIds,
-                )
-                else -> message.toGeminiContent(message.id == legacyAssistantId)
-            }
-            content?.let { appendGeminiContent(contents, it) }
-            messageIndex++
-        }
-        return JsonArray(contents)
-    }
-
-    /** 2.x 不接受 3.x 的调用 ID；仅删除该字段，其余原生 Part 及顺序保持不变。 */
-    private fun JsonObject.withoutGeminiFunctionCallIds(): JsonObject {
-        val parts = this["parts"] as? JsonArray ?: return this
-        return JsonObject(toMutableMap().apply {
-            put("parts", JsonArray(parts.map { part ->
-                val objectPart = part as? JsonObject ?: return@map part
-                val functionCall = objectPart["functionCall"] as? JsonObject ?: return@map part
-                JsonObject(objectPart.toMutableMap().apply {
-                    put("functionCall", JsonObject(functionCall - "id"))
-                })
-            }))
-        })
-    }
-
-    /** 中立 Assistant 恢复成 Gemini Content；跨模型保留语义和工具协议，只移除不可复用签名。 */
-    private fun AgentAssistantApiMessage.toGeminiAssistantContent(
-        request: ChatRequest,
-        omitLocalIds: Boolean,
-        includeFunctionCallIds: Boolean,
-    ): JsonObject = buildJsonObject {
-        put("role", "model")
-        putJsonArray("parts") {
-            val sameSource = sourceProvider == request.provider &&
-                sourceEndpoint == request.apiAddress &&
-                sourceModel == request.model
-            if (contentParts.isNotEmpty()) {
-                contentParts.forEach { part ->
-                    when (part) {
-                        is AgentAssistantContentApiPart.Text -> {
-                            val signature = part.thoughtSignature.validForReplay(sameSource)
-                            if (part.text.isNotEmpty() || signature != null) addJsonObject {
-                                put("text", part.text)
-                                signature?.let { put("thoughtSignature", it) }
-                            }
-                        }
-                        is AgentAssistantContentApiPart.Reasoning -> {
-                            val signature = part.thoughtSignature.validForReplay(sameSource)
-                            if (sameSource && (part.text.isNotEmpty() || signature != null)) {
-                                addJsonObject {
-                                    put("thought", true)
-                                    put("text", part.text)
-                                    signature?.let { put("thoughtSignature", it) }
-                                }
-                            } else if (part.text.isNotBlank()) {
-                                addJsonObject { put("text", part.text) }
-                            }
-                        }
-                        is AgentAssistantContentApiPart.ToolCall -> addGeminiFunctionCall(
-                            call = part.call,
-                            includeId = includeFunctionCallIds && !omitLocalIds &&
-                                !isLocalGeminiToolCallId(part.call.id),
-                            includeSignature = sameSource,
-                        )
-                    }
-                }
-            } else {
-                reasoning.takeIf(String::isNotBlank)?.let { addJsonObject { put("text", it) } }
-                text.takeIf(String::isNotBlank)?.let { addJsonObject { put("text", it) } }
-                toolCalls.forEach { call ->
-                    addGeminiFunctionCall(
-                        call = call,
-                        includeId = includeFunctionCallIds && !omitLocalIds &&
-                            !isLocalGeminiToolCallId(call.id),
-                        includeSignature = sameSource,
-                    )
-                }
-            }
-        }
-    }
-
-    private fun JsonArrayBuilder.addGeminiFunctionCall(
-        call: AgentToolCallApiPart,
-        includeId: Boolean,
-        includeSignature: Boolean,
-    ) {
-        addJsonObject {
-            putJsonObject("functionCall") {
-                if (includeId) put("id", call.id)
-                put("name", call.name)
-                put("args", call.arguments)
-            }
-            call.thoughtSignature.validForReplay(includeSignature)?.let { put("thoughtSignature", it) }
-        }
-    }
-
-    /** Google 的 thoughtSignature 是标准 Base64；无效值不能回放给接口。 */
-    private fun String?.validForReplay(sameSource: Boolean): String? = takeIf { signature ->
-        sameSource && !signature.isNullOrEmpty() && signature.length % 4 == 0 &&
-            runCatching { Base64.getDecoder().decode(signature) }.isSuccess
-    }
-
-    /** 原生 Content 只允许替换同一个工具回合，名称和服务端 ID 都要完全对应。 */
-    private fun JsonObject.matchesGeminiAssistant(assistant: AgentAssistantApiMessage): Boolean {
-        if (this["role"]?.jsonPrimitive?.contentOrNull != "model") return false
-        if (assistant.toolCalls.isEmpty()) {
-            val nativeParts = (this["parts"] as? JsonArray).orEmpty().mapNotNull { it as? JsonObject }
-            val nativeText = nativeParts
-                .filter { it["thought"]?.jsonPrimitive?.booleanOrNull != true }
-                .mapNotNull { it["text"]?.jsonPrimitive?.contentOrNull }
-                .joinToString("")
-            val nativeReasoning = nativeParts
-                .filter { it["thought"]?.jsonPrimitive?.booleanOrNull == true }
-                .mapNotNull { it["text"]?.jsonPrimitive?.contentOrNull }
-                .joinToString("")
-            return nativeText == assistant.text && nativeReasoning == assistant.reasoning
-        }
-        val nativeCalls = (this["parts"] as? JsonArray).orEmpty().mapNotNull { part ->
-            (part as? JsonObject)?.get("functionCall") as? JsonObject
-        }
-        if (nativeCalls.size != assistant.toolCalls.size) return false
-        return nativeCalls.zip(assistant.toolCalls).all { (nativeCall, call) ->
-            val nativeName = nativeCall["name"]?.jsonPrimitive?.contentOrNull
-            val nativeId = nativeCall["id"]?.jsonPrimitive?.contentOrNull
-            nativeName == call.name && if (isLocalGeminiToolCallId(call.id)) {
-                nativeId.isNullOrBlank()
-            } else {
-                nativeId == call.id
-            }
-        }
-    }
-
-    private fun AbstractApiMessage.toGeminiContent(useLegacyFunctionCalls: Boolean): JsonObject = buildJsonObject {
-        put("role", if (role == "assistant") "model" else role)
-        putJsonArray("parts") {
-            when (this@toGeminiContent) {
-                is SimpleTextApiMessage -> content.takeIf(String::isNotEmpty)?.let { text ->
-                    addJsonObject { put("text", text) }
-                }
-                is PartsApiMessage -> parts.forEach { part ->
-                    when (part) {
-                        is com.android.everytalk.data.DataClass.ApiContentPart.Text ->
-                            addJsonObject { put("text", part.text) }
-                        is com.android.everytalk.data.DataClass.ApiContentPart.InlineData -> addJsonObject {
-                            putJsonObject("inlineData") {
-                                put("mimeType", part.mimeType)
-                                put("data", part.base64Data)
-                            }
-                        }
-                        is com.android.everytalk.data.DataClass.ApiContentPart.FileUri ->
-                            addJsonObject { put("text", "[Image: ${part.uri}]") }
-                    }
-                }
-                is AgentAssistantApiMessage -> error("Assistant 应由 toGeminiAssistantContent 处理")
-                is AgentToolResultApiMessage -> error("工具结果应按连续批次处理")
-            }
-        }
-    }
-
-    /**
-     * 内部 ToolResult 只在这里转换成 Gemini FunctionResponse。
-     * 任意对象或数组转成 JSON 文本，避免工具输出中的 Schema 关键字被 Gemini 当成协议字段解释。
-     */
-    private fun geminiFunctionResponseContent(
-        results: List<AgentToolResultApiMessage>,
-        includeFunctionCallIds: Boolean,
-    ): JsonObject = buildJsonObject {
-        put("role", "user")
-        putJsonArray("parts") {
-            results.forEach { result ->
-                addJsonObject {
-                    putJsonObject("functionResponse") {
-                        put("name", result.toolName)
-                        if (includeFunctionCallIds) {
-                            result.toolCallId.takeUnless(::isLocalGeminiToolCallId)?.let { put("id", it) }
-                        }
-                        putJsonObject("response") {
-                            if (result.isError) put("error", result.content.toGeminiToolErrorText())
-                            else put("output", result.content.toGeminiFunctionResponseValue())
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    private fun JsonElement.toGeminiFunctionResponseValue(): JsonElement = when (this) {
-        is JsonPrimitive, JsonNull -> this
-        else -> JsonPrimitive(toString())
-    }
-
-    private fun JsonElement.toGeminiToolErrorText(): String =
-        (this as? JsonPrimitive)?.contentOrNull ?: toString()
-
-    /** 只合并普通文本 Content，带签名或工具协议的 Part 必须保持原位置。 */
-    private fun appendGeminiContent(contents: MutableList<JsonObject>, content: JsonObject) {
-        val normalizedContent = content.normalizeGeminiContentForRequest()
-        val parts = normalizedContent["parts"] as? JsonArray ?: return
-        if (parts.isEmpty()) return
-        val previous = contents.lastOrNull()
-        if (
-            previous != null &&
-            previous["role"] == normalizedContent["role"] &&
-            previous.isMergeableGeminiTextContent() &&
-            normalizedContent.isMergeableGeminiTextContent()
-        ) {
-            contents[contents.lastIndex] = buildJsonObject {
-                put("role", checkNotNull(normalizedContent["role"]))
-                putJsonArray("parts") {
-                    (previous["parts"] as? JsonArray).orEmpty().forEach(::add)
-                    parts.forEach(::add)
-                }
-            }
-        } else {
-            contents += normalizedContent
-        }
-    }
-
-    /**
-     * Gemini Part 必须初始化一个 data oneof 字段。
-     * 流式接口可能单独返回 thoughtSignature；回放时用空 text 承载签名，纯空 Part 直接删除。
-     */
-    private fun JsonObject.normalizeGeminiContentForRequest(): JsonObject {
-        val parts = this["parts"] as? JsonArray ?: return this
-        return JsonObject(toMutableMap().apply {
-            put("parts", JsonArray(parts.mapNotNull { element ->
-                val part = element as? JsonObject ?: return@mapNotNull null
-                val hasData = GEMINI_PART_DATA_FIELDS.any { field ->
-                    part[field]?.let { it !is JsonNull } == true
-                }
-                if (hasData) return@mapNotNull part
-                val signature = part["thoughtSignature"]?.jsonPrimitive?.contentOrNull
-                if (signature.isNullOrEmpty()) return@mapNotNull null
-                JsonObject(part.toMutableMap().apply { put("text", JsonPrimitive("")) })
-            }))
-        })
-    }
-
-    private fun JsonObject.isMergeableGeminiTextContent(): Boolean =
-        (this["parts"] as? JsonArray).orEmpty().all { part ->
-            val objectPart = part as? JsonObject ?: return@all false
-            objectPart["functionCall"] == null &&
-                objectPart["functionResponse"] == null &&
-                objectPart["thoughtSignature"] == null
-        }
-    
     /**
      * 解析结果，用于在工具循环中传递信息
      */
@@ -655,6 +310,7 @@ object GeminiDirectClient {
         val fullText: String,
         /** 原样保留模型 content，下一轮需要其中的 thoughtSignature。 */
         val assistantContent: JsonObject? = null,
+        val finishReason: String = "stop",
     )
 
     private fun parseGeminiTokenUsage(usage: JsonObject): TokenUsage? {
@@ -691,7 +347,9 @@ object GeminiDirectClient {
         var contentStarted = false
         var hasToolCalls = false
         var safetyBlocked = false
+        var rawFinishReason: String? = null
         var latestAssistantContent: JsonObject? = null
+        val seenToolCallIds = mutableSetOf<String>()
         val thinkRouter = ThinkTagStreamRouter()
         
         try {
@@ -780,9 +438,14 @@ object GeminiDirectClient {
                                             hasToolCalls = true
                                             // Gemini 3 要求 FunctionResponse 原样带回服务端 FunctionCall.id。
                                             // 旧模型可能没有 id，本地 ID 只供 AgentLoop 关联，不能伪装成服务端 ID 回传。
-                                            val toolCallId = fcObj["id"]?.jsonPrimitive?.contentOrNull
+                                            val providedId = fcObj["id"]?.jsonPrimitive?.contentOrNull
                                                 ?.takeIf(String::isNotBlank)
-                                                ?: "$LOCAL_TOOL_CALL_ID_PREFIX${UUID.randomUUID()}"
+                                            // Pi 会替换缺失或重复的 ID，避免同一批 ToolResult 互相覆盖。
+                                            val toolCallId = providedId
+                                                ?.takeIf(seenToolCallIds::add)
+                                                ?: generateSequence {
+                                                    "$LOCAL_TOOL_CALL_ID_PREFIX${UUID.randomUUID()}"
+                                                }.first(seenToolCallIds::add)
                                             onToolCall(GeminiToolCall(toolCallId, name, args))
                                             emitEvent(AppStreamEvent.ToolCall(
                                                 id = toolCallId,
@@ -795,6 +458,7 @@ object GeminiDirectClient {
                                     }
                                     
                                     candidateObj["finishReason"]?.jsonPrimitive?.contentOrNull?.let { reason ->
+                                        rawFinishReason = reason
                                         Log.d(TAG, "Finish reason: $reason")
                                     }
                                 }
@@ -846,17 +510,41 @@ object GeminiDirectClient {
             throw e
         }
 
+        if (rawFinishReason == null) {
+            throw IllegalStateException("Gemini stream ended before finishReason")
+        }
+
         val completedText = fullText.toString()
         if (completedText.isNotEmpty() && !hasToolCalls) {
             emitEvent(AppStreamEvent.ContentFinal(completedText))
+        }
+
+        val mappedFinishReason = mapGeminiFinishReason(rawFinishReason, hasToolCalls)
+        if (mappedFinishReason == "error") {
+            emitEvent(
+                AppStreamEvent.Error(
+                    message = "Gemini 响应异常终止：$rawFinishReason",
+                    code = rawFinishReason.lowercase(),
+                    type = "provider_error",
+                ),
+            )
         }
 
         return ParseResult(
             hasToolCalls = hasToolCalls,
             fullText = completedText,
             assistantContent = latestAssistantContent,
+            finishReason = mappedFinishReason,
         )
     }
+
+    /** 与 Pi Google Adapter 的 stopReason 映射一致。 */
+    private fun mapGeminiFinishReason(rawReason: String?, hasToolCalls: Boolean): String =
+        when (rawReason?.uppercase()) {
+            "MAX_TOKENS" -> "length"
+            "STOP" -> if (hasToolCalls) "tool_use" else "stop"
+            else -> "error"
+        }
 
     /**
      * Gemini 会把同一条 model content 分成多个 SSE candidate。
@@ -866,17 +554,47 @@ object GeminiDirectClient {
         current: JsonObject?,
         incoming: JsonObject,
     ): JsonObject {
-        if (current == null) return incoming
-        val role = incoming["role"] ?: current["role"] ?: JsonPrimitive("model")
-        val parts = buildJsonArray {
-            (current["parts"] as? JsonArray)?.forEach(::add)
-            (incoming["parts"] as? JsonArray)?.forEach(::add)
+        val role = incoming["role"] ?: current?.get("role") ?: JsonPrimitive("model")
+        val parts = (current?.get("parts") as? JsonArray).orEmpty().toMutableList()
+        (incoming["parts"] as? JsonArray).orEmpty().forEach { incomingPart ->
+            val incomingObject = incomingPart as? JsonObject
+            val previousObject = parts.lastOrNull() as? JsonObject
+            if (incomingObject != null && previousObject != null &&
+                incomingObject.isGeminiTextDelta() && previousObject.isGeminiTextDelta() &&
+                incomingObject.isThoughtPart() == previousObject.isThoughtPart()
+            ) {
+                // Google 可能只在首个分片发送签名。连续同类文本按 Pi 的 currentBlock 规则合并，
+                // 新的非空签名覆盖旧值，缺失签名则保留旧值。
+                parts[parts.lastIndex] = JsonObject(previousObject.toMutableMap().apply {
+                    put(
+                        "text",
+                        JsonPrimitive(
+                            previousObject["text"]?.jsonPrimitive?.contentOrNull.orEmpty() +
+                                incomingObject["text"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                        ),
+                    )
+                    incomingObject["thoughtSignature"]?.jsonPrimitive?.contentOrNull
+                        ?.takeIf(String::isNotEmpty)
+                        ?.let { put("thoughtSignature", JsonPrimitive(it)) }
+                    if (incomingObject.isThoughtPart()) put("thought", JsonPrimitive(true))
+                })
+            } else {
+                parts += incomingPart
+            }
         }
         return buildJsonObject {
             put("role", role)
-            put("parts", parts)
+            put("parts", JsonArray(parts))
         }
     }
+
+    /** 只有恰好一个 text data 字段的 Part 才能合并；签名-only Part 必须保持独立。 */
+    private fun JsonObject.isGeminiTextDelta(): Boolean =
+        PART_DATA_FIELDS.count { field -> this[field]?.let { it !is JsonNull } == true } == 1 &&
+            this["text"]?.let { it !is JsonNull } == true
+
+    private fun JsonObject.isThoughtPart(): Boolean =
+        this["thought"]?.jsonPrimitive?.booleanOrNull == true
 
 }
 

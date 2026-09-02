@@ -231,7 +231,45 @@ class OpenAIResponsesClientPayloadTest {
     }
 
     @Test
-    fun `中断工具调用后新请求不再携带孤立function call`() {
+    fun `responses纯文本下一轮原样回放多个原生output item`() {
+        val assistant = AgentAssistantApiMessage(
+            id = "assistant-text",
+            text = "前半后半",
+            sourceProvider = "OpenAI",
+            sourceEndpoint = "https://api.openai.com",
+            sourceModel = "gpt-5.6",
+            sourceProtocol = ModelParameterProtocol.CODEX,
+        )
+        val payload = Json.parseToJsonElement(
+            buildResponsesPayloadForTest(
+                request(
+                    messages = listOf(
+                        assistant,
+                        SimpleTextApiMessage(role = "user", content = "继续"),
+                    ),
+                ).copy(
+                    localProviderContinuation = ProviderTurnContinuation(
+                        protocol = ModelParameterProtocol.CODEX,
+                        assistantMessageId = assistant.id,
+                        payloadJson = """[
+                            {"id":"rs-1","type":"reasoning","encrypted_content":"opaque","summary":[]},
+                            {"id":"msg-commentary","type":"message","role":"assistant","phase":"commentary","status":"completed","content":[{"type":"output_text","text":"前半","annotations":[]}]},
+                            {"id":"msg-final","type":"message","role":"assistant","phase":"final_answer","status":"completed","content":[{"type":"output_text","text":"后半","annotations":[]}]}
+                        ]""".trimIndent(),
+                    ),
+                ),
+            ),
+        ).jsonObject
+        val input = payload.getValue("input").jsonArray
+
+        assertEquals(1, input.count { it.jsonObject["id"]?.jsonPrimitive?.content == "rs-1" })
+        assertEquals(1, input.count { it.jsonObject["id"]?.jsonPrimitive?.content == "msg-commentary" })
+        assertEquals(1, input.count { it.jsonObject["id"]?.jsonPrimitive?.content == "msg-final" })
+        assertFalse(input.any { it.jsonObject["id"]?.jsonPrimitive?.content?.startsWith("msg_pi_") == true })
+    }
+
+    @Test
+    fun `中断工具调用后按Pi规则补失败output并保留配对call`() {
         val payload = Json.parseToJsonElement(
             buildResponsesPayloadForTest(
                 request(
@@ -256,9 +294,21 @@ class OpenAIResponsesClientPayloadTest {
         ).jsonObject
         val input = payload.getValue("input").jsonArray
 
-        assertFalse(input.any { it.jsonObject["call_id"]?.jsonPrimitive?.content == "call-interrupted" })
-        assertFalse(input.any { it.jsonObject["id"]?.jsonPrimitive?.content == "rs-interrupted" })
-        assertTrue(input.any { it.jsonObject["content"]?.jsonPrimitive?.contentOrNull == "中断后继续" })
+        assertTrue(input.any {
+            it.jsonObject["type"]?.jsonPrimitive?.content == "function_call" &&
+                it.jsonObject["call_id"]?.jsonPrimitive?.content == "call-interrupted"
+        })
+        assertTrue(input.any {
+            it.jsonObject["type"]?.jsonPrimitive?.content == "function_call_output" &&
+                it.jsonObject["call_id"]?.jsonPrimitive?.content == "call-interrupted" &&
+                it.jsonObject["output"]?.jsonPrimitive?.content == "No result provided"
+        })
+        assertTrue(input.any { it.jsonObject["id"]?.jsonPrimitive?.content == "rs-interrupted" })
+        assertTrue(input.any { item ->
+            (item.jsonObject["content"] as? kotlinx.serialization.json.JsonArray).orEmpty().any { part ->
+                part.jsonObject["text"]?.jsonPrimitive?.contentOrNull == "中断后继续"
+            }
+        })
     }
 
     @Test
@@ -328,7 +378,11 @@ class OpenAIResponsesClientPayloadTest {
         ).jsonObject
 
         val input = payload.getValue("input").jsonArray
-        assertEquals(1, input.count { it.jsonObject["content"]?.jsonPrimitive?.content == "分析" })
+        assertEquals(1, input.count { item ->
+            (item.jsonObject["content"] as? kotlinx.serialization.json.JsonArray).orEmpty().any { part ->
+                part.jsonObject["text"]?.jsonPrimitive?.contentOrNull == "分析"
+            }
+        })
     }
 
     @Test

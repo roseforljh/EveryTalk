@@ -31,6 +31,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.boolean
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -244,7 +245,7 @@ class AnthropicDirectClientTest {
     }
 
     @Test
-    fun `中断后的孤立Anthropic工具项不会进入请求`() {
+    fun `中断后的孤立Anthropic工具项按Pi规则补失败结果`() {
         val payload = Json.parseToJsonElement(
             AnthropicDirectClient.buildAnthropicPayload(
                 request(
@@ -269,7 +270,12 @@ class AnthropicDirectClientTest {
             it.jsonObject.getValue("content").jsonArray
         }
 
-        assertFalse(blocks.any { it.jsonObject["type"]?.jsonPrimitive?.content == "tool_use" })
+        assertTrue(blocks.any { it.jsonObject["type"]?.jsonPrimitive?.content == "tool_use" })
+        val syntheticResult = blocks.single {
+            it.jsonObject["tool_use_id"]?.jsonPrimitive?.content == "call-orphan"
+        }.jsonObject
+        assertEquals("No result provided", syntheticResult.getValue("content").jsonPrimitive.content)
+        assertTrue(syntheticResult.getValue("is_error").jsonPrimitive.boolean)
         assertTrue(blocks.any { it.jsonObject["text"]?.jsonPrimitive?.content == "继续" })
     }
 
@@ -288,7 +294,9 @@ class AnthropicDirectClientTest {
                 ),
             ),
         ).jsonObject
-        val assistant = payload.getValue("messages").jsonArray.last().jsonObject
+        val assistant = payload.getValue("messages").jsonArray
+            .map { it.jsonObject }
+            .last { it.getValue("role").jsonPrimitive.content == "assistant" }
 
         assertEquals("分析", assistant.getValue("content").jsonArray.first().jsonObject.getValue("text").jsonPrimitive.content)
     }
@@ -424,7 +432,7 @@ class AnthropicDirectClientTest {
             assertEquals("test-key", capturedApiKey)
             assertEquals("2023-06-01", capturedVersion)
             assertEquals("你好", events.filterIsInstance<AppStreamEvent.ContentFinal>().single().text)
-            assertEquals(listOf("end_turn"), events.filterIsInstance<AppStreamEvent.Finish>().map { it.reason })
+            assertEquals(listOf("stop"), events.filterIsInstance<AppStreamEvent.Finish>().map { it.reason })
         } finally {
             client.close()
         }

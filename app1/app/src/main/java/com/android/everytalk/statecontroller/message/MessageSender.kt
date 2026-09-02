@@ -696,6 +696,61 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
     }
 
 
+    /**
+     * steering 已由 AgentRun 接收后，只补齐正常用户消息的时间线和历史记录。
+     * 这里不调用 API，也不创建新的 AgentRun。
+     */
+    suspend fun recordSteeredUserMessage(
+        messageId: String,
+        text: String,
+        contentParts: List<MessageContentPart>,
+        attachments: List<SelectedMediaItem>,
+    ) {
+        val currentConfig = stateHolder._selectedApiConfig.value
+        val imageUrls = attachments.mapNotNull { attachment ->
+            when (attachment) {
+                is SelectedMediaItem.ImageFromUri -> attachment.filePath ?: attachment.uri.toString()
+                is SelectedMediaItem.ImageFromBitmap -> attachment.model
+                is SelectedMediaItem.GenericFile,
+                is SelectedMediaItem.Audio -> null
+            }
+        }.takeIf { it.isNotEmpty() }
+        val message = UiMessage(
+            id = messageId,
+            text = text,
+            contentParts = contentParts,
+            sender = UiSender.User,
+            contentStarted = true,
+            imageUrls = imageUrls,
+            attachments = attachments,
+            modelName = currentConfig?.model,
+            providerName = currentConfig?.provider,
+        )
+        val added = withContext(Dispatchers.Main.immediate) {
+            if (stateHolder.messages.any { it.id == messageId }) {
+                false
+            } else {
+                stateHolder.textMessageAnimationStates[messageId] = true
+                stateHolder.messages.add(message)
+                stateHolder._lastSentUserMessageId.value = messageId
+                triggerScrollToBottom()
+                true
+            }
+        }
+        if (!added) return
+
+        val persisted = runCatching {
+            withContext(Dispatchers.IO) {
+                historyManager.saveCurrentChatToHistoryNow(forceSave = true, isImageGeneration = false)
+            }
+        }.isSuccess
+        if (!persisted) {
+            withContext(Dispatchers.Main.immediate) {
+                showSnackbar("调整方向已发送，但本地消息记录保存失败")
+            }
+        }
+    }
+
     fun sendMessage(
         messageText: String,
         isFromRegeneration: Boolean = false,

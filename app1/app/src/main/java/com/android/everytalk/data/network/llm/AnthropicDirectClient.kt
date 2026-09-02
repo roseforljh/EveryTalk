@@ -208,7 +208,6 @@ object AnthropicDirectClient {
         includeRequestMessages: Boolean = true,
     ): String {
         val preparedMessages = SystemPromptInjector.smartInjectSystemPrompt(request.messages)
-            .normalizeAgentToolHistory()
         val systemText = preparedMessages
             .filter { it.role.equals("system", ignoreCase = true) }
             .mapNotNull(::messageText)
@@ -216,9 +215,10 @@ object AnthropicDirectClient {
             .joinToString("\n\n")
         val messages = (
             restoredAnthropicMessages(request, preparedMessages, allowRestoredCompaction)
-                ?: preparedMessages
-                .filterNot { it.role.equals("system", ignoreCase = true) }
-                .mapNotNull(::toAnthropicMessage)
+                ?: PiAnthropicMessageAdapter.buildMessages(
+                    preparedMessages.filterNot { it.role.equals("system", ignoreCase = true) },
+                    request,
+                )
             ).replaceLatestAssistantWithNativeContinuation(request, preparedMessages)
             .pruneBeforeLatestCompaction()
         val maxTokens = request.generationConfig?.maxOutputTokens
@@ -300,6 +300,7 @@ object AnthropicDirectClient {
             ?: return this
         val nativeContent = request.localProviderContinuation
             ?.takeIf { it.protocol == com.android.everytalk.data.DataClass.ModelParameterProtocol.ANTHROPIC }
+            ?.takeIf { latestAssistant.canReplayNativeContinuation(request) }
             ?.takeIf { continuation ->
                 (continuation.assistantMessageId == null || continuation.assistantMessageId == latestAssistant.id) &&
                     nativeAnthropicToolCallsMatch(continuation.payloadJson, latestAssistant)
@@ -363,14 +364,14 @@ object AnthropicDirectClient {
         if (completed.hasSuccessfulCompaction()) return JsonArray(listOf(currentAssistant))
 
         val preparedMessages = SystemPromptInjector.smartInjectSystemPrompt(request.messages)
-            .normalizeAgentToolHistory()
         val messages = restoredAnthropicMessages(
             request = request,
             preparedMessages = preparedMessages,
             allowRestoredCompaction = true,
-        ) ?: preparedMessages
-            .filterNot { it.role.equals("system", ignoreCase = true) }
-            .mapNotNull(::toAnthropicMessage)
+        ) ?: PiAnthropicMessageAdapter.buildMessages(
+            preparedMessages.filterNot { it.role.equals("system", ignoreCase = true) },
+            request,
+        )
         val canonical = messages
             .replaceLatestAssistantWithNativeContinuation(request, preparedMessages)
             .pruneBeforeLatestCompaction()
@@ -394,9 +395,13 @@ object AnthropicDirectClient {
             if (throughIndex < 0) return null
             return buildList {
                 addAll(runCanonical)
-                preparedMessages.drop(throughIndex + 1)
-                    .filterNot { it.role.equals("system", ignoreCase = true) }
-                    .mapNotNullTo(this, ::toAnthropicMessage)
+                addAll(
+                    PiAnthropicMessageAdapter.buildMessages(
+                        preparedMessages.drop(throughIndex + 1)
+                            .filterNot { it.role.equals("system", ignoreCase = true) },
+                        request,
+                    )
+                )
             }
         }
         val management = request.contextManagement ?: return null
@@ -420,9 +425,12 @@ object AnthropicDirectClient {
             } else {
                 preparedMessages
             }
-            uncoveredMessages
-                .filterNot { it.role.equals("system", ignoreCase = true) }
-                .mapNotNullTo(this, ::toAnthropicMessage)
+            addAll(
+                PiAnthropicMessageAdapter.buildMessages(
+                    uncoveredMessages.filterNot { it.role.equals("system", ignoreCase = true) },
+                    request,
+                )
+            )
         }
     }
 
@@ -440,100 +448,6 @@ object AnthropicDirectClient {
         ?.let { value -> runCatching { Json.parseToJsonElement(value) as? JsonArray }.getOrNull() }
         ?.mapNotNull { it as? JsonObject }
         ?.takeIf(::containsSuccessfulCompaction)
-
-    private fun toAnthropicMessage(message: AbstractApiMessage): JsonObject? {
-        val content = when (message) {
-            is SimpleTextApiMessage -> buildJsonArray {
-                message.content.takeIf(String::isNotEmpty)?.let { text ->
-                    addJsonObject {
-                        put("type", "text")
-                        put("text", text)
-                    }
-                }
-            }
-            is PartsApiMessage -> buildJsonArray {
-                message.parts.forEach { part ->
-                    when (part) {
-                        is ApiContentPart.Text -> if (part.text.isNotEmpty()) {
-                            addJsonObject {
-                                put("type", "text")
-                                put("text", part.text)
-                            }
-                        }
-                        is ApiContentPart.InlineData -> addInlineData(part)
-                        is ApiContentPart.FileUri -> addJsonObject {
-                            put("type", "text")
-                            put("text", "[附件: ${part.uri}]")
-                        }
-                    }
-                }
-            }
-            is AgentAssistantApiMessage -> buildJsonArray {
-                message.reasoning.takeIf(String::isNotBlank)?.let { reasoning ->
-                    addJsonObject {
-                        put("type", "text")
-                        put("text", reasoning)
-                    }
-                }
-                message.text.takeIf(String::isNotBlank)?.let { text ->
-                    addJsonObject {
-                        put("type", "text")
-                        put("text", text)
-                    }
-                }
-                message.toolCalls.forEach { call ->
-                    addJsonObject {
-                        put("type", "tool_use")
-                        put("id", call.id)
-                        put("name", call.name)
-                        put("input", call.arguments)
-                    }
-                }
-            }
-            is AgentToolResultApiMessage -> buildJsonArray {
-                addJsonObject {
-                    put("type", "tool_result")
-                    put("tool_use_id", message.toolCallId)
-                    put("content", message.content.toString())
-                    if (message.isError) put("is_error", true)
-                }
-            }
-        }
-        if (content.isEmpty()) return null
-        return buildJsonObject {
-            put("role", if (message.role.equals("assistant", true) || message.role.equals("model", true)) "assistant" else "user")
-            put("content", content)
-        }
-    }
-
-    private fun kotlinx.serialization.json.JsonArrayBuilder.addInlineData(part: ApiContentPart.InlineData) {
-        val mimeType = when (part.mimeType.lowercase()) {
-            "image/jpg" -> "image/jpeg"
-            else -> part.mimeType.lowercase()
-        }
-        if (mimeType in setOf("image/jpeg", "image/png", "image/gif", "image/webp")) {
-            addJsonObject {
-                put("type", "image")
-                putJsonObject("source") {
-                    put("type", "base64")
-                    put("media_type", mimeType)
-                    put("data", stripDataUriPrefix(part.base64Data))
-                }
-            }
-        } else {
-            addJsonObject {
-                put("type", "text")
-                put("text", "[不支持直接发送的附件类型: $mimeType]")
-            }
-        }
-    }
-
-    private fun stripDataUriPrefix(value: String): String {
-        if (!value.startsWith("data:", ignoreCase = true)) return value
-        val marker = ";base64,"
-        val markerIndex = value.indexOf(marker, ignoreCase = true)
-        return if (markerIndex >= 0) value.substring(markerIndex + marker.length) else value
-    }
 
     private fun toAnthropicTools(tools: List<Map<String, Any>>?): JsonArray = buildJsonArray {
         tools.orEmpty().forEach { tool ->
@@ -649,11 +563,21 @@ object AnthropicDirectClient {
                         initialInput = block["input"] as? JsonObject,
                         compactionContent = block["content"].nullableString(),
                         encryptedContent = block["encrypted_content"].nullableString(),
+                        redactedData = block["data"].nullableString(),
                     )
                     block["text"]?.jsonPrimitive?.contentOrNull?.let(state.text::append)
                     block["thinking"]?.jsonPrimitive?.contentOrNull?.let(state.text::append)
                     block["signature"]?.jsonPrimitive?.contentOrNull?.let(state.signature::append)
                     blocks[index] = state
+                    if (state.type == "redacted_thinking" && !state.redactedData.isNullOrEmpty()) {
+                        emitEvent(
+                            AppStreamEvent.Reasoning(
+                                text = "",
+                                thoughtSignature = state.redactedData,
+                                redacted = true,
+                            ),
+                        )
+                    }
                     if (state.text.isNotEmpty()) {
                         when (state.type) {
                             "thinking" -> {
@@ -695,12 +619,26 @@ object AnthropicDirectClient {
                         "input_json_delta" -> delta["partial_json"]?.jsonPrimitive?.contentOrNull?.let(state.partialInput::append)
                     }
                 }
+                "content_block_stop" -> {
+                    val index = event["index"]?.jsonPrimitive?.intOrNull ?: return
+                    val state = blocks[index] ?: return
+                    if (state.type == "thinking" && state.signature.isNotEmpty()) {
+                        emitEvent(
+                            AppStreamEvent.Reasoning(
+                                text = "",
+                                thoughtSignature = state.signature.toString(),
+                                signatureOnlyUpdate = true,
+                            ),
+                        )
+                    }
+                }
                 "message_delta" -> {
-                    stopReason = (event["delta"] as? JsonObject)
-                        ?.get("stop_reason")
-                        ?.jsonPrimitive
-                        ?.contentOrNull
-                        ?: stopReason
+                    val delta = event["delta"] as? JsonObject
+                    delta?.get("stop_reason")?.jsonPrimitive?.contentOrNull?.let { reason ->
+                        val mapped = mapAnthropicStopReason(reason, delta["stop_details"] as? JsonObject)
+                        stopReason = mapped.first
+                        errorMessage = mapped.second ?: errorMessage
+                    }
                     (event["usage"] as? JsonObject)?.let { usage ->
                         emitUsage(usage, isFinal = true)
                     }
@@ -726,6 +664,12 @@ object AnthropicDirectClient {
         }
         processEvent()
         if (reasoningOpen) emitEvent(AppStreamEvent.ReasoningFinish())
+        if (!messageStopped) {
+            throw IllegalStateException("Anthropic stream ended before message_stop")
+        }
+        if (errorMessage == null && stopReason == null) {
+            throw IllegalStateException("Anthropic message_stop arrived without stop_reason")
+        }
 
         val sortedBlocks = blocks.values.sortedBy { it.index }
         val toolCalls = sortedBlocks.mapNotNull { block ->
@@ -751,6 +695,12 @@ object AnthropicDirectClient {
                         put("type", "thinking")
                         put("thinking", block.text.toString())
                         if (block.signature.isNotEmpty()) put("signature", block.signature.toString())
+                    }
+                    "redacted_thinking" -> block.redactedData?.let { data ->
+                        addJsonObject {
+                            put("type", "redacted_thinking")
+                            put("data", data)
+                        }
                     }
                     "tool_use" -> {
                         val call = toolCalls.firstOrNull { it.id == block.id } ?: return@forEach
@@ -845,6 +795,22 @@ object AnthropicDirectClient {
     private fun safeTokenAdd(left: Long, right: Long): Long =
         if (right > Long.MAX_VALUE - left) Long.MAX_VALUE else left + right
 
+    /** Pi Anthropic Messages stopReason 映射。 */
+    private fun mapAnthropicStopReason(
+        reason: String,
+        stopDetails: JsonObject?,
+    ): Pair<String, String?> = when (reason) {
+        "end_turn", "pause_turn", "stop_sequence" -> "stop" to null
+        "max_tokens" -> "length" to null
+        "tool_use" -> "tool_use" to null
+        "refusal" -> "error" to (
+            stopDetails?.get("explanation")?.jsonPrimitive?.contentOrNull
+                ?: "The model refused to complete the request"
+            )
+        "sensitive" -> "error" to "Provider stopped with: sensitive"
+        else -> throw IllegalStateException("Unhandled Anthropic stop reason: $reason")
+    }
+
     private fun JsonObject.nonNegativeToken(name: String): Long =
         this[name]?.jsonPrimitive?.longOrNull?.coerceAtLeast(0L) ?: 0L
 
@@ -862,6 +828,7 @@ object AnthropicDirectClient {
         val initialInput: JsonObject?,
         var compactionContent: String?,
         var encryptedContent: String?,
+        val redactedData: String?,
         val text: StringBuilder = StringBuilder(),
         val signature: StringBuilder = StringBuilder(),
         val partialInput: StringBuilder = StringBuilder(),

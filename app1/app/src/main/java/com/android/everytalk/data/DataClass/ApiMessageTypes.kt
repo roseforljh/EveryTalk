@@ -72,6 +72,15 @@ data class AgentAssistantApiMessage(
     val sourceEndpoint: String? = null,
     @SerialName("source_model")
     val sourceModel: String? = null,
+    /**
+     * Pi 的 `AssistantMessage.api`。同一个 Provider、地址和模型也可能切换 Chat、Responses、
+     * Anthropic 或 Gemini 协议；加密思考和原生 Tool ID 只能回放给产生它们的协议。
+     */
+    @SerialName("source_protocol")
+    val sourceProtocol: ModelParameterProtocol? = null,
+    /** Pi AssistantMessage.stopReason；Provider Adapter 和 AgentLoop 共用同一终止语义。 */
+    @SerialName("stop_reason")
+    val stopReason: String? = null,
     @SerialName("name")
     override val name: String? = null,
 ) : AbstractApiMessage()
@@ -91,6 +100,8 @@ sealed class AgentAssistantContentApiPart {
     data class Reasoning(
         val text: String,
         @SerialName("thought_signature") val thoughtSignature: String? = null,
+        /** Anthropic redacted_thinking 等不可见加密思考只允许回放给同源模型。 */
+        val redacted: Boolean = false,
     ) : AgentAssistantContentApiPart()
 
     @Serializable
@@ -105,7 +116,24 @@ data class AgentToolCallApiPart(
     val arguments: JsonObject,
     @SerialName("thought_signature")
     val thoughtSignature: String? = null,
+    /** Pi deferred/custom tool 的可选命名空间。 */
+    val namespace: String? = null,
 )
+
+/** Pi ToolResult.content 的有序块；旧记录仍由 content 字段兼容恢复。 */
+@Serializable
+sealed class AgentToolResultContentApiPart {
+    @Serializable
+    @SerialName("text")
+    data class Text(val text: String) : AgentToolResultContentApiPart()
+
+    @Serializable
+    @SerialName("image")
+    data class Image(
+        val data: String,
+        @SerialName("mime_type") val mimeType: String,
+    ) : AgentToolResultContentApiPart()
+}
 
 /** Tool Result 独立成消息，保证上下文裁剪时能和 Tool Call 成组处理。 */
 @Serializable
@@ -125,4 +153,6 @@ data class AgentToolResultApiMessage(
     val isError: Boolean = false,
     @SerialName("name")
     override val name: String? = toolName,
+    @SerialName("content_blocks")
+    val contentBlocks: List<AgentToolResultContentApiPart> = emptyList(),
 ) : AbstractApiMessage()

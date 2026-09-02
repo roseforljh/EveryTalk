@@ -5,11 +5,13 @@ import com.android.everytalk.data.DataClass.AgentAssistantApiMessage
 import com.android.everytalk.data.DataClass.AgentAssistantContentApiPart
 import com.android.everytalk.data.DataClass.AgentToolCallApiPart
 import com.android.everytalk.data.DataClass.AgentToolResultApiMessage
+import com.android.everytalk.data.DataClass.AgentToolResultContentApiPart
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.ContextUsageSnapshot
 import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.DataClass.ModelTokenLimits
 import com.android.everytalk.data.DataClass.ModelParameterProtocol
+import com.android.everytalk.data.DataClass.modelParameterProtocol
 import com.android.everytalk.data.DataClass.ProviderTurnContinuation
 import com.android.everytalk.data.computer.ComputerErrorCodes
 import com.android.everytalk.data.computer.ComputerRequestContext
@@ -137,10 +139,29 @@ class AgentLoop(
             val resumedApproval = input.approvalDecision
             if (resumedApproval != null) {
                 run = runStore.updateRunStatus(checkNotNull(run), AgentRunStatus.EXECUTING_TOOL)
-                val currentResultAlreadyPersisted = runStore.hasFinalToolResult(
-                    checkNotNull(run).id,
-                    resumedApproval.toolCall.id,
-                )
+                if (resumedApproval.resumeWholeBatchWithApprovedGate) {
+                    val replay = executeToolCallsUntilApproval(
+                        run = checkNotNull(run),
+                        requestId = resumedApproval.requestId,
+                        calls = resumedApproval.pendingToolCalls,
+                        transcript = transcript,
+                        computerContext = input.request.localComputerRequestContext,
+                        maxModelResultTokens = (input.tokenLimits.maxContextTokens.toLong() / 4L).coerceAtLeast(64L),
+                    emit = { event -> emit(event) },
+                    toolLoopGuard = toolLoopGuard,
+                    toolExecutionModes = input.request.tools.piToolExecutionModes(),
+                    toolDefinitions = input.request.tools,
+                    approvedGate = resumedApproval,
+                    )
+                    transcript = replay.transcript
+                    if (replay.paused) return@flow
+                    emit(AppStreamEvent.ExecutionStatusUpdate("正在分析工具结果"))
+                } else {
+                val currentResultAlreadyPersisted = runStore.finalToolResult(
+                    runId = checkNotNull(run).id,
+                    requestId = resumedApproval.requestId,
+                    toolCallId = resumedApproval.toolCall.id,
+                ) != null
                 val resumedPendingCalls = if (resumedApproval.resumePendingToolCallsOnly) {
                     resumedApproval.pendingToolCalls
                 } else if (resumedApproval.toolResultAlreadyPersisted) {
@@ -195,10 +216,30 @@ class AgentLoop(
                     maxModelResultTokens = (input.tokenLimits.maxContextTokens.toLong() / 4L).coerceAtLeast(64L),
                     emit = { event -> emit(event) },
                     toolLoopGuard = toolLoopGuard,
+                    toolExecutionModes = input.request.tools.piToolExecutionModes(),
+                    toolDefinitions = input.request.tools,
                 )
                 transcript = pause.transcript
                 if (pause.paused) return@flow
                 emit(AppStreamEvent.ExecutionStatusUpdate("正在分析工具结果"))
+                }
+            }
+
+            if (input.existingRun != null && runStore.latestCompletedToolBatchTerminates(checkNotNull(run).id)) {
+                // App 可能在整批 terminate ToolResult 已落库、Run 完成状态尚未落库时退出。
+                // 恢复时沿用 Pi 的终止规则；若同时有 steering，则先消费新指令并继续当前 Run。
+                val completedRun = runStore.completeRunIfNoPendingSteering(
+                    run = checkNotNull(run),
+                    requestOrdinal = requestOrdinal,
+                    terminalReason = "tool_terminate",
+                )
+                if (completedRun != null) {
+                    emit(AppStreamEvent.Finish("stop"))
+                    return@flow
+                }
+                val lateSteering = runStore.consumePendingSteering(checkNotNull(run).id)
+                if (lateSteering.isEmpty()) return@flow
+                transcript = transcript + lateSteering
             }
 
             // modelTurnOrdinal 从 1 开始；恢复 Run 时只能使用剩余额度，不能重新获得 50 轮。
@@ -220,115 +261,15 @@ class AgentLoop(
                     runId = checkNotNull(run).id,
                     currentStep = "准备第 ${modelTurnOrdinal} 轮模型请求",
                 )
-                var requestId = UUID.randomUUID().toString()
-                val sessionStatePrompt = computerSessionStateProvider(input.request.localComputerRequestContext)
-                val contextTranscript = transcript + listOfNotNull(
-                    sessionStatePrompt?.takeIf(String::isNotBlank)?.let { prompt ->
-                        SimpleTextApiMessage(
-                            id = "computer-session-state",
-                            role = "system",
-                            content = prompt,
-                        )
-                    },
-                )
                 val toolSchemaFingerprint = agentToolSchemaFingerprint(input.request)
-                var prepared = contextManager.prepare(
-                    requestId = requestId,
-                    request = input.request.copy(
-                        messages = contextTranscript,
-                        localProviderContinuation = providerContinuation,
-                    ),
-                    limits = input.tokenLimits,
-                    checkpoint = activeCompaction,
-                    executionCheckpoint = executionCheckpoint,
-                )
-                if (providerContinuation == null) {
-                    val restoredContinuation = runStore.loadContinuation(
-                        sessionId = input.sessionId,
-                        configId = checkNotNull(run).configIdSnapshot,
-                        request = input.request,
-                        systemPromptFingerprint = agentSystemPromptFingerprint(prepared.messages),
-                        toolSchemaFingerprint = toolSchemaFingerprint,
-                        compactionId = activeCompaction?.id,
-                    )
-                    if (restoredContinuation != null) {
-                        providerContinuation = restoredContinuation
-                        prepared = contextManager.prepare(
-                            requestId = requestId,
-                            request = input.request.copy(
-                                messages = contextTranscript,
-                                localProviderContinuation = restoredContinuation,
-                            ),
-                            limits = input.tokenLimits,
-                            checkpoint = activeCompaction,
-                            executionCheckpoint = executionCheckpoint,
-                        )
-                    }
-                }
-                while (prepared.compactionPlan != null) {
-                    val plan = checkNotNull(prepared.compactionPlan)
-                    requestOrdinal++
-                    run = runStore.updateRunStatus(
-                        run = checkNotNull(run),
-                        status = AgentRunStatus.COMPACTING_CONTEXT,
-                        requestOrdinal = requestOrdinal,
-                    )
-                    executionCheckpoint = runStore.updateExecutionStep(
-                        runId = checkNotNull(run).id,
-                        currentStep = "压缩上下文",
-                    )
-                    runStore.appendStatusEvent(
-                        runId = checkNotNull(run).id,
-                        reason = "compaction_start",
-                        message = "reason=threshold,tokensBefore=${plan.tokensBefore},contextWindow=${input.tokenLimits.maxContextTokens}," +
-                            "triggerThreshold=${plan.triggerThreshold},recentTarget=${plan.recentTargetTokens},nativeOrLocal=local",
-                    )
-                    emit(AppStreamEvent.ExecutionStatusUpdate("正在压缩上下文"))
-                    val completedCompaction = try {
-                        executeCompaction(
-                            run = checkNotNull(run),
-                            requestOrdinal = requestOrdinal,
-                            plan = plan,
-                            baseRequest = input.request.copy(messages = contextTranscript),
-                            limits = input.tokenLimits,
-                        )
-                    } catch (error: AgentContextWindowException) {
-                        runStore.appendStatusEvent(
-                            runId = checkNotNull(run).id,
-                            reason = "compaction_error",
-                            message = error.message ?: "压缩失败",
-                        )
-                        // 软阈值压缩失败时沿用旧检查点，并通过硬窗口裁剪继续当前主请求。
-                        emit(AppStreamEvent.ExecutionStatusUpdate("上下文压缩失败，正在使用安全上下文继续"))
-                        prepared = contextManager.prepare(
-                            requestId = UUID.randomUUID().toString(),
-                            request = input.request.copy(
-                                messages = contextTranscript,
-                                contextManagement = input.request.contextManagement?.copy(
-                                    autoCompressionEnabled = false,
-                                ),
-                                localProviderContinuation = providerContinuation,
-                            ),
-                            limits = input.tokenLimits,
-                            checkpoint = activeCompaction,
-                            executionCheckpoint = executionCheckpoint,
-                        )
-                        break
-                    }
-                    activeCompaction = completedCompaction
-                    runStore.appendStatusEvent(
-                        runId = checkNotNull(run).id,
-                        reason = "compaction_end",
-                        message = "tokensBefore=${plan.tokensBefore},tokensAfter=${completedCompaction.estimatedTokensAfter}," +
-                            "contextWindow=${input.tokenLimits.maxContextTokens},triggerThreshold=${plan.triggerThreshold}," +
-                            "recentTarget=${plan.recentTargetTokens},summaryTokens=${plan.summaryOutputTokenLimit},nativeOrLocal=local",
-                    )
-                    // 摘要替代了早期中立历史，供应商上一轮的原生连续状态已不再对应新前缀。
-                    providerContinuation = null
+                var requestId = ""
+                lateinit var contextTranscript: List<com.android.everytalk.data.DataClass.AbstractApiMessage>
+                lateinit var prepared: PreparedAgentContext
+                while (true) {
                     requestId = UUID.randomUUID().toString()
-                    val refreshedSessionStatePrompt = computerSessionStateProvider(input.request.localComputerRequestContext)
-                    val refreshedContextTranscript = transcript + listOfNotNull(
-                        refreshedSessionStatePrompt?.takeIf(String::isNotBlank)?.let { prompt ->
+                    val sessionStatePrompt = computerSessionStateProvider(input.request.localComputerRequestContext)
+                    contextTranscript = transcript + listOfNotNull(
+                        sessionStatePrompt?.takeIf(String::isNotBlank)?.let { prompt ->
                             SimpleTextApiMessage(
                                 id = "computer-session-state",
                                 role = "system",
@@ -339,12 +280,127 @@ class AgentLoop(
                     prepared = contextManager.prepare(
                         requestId = requestId,
                         request = input.request.copy(
-                            messages = refreshedContextTranscript,
+                            messages = contextTranscript,
                             localProviderContinuation = providerContinuation,
                         ),
                         limits = input.tokenLimits,
                         checkpoint = activeCompaction,
                         executionCheckpoint = executionCheckpoint,
+                    )
+                    if (providerContinuation == null) {
+                        val restoredContinuation = runStore.loadContinuation(
+                            sessionId = input.sessionId,
+                            configId = checkNotNull(run).configIdSnapshot,
+                            request = input.request,
+                            systemPromptFingerprint = agentSystemPromptFingerprint(prepared.messages),
+                            toolSchemaFingerprint = toolSchemaFingerprint,
+                            compactionId = activeCompaction?.id,
+                        )
+                        if (restoredContinuation != null) {
+                            providerContinuation = restoredContinuation
+                            prepared = contextManager.prepare(
+                                requestId = requestId,
+                                request = input.request.copy(
+                                    messages = contextTranscript,
+                                    localProviderContinuation = restoredContinuation,
+                                ),
+                                limits = input.tokenLimits,
+                                checkpoint = activeCompaction,
+                                executionCheckpoint = executionCheckpoint,
+                            )
+                        }
+                    }
+                    while (prepared.compactionPlan != null) {
+                        val plan = checkNotNull(prepared.compactionPlan)
+                        requestOrdinal++
+                        run = runStore.updateRunStatus(
+                            run = checkNotNull(run),
+                            status = AgentRunStatus.COMPACTING_CONTEXT,
+                            requestOrdinal = requestOrdinal,
+                        )
+                        executionCheckpoint = runStore.updateExecutionStep(
+                            runId = checkNotNull(run).id,
+                            currentStep = "压缩上下文",
+                        )
+                        runStore.appendStatusEvent(
+                            runId = checkNotNull(run).id,
+                            reason = "compaction_start",
+                            message = "reason=threshold,tokensBefore=${plan.tokensBefore},contextWindow=${input.tokenLimits.maxContextTokens}," +
+                                "triggerThreshold=${plan.triggerThreshold},recentTarget=${plan.recentTargetTokens},nativeOrLocal=local",
+                        )
+                        emit(AppStreamEvent.ExecutionStatusUpdate("正在压缩上下文"))
+                        val completedCompaction = try {
+                            executeCompaction(
+                                run = checkNotNull(run),
+                                requestOrdinal = requestOrdinal,
+                                plan = plan,
+                                baseRequest = input.request.copy(messages = contextTranscript),
+                                limits = input.tokenLimits,
+                            )
+                        } catch (error: AgentContextWindowException) {
+                            runStore.appendStatusEvent(
+                                runId = checkNotNull(run).id,
+                                reason = "compaction_error",
+                                message = error.message ?: "压缩失败",
+                            )
+                            emit(AppStreamEvent.ExecutionStatusUpdate("上下文压缩失败，正在使用安全上下文继续"))
+                            requestId = UUID.randomUUID().toString()
+                            prepared = contextManager.prepare(
+                                requestId = requestId,
+                                request = input.request.copy(
+                                    messages = contextTranscript,
+                                    contextManagement = input.request.contextManagement?.copy(
+                                        autoCompressionEnabled = false,
+                                    ),
+                                    localProviderContinuation = providerContinuation,
+                                ),
+                                limits = input.tokenLimits,
+                                checkpoint = activeCompaction,
+                                executionCheckpoint = executionCheckpoint,
+                            )
+                            break
+                        }
+                        activeCompaction = completedCompaction
+                        runStore.appendStatusEvent(
+                            runId = checkNotNull(run).id,
+                            reason = "compaction_end",
+                            message = "tokensBefore=${plan.tokensBefore},tokensAfter=${completedCompaction.estimatedTokensAfter}," +
+                                "contextWindow=${input.tokenLimits.maxContextTokens},triggerThreshold=${plan.triggerThreshold}," +
+                                "recentTarget=${plan.recentTargetTokens},summaryTokens=${plan.summaryOutputTokenLimit},nativeOrLocal=local",
+                        )
+                        // 摘要替代了早期中立历史，供应商上一轮的原生连续状态已不再对应新前缀。
+                        providerContinuation = null
+                        requestId = UUID.randomUUID().toString()
+                        val refreshedSessionStatePrompt = computerSessionStateProvider(input.request.localComputerRequestContext)
+                        contextTranscript = transcript + listOfNotNull(
+                            refreshedSessionStatePrompt?.takeIf(String::isNotBlank)?.let { prompt ->
+                                SimpleTextApiMessage(
+                                    id = "computer-session-state",
+                                    role = "system",
+                                    content = prompt,
+                                )
+                            },
+                        )
+                        prepared = contextManager.prepare(
+                            requestId = requestId,
+                            request = input.request.copy(
+                                messages = contextTranscript,
+                                localProviderContinuation = providerContinuation,
+                            ),
+                            limits = input.tokenLimits,
+                            checkpoint = activeCompaction,
+                            executionCheckpoint = executionCheckpoint,
+                        )
+                    }
+
+                    // Pi 在 prepareNextTurn 之后再轮询一次。压缩期间来的 steering 必须进入眼前这轮模型请求。
+                    val steeringAfterPreparation = runStore.consumePendingSteering(checkNotNull(run).id)
+                    if (steeringAfterPreparation.isEmpty()) break
+                    transcript = transcript + steeringAfterPreparation
+                    run = runStore.updateRunStatus(
+                        run = checkNotNull(run),
+                        status = AgentRunStatus.PREPARING_CONTEXT,
+                        requestOrdinal = requestOrdinal,
                     )
                 }
                 requestOrdinal++
@@ -382,6 +438,7 @@ class AgentLoop(
                 run = runStore.updateRunStatus(checkNotNull(run), AgentRunStatus.WAITING_MODEL, ordinal)
 
                 val blocks = mutableListOf<AgentContentBlock>()
+                val turnSourceProtocol = modelParameterProtocol(turnRequest.channel).name
                 val toolCalls = linkedMapOf<String, AgentContentBlock.ToolCall>()
                 var usage: TokenUsage? = null
                 var finishReason: String? = null
@@ -431,14 +488,18 @@ class AgentLoop(
                     when (event) {
                         is AppStreamEvent.Text -> {
                             if (firstTextAt == null && event.text.isNotBlank()) firstTextAt = System.currentTimeMillis()
-                            blocks.appendText(event.text)
+                            blocks.appendText(event.text, sourceProtocol = turnSourceProtocol)
                             partialCheckpointDirty = true
                             partialCharactersSinceCheckpoint += event.text.length
                             roundContentBuffer.accept(event)
                         }
                         is AppStreamEvent.Content -> {
                             if (firstTextAt == null && event.text.isNotBlank()) firstTextAt = System.currentTimeMillis()
-                            blocks.appendText(event.text, event.thoughtSignature)
+                            if (event.signatureOnlyUpdate) {
+                                blocks.updateLastTextSignature(event.thoughtSignature, turnSourceProtocol)
+                            } else {
+                                blocks.appendText(event.text, event.thoughtSignature, turnSourceProtocol)
+                            }
                             partialCheckpointDirty = true
                             partialCharactersSinceCheckpoint += event.text.length
                             roundContentBuffer.accept(event)
@@ -448,7 +509,20 @@ class AgentLoop(
                             roundContentBuffer.accept(event)
                         }
                         is AppStreamEvent.Reasoning -> {
-                            blocks.appendReasoning(event.text, event.thoughtSignature)
+                            if (event.signatureOnlyUpdate) {
+                                blocks.updateLastReasoningSignature(
+                                    event.thoughtSignature,
+                                    event.redacted,
+                                    turnSourceProtocol,
+                                )
+                            } else {
+                                blocks.appendReasoning(
+                                    event.text,
+                                    event.thoughtSignature,
+                                    event.redacted,
+                                    turnSourceProtocol,
+                                )
+                            }
                             partialCheckpointDirty = true
                             partialCharactersSinceCheckpoint += event.text.length
                             roundContentBuffer.accept(event)
@@ -461,6 +535,8 @@ class AgentLoop(
                                 arguments = event.argumentsObj,
                                 // 部分流只在第一个增量携带签名，后续更新不能把它覆盖成 null。
                                 thoughtSignature = event.thoughtSignature ?: previous?.thoughtSignature,
+                                namespace = event.namespace ?: previous?.namespace,
+                                sourceProtocol = turnSourceProtocol,
                             )
                             toolCalls[event.id] = call
                             val existingIndex = blocks.indexOfFirst {
@@ -514,7 +590,7 @@ class AgentLoop(
                     withContext(NonCancellable) { checkpointPartialAssistant(force = true) }
                     throw error
                 }
-                if (blocks.none { it is AgentContentBlock.Text }) finalText?.let(blocks::appendText)
+                blocks.reconcileFinalText(finalText)
                 roundContentBuffer.finish(hasToolCalls = toolCalls.isNotEmpty())
                 val assistant = AgentAssistantTurn(blocks = blocks, finishReason = finishReason)
                 val finishedAt = System.currentTimeMillis()
@@ -529,7 +605,17 @@ class AgentLoop(
                         " total_ms=" + (finishedAt - startedAt),
                 )
 
-                val turnFailure = failure
+                // Pi 把 error/aborted stopReason 当成失败回合。即使某个 Provider 漏发 Error 事件，
+                // 也不能把空 Assistant 记成成功并结束 Run。
+                val turnFailure = failure ?: finishReason
+                    ?.takeIf { it == "error" || it == "aborted" }
+                    ?.let { reason ->
+                        AppStreamEvent.Error(
+                            message = "模型响应以 $reason 状态结束",
+                            code = "provider_$reason",
+                            type = "provider_error",
+                        )
+                    }
                 if (turnFailure != null) {
                     partialCheckpointDirty = blocks.isNotEmpty()
                     checkpointPartialAssistant(force = true)
@@ -711,6 +797,25 @@ class AgentLoop(
                     return@flow
                 }
 
+                // Pi 规则：长度截断时 Tool Call 参数可能是不完整 JSON，禁止执行。
+                // 给每个调用写入普通失败 ToolResult，让下一轮模型重新生成完整调用。
+                if (finishReason == "length") {
+                    assistant.toolCalls.forEach { call ->
+                        val result = AgentContentBlock.ToolResult(
+                            toolCallId = call.id,
+                            toolName = call.name,
+                            content = kotlinx.serialization.json.JsonPrimitive(
+                                "Tool call was truncated because the model reached its output token limit. Please retry with complete arguments.",
+                            ),
+                            isError = true,
+                        )
+                        runStore.appendToolResult(checkNotNull(run).id, requestId, result)
+                        transcript = transcript + result.toApiMessage()
+                    }
+                    emit(AppStreamEvent.ExecutionStatusUpdate("工具调用被模型输出上限截断，正在让模型重新生成"))
+                    continue
+                }
+
                 // 只有确实存在下一批 Tool 时才暂停。最终回答已经没有后续工作，必须自然完成 Run。
                 pauseController.awaitIfPaused(checkNotNull(run).id)
                 run = runStore.updateRunStatus(checkNotNull(run), AgentRunStatus.CHECKING_PERMISSION, ordinal)
@@ -723,9 +828,56 @@ class AgentLoop(
                     maxModelResultTokens = (input.tokenLimits.maxContextTokens.toLong() / 4L).coerceAtLeast(64L),
                     emit = { event -> emit(event) },
                     toolLoopGuard = toolLoopGuard,
+                    toolExecutionModes = turnRequest.tools.piToolExecutionModes(),
+                    toolDefinitions = turnRequest.tools,
                 )
                 transcript = toolOutcome.transcript
                 if (toolOutcome.paused) return@flow
+                if (toolOutcome.terminate) {
+                    // Pi 语义：只有整批结果都明确 terminate=true 才跳过自动下一轮。
+                    // 同时保留 steering 的优先权，用户已排队的新指令仍继续处理。
+                    val completedRun = runStore.completeRunIfNoPendingSteering(
+                        run = checkNotNull(run),
+                        requestOrdinal = ordinal,
+                        terminalReason = "tool_terminate",
+                    )
+                    if (completedRun == null) {
+                        val lateSteering = runStore.consumePendingSteering(checkNotNull(run).id)
+                        if (lateSteering.isNotEmpty()) {
+                            transcript = transcript + lateSteering
+                            continue
+                        }
+                        return@flow
+                    }
+                    run = completedRun
+                    val summary = runStore.usageSummary(checkNotNull(run).id)
+                    emit(
+                        AppStreamEvent.AgentUsage(
+                            activeRequest = finalUsage,
+                            activeContext = summary.activeContext?.let { snapshot ->
+                                ContextUsageSnapshot(
+                                    messageId = input.visibleAssistantMessageId,
+                                    configId = input.request.contextManagement?.configId,
+                                    systemPromptTokens = snapshot.systemPromptTokens,
+                                    conversationTextTokens = snapshot.conversationTextTokens,
+                                    mediaTokens = snapshot.mediaTokens,
+                                    toolSchemaTokens = snapshot.toolSchemaTokens,
+                                    protocolOverheadTokens = snapshot.protocolOverheadTokens,
+                                    reservedOutputTokens = snapshot.reservedOutputTokens,
+                                    contextWindowTokens = snapshot.contextWindowTokens,
+                                    inputCalibrationTokens = snapshot.calibrationTokens,
+                                )
+                            },
+                            runInputTokens = summary.runInputTokens,
+                            runOutputTokens = summary.runOutputTokens,
+                            runTotalTokens = summary.runTotalTokens,
+                            requestCount = summary.requestCount,
+                            conversationTotalTokens = runStore.sessionTotalTokens(input.sessionId),
+                        ),
+                    )
+                    emit(AppStreamEvent.Finish("stop"))
+                    return@flow
+                }
                 // 当前 Tool batch 和全部 ToolResult 已落库，下一轮 LLM 必须先经过暂停门。
                 pauseController.awaitIfPaused(checkNotNull(run).id)
                 emit(AppStreamEvent.ExecutionStatusUpdate("正在分析工具结果"))
@@ -793,6 +945,9 @@ class AgentLoop(
         maxModelResultTokens: Long,
         emit: suspend (AppStreamEvent) -> Unit,
         toolLoopGuard: ToolLoopGuard,
+        toolExecutionModes: Map<String, String> = emptyMap(),
+        toolDefinitions: List<Map<String, Any>>? = null,
+        approvedGate: AgentApprovalRecord? = null,
     ): ToolBatchOutcome {
         var currentTranscript = transcript
         val contextualComputerContext = computerContext?.copy(runId = run.id)
@@ -801,13 +956,28 @@ class AgentLoop(
             (value.automaticCatalog.map { it.skillId } + value.manualReferences.map { it.skillId }).toSet()
         }.orEmpty()
         val parallelCalls = mutableListOf<AgentContentBlock.ToolCall>()
+        val parallelPreflightFailures = mutableMapOf<String, AgentContentBlock.ToolResult>()
+        val finalizedResults = linkedMapOf<String, AgentContentBlock.ToolResult>()
+        // Pi 规则：批次中只要有一个 sequential Tool，整批都必须串行。
+        // Computer 和 Agent Gate 会接触共享资源或暂停 Run，因此都属于 sequential Tool。
+        val executeWholeBatchSequentially = calls.any { call ->
+            toolExecutionModes[call.name] == "sequential" ||
+                call.name in ComputerToolNames.all ||
+                call.name in AgentControlToolNames.all
+        }
+
+        suspend fun persistResult(result: AgentContentBlock.ToolResult) {
+            runStore.appendToolResult(run.id, requestId, result)
+            currentTranscript = currentTranscript + result.toApiMessage()
+            finalizedResults[result.toolCallId] = result
+        }
 
         /**
          * 同一批工具并发执行，完成后仍按模型给出的 Tool Call 顺序写入上下文。
          * 开始事实先统一落库，App 中途退出时，每条远端命令都能沿原 Execution 恢复。
          */
         suspend fun flushParallelCalls() {
-            if (parallelCalls.isEmpty()) return
+            if (parallelCalls.isEmpty() && parallelPreflightFailures.isEmpty()) return
             val batch = parallelCalls.toList()
             parallelCalls.clear()
             batch.forEach { call -> runStore.appendToolExecutionStarted(run.id, requestId, call) }
@@ -815,19 +985,23 @@ class AgentLoop(
             if (containsComputerCall) {
                 runStore.updateRunStatus(run, AgentRunStatus.WAITING_REMOTE_EXECUTION)
             }
-            val results = executeToolCallBatch(
-                calls = batch,
-                computerContext = contextualComputerContext,
-                maxModelResultTokens = maxModelResultTokens,
-                runId = run.id,
-                emit = emit,
-            )
+            val results = if (batch.isEmpty()) emptyList() else executeToolCallBatch(
+                    calls = batch,
+                    computerContext = contextualComputerContext,
+                    maxModelResultTokens = maxModelResultTokens,
+                    runId = run.id,
+                    emit = emit,
+                )
             if (containsComputerCall) {
                 runStore.updateRunStatus(run, AgentRunStatus.PERSISTING_RESULT)
             }
-            results.forEach { result ->
-                runStore.appendToolResult(run.id, requestId, result)
-                currentTranscript = currentTranscript + result.toApiMessage()
+            val executedById = results.associateBy(AgentContentBlock.ToolResult::toolCallId)
+            val orderedResults = calls.mapNotNull { call ->
+                parallelPreflightFailures[call.id] ?: executedById[call.id]
+            }
+            parallelPreflightFailures.clear()
+            orderedResults.forEach { result ->
+                persistResult(result)
             }
             runStore.updateExecutionStep(
                 runId = run.id,
@@ -836,7 +1010,46 @@ class AgentLoop(
             )
         }
 
-        for ((index, call) in calls.withIndex()) {
+        for ((index, rawCall) in calls.withIndex()) {
+            // 一个并行批次可能连续经过多个 Gate。每次恢复都从持久事实计算，已完成槽位绝不重放。
+            val persistedResult = runStore.finalToolResult(run.id, requestId, rawCall.id)
+            if (persistedResult != null) {
+                finalizedResults[rawCall.id] = persistedResult
+                continue
+            }
+            val call = try {
+                PiToolArgumentValidator.prepareAndValidate(rawCall, toolDefinitions)
+            } catch (error: IllegalArgumentException) {
+                val result = AgentContentBlock.ToolResult(
+                    toolCallId = rawCall.id,
+                    toolName = rawCall.name,
+                    content = kotlinx.serialization.json.JsonPrimitive(error.message ?: "工具参数校验失败"),
+                    isError = true,
+                )
+                if (executeWholeBatchSequentially) {
+                    flushParallelCalls()
+                    persistResult(result)
+                } else {
+                    // Pi 会把 schema 失败作为普通 ToolResult；并行批次仍先完成全部预检。
+                    parallelPreflightFailures[rawCall.id] = result
+                }
+                continue
+            }
+            if (approvedGate?.toolCall?.id == call.id) {
+                if (approvedGate.decision in setOf(AgentApprovalDecision.APPROVED, AgentApprovalDecision.RETRY)) {
+                    toolLoopGuard.record(call)?.let { reason -> throw AgentToolLoopException(reason) }
+                }
+                flushParallelCalls()
+                val handled = executeApprovedOrRejectedTool(
+                    run = run,
+                    record = approvedGate,
+                    baseContext = computerContext,
+                    maxModelResultTokens = maxModelResultTokens,
+                    emit = emit,
+                )
+                persistResult(handled.result)
+                continue
+            }
             val pauseRequest = runCatching { agentPauseRequest(call, allowedSkillIds) }
             if (pauseRequest.isFailure && call.name in AgentControlToolNames.all) {
                 flushParallelCalls()
@@ -846,8 +1059,7 @@ class AgentLoop(
                     content = kotlinx.serialization.json.JsonPrimitive(pauseRequest.exceptionOrNull()?.message ?: "申请参数无效"),
                     isError = true,
                 )
-                runStore.appendToolResult(run.id, requestId, result)
-                currentTranscript = currentTranscript + result.toApiMessage()
+                persistResult(result)
                 continue
             }
             val agentRequest = pauseRequest.getOrNull()
@@ -862,8 +1074,7 @@ class AgentLoop(
                             content = kotlinx.serialization.json.JsonPrimitive("当前运行环境未启用统一人类接力 Broker"),
                             isError = true,
                         )
-                        runStore.appendToolResult(run.id, requestId, result)
-                        currentTranscript = currentTranscript + result.toApiMessage()
+                        persistResult(result)
                         continue
                     }
                     val requestHash = java.security.MessageDigest.getInstance("SHA-256")
@@ -914,7 +1125,6 @@ class AgentLoop(
             } catch (error: CancellationException) {
                 throw error
             } catch (error: Exception) {
-                flushParallelCalls()
                 /**
                  * 审批预检也会解析工具参数。参数错误属于本次工具调用失败，
                  * 应回传模型自行纠正，不能让整次 Agent 运行直接失败。
@@ -925,18 +1135,24 @@ class AgentLoop(
                     content = kotlinx.serialization.json.JsonPrimitive(error.message ?: "工具参数无效"),
                     isError = true,
                 )
-                runStore.appendToolResult(run.id, requestId, result)
-                currentTranscript = currentTranscript + result.toApiMessage()
+                if (executeWholeBatchSequentially) {
+                    flushParallelCalls()
+                    persistResult(result)
+                } else {
+                    // 并行批次必须先完成全部预检；失败结果与成功结果最后按原调用顺序一起落库。
+                    parallelPreflightFailures[call.id] = result
+                }
                 continue
             }
             if (approval != null) {
-                flushParallelCalls()
+                if (executeWholeBatchSequentially) flushParallelCalls()
                 val record = AgentApprovalRecord(
                     approvalRequestId = UUID.randomUUID().toString(),
                     requestId = requestId,
                     toolCall = call,
-                    pendingToolCalls = calls.drop(index),
+                    pendingToolCalls = if (executeWholeBatchSequentially) calls.drop(index) else calls,
                     request = approval,
+                    resumeWholeBatchWithApprovedGate = !executeWholeBatchSequentially,
                 )
                 runStore.pauseForApproval(run, record)
                 runStore.updateExecutionStep(
@@ -951,7 +1167,7 @@ class AgentLoop(
             toolLoopGuard.record(call)?.let { reason -> throw AgentToolLoopException(reason) }
 
             // 修改服务器的命令可能依赖前一条命令，继续串行；查询类命令才能安全并发。
-            if (canRunToolCallInParallel(call)) {
+            if (!executeWholeBatchSequentially && canRunToolCallInParallel(call)) {
                 parallelCalls += call
                 continue
             }
@@ -986,16 +1202,19 @@ class AgentLoop(
             if (call.name in ComputerToolNames.all) {
                 runStore.updateRunStatus(run, AgentRunStatus.PERSISTING_RESULT)
             }
-            runStore.appendToolResult(run.id, requestId, result)
+            persistResult(result)
             runStore.updateExecutionStep(
                 runId = run.id,
                 currentStep = "已完成工具 ${call.name}，准备分析结果",
                 resumeInstruction = null,
             )
-            currentTranscript = currentTranscript + result.toApiMessage()
         }
         flushParallelCalls()
-        return ToolBatchOutcome(currentTranscript, paused = false)
+        return ToolBatchOutcome(
+            transcript = currentTranscript,
+            paused = false,
+            terminate = calls.isNotEmpty() && calls.all { call -> finalizedResults[call.id]?.terminate == true },
+        )
     }
 
     /**
@@ -1138,20 +1357,22 @@ class AgentLoop(
             text = blocks.filterIsInstance<AgentContentBlock.Text>().joinToString("") { it.text },
             reasoning = blocks.filterIsInstance<AgentContentBlock.Reasoning>().joinToString("") { it.text },
             toolCalls = toolCalls.map { call ->
-                AgentToolCallApiPart(call.id, call.name, call.arguments, call.thoughtSignature)
+                AgentToolCallApiPart(call.id, call.name, call.arguments, call.thoughtSignature, call.namespace)
             },
             contentParts = blocks.map { block -> block.toApiContentPart() },
             sourceProvider = request.provider,
             sourceEndpoint = request.apiAddress,
             sourceModel = request.model,
+            sourceProtocol = sourceProtocol ?: modelParameterProtocol(request.channel),
+            stopReason = finishReason,
         )
 
     /** 保留原始块顺序和块级签名，避免下一轮只能依赖易失的 continuation。 */
     private fun AgentContentBlock.toApiContentPart(): AgentAssistantContentApiPart = when (this) {
         is AgentContentBlock.Text -> AgentAssistantContentApiPart.Text(text, thoughtSignature)
-        is AgentContentBlock.Reasoning -> AgentAssistantContentApiPart.Reasoning(text, thoughtSignature)
+        is AgentContentBlock.Reasoning -> AgentAssistantContentApiPart.Reasoning(text, thoughtSignature, redacted)
         is AgentContentBlock.ToolCall -> AgentAssistantContentApiPart.ToolCall(
-            AgentToolCallApiPart(id, name, arguments, thoughtSignature),
+            AgentToolCallApiPart(id, name, arguments, thoughtSignature, namespace),
         )
         is AgentContentBlock.ToolResult -> error("Assistant 中不能包含 Tool Result")
     }
@@ -1163,6 +1384,7 @@ class AgentLoop(
             toolName = toolName,
             content = content,
             isError = isError,
+            contentBlocks = contentBlocks,
         )
 
     /**
@@ -1331,6 +1553,7 @@ internal fun remainingAgentModelTurnOrdinals(firstModelTurnOrdinal: Int): IntRan
 private data class ToolBatchOutcome(
     val transcript: List<com.android.everytalk.data.DataClass.AbstractApiMessage>,
     val paused: Boolean,
+    val terminate: Boolean = false,
 )
 
 private data class ResumedToolOutcome(val result: AgentContentBlock.ToolResult)
@@ -1407,30 +1630,110 @@ internal class ToolLoopGuard {
 
 private class AgentToolLoopException(message: String) : IllegalStateException(message)
 
-private fun MutableList<AgentContentBlock>.appendText(text: String, thoughtSignature: String? = null) {
+private fun MutableList<AgentContentBlock>.appendText(
+    text: String,
+    thoughtSignature: String? = null,
+    sourceProtocol: String? = null,
+) {
     if (text.isEmpty() && thoughtSignature.isNullOrEmpty()) return
     val last = lastOrNull()
-    if (last is AgentContentBlock.Text && last.thoughtSignature == null && thoughtSignature == null) {
-        this[lastIndex] = last.copy(text = last.text + text)
+    if (last is AgentContentBlock.Text && signaturesBelongToSameStreamBlock(last.thoughtSignature, thoughtSignature)) {
+        // Pi 在连续 text_delta 上复用一个块，并保留最近一次出现的非空签名。
+        this[lastIndex] = last.copy(
+            text = last.text + text,
+            thoughtSignature = thoughtSignature?.takeIf(String::isNotEmpty) ?: last.thoughtSignature,
+            sourceProtocol = sourceProtocol ?: last.sourceProtocol,
+        )
     } else {
-        add(AgentContentBlock.Text(text, thoughtSignature))
+        add(AgentContentBlock.Text(text, thoughtSignature, sourceProtocol))
     }
 }
 
-private fun MutableList<AgentContentBlock>.appendReasoning(text: String, thoughtSignature: String? = null) {
+/**
+ * Responses 的终止事件可能同时补齐完整正文和 message id。
+ * 若签名事件先创建了空文本块，这里把终止正文填回同一块，避免持久化后只剩签名。
+ */
+private fun MutableList<AgentContentBlock>.reconcileFinalText(finalText: String?) {
+    val completed = finalText?.takeIf(String::isNotBlank) ?: return
+    val textIndexes = indices.filter { this[it] is AgentContentBlock.Text }
+    if (textIndexes.isEmpty()) {
+        appendText(completed)
+        return
+    }
+    if (textIndexes.size == 1) {
+        val index = textIndexes.single()
+        val block = this[index] as AgentContentBlock.Text
+        if (block.text != completed) this[index] = block.copy(text = completed)
+    }
+}
+
+private fun MutableList<AgentContentBlock>.updateLastTextSignature(
+    thoughtSignature: String?,
+    sourceProtocol: String? = null,
+) {
+    if (thoughtSignature.isNullOrEmpty()) return
+    val index = indexOfLast { it is AgentContentBlock.Text }
+    if (index < 0) {
+        add(AgentContentBlock.Text("", thoughtSignature, sourceProtocol))
+    } else {
+        val text = this[index] as AgentContentBlock.Text
+        this[index] = text.copy(thoughtSignature = thoughtSignature, sourceProtocol = sourceProtocol ?: text.sourceProtocol)
+    }
+}
+
+private fun MutableList<AgentContentBlock>.appendReasoning(
+    text: String,
+    thoughtSignature: String? = null,
+    redacted: Boolean = false,
+    sourceProtocol: String? = null,
+) {
     if (text.isEmpty() && thoughtSignature.isNullOrEmpty()) return
     val last = lastOrNull()
-    if (last is AgentContentBlock.Reasoning && last.thoughtSignature == null && thoughtSignature == null) {
-        this[lastIndex] = last.copy(text = last.text + text)
+    if (
+        last is AgentContentBlock.Reasoning &&
+        !last.redacted &&
+        !redacted &&
+        signaturesBelongToSameStreamBlock(last.thoughtSignature, thoughtSignature)
+    ) {
+        // Pi 在连续 thinking_delta 上复用一个块，并保留最近一次出现的非空签名。
+        this[lastIndex] = last.copy(
+            text = last.text + text,
+            thoughtSignature = thoughtSignature?.takeIf(String::isNotEmpty) ?: last.thoughtSignature,
+            sourceProtocol = sourceProtocol ?: last.sourceProtocol,
+        )
     } else {
-        add(AgentContentBlock.Reasoning(text, thoughtSignature))
+        add(AgentContentBlock.Reasoning(text, thoughtSignature, redacted, sourceProtocol))
+    }
+}
+
+/** 两个不同的非空签名代表不同 Provider 块；其余情况允许把晚到签名并回当前块。 */
+private fun signaturesBelongToSameStreamBlock(previous: String?, incoming: String?): Boolean =
+    previous.isNullOrEmpty() || incoming.isNullOrEmpty() || previous == incoming
+
+/** Anthropic/OpenAI 的签名通常在正文增量之后才到达，必须补回原块。 */
+private fun MutableList<AgentContentBlock>.updateLastReasoningSignature(
+    thoughtSignature: String?,
+    redacted: Boolean,
+    sourceProtocol: String? = null,
+) {
+    if (thoughtSignature.isNullOrEmpty()) return
+    val index = indexOfLast { it is AgentContentBlock.Reasoning && it.redacted == redacted }
+    if (index < 0) {
+        add(AgentContentBlock.Reasoning("", thoughtSignature, redacted, sourceProtocol))
+    } else {
+        val reasoning = this[index] as AgentContentBlock.Reasoning
+        this[index] = reasoning.copy(
+            thoughtSignature = thoughtSignature,
+            sourceProtocol = sourceProtocol ?: reasoning.sourceProtocol,
+        )
     }
 }
 
 private fun AppStreamEvent.isMeaningfulModelEvent(): Boolean = when (this) {
+    is AppStreamEvent.Reasoning ->
+        text.isNotEmpty() || (!signatureOnlyUpdate && !thoughtSignature.isNullOrEmpty())
+    is AppStreamEvent.Content -> text.isNotEmpty() || (!signatureOnlyUpdate && !thoughtSignature.isNullOrEmpty())
     is AppStreamEvent.Text,
-    is AppStreamEvent.Content,
-    is AppStreamEvent.Reasoning,
     is AppStreamEvent.ToolCall,
     is AppStreamEvent.Usage,
     is AppStreamEvent.Error,
@@ -1441,6 +1744,20 @@ private fun AppStreamEvent.isMeaningfulModelEvent(): Boolean = when (this) {
 /** 压缩请求和普通模型请求共用同一套临时网络错误判定。 */
 private fun AppStreamEvent.Error.isRetryableNetworkError(finishReason: String?): Boolean =
     type == "retryable_network" || code == "connection_aborted" || finishReason == "connection_failed"
+
+/** 兼容 Pi 的 executionMode，同时接受 Kotlin 工具定义常用的 snake_case 写法。 */
+private fun List<Map<String, Any>>?.piToolExecutionModes(): Map<String, String> =
+    orEmpty().mapNotNull { definition ->
+        @Suppress("UNCHECKED_CAST")
+        val function = definition["function"] as? Map<String, Any>
+        val name = (function?.get("name") ?: definition["name"])?.toString()?.takeIf(String::isNotBlank)
+            ?: return@mapNotNull null
+        val mode = (
+            definition["executionMode"] ?: definition["execution_mode"] ?:
+                function?.get("executionMode") ?: function?.get("execution_mode")
+            )?.toString()?.lowercase()
+        name to if (mode == "sequential") "sequential" else "parallel"
+    }.toMap()
 
 /** Provider 可以先发送协议心跳，但首个真正模型事件必须在统一时限内到达。 */
 internal fun Flow<AppStreamEvent>.withFirstMeaningfulEventTimeout(

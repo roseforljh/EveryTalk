@@ -133,7 +133,7 @@ object OpenAIResponsesClient {
                     )
                 }
             }
-            if (!terminalSent) send(AppStreamEvent.Finish("turn_complete"))
+            if (!terminalSent) send(AppStreamEvent.Finish(completed.stopReason))
         } catch (error: CancellationException) {
             throw error
         } catch (error: Exception) {
@@ -155,12 +155,30 @@ object OpenAIResponsesClient {
         val arguments: String
     )
 
+    private data class ResponsesToolCallState(
+        var providerCallId: String = "",
+        var providerItemId: String? = null,
+        var name: String = "",
+        val arguments: StringBuilder = StringBuilder(),
+        var namespace: String? = null,
+    ) {
+        val callId: String
+            get() = responsesToolCallId(providerCallId.takeIf(String::isNotBlank), providerItemId)
+
+        fun matches(callId: String?, itemId: String?): Boolean = when {
+            !itemId.isNullOrBlank() && !providerItemId.isNullOrBlank() -> providerItemId == itemId
+            !callId.isNullOrBlank() && providerCallId.isNotBlank() -> providerCallId == callId
+            else -> false
+        }
+    }
+
     private data class ResponsesParseResult(
         val hasToolCalls: Boolean,
         val fullText: String,
         val reasoningContent: String = "",
         val outputItems: List<JsonElement> = emptyList(),
         val usage: TokenUsage? = null,
+        val stopReason: String = "stop",
     )
 
     internal fun buildResponsesPayload(
@@ -177,7 +195,10 @@ object OpenAIResponsesClient {
         input: List<JsonElement>,
         nativeContextManagementEnabled: Boolean,
     ): String {
-        val messagesWithSystemPrompt = SystemPromptInjector.smartInjectSystemPrompt(request.messages)
+        val messagesWithSystemPrompt = PiOpenAIResponsesMessageAdapter.transformMessages(
+            SystemPromptInjector.smartInjectSystemPrompt(request.messages),
+            request,
+        )
             .normalizeAgentToolHistory()
         val normalizedTools = PromptCachePolicy.normalizeTools(request.tools)
         val promptCacheKey = PromptCachePolicy.buildOpenAICacheKey(
@@ -283,7 +304,7 @@ object OpenAIResponsesClient {
                             }
                         }
                     }
-                    put("tool_choice", "auto")
+                    put("tool_choice", request.toolChoice?.let(::anyToJsonElement) ?: JsonPrimitive("auto"))
                 }
             }
         }.toString()
@@ -293,12 +314,10 @@ object OpenAIResponsesClient {
         request: ChatRequest,
         allowRestoredCompaction: Boolean = true,
     ): List<JsonElement> {
-        val messagesWithSystemPrompt = SystemPromptInjector.smartInjectSystemPrompt(request.messages)
-            .normalizeAgentToolHistory()
-        val transcriptToolCallIds = messagesWithSystemPrompt
-            .filterIsInstance<AgentAssistantApiMessage>()
-            .flatMap { message -> message.toolCalls.map { it.id } }
-            .toSet()
+        val messagesWithSystemPrompt = PiOpenAIResponsesMessageAdapter.transformMessages(
+            SystemPromptInjector.smartInjectSystemPrompt(request.messages),
+            request,
+        )
         val toolResultIds = messagesWithSystemPrompt
             .filterIsInstance<AgentToolResultApiMessage>()
             .map { it.toolCallId }
@@ -325,47 +344,64 @@ object OpenAIResponsesClient {
         val nativeFunctionCalls = nativeOutputCandidate.orEmpty().mapNotNull { item ->
             val value = item as? JsonObject ?: return@mapNotNull null
             if (value["type"]?.jsonPrimitive?.contentOrNull != "function_call") return@mapNotNull null
-            value["call_id"]?.jsonPrimitive?.contentOrNull to value["name"]?.jsonPrimitive?.contentOrNull
+            val callId = value["call_id"]?.jsonPrimitive?.contentOrNull ?: return@mapNotNull null
+            val itemId = value["id"]?.jsonPrimitive?.contentOrNull
+            (itemId?.let { "$callId|$it" } ?: callId) to value["name"]?.jsonPrimitive?.contentOrNull
         }
         val nativeFunctionCallIds = nativeFunctionCalls.map { it.first }
+        val nativeText = nativeOutputCandidate?.toList()?.let(::extractOpenAICompletedOutputText).orEmpty()
         val continuationBelongsToAssistant = latestAssistant != null &&
+            latestAssistant.canReplayNativeContinuation(request) &&
             (request.localProviderContinuation?.assistantMessageId == null ||
                 request.localProviderContinuation.assistantMessageId == latestAssistant.id) &&
-            latestAssistant.toolCalls.isNotEmpty() &&
-            nativeFunctionCalls.size == latestAssistant.toolCalls.size &&
-            nativeFunctionCalls.zip(latestAssistant.toolCalls).all { (native, call) ->
-                native.first == call.id && native.second == call.name
-            }
+            (
+                if (latestAssistant.toolCalls.isEmpty()) {
+                    nativeFunctionCalls.isEmpty() && nativeText == latestAssistant.text
+                } else {
+                    nativeFunctionCalls.size == latestAssistant.toolCalls.size &&
+                        nativeFunctionCalls.zip(latestAssistant.toolCalls).all { (native, call) ->
+                            (native.first == call.id || native.first.substringBefore('|') == call.id) &&
+                                native.second == call.name
+                        }
+                }
+            )
         // 中断可能只保存模型的 function_call，却没来得及保存工具结果。
         // 这种 continuation 不能再发给 Responses，否则服务端会直接返回 400。
         val nativeOutput = nativeOutputCandidate?.takeIf {
             continuationBelongsToAssistant &&
-            nativeFunctionCallIds.all { callId ->
-                callId != null && callId.isNotBlank() && callId in toolResultIds
-            }
+            (nativeFunctionCallIds.isEmpty() || nativeFunctionCallIds.all { callId ->
+                callId.isNotBlank() && toolResultIds.any { resultId ->
+                    resultId == callId || resultId == callId.substringBefore('|')
+                }
+            })
         }
-        val completedToolCallIds = (
-            transcriptToolCallIds +
-                nativeFunctionCallIds.filterNotNull().takeIf { nativeOutput != null }.orEmpty()
-            ).intersect(toolResultIds)
         val replacedAssistantId = nativeOutput?.let {
             messagesWithSystemPrompt.filterIsInstance<AgentAssistantApiMessage>().lastOrNull()?.id
         }
         val throughIndex = runThroughIndex.takeIf { runNativeInput != null } ?: -1
+        val uncoveredMessages = messagesWithSystemPrompt
+            .filterIndexed { index, message ->
+                message.role.equals("system", ignoreCase = true) || index > throughIndex
+            }
+            .filterNot { it.role.equals("system", ignoreCase = true) }
         return buildList {
             if (allowRestoredCompaction) {
                 (runNativeInput ?: restoredNativeInput(request))?.let(::addAll)
             }
-            messagesWithSystemPrompt
-                .filterIndexed { index, message ->
-                    message.role.equals("system", ignoreCase = true) || index > throughIndex
-                }
-                .filterNot { it.role.equals("system", ignoreCase = true) }
-                .forEach { message ->
-                    if (message.id == replacedAssistantId) addAll(checkNotNull(nativeOutput))
-                    else addAll(message.toResponsesInputItems(completedToolCallIds))
-                }
-        }.removeOrphanToolItems()
+            val replacementIndex = uncoveredMessages.indexOfFirst { it.id == replacedAssistantId }
+            if (replacementIndex < 0) {
+                addAll(PiOpenAIResponsesMessageAdapter.buildTransformedInput(uncoveredMessages, request))
+            } else {
+                addAll(PiOpenAIResponsesMessageAdapter.buildTransformedInput(uncoveredMessages.take(replacementIndex), request))
+                addAll(checkNotNull(nativeOutput))
+                addAll(
+                    PiOpenAIResponsesMessageAdapter.buildTransformedInput(
+                        uncoveredMessages.drop(replacementIndex + 1),
+                        request,
+                    ),
+                )
+            }
+        }
     }
 
     private fun restoredNativeInput(request: ChatRequest): List<JsonElement>? {
@@ -397,105 +433,6 @@ object OpenAIResponsesClient {
     private fun hasRestoredResponsesCompaction(request: ChatRequest): Boolean =
         activeNativeInput(request)?.let(::latestCompactionItemId) != null
 
-    private fun com.android.everytalk.data.DataClass.AbstractApiMessage.toResponsesInputItems(
-        completedToolCallIds: Set<String>,
-    ): List<JsonElement> =
-        when (this) {
-            is SimpleTextApiMessage -> listOf(buildJsonObject {
-                put("role", role)
-                put("content", content)
-            })
-            is PartsApiMessage -> {
-                val supportedParts = parts.filterNot {
-                    it is ApiContentPart.FileUri && it.mimeType == "qwen-file-id"
-                }
-                if (supportedParts.all { it is ApiContentPart.Text }) {
-                    listOf(buildJsonObject {
-                        put("role", role)
-                        put("content", supportedParts.joinToString("\n") {
-                            (it as ApiContentPart.Text).text
-                        })
-                    })
-                } else {
-                    listOf(buildJsonObject {
-                        put("role", role)
-                        putJsonArray("content") {
-                            supportedParts.forEach { part ->
-                                when (part) {
-                                    is ApiContentPart.Text -> addJsonObject {
-                                        put("type", "input_text")
-                                        put("text", part.text)
-                                    }
-                                    is ApiContentPart.InlineData -> addJsonObject {
-                                        put("type", "input_image")
-                                        put("image_url", "data:${part.mimeType};base64,${part.base64Data}")
-                                    }
-                                    is ApiContentPart.FileUri -> addJsonObject {
-                                        put("type", "input_text")
-                                        put("text", "[Attachment: ${part.uri}]")
-                                    }
-                                }
-                            }
-                        }
-                    })
-                }
-            }
-            is AgentAssistantApiMessage -> buildList {
-                if (reasoning.isNotBlank()) {
-                    add(buildJsonObject {
-                        put("role", "assistant")
-                        put("content", reasoning)
-                    })
-                }
-                if (text.isNotBlank()) {
-                    add(buildJsonObject {
-                        put("role", "assistant")
-                        put("content", text)
-                    })
-                }
-                toolCalls.filter { it.id in completedToolCallIds }.forEach { call ->
-                    add(buildJsonObject {
-                        put("type", "function_call")
-                        put("call_id", call.id)
-                        put("name", call.name)
-                        put("arguments", call.arguments.toString())
-                    })
-                }
-            }
-            is AgentToolResultApiMessage -> if (toolCallId in completedToolCallIds) {
-                listOf(buildJsonObject {
-                    put("type", "function_call_output")
-                    put("call_id", toolCallId)
-                    put("output", content.toString())
-                })
-            } else {
-                emptyList()
-            }
-        }
-
-    /** 请求发出前再做一次协议配对，兼容数据库里已经存在的脏数据。 */
-    private fun List<JsonElement>.removeOrphanToolItems(): List<JsonElement> {
-        val functionCallIds = mapNotNull { item ->
-            (item as? JsonObject)
-                ?.takeIf { it["type"]?.jsonPrimitive?.contentOrNull == "function_call" }
-                ?.get("call_id")?.jsonPrimitive?.contentOrNull
-        }.toSet()
-        val functionOutputIds = mapNotNull { item ->
-            (item as? JsonObject)
-                ?.takeIf { it["type"]?.jsonPrimitive?.contentOrNull == "function_call_output" }
-                ?.get("call_id")?.jsonPrimitive?.contentOrNull
-        }.toSet()
-        val completedIds = functionCallIds.intersect(functionOutputIds)
-        return filter { item ->
-            val objectItem = item as? JsonObject ?: return@filter true
-            when (objectItem["type"]?.jsonPrimitive?.contentOrNull) {
-                "function_call", "function_call_output" ->
-                    objectItem["call_id"]?.jsonPrimitive?.contentOrNull in completedIds
-                else -> true
-            }
-        }
-    }
-
     private suspend fun parseResponsesSSEStream(
         channel: ByteReadChannel,
         onToolCall: (ResponsesToolCallInfo) -> Unit,
@@ -511,9 +448,39 @@ object OpenAIResponsesClient {
         var completedOutputItems: List<JsonElement>? = null
         var completedResponseText: String? = null
         var finalUsage: TokenUsage? = null
+        var stopReason = "stop"
+        var sawTerminalResponse = false
 
         // 聚合 function_call 参数
-        val toolCallsMap = mutableMapOf<String, Triple<String, String, StringBuilder>>() // callId -> (callId, name, args)
+        val toolCallsMap = mutableMapOf<String, ResponsesToolCallState>()
+
+        /** Responses 的同一调用按 output_index 绑定；终止事件没有 index 时再按真实 ID 对账。 */
+        fun upsertToolCall(
+            outputIndex: Int?,
+            callId: String?,
+            itemId: String?,
+            name: String?,
+            arguments: String?,
+            replaceArguments: Boolean,
+            namespace: String?,
+        ): ResponsesToolCallState? {
+            val compositeId = responsesToolCallId(callId, itemId)
+            val indexedKey = outputIndex?.let { "index:$it" }
+            val existingKey = indexedKey?.takeIf(toolCallsMap::containsKey)
+                ?: toolCallsMap.entries.firstOrNull { (_, state) -> state.matches(callId, itemId) }?.key
+            if (compositeId.isBlank() && existingKey == null) return null
+            val key = existingKey ?: indexedKey ?: "id:$compositeId"
+            val state = toolCallsMap.getOrPut(key) { ResponsesToolCallState() }
+            callId?.takeIf(String::isNotBlank)?.let { state.providerCallId = it }
+            itemId?.takeIf(String::isNotBlank)?.let { state.providerItemId = it }
+            name?.takeIf(String::isNotBlank)?.let { state.name = it }
+            namespace?.let { state.namespace = it }
+            arguments?.let { value ->
+                if (replaceArguments) state.arguments.clear()
+                state.arguments.append(value)
+            }
+            return state
+        }
 
         try {
             while (true) {
@@ -553,31 +520,27 @@ object OpenAIResponsesClient {
                                     }
                                     "response.refusal.done" -> Unit
                                     "response.function_call_arguments.delta" -> {
-                                        val callId = event["call_id"]?.jsonPrimitive?.contentOrNull
-                                            ?: event["item_id"]?.jsonPrimitive?.contentOrNull ?: ""
-                                        val delta = event["delta"]?.jsonPrimitive?.contentOrNull ?: ""
-                                        val existing = toolCallsMap[callId]
-                                        if (existing != null) {
-                                            existing.third.append(delta)
-                                        } else {
-                                            val name = event["name"]?.jsonPrimitive?.contentOrNull ?: ""
-                                            toolCallsMap[callId] = Triple(callId, name, StringBuilder(delta))
-                                        }
+                                        upsertToolCall(
+                                            outputIndex = event["output_index"]?.jsonPrimitive?.intOrNull,
+                                            callId = event["call_id"]?.jsonPrimitive?.contentOrNull,
+                                            itemId = event["item_id"]?.jsonPrimitive?.contentOrNull,
+                                            name = event["name"]?.jsonPrimitive?.contentOrNull,
+                                            arguments = event["delta"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+                                            replaceArguments = false,
+                                            namespace = event["namespace"]?.jsonPrimitive?.contentOrNull,
+                                        )
                                         hasToolCalls = true
                                     }
                                     "response.function_call_arguments.done" -> {
-                                        val callId = event["call_id"]?.jsonPrimitive?.contentOrNull
-                                            ?: event["item_id"]?.jsonPrimitive?.contentOrNull ?: ""
-                                        val name = event["name"]?.jsonPrimitive?.contentOrNull
-                                        val args = event["arguments"]?.jsonPrimitive?.contentOrNull
-                                        if (callId.isNotBlank()) {
-                                            val existing = toolCallsMap[callId]
-                                            if (existing != null && name != null) {
-                                                toolCallsMap[callId] = Triple(callId, name, StringBuilder(args ?: existing.third.toString()))
-                                            } else if (name != null) {
-                                                toolCallsMap[callId] = Triple(callId, name, StringBuilder(args ?: ""))
-                                            }
-                                        }
+                                        upsertToolCall(
+                                            outputIndex = event["output_index"]?.jsonPrimitive?.intOrNull,
+                                            callId = event["call_id"]?.jsonPrimitive?.contentOrNull,
+                                            itemId = event["item_id"]?.jsonPrimitive?.contentOrNull,
+                                            name = event["name"]?.jsonPrimitive?.contentOrNull,
+                                            arguments = event["arguments"]?.jsonPrimitive?.contentOrNull,
+                                            replaceArguments = event["arguments"] != null,
+                                            namespace = event["namespace"]?.jsonPrimitive?.contentOrNull,
+                                        )
                                         hasToolCalls = true
                                     }
                                     "response.reasoning_summary_text.delta" -> {
@@ -598,12 +561,15 @@ object OpenAIResponsesClient {
                                         }
                                         val itemType = item?.get("type")?.jsonPrimitive?.contentOrNull
                                         if (itemType == "function_call") {
-                                            val callId = item["call_id"]?.jsonPrimitive?.contentOrNull
-                                                ?: item["id"]?.jsonPrimitive?.contentOrNull ?: ""
-                                            val name = item["name"]?.jsonPrimitive?.contentOrNull ?: ""
-                                            if (callId.isNotBlank() && !toolCallsMap.containsKey(callId)) {
-                                                toolCallsMap[callId] = Triple(callId, name, StringBuilder())
-                                            }
+                                            upsertToolCall(
+                                                outputIndex = outputIndex,
+                                                callId = item["call_id"]?.jsonPrimitive?.contentOrNull,
+                                                itemId = item["id"]?.jsonPrimitive?.contentOrNull,
+                                                name = item["name"]?.jsonPrimitive?.contentOrNull,
+                                                arguments = item["arguments"]?.jsonPrimitive?.contentOrNull,
+                                                replaceArguments = item["arguments"] != null,
+                                                namespace = item["namespace"]?.jsonPrimitive?.contentOrNull,
+                                            )
                                             hasToolCalls = true
                                         } else if (itemType == "compaction") {
                                             emitEvent(
@@ -640,62 +606,102 @@ object OpenAIResponsesClient {
                                                 )
                                             }
                                             if (itemType == "function_call") {
-                                                val callId = item["call_id"]?.jsonPrimitive?.contentOrNull
-                                                    ?: item["id"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                                                val name = item["name"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                                                val arguments = item["arguments"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                                                if (callId.isNotBlank()) {
-                                                    toolCallsMap[callId] = Triple(
-                                                        callId,
-                                                        name,
-                                                        StringBuilder(arguments),
+                                                upsertToolCall(
+                                                    outputIndex = outputIndex,
+                                                    callId = item["call_id"]?.jsonPrimitive?.contentOrNull,
+                                                    itemId = item["id"]?.jsonPrimitive?.contentOrNull,
+                                                    name = item["name"]?.jsonPrimitive?.contentOrNull,
+                                                    arguments = item["arguments"]?.jsonPrimitive?.contentOrNull,
+                                                    replaceArguments = true,
+                                                    namespace = item["namespace"]?.jsonPrimitive?.contentOrNull,
+                                                )
+                                                hasToolCalls = true
+                                            } else if (itemType == "reasoning") {
+                                                emitEvent(
+                                                    AppStreamEvent.Reasoning(
+                                                        text = "",
+                                                        thoughtSignature = item.toString(),
+                                                        signatureOnlyUpdate = true,
+                                                    ),
+                                                )
+                                            } else if (itemType == "message") {
+                                                item["id"]?.jsonPrimitive?.contentOrNull?.let { messageId ->
+                                                    emitEvent(
+                                                        AppStreamEvent.Content(
+                                                            text = "",
+                                                            thoughtSignature = buildJsonObject {
+                                                                put("v", 1)
+                                                                put("id", messageId)
+                                                                item["phase"]?.jsonPrimitive?.contentOrNull?.let { phase ->
+                                                                    put("phase", phase)
+                                                                }
+                                                            }.toString(),
+                                                            signatureOnlyUpdate = true,
+                                                        ),
                                                     )
-                                                    hasToolCalls = true
                                                 }
                                             }
                                         }
                                     }
                                     "response.completed" -> {
+                                        sawTerminalResponse = true
                                         val responseObject = event["response"] as? JsonObject
                                         completedOutputItems = (responseObject?.get("output") as? JsonArray)?.toList()
                                         completedResponseText = completedOutputItems
                                             ?.let(::extractOpenAICompletedOutputText)
+                                        emitResponsesReplaySignatures(completedOutputItems.orEmpty(), emitEvent)
                                         completedOutputItems.orEmpty().forEach { outputItem ->
                                             val item = outputItem as? JsonObject ?: return@forEach
-                                            if (item["type"]?.jsonPrimitive?.contentOrNull != "function_call") {
+                                            val itemType = item["type"]?.jsonPrimitive?.contentOrNull
+                                            if (itemType != "function_call") {
                                                 return@forEach
                                             }
-                                            val callId = item["call_id"]?.jsonPrimitive?.contentOrNull
-                                                ?: item["id"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                                            if (callId.isNotBlank()) {
-                                                toolCallsMap[callId] = Triple(
-                                                    callId,
-                                                    item["name"]?.jsonPrimitive?.contentOrNull.orEmpty(),
-                                                    StringBuilder(
-                                                        item["arguments"]?.jsonPrimitive?.contentOrNull.orEmpty()
-                                                    ),
-                                                )
-                                                hasToolCalls = true
-                                            }
+                                            upsertToolCall(
+                                                outputIndex = null,
+                                                callId = item["call_id"]?.jsonPrimitive?.contentOrNull,
+                                                itemId = item["id"]?.jsonPrimitive?.contentOrNull,
+                                                name = item["name"]?.jsonPrimitive?.contentOrNull,
+                                                arguments = item["arguments"]?.jsonPrimitive?.contentOrNull,
+                                                replaceArguments = true,
+                                                namespace = item["namespace"]?.jsonPrimitive?.contentOrNull,
+                                            )
+                                            hasToolCalls = true
                                         }
                                         val usage = responseObject?.get("usage") as? JsonObject
                                         finalUsage = usage?.let(::parseOpenAIResponsesTokenUsage)
                                         finalUsage?.let { parsedUsage ->
                                             emitEvent(AppStreamEvent.Usage(parsedUsage))
                                         }
+                                        stopReason = "stop"
                                     }
                                     "response.incomplete" -> {
+                                        sawTerminalResponse = true
                                         val responseObject = event["response"] as? JsonObject
+                                        completedOutputItems = (responseObject?.get("output") as? JsonArray)?.toList()
+                                        completedResponseText = completedOutputItems?.let(::extractOpenAICompletedOutputText)
+                                        emitResponsesReplaySignatures(completedOutputItems.orEmpty(), emitEvent)
+                                        finalUsage = (responseObject?.get("usage") as? JsonObject)
+                                            ?.let(::parseOpenAIResponsesTokenUsage)
+                                        finalUsage?.let { parsedUsage -> emitEvent(AppStreamEvent.Usage(parsedUsage)) }
                                         val reason = (responseObject?.get("incomplete_details") as? JsonObject)
                                             ?.get("reason")
                                             ?.jsonPrimitive
                                             ?.contentOrNull
-                                        if (ProviderSafetyResponse.isSafetyReason(reason)) {
+                                        if (reason == "max_output_tokens") {
+                                            stopReason = "length"
+                                        } else if (ProviderSafetyResponse.isSafetyReason(reason)) {
                                             safetyBlocked = true
                                             emitEvent(ProviderSafetyResponse.error(reason))
+                                            stopReason = "error"
+                                        } else {
+                                            throw IllegalStateException(
+                                                reason?.let { "Response incomplete: $it" }
+                                                    ?: "Response incomplete without a provider reason",
+                                            )
                                         }
                                     }
                                     "response.failed" -> {
+                                        sawTerminalResponse = true
                                         val responseObject = event["response"] as? JsonObject
                                         val errorObject = responseObject?.get("error") as? JsonObject
                                         val reason = errorObject?.get("code")?.jsonPrimitive?.contentOrNull
@@ -751,12 +757,21 @@ object OpenAIResponsesClient {
                     reasoningContent = "",
                     outputItems = emptyList(),
                     usage = finalUsage,
+                    stopReason = "error",
                 )
+            }
+
+            if (!sawTerminalResponse) {
+                throw IllegalStateException("OpenAI Responses stream ended before a terminal response event")
             }
 
             // 发送聚合的工具调用
             if (toolCallsMap.isNotEmpty()) {
-                toolCallsMap.values.forEach { (callId, name, argsBuilder) ->
+                toolCallsMap.values.forEach { state ->
+                    val callId = state.callId
+                    val name = state.name
+                    val argsBuilder = state.arguments
+                    val namespace = state.namespace
                     if (name.isNotBlank()) {
                         val toolInfo = ResponsesToolCallInfo(callId, name, argsBuilder.toString())
                         onToolCall(toolInfo)
@@ -767,7 +782,8 @@ object OpenAIResponsesClient {
                                 Json.parseToJsonElement(argsBuilder.toString()).jsonObject
                             } catch (_: Exception) {
                                 JsonObject(emptyMap())
-                            }
+                            },
+                            namespace = namespace,
                         ))
                     }
                 }
@@ -791,21 +807,27 @@ object OpenAIResponsesClient {
             completedOutputItems?.takeIf { it.isNotEmpty() }
                 ?: streamedOutputItems.values.toList()
             ).toMutableList()
-        toolCallsMap.values.forEach { (callId, name, arguments) ->
+        toolCallsMap.values.forEach { state ->
+            val callId = state.callId
+            val name = state.name
+            val arguments = state.arguments
+            val namespace = state.namespace
+            val providerCallId = callId.substringBefore('|')
+            val providerItemId = callId.substringAfter('|', missingDelimiterValue = "").takeIf(String::isNotEmpty)
             val alreadyPresent = canonicalOutput.any { item ->
                 val itemObject = item as? JsonObject
                 itemObject?.get("type")?.jsonPrimitive?.contentOrNull == "function_call" &&
-                    (
-                        itemObject["call_id"]?.jsonPrimitive?.contentOrNull == callId ||
-                            itemObject["id"]?.jsonPrimitive?.contentOrNull == callId
-                        )
+                    itemObject["call_id"]?.jsonPrimitive?.contentOrNull == providerCallId &&
+                    (providerItemId == null || itemObject["id"]?.jsonPrimitive?.contentOrNull == providerItemId)
             }
             if (!alreadyPresent && name.isNotBlank()) {
                 canonicalOutput += buildJsonObject {
                     put("type", "function_call")
-                    put("call_id", callId)
+                    put("call_id", providerCallId)
+                    providerItemId?.let { put("id", it) }
                     put("name", name)
                     put("arguments", arguments.toString())
+                    namespace?.let { put("namespace", it) }
                 }
             }
         }
@@ -816,7 +838,15 @@ object OpenAIResponsesClient {
             reasoningContent = completedReasoning,
             outputItems = canonicalOutput,
             usage = finalUsage,
+            stopReason = if (hasToolCalls && stopReason == "stop") "tool_use" else stopReason,
         )
+    }
+
+    /** Pi 使用 call_id|item_id 保留 Responses 同批调用的真实唯一性。 */
+    private fun responsesToolCallId(callId: String?, itemId: String?): String = when {
+        !callId.isNullOrBlank() && !itemId.isNullOrBlank() -> "$callId|$itemId"
+        !callId.isNullOrBlank() -> callId
+        else -> itemId.orEmpty()
     }
 
     /** response.completed 携带供应商最终正文，可用于修复中途缺失的 delta。 */
@@ -827,13 +857,47 @@ object OpenAIResponsesClient {
                 if (item["type"]?.jsonPrimitive?.contentOrNull != "message") continue
                 for (contentPart in (item["content"] as? JsonArray).orEmpty()) {
                     val part = contentPart as? JsonObject ?: continue
-                    if (part["type"]?.jsonPrimitive?.contentOrNull == "output_text") {
-                        part["text"]?.jsonPrimitive?.contentOrNull?.let(::append)
+                    when (part["type"]?.jsonPrimitive?.contentOrNull) {
+                        "output_text" -> part["text"]?.jsonPrimitive?.contentOrNull?.let(::append)
+                        "refusal" -> (part["refusal"] ?: part["text"])
+                            ?.jsonPrimitive?.contentOrNull?.let(::append)
                     }
                 }
             }
         }
         return text.takeIf { it.isNotEmpty() }
+    }
+
+    /** 终止事件同样可能首次携带 message id、phase 和 reasoning item，必须进入持久化回放链。 */
+    private suspend fun emitResponsesReplaySignatures(
+        outputItems: List<JsonElement>,
+        emitEvent: suspend (AppStreamEvent) -> Unit,
+    ) {
+        outputItems.forEach { outputItem ->
+            val item = outputItem as? JsonObject ?: return@forEach
+            when (item["type"]?.jsonPrimitive?.contentOrNull) {
+                "reasoning" -> emitEvent(
+                    AppStreamEvent.Reasoning(
+                        text = "",
+                        thoughtSignature = item.toString(),
+                        signatureOnlyUpdate = true,
+                    ),
+                )
+                "message" -> item["id"]?.jsonPrimitive?.contentOrNull?.let { messageId ->
+                    emitEvent(
+                        AppStreamEvent.Content(
+                            text = "",
+                            thoughtSignature = buildJsonObject {
+                                put("v", 1)
+                                put("id", messageId)
+                                item["phase"]?.jsonPrimitive?.contentOrNull?.let { phase -> put("phase", phase) }
+                            }.toString(),
+                            signatureOnlyUpdate = true,
+                        ),
+                    )
+                }
+            }
+        }
     }
 
     private fun responseOutputItemKey(item: JsonObject, outputIndex: Int?): String =

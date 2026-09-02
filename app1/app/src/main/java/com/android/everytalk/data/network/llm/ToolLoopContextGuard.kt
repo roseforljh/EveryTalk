@@ -17,13 +17,18 @@ internal class ToolRoundContentBuffer(
 
     suspend fun accept(event: AppStreamEvent) {
         when (event) {
-            is AppStreamEvent.Content,
+            is AppStreamEvent.Content -> {
+                if (event.signatureOnlyUpdate) return
+                streamedContentObserved = true
+                emitEvent(event)
+            }
             is AppStreamEvent.Text,
             -> {
                 streamedContentObserved = true
                 emitEvent(event)
             }
             is AppStreamEvent.ContentFinal -> pendingFinalContent = event
+            is AppStreamEvent.Reasoning -> if (!event.signatureOnlyUpdate && !event.redacted) emitEvent(event)
             is AppStreamEvent.ToolCall -> {
                 toolCallObserved = true
                 emitEvent(event)

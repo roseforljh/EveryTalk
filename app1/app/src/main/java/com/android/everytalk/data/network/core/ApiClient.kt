@@ -208,7 +208,8 @@ object ApiClient {
                 install(io.ktor.client.plugins.logging.Logging) {
                     logger = object : io.ktor.client.plugins.logging.Logger {
                         override fun log(message: String) {
-                            android.util.Log.d("ApiClient-HTTP", message)
+                            // Gemini 等协议把 Key 放在 URL 查询参数中，sanitizeHeader 覆盖不到。
+                            android.util.Log.d("ApiClient-HTTP", NetworkUtils.sanitizeMessage(message))
                         }
                     }
                     level = io.ktor.client.plugins.logging.LogLevel.INFO

@@ -76,7 +76,7 @@ class OpenAIResponsesCompactionTest {
             })
             assertEquals("cmp-1", native.compactionItemId)
             assertTrue(native.estimatedTokens > 0)
-            assertEquals("turn_complete", events.filterIsInstance<AppStreamEvent.Finish>().single().reason)
+            assertEquals("stop", events.filterIsInstance<AppStreamEvent.Finish>().single().reason)
         }
     }
 

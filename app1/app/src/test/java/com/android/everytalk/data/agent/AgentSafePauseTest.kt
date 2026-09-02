@@ -12,6 +12,7 @@ import com.android.everytalk.data.computer.ComputerToolNames
 import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.data.database.entities.ChatSessionEntity
 import com.android.everytalk.data.network.AppStreamEvent
+import com.android.everytalk.data.network.AppToolExecutionResult
 import com.android.everytalk.data.network.AppToolExecutor
 import com.android.everytalk.data.network.ModelTurnTransport
 import java.util.concurrent.atomic.AtomicInteger
@@ -66,7 +67,7 @@ class AgentSafePauseTest {
         var modelTurns = 0
         val executor: AppToolExecutor = { _, _, _, _, _ ->
             toolExecutions.incrementAndGet()
-            buildJsonObject { put("ok", true) }
+            AppToolExecutionResult(buildJsonObject { put("ok", true) })
         }
         val loop = AgentLoop(
             runStore = store,
@@ -156,7 +157,7 @@ class AgentSafePauseTest {
                 finishFirstTool.await()
             }
             executed += toolCallId
-            buildJsonObject { put("ok", true); put("tool_call_id", toolCallId) }
+            AppToolExecutionResult(buildJsonObject { put("ok", true); put("tool_call_id", toolCallId) })
         }
         val loop = AgentLoop(
             runStore = store,

@@ -127,6 +127,14 @@ data class ChatRequest(
     /** 当前请求冻结的 Skill 目录，只在 Android 本地运行和恢复时使用。 */
     @Transient
     val localSkillSnapshot: SkillRequestSnapshot? = null,
+
+    /** Anthropic 兼容端点的 Pi allowEmptySignature 开关，仅参与本地协议转换。 */
+    @Transient
+    val localAllowEmptyAnthropicThinkingSignature: Boolean = false,
+
+    /** 当前模型可接受的输入类型；Provider Adapter 用它决定是否回放工具图片。 */
+    @Transient
+    val localInputModalities: Set<String> = setOf("text", "image"),
 )
 
 @Serializable
