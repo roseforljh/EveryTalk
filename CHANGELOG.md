@@ -1,5 +1,50 @@
 # Changelog
 
+## [1.29.0](https://github.com/roseforljh/EveryTalk/compare/v1.28.1...v1.29.0) (2026-09-02)
+
+
+### Features
+
+* 完善分类存储管理界面、图片生成预览与UI交互体验 ([8e21ac7](https://github.com/roseforljh/EveryTalk/commit/8e21ac7a011ec4cfe16f508b50982d9c027f95b4))
+* 完善后台Computer与Agent连接服务恢复机制及前台通知能力 ([02f9d64](https://github.com/roseforljh/EveryTalk/commit/02f9d64680b72abf500cd91239b0b57106953d6e))
+* 完善输入区域待发消息交互UI与文档说明 ([4d1a2b4](https://github.com/roseforljh/EveryTalk/commit/4d1a2b493f7ffbbc59163022c97b0a2f0cc6a7fc))
+* 实现Agent运行网关、干预恢复与能力授权治理架构 ([5d5ee9a](https://github.com/roseforljh/EveryTalk/commit/5d5ee9ad0cd60b1e5b0ecdd1e07f9e17546e1911))
+* 实现人类接力与待发消息状态管理控制流 ([d34381d](https://github.com/roseforljh/EveryTalk/commit/d34381d52280f157d9619419ba87ea740029b592))
+* 支持多协议消息适配转换与Agent工具调用运行增强 ([49acfcd](https://github.com/roseforljh/EveryTalk/commit/49acfcd477e0805d13c53c42c3ca563d7a1f6be1))
+* 新增Agent安全暂停控制器与运行状态协同机制 ([086465c](https://github.com/roseforljh/EveryTalk/commit/086465c5bba28706578c9134f56a20aa067d1970))
+* 新增存储与数据管理页面及应用缓存数据清理能力 ([b6b3f37](https://github.com/roseforljh/EveryTalk/commit/b6b3f372600b78fde03e2baa302ee2646709f46e))
+
+
+### Bug Fixes
+
+* 优化Computer模块数据持久化与配置卡片表单交互 ([ea27313](https://github.com/roseforljh/EveryTalk/commit/ea2731330ae8b9cfeb773b5ee3c051457e52fd3d))
+* 优化Gemini与Anthropic多模型客户端载荷构建及流式重试处理 ([992c9b5](https://github.com/roseforljh/EveryTalk/commit/992c9b58ec68c30a1c77da5ead5db72a1178df33))
+* 优化Gemini客户端工具调用历史规范化与流式事件解析 ([a6d8bcf](https://github.com/roseforljh/EveryTalk/commit/a6d8bcf3585112edd92fe27c488e1752859a56f1))
+* 优化OpenAIResponsesClient请求载荷与消息附件降级处理 ([8fd0413](https://github.com/roseforljh/EveryTalk/commit/8fd04133fc4a4d75451cf34cb1b0600c98b19d6d))
+* 优化UI交互流程与ViewModel审批状态管理 ([08f901c](https://github.com/roseforljh/EveryTalk/commit/08f901c43d232864c23f5547722f684ef31e146e))
+* 优化UI渲染交互、Markdown展示及主题颜色 ([911163c](https://github.com/roseforljh/EveryTalk/commit/911163c9ac9bffc95b0937ef9b007859c8526937))
+* 优化侧边栏分组收起动效与分组区域展开状态持久化记忆 ([adf451c](https://github.com/roseforljh/EveryTalk/commit/adf451c0fde44c570501dd91e87ef27ef013b674))
+* 优化多模态附件Payload构建与Gemini直连请求工具适配 ([d9c94e0](https://github.com/roseforljh/EveryTalk/commit/d9c94e0d1a01265c4a9f122348f88540fbe04913))
+* 优化流式事件处理、上下文压缩与待发消息调度控制 ([bfe38a3](https://github.com/roseforljh/EveryTalk/commit/bfe38a3df60078db42bdf2405bc6fc77e5f78c2e))
+* 升级Room数据库版本并优化会话历史分批读写与迁移逻辑 ([41aa95e](https://github.com/roseforljh/EveryTalk/commit/41aa95e97fc93f67a75918a523dfb96a61bb0dae))
+* 升级Room数据库至版本28并优化历史与Agent状态数据迁移 ([ab31d94](https://github.com/roseforljh/EveryTalk/commit/ab31d9426e3e8a8a28b57946ac3343fb48b34a46))
+* 升级数据库架构并支持待发消息与Agent运行实体持久化 ([aea0b65](https://github.com/roseforljh/EveryTalk/commit/aea0b65723ea4a670c920893f969abe1d42318aa))
+* 升级数据库至版本31并增加Agent干预与授权状态表 ([0e7b589](https://github.com/roseforljh/EveryTalk/commit/0e7b5898b689c033af4dcf038424f808863d3b23))
+* 完善Agent上下文压缩恢复与循环状态持久化 ([5473cf2](https://github.com/roseforljh/EveryTalk/commit/5473cf22fdc240424ad1365c98bf5a31938ee612))
+* 完善Agent上下文管理压缩恢复与循环执行逻辑 ([960f3e8](https://github.com/roseforljh/EveryTalk/commit/960f3e8d5214001e515964a4750d3c1f05e662f6))
+* 完善Agent上下文管理压缩恢复与模型配置控制器 ([ea31a5b](https://github.com/roseforljh/EveryTalk/commit/ea31a5be4019df5c749cbee478fbcc330ba86d43))
+* 完善Agent运行状态存储恢复与并发工具执行机制 ([5fdc115](https://github.com/roseforljh/EveryTalk/commit/5fdc1156e60e3c37d56b0bfa857c68515ac0abe1))
+* 完善Agent运行续传与UI弹窗交互样式 ([505e247](https://github.com/roseforljh/EveryTalk/commit/505e247b1bdcd52c20e000c74c31daa3efb8ce95))
+* 完善Computer与Agent工具互斥池及多模态网络传输逻辑 ([1740f55](https://github.com/roseforljh/EveryTalk/commit/1740f550b59e7e876f8a8c9eb41280eb2bb0fbe1))
+* 完善Computer容器初始化脚本与环境准备配置 ([2ff2e4e](https://github.com/roseforljh/EveryTalk/commit/2ff2e4e19ba9bee1c8d5439d5c8ed43a93caa1ef))
+* 完善Computer工具多模态附件解析与桥接 ([dc4c402](https://github.com/roseforljh/EveryTalk/commit/dc4c402a114e16cb96e6242a13e958cb334915bd))
+* 完善Computer工具安全信封、终端管理与敏感凭据管控 ([380d85c](https://github.com/roseforljh/EveryTalk/commit/380d85c7d3175fa7d5ea54a3090513e86f2f27b3))
+* 完善消息发送流程、附件回退处理与会话管理 ([c07d815](https://github.com/roseforljh/EveryTalk/commit/c07d8151e93c4813cad35cd6471d3c55f29291f5))
+* 支持模型管理多页签变更批量应用与配置冲突防护 ([0d2f986](https://github.com/roseforljh/EveryTalk/commit/0d2f986cd52be9fa2805e880a5e39e6f60b2596a))
+* 支持清理已下架模型配置 ([dd59710](https://github.com/roseforljh/EveryTalk/commit/dd597107fc217d2c44be34f54bea0ad4832eb8d7))
+* 支持音频等多媒体附件的序列化保存与持久化清理 ([9643d16](https://github.com/roseforljh/EveryTalk/commit/9643d1650f0f065c7a647a3a8e12bb3ef35abc85))
+* 适配深色主题启动闪屏背景与反色滤镜 ([e09318f](https://github.com/roseforljh/EveryTalk/commit/e09318f8bef8fd6af491b55ea0c1de834f1f197e))
+
 ## [1.28.1](https://github.com/roseforljh/EveryTalk/compare/v1.28.0...v1.28.1) (2026-08-16)
 
 
