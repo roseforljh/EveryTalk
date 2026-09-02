@@ -61,6 +61,14 @@ class AgentRunCoordinatorTest {
     }
 
     @Test
+    fun `只有模型待续写状态保留恢复退避`() {
+        assertTrue(shouldBackoffAgentResume(AgentRunStatus.MODEL_CONTINUATION_PENDING.name))
+        assertFalse(shouldBackoffAgentResume(AgentRunStatus.WAITING_APPROVAL.name))
+        assertFalse(shouldBackoffAgentResume(AgentRunStatus.COMPLETED.name))
+        assertFalse(shouldBackoffAgentResume(null))
+    }
+
+    @Test
     fun `前台Agent事件使用挂起发送保持单通道顺序`() {
         val source = agentRunCoordinatorSource()
         val firstRunCollector = source.substringAfter("agentLoop.run(request).collect { event ->")

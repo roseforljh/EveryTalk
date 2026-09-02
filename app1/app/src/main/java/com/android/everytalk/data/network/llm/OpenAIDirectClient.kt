@@ -25,6 +25,14 @@ import java.util.UUID
 
 object OpenAIDirectClient {
     private const val TAG = "OpenAIDirectClient"
+    private val REPLAYABLE_REASONING_FIELDS = setOf("reasoning", "reasoning_content", "reasoning_text")
+    private val REASONING_FIELDS_IN_PRIORITY = listOf(
+        "reasoning_content",
+        "reasoning",
+        "reasoning_text",
+        "thinking",
+        "thoughts",
+    )
     private const val MAX_QWEN_UPLOAD_FILE_BYTES = 10L * 1024L * 1024L
 
     @OptIn(ExperimentalCoroutinesApi::class)
@@ -302,7 +310,7 @@ object OpenAIDirectClient {
                         }
                         is AgentAssistantApiMessage -> addAgentAssistantMessage(
                             message = message,
-                            includeReasoningContent = !officialOpenAIEndpoint,
+                            defaultReasoningField = if (isDeepSeekCompatible(request)) "reasoning_content" else null,
                         )
                         is AgentToolResultApiMessage -> {
                             pendingToolResultImages += addAgentToolResultMessage(message)
@@ -346,12 +354,19 @@ object OpenAIDirectClient {
                 config.temperature?.let { put("temperature", it) }
                 config.topP?.let { put("top_p", it) }
                 config.maxOutputTokens?.let { maxOutputTokens ->
-                    val parameterName = if (officialOpenAIEndpoint) {
-                        "max_completion_tokens"
-                    } else {
-                        "max_tokens"
+                    // 用户显式配置任一字段时交给 customModelParameters，避免请求同时出现两种字段。
+                    val hasExplicitMaxTokens = request.customModelParameters.orEmpty().keys.any { name ->
+                        name == "max_tokens" || name == "max_completion_tokens"
                     }
-                    put(parameterName, maxOutputTokens)
+                    if (!hasExplicitMaxTokens) {
+                        put(
+                            PiOpenAIChatMessageAdapter.maxTokensField(
+                                provider = request.provider,
+                                baseUrl = resolvedOpenAIApiAddress(request),
+                            ),
+                            maxOutputTokens,
+                        )
+                    }
                 }
             }
 
@@ -504,16 +519,23 @@ object OpenAIDirectClient {
                                     val delta = choice["delta"]?.jsonObject
 
                                     // 处理推理内容
-                                    val reasoningText =
-                                        delta?.get("reasoning_content")?.jsonPrimitive?.contentOrNull
-                                            ?: delta?.get("reasoning")?.jsonPrimitive?.contentOrNull
-                                            ?: delta?.get("thinking")?.jsonPrimitive?.contentOrNull
-                                            ?: delta?.get("thoughts")?.jsonPrimitive?.contentOrNull
+                                    val reasoningField = REASONING_FIELDS_IN_PRIORITY.firstOrNull { field ->
+                                        !((delta?.get(field) as? JsonPrimitive)?.contentOrNull).isNullOrEmpty()
+                                    }
+                                    val reasoningText = reasoningField
+                                        ?.let { field -> (delta?.get(field) as? JsonPrimitive)?.contentOrNull }
 
                                     if (!reasoningText.isNullOrEmpty()) {
                                         if (!reasoningStarted) reasoningStarted = true
                                         fullReasoningContent.append(reasoningText)
-                                        emitEvent(AppStreamEvent.Reasoning(reasoningText))
+                                        // Pi 把原始 reasoning 字段名作为可回放签名保存。
+                                        // 非标准 thinking/thoughts 仍可展示，但不会作为请求字段回放。
+                                        emitEvent(
+                                            AppStreamEvent.Reasoning(
+                                                reasoningText,
+                                                reasoningField.takeIf(REPLAYABLE_REASONING_FIELDS::contains),
+                                            )
+                                        )
                                     }
 
                                     (delta?.get("reasoning_details") as? JsonArray)?.forEach { detail ->
@@ -752,7 +774,7 @@ object OpenAIDirectClient {
 
     private fun JsonArrayBuilder.addAgentAssistantMessage(
         message: AgentAssistantApiMessage,
-        includeReasoningContent: Boolean,
+        defaultReasoningField: String?,
     ) {
         // PiMessageTransformer 已把跨协议 reasoning 降级成 Text，并剥离不可回放签名。
         // 这里只认规范块，不能再从旧 summary 字段把 reasoning 私自塞回目标 Provider。
@@ -768,30 +790,38 @@ object OpenAIDirectClient {
         val toolCalls = message.contentParts.mapNotNull { part ->
             (part as? com.android.everytalk.data.DataClass.AgentAssistantContentApiPart.ToolCall)?.call
         }
-        if (text.isEmpty() && toolCalls.isEmpty() && (!includeReasoningContent || reasoning.isEmpty())) return
+        val reasoningDetails = reasoningBlocks
+            .mapNotNull { part ->
+                part.thoughtSignature?.let { raw ->
+                    runCatching { Json.parseToJsonElement(raw) as? JsonArray }.getOrNull()
+                }
+            }
+            .firstOrNull()
+        val reasoningField = if (reasoningDetails == null) {
+            reasoningBlocks.firstNotNullOfOrNull { part ->
+                part.thoughtSignature?.takeIf(REPLAYABLE_REASONING_FIELDS::contains)
+            } ?: defaultReasoningField
+        } else {
+            null
+        }
+        if (text.isEmpty() && toolCalls.isEmpty() && (reasoningField == null || reasoning.isEmpty())) return
 
         addJsonObject {
             put("role", "assistant")
             if (text.isNotEmpty()) {
                 put("content", text)
-            } else if (includeReasoningContent) {
+            } else if (reasoningField != null) {
                 // 兼容端点沿用旧行为；OpenAI 官方在纯 Tool Call 消息中使用 null。
                 put("content", "")
             } else {
                 put("content", JsonNull)
             }
-            // DeepSeek、Kimi 等 OpenAI 兼容推理模型要求工具下一轮回传 reasoning_content。
-            // OpenAI 官方 Chat Completions 没有该字段，发送过去会触发参数校验错误。
-            reasoning.takeIf { includeReasoningContent && it.isNotBlank() }
-                ?.let { put("reasoning_content", it) }
-            reasoningBlocks
-                .mapNotNull { part ->
-                    part.thoughtSignature?.let { raw ->
-                        runCatching { Json.parseToJsonElement(raw) as? JsonArray }.getOrNull()
-                    }
-                }
-                .firstOrNull()
-                ?.let { put("reasoning_details", it) }
+            // 结构化 reasoning_details 优先；否则按上游原字段名回放。
+            // DeepSeek 旧记录没有字段签名时使用其明确要求的 reasoning_content。
+            reasoningDetails?.let { put("reasoning_details", it) }
+            reasoningField?.let { field ->
+                reasoning.takeIf(String::isNotBlank)?.let { put(field, it) }
+            }
             if (toolCalls.isNotEmpty()) {
                 putJsonArray("tool_calls") {
                     toolCalls.forEach { call ->
@@ -808,6 +838,10 @@ object OpenAIDirectClient {
             }
         }
     }
+
+    private fun isDeepSeekCompatible(request: ChatRequest): Boolean =
+        request.provider.contains("deepseek", ignoreCase = true) ||
+            request.apiAddress.orEmpty().contains("deepseek.com", ignoreCase = true)
 
     private fun JsonArrayBuilder.addAgentToolResultMessage(
         message: AgentToolResultApiMessage,

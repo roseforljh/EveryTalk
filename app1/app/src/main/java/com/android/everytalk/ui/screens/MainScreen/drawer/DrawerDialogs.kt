@@ -14,15 +14,24 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.style.TextOverflow
 import com.android.everytalk.ui.components.dialog.AppDialogButtonShape
 import com.android.everytalk.ui.components.dialog.AppDialogShape
 import com.android.everytalk.ui.components.dialog.AppDialogTextFieldShape
@@ -362,6 +371,12 @@ internal fun MoveToGroupDialog(
     val dialogBg = appDialogContainerColor()
     val contentColor = appDialogContentColor()
     val cancelButtonColor = appDialogCancelColor()
+    val isDark = isSystemInDarkTheme()
+    val itemBg = if (isDark) Color(0xFF1E1E1E) else Color(0xFFF5F5F5)
+    val itemBorder = if (isDark) Color(0xFF333333) else Color(0xFFE5E5E5)
+    val iconTint = if (isDark) Color(0xFF9E9E9E) else Color(0xFF616161)
+    val removeColor = if (isDark) Color(0xFFFF6B6B) else Color(0xFFE53935)
+
     AlertDialog(
         onDismissRequest = onDismiss,
         modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
@@ -379,47 +394,88 @@ internal fun MoveToGroupDialog(
                     Text(stringResource(R.string.drawer_no_groups_available), style = MaterialTheme.typography.bodyLarge)
                 }
             } else {
-                LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(max = 320.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
                     if (isCurrentlyGrouped) {
                         item {
-                            ListItem(
-                                headlineContent = { Text(stringResource(R.string.drawer_remove_from_group)) },
-                                leadingContent = {
-                                    Icon(
-                                        painter = painterResource(R.drawable.ic_remove_circle),
-                                        contentDescription = stringResource(R.string.drawer_remove_from_group)
-                                    )
-                                },
-                                modifier = Modifier.clickable {
-                                    onConfirm(null) // null indicates moving to ungrouped
-                                    onDismiss()
-                                }
-                            )
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clip(RoundedCornerShape(14.dp))
+                                    .background(itemBg)
+                                    .border(1.dp, itemBorder, RoundedCornerShape(14.dp))
+                                    .clickable {
+                                        onConfirm(null) // null indicates moving to ungrouped
+                                        onDismiss()
+                                    }
+                                    .padding(horizontal = 16.dp, vertical = 14.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_remove_circle),
+                                    contentDescription = stringResource(R.string.drawer_remove_from_group),
+                                    tint = removeColor,
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(modifier = Modifier.width(12.dp))
+                                Text(
+                                    text = stringResource(R.string.drawer_remove_from_group),
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        color = removeColor,
+                                        fontWeight = FontWeight.Medium
+                                    ),
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
                         }
                     }
                     items(groups) { groupName ->
-                        ListItem(
-                            headlineContent = { Text(groupName) },
-                            leadingContent = {
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_folder),
-                                    contentDescription = stringResource(R.string.drawer_group_content_description)
-                                )
-                            },
-                            modifier = Modifier.clickable {
-                                onConfirm(groupName)
-                                onDismiss()
-                            }
-                        )
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(14.dp))
+                                .background(itemBg)
+                                .border(1.dp, itemBorder, RoundedCornerShape(14.dp))
+                                .clickable {
+                                    onConfirm(groupName)
+                                    onDismiss()
+                                }
+                                .padding(horizontal = 16.dp, vertical = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_folder),
+                                contentDescription = stringResource(R.string.drawer_group_content_description),
+                                tint = iconTint,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                            Text(
+                                text = groupName,
+                                style = MaterialTheme.typography.bodyMedium.copy(
+                                    color = contentColor,
+                                    fontWeight = FontWeight.Medium
+                                ),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
                 }
             }
         },
-        dismissButton = {
+        confirmButton = {
             OutlinedButton(
                 onClick = onDismiss,
                 shape = AppDialogButtonShape,
-                modifier = Modifier.height(48.dp).padding(horizontal = 4.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(44.dp),
                 colors = ButtonDefaults.outlinedButtonColors(
                     containerColor = dialogBg,
                     contentColor = cancelButtonColor
@@ -429,6 +485,6 @@ internal fun MoveToGroupDialog(
                 Text(stringResource(R.string.action_cancel), fontWeight = FontWeight.Medium)
             }
         },
-        confirmButton = { }
+        dismissButton = {}
     )
 }

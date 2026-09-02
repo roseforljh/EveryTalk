@@ -49,19 +49,38 @@ class OpenAIDirectClientPayloadTest {
     }
 
     @Test
-    fun `官方和兼容接口使用各自的最大输出字段`() {
+    fun `最大输出字段遵循Pi兼容矩阵`() {
         val generationConfig = GenerationConfig(maxOutputTokens = 8192)
         val official = buildPayload(
             request(apiAddress = "https://api.openai.com/v1", generationConfig = generationConfig)
         )
-        val compatible = buildPayload(
+        val standardCompatible = buildPayload(
             request(apiAddress = "https://example.com/v1", generationConfig = generationConfig)
+        )
+        val deepSeek = buildPayload(
+            request(apiAddress = "https://api.deepseek.com/v1", generationConfig = generationConfig)
         )
 
         assertTrue(official.contains("\"max_completion_tokens\":8192"))
         assertFalse(official.contains("\"max_tokens\""))
-        assertTrue(compatible.contains("\"max_tokens\":8192"))
-        assertFalse(compatible.contains("\"max_completion_tokens\""))
+        assertTrue(standardCompatible.contains("\"max_completion_tokens\":8192"))
+        assertFalse(standardCompatible.contains("\"max_tokens\""))
+        assertTrue(deepSeek.contains("\"max_tokens\":8192"))
+        assertFalse(deepSeek.contains("\"max_completion_tokens\""))
+    }
+
+    @Test
+    fun `显式最大输出字段覆盖自动兼容判定且不会双发`() {
+        val payload = buildPayload(
+            request(
+                apiAddress = "https://example.com/v1",
+                generationConfig = GenerationConfig(maxOutputTokens = 8192),
+                customModelParameters = mapOf("max_tokens" to 4096),
+            )
+        )
+
+        assertTrue(payload.contains("\"max_tokens\":4096"))
+        assertFalse(payload.contains("max_completion_tokens"))
     }
 
     @Test
@@ -213,6 +232,72 @@ class OpenAIDirectClientPayloadTest {
             .jsonObject
         assertEquals("reasoning.encrypted", assistant.getValue("reasoning_details").jsonArray
             .single().jsonObject.getValue("type").jsonPrimitive.content)
+    }
+
+    @Test
+    fun `OpenAI兼容端点按Pi规则回放原始reasoning字段名`() {
+        val payload = Json.parseToJsonElement(
+            buildPayload(
+                request(
+                    apiAddress = "https://openrouter.ai/api/v1",
+                    messages = listOf(
+                        AgentAssistantApiMessage(
+                            reasoning = "分析",
+                            contentParts = listOf(
+                                AgentAssistantContentApiPart.Reasoning("分析", "reasoning"),
+                                AgentAssistantContentApiPart.ToolCall(
+                                    AgentToolCallApiPart("call-1", "exec", JsonObject(emptyMap())),
+                                ),
+                            ),
+                            toolCalls = listOf(AgentToolCallApiPart("call-1", "exec", JsonObject(emptyMap()))),
+                            sourceProvider = "OpenAI",
+                            sourceEndpoint = "https://openrouter.ai/api/v1",
+                            sourceModel = "gpt-5.4",
+                            sourceProtocol = ModelParameterProtocol.OPENAI_COMPATIBLE,
+                        ),
+                        AgentToolResultApiMessage(
+                            toolCallId = "call-1",
+                            toolName = "exec",
+                            content = JsonPrimitive("ok"),
+                        ),
+                    ),
+                ),
+            ),
+        ).jsonObject
+
+        val assistant = payload.getValue("messages").jsonArray
+            .first { it.jsonObject["role"]?.jsonPrimitive?.content == "assistant" }
+            .jsonObject
+        assertEquals("分析", assistant.getValue("reasoning").jsonPrimitive.content)
+        assertFalse(assistant.containsKey("reasoning_content"))
+    }
+
+    @Test
+    fun `未知兼容端点不会把无来源推理强行改成reasoningContent`() {
+        val payload = Json.parseToJsonElement(
+            buildPayload(
+                request(
+                    apiAddress = "https://example.com/v1",
+                    messages = listOf(
+                        AgentAssistantApiMessage(
+                            reasoning = "分析",
+                            toolCalls = listOf(AgentToolCallApiPart("call-1", "exec", JsonObject(emptyMap()))),
+                        ),
+                        AgentToolResultApiMessage(
+                            toolCallId = "call-1",
+                            toolName = "exec",
+                            content = JsonPrimitive("ok"),
+                        ),
+                    ),
+                ),
+            ),
+        ).jsonObject
+
+        val assistant = payload.getValue("messages").jsonArray
+            .first { it.jsonObject["role"]?.jsonPrimitive?.content == "assistant" }
+            .jsonObject
+        assertFalse(assistant.containsKey("reasoning_content"))
+        assertFalse(assistant.containsKey("reasoning"))
     }
 
     @Test

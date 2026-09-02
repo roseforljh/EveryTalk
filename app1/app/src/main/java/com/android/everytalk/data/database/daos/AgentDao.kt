@@ -19,6 +19,8 @@ import com.android.everytalk.data.database.entities.AgentExecutionSlotEntity
 import com.android.everytalk.data.database.entities.AgentStoredAuthorizationEntity
 import com.android.everytalk.data.database.entities.AgentOAuthStateEntity
 import com.android.everytalk.data.database.entities.ProviderContinuationStateEntity
+import com.android.everytalk.data.database.entities.PendingMessageEntity
+import com.android.everytalk.data.database.entities.MessageEntity
 import kotlinx.coroutines.flow.Flow
 
 data class AgentTokenTotalsRow(
@@ -38,6 +40,7 @@ interface AgentDao {
     @Upsert suspend fun upsertContextSnapshot(snapshot: AgentContextSnapshotEntity)
     @Upsert suspend fun upsertCompaction(compaction: AgentCompactionEntryEntity)
     @Upsert suspend fun upsertContinuationState(state: ProviderContinuationStateEntity)
+    @Upsert suspend fun upsertAgentUserMessage(message: MessageEntity)
     @androidx.room.Insert(onConflict = androidx.room.OnConflictStrategy.IGNORE)
     suspend fun insertSuspensionIfAbsent(suspension: AgentSuspensionEntity): Long
     @Upsert suspend fun upsertSuspension(suspension: AgentSuspensionEntity)
@@ -477,8 +480,8 @@ interface AgentDao {
 
     @Query(
         """
-        INSERT OR IGNORE INTO agent_steering_messages(id, runId, content, status, createdAt, consumedAt)
-        SELECT :id, :runId, :content, 'PENDING', :createdAt, NULL
+        INSERT OR IGNORE INTO agent_steering_messages(id, runId, content, payloadJson, status, createdAt, consumedAt)
+        SELECT :id, :runId, :content, :payloadJson, 'PENDING', :createdAt, NULL
         FROM agent_runs
         WHERE id = :runId
           AND status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED')
@@ -488,8 +491,33 @@ interface AgentDao {
         id: String,
         runId: String,
         content: String,
+        payloadJson: String? = null,
         createdAt: Long,
     ): Long
+
+    /** steering 队列和用户聊天记录同时落库，后台运行时也不会丢历史气泡。 */
+    @Transaction
+    suspend fun enqueueSteeringWithUserMessage(
+        id: String,
+        runId: String,
+        content: String,
+        payloadJson: String,
+        createdAt: Long,
+        userMessage: MessageEntity,
+    ): Boolean {
+        if (enqueueSteeringIfRunActive(id, runId, content, payloadJson, createdAt) == -1L) return false
+        upsertAgentUserMessage(userMessage)
+        return true
+    }
+
+    @Query(
+        "SELECT * FROM pending_messages WHERE conversationId = :sessionId " +
+            "ORDER BY queuePosition ASC, id ASC LIMIT 1",
+    )
+    suspend fun getPendingFollowUpHead(sessionId: String): PendingMessageEntity?
+
+    @Query("DELETE FROM pending_messages WHERE id = :id AND status = 'PENDING'")
+    suspend fun deletePendingFollowUp(id: String): Int
 
     @Query(
         "SELECT * FROM agent_steering_messages WHERE runId = :runId AND status = 'PENDING' " +
@@ -505,9 +533,40 @@ interface AgentDao {
 
     /** steering 的 Transcript 事实和已消费状态必须一起提交，进程退出后不能丢失或重复。 */
     @Transaction
-    suspend fun consumeSteering(entry: AgentEntryEntity, steeringId: String, consumedAt: Long): Boolean {
+    suspend fun consumeSteering(
+        entry: AgentEntryEntity,
+        steeringId: String,
+        consumedAt: Long,
+        updatedRun: AgentRunEntity? = null,
+        snapshotChunks: List<AgentRunSnapshotChunkEntity> = emptyList(),
+    ): Boolean {
         if (markSteeringConsumed(steeringId, consumedAt) != 1) return false
         upsertEntry(entry)
+        if (updatedRun != null) {
+            upsertRun(updatedRun)
+            deleteRunSnapshotChunks(updatedRun.id)
+            if (snapshotChunks.isNotEmpty()) upsertRunSnapshotChunks(snapshotChunks)
+        }
+        return true
+    }
+
+    /** Follow-up 从 Pending 队列进入 Agent transcript 必须原子完成，崩溃后不能重复或丢失。 */
+    @Transaction
+    suspend fun consumePendingFollowUp(
+        entry: AgentEntryEntity,
+        pendingId: String,
+        userMessage: MessageEntity,
+        updatedRun: AgentRunEntity? = null,
+        snapshotChunks: List<AgentRunSnapshotChunkEntity> = emptyList(),
+    ): Boolean {
+        if (deletePendingFollowUp(pendingId) != 1) return false
+        upsertEntry(entry)
+        upsertAgentUserMessage(userMessage)
+        if (updatedRun != null) {
+            upsertRun(updatedRun)
+            deleteRunSnapshotChunks(updatedRun.id)
+            if (snapshotChunks.isNotEmpty()) upsertRunSnapshotChunks(snapshotChunks)
+        }
         return true
     }
 
@@ -524,12 +583,28 @@ interface AgentDao {
           )
         """,
     )
-    suspend fun completeRunIfNoPendingSteering(
+    suspend fun markRunCompletedIfNoPendingSteering(
         runId: String,
         requestOrdinal: Int,
         terminalReason: String?,
         updatedAt: Long,
     ): Int
+
+    /**
+     * Pending 队首为可发送消息时，它就是 Pi follow-up。检查与 Run 完成处于同一事务，
+     * 保证并发入队和完成只有一个先发生。
+     */
+    @Transaction
+    suspend fun completeRunIfNoQueuedUserMessage(
+        runId: String,
+        sessionId: String,
+        requestOrdinal: Int,
+        terminalReason: String?,
+        updatedAt: Long,
+    ): Int {
+        if (getPendingFollowUpHead(sessionId)?.status == "PENDING") return 0
+        return markRunCompletedIfNoPendingSteering(runId, requestOrdinal, terminalReason, updatedAt)
+    }
 
     /**
      * 分页读取恢复快照。

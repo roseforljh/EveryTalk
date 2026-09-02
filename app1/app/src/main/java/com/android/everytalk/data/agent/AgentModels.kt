@@ -6,6 +6,7 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import com.android.everytalk.data.DataClass.AbstractApiMessage
+import com.android.everytalk.data.DataClass.MessageContentPart
 import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.DataClass.ModelParameterProtocol
 import com.android.everytalk.data.DataClass.RequestContextManagement
@@ -13,6 +14,7 @@ import com.android.everytalk.data.DataClass.AgentToolResultContentApiPart
 import com.android.everytalk.data.computer.ComputerRequestContext
 import com.android.everytalk.data.computer.ComputerToolApprovalRequest
 import com.android.everytalk.data.skill.SkillRequestSnapshot
+import com.android.everytalk.models.SelectedMediaItem
 
 /**
  * 一次用户输入对应一个 AgentRun。普通聊天同样创建 Run，通常只包含一次模型请求。
@@ -69,6 +71,7 @@ enum class AgentEntryKind {
     APPROVAL_DECISION,
     STATUS,
     STEERING,
+    FOLLOW_UP,
     /** 当前任务的最小执行真相，只用于内部上下文投影，不进入可见聊天记录。 */
     EXECUTION_CHECKPOINT,
 }
@@ -93,6 +96,8 @@ data class ExecutionCheckpoint(
 data class AgentSteeringInstruction(
     val id: String,
     val content: String,
+    val contentParts: List<MessageContentPart> = emptyList(),
+    val attachments: List<SelectedMediaItem> = emptyList(),
     val createdAt: Long,
 )
 

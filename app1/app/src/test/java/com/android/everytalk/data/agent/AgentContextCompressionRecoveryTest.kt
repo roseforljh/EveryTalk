@@ -8,12 +8,20 @@ import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.ModelTokenLimits
 import com.android.everytalk.data.DataClass.RequestContextManagement
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
+import com.android.everytalk.data.DataClass.PartsApiMessage
+import com.android.everytalk.data.DataClass.ApiContentPart
 import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.data.database.entities.ChatSessionEntity
+import com.android.everytalk.data.database.entities.PendingMessageEntity
 import com.android.everytalk.data.network.AppStreamEvent
 import com.android.everytalk.data.network.ModelTurnTransport
+import com.android.everytalk.models.SelectedMediaItem
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -65,6 +73,114 @@ class AgentContextCompressionRecoveryTest {
     }
 
     @Test
+    fun `Provider连续失败在第三次重试后终止Run`() = runBlocking {
+        val sessionId = "provider-retry-limit"
+        seedSession(sessionId)
+        val loop = AgentLoop(
+            runStore = store,
+            modelTransport = ModelTurnTransport {
+                flowOf(
+                    AppStreamEvent.Error(
+                        message = "connection reset",
+                        code = "connection_aborted",
+                        type = "retryable_network",
+                    )
+                )
+            },
+        )
+        val baseRequest = loopRequest(sessionId)
+        var events = loop.run(baseRequest).toList()
+
+        repeat(PI_DEFAULT_MAX_PROVIDER_RETRIES) {
+            val run = checkNotNull(database.agentDao().getRunsForSession(sessionId).single())
+            events = loop.run(baseRequest.copy(existingRun = run)).toList()
+        }
+
+        val run = checkNotNull(database.agentDao().getRunsForSession(sessionId).single())
+        val requests = database.agentDao().getRequests(run.id)
+            .filter { it.purpose == AgentRequestPurpose.AGENT_TURN.name }
+        assertEquals(listOf(1, 2, 3, 4), requests.map { it.attempt })
+        assertEquals(AgentRunStatus.FAILED.name, run.status)
+        assertTrue(events.filterIsInstance<AppStreamEvent.Error>().any { it.code == "provider_retry_exhausted" })
+    }
+
+    @Test
+    fun `Pending只在Agent准备结束时作为同一Run的followUp消费`() = runBlocking {
+        val sessionId = "pi-follow-up"
+        seedSession(sessionId)
+        val firstRequestStarted = CompletableDeferred<Unit>()
+        val releaseFirstRequest = CompletableDeferred<Unit>()
+        val requestMessages = mutableListOf<List<com.android.everytalk.data.DataClass.AbstractApiMessage>>()
+        val loop = AgentLoop(
+            runStore = store,
+            modelTransport = ModelTurnTransport { turn ->
+                flow {
+                    requestMessages += turn.request.messages
+                    if (requestMessages.size == 1) {
+                        firstRequestStarted.complete(Unit)
+                        releaseFirstRequest.await()
+                    }
+                    emit(AppStreamEvent.Content("第${requestMessages.size}轮"))
+                    emit(AppStreamEvent.Finish("stop"))
+                }
+            },
+        )
+        val running = async { loop.run(loopRequest(sessionId, compactThresholdTokens = 8_000)).toList() }
+
+        firstRequestStarted.await()
+        database.chatDao().enqueuePendingMessage(
+            PendingMessageEntity(
+                id = "follow-up-1",
+                conversationId = sessionId,
+                content = "继续检查配置",
+                composerText = "继续检查配置",
+                createdAt = 2L,
+                updatedAt = 2L,
+                status = "PENDING",
+                queuePosition = 0L,
+            )
+        )
+        releaseFirstRequest.complete(Unit)
+        val events = running.await()
+
+        assertEquals(2, requestMessages.size)
+        assertTrue(
+            requestMessages[1].filterIsInstance<SimpleTextApiMessage>()
+                .any { it.role == "user" && it.content == "继续检查配置" }
+        )
+        assertTrue(events.any { it is AppStreamEvent.AgentFollowUpAccepted && it.messageId == "follow-up-1" })
+        assertTrue(database.chatDao().observePendingMessages(sessionId).first().isEmpty())
+        assertEquals("继续检查配置", database.chatDao().getMessagesForSession(sessionId).single().text)
+        assertEquals(1, database.agentDao().getRunsForSession(sessionId).size)
+    }
+
+    @Test
+    fun `队列附件在消费时生成多模态消息`() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val message = materializeAndroidQueuedMessage(
+            context = context,
+            instruction = AgentSteeringInstruction(
+                id = "queued-image",
+                content = "检查图片",
+                attachments = listOf(
+                    SelectedMediaItem.ImageFromBitmap(
+                        bitmapData = "AQ==",
+                        id = "image-1",
+                        mimeType = "image/png",
+                    )
+                ),
+                createdAt = 1L,
+            ),
+            request = loopRequest("queued-image", compactThresholdTokens = 8_000).request,
+        ) as PartsApiMessage
+
+        assertTrue(message.parts.any { it is ApiContentPart.Text && it.text == "检查图片" })
+        assertTrue(message.parts.any {
+            it is ApiContentPart.InlineData && it.mimeType == "image/png" && it.base64Data == "AQ=="
+        })
+    }
+
+    @Test
     fun `压缩摘要预算随待压缩内容收紧`() = runBlocking {
         seedSession("compression-budget")
         val compressionBudgets = mutableListOf<Int?>()
@@ -82,7 +198,7 @@ class AgentContextCompressionRecoveryTest {
             },
         )
 
-        val events = loop.run(loopRequest("compression-budget")).toList()
+        val events = loop.run(loopRequest("compression-budget", compactThresholdTokens = 500)).toList()
 
         assertTrue(checkNotNull(compressionBudgets.single()) <= 256)
         assertTrue(events.any { it is AppStreamEvent.Content && it.text == "已继续处理" })
@@ -111,7 +227,7 @@ class AgentContextCompressionRecoveryTest {
             },
         )
 
-        val events = loop.run(loopRequest("compression-fallback")).toList()
+        val events = loop.run(loopRequest("compression-fallback", compactThresholdTokens = 500)).toList()
 
         assertEquals(2, requestCount)
         assertTrue(events.any { it is AppStreamEvent.Content && it.text == "主请求继续完成" })
@@ -134,7 +250,7 @@ class AgentContextCompressionRecoveryTest {
             },
         )
 
-        val events = loop.run(loopRequest(sessionId)).toList()
+        val events = loop.run(loopRequest(sessionId, compactThresholdTokens = 500)).toList()
         val run = checkNotNull(database.agentDao().getRunsForSession(sessionId).single())
         val compactionRequest = database.agentDao().getRequests(run.id)
             .single { it.purpose == AgentRequestPurpose.COMPACTION.name }
@@ -198,7 +314,10 @@ class AgentContextCompressionRecoveryTest {
         database.chatDao().insertSession(ChatSessionEntity(sessionId, 1L, 1L, false))
     }
 
-    private fun loopRequest(sessionId: String): AgentLoopRequest {
+    private fun loopRequest(
+        sessionId: String,
+        compactThresholdTokens: Long = 800,
+    ): AgentLoopRequest {
         val messages = listOf(
             SimpleTextApiMessage(id = "old-user", role = "user", content = "早期需求".repeat(80)),
             SimpleTextApiMessage(id = "old-assistant", role = "assistant", content = "早期结论".repeat(80)),
@@ -216,7 +335,7 @@ class AgentContextCompressionRecoveryTest {
                     configId = "config-1",
                     maxContextTokens = 8_192,
                     reservedOutputTokens = 512,
-                    compactThresholdTokens = 800,
+                    compactThresholdTokens = compactThresholdTokens,
                     autoCompressionEnabled = true,
                 ),
             ),

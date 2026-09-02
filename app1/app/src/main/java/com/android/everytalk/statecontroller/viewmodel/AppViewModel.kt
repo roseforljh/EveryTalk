@@ -385,6 +385,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     conversationId = pending.conversationId,
                     steeringId = pending.id,
                     content = pending.content,
+                    contentParts = pending.contentParts,
+                    attachments = pending.attachments,
                 )
             },
             recordSteeredMessage = { pending ->

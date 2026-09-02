@@ -1,10 +1,10 @@
 # EveryTalk Android Pi Agent 架构改造计划
 
-> 状态：核心实现已落地，定向自动验证通过，待真实 VPS 与真机验收
-> 记录日期：2026-08-15
+> 状态：架构与协议实现已封版，自动验证通过，待真实 VPS 与真机验收
+> 记录日期：2026-09-03
 > 适用工程：app1/
 > 参考项目：earendil-works/pi
-> 参考提交：6f707eb36064e82af9c1320a7634f4dfad21049b
+> 参考提交：b8b873b9872db04a938fb4357b5e8e824ddc051c
 > 参考包：@earendil-works/pi-agent-core 0.84.1
 > 许可证：MIT
 > 改造性质：Android 本地架构重构，不新增 EveryTalk 后端
@@ -29,19 +29,26 @@ EveryTalk 适合吸收 Pi 的架构语义，并使用 Kotlin、Coroutine、Flow 
 
 > Pi 提供 Agent 的运行语义，EveryTalk 使用 Android 原生代码实现同等语义，并保留自己的 Provider、Computer 和界面体系。
 
-### 1.3 当前实施进度（2026-08-14）
+### 1.3 当前实施进度（2026-09-03）
 
 已进入代码实施，当前文本主链已经完成：
 
 1. 普通聊天、MCP、联网搜索、VPS Agent 全部进入同一个 Kotlin `AgentLoop`。
 2. 四种协议只通过 `streamSingleTurn` 执行单次模型请求，工具循环和上下文推进由 AgentLoop 负责。
-3. Room 19 已保存 Run、Entry、Request、Usage、ContextSnapshot、Compaction、Provider continuation、非敏感恢复快照和 Computer 远端执行字段。
+3. Room 32 已保存 Run、Entry、Request、Usage、ContextSnapshot、Compaction、Provider continuation、非敏感恢复快照、steering 完整结构化引用和 Computer 远端执行字段。
 4. 上下文按完整工具原子组重建，压缩保留近期原文，支持超长单轮切分。
 5. 文本发送前的旧 `AutoContextCompression` 已退出正式路径，避免旧链与 AgentLoop 双重压缩；图片路径只保留窗口裁剪。
 6. OpenAI Responses、Anthropic、Gemini 和 OpenAI 兼容推理内容的当前 Run 连续状态已接入。
 7. 当前请求、当前 Run、整个会话三套 Usage 已分开。
 8. 工具结果统一限制大小；用户取消会收尾活动请求；App 重启会把旧活动 Run 和 Request 标为 `INTERRUPTED`。
 9. SSE 已设置 30 分钟总上限、2 分钟 Socket 空闲上限和 120 秒首个有效事件上限。
+10. Gemini、Anthropic、OpenAI Chat、OpenAI Responses 已各自按 Pi 的 Provider Adapter 生成官方协议消息，AgentLoop 不再拼接渠道专属 JSON。
+11. Gemini 请求发送前递归清理并校验七种官方 Part data oneof，空 `data` 不再进入请求；Tool Call ID、thoughtSignature 和 functionResponse 按原模型轮保存及回放。
+12. 工具失败统一包装为正常 ToolResult 交给模型继续处理；Provider 格式错误由本地 Adapter 拒绝，禁止让模型猜协议 JSON。
+13. 已支持 Pi 的串行与并行 Tool 批次。批次只要包含 sequential Tool 就整体串行；允许并行的 Tool 同时执行，结果仍按原 Tool Call 顺序进入 Transcript。
+14. steering 在下一模型边界消费，follow-up 只在 Agent 原本准备结束时消费，默认均为 one-at-a-time。
+15. follow-up 复用持久化 Pending 队列，在同一 Room 事务中删除 Pending、写 FOLLOW_UP Entry、保存用户历史和更新 Skill 冻结快照；附件只保存文件引用，消费时才生成多模态内容。
+16. Provider 临时失败沿用同一模型轮和同一 `modelTurnOrdinal`，默认最多执行三次自动重试；第四次失败进入明确终态。
 
 后续范围外项目：
 
@@ -49,7 +56,7 @@ EveryTalk 适合吸收 Pi 的架构语义，并使用 Kotlin、Coroutine、Flow 
 
 本轮补齐：
 
-1. Room 19 保存不含 API Key 的恢复快照，`WAITING_APPROVAL` 和 `WAITING_REMOTE_EXECUTION` 跨进程保留。
+1. Room 32 保存不含 API Key 的恢复快照，`WAITING_APPROVAL` 和 `WAITING_REMOTE_EXECUTION` 跨进程保留。
 2. 审批请求、决定和剩余 Tool Call 从原 Run 恢复，同一 `approvalRequestId` 只能决策一次。
 3. 多会话审批以 Room 列表保存，界面只投影当前会话对应卡片。
 4. Host 命令、Public Preview 和 UNKNOWN 恢复统一进入持久化审批链。
@@ -522,14 +529,15 @@ AgentToolRuntime 统一管理：
 
 ### 8.2 执行顺序
 
-第一版统一采用模型返回顺序串行执行：
+执行顺序与 Pi 一致：
 
-1. 保持操作顺序可预测。
-2. 避免多个写操作同时修改 VPS。
-3. 审批卡片与 Tool Result 顺序稳定。
-4. Provider 切换后行为一致。
+1. Tool 定义可明确标记 `sequential` 或 `parallel`。
+2. 同一批只要包含一个 sequential Tool，整批按模型返回顺序串行执行。
+3. Computer、Agent Gate 和会触碰共享资源的 Tool 固定为 sequential。
+4. 全部允许并行时最多同时执行四个，完成顺序不改变 Transcript 顺序。
+5. 每个 Tool Result 绑定原 requestId 和 toolCallId；已落库 sibling 不会因暂停、崩溃或恢复而重跑。
 
-未来若增加并行执行，只允许经过明确标记、互不依赖的只读工具。本计划不实施该扩展。
+并行只改变执行等待时间，不改变审批、安全预检、持久化身份和 Provider 回放格式。
 
 ### 8.3 统一权限预检
 
@@ -848,18 +856,18 @@ ProviderContinuationState 的有效键包括：
 
 ### 12.3 自动重试边界
 
-当前 AgentLoop 对错误按终止处理，不自动重放模型请求。这样能确保出现部分输出、Tool Call 或状态未知工具时不产生重复副作用。以下规则保留为未来启用自动重试时的硬边界：
+AgentLoop 已实现 Pi 风格的有限 Provider retry。初始请求 attempt=1，失败后最多再执行三次，因此单个模型轮最多产生 attempt 1、2、3、4 四条请求事实。
 
-只允许在以下条件全部满足时自动重试一次：
+只允许在以下条件全部满足时自动重试：
 
 1. 错误属于建连失败、可重试 5xx、429 或首包前断线。
 2. 没有收到任何用户可见文本、推理或完整 Tool Call。
 3. 本轮没有执行任何工具。
 4. 取消信号没有触发。
 
-已经出现部分输出、完整 Tool Call 或状态未知的工具后，禁止自动重试。此时向用户显示明确错误，避免重复回答或重复修改 VPS。
+失败 attempt 的 PARTIAL Assistant 会先从活动上下文撤销，MessageProcessor、UI 和 executionTrace 同步回到 Room 最终事实。重试保持原 `modelTurnOrdinal`，只递增 attempt 并记录 `retryOfRequestId`。
 
-当前不产生自动重试请求，`retryOfRequestId` 保留为空；未来启用时，每次真正发到上游的尝试都创建独立 AgentRequest 并关联来源。
+已经出现完整 Tool Call、已执行工具或状态未知副作用时，禁止重放工具。attempt=4 仍失败时 Run 进入 FAILED，错误码固定为 `provider_retry_exhausted`。
 
 ## 十三、Android 生命周期与恢复
 
@@ -898,13 +906,17 @@ ProviderContinuationState 的有效键包括：
 1. 只有 FINAL Assistant 和 FINAL ToolResult 默认进入下一次请求。
 2. PARTIAL Assistant 保留给用户查看，不自动当作模型已完成回答。
 3. UNKNOWN 工具必须先解决状态，不能伪造成功或失败结果。
-4. 恢复动作通过持久 Run 状态、Approval Entry 和 ToolResult 表达；当前不额外写重复的 Status Entry。
+4. 恢复动作通过持久 Run 状态、Approval Entry、ToolResult 和必要的 Status Entry 表达。
+5. 只有最后一条 `INTERRUPTED` 模型请求可成为 retry 来源，历史中断请求不会覆盖后续成功事实。
+6. `MODEL_CONTINUATION_PENDING` 与 `RETRYING` 冷启动后以 Room Transcript 覆盖内存残片，再恢复同一模型轮。
+7. 已消费的 steering 和 follow-up 通过 AgentEntry 重建；未消费 follow-up 仍留在 Pending，内存回调丢失不影响恢复。
+8. follow-up 的 Pending 删除、用户 Message、FOLLOW_UP Entry 和新增 SkillReference 快照原子提交，不会出现模型收到消息但历史丢失的半状态。
 
 ## 十四、Room 数据模型
 
 ### 14.1 新实体
 
-当前数据库版本为 16。若实施期间没有其他迁移，目标版本为 17；若版本已经变化，则使用当时版本加一。
+当前数据库版本为 32。Agent 基础事实从 17 版开始演进，32 版为 steering 增加结构化消息载荷；附件内容仍保存在应用私有文件，Room 只保存引用。
 
 #### AgentRunEntity
 
@@ -1072,7 +1084,7 @@ ProviderContinuationState 的有效键包括：
 
 AgentEntry.Assistant、ToolResult、Approval 和 Status 按 sequence 投影到 executionTrace，严格遵循真实顺序。禁止把所有思考集中显示后再显示所有工具。
 
-同一会话同时只允许一个活动 AgentRun。运行期间继续沿用现有停止按钮，不在本计划中增加运行中插入新用户消息或 Pi 的 steering message。
+同一会话同时只允许一个活动 AgentRun。运行中的普通排队消息属于 Pi follow-up，仅在 Agent 原本准备停止时进入同一个 Run；用户点击“立即发送”时属于 steering，在下一个安全模型边界进入同一个 Run。两者都支持文本、SkillReference 和附件引用。
 
 ### 15.2 运行中的状态
 
@@ -1130,7 +1142,7 @@ AgentEntry.Assistant、ToolResult、Approval 和 Status 按 sequence 投影到 e
 | data/agent/AgentModels.kt | AgentRun、AgentEntry、状态和中立内容模型 |
 | data/agent/AgentLoop.kt | 唯一 Agent 状态机 |
 | data/agent/AgentContextManager.kt | 上下文重建、预算、裁剪、压缩和快照 |
-| data/agent/AgentToolRuntime.kt | Tool Registry、权限预检、串行执行和结果归一化 |
+| data/agent/AgentToolRuntime.kt | Tool Registry、权限预检、串行或受限并行执行和结果归一化 |
 | data/agent/AgentToolResultStore.kt | 大型工具结果的 App 私有文件写入和会话级清理 |
 | data/agent/AgentRunStore.kt | Room 事务、序号分配、恢复查询和聚合 |
 | data/network/llm/ModelTurnTransport.kt | Provider 单次请求接口和事件 |
@@ -1203,7 +1215,7 @@ AgentEntry.Assistant、ToolResult、Approval 和 Status 按 sequence 投影到 e
 
 ### 阶段 2：建立中立 Agent 模型和持久化
 
-当前状态：已完成主链与 Room 19 持久化；界面继续兼容原 executionTrace，并在 Run 恢复时从 AgentEntry 重建顺序。
+当前状态：已完成主链与 Room 32 持久化；界面继续兼容原 executionTrace，并在 Run 恢复时从 AgentEntry 重建顺序。
 
 实施：
 
@@ -1364,6 +1376,11 @@ AgentEntry.Assistant、ToolResult、Approval 和 Status 按 sequence 投影到 e
 * 权限暂停和恢复。
 * 超时和取消。
 * UNKNOWN 工具禁止自动重放。
+* Provider retry 的 attempt、同模型轮身份和三次上限。
+* 并行 Tool 完成后仍按原调用顺序写入。
+* steering 与 follow-up 的消费边界、one-at-a-time 和同 Run 语义。
+* follow-up 的 Pending、用户历史、AgentEntry 与 Skill 快照原子提交。
+* 队列附件在消费时转换成 Provider 可接受的多模态消息。
 
 ### 18.2 Provider Payload 快照
 
@@ -1377,7 +1394,7 @@ AgentEntry.Assistant、ToolResult、Approval 和 Status 按 sequence 投影到 e
 
 ### 18.3 Room Migration Test
 
-从版本 16 依次升级到 17、18、19，检查：
+覆盖 Agent 相关关键迁移直到当前 32 版，检查：
 
 * 原会话和消息数量不变。
 * 新表与索引完整。
@@ -1386,6 +1403,7 @@ AgentEntry.Assistant、ToolResult、Approval 和 Status 按 sequence 投影到 e
 * 删除会话后相关 Agent 数据级联清理。
 * 17→18 保留旧 Agent 事实，并增加恢复快照和 Provider 协议身份字段。
 * 18→19 保留旧 ComputerExecution，并增加七个可空的远端执行字段。
+* 31→32 保留旧 steering 文本，并增加可空的结构化 `payloadJson`。
 * Runtime V2 的成功、失败、取消、MISSING、协议损坏和网络不可用分支不互相误判。
 
 ### 18.4 已知日志回归
@@ -1435,8 +1453,15 @@ AgentEntry.Assistant、ToolResult、Approval 和 Status 按 sequence 投影到 e
 14. Provider 切换后可以从中立消息重建上下文。
 15. 旧聊天数据不丢失，旧累计 Usage 不再冒充当前上下文。
 16. TokenUsageAccumulator 和四套 Provider 工具循环完成清理。
+17. 四套 Provider 消息只由各自 Adapter 生成，Gemini Part data oneof 在发送前完成清理和校验。
+18. 工具失败作为普通 ToolResult 返回模型，格式错误由本地代码处理，不要求模型生成协议 JSON。
+19. Provider retry 保持同一模型轮，达到三次重试上限后进入明确失败终态。
+20. steering 和 follow-up 支持文本、附件与 SkillReference，并在同一 AgentRun 按 Pi 边界消费。
+21. follow-up 与用户历史、Transcript 和 Skill 快照的持久化不存在半完成窗口。
 
-当前实施状态：以上 16 项均已落入正式 Android 本地路径。自动验证覆盖上下文、逐请求 Usage、恢复快照、Room 迁移、审批原子暂停与单次决策、工具执行中断分流、同批剩余调用、UNKNOWN 用户决定、Provider continuation 失效、模型与工具循环限制、工具结果私有归档；真机交互继续由用户验收。
+当前实施状态：以上 21 项均已落入正式 Android 本地路径。自动验证覆盖上下文、逐请求 Usage、恢复快照、Room 迁移、审批原子暂停与单次决策、工具执行中断分流、同批剩余调用、UNKNOWN 用户决定、Provider continuation 失效、模型与工具循环限制、工具结果私有归档；真机交互继续由用户验收。
+
+协议收口同时覆盖四套 Provider Adapter、Gemini Part oneof 清理、Provider retry、并行 Tool、steering、follow-up、多模态队列、SkillReference 冻结和后台用户历史持久化。ADB 已关闭，因此 Gemini 3.7 真实接口与 Release 真机行为仍属于人工验收项。
 
 ## 二十、风险与取舍
 
@@ -1477,26 +1502,28 @@ Provider 迁移阶段曾短暂保留新旧路径；阶段 8 已删除旧工具�
 * 重做现有服务器页面和权限卡片视觉设计。
 * 自动重放结果未知的 VPS 写操作。
 * 把完整隐藏思维链发送到界面。
-* 运行中插入用户消息、steering message 和多 Run 并发。
+* 同一会话内多 Run 并发。
 
 ## 二十二、Pi 固定参考
 
 所有实现对照固定提交，避免主分支更新后语义漂移：
 
 * Agent Loop：  
-  https://github.com/earendil-works/pi/blob/6f707eb36064e82af9c1320a7634f4dfad21049b/packages/agent/src/agent-loop.ts
+  https://github.com/earendil-works/pi/blob/b8b873b9872db04a938fb4357b5e8e824ddc051c/packages/agent/src/agent-loop.ts
+* steering、follow-up 与 QueueMode：
+  https://github.com/earendil-works/pi/blob/b8b873b9872db04a938fb4357b5e8e824ddc051c/packages/agent/src/agent.ts
 * Agent 类型与 transformContext、convertToLlm：  
-  https://github.com/earendil-works/pi/blob/6f707eb36064e82af9c1320a7634f4dfad21049b/packages/agent/src/types.ts
+  https://github.com/earendil-works/pi/blob/b8b873b9872db04a938fb4357b5e8e824ddc051c/packages/agent/src/types.ts
 * 上下文压缩实现：  
-  https://github.com/earendil-works/pi/blob/6f707eb36064e82af9c1320a7634f4dfad21049b/packages/agent/src/harness/compaction/compaction.ts
+  https://github.com/earendil-works/pi/blob/b8b873b9872db04a938fb4357b5e8e824ddc051c/packages/agent/src/harness/compaction/compaction.ts
 * 压缩说明：  
-  https://github.com/earendil-works/pi/blob/6f707eb36064e82af9c1320a7634f4dfad21049b/packages/coding-agent/docs/compaction.md
+  https://github.com/earendil-works/pi/blob/b8b873b9872db04a938fb4357b5e8e824ddc051c/packages/coding-agent/docs/compaction.md
 * Usage 汇总：  
-  https://github.com/earendil-works/pi/blob/6f707eb36064e82af9c1320a7634f4dfad21049b/packages/coding-agent/src/core/usage-totals.ts
+  https://github.com/earendil-works/pi/blob/b8b873b9872db04a938fb4357b5e8e824ddc051c/packages/coding-agent/src/core/usage-totals.ts
 * OpenAI 请求适配参考：  
-  https://github.com/earendil-works/pi/blob/6f707eb36064e82af9c1320a7634f4dfad21049b/packages/ai/src/api/openai-completions.ts
+  https://github.com/earendil-works/pi/blob/b8b873b9872db04a938fb4357b5e8e824ddc051c/packages/ai/src/api/openai-completions.ts
 * MIT License：  
-  https://github.com/earendil-works/pi/blob/6f707eb36064e82af9c1320a7634f4dfad21049b/LICENSE
+  https://github.com/earendil-works/pi/blob/b8b873b9872db04a938fb4357b5e8e824ddc051c/LICENSE
 
 ## 二十三、审查时需要确认的决策
 

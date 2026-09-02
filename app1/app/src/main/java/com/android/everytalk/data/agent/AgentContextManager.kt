@@ -553,6 +553,7 @@ private fun AbstractApiMessage.compactionText(): String = when (this) {
 /** 按 ET 现有 Computer 工具信封提取关键字段，未知工具保留首尾避免丢失尾部错误。 */
 internal fun compactAgentToolResultForCompaction(message: AgentToolResultApiMessage): String {
     val raw = message.content.toString()
+    val plainText = (message.content as? JsonPrimitive)?.contentOrNull
     val parsed = runCatching { Json.parseToJsonElement(raw) as? JsonObject }.getOrNull()
     val data = parsed?.get("data") as? JsonObject
     val error = parsed?.get("error") as? JsonObject
@@ -582,6 +583,10 @@ internal fun compactAgentToolResultForCompaction(message: AgentToolResultApiMess
             value("stderr")?.let { append("stderr: ").append(compactHeadTail(it, 1_000)).append('\n') }
             value("stdout")?.let { append("stdout: ").append(compactHeadTail(it, 1_000)).append('\n') }
             error?.get("message")?.let { append("error: ").append(it).append('\n') }
+            // Pi 会把工具异常正文保留在 ToolResult。旧实现只解析对象信封，
+            // JsonPrimitive 类型的 permission denied 等关键错误会在压缩时静默丢失。
+            plainText?.takeIf(String::isNotBlank)
+                ?.let { append("result:\n").append(compactHeadTail(it, 2_000)).append('\n') }
         }
         message.toolName in setOf("edit", "write_file", "write") -> buildString {
             append("tool: ").append(message.toolName).append('\n')

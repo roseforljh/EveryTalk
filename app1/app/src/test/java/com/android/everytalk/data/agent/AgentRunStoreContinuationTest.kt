@@ -4,11 +4,15 @@ import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.ModelParameterProtocol
 import com.android.everytalk.data.DataClass.ProviderTurnContinuation
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
+import com.android.everytalk.data.DataClass.MessageContentPart
 import com.android.everytalk.data.database.daos.AgentDao
 import com.android.everytalk.data.database.entities.ProviderContinuationStateEntity
 import com.android.everytalk.data.database.entities.AgentContextSnapshotEntity
 import com.android.everytalk.data.database.entities.AgentRequestEntity
 import com.android.everytalk.data.database.entities.AgentRunEntity
+import com.android.everytalk.data.database.entities.AgentSteeringMessageEntity
+import com.android.everytalk.data.skill.MessageSkillReference
+import com.android.everytalk.data.skill.SkillSourceType
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.mockk
@@ -219,6 +223,127 @@ class AgentRunStoreContinuationTest {
     }
 
     @Test
+    fun `只有最后一条模型请求中断时才允许作为retry来源`() = runBlocking {
+        val interrupted = requestEntity(
+            id = "request-interrupted",
+            ordinal = 1,
+            status = AgentRequestStatus.INTERRUPTED,
+        )
+        val completed = requestEntity(
+            id = "request-completed",
+            ordinal = 2,
+            status = AgentRequestStatus.COMPLETED,
+        )
+        coEvery { dao.getRequests("run-1") } returns listOf(interrupted)
+
+        assertEquals(interrupted, store.latestInterruptedAgentRequest("run-1"))
+
+        coEvery { dao.getRequests("run-1") } returns listOf(interrupted, completed)
+
+        assertNull(store.latestInterruptedAgentRequest("run-1"))
+    }
+
+    @Test
+    fun `steering默认按Pi规则一次只消费一条`() = runBlocking {
+        val first = AgentSteeringMessageEntity(
+            id = "steer-1",
+            runId = "run-1",
+            content = "先检查日志",
+            status = "PENDING",
+            createdAt = 1L,
+        )
+        val second = first.copy(id = "steer-2", content = "再检查配置", createdAt = 2L)
+        val run = AgentRunEntity(
+            id = "run-1",
+            sessionId = "session-1",
+            userMessageId = "user-1",
+            visibleAssistantMessageId = "assistant-1",
+            configIdSnapshot = "config-1",
+            requestSnapshotJson = Json.encodeToString(
+                AgentRequestSnapshot.serializer(),
+                AgentRequestSnapshot(
+                    messages = emptyList(),
+                    provider = request.provider,
+                    channel = request.channel,
+                    apiAddress = request.apiAddress,
+                    model = request.model,
+                ),
+            ),
+            status = AgentRunStatus.STREAMING_MODEL.name,
+            currentRequestOrdinal = 1,
+            terminalReason = null,
+            createdAt = 1L,
+            updatedAt = 1L,
+        )
+        coEvery { dao.getPendingSteering("run-1") } returns listOf(first, second)
+        coEvery { dao.getRun("run-1") } returns run
+        coEvery { dao.nextEntrySequence("run-1") } returns 1L
+        coEvery { dao.consumeSteering(any(), "steer-1", any(), any(), any()) } returns true
+
+        val consumed = store.consumePendingSteering("run-1")
+
+        assertEquals(listOf("先检查日志"), consumed.map { (it as SimpleTextApiMessage).content })
+        coVerify(exactly = 1) { dao.consumeSteering(any(), "steer-1", any(), any(), any()) }
+        coVerify(exactly = 0) { dao.consumeSteering(any(), "steer-2", any(), any(), any()) }
+    }
+
+    @Test
+    fun `steering中的SkillReference原子并入当前Run冻结快照`() = runBlocking {
+        val reference = MessageSkillReference(
+            skillId = "skill-1",
+            displayName = "检查配置",
+            sourceType = SkillSourceType.USER_CREATED,
+            contentHash = "hash-1",
+        )
+        val instruction = AgentSteeringInstruction(
+            id = "steer-skill",
+            content = "使用指定技能",
+            contentParts = listOf(MessageContentPart.SkillReference(reference)),
+            createdAt = 2L,
+        )
+        val run = AgentRunEntity(
+            id = "run-skill",
+            sessionId = "session-1",
+            userMessageId = "user-1",
+            visibleAssistantMessageId = "assistant-skill",
+            configIdSnapshot = "config-1",
+            requestSnapshotJson = Json.encodeToString(
+                AgentRequestSnapshot.serializer(),
+                AgentRequestSnapshot(
+                    messages = emptyList(),
+                    provider = request.provider,
+                    channel = request.channel,
+                    apiAddress = request.apiAddress,
+                    model = request.model,
+                ),
+            ),
+            status = AgentRunStatus.STREAMING_MODEL.name,
+            currentRequestOrdinal = 1,
+            terminalReason = null,
+            createdAt = 1L,
+            updatedAt = 1L,
+        )
+        coEvery { dao.getRun(run.id) } returns run
+        coEvery { dao.getPendingSteering(run.id) } returns listOf(
+            AgentSteeringMessageEntity(
+                id = instruction.id,
+                runId = run.id,
+                content = instruction.content,
+                payloadJson = Json.encodeToString(AgentSteeringInstruction.serializer(), instruction),
+                status = "PENDING",
+                createdAt = instruction.createdAt,
+            )
+        )
+        coEvery { dao.nextEntrySequence(run.id) } returns 1L
+        coEvery { dao.consumeSteering(any(), instruction.id, any(), any(), any()) } returns true
+
+        store.consumePendingSteering(run.id)
+
+        val updated = checkNotNull(store.decodeRequestSnapshot(run))
+        assertEquals(listOf(reference), updated.skillSnapshot?.manualReferences)
+    }
+
+    @Test
     fun `新恢复快照分块落库并可完整还原`() = runBlocking {
         val runSlot = slot<com.android.everytalk.data.database.entities.AgentRunEntity>()
         val chunksSlot = slot<List<com.android.everytalk.data.database.entities.AgentRunSnapshotChunkEntity>>()
@@ -285,5 +410,28 @@ class AgentRunStoreContinuationTest {
         summarizedThroughItemId = null,
         opaqueStateJson = opaqueStateJson,
         updatedAt = 1L,
+    )
+
+    private fun requestEntity(
+        id: String,
+        ordinal: Int,
+        status: AgentRequestStatus,
+    ) = AgentRequestEntity(
+        id = id,
+        runId = "run-1",
+        ordinal = ordinal,
+        purpose = AgentRequestPurpose.AGENT_TURN.name,
+        modelTurnOrdinal = ordinal,
+        attempt = 1,
+        retryOfRequestId = null,
+        provider = "OpenAI",
+        endpoint = "https://example.test/v1",
+        model = "model-1",
+        payloadFingerprint = "fingerprint-$ordinal",
+        status = status.name,
+        finishReason = null,
+        startedAt = 1L,
+        firstEventAt = null,
+        finishedAt = 2L,
     )
 }

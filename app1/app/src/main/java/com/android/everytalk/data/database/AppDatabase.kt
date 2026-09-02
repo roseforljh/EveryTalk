@@ -88,7 +88,7 @@ import com.android.everytalk.data.database.entities.WorkspaceSecretMetadataEntit
         AgentStoredAuthorizationEntity::class,
         AgentOAuthStateEntity::class,
     ],
-    version = 31,
+    version = 32,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -146,6 +146,7 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_28_29,
                     MIGRATION_29_30,
                     MIGRATION_30_31,
+                    MIGRATION_31_32,
                 )
                 .addCallback(DATABASE_MAINTENANCE_CALLBACK)
                 .build()
@@ -1184,6 +1185,13 @@ abstract class AppDatabase : RoomDatabase() {
                     """.trimIndent(),
                 )
                 db.execSQL("CREATE INDEX IF NOT EXISTS index_agent_oauth_states_runId_consumed_expiresAt ON agent_oauth_states(runId, consumed, expiresAt)")
+            }
+        }
+
+        /** steering 保存完整结构化用户消息；附件只保存应用私有文件引用。 */
+        val MIGRATION_31_32 = object : Migration(31, 32) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE agent_steering_messages ADD COLUMN payloadJson TEXT")
             }
         }
 

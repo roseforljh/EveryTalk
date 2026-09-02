@@ -57,6 +57,7 @@ internal const val MAX_AGENT_MODEL_TURNS = 50
 internal const val MAX_AGENT_CONSECUTIVE_TOOL_CALLS = 100
 internal const val MAX_IDENTICAL_TOOL_CALLS = 3
 internal const val MAX_PARALLEL_TOOL_CALLS = 4
+internal const val PI_DEFAULT_MAX_PROVIDER_RETRIES = 3
 private const val COMPACTION_OUTPUT_TOKENS = 4_096
 private const val PARTIAL_ASSISTANT_CHECKPOINT_INTERVAL_MILLIS = 500L
 private const val PARTIAL_ASSISTANT_CHECKPOINT_CHARACTERS = 512
@@ -131,9 +132,55 @@ class AgentLoop(
             var activeCompaction = runStore.latestCompaction(input.sessionId)
             var executionCheckpoint = runStore.executionCheckpoint(checkNotNull(run).id)
             var requestOrdinal = checkNotNull(run).currentRequestOrdinal
-            val firstModelTurnOrdinal = runStore.nextModelTurnOrdinal(checkNotNull(run).id)
+            // Pi 的 Provider retry 仍属于同一模型轮。只有最新模型请求确实中断时才复用；
+            // 审批恢复不能捡起历史上早已被后续成功请求覆盖的中断记录。
+            val interruptedModelRequest = input.existingRun?.let {
+                runStore.latestInterruptedAgentRequest(checkNotNull(run).id)
+            }
+            val firstModelTurnOrdinal = interruptedModelRequest?.modelTurnOrdinal
+                ?: runStore.nextModelTurnOrdinal(checkNotNull(run).id)
+            if (interruptedModelRequest != null) {
+                // Pi 重试前会把失败 Assistant 从活动上下文移除。Room 中的 PARTIAL 也必须先撤销，
+                // 再把最终事实投影给 UI，否则新 attempt 会接在失败正文后面重复显示。
+                runStore.discardPartialAssistantAttempt(checkNotNull(run).id)
+                val retainedTrace = runStore.executionTrace(checkNotNull(run).id)
+                emit(
+                    AppStreamEvent.AgentTurnRetryReset(
+                        retainedText = retainedTrace.filterIsInstance<com.android.everytalk.data.DataClass.ExecutionTraceEvent.Content>()
+                            .joinToString(separator = "") { event -> event.text },
+                        retainedReasoning = retainedTrace
+                            .filterIsInstance<com.android.everytalk.data.DataClass.ExecutionTraceEvent.Reasoning>()
+                            .joinToString(separator = "") { event -> event.text }
+                            .takeIf(String::isNotBlank),
+                        retainedTrace = retainedTrace,
+                    )
+                )
+            }
             val toolLoopGuard = ToolLoopGuard().apply {
                 runStore.finalExecutedToolCalls(checkNotNull(run).id).forEach(::recordHistorical)
+            }
+
+            /** steering 抢占 stop 边界；没有 steering 时才按 Pi 规则消费一条 follow-up。 */
+            suspend fun consumeQueuedMessageAtStopBoundary(): Boolean {
+                val lateSteering = runStore.consumePendingSteering(checkNotNull(run).id)
+                if (lateSteering.isNotEmpty()) {
+                    transcript = transcript + lateSteering
+                    return true
+                }
+                val followUp = runStore.consumePendingFollowUp(
+                    runId = checkNotNull(run).id,
+                    sessionId = input.sessionId,
+                ) ?: return false
+                transcript = transcript + followUp.message
+                emit(
+                    AppStreamEvent.AgentFollowUpAccepted(
+                        messageId = followUp.instruction.id,
+                        text = followUp.instruction.content,
+                        contentParts = followUp.instruction.contentParts,
+                        attachments = followUp.instruction.attachments,
+                    )
+                )
+                return true
             }
 
             val resumedApproval = input.approvalDecision
@@ -237,9 +284,7 @@ class AgentLoop(
                     emit(AppStreamEvent.Finish("stop"))
                     return@flow
                 }
-                val lateSteering = runStore.consumePendingSteering(checkNotNull(run).id)
-                if (lateSteering.isEmpty()) return@flow
-                transcript = transcript + lateSteering
+                if (!consumeQueuedMessageAtStopBoundary()) return@flow
             }
 
             // modelTurnOrdinal 从 1 开始；恢复 Run 时只能使用剩余额度，不能重新获得 50 轮。
@@ -251,6 +296,7 @@ class AgentLoop(
                 if (steeringAtBoundary.isNotEmpty()) {
                     transcript = transcript + steeringAtBoundary
                 }
+                var steeringAlreadyConsumedForTurn = steeringAtBoundary.isNotEmpty()
                 val preparationStartedAt = System.currentTimeMillis()
                 run = runStore.updateRunStatus(
                     run = checkNotNull(run),
@@ -394,8 +440,12 @@ class AgentLoop(
                     }
 
                     // Pi 在 prepareNextTurn 之后再轮询一次。压缩期间来的 steering 必须进入眼前这轮模型请求。
+                    // Pi 默认 one-at-a-time。本轮开始已经消费过一条时，长时间上下文准备结束后
+                    // 不能再取第二条；只有第一次轮询为空时才补查准备期间新到的 steering。
+                    if (steeringAlreadyConsumedForTurn) break
                     val steeringAfterPreparation = runStore.consumePendingSteering(checkNotNull(run).id)
                     if (steeringAfterPreparation.isEmpty()) break
+                    steeringAlreadyConsumedForTurn = true
                     transcript = transcript + steeringAfterPreparation
                     run = runStore.updateRunStatus(
                         run = checkNotNull(run),
@@ -410,8 +460,8 @@ class AgentLoop(
                     messages = prepared.messages,
                     localProviderContinuation = providerContinuation,
                 )
-                val retryOfRequest = if (input.existingRun != null && modelTurnOrdinal == firstModelTurnOrdinal) {
-                    runStore.latestInterruptedAgentRequest(checkNotNull(run).id)
+                val retryOfRequest = if (modelTurnOrdinal == firstModelTurnOrdinal) {
+                    interruptedModelRequest
                 } else {
                     null
                 }
@@ -681,7 +731,7 @@ class AgentLoop(
 
                     val isRetryable = turnFailure.isRetryableNetworkError(finishReason)
 
-                    if (isRetryable) {
+                    if (isRetryable && canRetryProviderAttempt(requestFact.attempt)) {
                         runStore.updateRequest(
                             request = requestFact,
                             status = AgentRequestStatus.INTERRUPTED,
@@ -705,10 +755,20 @@ class AgentLoop(
                         )
                         return@flow
                     } else {
+                        val terminalFailure = if (isRetryable) {
+                            turnFailure.copy(
+                                message = "模型连接连续失败，已完成 $PI_DEFAULT_MAX_PROVIDER_RETRIES 次自动重试：${turnFailure.message}",
+                                code = "provider_retry_exhausted",
+                                type = "provider_error",
+                                rawMessage = turnFailure.rawMessage ?: turnFailure.message,
+                            )
+                        } else {
+                            turnFailure
+                        }
                         runStore.updateRequest(
                             request = requestFact,
                             status = AgentRequestStatus.FAILED,
-                            finishReason = finishReason ?: turnFailure.code ?: "error",
+                            finishReason = finishReason ?: terminalFailure.code ?: "error",
                             firstEventAt = firstEventAt,
                             finishedAt = finishedAt,
                         )
@@ -716,9 +776,9 @@ class AgentLoop(
                             run = checkNotNull(run),
                             status = AgentRunStatus.FAILED,
                             requestOrdinal = ordinal,
-                            terminalReason = turnFailure.message,
+                            terminalReason = terminalFailure.message,
                         )
-                        emit(turnFailure)
+                        emit(terminalFailure)
                         return@flow
                     }
                 }
@@ -760,11 +820,7 @@ class AgentLoop(
                         terminalReason = finishReason,
                     )
                     if (completedRun == null) {
-                        val lateSteering = runStore.consumePendingSteering(checkNotNull(run).id)
-                        if (lateSteering.isNotEmpty()) {
-                            transcript = transcript + lateSteering
-                            continue
-                        }
+                        if (consumeQueuedMessageAtStopBoundary()) continue
                         return@flow
                     }
                     run = completedRun
@@ -842,11 +898,7 @@ class AgentLoop(
                         terminalReason = "tool_terminate",
                     )
                     if (completedRun == null) {
-                        val lateSteering = runStore.consumePendingSteering(checkNotNull(run).id)
-                        if (lateSteering.isNotEmpty()) {
-                            transcript = transcript + lateSteering
-                            continue
-                        }
+                        if (consumeQueuedMessageAtStopBoundary()) continue
                         return@flow
                     }
                     run = completedRun
@@ -1549,6 +1601,10 @@ class AgentLoop(
 /** 恢复 Run 只消费尚未使用的模型轮次；已达到上限时返回空范围。 */
 internal fun remainingAgentModelTurnOrdinals(firstModelTurnOrdinal: Int): IntRange =
     firstModelTurnOrdinal.coerceAtLeast(1)..MAX_AGENT_MODEL_TURNS
+
+/** Pi 默认允许初始请求之后再重试三次；attempt 从 1 开始并持久化。 */
+internal fun canRetryProviderAttempt(currentAttempt: Int): Boolean =
+    currentAttempt in 1..PI_DEFAULT_MAX_PROVIDER_RETRIES
 
 private data class ToolBatchOutcome(
     val transcript: List<com.android.everytalk.data.DataClass.AbstractApiMessage>,

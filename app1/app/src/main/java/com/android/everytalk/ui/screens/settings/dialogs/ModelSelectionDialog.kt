@@ -413,13 +413,19 @@ private fun ModelCatalogTabs(
                 selected = selected,
                 onClick = { onSelect(tab) },
                 label = {
-                    Text(
-                        text = "${stringResource(labelRes)} $count",
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        fontSize = 11.sp,
-                        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
-                    )
+                    Box(
+                        modifier = Modifier.fillMaxWidth(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "${stringResource(labelRes)} $count",
+                            maxLines = 1,
+                            softWrap = false,
+                            fontSize = 11.sp,
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+                            textAlign = TextAlign.Center
+                        )
+                    }
                 },
                 modifier = Modifier.weight(1f),
                 shape = RoundedCornerShape(20.dp),

@@ -16,6 +16,24 @@ import org.junit.Test
 
 class MessageProcessorFinalizePartsTest {
 
+    @Test
+    fun `模型重试会撤销失败轮正文并从持久化基线继续`() = runBlocking {
+        val processor = MessageProcessor()
+        processor.processStreamEvent(AppStreamEvent.Text("旧的失败残片"), "message-1")
+
+        processor.processStreamEvent(
+            AppStreamEvent.AgentTurnRetryReset(
+                retainedText = "已确认正文",
+                retainedReasoning = "已确认思考",
+            ),
+            "message-1",
+        )
+        processor.processStreamEvent(AppStreamEvent.Text("新的回复"), "message-1")
+
+        assertEquals("已确认正文新的回复", processor.getCurrentText())
+        assertEquals("已确认思考", processor.getCurrentReasoning())
+    }
+
     @Before
     fun setUp() {
         mockkStatic(android.util.Log::class)

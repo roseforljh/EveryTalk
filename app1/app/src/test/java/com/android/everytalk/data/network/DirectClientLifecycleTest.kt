@@ -282,6 +282,26 @@ class DirectClientLifecycleTest {
     }
 
     @Test
+    fun `OpenAI Chat流保留Pi可回放的reasoning字段名`() = runBlocking {
+        val events = mutableListOf<AppStreamEvent>()
+        val channel = ByteReadChannel(
+            "data: {\"choices\":[{\"delta\":{\"reasoning\":\"分析\"}}]}\n\n" +
+                "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+                "data: [DONE]\n\n",
+        )
+
+        OpenAIDirectClient.parseOpenAISSEStreamWithTools(
+            channel = channel,
+            onToolCall = {},
+            emitEvent = events::add,
+        )
+
+        val reasoning = events.filterIsInstance<AppStreamEvent.Reasoning>().single()
+        assertEquals("分析", reasoning.text)
+        assertEquals("reasoning", reasoning.thoughtSignature)
+    }
+
+    @Test
     fun `OpenAI Responses原生注解发布网页来源事件`() = runBlocking {
         val body = buildString {
             appendResponsesEvent("""{"type":"response.output_text.delta","delta":"answer"}""")

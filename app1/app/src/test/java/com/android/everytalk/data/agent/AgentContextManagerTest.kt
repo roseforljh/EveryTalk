@@ -231,7 +231,7 @@ class AgentContextManagerTest {
     @Test
     fun `多轮历史按近期Token预算保留多个回合`() {
         val messages = buildList {
-            repeat(6) { index ->
+            repeat(12) { index ->
                 val turn = index + 1
                 add(SimpleTextApiMessage(id = "user-$turn", role = "user", content = "u".repeat(1_000)))
                 add(SimpleTextApiMessage(id = "assistant-$turn", role = "assistant", content = "a".repeat(1_000)))
@@ -241,13 +241,14 @@ class AgentContextManagerTest {
         val plan = checkNotNull(
             manager.prepare(
                 requestId = "request-recent-budget",
-                request = request(messages, maxContextTokens = 8_192, compactThresholdTokens = 1),
+                // 触发线为 6,000 时近期预算能稳定容纳两个完整回合，测试目标不依赖极小阈值副作用。
+                request = request(messages, maxContextTokens = 8_192, compactThresholdTokens = 6_000),
                 limits = ModelTokenLimits(maxOutputTokens = 512, maxContextTokens = 8_192),
             ).compactionPlan
         )
 
-        assertTrue(plan.retainedTailIds.contains("user-5"))
-        assertTrue(plan.retainedTailIds.contains("user-6"))
+        assertTrue(plan.retainedTailIds.contains("user-11"))
+        assertTrue(plan.retainedTailIds.contains("user-12"))
         assertFalse(plan.retainedTailIds.contains("user-1"))
     }
 

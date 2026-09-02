@@ -9,7 +9,9 @@ import com.android.everytalk.data.database.entities.AgentRequestUsageEntity
 import com.android.everytalk.data.database.entities.AgentRunEntity
 import com.android.everytalk.data.database.entities.AgentRunSnapshotChunkEntity
 import com.android.everytalk.data.database.entities.AgentSteeringMessageEntity
+import com.android.everytalk.data.database.entities.MessageEntity
 import com.android.everytalk.data.database.entities.ProviderContinuationStateEntity
+import com.android.everytalk.data.database.entities.toEntity
 import com.android.everytalk.data.DataClass.AbstractApiMessage
 import com.android.everytalk.data.DataClass.AgentAssistantApiMessage
 import com.android.everytalk.data.DataClass.AgentAssistantContentApiPart
@@ -22,9 +24,13 @@ import com.android.everytalk.data.DataClass.ExecutionStep
 import com.android.everytalk.data.DataClass.ExecutionStepType
 import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.ChatRequest
+import com.android.everytalk.data.DataClass.MessageContentPart
+import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.ModelParameterProtocol
 import com.android.everytalk.data.DataClass.ProviderTurnContinuation
 import com.android.everytalk.data.DataClass.modelParameterProtocol
+import com.android.everytalk.data.DataClass.toApiText
+import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.network.TokenUsage
 import com.android.everytalk.data.computer.ComputerRequestContext
 import com.android.everytalk.data.computer.ComputerExecutionStatus
@@ -33,6 +39,9 @@ import com.android.everytalk.data.computer.ComputerToolRequestHasher
 import com.android.everytalk.data.computer.ComputerToolNames
 import com.android.everytalk.data.computer.ComputerToolCallSafety
 import com.android.everytalk.data.database.daos.ComputerDao
+import com.android.everytalk.data.skill.MessageSkillReference
+import com.android.everytalk.data.skill.SkillRequestSnapshot
+import com.android.everytalk.models.SelectedMediaItem
 import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -57,9 +66,58 @@ import kotlinx.coroutines.sync.withLock
 /**
  * Agent 运行事实的唯一写入口。每次真实模型请求独立保存，禁止再按可见 AI 消息累计 Usage。
  */
+typealias AgentQueuedMessageMaterializer = suspend (
+    instruction: AgentSteeringInstruction,
+    request: ChatRequest,
+) -> AbstractApiMessage
+
+typealias AgentSkillReferenceValidator = suspend (
+    references: List<MessageSkillReference>,
+) -> List<MessageSkillReference>
+
+data class ConsumedAgentFollowUp(
+    val message: AbstractApiMessage,
+    val instruction: AgentSteeringInstruction,
+)
+
+private data class PreparedQueuedUserMessage(
+    val instruction: AgentSteeringInstruction,
+    val message: AbstractApiMessage,
+    val payloadJson: String,
+    val historyMessage: MessageEntity,
+    val updatedRun: AgentRunEntity?,
+    val updatedSnapshot: AgentRequestSnapshot?,
+    val snapshotChunks: List<AgentRunSnapshotChunkEntity>,
+) {
+    fun toEntry(runId: String, sequence: Long, kind: AgentEntryKind): AgentEntryEntity {
+        val now = System.currentTimeMillis()
+        return AgentEntryEntity(
+            id = "${kind.name.lowercase()}:${instruction.id}",
+            runId = runId,
+            sequence = sequence,
+            kind = kind.name,
+            requestId = null,
+            toolCallId = null,
+            payloadJson = payloadJson,
+            status = AgentEntryStatus.FINAL.name,
+            createdAt = instruction.createdAt,
+            finalizedAt = now,
+        )
+    }
+}
+
 class AgentRunStore(
     private val dao: AgentDao,
     private val json: Json = Json { encodeDefaults = true; ignoreUnknownKeys = true },
+    private val queuedMessageMaterializer: AgentQueuedMessageMaterializer = { instruction, _ ->
+        require(instruction.attachments.isEmpty()) { "当前 AgentRunStore 没有配置附件读取器" }
+        SimpleTextApiMessage(
+            id = "queued:${instruction.id}",
+            role = "user",
+            content = instruction.contentParts.toApiText(instruction.content),
+        )
+    },
+    private val skillReferenceValidator: AgentSkillReferenceValidator = { it },
 ) {
     private val approvalDecisionLock = kotlinx.coroutines.sync.Mutex()
     private val entryAppendLock = kotlinx.coroutines.sync.Mutex()
@@ -550,11 +608,24 @@ class AgentRunStore(
         }
     }
 
-    suspend fun latestInterruptedAgentRequest(runId: String): AgentRequestEntity? =
-        dao.getRequests(runId).lastOrNull { request ->
-            request.purpose == AgentRequestPurpose.AGENT_TURN.name &&
-                request.status == AgentRequestStatus.INTERRUPTED.name
+    /**
+     * Provider retry 不能继承失败 attempt 的临时 Assistant。
+     * 一个 Run 同时最多只有一个模型请求在流式输出，因此清理该 Run 的 PARTIAL 即可。
+     */
+    suspend fun discardPartialAssistantAttempt(runId: String) {
+        entryAppendLock.withLock {
+            dao.deletePartialAssistantEntries(runId)
         }
+    }
+
+    /**
+     * 只有最后一条模型请求仍为 INTERRUPTED 才能重试。
+     * 历史中断若已被后续成功请求覆盖，不能再成为新请求的 retryOf。
+     */
+    suspend fun latestInterruptedAgentRequest(runId: String): AgentRequestEntity? =
+        dao.getRequests(runId)
+            .lastOrNull { request -> request.purpose == AgentRequestPurpose.AGENT_TURN.name }
+            ?.takeIf { request -> request.status == AgentRequestStatus.INTERRUPTED.name }
 
     suspend fun appendToolResult(
         runId: String,
@@ -1121,41 +1192,173 @@ class AgentRunStore(
     suspend fun latestCompaction(sessionId: String): AgentCompactionEntryEntity? =
         dao.getLatestCompaction(sessionId)
 
+    /** 完整 steering 入队。载荷只含正文、Skill 引用和附件文件引用。 */
+    suspend fun enqueueSteering(runId: String, instruction: AgentSteeringInstruction): Boolean {
+        val run = dao.getRun(runId) ?: return false
+        val request = restoreChatRequest(run, apiKey = "") ?: return false
+        return dao.enqueueSteeringWithUserMessage(
+            id = instruction.id,
+            runId = runId,
+            content = instruction.content,
+            payloadJson = json.encodeToString(AgentSteeringInstruction.serializer(), instruction),
+            createdAt = instruction.createdAt,
+            userMessage = instruction.toHistoryMessage(request).toEntity(run.sessionId),
+        )
+    }
+
     /**
-     * 在模型轮次之间消费 steering。先把 steering 事实写入 Agent transcript，
-     * 再标记队列已消费，进程中断后不会丢失或重复送入模型。
+     * 在模型轮次之间消费 steering。Pi 默认 one-at-a-time，剩余消息留到下一模型边界。
+     * 队列消费、Transcript 事实和新增 Skill 冻结快照在同一 Room 事务提交。
      */
-    suspend fun consumePendingSteering(runId: String): List<SimpleTextApiMessage> = buildList {
-        dao.getPendingSteering(runId).forEach { steering ->
-            val instruction = AgentSteeringInstruction(
+    suspend fun consumePendingSteering(runId: String): List<AbstractApiMessage> {
+        val consumed = entryAppendLock.withLock {
+            val steering = dao.getPendingSteering(runId).firstOrNull() ?: return@withLock null
+            val instruction = steering.payloadJson?.let { payload ->
+                runCatching {
+                    json.decodeFromString(AgentSteeringInstruction.serializer(), payload)
+                }.getOrNull()
+            } ?: AgentSteeringInstruction(
                 id = steering.id,
                 content = steering.content,
                 createdAt = steering.createdAt,
             )
-            val entry = AgentEntryEntity(
-                id = "steering:${steering.id}",
+            val prepared = prepareQueuedUserMessage(runId, instruction) ?: return@withLock null
+            val entry = prepared.toEntry(
                 runId = runId,
                 sequence = dao.nextEntrySequence(runId),
-                kind = AgentEntryKind.STEERING.name,
-                requestId = null,
-                toolCallId = null,
-                payloadJson = json.encodeToString(AgentSteeringInstruction.serializer(), instruction),
-                status = AgentEntryStatus.FINAL.name,
-                createdAt = steering.createdAt,
-                finalizedAt = System.currentTimeMillis(),
+                kind = AgentEntryKind.STEERING,
             )
-            if (dao.consumeSteering(entry, steering.id, System.currentTimeMillis())) {
-                mergeExecutionCheckpointInstruction(runId, steering.content)
-                add(
-                    SimpleTextApiMessage(
-                        id = "steering:${steering.id}",
-                        role = "user",
-                        content = steering.content,
-                    ),
+            if (!dao.consumeSteering(
+                    entry = entry,
+                    steeringId = steering.id,
+                    consumedAt = System.currentTimeMillis(),
+                    updatedRun = prepared.updatedRun,
+                    snapshotChunks = prepared.snapshotChunks,
                 )
+            ) return@withLock null
+            prepared.updatedSnapshot?.let { snapshotCache[runId] = it }
+            prepared
+        } ?: return emptyList()
+        mergeExecutionCheckpointInstruction(runId, consumed.instruction.content)
+        return listOf(consumed.message)
+    }
+
+    /**
+     * Agent 原本准备结束时才消费一条 Pending，等价于 Pi followUp one-at-a-time。
+     * Pending 删除和 FOLLOW_UP Transcript 写入为同一事务，强杀后只会看到其中一种状态。
+     */
+    suspend fun consumePendingFollowUp(runId: String, sessionId: String): ConsumedAgentFollowUp? {
+        val consumed = entryAppendLock.withLock {
+            val pending = dao.getPendingFollowUpHead(sessionId)
+                ?.takeIf { it.status == "PENDING" }
+                ?: return@withLock null
+            val instruction = AgentSteeringInstruction(
+                id = pending.id,
+                content = pending.content,
+                contentParts = pending.contentParts,
+                attachments = pending.attachments,
+                createdAt = pending.createdAt,
+            )
+            val prepared = prepareQueuedUserMessage(runId, instruction) ?: return@withLock null
+            val entry = prepared.toEntry(
+                runId = runId,
+                sequence = dao.nextEntrySequence(runId),
+                kind = AgentEntryKind.FOLLOW_UP,
+            )
+            if (!dao.consumePendingFollowUp(
+                    entry = entry,
+                    pendingId = pending.id,
+                    userMessage = prepared.historyMessage,
+                    updatedRun = prepared.updatedRun,
+                    snapshotChunks = prepared.snapshotChunks,
+                )
+            ) return@withLock null
+            prepared.updatedSnapshot?.let { snapshotCache[runId] = it }
+            prepared
+        } ?: return null
+        mergeExecutionCheckpointInstruction(runId, consumed.instruction.content)
+        return ConsumedAgentFollowUp(consumed.message, consumed.instruction)
+    }
+
+    private suspend fun prepareQueuedUserMessage(
+        runId: String,
+        instruction: AgentSteeringInstruction,
+    ): PreparedQueuedUserMessage? {
+        val run = dao.getRun(runId) ?: return null
+        val request = restoreChatRequest(run, apiKey = "") ?: return null
+        val requestedReferences = instruction.contentParts
+            .filterIsInstance<MessageContentPart.SkillReference>()
+            .map { it.reference }
+            .distinctBy(MessageSkillReference::skillId)
+        val validReferences = skillReferenceValidator(requestedReferences)
+            .distinctBy(MessageSkillReference::skillId)
+        val validKeys = validReferences.mapTo(mutableSetOf()) { it.skillId to it.contentHash }
+        val normalizedParts = instruction.contentParts.map { part ->
+            if (part is MessageContentPart.SkillReference &&
+                (part.reference.skillId to part.reference.contentHash) !in validKeys
+            ) {
+                MessageContentPart.Text("<skill_ref_unavailable>${part.reference.displayName}</skill_ref_unavailable>")
+            } else {
+                part
             }
         }
+        val normalized = instruction.copy(contentParts = normalizedParts)
+        val currentSnapshot = decodeRequestSnapshot(run) ?: return null
+        val oldSkills = currentSnapshot.skillSnapshot
+        val mergedSkills = if (validReferences.isEmpty()) {
+            oldSkills
+        } else {
+            SkillRequestSnapshot(
+                automaticCatalog = oldSkills?.automaticCatalog.orEmpty(),
+                manualReferences = (oldSkills?.manualReferences.orEmpty() + validReferences)
+                    .distinctBy { it.skillId to it.contentHash },
+                createdAt = oldSkills?.createdAt ?: System.currentTimeMillis(),
+            )
+        }
+        val updatedSnapshot = currentSnapshot.copy(skillSnapshot = mergedSkills)
+            .takeIf { it != currentSnapshot }
+        val updatedRun = updatedSnapshot?.let { run.copy(updatedAt = System.currentTimeMillis()) }
+        val snapshotChunks = updatedSnapshot?.let { snapshot ->
+            agentRequestSnapshotChunks(
+                runId,
+                json.encodeToString(AgentRequestSnapshot.serializer(), snapshot),
+            )
+        }.orEmpty()
+        val message = queuedMessageMaterializer(
+            normalized,
+            request.copy(localSkillSnapshot = mergedSkills),
+        )
+        return PreparedQueuedUserMessage(
+            instruction = normalized,
+            message = message,
+            payloadJson = json.encodeToString(AgentSteeringInstruction.serializer(), normalized),
+            historyMessage = normalized.toHistoryMessage(request).toEntity(run.sessionId),
+            updatedRun = updatedRun,
+            updatedSnapshot = updatedSnapshot,
+            snapshotChunks = snapshotChunks,
+        )
     }
+
+    private fun AgentSteeringInstruction.toHistoryMessage(request: ChatRequest): Message = Message(
+        id = id,
+        text = content,
+        contentParts = contentParts,
+        sender = Sender.User,
+        contentStarted = true,
+        timestamp = createdAt,
+        imageUrls = attachments.mapNotNull { attachment ->
+            when (attachment) {
+                is SelectedMediaItem.ImageFromUri -> attachment.filePath ?: attachment.uri.toString()
+                is SelectedMediaItem.ImageFromBitmap -> attachment.model
+                is SelectedMediaItem.GenericFile,
+                is SelectedMediaItem.Audio,
+                -> null
+            }
+        }.takeIf { it.isNotEmpty() },
+        attachments = attachments,
+        modelName = request.model,
+        providerName = request.provider,
+    )
 
     /** 只有没有待处理 steering 时才能把 Run 原子结束，避免 steer 与完成竞态。 */
     suspend fun completeRunIfNoPendingSteering(
@@ -1163,8 +1366,9 @@ class AgentRunStore(
         requestOrdinal: Int,
         terminalReason: String?,
     ): AgentRunEntity? {
-        val updated = dao.completeRunIfNoPendingSteering(
+        val updated = dao.completeRunIfNoQueuedUserMessage(
             runId = run.id,
+            sessionId = run.sessionId,
             requestOrdinal = requestOrdinal,
             terminalReason = terminalReason,
             updatedAt = System.currentTimeMillis(),
@@ -1264,7 +1468,9 @@ class AgentRunStore(
                 )
                 AgentEntryKind.TOOL_RESULT.name -> decodeToolResultEntry(entry)
                 AgentEntryKind.STATUS.name -> decodeStatusEntry(entry)
-                AgentEntryKind.STEERING.name -> decodeSteeringEntry(entry)
+                AgentEntryKind.STEERING.name,
+                AgentEntryKind.FOLLOW_UP.name,
+                -> decodeQueuedUserEntry(entry, runId)
                 else -> null
             }
         }
@@ -1362,13 +1568,14 @@ class AgentRunStore(
         )
     }.getOrNull()
 
-    private fun decodeSteeringEntry(entry: AgentEntryEntity): SimpleTextApiMessage? = runCatching {
+    private suspend fun decodeQueuedUserEntry(
+        entry: AgentEntryEntity,
+        runId: String,
+    ): AbstractApiMessage? = runCatching {
         val instruction = json.decodeFromString(AgentSteeringInstruction.serializer(), entry.payloadJson)
-        SimpleTextApiMessage(
-            id = "steering:${instruction.id}",
-            role = "user",
-            content = instruction.content,
-        )
+        val run = dao.getRun(runId) ?: return@runCatching null
+        val request = restoreChatRequest(run, apiKey = "") ?: return@runCatching null
+        queuedMessageMaterializer(instruction, request)
     }.getOrNull()
 
     private fun decodeExecutionCheckpoint(entry: AgentEntryEntity): ExecutionCheckpoint? = runCatching {

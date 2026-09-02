@@ -7,6 +7,7 @@ import com.android.everytalk.data.DataClass.ExecutionStep
 import com.android.everytalk.data.DataClass.ExecutionStepType
 import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.data.network.AppStreamEvent
 import com.android.everytalk.data.network.AI_CONTENT_SAFETY_ERROR_TYPE
 import com.android.everytalk.data.agent.AGENT_INTERNAL_ERROR_TYPE
@@ -17,6 +18,7 @@ import com.android.everytalk.util.AppLogger
 import com.android.everytalk.util.PromptLeakGuard
 import com.android.everytalk.util.debug.PerformanceMonitor
 import com.android.everytalk.util.messageprocessor.MessageProcessor
+import com.android.everytalk.ui.components.MarkdownPart
 import com.android.everytalk.util.text.TextSanitizer
 import com.android.everytalk.util.image.ImagePersistenceFailure
 import com.android.everytalk.util.image.ImagePersistenceResult
@@ -266,6 +268,23 @@ internal fun reconcileFinalRoundTraceContent(
         trace + ExecutionTraceEvent.Content(finalRoundText)
     }
 }
+
+/** 失败 attempt 的可见残片必须由 Room 最终事实整体覆盖，不能继续做增量追加。 */
+internal fun applyAgentTurnRetryReset(
+    message: Message,
+    event: AppStreamEvent.AgentTurnRetryReset,
+): Message = message.copy(
+    text = event.retainedText,
+    reasoning = event.retainedReasoning,
+    parts = event.retainedText.takeIf(String::isNotBlank)
+        ?.let { text -> listOf(MarkdownPart.Text(id = "text_0", content = text)) }
+        .orEmpty(),
+    contentStarted = event.retainedText.isNotBlank(),
+    currentWebSearchStage = null,
+    executionStatus = "正在重试模型回复...",
+    executionFinishedAt = null,
+    executionTrace = event.retainedTrace,
+)
 
 /**
  * 正文后出现任何非正文事件时，先冲刷正文缓冲。
@@ -685,6 +704,48 @@ internal class ApiHandlerStreamProcessor(
             }
     
             when (appEvent) {
+                is AppStreamEvent.AgentTurnRetryReset -> {
+                    // 旧 StreamingBuffer 和泄漏检测器都包含失败 attempt 的内容，必须一起轮换。
+                    stateHolder.clearStreamingBuffer(aiMessageId)
+                    stateHolder.createStreamingBuffer(aiMessageId, isImageGeneration)
+                    promptLeakDetectors.remove(aiMessageId)
+                    stateHolder.streamingMessageStateManager.updateContent(aiMessageId, appEvent.retainedText)
+                    updatedMessage = applyAgentTurnRetryReset(latestMessageForUpdate(), appEvent)
+                    messageList[messageIndex] = updatedMessage
+                }
+                is AppStreamEvent.AgentFollowUpAccepted -> {
+                    if (messageList.none { it.id == appEvent.messageId }) {
+                        val imageUrls = appEvent.attachments.mapNotNull { attachment ->
+                            when (attachment) {
+                                is SelectedMediaItem.ImageFromUri -> attachment.filePath ?: attachment.uri.toString()
+                                is SelectedMediaItem.ImageFromBitmap -> attachment.model
+                                is SelectedMediaItem.GenericFile,
+                                is SelectedMediaItem.Audio,
+                                -> null
+                            }
+                        }.takeIf { it.isNotEmpty() }
+                        messageList.add(
+                            Message(
+                                id = appEvent.messageId,
+                                text = appEvent.text,
+                                contentParts = appEvent.contentParts,
+                                sender = Sender.User,
+                                contentStarted = true,
+                                imageUrls = imageUrls,
+                                attachments = appEvent.attachments,
+                                modelName = currentMessage.modelName,
+                                providerName = currentMessage.providerName,
+                            )
+                        )
+                        stateHolder.isTextConversationDirty.value = true
+                        viewModelScope.launch(Dispatchers.IO) {
+                            historyManager.saveCurrentChatToHistoryIfNeeded(
+                                forceSave = true,
+                                isImageGeneration = false,
+                            )
+                        }
+                    }
+                }
                 is AppStreamEvent.Content -> {
                     if (appEvent.signatureOnlyUpdate) return@withContext
                     if (processedResult is com.android.everytalk.util.messageprocessor.ProcessedEventResult.ContentUpdated) {

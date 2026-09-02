@@ -83,6 +83,15 @@ class MessageProcessor {
                         roundText = canonicalRoundText,
                     )
                 }
+                is AppStreamEvent.AgentTurnRetryReset -> {
+                    // 失败 attempt 已经从 Room 撤销。内存累积器必须切到同一条持久化基线，
+                    // 否则重试成功后的 ContentFinal 仍会把旧残片拼回正文。
+                    currentTextBuilder.set(StringBuilder(event.retainedText))
+                    currentReasoningBuilder.set(StringBuilder(event.retainedReasoning.orEmpty()))
+                    currentRoundTextStart = event.retainedText.length
+                    isCompleted.set(false)
+                    ProcessedEventResult.NoChange
+                }
                 is AppStreamEvent.CodeExecutionResult -> {
                     // 图片由 ApiHandler 在落盘后统一写入消息状态，这里只处理文本执行结果。
                     val builder = currentTextBuilder.get()

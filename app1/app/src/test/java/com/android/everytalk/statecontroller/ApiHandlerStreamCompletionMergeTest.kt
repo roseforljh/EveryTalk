@@ -4,6 +4,7 @@ import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.DataClass.WebSearchResult
+import com.android.everytalk.data.network.AppStreamEvent
 import com.android.everytalk.ui.components.MarkdownPart
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertSame
@@ -11,6 +12,33 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ApiHandlerStreamCompletionMergeTest {
+
+    @Test
+    fun `模型重试基线整体替换失败轮可见残片`() {
+        val retainedTrace = listOf(ExecutionTraceEvent.Content("已确认正文"))
+        val message = Message(
+            id = "msg-retry",
+            text = "已确认正文失败残片",
+            sender = Sender.AI,
+            reasoning = "失败思考",
+            parts = listOf(MarkdownPart.Text(id = "text_0", content = "已确认正文失败残片")),
+            contentStarted = true,
+        )
+
+        val reset = applyAgentTurnRetryReset(
+            message,
+            AppStreamEvent.AgentTurnRetryReset(
+                retainedText = "已确认正文",
+                retainedReasoning = null,
+                retainedTrace = retainedTrace,
+            ),
+        )
+
+        assertEquals("已确认正文", reset.text)
+        assertEquals(null, reset.reasoning)
+        assertEquals("已确认正文", (reset.parts.single() as MarkdownPart.Text).content)
+        assertEquals(retainedTrace, reset.executionTrace)
+    }
 
     @Test
     fun `终态正文相同时执行链保持原对象`() {

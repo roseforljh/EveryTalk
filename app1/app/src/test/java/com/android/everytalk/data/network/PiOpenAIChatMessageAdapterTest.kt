@@ -21,4 +21,24 @@ class PiOpenAIChatMessageAdapterTest {
         assertEquals("x".repeat(40), PiOpenAIChatMessageAdapter.normalizeToolCallId(id, "openai"))
         assertEquals(id, PiOpenAIChatMessageAdapter.normalizeToolCallId(id, "custom"))
     }
+
+    @Test
+    fun `最大输出字段与Pi已知Provider矩阵一致`() {
+        assertEquals(
+            "max_tokens",
+            PiOpenAIChatMessageAdapter.maxTokensField("OpenAI", "https://api.deepseek.com/v1"),
+        )
+        assertEquals(
+            "max_tokens",
+            PiOpenAIChatMessageAdapter.maxTokensField("OpenAI", "https://integrate.api.nvidia.com/v1"),
+        )
+        assertEquals(
+            "max_completion_tokens",
+            PiOpenAIChatMessageAdapter.maxTokensField("OpenAI", "https://openrouter.ai/api/v1"),
+        )
+        assertEquals(
+            "max_completion_tokens",
+            PiOpenAIChatMessageAdapter.maxTokensField("custom", "https://example.com/v1"),
+        )
+    }
 }

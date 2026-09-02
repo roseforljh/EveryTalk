@@ -2,7 +2,10 @@ package com.android.everytalk.data.network
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import com.android.everytalk.data.DataClass.ContextUsageSnapshot
+import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.WebSearchResult
+import com.android.everytalk.data.DataClass.MessageContentPart
+import com.android.everytalk.models.SelectedMediaItem
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
@@ -88,6 +91,28 @@ sealed class AppStreamEvent {
         val runTotalTokens: Long,
         val requestCount: Int,
         val conversationTotalTokens: Long,
+    ) : AppStreamEvent()
+
+    /**
+     * 同一模型轮重试前撤销失败 attempt 的临时输出。
+     * retained 字段只包含 Room 中已经确认的最终事实，新的流必须从这条基线继续。
+     */
+    @Serializable
+    @SerialName("agent_turn_retry_reset")
+    data class AgentTurnRetryReset(
+        val retainedText: String,
+        val retainedReasoning: String? = null,
+        val retainedTrace: List<ExecutionTraceEvent> = emptyList(),
+    ) : AppStreamEvent()
+
+    /** Pi follow-up 已从持久化 Pending 队列原子进入当前 AgentRun。 */
+    @Serializable
+    @SerialName("agent_follow_up_accepted")
+    data class AgentFollowUpAccepted(
+        val messageId: String,
+        val text: String,
+        val contentParts: List<MessageContentPart> = emptyList(),
+        val attachments: List<SelectedMediaItem> = emptyList(),
     ) : AppStreamEvent()
 
     /** Run 已安全暂停，UI 通过 Room 中的 approvalRequestId 恢复对应权限卡。 */

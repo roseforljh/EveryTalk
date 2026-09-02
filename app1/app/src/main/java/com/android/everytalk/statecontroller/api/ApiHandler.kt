@@ -17,6 +17,7 @@ import com.android.everytalk.data.network.AppStreamEvent
 import com.android.everytalk.data.agent.AgentLoopRequest
 import com.android.everytalk.data.agent.AgentRunControlSnapshot
 import com.android.everytalk.data.agent.AgentRunStore
+import com.android.everytalk.data.agent.materializeAndroidQueuedMessage
 import com.android.everytalk.data.agent.AgentApprovalDecision
 import com.android.everytalk.data.agent.AgentApprovalRecord
 import com.android.everytalk.data.agent.AgentPauseRequest
@@ -33,6 +34,7 @@ import com.android.everytalk.data.network.ApiClient
 import com.android.everytalk.data.network.NetworkUtils
 import com.android.everytalk.data.network.extractThinkTagContent
 import com.android.everytalk.models.SelectedMediaItem
+import com.android.everytalk.data.DataClass.MessageContentPart
 import com.android.everytalk.models.SelectedMediaItem.Audio
 import com.android.everytalk.ui.screens.viewmodel.HistoryManager
 import com.android.everytalk.util.AppLogger
@@ -308,7 +310,17 @@ class ApiHandler(
     private val messageProcessorMap = ConcurrentHashMap<String, MessageProcessor>()
     private val processedMessageIds = ConcurrentHashMap.newKeySet<String>()
     private val generatedImageSourceFingerprints = ConcurrentHashMap<String, MutableSet<String>>()
-    private val agentRunStore by lazy { AgentRunStore(AppDatabase.getDatabase(context).agentDao()) }
+    private val agentRunStore by lazy {
+        AgentRunStore(
+            dao = AppDatabase.getDatabase(context).agentDao(),
+            queuedMessageMaterializer = { instruction, request ->
+                materializeAndroidQueuedMessage(context, instruction, request)
+            },
+            skillReferenceValidator = { references ->
+                skillRepository.createSnapshot(references).manualReferences
+            },
+        )
+    }
     private val skillRepository by lazy {
         com.android.everytalk.data.skill.SkillRepository(context, AppDatabase.getDatabase(context).skillDao())
     }
@@ -417,13 +429,34 @@ class ApiHandler(
                     .joinToString(separator = "") { it.text }
                 val restoredReasoning = trace.filterIsInstance<ExecutionTraceEvent.Reasoning>()
                     .joinToString(separator = "") { it.text }
+                // 重试重置事件只负责实时 UI。冷启动时内存事件可能已经丢失，
+                // MODEL_CONTINUATION_PENDING/RETRYING 必须以 Room 最终事实覆盖失败轮残片。
+                val replaceInterruptedAttempt = status == AgentRunStatus.MODEL_CONTINUATION_PENDING ||
+                    status == AgentRunStatus.RETRYING
+                val projectedText = if (replaceInterruptedAttempt) restoredText else current.text.ifBlank { restoredText }
+                val projectedReasoning = if (replaceInterruptedAttempt) {
+                    restoredReasoning.takeIf(String::isNotBlank)
+                } else {
+                    current.reasoning?.takeIf(String::isNotBlank)
+                        ?: restoredReasoning.takeIf(String::isNotBlank)
+                }
                 stateHolder.messages[index] = current.copy(
-                    text = current.text.ifBlank { restoredText },
-                    reasoning = current.reasoning?.takeIf(String::isNotBlank)
-                        ?: restoredReasoning.takeIf(String::isNotBlank),
-                    contentStarted = current.contentStarted || restoredText.isNotBlank(),
+                    text = projectedText,
+                    reasoning = projectedReasoning,
+                    parts = if (replaceInterruptedAttempt) {
+                        projectedText.takeIf(String::isNotBlank)
+                            ?.let { text -> listOf(MarkdownPart.Text(id = "text_0", content = text)) }
+                            .orEmpty()
+                    } else {
+                        current.parts
+                    },
+                    contentStarted = if (replaceInterruptedAttempt) {
+                        projectedText.isNotBlank()
+                    } else {
+                        current.contentStarted || restoredText.isNotBlank()
+                    },
                     executionStatus = restoredAgentExecutionStatus(status),
-                    executionTrace = trace.ifEmpty { current.executionTrace },
+                    executionTrace = if (replaceInterruptedAttempt) trace else trace.ifEmpty { current.executionTrace },
                     executionFinishedAt = run.updatedAt.takeIf { !isActiveAgentUiStatus(status) },
                 )
             }
@@ -1462,8 +1495,19 @@ class ApiHandler(
     }
 
     /** 将用户调整方向提交给当前 AgentRun 的真实 steering queue，不中断工具执行。 */
-    suspend fun steerCurrentAgent(conversationId: String, steeringId: String, content: String): Boolean =
-        agentRunCoordinator.steer(conversationId, steeringId, content)
+    suspend fun steerCurrentAgent(
+        conversationId: String,
+        steeringId: String,
+        content: String,
+        contentParts: List<MessageContentPart> = emptyList(),
+        attachments: List<SelectedMediaItem> = emptyList(),
+    ): Boolean = agentRunCoordinator.steer(
+        sessionId = conversationId,
+        steeringId = steeringId,
+        content = content,
+        contentParts = contentParts,
+        attachments = attachments,
+    )
 
     /** 手动停止属于本次回复的终点；远端取消结果只更新提示，不再延长气泡耗时。 */
     private fun finishMessageExecutionForUserStop(messageId: String) {

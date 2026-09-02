@@ -113,6 +113,8 @@ data class AgentSteeringMessageEntity(
     @PrimaryKey val id: String,
     val runId: String,
     val content: String,
+    /** 完整用户消息只保存附件引用和结构化正文，不保存附件 Base64。 */
+    val payloadJson: String? = null,
     val status: String,
     val createdAt: Long,
     val consumedAt: Long? = null,

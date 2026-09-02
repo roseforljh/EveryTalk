@@ -35,6 +35,43 @@ class AppDatabaseMigrationTest {
     }
 
     @Test
+    fun `migration 31 to 32 adds structured steering payload without changing legacy rows`() {
+        val createHelper = openHelper(
+            version = 31,
+            onCreate = { db ->
+                db.execSQL(
+                    "CREATE TABLE agent_steering_messages (" +
+                        "id TEXT NOT NULL PRIMARY KEY, runId TEXT NOT NULL, content TEXT NOT NULL, " +
+                        "status TEXT NOT NULL, createdAt INTEGER NOT NULL, consumedAt INTEGER)",
+                )
+                db.execSQL(
+                    "INSERT INTO agent_steering_messages VALUES ('steer-1', 'run-1', '继续', 'PENDING', 1, NULL)",
+                )
+            },
+        )
+        createHelper.writableDatabase.close()
+        createHelper.close()
+
+        val migrateHelper = openHelper(
+            version = 32,
+            onUpgrade = { db, oldVersion, newVersion ->
+                assertEquals(31, oldVersion)
+                assertEquals(32, newVersion)
+                AppDatabase.MIGRATION_31_32.migrate(db)
+            },
+        )
+        val db = migrateHelper.writableDatabase
+        assertTrue(columns(db, "agent_steering_messages").contains("payloadJson"))
+        db.query("SELECT content, payloadJson FROM agent_steering_messages WHERE id = 'steer-1'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("继续", cursor.getString(0))
+            assertTrue(cursor.isNull(1))
+        }
+        db.close()
+        migrateHelper.close()
+    }
+
+    @Test
     fun `migration 30 to 31 creates intervention ledger without secret columns`() {
         val createHelper = openHelper(
             version = 30,

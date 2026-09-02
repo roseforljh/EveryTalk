@@ -18,6 +18,14 @@ class AgentModelTurnLimitTest {
     }
 
     @Test
+    fun `Provider初始请求后最多自动重试三次`() {
+        assertTrue(canRetryProviderAttempt(1))
+        assertTrue(canRetryProviderAttempt(2))
+        assertTrue(canRetryProviderAttempt(3))
+        assertEquals(false, canRetryProviderAttempt(4))
+    }
+
+    @Test
     fun `相同参数连续调用第三次终止`() {
         val guard = ToolLoopGuard()
         fun call(id: String) = AgentContentBlock.ToolCall(

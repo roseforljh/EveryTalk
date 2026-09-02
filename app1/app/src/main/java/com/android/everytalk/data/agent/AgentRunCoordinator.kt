@@ -1,6 +1,10 @@
 package com.android.everytalk.data.agent
 
 import android.content.Context
+import com.android.everytalk.data.DataClass.MessageContentPart
+import com.android.everytalk.data.DataClass.AbstractApiMessage
+import com.android.everytalk.data.DataClass.SimpleTextApiMessage
+import com.android.everytalk.data.DataClass.toApiText
 import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.data.database.entities.AgentRunEntity
 import com.android.everytalk.data.database.entities.ComputerExecutionEntity
@@ -8,6 +12,8 @@ import com.android.everytalk.data.database.entities.toApiConfig
 import com.android.everytalk.data.computer.ComputerRequestContext
 import com.android.everytalk.data.computer.ComputerToolRequestHasher
 import com.android.everytalk.data.network.AppStreamEvent
+import com.android.everytalk.data.network.buildDirectMultimodalRequest
+import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.service.ComputerConnectionServiceController
 import com.android.everytalk.util.AgentNotificationManager
 import com.android.everytalk.util.AppLogger
@@ -36,6 +42,24 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+
+/** 消费队列时才读取附件文件并生成多模态消息，Room 永远只保存稳定文件引用。 */
+internal suspend fun materializeAndroidQueuedMessage(
+    context: Context,
+    instruction: AgentSteeringInstruction,
+    request: com.android.everytalk.data.DataClass.ChatRequest,
+): AbstractApiMessage {
+    val baseMessage = SimpleTextApiMessage(
+        id = "queued:${instruction.id}",
+        role = "user",
+        content = instruction.contentParts.toApiText(instruction.content),
+    )
+    return buildDirectMultimodalRequest(
+        request = request.copy(messages = listOf(baseMessage)),
+        attachments = instruction.attachments,
+        context = context,
+    ).messages.single()
+}
 
 /**
  * 独立的全局应用级/服务级 AgentRun 协调器。
@@ -66,7 +90,17 @@ class AgentRunCoordinator(
     private val database by lazy { AppDatabase.getDatabase(appContext) }
     private val agentDao by lazy { database.agentDao() }
     private val computerDao by lazy { database.computerDao() }
-    private val agentRunStore by lazy { AgentRunStore(agentDao) }
+    private val agentRunStore by lazy {
+        AgentRunStore(
+            dao = agentDao,
+            queuedMessageMaterializer = { instruction, request ->
+                materializeAndroidQueuedMessage(appContext, instruction, request)
+            },
+            skillReferenceValidator = { references ->
+                skillRepository.createSnapshot(references).manualReferences
+            },
+        )
+    }
     private val interventionStore by lazy { AgentInterventionStore(agentDao) }
     private val interventionRecovery by lazy { AgentInterventionRecovery(agentDao, interventionStore) }
     private val interventionBroker by lazy {
@@ -166,7 +200,9 @@ class AgentRunCoordinator(
                         }
                     }
                 }
-                notifyTerminalRun(agentDao.getRunByVisibleMessage(request.visibleAssistantMessageId))
+                val completedRun = agentDao.getRunByVisibleMessage(request.visibleAssistantMessageId)
+                updateResumeRetryAfterRun(completedRun)
+                notifyTerminalRun(completedRun)
             } finally {
                 foregroundActivity.close()
                 activeJobs.remove(jobKey)
@@ -219,15 +255,25 @@ class AgentRunCoordinator(
      * 正式 steering API。只把指令写入当前 Run 的 steering queue，不取消当前模型或工具 Job。
      * AgentLoop 在工具结果落库后的下一个模型边界消费它。
      */
-    suspend fun steer(sessionId: String, steeringId: String, content: String): Boolean {
-        if (content.isBlank() || steeringId.isBlank()) return false
+    suspend fun steer(
+        sessionId: String,
+        steeringId: String,
+        content: String,
+        contentParts: List<MessageContentPart> = emptyList(),
+        attachments: List<SelectedMediaItem> = emptyList(),
+    ): Boolean {
+        if ((content.isBlank() && contentParts.isEmpty() && attachments.isEmpty()) || steeringId.isBlank()) return false
         val run = agentDao.getLatestSteerableRun(sessionId) ?: return false
-        return agentDao.enqueueSteeringIfRunActive(
-            id = steeringId,
+        return agentRunStore.enqueueSteering(
             runId = run.id,
-            content = content,
-            createdAt = System.currentTimeMillis(),
-        ) == 1L
+            instruction = AgentSteeringInstruction(
+                id = steeringId,
+                content = content,
+                contentParts = contentParts,
+                attachments = attachments,
+                createdAt = System.currentTimeMillis(),
+            ),
+        )
     }
 
     private suspend fun resumeRunLocked(
@@ -280,7 +326,9 @@ class AgentRunCoordinator(
                 agentLoop.run(loopRequest).collect { event ->
                     _events.emit(run.visibleAssistantMessageId to event)
                 }
-                notifyTerminalRun(agentDao.getRun(run.id))
+                val completedRun = agentDao.getRun(run.id)
+                updateResumeRetryAfterRun(completedRun)
+                notifyTerminalRun(completedRun)
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -307,7 +355,6 @@ class AgentRunCoordinator(
         visibleRunCancellationReasons[run.visibleAssistantMessageId]?.let { reason ->
             job.cancel(CancellationException(reason))
         }
-        resumeRetryStates.remove(run.id)
         return true
     }
 
@@ -432,6 +479,19 @@ class AgentRunCoordinator(
         return false
     }
 
+    /**
+     * Provider 返回临时错误时 AgentLoop 已把 Run 持久化为待续写。
+     * 这里保留失败次数并退避；正常完成、审批暂停或永久失败都会清掉旧退避状态。
+     */
+    private fun updateResumeRetryAfterRun(run: AgentRunEntity?) {
+        val runId = run?.id ?: return
+        if (shouldBackoffAgentResume(run.status)) {
+            recordResumeFailure(runId)
+        } else {
+            resumeRetryStates.remove(runId)
+        }
+    }
+
     /** 恢复失败保留原 Run，按上限 60 秒退避，避免前台服务每三秒重复读取同一份大快照。 */
     private fun recordResumeFailure(runId: String) {
         val now = System.currentTimeMillis()
@@ -518,6 +578,10 @@ internal fun agentResumeRetryDelayMillis(failures: Int): Long = when (failures.c
     4 -> 30_000L
     else -> 60_000L
 }
+
+/** 只有可恢复的模型中断参与退避，审批等待和终态都不能继承旧失败次数。 */
+internal fun shouldBackoffAgentResume(status: String?): Boolean =
+    status == AgentRunStatus.MODEL_CONTINUATION_PENDING.name
 
 /** 同时识别首次启动的 message 键和恢复启动的 run 键。 */
 internal fun isAgentRunActive(
