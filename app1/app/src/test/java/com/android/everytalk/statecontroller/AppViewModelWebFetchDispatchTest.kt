@@ -2,6 +2,7 @@ package com.android.everytalk.statecontroller
 
 import com.android.everytalk.data.DataClass.Message
 import com.android.everytalk.data.DataClass.Sender
+import com.android.everytalk.data.network.WebFetchService
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
@@ -82,6 +83,21 @@ class AppViewModelWebFetchDispatchTest {
         assertSame(localResult, result)
         assertTrue(!fallbackCalled)
         assertEquals(listOf("读取网页 · https://example.com", null), statusUpdates)
+    }
+
+    @Test
+    fun `Defuddle Server 响应会提取 Markdown 正文和标题`() {
+        val result = WebFetchService.parseDefuddleWebFetchResponse(
+            requestedUrl = "https://example.com/article",
+            responseBody = """{"result":{"title":"示例标题","content":"# 示例标题\n\n正文内容"}}""",
+            maxContentChars = 100,
+            statusCode = 200,
+        )
+
+        assertTrue(result.success)
+        assertEquals("示例标题", result.title)
+        assertEquals("# 示例标题\n\n正文内容", result.content)
+        assertEquals(200, result.statusCode)
     }
 
     @Test

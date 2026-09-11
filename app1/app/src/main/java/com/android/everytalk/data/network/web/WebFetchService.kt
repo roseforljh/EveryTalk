@@ -6,14 +6,25 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.HttpRedirect
 import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.request.accept
 import io.ktor.client.request.header
-import io.ktor.client.request.prepareGet
-import io.ktor.http.HttpHeaders
+import io.ktor.client.request.preparePost
+import io.ktor.client.request.setBody
+import io.ktor.http.ContentType
+import io.ktor.http.contentType
 import io.ktor.http.isSuccess
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import com.android.everytalk.util.text.TextSanitizer
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonObject
 
 object WebFetchService {
     private const val TAG = "WebFetchService"
@@ -62,55 +73,47 @@ object WebFetchService {
                 error = "URL 无效，仅支持 http/https 网页地址",
             )
 
-        fetchViaReader(validatedUrl, maxContentChars)
+        fetchViaDefuddle(validatedUrl, maxContentChars)
     }
 
-    private suspend fun fetchViaReader(
+    private suspend fun fetchViaDefuddle(
         url: String,
         maxContentChars: Int,
     ): WebFetchResult {
         return try {
-            val fetchUrl = "$webFetchBaseUrl/$url"
+            val endpoint = "$webFetchBaseUrl/api/parse"
+            val requestBody = buildJsonObject {
+                put("url", url)
+                putJsonObject("defuddleOptions") { put("markdown", true) }
+            }
             Log.d(TAG, "WebFetch 抓取: ${java.net.URI(url).host}")
 
-            httpClient.prepareGet(fetchUrl) {
-                header(HttpHeaders.Accept, "text/markdown")
-                header("X-Return-Format", "markdown")
-                header("X-No-Cache", "true")
-                header(HttpHeaders.Authorization, "Bearer $webFetchApiKey")
+            httpClient.preparePost(endpoint) {
+                accept(ContentType.Application.Json)
+                contentType(ContentType.Application.Json)
+                header("x-api-key", webFetchApiKey)
+                setBody(requestBody.toString())
             }.execute { response ->
+                val responseBody = response.readTextAtMost(MAX_FETCH_RESPONSE_BYTES)
                 if (!response.status.isSuccess()) {
                     Log.w(TAG, "WebFetch 返回非成功状态: ${response.status.value}")
+                    val detail = runCatching {
+                        (Json.parseToJsonElement(responseBody) as? JsonObject)
+                            ?.get("error")?.jsonPrimitive?.contentOrNull
+                    }.getOrNull()
                     return@execute WebFetchResult(
                         success = false,
                         requestedUrl = url,
                         statusCode = response.status.value,
-                        error = "WebFetch 返回 HTTP ${response.status.value}",
+                        error = "WebFetch 返回 HTTP ${response.status.value}" +
+                            detail?.takeIf(String::isNotBlank)?.let { ": $it" }.orEmpty(),
                     )
                 }
 
-                val content = TextSanitizer.removeUnicodeReplacementCharacters(
-                    response.readTextAtMost(MAX_FETCH_RESPONSE_BYTES)
-                )
-                if (content.isBlank()) {
-                    return@execute WebFetchResult(
-                        success = false,
-                        requestedUrl = url,
-                        error = "WebFetch 返回空内容",
-                    )
-                }
-
-                val truncated = content.length > maxContentChars
-                val finalContent = if (truncated) content.take(maxContentChars).trimEnd() else content
-
-                WebFetchResult(
-                    success = true,
+                parseDefuddleWebFetchResponse(
                     requestedUrl = url,
-                    finalUrl = url,
-                    title = extractTitleFromMarkdown(finalContent),
-                    content = finalContent,
-                    truncated = truncated,
-                    truncationReason = if (truncated) "content_truncated" else null,
+                    responseBody = responseBody,
+                    maxContentChars = maxContentChars,
                     statusCode = response.status.value,
                 )
             }
@@ -124,6 +127,49 @@ object WebFetchService {
                 error = "WebFetch 请求失败: ${e.message ?: "未知错误"}",
             )
         }
+    }
+
+    /** Defuddle Server 返回 `{ result: {...} }`，正文优先取 Markdown 字段。 */
+    internal fun parseDefuddleWebFetchResponse(
+        requestedUrl: String,
+        responseBody: String,
+        maxContentChars: Int,
+        statusCode: Int,
+    ): WebFetchResult {
+        val result = runCatching {
+            (Json.parseToJsonElement(responseBody) as? JsonObject)
+                ?.get("result") as? JsonObject
+        }.getOrNull() ?: return WebFetchResult(
+            success = false,
+            requestedUrl = requestedUrl,
+            statusCode = statusCode,
+            error = "WebFetch 返回格式无效",
+        )
+        val content = sequenceOf("contentMarkdown", "content")
+            .mapNotNull { key -> (result[key] as? JsonPrimitive)?.contentOrNull }
+            .firstOrNull(String::isNotBlank)
+            ?.let(TextSanitizer::removeUnicodeReplacementCharacters)
+            ?: return WebFetchResult(
+                success = false,
+                requestedUrl = requestedUrl,
+                statusCode = statusCode,
+                error = "WebFetch 返回空内容",
+            )
+        val limit = maxContentChars.coerceAtLeast(1)
+        val truncated = content.length > limit
+        val finalContent = if (truncated) content.take(limit).trimEnd() else content
+        return WebFetchResult(
+            success = true,
+            requestedUrl = requestedUrl,
+            finalUrl = requestedUrl,
+            title = (result["title"] as? JsonPrimitive)?.contentOrNull
+                ?.takeIf(String::isNotBlank)
+                ?: extractTitleFromMarkdown(finalContent),
+            content = finalContent,
+            truncated = truncated,
+            truncationReason = if (truncated) "content_truncated" else null,
+            statusCode = statusCode,
+        )
     }
 
     private fun extractTitleFromMarkdown(markdown: String): String? {
