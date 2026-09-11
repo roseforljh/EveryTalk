@@ -93,6 +93,8 @@ import com.android.everytalk.statecontroller.setComputerPrivateNetworkAllowed
 import com.android.everytalk.statecontroller.setComputerPermissionMode
 import com.android.everytalk.statecontroller.showSnackbar
 import com.android.everytalk.statecontroller.updateComputer
+import com.android.everytalk.statecontroller.logoutCloudflareComputer
+import com.android.everytalk.statecontroller.deleteLocalCloudflareComputer
 import com.android.everytalk.ui.components.floatingEdgeGradient
 import com.android.everytalk.ui.components.EveryTalkTimedLoadingStatus
 import com.android.everytalk.ui.components.dialog.AppDialogShape
@@ -118,6 +120,10 @@ fun ComputerDetailScreen(
 ) {
     val computers by viewModel.computers.collectAsState()
     val computer = computers.firstOrNull { it.id == computerId }
+    if (computer?.provider == com.android.everytalk.data.computer.ComputerProvider.CLOUDFLARE) {
+        CloudflareComputerDetail(viewModel, navController, computer, modifier)
+        return
+    }
     val context = LocalContext.current
     val workspacesFlow = remember(computerId) { viewModel.observeComputerWorkspaces(computerId) }
     val activeTaskCountFlow = remember(computerId) { viewModel.observeComputerActiveTaskCount(computerId) }
@@ -152,6 +158,7 @@ fun ComputerDetailScreen(
     var repairDialogVisible by remember { mutableStateOf(false) }
     var repairSetupStage by remember { mutableStateOf<ComputerSetupStage?>(null) }
     var deleteDialogVisible by remember { mutableStateOf(false) }
+    var cloudflareLocalAction by remember { mutableStateOf<String?>(null) }
     var replacementHostKey by remember { mutableStateOf<HostKeyProbeResult?>(null) }
     var moreSettingsExpanded by remember(computer?.id) { mutableStateOf(false) }
     var pendingPermissionMode by remember(computer?.id) { mutableStateOf<ComputerPermissionMode?>(null) }
@@ -466,6 +473,8 @@ fun ComputerDetailScreen(
                                 }
                             },
                             onDelete = { deleteDialogVisible = true },
+                            onCloudflareLogout = { cloudflareLocalAction = "logout" },
+                            onCloudflareDeleteLocal = { cloudflareLocalAction = "delete-local" },
                         )
                     }
                 }
@@ -612,6 +621,27 @@ fun ComputerDetailScreen(
             }
         },
     )
+
+    if (cloudflareLocalAction != null && computer.provider == com.android.everytalk.data.computer.ComputerProvider.CLOUDFLARE) {
+        AlertDialog(
+            onDismissRequest = { if (busyAction == null) cloudflareLocalAction = null },
+            title = { Text(if (cloudflareLocalAction == "logout") "退出 Cloudflare 登录" else "删除本地 Cloudflare Computer") },
+            text = { Text("只清除本机授权和绑定，云端资源不会删除。") },
+            confirmButton = {
+                Button(onClick = {
+                    val action = cloudflareLocalAction ?: return@Button
+                    launchAction("cloudflare-$action", onCompletion = { cloudflareLocalAction = null }) {
+                        if (action == "logout") viewModel.logoutCloudflareComputer(computerId)
+                        else {
+                            viewModel.deleteLocalCloudflareComputer(computerId)
+                            withContext(Dispatchers.Main) { navController.popBackStack() }
+                        }
+                    }
+                }, enabled = busyAction == null) { Text("确认") }
+            },
+            dismissButton = { TextButton(onClick = { cloudflareLocalAction = null }, enabled = busyAction == null) { Text("取消") } },
+        )
+    }
 
     ComputerFullApprovalWarningDialog(
         visible = pendingPermissionMode == ComputerPermissionMode.FULL,
@@ -833,6 +863,8 @@ private fun ComputerMoreSettingsCard(
     onExpandedChange: (Boolean) -> Unit,
     onReplaceHostKey: () -> Unit,
     onDelete: () -> Unit,
+    onCloudflareLogout: () -> Unit = {},
+    onCloudflareDeleteLocal: () -> Unit = {},
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -921,6 +953,15 @@ private fun ComputerMoreSettingsCard(
                     }
 
                     HorizontalDivider()
+                    if (computer.provider == com.android.everytalk.data.computer.ComputerProvider.CLOUDFLARE) {
+                        OutlinedButton(onClick = onCloudflareLogout, enabled = busyAction == null, modifier = Modifier.height(48.dp)) {
+                            Text("退出 Cloudflare 登录")
+                        }
+                        OutlinedButton(onClick = onCloudflareDeleteLocal, enabled = busyAction == null, modifier = Modifier.height(48.dp)) {
+                            Text("删除本地 Cloudflare Computer")
+                        }
+                        HorizontalDivider()
+                    }
                     TextButton(
                         onClick = onDelete,
                         enabled = busyAction == null,

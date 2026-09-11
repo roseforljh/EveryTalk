@@ -35,6 +35,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -55,11 +56,17 @@ import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.navigation.NavController
 import com.android.everytalk.R
+import com.android.everytalk.BuildConfig
 import com.android.everytalk.data.computer.ComputerDiagnostics
 import com.android.everytalk.data.computer.ComputerFailureStage
 import com.android.everytalk.data.computer.ComputerRunMode
 import com.android.everytalk.data.computer.ComputerSetupStage
 import com.android.everytalk.data.computer.ComputerStatus
+import com.android.everytalk.data.computer.CloudflareOAuthConfig
+import com.android.everytalk.data.computer.CloudflareSettingsOAuthFlow
+import com.android.everytalk.data.computer.CloudflareSettingsOAuthStore
+import com.android.everytalk.data.computer.CloudflareOAuthCallbackBus
+import com.android.everytalk.data.computer.CloudflareTokenExchangeResult
 import com.android.everytalk.navigation.Screen
 import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.statecontroller.addConfirmedComputer
@@ -67,12 +74,19 @@ import com.android.everytalk.statecontroller.probeComputerHostKey
 import com.android.everytalk.statecontroller.provisionComputerContainer
 import com.android.everytalk.statecontroller.refreshComputerFromList
 import com.android.everytalk.statecontroller.showSnackbar
+import com.android.everytalk.statecontroller.listCloudflareAccounts
+import com.android.everytalk.statecontroller.cloudflareLoginIdentity
+import com.android.everytalk.statecontroller.createCloudflareComputer
 import com.android.everytalk.ui.components.floatingEdgeGradient
 import com.android.everytalk.ui.screens.settings.SettingsTabMenu
 import com.android.everytalk.util.locale.localizeUiMessage
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.flow.collectLatest
+import io.ktor.client.HttpClient
+import org.koin.java.KoinJavaComponent
 
 @Composable
 fun ComputerScreen(
@@ -92,7 +106,57 @@ fun ComputerScreen(
     var errorText by remember { mutableStateOf<String?>(null) }
     var prepared by remember { mutableStateOf<PreparedComputerAdd?>(null) }
     var hostKey by remember { mutableStateOf<com.android.everytalk.data.computer.HostKeyProbeResult?>(null) }
+    var cloudflareToken by remember { mutableStateOf<CloudflareTokenExchangeResult?>(null) }
+    var cloudflareAccounts by remember { mutableStateOf<List<com.android.everytalk.data.computer.CloudflareApiAccount>>(emptyList()) }
+    val cloudflareOAuthFlow = remember(viewModel) {
+        CloudflareSettingsOAuthFlow(
+            config = CloudflareOAuthConfig(
+                clientId = BuildConfig.CLOUDFLARE_OAUTH_CLIENT_ID,
+                redirectUri = BuildConfig.CLOUDFLARE_OAUTH_REDIRECT_URI,
+            ),
+            store = viewModel.cloudflareOAuthStore,
+            httpClient = KoinJavaComponent.getKoin().get<HttpClient>(),
+        )
+    }
     val latestPrepared by rememberUpdatedState(prepared)
+    val latestCloudflareToken by rememberUpdatedState(cloudflareToken)
+    LaunchedEffect(Unit) {
+        // 这是一次性 StateFlow 回调。consume 会把值清为 null，不能用 collectLatest，
+        // 否则清空状态会取消正在进行的 Token 交换。
+        CloudflareOAuthCallbackBus.callbacks.collect { uri ->
+            if (uri == null) return@collect
+            if (!cloudflareOAuthFlow.ownsCallback(uri, form.id)) return@collect
+            CloudflareOAuthCallbackBus.consume(uri)
+            isBusy = true
+            errorText = null
+            runCatching {
+                val result = cloudflareOAuthFlow.consume(uri, form.id)
+                try {
+                    val accounts = withContext(Dispatchers.IO) { viewModel.listCloudflareAccounts(result.accessToken) }
+                    require(accounts.isNotEmpty()) { "Cloudflare 没有可用 Account" }
+                    val identity = try { withContext(Dispatchers.IO) { viewModel.cloudflareLoginIdentity(result.accessToken) } }
+                    catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: Exception) { null }
+                    cloudflareAccounts = accounts
+                    cloudflareToken = CloudflareTokenExchangeResult(
+                        result.accessToken.copyOf(), result.refreshToken?.copyOf(), result.scopes, result.expiresInSeconds,
+                    )
+                    val selected = accounts.singleOrNull()
+                    form = form.copy(
+                        cloudflareAuthorized = true,
+                        cloudflareIdentity = identity?.displayName ?: identity?.email,
+                        cloudflareAccountId = selected?.id.orEmpty(),
+                        cloudflareAccountName = selected?.name.orEmpty(),
+                        cloudflareScopes = result.scopes,
+                    )
+                } finally {
+                    result.accessToken.fill('\u0000')
+                    result.refreshToken?.fill('\u0000')
+                }
+            }.onFailure { errorText = it.message ?: "Cloudflare 登录失败" }
+            isBusy = false
+        }
+    }
     ComputerSecureWindowEffect(showAddCard)
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
@@ -100,11 +164,20 @@ fun ComputerScreen(
     ) { }
 
     DisposableEffect(Unit) {
-        onDispose { latestPrepared?.clear() }
+        onDispose {
+            latestPrepared?.clear()
+            latestCloudflareToken?.accessToken?.fill('\u0000')
+            latestCloudflareToken?.refreshToken?.fill('\u0000')
+        }
     }
 
     fun closeAddCard() {
         if (isBusy) return
+        viewModel.cloudflareOAuthStore.cancel(form.id)
+        cloudflareToken?.accessToken?.fill('\u0000')
+        cloudflareToken?.refreshToken?.fill('\u0000')
+        cloudflareToken = null
+        cloudflareAccounts = emptyList()
         prepared?.clear()
         prepared = null
         hostKey = null
@@ -152,6 +225,27 @@ fun ComputerScreen(
     )
 
     fun startHostKeyProbe() {
+        if (form.provider == com.android.everytalk.data.computer.ComputerProvider.CLOUDFLARE) {
+            errorText = cloudflareAddError(form)
+            if (errorText != null) return
+            val token = cloudflareToken ?: run { errorText = "请先登录 Cloudflare"; return }
+            val account = cloudflareAccounts.firstOrNull { it.id == form.cloudflareAccountId }
+                ?: run { errorText = "请选择 Cloudflare Account"; return }
+            isBusy = true
+            scope.launch {
+                try {
+                    // 管理器会销毁它接收的 Token。传入副本，保存失败后保留表单内
+                    // 尚未过期的 OAuth 结果供重试，避免“界面已登录但 Token 已清零”。
+                    withContext(Dispatchers.IO) { viewModel.createCloudflareComputer(form.displayName,
+                        token.copy(accessToken = token.accessToken.copyOf(), refreshToken = token.refreshToken?.copyOf()), account) }
+                    viewModel.showSnackbar("Cloudflare Computer 已添加")
+                    token.accessToken.fill('\u0000'); token.refreshToken?.fill('\u0000')
+                    cloudflareToken = null; showAddCard = false; form = ComputerAddFormState()
+                } catch (error: Throwable) { errorText = error.message ?: "Cloudflare 保存失败" }
+                finally { isBusy = false }
+            }
+            return
+        }
         val validationError = form.validationError()
         if (validationError != null) {
             errorText = validationMessage(validationError)
@@ -402,6 +496,20 @@ fun ComputerScreen(
             errorText = errorText,
             onFormChange = { form = it; errorText = null },
             onSubmit = ::startHostKeyProbe,
+            onCloudflareLogin = {
+                cloudflareToken?.accessToken?.fill('\u0000')
+                cloudflareToken?.refreshToken?.fill('\u0000')
+                cloudflareToken = null
+                cloudflareAccounts = emptyList()
+                form = form.copy(cloudflareAuthorized = false, cloudflareIdentity = null, cloudflareAccountId = "", cloudflareAccountName = "", cloudflareScopes = emptySet())
+                cloudflareOAuthFlow.let { flow ->
+                    com.android.everytalk.data.computer.CloudflareOAuthLaunchCoordinator(context, flow)
+                        .launch(form.id)
+                        .onFailure { launchError -> errorText = launchError.message ?: "Cloudflare OAuth 配置错误" }
+                }
+            },
+            onCloudflareAccountSelected = { id, name -> form = form.copy(cloudflareAccountId = id, cloudflareAccountName = name) },
+            cloudflareAccounts = cloudflareAccounts,
             onDismiss = ::closeAddCard,
         )
     }

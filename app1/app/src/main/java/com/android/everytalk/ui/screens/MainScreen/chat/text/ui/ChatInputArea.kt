@@ -81,6 +81,12 @@ import com.android.everytalk.data.computer.ComputerDisclosureKind
 import com.android.everytalk.data.computer.ComputerDisclosureStore
 import com.android.everytalk.data.computer.ComputerHostCommandConfirmationRequest
 import com.android.everytalk.data.computer.ComputerStatus
+import com.android.everytalk.data.computer.CloudflareOAuthCallbackBus
+import com.android.everytalk.data.computer.CloudflareOAuthConfig
+import com.android.everytalk.data.computer.CloudflareOAuthLaunchCoordinator
+import com.android.everytalk.data.computer.CloudflareSettingsOAuthFlow
+import com.android.everytalk.data.computer.CloudflareSettingsOAuthStore
+import com.android.everytalk.data.computer.CloudflareTokenExchangeResult
 import com.android.everytalk.models.ImageSourceOption
 import com.android.everytalk.models.MoreOptionsType
 import com.android.everytalk.models.SelectedMediaItem
@@ -110,6 +116,8 @@ import com.android.everytalk.data.mcp.McpServerConfig
 import com.android.everytalk.ui.screens.mcp.McpServerListDialog
 import java.io.File
 import java.util.UUID
+import io.ktor.client.HttpClient
+import org.koin.java.KoinJavaComponent
 import com.android.everytalk.data.DataClass.MessageContentPart
 import com.android.everytalk.data.skill.MessageSkillReference
 import com.android.everytalk.data.skill.SkillSourceType
@@ -118,6 +126,9 @@ import com.android.everytalk.data.database.entities.SkillInstallationEntity
 import com.android.everytalk.data.skill.effectivePackageName
 import com.android.everytalk.data.agent.PendingAgentEnableApproval
 import com.android.everytalk.data.agent.PendingSkillSecretApproval
+import com.android.everytalk.data.agent.PendingIntervention
+import com.android.everytalk.statecontroller.reauthorizeCloudflareComputer
+import com.android.everytalk.BuildConfig
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import com.android.everytalk.ui.screens.MainScreen.chat.text.skill.SkillTagVisualTransformation
 import com.android.everytalk.ui.screens.MainScreen.chat.text.skill.buildSkillContentParts
@@ -202,6 +213,19 @@ fun ChatInputArea(
     val currentConversationId by viewModel.currentConversationId.collectAsState()
     val pendingInterventions by viewModel.pendingInterventions.collectAsState()
     val currentIntervention = pendingInterventions.firstOrNull { it.sessionId == currentConversationId }
+    // 重新授权必须复用同一个 Store：PKCE verifier 只存在于启动 OAuth 的这一份内存状态。
+    val cloudflareOAuthStore = viewModel.cloudflareOAuthStore
+    val cloudflareOAuthFlow = remember(context, cloudflareOAuthStore) {
+        CloudflareSettingsOAuthFlow(
+            config = CloudflareOAuthConfig(
+                clientId = BuildConfig.CLOUDFLARE_OAUTH_CLIENT_ID,
+                redirectUri = BuildConfig.CLOUDFLARE_OAUTH_REDIRECT_URI,
+            ),
+            store = cloudflareOAuthStore,
+            httpClient = KoinJavaComponent.getKoin().get<HttpClient>(),
+        )
+    }
+    var pendingCloudflareReauthorization by remember { mutableStateOf<PendingIntervention?>(null) }
     val pendingMessages by viewModel.pendingMessages.collectAsState()
     val composerMode by viewModel.composerMode.collectAsState()
     val chatRunState by viewModel.chatRunState.collectAsState()
@@ -219,6 +243,61 @@ fun ChatInputArea(
     var pendingWorkspaceRecreationAction by remember { mutableStateOf<PendingAgentAction?>(null) }
     var pendingNotificationPermissionAction by remember { mutableStateOf<PendingAgentAction?>(null) }
     var showDeletedServerDialog by remember { mutableStateOf(false) }
+
+    LaunchedEffect(cloudflareOAuthFlow) {
+        CloudflareOAuthCallbackBus.callbacks.collect { uri ->
+            val pending = pendingCloudflareReauthorization ?: return@collect
+            val computerId = pending.parameters["computer_id"]
+                ?.takeIf(String::isNotBlank)
+                ?: return@collect
+            // 回调总线是进程级的，只有真正由本聊天页面创建的 state 才能被消费。
+            val oauthBinding = "agent:${pending.suspensionId}"
+            if (!cloudflareOAuthFlow.ownsCallback(uri ?: return@collect, oauthBinding)) return@collect
+            CloudflareOAuthCallbackBus.consume(uri)
+            runCatching {
+                val result = cloudflareOAuthFlow.consume(uri, oauthBinding)
+                try {
+                    val tokenResult = CloudflareTokenExchangeResult(
+                        result.accessToken.copyOf(),
+                        result.refreshToken?.copyOf(),
+                        result.scopes,
+                        result.expiresInSeconds,
+                    )
+                    try {
+                        withContext(Dispatchers.IO) {
+                            viewModel.reauthorizeCloudflareComputer(computerId, tokenResult)
+                        }
+                    } finally {
+                        tokenResult.accessToken.fill('\u0000')
+                        tokenResult.refreshToken?.fill('\u0000')
+                    }
+                    pending.resolutionNonce?.let { nonce ->
+                        viewModel.resolveIntervention(pending.suspensionId, pending.rowVersion, nonce)
+                    }
+                    pendingCloudflareReauthorization = null
+                } finally {
+                    result.accessToken.fill('\u0000')
+                    result.refreshToken?.fill('\u0000')
+                }
+            }.onFailure { failure ->
+                if (failure is CancellationException) throw failure
+                // 授权失败不解决 Suspension。用户可以重新点按钮，重新生成 state/verifier。
+                onShowSnackbar(failure.message ?: "Cloudflare 重新授权失败，请重试")
+            }
+        }
+    }
+
+    fun startCloudflareReauthorization(pending: PendingIntervention) {
+        val computerId = pending.parameters["computer_id"]?.takeIf(String::isNotBlank)
+        if (computerId == null) {
+            onShowSnackbar("Cloudflare 重新授权目标无效")
+            return
+        }
+        pendingCloudflareReauthorization = pending
+        CloudflareOAuthLaunchCoordinator(context, cloudflareOAuthFlow)
+            .launch("agent:${pending.suspensionId}")
+            .onFailure { failure -> onShowSnackbar(failure.message ?: "Cloudflare OAuth 配置错误") }
+    }
 
     BackHandler(enabled = composerMode is ComposerMode.EditingPending) {
         viewModel.cancelPendingMessageEdit()
@@ -1584,6 +1663,17 @@ fun ChatInputArea(
                         nonce,
                         secret,
                     )
+                }
+            },
+            onStartCloudflareReauthorization = ::startCloudflareReauthorization,
+            onLoadCloudflareResources = { pending -> withContext(Dispatchers.IO) { viewModel.cloudflareResourceOptions(pending) } },
+            onSelectCloudflareResource = { pending, resourceId ->
+                coroutineScope.launch {
+                    try {
+                        withContext(Dispatchers.IO) { viewModel.selectCloudflareResource(pending, resourceId) }
+                        pending.resolutionNonce?.let { viewModel.resolveIntervention(pending.suspensionId, pending.rowVersion, it) }
+                    } catch (cancelled: CancellationException) { throw cancelled }
+                    catch (error: Exception) { onShowSnackbar(error.message ?: "资源选择失败，请重试") }
                 }
             },
             onReject = { pending ->

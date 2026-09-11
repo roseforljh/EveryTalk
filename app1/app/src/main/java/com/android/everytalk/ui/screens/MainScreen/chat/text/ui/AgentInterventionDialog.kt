@@ -5,6 +5,9 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -12,7 +15,9 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -45,6 +50,9 @@ internal fun AgentInterventionDialog(
     onResolveNone: (PendingIntervention) -> Unit,
     onResolveEphemeral: (PendingIntervention, CharArray) -> Unit,
     onCreateAuthorization: (PendingIntervention, CharArray) -> Unit,
+    onStartCloudflareReauthorization: (PendingIntervention) -> Unit,
+    onLoadCloudflareResources: suspend (PendingIntervention) -> List<com.android.everytalk.data.computer.ResourceOption>,
+    onSelectCloudflareResource: (PendingIntervention, String) -> Unit,
     onReject: (PendingIntervention) -> Unit,
     onConfirmUnknownDelivered: (PendingIntervention) -> Unit,
     onContinueUnknown: (PendingIntervention) -> Unit,
@@ -56,7 +64,25 @@ internal fun AgentInterventionDialog(
     val field = intervention.fields.firstOrNull()
     val fieldKind = field?.kind
     val requiresUserDecision = intervention.state == SuspensionState.USER_DECISION_REQUIRED
-    val canSubmit = if (requiresUserDecision) true else when (intervention.materialKind) {
+    val isCloudflareReauthorization = intervention.capabilityId == "cloudflare.reauthorize"
+    val isResourceSelection = intervention.capabilityId == "cloudflare.resource.select"
+    var resources by remember(intervention.suspensionId) { mutableStateOf<List<com.android.everytalk.data.computer.ResourceOption>>(emptyList()) }
+    var selectedId by remember(intervention.suspensionId) { mutableStateOf<String?>(null) }
+    var resourceError by remember(intervention.suspensionId) { mutableStateOf<String?>(null) }
+    var refresh by remember(intervention.suspensionId) { mutableStateOf(0) }
+    var loading by remember(intervention.suspensionId) { mutableStateOf(false) }
+    LaunchedEffect(intervention.suspensionId, refresh) {
+        if (isResourceSelection) {
+            loading = true
+            resourceError = null
+            selectedId = null
+            try { resources = onLoadCloudflareResources(intervention) }
+            catch (cancelled: kotlinx.coroutines.CancellationException) { throw cancelled }
+            catch (error: Exception) { resourceError = error.message ?: "读取资源失败" }
+            finally { loading = false }
+        }
+    }
+    val canSubmit = if (requiresUserDecision) true else if (isResourceSelection) selectedId != null && !loading else when (intervention.materialKind) {
         ResolutionMaterialKind.NONE -> true
         ResolutionMaterialKind.EPHEMERAL -> sensitiveInput.isNotEmpty()
         ResolutionMaterialKind.DURABLE_REFERENCE -> sensitiveInput.isNotEmpty()
@@ -94,6 +120,24 @@ internal fun AgentInterventionDialog(
                         text = "外部动作是否完成无法自动确认。旧密码或 OTP 已丢弃，禁止重新输入。",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.error,
+                    )
+                } else if (isResourceSelection) {
+                    Text("请选择当前 Account 的资源。选择不会执行原工具。")
+                    if (loading) Text("正在读取资源列表…")
+                    resourceError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                    Column(Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState())) {
+                        resources.forEach { resource ->
+                            TextButton(onClick = { selectedId = resource.id }, enabled = !loading) {
+                                Text((if (selectedId == resource.id) "✓ " else "") + resource.displayName + "\n" + resource.id)
+                            }
+                        }
+                    }
+                    if (!loading && resources.isEmpty()) Text("当前没有可选资源")
+                    TextButton(onClick = { refresh++ }, enabled = !loading) { Text("刷新资源列表") }
+                } else if (isCloudflareReauthorization) {
+                    Text(
+                        text = "Cloudflare 授权已失效。点击下方按钮登录同一 Cloudflare Computer；原工具调用会在授权恢复后重新交给模型决定。",
+                        style = MaterialTheme.typography.bodyMedium,
                     )
                 } else when (intervention.materialKind) {
                     ResolutionMaterialKind.NONE -> Text(
@@ -144,6 +188,10 @@ internal fun AgentInterventionDialog(
                 onClick = {
                     if (requiresUserDecision) {
                         onConfirmUnknownDelivered(intervention)
+                    } else if (isResourceSelection) {
+                        selectedId?.let { onSelectCloudflareResource(intervention, it) }
+                    } else if (isCloudflareReauthorization) {
+                        onStartCloudflareReauthorization(intervention)
                     } else when (intervention.materialKind) {
                         ResolutionMaterialKind.NONE -> onResolveNone(intervention)
                         ResolutionMaterialKind.EPHEMERAL -> {
@@ -165,7 +213,7 @@ internal fun AgentInterventionDialog(
                 ),
             ) {
                 Text(
-                    if (requiresUserDecision) "确认已完成" else "继续",
+                    if (requiresUserDecision) "确认已完成" else if (isCloudflareReauthorization) "重新授权" else "继续",
                     fontWeight = FontWeight.SemiBold,
                 )
             }
@@ -193,6 +241,8 @@ internal fun AgentInterventionDialog(
 }
 
 private fun capabilityTitle(capability: String): String = when (capability) {
+    "cloudflare.reauthorize" -> "恢复 Cloudflare 授权"
+    "cloudflare.resource.select" -> "选择 Cloudflare 资源"
     "git.push" -> "提供 Git 仓库授权"
     "ssh.connect" -> "提供 SSH 登录能力"
     "privilege.sudo.execute" -> "输入 sudo 密码"

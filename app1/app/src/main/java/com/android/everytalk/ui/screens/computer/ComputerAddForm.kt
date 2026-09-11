@@ -6,6 +6,7 @@ import com.android.everytalk.data.computer.ComputerAuthKind
 import com.android.everytalk.data.computer.ComputerCredential
 import com.android.everytalk.data.computer.ComputerRunMode
 import com.android.everytalk.data.computer.UpdateComputerRequest
+import com.android.everytalk.data.computer.ComputerProvider
 import java.util.UUID
 
 internal enum class ComputerAddFormError {
@@ -30,8 +31,15 @@ internal data class ComputerAddFormState(
     val sudoPassword: String = "",
     /** 默认启用更安全的沙箱；低配服务器可在添加时关闭并直接使用 SSH。 */
     val sandboxEnabled: Boolean = true,
+    val provider: ComputerProvider = ComputerProvider.SSH,
+    val cloudflareAuthorized: Boolean = false,
+    val cloudflareIdentity: String? = null,
+    val cloudflareAccountId: String = "",
+    val cloudflareAccountName: String = "",
+    val cloudflareScopes: Set<String> = emptySet(),
 ) {
     fun validationError(reusableAuthKind: ComputerAuthKind? = null): ComputerAddFormError? = when {
+        provider == ComputerProvider.CLOUDFLARE -> null
         host.isBlank() -> ComputerAddFormError.HOST_REQUIRED
         port.toIntOrNull()?.let { it in 1..65535 } != true -> ComputerAddFormError.PORT_INVALID
         username.isBlank() -> ComputerAddFormError.USERNAME_REQUIRED

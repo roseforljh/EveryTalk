@@ -64,6 +64,7 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.DialogWindowProvider
 import com.android.everytalk.R
 import com.android.everytalk.data.computer.ComputerAuthKind
+import com.android.everytalk.data.computer.ComputerProvider
 import com.android.everytalk.data.computer.HostKeyProbeResult
 import com.android.everytalk.ui.components.dialog.AppDialogButtonShape
 import com.android.everytalk.ui.components.dialog.AppDialogShape
@@ -95,6 +96,9 @@ internal fun ComputerAddCard(
     submitLabel: String = stringResource(R.string.computer_add_save),
     keepCredentialHint: Boolean = false,
     allowBusyDismiss: Boolean = false,
+    onCloudflareLogin: () -> Unit = {},
+    onCloudflareAccountSelected: (String, String) -> Unit = { _, _ -> },
+    cloudflareAccounts: List<com.android.everytalk.data.computer.CloudflareApiAccount> = emptyList(),
 ) {
     val dialogBackground = appDialogContainerColor()
     val borderColor = appDialogBorderColor()
@@ -179,19 +183,53 @@ internal fun ComputerAddCard(
 
                     ComputerFormSectionTitle(stringResource(R.string.computer_form_basic))
 
+                    FlowRow(
+                        modifier = Modifier.padding(bottom = 12.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        FilterChip(
+                            selected = form.provider == ComputerProvider.SSH,
+                            onClick = { onFormChange(form.copy(provider = ComputerProvider.SSH)) },
+                            label = { Text("SSH / VPS") }, enabled = !isBusy, colors = choiceColors,
+                        )
+                        FilterChip(
+                            selected = form.provider == ComputerProvider.CLOUDFLARE,
+                            onClick = { onFormChange(form.copy(provider = ComputerProvider.CLOUDFLARE)) },
+                            label = { Text("Cloudflare") }, enabled = !isBusy, colors = choiceColors,
+                        )
+                    }
+
+                    if (form.provider == ComputerProvider.CLOUDFLARE) {
+                        Text(
+                            text = if (form.cloudflareAuthorized) "Cloudflare 已登录：${form.cloudflareIdentity ?: "身份信息暂不可用"}" else "尚未登录 Cloudflare",
+                            color = contentColor,
+                            modifier = Modifier.padding(bottom = 12.dp),
+                        )
+                        OutlinedButton(onClick = onCloudflareLogin, enabled = !isBusy) { Text("登录 Cloudflare") }
+                        if (form.cloudflareAuthorized) Text("授权范围：${form.cloudflareScopes.joinToString().ifBlank { "未返回" }}", color = contentColor)
+                        if (form.cloudflareAccountId.isNotBlank()) {
+                            Text("Account：${form.cloudflareAccountName} (${form.cloudflareAccountId})", color = contentColor)
+                        }
+                        cloudflareAccounts.forEach { account ->
+                            OutlinedButton(
+                                onClick = { onCloudflareAccountSelected(account.id, account.name) },
+                                enabled = !isBusy,
+                            ) { Text("使用 ${account.name}") }
+                        }
+                    }
                     ComputerTextField(
                         value = form.displayName,
                         onValueChange = { onFormChange(form.copy(displayName = it)) },
                         label = stringResource(R.string.computer_field_name),
                         enabled = !isBusy,
                     )
-                    ComputerTextField(
+                    if (form.provider == ComputerProvider.SSH) ComputerTextField(
                         value = form.host,
                         onValueChange = { onFormChange(form.copy(host = it)) },
                         label = stringResource(R.string.computer_field_host),
                         enabled = !isBusy,
                     )
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    if (form.provider == ComputerProvider.SSH) Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         ComputerTextField(
                             value = form.port,
                             onValueChange = { value ->
@@ -211,12 +249,13 @@ internal fun ComputerAddCard(
                         )
                     }
 
+                    if (form.provider == ComputerProvider.SSH) {
                     ComputerFormSectionTitle(
                         text = stringResource(R.string.computer_form_login),
                         modifier = Modifier.padding(top = 4.dp),
                     )
-                    SettingsFieldLabel(stringResource(R.string.computer_field_auth))
-                    FlowRow(
+                    if (form.provider == ComputerProvider.SSH) SettingsFieldLabel(stringResource(R.string.computer_field_auth))
+                    if (form.provider == ComputerProvider.SSH) FlowRow(
                         modifier = Modifier.padding(bottom = 12.dp),
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
@@ -264,6 +303,7 @@ internal fun ComputerAddCard(
                             enabled = !isBusy,
                             isPassword = true,
                         )
+                    }
                     }
 
                     if (keepCredentialHint) {
