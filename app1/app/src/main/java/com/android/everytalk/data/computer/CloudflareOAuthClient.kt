@@ -26,7 +26,27 @@ data class CloudflareOAuthConfig(
     val redirectUri: String,
     val authorizationEndpoint: String = "https://dash.cloudflare.com/oauth2/auth",
     val tokenEndpoint: String = "https://dash.cloudflare.com/oauth2/token",
-    val scopes: Set<String> = setOf("account:read", "workers:read", "workers:write"),
+    // 名称必须是 Cloudflare OAuth 的 scope 标识；请求任何未在 OAuth 客户端登记的 scope 都会导致 invalid_scope。
+    // 这里每一项都已验证过会被授权端点接受；新增前必须先确认 OAuth 客户端已登记，否则整个登录会挂。
+    val scopes: Set<String> = setOf(
+        "user-details.read",
+        "account-settings.read",
+        "workers-scripts.read",
+        "workers-scripts.write",
+        "workers-scripts.bind",
+        "workers-scripts.edit",
+        "workers-kv-storage.read",
+        "workers-kv-storage.write",
+        "workers-r2.read",
+        "workers-r2.write",
+        "workers-r2-bucket-item.read",
+        "workers-r2-bucket-item.write",
+        "d1.read",
+        "d1.write",
+        "queues.read",
+        "queues.write",
+        "workers-tail.read",
+    ),
 )
 
 data class CloudflareTokenExchangeResult(
@@ -146,11 +166,22 @@ internal fun parseCloudflareOAuthCallback(rawUri: String, redirectUri: String): 
     return CloudflareOAuthCallback(code, state, query["nonce"]?.takeIf { it.isNotBlank() })
 }
 
+/**
+ * Worker 拿到 code 后会固定跳回应用自定义 scheme，所以自定义 scheme 与登记的 redirect_uri 等价。
+ * 这里只判定形状，state/PKCE 归属仍由各自的 OAuth Store 校验。
+ */
+internal fun isCloudflareCallbackUri(rawUri: String, redirectUri: String): Boolean {
+    val prefix = rawUri.substringBefore('?')
+    return prefix == redirectUri || prefix == CLOUDFLARE_CUSTOM_SCHEME_CALLBACK
+}
+
+private const val CLOUDFLARE_CUSTOM_SCHEME_CALLBACK = "everytalk://oauth/cloudflare"
+
 /** 拒绝重复参数、片段和额外路径，授权错误回调也必须通过相同的 URL 校验。 */
 internal fun parseCloudflareOAuthParameters(rawUri: String, redirectUri: String): Map<String, String> {
     require(rawUri.length <= 16_384) { "Cloudflare OAuth 回调过长" }
     val uri = URI(rawUri)
-    require(uri.rawFragment == null && uri.rawUserInfo == null && uri.toString().substringBefore('?') == redirectUri) { "Cloudflare OAuth 回调地址不匹配" }
+    require(uri.rawFragment == null && uri.rawUserInfo == null && isCloudflareCallbackUri(rawUri, redirectUri)) { "Cloudflare OAuth 回调地址不匹配" }
     val pairs = uri.rawQuery.orEmpty().split('&').filter { it.isNotBlank() }.map {
         val parts = it.split('=', limit = 2)
         URLDecoder.decode(parts[0], StandardCharsets.UTF_8.name()) to
@@ -197,8 +228,47 @@ internal suspend fun exchangeCloudflareToken(
     )
 }
 
-/** OAuth 端点来自可信构建配置；拒绝明文传输、URL 内凭据和歧义回调。 */
-internal fun CloudflareOAuthConfig.requireValid() {
+/**
+ * 用 refresh_token 换新的 access token。
+ * 不带 client_secret：当前 OAuth 客户端按公开客户端走 PKCE，和授权码交换一致。
+ */
+internal suspend fun exchangeCloudflareRefreshToken(
+    client: HttpClient,
+    config: CloudflareOAuthConfig,
+    refreshToken: CharArray,
+    json: Json,
+): CloudflareTokenExchangeResult {
+    config.requireValid()
+    require(refreshToken.isNotEmpty()) { "Cloudflare Refresh Token 为空" }
+    val (status, raw) = withTimeout(30_000L) {
+        client.config { followRedirects = false; expectSuccess = false }.use { safe ->
+            safe.prepareRequest(config.tokenEndpoint) {
+                method = HttpMethod.Post
+                contentType(ContentType.Application.FormUrlEncoded)
+                setBody(FormDataContent(Parameters.build {
+                    append("grant_type", "refresh_token")
+                    append("client_id", config.clientId)
+                    append("refresh_token", refreshToken.concatToString())
+                }))
+            }.execute { response -> response.status.value to response.readTextAtMost(128L * 1024) }
+        }
+    }
+    if (status !in 200..299) throw CloudflareOAuthException("TOKEN_REFRESH_FAILED", "Cloudflare Token 续期失败")
+    val payload = try { json.decodeFromString<CloudflareTokenResponse>(raw) }
+    catch (_: IllegalArgumentException) { throw CloudflareOAuthException("TOKEN_RESPONSE_INVALID", "Cloudflare Token 响应无效") }
+    val token = payload.accessToken?.takeIf { it.isNotBlank() && it.none(Char::isISOControl) }
+        ?: throw CloudflareOAuthException("TOKEN_RESPONSE_INVALID", "Cloudflare Token 缺失或无效")
+    if (payload.expiresIn != null && payload.expiresIn!! !in 1..31_536_000L) {
+        throw CloudflareOAuthException("TOKEN_RESPONSE_INVALID", "Cloudflare Token 有效期无效")
+    }
+    // 有些响应不返回新的 refresh_token，那就继续用旧的。
+    return CloudflareTokenExchangeResult(
+        token.toCharArray(), payload.refreshToken?.toCharArray() ?: refreshToken.copyOf(),
+        payload.scope.orEmpty().split(' ').filter(String::isNotBlank).toSet(), payload.expiresIn,
+    )
+}
+
+/** OAuth 端点来自可信构建配置；拒绝明文传输、URL 内凭据和歧义回调。 */internal fun CloudflareOAuthConfig.requireValid() {
     require(clientId.isNotBlank()) { "Cloudflare OAuth Client ID 未配置" }
     listOf(authorizationEndpoint, tokenEndpoint).forEach { endpoint ->
         val uri = URI(endpoint)

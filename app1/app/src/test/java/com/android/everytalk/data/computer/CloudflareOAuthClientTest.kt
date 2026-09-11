@@ -1,11 +1,64 @@
 package com.android.everytalk.data.computer
 
 import android.net.Uri
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.engine.mock.MockEngineConfig
+import io.ktor.client.engine.mock.respond
+import io.ktor.http.HttpStatusCode
+import io.ktor.http.content.OutgoingContent
+import io.ktor.http.headersOf
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class CloudflareOAuthClientTest {
+    @Test
+    fun `续期用 refresh_token 且响应缺新值時沿用旧值`() = runTest {
+        var requestBody = ""
+        val client = HttpClient(MockEngine(MockEngineConfig().apply {
+            dispatcher = StandardTestDispatcher(testScheduler)
+            addHandler { request ->
+                requestBody = (request.body as OutgoingContent.ByteArrayContent).bytes().decodeToString()
+                respond(
+                    "{\"access_token\":\"new-access\",\"expires_in\":3600}",
+                    HttpStatusCode.OK,
+                    headersOf("Content-Type", "application/json"),
+                )
+            }
+        }))
+        val config = CloudflareOAuthConfig("client", "everytalk://oauth/cloudflare")
+
+        val result = exchangeCloudflareRefreshToken(client, config, "old-refresh".toCharArray(), Json)
+
+        assertEquals("new-access", result.accessToken.concatToString())
+        assertEquals(3600L, result.expiresInSeconds)
+        assertEquals("old-refresh", result.refreshToken?.concatToString())
+        assertTrue(requestBody, requestBody.contains("grant_type=refresh_token"))
+        assertTrue(requestBody, requestBody.contains("refresh_token=old-refresh"))
+        client.close()
+    }
+
+    @Test
+    fun `续期失败报 TOKEN_REFRESH_FAILED`() = runTest {
+        val client = HttpClient(MockEngine(MockEngineConfig().apply {
+            dispatcher = StandardTestDispatcher(testScheduler)
+            addHandler { respond("nope", HttpStatusCode.Unauthorized) }
+        }))
+        val config = CloudflareOAuthConfig("client", "everytalk://oauth/cloudflare")
+
+        val error = runCatching {
+            exchangeCloudflareRefreshToken(client, config, "r".toCharArray(), Json)
+        }.exceptionOrNull()
+
+        assertTrue(error is CloudflareOAuthException)
+        client.close()
+    }
+
     @Test fun `拒绝重复 state 片段和额外尾斜线`() {
         listOf("?code=c&state=a&state=b", "?code=c&state=a#fragment", "/?code=c&state=a").forEach { suffix ->
             assertThrows(IllegalArgumentException::class.java) {

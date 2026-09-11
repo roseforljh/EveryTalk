@@ -14,9 +14,8 @@ object CloudflareOAuthCallbackBus {
     fun publish(uri: Uri) {
         // 支持 everytalk:// 和正式配置的 HTTPS 回调；真正的 state/目标归属
         // 仍由各个 OAuth Flow 校验，不能只凭 URL 形状接收授权结果。
-        val configured = BuildConfig.CLOUDFLARE_OAUTH_REDIRECT_URI.trimEnd('/')
-        val actual = uri.toString().substringBefore('?').trimEnd('/')
-        if (actual == configured && uri.getQueryParameter("state") != null) {
+        if (isCloudflareCallbackUri(uri.toString(), BuildConfig.CLOUDFLARE_OAUTH_REDIRECT_URI) &&
+            uri.getQueryParameter("state") != null) {
             _callbacks.value = uri
         }
     }
