@@ -13,8 +13,8 @@ internal object ComputerToolCallSafety {
     fun isReadOnly(toolName: String, arguments: JsonObject): Boolean = when (toolName) {
         ComputerToolNames.READ_FILE, ComputerToolNames.DOWNLOAD,
         ComputerToolNames.WORKER_LIST, ComputerToolNames.WORKER_READ,
-        "computer.worker.status", "computer.worker.logs", ComputerToolNames.WORKER_HEALTH,
-        "computer.kv.list_keys", "computer.kv.get",
+        "computer_worker_status", "computer_worker_logs", ComputerToolNames.WORKER_HEALTH,
+        "computer_kv_list_keys", "computer_kv_get",
         ComputerToolNames.D1_LIST, ComputerToolNames.D1_SCHEMA,
         ComputerToolNames.KV_LIST_NAMESPACES, ComputerToolNames.R2_LIST_BUCKETS,
         ComputerToolNames.R2_LIST_OBJECTS, ComputerToolNames.R2_GET_METADATA,

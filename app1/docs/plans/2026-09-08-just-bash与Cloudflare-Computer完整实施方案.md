@@ -122,17 +122,17 @@ Provider 负责目标能力、请求校验、执行、状态查询和错误映�
 local.workspace.read
 local.workspace.write
 local.shell.execute
-computer.worker.list
-computer.worker.read
-computer.worker.create
-computer.worker.update
-computer.worker.deploy
-computer.worker.status
-computer.worker.logs
-computer.worker.delete
-computer.d1.*
-computer.kv.*
-computer.r2.*
+computer_worker_list
+computer_worker_read
+computer_worker_create
+computer_worker_update
+computer_worker_deploy
+computer_worker_status
+computer_worker_logs
+computer_worker_delete
+computer_d1_*
+computer_kv_*
+computer_r2_*
 ```
 
 Cloudflare 不暴露成拥有完整 Linux 的 `computer/bash`。模型只能看到当前 Provider 声明支持的结构化工具。
@@ -319,12 +319,12 @@ Worker 工具统一返回 `execution_id`、状态、错误码和安全摘要，�
 D1、KV、R2 等功能都作为独立能力加入，不把它们混入 Workers 工具：
 
 ```text
-computer.d1.query
-computer.d1.migration
-computer.kv.get
-computer.kv.put
-computer.r2.list
-computer.r2.upload
+computer_d1_query
+computer_d1_migration
+computer_kv_get
+computer_kv_put
+computer_r2_list
+computer_r2_upload
 ```
 
 每种资源都需要独立的 scope、资源 ID 校验、输出限制和危险操作确认。
@@ -486,12 +486,12 @@ READY -> DELETING -> DELETED
 推荐工具：
 
 ```text
-computer.worker.list
-computer.worker.read
-computer.worker.create
-computer.worker.update
-computer.worker.deploy
-computer.worker.status
+computer_worker_list
+computer_worker_read
+computer_worker_create
+computer_worker_update
+computer_worker_deploy
+computer_worker_status
 ```
 
 测试：分页、空列表、权限不足、Worker 不存在、网络中断、未知部署结果、重复 hash、部署状态恢复和输出截断。
@@ -559,7 +559,7 @@ computer.worker.status
 - 迁移操作保存 migration hash，防止重复执行。
 - 返回结构化列名、类型、行数和截断状态。
 
-工具：`computer.d1.list`、`computer.d1.schema`、`computer.d1.query`、`computer.d1.migration`。
+工具：`computer_d1_list`、`computer_d1_schema`、`computer_d1_query`、`computer_d1_migration`。
 
 #### KV
 
@@ -568,7 +568,7 @@ computer.worker.status
 - key、value 大小和列表分页必须限制。
 - 默认隐藏疑似 Secret 的 value，除非用户明确查看。
 
-工具：`computer.kv.list_namespaces`、`computer.kv.list_keys`、`computer.kv.get`、`computer.kv.put`、`computer.kv.delete`。
+工具：`computer_kv_list_namespaces`、`computer_kv_list_keys`、`computer_kv_get`、`computer_kv_put`、`computer_kv_delete`。
 
 #### R2
 
@@ -577,7 +577,7 @@ computer.worker.status
 - 上传前检查路径、大小、类型和敏感文件。
 - 删除对象必须确认并支持幂等结果。
 
-工具：`computer.r2.list_buckets`、`computer.r2.list_objects`、`computer.r2.get_metadata`、`computer.r2.upload`、`computer.r2.delete`。
+工具：`computer_r2_list_buckets`、`computer_r2_list_objects`、`computer_r2_get_metadata`、`computer_r2_upload`、`computer_r2_delete`。
 
 #### Durable Objects、Queues、Cron
 

@@ -10,40 +10,40 @@ object ComputerToolNames {
     const val UPLOAD = "upload"
     const val DOWNLOAD = "download"
     const val OPEN_PORT = "open_port"
-    const val WORKER_LIST = "computer.worker.list"
-    const val WORKER_READ = "computer.worker.read"
-    const val WORKER_CREATE = "computer.worker.create"
-    const val WORKER_UPDATE = "computer.worker.update"
-    const val WORKER_DEPLOY = "computer.worker.deploy"
-    const val WORKER_STATUS = "computer.worker.status"
-    const val WORKER_LOGS = "computer.worker.logs"
-    const val WORKER_HEALTH = "computer.worker.health"
-    const val WORKER_DELETE = "computer.worker.delete"
-    const val D1_LIST = "computer.d1.list"
-    const val D1_SCHEMA = "computer.d1.schema"
-    const val KV_LIST_NAMESPACES = "computer.kv.list_namespaces"
-    const val R2_LIST_BUCKETS = "computer.r2.list_buckets"
-    const val R2_LIST_OBJECTS = "computer.r2.list_objects"
-    const val R2_GET_METADATA = "computer.r2.get_metadata"
-    const val R2_UPLOAD = "computer.r2.upload"
-    const val R2_DELETE = "computer.r2.delete"
-    const val D1_QUERY = "computer.d1.query"
-    const val D1_MIGRATION = "computer.d1.migration"
-    const val KV_LIST_KEYS = "computer.kv.list_keys"
-    const val KV_GET = "computer.kv.get"
-    const val KV_PUT = "computer.kv.put"
-    const val KV_DELETE = "computer.kv.delete"
-    const val DO_LIST = "computer.durable_objects.list"
-    const val DO_OBJECTS_LIST = "computer.durable_objects.list_objects"
-    const val QUEUES_LIST = "computer.queues.list"
-    const val QUEUES_GET = "computer.queues.get"
-    const val QUEUES_METRICS = "computer.queues.metrics"
-    const val QUEUES_PEEK = "computer.queues.peek"
-    const val CRON_LIST = "computer.cron.list"
-    const val CRON_UPDATE = "computer.cron.update"
-    const val CRON_TRIGGER = "computer.cron.trigger"
-    const val QUEUES_CREATE = "computer.queues.create"
-    const val QUEUES_DELETE = "computer.queues.delete"
+    const val WORKER_LIST = "computer_worker_list"
+    const val WORKER_READ = "computer_worker_read"
+    const val WORKER_CREATE = "computer_worker_create"
+    const val WORKER_UPDATE = "computer_worker_update"
+    const val WORKER_DEPLOY = "computer_worker_deploy"
+    const val WORKER_STATUS = "computer_worker_status"
+    const val WORKER_LOGS = "computer_worker_logs"
+    const val WORKER_HEALTH = "computer_worker_health"
+    const val WORKER_DELETE = "computer_worker_delete"
+    const val D1_LIST = "computer_d1_list"
+    const val D1_SCHEMA = "computer_d1_schema"
+    const val KV_LIST_NAMESPACES = "computer_kv_list_namespaces"
+    const val R2_LIST_BUCKETS = "computer_r2_list_buckets"
+    const val R2_LIST_OBJECTS = "computer_r2_list_objects"
+    const val R2_GET_METADATA = "computer_r2_get_metadata"
+    const val R2_UPLOAD = "computer_r2_upload"
+    const val R2_DELETE = "computer_r2_delete"
+    const val D1_QUERY = "computer_d1_query"
+    const val D1_MIGRATION = "computer_d1_migration"
+    const val KV_LIST_KEYS = "computer_kv_list_keys"
+    const val KV_GET = "computer_kv_get"
+    const val KV_PUT = "computer_kv_put"
+    const val KV_DELETE = "computer_kv_delete"
+    const val DO_LIST = "computer_durable_objects_list"
+    const val DO_OBJECTS_LIST = "computer_durable_objects_list_objects"
+    const val QUEUES_LIST = "computer_queues_list"
+    const val QUEUES_GET = "computer_queues_get"
+    const val QUEUES_METRICS = "computer_queues_metrics"
+    const val QUEUES_PEEK = "computer_queues_peek"
+    const val CRON_LIST = "computer_cron_list"
+    const val CRON_UPDATE = "computer_cron_update"
+    const val CRON_TRIGGER = "computer_cron_trigger"
+    const val QUEUES_CREATE = "computer_queues_create"
+    const val QUEUES_DELETE = "computer_queues_delete"
 
     val cloudflare = setOf(WORKER_LIST, WORKER_READ, WORKER_CREATE, WORKER_UPDATE, WORKER_DEPLOY, WORKER_STATUS, WORKER_LOGS, WORKER_HEALTH, WORKER_DELETE, D1_LIST, D1_SCHEMA, D1_QUERY, D1_MIGRATION, KV_LIST_NAMESPACES, KV_LIST_KEYS, KV_GET, KV_PUT, KV_DELETE, R2_LIST_BUCKETS, R2_LIST_OBJECTS, R2_GET_METADATA, R2_UPLOAD, R2_DELETE, DO_LIST, DO_OBJECTS_LIST, QUEUES_LIST, QUEUES_GET, QUEUES_METRICS, QUEUES_PEEK, QUEUES_CREATE, QUEUES_DELETE, CRON_LIST, CRON_UPDATE, CRON_TRIGGER)
     /** 兼容既有 SSH 工具契约；Cloudflare 工具通过 allProviders 单独识别。 */
@@ -54,49 +54,90 @@ object ComputerToolNames {
 /** 八个稳定的 Computer Tool Schema，服务器身份由 Android 请求快照注入，模型参数中不出现。 */
 object ComputerToolCatalog {
     /** Cloudflare 工具单独声明，避免把 VPS exec schema 暴露给云端目标。 */
-    fun cloudflareDefinitions(workerWriteEnabled: Boolean = true, resourceToolsEnabled: Boolean = true): List<Map<String, Any>> = listOf(
-        function("computer.worker.list", "列出当前 Cloudflare Account 的 Workers。", mapOf("page" to integer("页码。", 1, 10000), "per_page" to integer("每页数量。", 1, 1000)), emptyList()),
-        function("computer.worker.read", "读取 Worker 模块源码。", mapOf("worker_name" to string("Worker 名称。")), listOf("worker_name")),
-        function("computer.worker.create", "创建或上传 Worker；必须先取得用户确认。", workerWriteProperties(), listOf("worker_name", "script")),
-        function("computer.worker.update", "更新 Worker；必须先取得用户确认。", workerWriteProperties(), listOf("worker_name", "script")),
-        function("computer.worker.deploy", "部署当前 Workspace 中的 Worker；必须先取得用户确认。", workerDeployProperties(), listOf("worker_name")),
-        function("computer.worker.status", "查看 Worker 配置和最近部署状态。", mapOf("worker_name" to string("Worker 名称。")), listOf("worker_name")),
-        function("computer.worker.logs", "查看 Worker 日志会话摘要。", mapOf("worker_name" to string("Worker 名称。")), listOf("worker_name")),
-        function("computer.worker.health", "探测指定 Worker URL 的运行时 HTTP 状态；只返回状态码和耗时。", mapOf("url" to string("Worker 的 HTTPS URL，必须是 workers.dev 或 Cloudflare 域名。")), listOf("url")),
-        function("computer.worker.delete", "删除 Worker；必须先取得用户确认。", mapOf("worker_name" to string("Worker 名称。")), listOf("worker_name")),
-        function("computer.d1.list", "列出 D1 数据库。", emptyMap(), emptyList()),
-        function("computer.d1.schema", "查看 D1 数据库结构。", mapOf("database_id" to string("D1 数据库 ID。")), listOf("database_id")),
-        function("computer.d1.query", "执行 D1 查询；写查询必须先取得用户确认。", mapOf("database_id" to string("D1 数据库 ID。"), "sql" to string("SQL 查询。")), listOf("database_id", "sql")),
-        function("computer.d1.migration", "执行 D1 migration；必须先取得用户确认且相同内容不会重复执行。", mapOf("database_id" to string("D1 数据库 ID。"), "sql" to string("Migration SQL。")), listOf("database_id", "sql")),
-        function("computer.kv.list_namespaces", "列出 KV Namespace。", emptyMap(), emptyList()),
-        function("computer.kv.list_keys", "列出 KV Key。", mapOf("namespace_id" to string("Namespace ID。"), "cursor" to string("下一页游标。"), "limit" to integer("每页数量。", 10, 1000)), listOf("namespace_id")),
-        function("computer.kv.get", "读取 KV Value。", mapOf("namespace_id" to string("Namespace ID。"), "key" to string("Key。")), listOf("namespace_id", "key")),
-        function("computer.kv.put", "写入 KV Value；必须先取得用户确认。", mapOf("namespace_id" to string("Namespace ID。"), "key" to string("Key。"), "value" to string("Value。")), listOf("namespace_id", "key", "value")),
-        function("computer.kv.delete", "删除 KV Key；必须先取得用户确认。", mapOf("namespace_id" to string("Namespace ID。"), "key" to string("Key。")), listOf("namespace_id", "key")),
-        function("computer.r2.list_buckets", "列出 R2 Bucket。", emptyMap(), emptyList()),
-        function("computer.r2.list_objects", "列出 R2 对象。", mapOf("bucket" to string("Bucket 名称。"), "cursor" to string("下一页游标。"), "per_page" to integer("每页数量。", 1, 1000)), listOf("bucket")),
-        function("computer.r2.get_metadata", "查看 R2 对象元数据。", mapOf("bucket" to string("Bucket 名称。"), "key" to string("对象 Key。")), listOf("bucket", "key")),
-        function("computer.r2.upload", "上传当前 Workspace 文件到 R2；必须先取得用户确认。", mapOf("bucket" to string("Bucket 名称。"), "key" to string("对象 Key。"), "path" to string("当前 Workspace 内的相对文件路径。")), listOf("bucket", "key", "path")),
-        function("computer.r2.delete", "删除 R2 对象；必须先取得用户确认。", mapOf("bucket" to string("Bucket 名称。"), "key" to string("对象 Key。")), listOf("bucket", "key")),
-        function("computer.durable_objects.list", "列出 Durable Objects Namespace。", emptyMap(), emptyList()),
-        function("computer.durable_objects.list_objects", "查看指定 Durable Objects Namespace 的实例列表。", mapOf("namespace_id" to string("Namespace ID。"), "cursor" to string("下一页游标。"), "limit" to integer("每页数量。", 10, 1000)), listOf("namespace_id")),
-        function("computer.queues.list", "列出 Queues。", emptyMap(), emptyList()),
-        function("computer.queues.get", "查看 Queue 配置和状态。", mapOf("queue_id" to string("Queue ID。")), listOf("queue_id")),
-        function("computer.queues.metrics", "查看 Queue 指标。", mapOf("queue_id" to string("Queue ID。")), listOf("queue_id")),
-        function("computer.queues.peek", "预览 Queue 消息；不会租赁或删除消息。", mapOf("queue_id" to string("Queue ID。"), "batch_size" to mapOf("type" to "integer", "description" to "最多预览的消息数。")), listOf("queue_id")),
-        function("computer.queues.create", "创建 Queue；必须先取得用户确认。", mapOf("name" to string("Queue 名称。")), listOf("name")),
-        function("computer.queues.delete", "删除 Queue；必须先取得用户确认。", mapOf("queue_id" to string("Queue ID。")), listOf("queue_id")),
-        function("computer.cron.list", "查看 Worker Cron 触发器。", mapOf("worker_name" to string("Worker 名称。")), listOf("worker_name")),
-        function("computer.cron.update", "修改 Worker Cron 触发器；必须先读取旧值并取得用户确认。", mapOf("worker_name" to string("Worker 名称。"), "schedules" to mapOf("type" to "array", "items" to mapOf("type" to "string"))), listOf("worker_name", "schedules")),
-        function("computer.cron.trigger", "立即触发 Cron；当前 Cloudflare 官方 API 未提供该操作，调用会返回明确的不支持错误。", mapOf("worker_name" to string("Worker 名称。")), listOf("worker_name")),
+    fun cloudflareDefinitions(
+        workerWriteEnabled: Boolean = true,
+        resourceToolsEnabled: Boolean = true,
+        permissionMode: ComputerPermissionMode = ComputerPermissionMode.MANUAL,
+    ): List<Map<String, Any>> = listOf(
+        function("computer_worker_list", "列出当前 Cloudflare Account 的 Workers。", mapOf("page" to integer("页码。", 1, 10000), "per_page" to integer("每页数量。", 1, 1000)), emptyList()),
+        function("computer_worker_read", "读取 Worker 模块源码。", mapOf("worker_name" to string("Worker 名称。")), listOf("worker_name")),
+        function("computer_worker_create", "创建或上传 Worker；必须先取得用户确认。", workerWriteProperties(), listOf("worker_name", "script")),
+        function("computer_worker_update", "更新 Worker；必须先取得用户确认。", workerWriteProperties(), listOf("worker_name", "script")),
+        function("computer_worker_deploy", "部署当前 Workspace 中的 Worker；必须先取得用户确认。", workerDeployProperties(), listOf("worker_name")),
+        function("computer_worker_status", "查看 Worker 配置和最近部署状态。", mapOf("worker_name" to string("Worker 名称。")), listOf("worker_name")),
+        function("computer_worker_logs", "查看 Worker 日志会话摘要。", mapOf("worker_name" to string("Worker 名称。")), listOf("worker_name")),
+        function("computer_worker_health", "探测指定 Worker URL 的运行时 HTTP 状态；只返回状态码和耗时。", mapOf("url" to string("Worker 的 HTTPS URL，必须是 workers.dev 或 Cloudflare 域名。")), listOf("url")),
+        function("computer_worker_delete", "删除 Worker；必须先取得用户确认。", mapOf("worker_name" to string("Worker 名称。")), listOf("worker_name")),
+        function("computer_d1_list", "列出 D1 数据库。", emptyMap(), emptyList()),
+        function("computer_d1_schema", "查看 D1 数据库结构。", mapOf("database_id" to string("D1 数据库 ID。")), listOf("database_id")),
+        function("computer_d1_query", "执行 D1 查询；写查询必须先取得用户确认。", mapOf("database_id" to string("D1 数据库 ID。"), "sql" to string("SQL 查询。")), listOf("database_id", "sql")),
+        function("computer_d1_migration", "执行 D1 migration；必须先取得用户确认且相同内容不会重复执行。", mapOf("database_id" to string("D1 数据库 ID。"), "sql" to string("Migration SQL。")), listOf("database_id", "sql")),
+        function("computer_kv_list_namespaces", "列出 KV Namespace。", emptyMap(), emptyList()),
+        function("computer_kv_list_keys", "列出 KV Key。", mapOf("namespace_id" to string("Namespace ID。"), "cursor" to string("下一页游标。"), "limit" to integer("每页数量。", 10, 1000)), listOf("namespace_id")),
+        function("computer_kv_get", "读取 KV Value。", mapOf("namespace_id" to string("Namespace ID。"), "key" to string("Key。")), listOf("namespace_id", "key")),
+        function("computer_kv_put", "写入 KV Value；必须先取得用户确认。", mapOf("namespace_id" to string("Namespace ID。"), "key" to string("Key。"), "value" to string("Value。")), listOf("namespace_id", "key", "value")),
+        function("computer_kv_delete", "删除 KV Key；必须先取得用户确认。", mapOf("namespace_id" to string("Namespace ID。"), "key" to string("Key。")), listOf("namespace_id", "key")),
+        function("computer_r2_list_buckets", "列出 R2 Bucket。", emptyMap(), emptyList()),
+        function("computer_r2_list_objects", "列出 R2 对象。", mapOf("bucket" to string("Bucket 名称。"), "cursor" to string("下一页游标。"), "per_page" to integer("每页数量。", 1, 1000)), listOf("bucket")),
+        function("computer_r2_get_metadata", "查看 R2 对象元数据。", mapOf("bucket" to string("Bucket 名称。"), "key" to string("对象 Key。")), listOf("bucket", "key")),
+        function("computer_r2_upload", "上传当前 Workspace 文件到 R2；必须先取得用户确认。", mapOf("bucket" to string("Bucket 名称。"), "key" to string("对象 Key。"), "path" to string("当前 Workspace 内的相对文件路径。")), listOf("bucket", "key", "path")),
+        function("computer_r2_delete", "删除 R2 对象；必须先取得用户确认。", mapOf("bucket" to string("Bucket 名称。"), "key" to string("对象 Key。")), listOf("bucket", "key")),
+        function("computer_durable_objects_list", "列出 Durable Objects Namespace。", emptyMap(), emptyList()),
+        function("computer_durable_objects_list_objects", "查看指定 Durable Objects Namespace 的实例列表。", mapOf("namespace_id" to string("Namespace ID。"), "cursor" to string("下一页游标。"), "limit" to integer("每页数量。", 10, 1000)), listOf("namespace_id")),
+        function("computer_queues_list", "列出 Queues。", emptyMap(), emptyList()),
+        function("computer_queues_get", "查看 Queue 配置和状态。", mapOf("queue_id" to string("Queue ID。")), listOf("queue_id")),
+        function("computer_queues_metrics", "查看 Queue 指标。", mapOf("queue_id" to string("Queue ID。")), listOf("queue_id")),
+        function("computer_queues_peek", "预览 Queue 消息；不会租赁或删除消息。", mapOf("queue_id" to string("Queue ID。"), "batch_size" to mapOf("type" to "integer", "description" to "最多预览的消息数。")), listOf("queue_id")),
+        function("computer_queues_create", "创建 Queue；必须先取得用户确认。", mapOf("name" to string("Queue 名称。")), listOf("name")),
+        function("computer_queues_delete", "删除 Queue；必须先取得用户确认。", mapOf("queue_id" to string("Queue ID。")), listOf("queue_id")),
+        function("computer_cron_list", "查看 Worker Cron 触发器。", mapOf("worker_name" to string("Worker 名称。")), listOf("worker_name")),
+        function("computer_cron_update", "修改 Worker Cron 触发器；必须先读取旧值并取得用户确认。", mapOf("worker_name" to string("Worker 名称。"), "schedules" to mapOf("type" to "array", "items" to mapOf("type" to "string"))), listOf("worker_name", "schedules")),
+        function("computer_cron_trigger", "立即触发 Cron；当前 Cloudflare 官方 API 未提供该操作，调用会返回明确的不支持错误。", mapOf("worker_name" to string("Worker 名称。")), listOf("worker_name")),
     ).filter { definition ->
         // 工具定义的名称位于 function.name；读取外层 name 会让功能开关失效，
         // 从而在关闭写能力时仍把危险工具暴露给模型。
         val function = definition["function"] as? Map<*, *>
         val name = function?.get("name") as? String ?: ""
         val workerWrite = name in setOf(ComputerToolNames.WORKER_CREATE, ComputerToolNames.WORKER_UPDATE, ComputerToolNames.WORKER_DEPLOY, ComputerToolNames.WORKER_DELETE, ComputerToolNames.CRON_UPDATE, ComputerToolNames.QUEUES_CREATE, ComputerToolNames.QUEUES_DELETE)
-        val resource = name.startsWith("computer.d1.") || name.startsWith("computer.kv.") || name.startsWith("computer.r2.") || name.startsWith("computer.durable_objects.") || name.startsWith("computer.queues.") || name.startsWith("computer.cron.")
+        val resource = name.startsWith("computer_d1_") || name.startsWith("computer_kv_") || name.startsWith("computer_r2_") || name.startsWith("computer_durable_objects_") || name.startsWith("computer_queues_") || name.startsWith("computer_cron_")
         (!workerWrite || workerWriteEnabled) && (!resource || resourceToolsEnabled)
+    }.map { definition -> withSmartApprovalArgument(definition, permissionMode) }
+
+    /**
+     * SMART 模式下由模型自报是否打断用户，和 exec / open_port 保持一致。
+     * 只读工具不加这个参数；判定复用执行期的 ComputerToolCallSafety，
+     * 避免 schema 允许的取值和审批边界对不上。
+     */
+    private fun withSmartApprovalArgument(
+        definition: Map<String, Any>,
+        permissionMode: ComputerPermissionMode,
+    ): Map<String, Any> {
+        if (permissionMode != ComputerPermissionMode.SMART) return definition
+        val function = definition["function"] as? Map<*, *> ?: return definition
+        val name = function["name"] as? String ?: return definition
+        if (ComputerToolCallSafety.isReadOnly(name, kotlinx.serialization.json.JsonObject(emptyMap()))) return definition
+        val parameters = function["parameters"] as? Map<*, *> ?: return definition
+        val properties = parameters["properties"] as? Map<*, *> ?: return definition
+        val required = parameters["required"] as? List<*> ?: emptyList<Any>()
+        return mapOf(
+            "type" to "function",
+            "function" to mapOf(
+                "name" to name,
+                "description" to (function["description"] ?: ""),
+                "parameters" to mapOf(
+                    "type" to "object",
+                    "properties" to (
+                        properties + mapOf(
+                            "ask_user_approval" to boolean(
+                                "Required in smart approval mode. Set true only when this operation should pause for the user's approval; otherwise set false.",
+                            ),
+                        )
+                        ),
+                    "required" to (required + "ask_user_approval"),
+                    "additionalProperties" to false,
+                ),
+            ),
+        )
     }
 
     private fun workerWriteProperties(): Map<String, Any> = mapOf(
