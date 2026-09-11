@@ -87,6 +87,7 @@ import com.android.everytalk.data.DataClass.defaultOpenAICompatibleParameters
 import com.android.everytalk.data.DataClass.modelParameterChannel
 import com.android.everytalk.data.DataClass.modelParameterProtocol
 import com.android.everytalk.data.DataClass.openAICompatibleRequestParameters
+import com.android.everytalk.data.DataClass.thinkingLevelOptions
 import com.android.everytalk.data.DataClass.validateAutoContextCompressionThreshold
 import com.android.everytalk.data.DataClass.validateModelTokenLimits
 import com.android.everytalk.data.DataClass.withUserTokenLimits
@@ -103,10 +104,6 @@ import com.android.everytalk.ui.components.popup.appFloatingCardContainerColor
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
-private val codexThinkingLevels = listOf("none", "minimal", "low", "medium", "high", "xhigh", "max")
-private val anthropicThinkingLevels = listOf("none", "low", "medium", "high", "max")
-private val geminiThinkingLevels = listOf("none", "minimal", "low", "medium", "high")
-private val openAICompatibleThinkingLevels = listOf("none", "low", "medium", "high", "xhigh", "max")
 private val modelParameterProtocols = listOf(
     ModelParameterProtocol.CODEX,
     ModelParameterProtocol.OPENAI_COMPATIBLE,
@@ -159,35 +156,13 @@ internal fun modelCapabilitySourceLabelRes(source: ModelCapabilitySource): Int =
     ModelCapabilitySource.CONSERVATIVE_DEFAULT -> R.string.model_capability_source_conservative_default
 }
 
-internal fun thinkingLevelOptions(protocol: ModelParameterProtocol): List<String> = when (protocol) {
-    ModelParameterProtocol.CODEX -> codexThinkingLevels
-    ModelParameterProtocol.ANTHROPIC -> anthropicThinkingLevels
-    ModelParameterProtocol.GEMINI -> geminiThinkingLevels
-    ModelParameterProtocol.OPENAI_COMPATIBLE -> openAICompatibleThinkingLevels
-}
-
-internal fun effectiveThinkingLevelOptions(
-    protocol: ModelParameterProtocol,
-    modelEfforts: Set<String> = emptySet(),
-): List<String> {
-    if (modelEfforts.isEmpty()) return thinkingLevelOptions(protocol)
-    val defaults = thinkingLevelOptions(protocol)
-    val normalized = modelEfforts
-        .map(String::trim)
-        .filter(String::isNotEmpty)
-        .distinctBy(String::lowercase)
-    return defaults.filter { preset -> normalized.any { it.equals(preset, ignoreCase = true) } } +
-        normalized.filter { value -> defaults.none { it.equals(value, ignoreCase = true) } }
-}
-
 internal fun thinkingLevelMenuOptions(
     protocol: ModelParameterProtocol,
     currentValue: String,
     customValues: List<String> = emptyList(),
-    modelEfforts: Set<String> = emptySet(),
 ): List<String> {
-    val presets = effectiveThinkingLevelOptions(protocol, modelEfforts)
-    val normalizedCurrent = normalizeThinkingLevel(protocol, currentValue, modelEfforts)
+    val presets = thinkingLevelOptions(protocol)
+    val normalizedCurrent = normalizeThinkingLevel(protocol, currentValue)
     if (protocol != ModelParameterProtocol.OPENAI_COMPATIBLE) return presets
     return (presets + normalizeCustomThinkingLevels(
         protocol = protocol,
@@ -210,7 +185,6 @@ internal fun normalizeCustomThinkingLevels(
 internal fun selectedThinkingLevelValue(
     protocol: ModelParameterProtocol,
     parameters: ModelParameters,
-    modelEfforts: Set<String> = emptySet(),
 ): String {
     val selected = when (protocol) {
         ModelParameterProtocol.CODEX -> if (parameters.reasoningMode == ReasoningMode.DISABLED) {
@@ -234,10 +208,10 @@ internal fun selectedThinkingLevelValue(
             }
         }
     }
-    val normalized = normalizeThinkingLevel(protocol, selected, modelEfforts).ifEmpty { DEFAULT_REASONING_EFFORT }
+    val normalized = normalizeThinkingLevel(protocol, selected).ifEmpty { DEFAULT_REASONING_EFFORT }
     return if (
         protocol == ModelParameterProtocol.OPENAI_COMPATIBLE ||
-        normalized in effectiveThinkingLevelOptions(protocol, modelEfforts)
+        normalized in thinkingLevelOptions(protocol)
     ) {
         normalized
     } else {
@@ -245,34 +219,15 @@ internal fun selectedThinkingLevelValue(
     }
 }
 
-internal fun automaticThinkingLevelValue(
-    protocol: ModelParameterProtocol,
-    currentValue: String,
-    supportsReasoning: Boolean?,
-    modelEfforts: Set<String> = emptySet(),
-): String = when {
-    supportsReasoning == false -> "none"
-    modelEfforts.isNotEmpty() -> effectiveThinkingLevelOptions(protocol, modelEfforts).let { options ->
-        options.firstOrNull { it.equals(currentValue, ignoreCase = true) }
-            ?: options.firstOrNull { it == DEFAULT_REASONING_EFFORT }
-            ?: options.firstOrNull { it != "none" }
-            ?: "none"
-    }
-    supportsReasoning == true -> DEFAULT_REASONING_EFFORT
-    protocol == ModelParameterProtocol.OPENAI_COMPATIBLE -> currentValue
-    else -> DEFAULT_REASONING_EFFORT
-}
-
 internal fun applyThinkingLevelSelection(
     protocol: ModelParameterProtocol,
     parameters: ModelParameters,
     selectedValue: String,
-    modelEfforts: Set<String> = emptySet(),
 ): ModelParameters {
-    val normalizedValue = normalizeThinkingLevel(protocol, selectedValue, modelEfforts)
+    val normalizedValue = normalizeThinkingLevel(protocol, selectedValue)
     require(normalizedValue.isNotEmpty())
     if (protocol != ModelParameterProtocol.OPENAI_COMPATIBLE) {
-        require(normalizedValue in effectiveThinkingLevelOptions(protocol, modelEfforts))
+        require(normalizedValue in thinkingLevelOptions(protocol))
     }
     if (
         parameters.reasoningMode == ReasoningMode.BUDGET &&
@@ -317,10 +272,9 @@ internal fun applyThinkingLevelSelection(
 private fun normalizeThinkingLevel(
     protocol: ModelParameterProtocol,
     value: String,
-    modelEfforts: Set<String> = emptySet(),
 ): String {
     val trimmed = value.trim()
-    return effectiveThinkingLevelOptions(protocol, modelEfforts)
+    return thinkingLevelOptions(protocol)
         .firstOrNull { it.equals(trimmed, ignoreCase = true) }
         ?: trimmed
 }
@@ -373,7 +327,6 @@ internal fun ModelParametersDialog(
             selectedThinkingLevelValue(
                 protocol,
                 config.modelParameters,
-                config.modelParameters.resolvedCapability?.reasoningEfforts.orEmpty(),
             )
         )
     }
@@ -408,19 +361,16 @@ internal fun ModelParametersDialog(
     var errorText by remember(config.id) { mutableStateOf<String?>(null) }
     var isAutoLoading by remember(config.id) { mutableStateOf(false) }
     val resolvedCapability = workingConfig.modelParameters.resolvedCapability
-    val modelEfforts = resolvedCapability?.reasoningEfforts.orEmpty()
     val menuOptions = thinkingLevelMenuOptions(
         protocol,
         selectedValue,
         customValues,
-        modelEfforts,
     )
     val dialogBackground = appDialogContainerColor()
     val contentColor = appDialogContentColor()
     val borderColor = appDialogBorderColor()
     val maxOutputSource = resolvedCapability?.maxOutputSource ?: ModelCapabilitySource.USER_OVERRIDE
     val contextWindowSource = resolvedCapability?.contextWindowSource ?: ModelCapabilitySource.USER_OVERRIDE
-    val reasoningSource = resolvedCapability?.reasoningSource
     val endpointPreview = SettingsEndpointRules.buildFullEndpointPreview(
         base = workingConfig.address,
         provider = workingConfig.provider,
@@ -452,25 +402,7 @@ internal fun ModelParametersDialog(
                 loader(workingConfig).fold(
                     onSuccess = { loadedConfig ->
                         workingConfig = loadedConfig
-                        selectedValue = automaticThinkingLevelValue(
-                            protocol = protocol,
-                            currentValue = selectedThinkingLevelValue(
-                                protocol,
-                                loadedConfig.modelParameters,
-                                loadedConfig.modelParameters.resolvedCapability?.reasoningEfforts.orEmpty(),
-                            ),
-                            supportsReasoning = loadedConfig.modelParameters
-                                .resolvedCapability
-                                ?.supportsReasoning,
-                            modelEfforts = loadedConfig.modelParameters
-                                .resolvedCapability
-                                ?.reasoningEfforts
-                                .orEmpty(),
-                        )
-                        customValues = normalizeCustomThinkingLevels(
-                            protocol = protocol,
-                            values = loadedConfig.modelParameters.customReasoningEfforts,
-                        )
+                        // 刷新只更新模型规格，不覆盖用户正在编辑的思考等级或自定义选项。
                         maxOutputTokens = (
                             loadedConfig.maxTokens ?: DEFAULT_MAX_OUTPUT_TOKENS
                         ).toString()
@@ -509,7 +441,6 @@ internal fun ModelParametersDialog(
                     autoContextCompressionThresholdPercent = compressionThreshold,
                 ),
                 selectedValue = selectedValue,
-                modelEfforts = modelEfforts,
             )
             if (protocol == ModelParameterProtocol.OPENAI_COMPATIBLE) {
                 updated.openAICompatibleRequestParameters()
@@ -639,12 +570,7 @@ internal fun ModelParametersDialog(
                 HorizontalDivider(color = borderColor.copy(alpha = 0.55f))
                 ModelParameterRow(
                     label = stringResource(R.string.model_parameters_reasoning_effort),
-                    supportingText = reasoningSource?.let {
-                        stringResource(
-                            R.string.model_parameters_reasoning_strength_source,
-                            stringResource(modelCapabilitySourceLabelRes(it)),
-                        )
-                    } ?: stringResource(R.string.model_parameters_reasoning_strength),
+                    supportingText = stringResource(R.string.model_parameters_reasoning_strength),
                 ) {
                     ThinkingLevelDropdown(
                         options = menuOptions,

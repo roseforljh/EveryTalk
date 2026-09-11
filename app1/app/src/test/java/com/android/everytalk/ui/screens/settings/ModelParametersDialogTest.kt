@@ -7,6 +7,7 @@ import com.android.everytalk.data.DataClass.ModelParameterProtocol
 import com.android.everytalk.data.DataClass.ModelCapabilitySource
 import com.android.everytalk.data.DataClass.ModelParameters
 import com.android.everytalk.data.DataClass.ReasoningMode
+import com.android.everytalk.data.DataClass.thinkingLevelOptions
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -131,56 +132,14 @@ class ModelParametersDialogTest {
     }
 
     @Test
-    fun `自动获取时兼容渠道只在端点明确声明后调整思考参数`() {
-        assertEquals(
-            "ultra",
-            automaticThinkingLevelValue(
-                protocol = ModelParameterProtocol.OPENAI_COMPATIBLE,
-                currentValue = "ultra",
-                supportsReasoning = null,
-            ),
-        )
-        assertEquals(
-            "medium",
-            automaticThinkingLevelValue(
-                protocol = ModelParameterProtocol.OPENAI_COMPATIBLE,
-                currentValue = "ultra",
-                supportsReasoning = true,
-            ),
-        )
-        assertEquals(
-            "none",
-            automaticThinkingLevelValue(
-                protocol = ModelParameterProtocol.OPENAI_COMPATIBLE,
-                currentValue = "ultra",
-                supportsReasoning = false,
-            ),
-        )
-    }
-
-    @Test
-    fun `模型级推理等级覆盖渠道通用预置并选择有效默认值`() {
-        val modelEfforts = setOf("high", "max")
-
-        assertEquals(
-            listOf("high", "max"),
-            effectiveThinkingLevelOptions(ModelParameterProtocol.OPENAI_COMPATIBLE, modelEfforts),
-        )
-        assertEquals(
-            "high",
-            automaticThinkingLevelValue(
-                protocol = ModelParameterProtocol.OPENAI_COMPATIBLE,
-                currentValue = "medium",
-                supportsReasoning = true,
-                modelEfforts = modelEfforts,
-            ),
-        )
+    fun `刷新模型规格不会覆盖正在编辑的思考等级`() {
+        val parameters = ModelParameters(reasoningEffort = "high")
         val updated = applyThinkingLevelSelection(
             protocol = ModelParameterProtocol.ANTHROPIC,
-            parameters = ModelParameters(),
-            selectedValue = "max",
-            modelEfforts = modelEfforts,
+            parameters = parameters,
+            selectedValue = "high",
         )
-        assertEquals("max", updated.reasoningEffort)
+        assertEquals("high", updated.reasoningEffort)
     }
+
 }

@@ -141,41 +141,31 @@ fun reasoningBudgetForEffort(effort: String): Int = when (effort.trim().lowercas
     else -> 8192
 }
 
+/**
+ * 思考选项属于所选 API 协议，界面与请求转换共用这份选项。
+ * 这里只定义协议参数，不维护模型规格，也不让远程规格目录裁剪用户可选的等级。
+ */
+fun thinkingLevelOptions(protocol: ModelParameterProtocol): List<String> = when (protocol) {
+    ModelParameterProtocol.CODEX -> listOf("none", "minimal", "low", "medium", "high", "xhigh", "max")
+    ModelParameterProtocol.ANTHROPIC -> listOf("none", "low", "medium", "high", "max")
+    ModelParameterProtocol.GEMINI -> listOf("none", "minimal", "low", "medium", "high")
+    ModelParameterProtocol.OPENAI_COMPATIBLE -> listOf("none", "low", "medium", "high", "xhigh", "max")
+}
+
+/** 按当前接口协议转换用户设置；目录能力缺失或变更不能吞掉已选的思考参数。 */
 fun ModelParameters.toThinkingConfig(channel: String, model: String): ThinkingConfig? {
     val protocol = modelParameterProtocol(channel)
-    val normalizedModel = model.removePrefix("models/").trim()
-    val inferredCapability = resolvedCapability
-        ?.takeUnless { it.reasoningSource == ModelCapabilitySource.OFFICIAL_CATALOG }
-        ?.takeIf { it.modelId.removePrefix("models/").trim().equals(normalizedModel, ignoreCase = true) }
-        ?: familyModelCapability(model, protocol)?.let { candidate ->
-            resolveModelCapability(model, protocol, "", listOf(candidate))
-        }
-    val protocolEfforts = when (protocol) {
-        ModelParameterProtocol.CODEX -> setOf("none", "minimal", "low", "medium", "high", "xhigh", "max")
-        ModelParameterProtocol.ANTHROPIC -> setOf("low", "medium", "high", "max")
-        ModelParameterProtocol.GEMINI -> setOf("minimal", "low", "medium", "high")
-        ModelParameterProtocol.OPENAI_COMPATIBLE -> emptySet()
-    }
-    val allowedEfforts = inferredCapability?.reasoningEfforts
-        ?.takeIf(Set<String>::isNotEmpty)
-        ?: protocolEfforts
-    val normalizedEffort = reasoningEffort.trim().lowercase().takeIf { it in allowedEfforts }
+    val normalizedEffort = reasoningEffort.trim().lowercase().takeIf { it in thinkingLevelOptions(protocol) }
         ?: DEFAULT_REASONING_EFFORT
     return when (protocol) {
         ModelParameterProtocol.OPENAI_COMPATIBLE -> null
-        ModelParameterProtocol.CODEX -> inferredCapability
-            ?.takeIf { it.supportsReasoning == true }
-            ?.let {
-                ThinkingConfig(
-                    includeThoughts = !normalizedEffort.equals("none", ignoreCase = true),
-                    reasoningMode = ReasoningMode.EFFORT,
-                    reasoningEffort = normalizedEffort,
-                )
-            }
+        ModelParameterProtocol.CODEX -> ThinkingConfig(
+            includeThoughts = reasoningMode != ReasoningMode.DISABLED && normalizedEffort != "none",
+            reasoningMode = ReasoningMode.EFFORT,
+            reasoningEffort = if (reasoningMode == ReasoningMode.DISABLED) "none" else normalizedEffort,
+        )
         ModelParameterProtocol.ANTHROPIC -> when {
-            reasoningMode == ReasoningMode.DISABLED -> null
-            reasoningMode == ReasoningMode.EFFORT &&
-                (inferredCapability?.supportsReasoning != true || inferredCapability.reasoningEfforts.isEmpty()) -> null
+            reasoningMode == ReasoningMode.DISABLED || normalizedEffort == "none" -> null
             else -> ThinkingConfig(
                 includeThoughts = true,
                 thinkingBudget = thinkingBudget.takeIf { reasoningMode == ReasoningMode.BUDGET },
@@ -184,9 +174,10 @@ fun ModelParameters.toThinkingConfig(channel: String, model: String): ThinkingCo
             )
         }
         ModelParameterProtocol.GEMINI -> {
-            if (inferredCapability?.supportsReasoning != true) return null
+            // 保留 Gemini 不同版本的字段兼容：3 使用 level，旧版本使用 budget。
+            // 这里只转换接口字段，不据此推断或限制思考选项。
             val usesThinkingLevel = "gemini-3" in model.lowercase()
-            when (reasoningMode) {
+            when (if (normalizedEffort == "none") ReasoningMode.DISABLED else reasoningMode) {
                 ReasoningMode.DISABLED -> ThinkingConfig(
                     includeThoughts = false,
                     thinkingBudget = 0.takeUnless { usesThinkingLevel },
@@ -252,17 +243,9 @@ fun CustomModelParameter.toJsonElement(): JsonElement = when (type) {
     CustomParameterType.JSON -> Json.parseToJsonElement(value)
 }
 
-fun ModelParameters.openAICompatibleRequestParameters(model: String? = null): Map<String, JsonElement> {
-    val supportsReasoning = resolvedCapability
-        ?.takeIf { capability ->
-            model == null || capability.modelId.removePrefix("models/").trim()
-                .equals(model.removePrefix("models/").trim(), ignoreCase = true)
-        }
-        ?.supportsReasoning
-        ?: model?.let { familyModelCapability(it, ModelParameterProtocol.OPENAI_COMPATIBLE)?.supportsReasoning }
-    // 旧配置没有自定义列表时，只给已确认的推理模型补默认参数。
-    // 用户自己保存过的参数始终原样发送，兼容第三方接口的私有字段。
-    val parameters = customParameters ?: defaultOpenAICompatibleParameters.takeIf { supportsReasoning == true }.orEmpty()
+fun ModelParameters.openAICompatibleRequestParameters(): Map<String, JsonElement> {
+    // 与兼容接口的界面默认值一致，不读取模型目录。显式空列表和用户私有参数原样保留。
+    val parameters = customParameters ?: defaultOpenAICompatibleParameters
     val enabledParameters = parameters.filter(CustomModelParameter::enabled)
     val duplicateName = enabledParameters
         .groupBy { it.name.trim().lowercase() }

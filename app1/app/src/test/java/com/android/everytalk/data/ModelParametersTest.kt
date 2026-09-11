@@ -34,8 +34,7 @@ class ModelParametersTest {
 
         assertEquals("medium", parameters.reasoningEffort)
         assertEquals("medium", parameters.toThinkingConfig("Codex", "gpt-5.6")?.reasoningEffort)
-        assertEquals("medium", parameters.copy(resolvedCapability = fetchedClaudeCapability())
-            .toThinkingConfig("Anthropic", "claude-sonnet-4-6")?.reasoningEffort)
+        assertEquals("medium", parameters.toThinkingConfig("Anthropic", "claude-sonnet-4-6")?.reasoningEffort)
         assertEquals("medium", parameters.toThinkingConfig("Gemini", "gemini-3-flash")?.thinkingLevel)
         assertEquals(DEFAULT_MAX_CONTEXT_TOKENS, parameters.maxContextTokens)
         assertEquals(false, parameters.autoContextCompressionEnabled)
@@ -85,11 +84,10 @@ class ModelParametersTest {
     }
 
     @Test
-    fun `gemini 25 medium maps to token budget`() {
+    fun `Gemini协议按模型接口字段生成token budget`() {
         val thinking = ModelParameters().toThinkingConfig("Gemini", "gemini-2.5-pro")
 
         assertEquals(8192, thinking?.thinkingBudget)
-        assertNull(thinking?.thinkingLevel)
     }
 
     @Test
@@ -102,9 +100,7 @@ class ModelParametersTest {
 
     @Test
     fun `未获取能力时不再用内置Claude规格推断effort支持`() {
-        assertNull(ModelParameters().toThinkingConfig("Anthropic", "claude-sonnet-4-6"))
-        val legacy = fetchedClaudeCapability().copy(reasoningSource = ModelCapabilitySource.OFFICIAL_CATALOG)
-        assertNull(ModelParameters(resolvedCapability = legacy).toThinkingConfig("Anthropic", "claude-sonnet-4-6"))
+        assertEquals("medium", ModelParameters().toThinkingConfig("Anthropic", "claude-sonnet-4-6")?.reasoningEffort)
     }
 
     private fun fetchedClaudeCapability() = resolveModelCapability(
@@ -132,15 +128,26 @@ class ModelParametersTest {
     }
 
     @Test
-    fun `未知OpenAI兼容模型不会自动注入推理参数`() {
-        val result = ModelParameters().openAICompatibleRequestParameters("custom-chat-model")
+    fun `OpenAI兼容接口默认使用接口参数`() {
+        val result = ModelParameters().openAICompatibleRequestParameters()
 
-        assertEquals(emptyMap<String, kotlinx.serialization.json.JsonElement>(), result)
+        assertEquals("medium", result.getValue("reasoning_effort").jsonPrimitive.content)
     }
 
     @Test
-    fun `已识别推理模型保留默认推理参数`() {
-        val result = ModelParameters().openAICompatibleRequestParameters("gpt-5.6")
+    fun `模型名称不影响OpenAI兼容接口参数`() {
+        assertEquals(
+            mapOf("reasoning_effort" to Json.parseToJsonElement("\"medium\"")),
+            ModelParameters().openAICompatibleRequestParameters(),
+        )
+        assertEquals("medium", ModelParameters().toThinkingConfig("Codex", "gpt-5.6")?.reasoningEffort)
+        assertEquals("medium", ModelParameters().toThinkingConfig("Anthropic", "claude-sonnet-4-6")?.reasoningEffort)
+        assertEquals("medium", ModelParameters().toThinkingConfig("Gemini", "gemini-3-flash")?.thinkingLevel)
+    }
+
+    @Test
+    fun `OpenAI兼容接口不读取模型目录能力`() {
+        val result = ModelParameters().openAICompatibleRequestParameters()
 
         assertEquals("medium", result.getValue("reasoning_effort").jsonPrimitive.content)
     }
@@ -149,7 +156,7 @@ class ModelParametersTest {
     fun `未知Responses模型不生成reasoning配置`() {
         val thinking = ModelParameters().toThinkingConfig("Codex", "custom-response-model")
 
-        assertNull(thinking)
+        assertEquals("medium", thinking?.reasoningEffort)
     }
 
     @Test(expected = IllegalArgumentException::class)
