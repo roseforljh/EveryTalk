@@ -345,6 +345,14 @@ internal fun MarkdownNodesSuccess(
     )
 }
 
+/**
+ * 流式重基（rebase）时，新状态的快照要等下一帧才由 collectAsState 收集到，
+ * 但正文串是从状态对象直接读的，于是会出现「旧 AST 配新正文」的一帧。
+ * 旧 AST 的节点偏移可能超出新正文长度，交给渲染器会抛 StringIndexOutOfBoundsException。
+ */
+internal fun markdownNodesWithinContent(nodes: List<ASTNode>, contentLength: Int): List<ASTNode> =
+    nodes.filter { it.endOffset <= contentLength }
+
 @Composable
 internal fun MarkdownStreamingNodesSuccess(
     snapshot: StreamingMarkdownState.Snapshot,
@@ -352,8 +360,11 @@ internal fun MarkdownStreamingNodesSuccess(
     modifier: Modifier,
     streamingContent: String,
 ) {
-    val nodes = remember(snapshot) {
-        snapshot.stableAst + snapshot.unstableAstTail
+    val nodes = remember(snapshot, streamingContent) {
+        markdownNodesWithinContent(
+            nodes = snapshot.stableAst + snapshot.unstableAstTail,
+            contentLength = streamingContent.length,
+        )
     }
     MarkdownNodesColumn(
         nodes = nodes,
