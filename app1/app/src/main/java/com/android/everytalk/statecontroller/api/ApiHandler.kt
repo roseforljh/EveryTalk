@@ -668,32 +668,54 @@ class ApiHandler(
         decision: AgentApprovalDecision,
     ) {
         viewModelScope.launch(Dispatchers.IO) {
-            // Room 中的待审批记录才是事实来源。UI StateFlow 只是卡片投影，Compose 重组或
-            // 卡片退场时可能短暂为空，不能因此吞掉用户已经点击的批准结果。
-            val record = agentRunStore.decideApproval(runId, approvalRequestId, decision) ?: run {
-                refreshPendingAgentApprovals()
-                return@launch
-            }
-            _pendingAgentApprovals.value = _pendingAgentApprovals.value.filterNot {
-                it.runId == runId && it.approvalRequestId == approvalRequestId
-            }
-            _pendingAgentEnableApprovals.value = _pendingAgentEnableApprovals.value.filterNot {
-                it.runId == runId && it.approvalRequestId == approvalRequestId
-            }
-            _pendingSkillSecretApprovals.value = _pendingSkillSecretApprovals.value.filterNot {
-                it.runId == runId && it.approvalRequestId == approvalRequestId
-            }
-            var started = false
-            if (resumingAgentRunIds.add(runId)) {
+            var decisionSaved = false
+            try {
+                // Room 中的待审批记录才是事实来源。UI StateFlow 只是卡片投影，Compose 重组或
+                // 卡片退场时可能短暂为空，不能因此吞掉用户已经点击的批准结果。
+                val record = agentRunStore.decideApproval(runId, approvalRequestId, decision) ?: run {
+                    refreshPendingAgentApprovals()
+                    return@launch
+                }
+                decisionSaved = true
+                _pendingAgentApprovals.value = _pendingAgentApprovals.value.filterNot {
+                    it.runId == runId && it.approvalRequestId == approvalRequestId
+                }
+                _pendingAgentEnableApprovals.value = _pendingAgentEnableApprovals.value.filterNot {
+                    it.runId == runId && it.approvalRequestId == approvalRequestId
+                }
+                _pendingSkillSecretApprovals.value = _pendingSkillSecretApprovals.value.filterNot {
+                    it.runId == runId && it.approvalRequestId == approvalRequestId
+                }
+                var started = false
+                if (resumingAgentRunIds.add(runId)) {
+                    try {
+                        started = resumeAgentRun(runId, record)
+                    } finally {
+                        resumingAgentRunIds.remove(runId)
+                    }
+                }
+                // 当前已有文本任务时决定仍保留在 Room；任务结束后统一扫描并串行续接。
+                if (started || stateHolder.textApiJob?.isActive == true) return@launch
+                resumeDecidedAgentRuns()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                // UI 点击启动的协程必须在边界收口异常，否则 Room 或恢复状态的异常会直接杀掉进程。
+                logger.error("Failed to handle Agent approval decision: runId=$runId decision=$decision", error)
                 try {
-                    started = resumeAgentRun(runId, record)
-                } finally {
-                    resumingAgentRunIds.remove(runId)
+                    val run = agentRunStore.getRun(runId)
+                    if (decisionSaved && run != null) {
+                        markApprovalDecisionFailure(run, "处理 Agent 决定失败")
+                    } else {
+                        refreshPendingAgentApprovals()
+                    }
+                } catch (recoveryError: Exception) {
+                    logger.error("Failed to recover Agent approval state: runId=$runId", recoveryError)
+                }
+                withContext(Dispatchers.Main.immediate) {
+                    stateHolder.showSnackbar("处理 Agent 决定失败，请重试")
                 }
             }
-            // 当前已有文本任务时决定仍保留在 Room；任务结束后统一扫描并串行续接。
-            if (started || stateHolder.textApiJob?.isActive == true) return@launch
-            resumeDecidedAgentRuns()
         }
     }
 
@@ -834,15 +856,32 @@ class ApiHandler(
                     ).collect { event ->
                         processStreamEvent(event, run.visibleAssistantMessageId, isImageGeneration = false)
                     }
-                } finally {
-                    stateHolder.syncStreamingMessageToList(run.visibleAssistantMessageId, false)
-                    stateHolder.clearStreamingBuffer(run.visibleAssistantMessageId)
-                    if (stateHolder.textApiJob == thisJob) {
-                        stateHolder.textApiJob = null
-                        stateHolder._isTextApiCalling.value = false
-                        stateHolder._currentTextStreamingAiMessageId.value = null
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (error: Exception) {
+                    // 恢复后的流处理属于独立子协程，外层点击处理捕获不到这里的异常。
+                    logger.error("Resumed Agent run failed after approval: runId=${run.id}", error)
+                    try {
+                        markApprovalDecisionFailure(run, "Agent 恢复失败")
+                    } catch (recoveryError: Exception) {
+                        logger.error("Failed to persist resumed Agent failure: runId=${run.id}", recoveryError)
                     }
-                    restorePendingAgentApproval()
+                    stateHolder.showSnackbar("Agent 恢复失败")
+                } finally {
+                    withContext(kotlinx.coroutines.NonCancellable + Dispatchers.Main.immediate) {
+                        stateHolder.syncStreamingMessageToList(run.visibleAssistantMessageId, false)
+                        stateHolder.clearStreamingBuffer(run.visibleAssistantMessageId)
+                        if (stateHolder.textApiJob == thisJob) {
+                            stateHolder.textApiJob = null
+                            stateHolder._isTextApiCalling.value = false
+                            stateHolder._currentTextStreamingAiMessageId.value = null
+                        }
+                        try {
+                            restorePendingAgentApproval()
+                        } catch (error: Exception) {
+                            logger.error("Failed to refresh approvals after resumed run: runId=${run.id}", error)
+                        }
+                    }
                 }
             }
         }
