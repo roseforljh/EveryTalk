@@ -50,6 +50,13 @@ import com.android.everytalk.data.database.entities.SkillInstallationEntity
 import com.android.everytalk.data.database.entities.SkillVersionEntity
 import com.android.everytalk.data.database.entities.VoiceBackendConfigEntity
 import com.android.everytalk.data.database.entities.WorkspaceSecretMetadataEntity
+import com.android.everytalk.data.database.entities.CloudflareComputerConfigEntity
+import com.android.everytalk.data.database.entities.CloudflareAuthorizationEntity
+import com.android.everytalk.data.database.entities.CloudflareDeploymentEntity
+import com.android.everytalk.data.database.entities.CloudflareResourceEntity
+import com.android.everytalk.data.database.entities.CloudflareResourceOperationEntity
+import com.android.everytalk.data.database.entities.CloudflareWorkerHealthEntity
+import com.android.everytalk.data.database.entities.TemporaryWorkerDeploymentEntity
 
 @Database(
     entities = [
@@ -70,6 +77,13 @@ import com.android.everytalk.data.database.entities.WorkspaceSecretMetadataEntit
         ComputerPreviewEntity::class,
         WorkspaceSecretMetadataEntity::class,
         ComputerAuditEventEntity::class,
+        CloudflareComputerConfigEntity::class,
+        CloudflareAuthorizationEntity::class,
+        CloudflareDeploymentEntity::class,
+        CloudflareResourceEntity::class,
+        CloudflareResourceOperationEntity::class,
+        CloudflareWorkerHealthEntity::class,
+        TemporaryWorkerDeploymentEntity::class,
         AgentRunEntity::class,
         AgentRunSnapshotChunkEntity::class,
         AgentSteeringMessageEntity::class,
@@ -88,7 +102,7 @@ import com.android.everytalk.data.database.entities.WorkspaceSecretMetadataEntit
         AgentStoredAuthorizationEntity::class,
         AgentOAuthStateEntity::class,
     ],
-    version = 34,
+    version = 41,
     exportSchema = true
 )
 @TypeConverters(Converters::class)
@@ -149,6 +163,13 @@ abstract class AppDatabase : RoomDatabase() {
                     MIGRATION_31_32,
                     MIGRATION_32_33,
                     MIGRATION_33_34,
+                    MIGRATION_34_35,
+                    MIGRATION_35_36,
+                    MIGRATION_36_37,
+                    MIGRATION_37_38,
+                    MIGRATION_38_39,
+                    MIGRATION_39_40,
+                    MIGRATION_40_41,
                 )
                 .addCallback(DATABASE_MAINTENANCE_CALLBACK)
                 .build()
@@ -1211,6 +1232,56 @@ abstract class AppDatabase : RoomDatabase() {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE computers ADD COLUMN provider TEXT NOT NULL DEFAULT 'SSH'")
                 db.execSQL("ALTER TABLE computers ADD COLUMN providerConfigRef TEXT")
+            }
+        }
+
+        /** Cloudflare Provider 的本地配置、授权索引、部署账本和资源索引。 */
+        val MIGRATION_34_35 = object : Migration(34, 35) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS cloudflare_authorizations (authorizationId TEXT NOT NULL PRIMARY KEY, credentialReference TEXT NOT NULL, grantedScopesJson TEXT NOT NULL, issuedAt INTEGER NOT NULL, expiresAt INTEGER, revoked INTEGER NOT NULL, generation INTEGER NOT NULL)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS cloudflare_computer_configs (computerId TEXT NOT NULL PRIMARY KEY, authorizationId TEXT NOT NULL, accountId TEXT NOT NULL, accountName TEXT, capabilitiesJson TEXT NOT NULL)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS cloudflare_deployments (deploymentId TEXT NOT NULL PRIMARY KEY, computerId TEXT NOT NULL, accountId TEXT NOT NULL, workerName TEXT NOT NULL, requestHash TEXT NOT NULL, status TEXT NOT NULL, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL, safeSummary TEXT)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_cloudflare_deployments_requestHash ON cloudflare_deployments(requestHash)")
+                db.execSQL("CREATE TABLE IF NOT EXISTS cloudflare_resources (resourceRef TEXT NOT NULL PRIMARY KEY, computerId TEXT NOT NULL, accountId TEXT NOT NULL, kind TEXT NOT NULL, resourceId TEXT NOT NULL, displayName TEXT NOT NULL, updatedAt INTEGER NOT NULL)")
+            }
+        }
+
+        val MIGRATION_35_36 = object : Migration(35, 36) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS temporary_worker_deployments (temporaryDeploymentId TEXT NOT NULL PRIMARY KEY, workerUrl TEXT, claimUrl TEXT, expiresAt INTEGER NOT NULL, claimStatus TEXT NOT NULL, sourceWorkspaceId TEXT NOT NULL)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS index_temporary_worker_deployments_claimStatus ON temporary_worker_deployments(claimStatus)")
+            }
+        }
+
+        val MIGRATION_36_37 = object : Migration(36, 37) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE cloudflare_deployments ADD COLUMN remoteDeploymentId TEXT")
+                db.execSQL("ALTER TABLE cloudflare_deployments ADD COLUMN versionId TEXT")
+            }
+        }
+
+        val MIGRATION_37_38 = object : Migration(37, 38) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS cloudflare_resource_operations (operationId TEXT NOT NULL PRIMARY KEY, computerId TEXT NOT NULL, accountId TEXT NOT NULL, resourceKind TEXT NOT NULL, resourceRef TEXT NOT NULL, requestHash TEXT NOT NULL, status TEXT NOT NULL, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL, safeSummary TEXT NOT NULL)")
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_cloudflare_resource_operations_requestHash ON cloudflare_resource_operations(requestHash)")
+            }
+        }
+
+        val MIGRATION_38_39 = object : Migration(38, 39) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE cloudflare_authorizations ADD COLUMN identityDisplayName TEXT")
+            }
+        }
+
+        val MIGRATION_39_40 = object : Migration(39, 40) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("CREATE TABLE IF NOT EXISTS cloudflare_worker_health (computerId TEXT NOT NULL, workerName TEXT NOT NULL, status TEXT NOT NULL, httpStatus INTEGER, latencyMs INTEGER, checkedAt INTEGER NOT NULL, PRIMARY KEY(computerId, workerName))")
+            }
+        }
+
+        val MIGRATION_40_41 = object : Migration(40, 41) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE agent_suspensions ADD COLUMN parametersJson TEXT NOT NULL DEFAULT '{}'")
             }
         }
 

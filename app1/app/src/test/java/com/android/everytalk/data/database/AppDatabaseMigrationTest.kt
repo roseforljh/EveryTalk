@@ -35,6 +35,93 @@ class AppDatabaseMigrationTest {
     }
 
     @Test
+    fun `migration 38 to 39 adds nullable Cloudflare identity without changing authorization`() {
+        val createHelper = openHelper(
+            version = 38,
+            onCreate = { db ->
+                db.execSQL("CREATE TABLE cloudflare_authorizations (authorizationId TEXT NOT NULL PRIMARY KEY, credentialReference TEXT NOT NULL, grantedScopesJson TEXT NOT NULL, issuedAt INTEGER NOT NULL, expiresAt INTEGER, revoked INTEGER NOT NULL, generation INTEGER NOT NULL)")
+                db.execSQL("INSERT INTO cloudflare_authorizations VALUES ('auth-1', 'stored-1', '[]', 10, NULL, 0, 3)")
+            },
+        )
+        createHelper.writableDatabase.close()
+        createHelper.close()
+
+        val migrateHelper = openHelper(
+            version = 39,
+            onUpgrade = { db, oldVersion, newVersion ->
+                assertEquals(38, oldVersion)
+                assertEquals(39, newVersion)
+                AppDatabase.MIGRATION_38_39.migrate(db)
+            },
+        )
+        val db = migrateHelper.writableDatabase
+        assertTrue(columns(db, "cloudflare_authorizations").contains("identityDisplayName"))
+        db.query("SELECT credentialReference, generation, identityDisplayName FROM cloudflare_authorizations WHERE authorizationId = 'auth-1'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("stored-1", cursor.getString(0))
+            assertEquals(3, cursor.getInt(1))
+            assertTrue(cursor.isNull(2))
+        }
+        db.close()
+        migrateHelper.close()
+    }
+
+    @Test
+    fun `migration 39 to 40 adds Worker health summary table`() {
+        val createHelper = openHelper(version = 39, onCreate = { })
+        createHelper.writableDatabase.close()
+        createHelper.close()
+
+        val migrateHelper = openHelper(
+            version = 40,
+            onUpgrade = { db, oldVersion, newVersion ->
+                assertEquals(39, oldVersion)
+                assertEquals(40, newVersion)
+                AppDatabase.MIGRATION_39_40.migrate(db)
+            },
+        )
+        val db = migrateHelper.writableDatabase
+        assertTrue(columns(db, "cloudflare_worker_health").containsAll(listOf("computerId", "workerName", "status", "httpStatus", "latencyMs", "checkedAt")))
+        db.execSQL("INSERT INTO cloudflare_worker_health(computerId, workerName, status, httpStatus, latencyMs, checkedAt) VALUES ('c1', 'worker', 'HEALTHY', 200, 12, 20)")
+        db.query("SELECT status, httpStatus, latencyMs FROM cloudflare_worker_health WHERE computerId = 'c1'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("HEALTHY", cursor.getString(0))
+            assertEquals(200, cursor.getInt(1))
+            assertEquals(12, cursor.getLong(2))
+        }
+        db.close()
+        migrateHelper.close()
+    }
+
+    @Test
+    fun `migration 40 to 41 preserves intervention and adds parameters json`() {
+        val createHelper = openHelper(version = 40, onCreate = { db ->
+            db.execSQL("CREATE TABLE agent_suspensions (id TEXT NOT NULL PRIMARY KEY, status TEXT NOT NULL)")
+            db.execSQL("INSERT INTO agent_suspensions VALUES ('susp-1', 'USER_DECISION_REQUIRED')")
+        })
+        createHelper.writableDatabase.close()
+        createHelper.close()
+
+        val migrateHelper = openHelper(
+            version = 41,
+            onUpgrade = { db, oldVersion, newVersion ->
+                assertEquals(40, oldVersion)
+                assertEquals(41, newVersion)
+                AppDatabase.MIGRATION_40_41.migrate(db)
+            },
+        )
+        val db = migrateHelper.writableDatabase
+        assertTrue(columns(db, "agent_suspensions").contains("parametersJson"))
+        db.query("SELECT status, parametersJson FROM agent_suspensions WHERE id = 'susp-1'").use { cursor ->
+            assertTrue(cursor.moveToFirst())
+            assertEquals("USER_DECISION_REQUIRED", cursor.getString(0))
+            assertEquals("{}", cursor.getString(1))
+        }
+        db.close()
+        migrateHelper.close()
+    }
+
+    @Test
     fun `migration 32 to 33 only adds non-secret resolution reference`() {
         val createHelper = openHelper(
             version = 32,

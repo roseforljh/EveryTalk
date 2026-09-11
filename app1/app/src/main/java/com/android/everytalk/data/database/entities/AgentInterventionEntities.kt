@@ -27,6 +27,8 @@ data class AgentSuspensionEntity(
     val capabilityId: String,
     val reasonSafe: String,
     val userVisibleContext: String? = null,
+    /** 非敏感参数快照，例如目标 Computer ID 和恢复时要回传的工具名。 */
+    val parametersJson: String = "{}",
     val targetBindingRef: String,
     val requestSource: String,
     val policyVersion: String,

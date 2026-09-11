@@ -11,10 +11,178 @@ import com.android.everytalk.data.database.entities.ComputerPreviewEntity
 import com.android.everytalk.data.database.entities.ComputerWorkspaceEntity
 import com.android.everytalk.data.database.entities.ConversationComputerSelectionEntity
 import com.android.everytalk.data.database.entities.WorkspaceSecretMetadataEntity
+import com.android.everytalk.data.database.entities.CloudflareComputerConfigEntity
+import com.android.everytalk.data.database.entities.CloudflareAuthorizationEntity
+import com.android.everytalk.data.database.entities.CloudflareDeploymentEntity
+import com.android.everytalk.data.database.entities.CloudflareResourceEntity
+import com.android.everytalk.data.database.entities.CloudflareResourceOperationEntity
+import com.android.everytalk.data.database.entities.CloudflareWorkerHealthEntity
+import com.android.everytalk.data.database.entities.TemporaryWorkerDeploymentEntity
 import kotlinx.coroutines.flow.Flow
 
 @Dao
 interface ComputerDao {
+    @Query("SELECT * FROM cloudflare_computer_configs WHERE computerId = :computerId LIMIT 1")
+    suspend fun getCloudflareConfig(computerId: String): CloudflareComputerConfigEntity?
+
+    @Upsert
+    suspend fun upsertCloudflareConfig(config: CloudflareComputerConfigEntity)
+
+    @Query("DELETE FROM cloudflare_computer_configs WHERE computerId = :computerId")
+    suspend fun deleteCloudflareConfig(computerId: String)
+
+    @Query("UPDATE cloudflare_computer_configs SET accountId = :accountId, accountName = :accountName WHERE computerId = :computerId")
+    suspend fun updateCloudflareAccount(computerId: String, accountId: String, accountName: String)
+
+    /** Account 列表请求结束后再次原子校验身份与旧绑定，拒绝已退出、过期或被其他界面修改的操作。 */
+    @Query("""
+        UPDATE cloudflare_computer_configs SET accountId = :accountId, accountName = :accountName
+        WHERE computerId = :computerId AND accountId = :previousAccountId AND authorizationId = :authorizationId
+        AND EXISTS (SELECT 1 FROM cloudflare_authorizations WHERE authorizationId = :authorizationId
+            AND generation = :generation AND revoked = 0 AND (expiresAt IS NULL OR expiresAt > :now))
+        AND EXISTS (SELECT 1 FROM computers WHERE id = :computerId AND provider = 'CLOUDFLARE' AND status != 'DELETED')
+    """)
+    suspend fun switchCloudflareAccountIfCurrent(
+        computerId: String, previousAccountId: String, authorizationId: String, generation: Long,
+        accountId: String, accountName: String, now: Long,
+    ): Int
+
+    @Query("SELECT * FROM cloudflare_authorizations WHERE authorizationId = :authorizationId LIMIT 1")
+    suspend fun getCloudflareAuthorization(authorizationId: String): CloudflareAuthorizationEntity?
+
+    @Query("SELECT COUNT(*) FROM cloudflare_computer_configs WHERE authorizationId = :authorizationId")
+    suspend fun countCloudflareComputerReferences(authorizationId: String): Int
+
+    @Upsert
+    suspend fun upsertCloudflareAuthorization(authorization: CloudflareAuthorizationEntity)
+
+    @Query("UPDATE cloudflare_authorizations SET revoked = 1, generation = generation + 1 WHERE authorizationId = :authorizationId")
+    suspend fun revokeCloudflareAuthorization(authorizationId: String)
+
+    /** 重新授权只替换安全存储引用并递增 generation；旧请求因此不能继续使用旧 Token。 */
+    @Query("""
+        UPDATE cloudflare_authorizations SET credentialReference = :credentialReference,
+            grantedScopesJson = :grantedScopesJson, issuedAt = :issuedAt, expiresAt = :expiresAt,
+            identityDisplayName = :identityDisplayName,
+            revoked = 0, generation = generation + 1
+        WHERE authorizationId = :authorizationId AND generation = :expectedGeneration
+    """)
+    suspend fun replaceCloudflareAuthorization(
+        authorizationId: String, expectedGeneration: Long, credentialReference: String,
+        grantedScopesJson: String, issuedAt: Long, expiresAt: Long?,
+        identityDisplayName: String?,
+    ): Int
+
+    @Query("UPDATE computers SET status = 'AUTHORIZATION_REQUIRED', credentialState = 'MISSING', updatedAt = :updatedAt WHERE provider = 'CLOUDFLARE' AND providerConfigRef IN (SELECT computerId FROM cloudflare_computer_configs WHERE authorizationId = :authorizationId)")
+    suspend fun markCloudflareComputersUnauthorized(authorizationId: String, updatedAt: Long = System.currentTimeMillis())
+
+    /** 重新授权后恢复关联目标；并发退出使 generation 改变时不能把目标重新标为 READY。 */
+    @Query("""
+        UPDATE computers SET status = 'READY', credentialState = 'ORIGINAL_ENCRYPTED', updatedAt = :now
+        WHERE provider = 'CLOUDFLARE' AND status NOT IN ('DELETED', 'DELETING')
+        AND id IN (SELECT computerId FROM cloudflare_computer_configs WHERE authorizationId = :authorizationId)
+        AND EXISTS (SELECT 1 FROM cloudflare_authorizations WHERE authorizationId = :authorizationId
+            AND generation = :generation AND revoked = 0 AND (expiresAt IS NULL OR expiresAt > :now))
+    """)
+    suspend fun markCloudflareComputersAuthorized(authorizationId: String, generation: Long, now: Long)
+
+    @Query("DELETE FROM cloudflare_authorizations WHERE authorizationId = :authorizationId")
+    suspend fun deleteCloudflareAuthorization(authorizationId: String)
+
+    @Query("SELECT * FROM cloudflare_deployments WHERE requestHash = :requestHash LIMIT 1")
+    suspend fun getCloudflareDeploymentByHash(requestHash: String): CloudflareDeploymentEntity?
+
+    @Query("SELECT * FROM cloudflare_deployments WHERE status = :status ORDER BY updatedAt ASC")
+    suspend fun getCloudflareDeploymentsByStatus(status: String): List<CloudflareDeploymentEntity>
+
+    @Query("UPDATE cloudflare_deployments SET status = :status, updatedAt = :updatedAt, safeSummary = :safeSummary, remoteDeploymentId = COALESCE(:remoteDeploymentId, remoteDeploymentId), versionId = COALESCE(:versionId, versionId) WHERE deploymentId = :deploymentId")
+    suspend fun updateCloudflareDeploymentStatus(
+        deploymentId: String,
+        status: String,
+        safeSummary: String?,
+        remoteDeploymentId: String? = null,
+        versionId: String? = null,
+        updatedAt: Long = System.currentTimeMillis(),
+    )
+
+    @Upsert
+    suspend fun upsertCloudflareDeployment(deployment: CloudflareDeploymentEntity)
+
+    /** 以 requestHash 唯一索引原子抢占部署槽位，防止并发重复上传 Worker。 */
+    @androidx.room.Insert(onConflict = androidx.room.OnConflictStrategy.IGNORE)
+    suspend fun insertCloudflareDeploymentIfAbsent(deployment: CloudflareDeploymentEntity): Long
+
+    /** 只返回本地安全摘要，详情页可展示部署历史而不读取云端日志正文。 */
+    @Query("SELECT * FROM cloudflare_deployments WHERE computerId = :computerId ORDER BY updatedAt DESC LIMIT :limit")
+    fun observeCloudflareDeployments(computerId: String, limit: Int = 20): Flow<List<CloudflareDeploymentEntity>>
+
+    @Upsert
+    suspend fun upsertCloudflareResource(resource: CloudflareResourceEntity)
+
+    @Query("SELECT * FROM cloudflare_resource_operations WHERE requestHash = :requestHash LIMIT 1")
+    suspend fun getCloudflareResourceOperationByHash(requestHash: String): CloudflareResourceOperationEntity?
+
+    @Query("SELECT * FROM cloudflare_resource_operations WHERE operationId = :operationId LIMIT 1")
+    suspend fun getCloudflareResourceOperation(operationId: String): CloudflareResourceOperationEntity?
+
+    @Upsert
+    suspend fun upsertCloudflareResourceOperation(operation: CloudflareResourceOperationEntity)
+
+    /** 以 requestHash 唯一索引做原子占位，避免并发请求在查询与写入之间同时穿透。 */
+    @androidx.room.Insert(onConflict = androidx.room.OnConflictStrategy.IGNORE)
+    suspend fun insertCloudflareResourceOperationIfAbsent(operation: CloudflareResourceOperationEntity): Long
+
+    @Query("UPDATE cloudflare_resource_operations SET status = :status, updatedAt = :updatedAt, safeSummary = :safeSummary WHERE operationId = :operationId")
+    suspend fun updateCloudflareResourceOperation(operationId: String, status: String, safeSummary: String, updatedAt: Long = System.currentTimeMillis())
+
+    @Upsert
+    suspend fun upsertCloudflareWorkerHealth(health: CloudflareWorkerHealthEntity)
+
+    @Query("SELECT * FROM cloudflare_worker_health WHERE computerId = :computerId ORDER BY checkedAt DESC LIMIT 1")
+    suspend fun getLatestCloudflareWorkerHealth(computerId: String): CloudflareWorkerHealthEntity?
+
+    @Query("SELECT * FROM cloudflare_resources WHERE resourceRef = :resourceRef LIMIT 1")
+    suspend fun getCloudflareResource(resourceRef: String): CloudflareResourceEntity?
+
+    /** 主键原子占位：并发调用只有一个能发送 migration，进程退出后占位仍保留。 */
+    @androidx.room.Insert(onConflict = androidx.room.OnConflictStrategy.IGNORE)
+    suspend fun insertCloudflareResourceIfAbsent(resource: CloudflareResourceEntity): Long
+
+    @Query("UPDATE cloudflare_resources SET kind = :kind, updatedAt = :updatedAt WHERE resourceRef = :resourceRef AND kind = 'D1_MIGRATION_UNKNOWN'")
+    suspend fun completeD1Migration(resourceRef: String, kind: String, updatedAt: Long = System.currentTimeMillis()): Int
+
+    /** Cloudflare Computer 的三张本地记录必须一起提交，避免留下孤立授权或孤立配置。 */
+    @Transaction
+    suspend fun saveCloudflareComputer(
+        authorization: CloudflareAuthorizationEntity,
+        computer: ComputerEntity,
+        config: CloudflareComputerConfigEntity,
+    ) {
+        upsertCloudflareAuthorization(authorization)
+        upsertComputer(computer)
+        upsertCloudflareConfig(config)
+    }
+
+    @Query("SELECT * FROM cloudflare_resources WHERE computerId = :computerId AND kind = :kind ORDER BY displayName")
+    suspend fun getCloudflareResources(computerId: String, kind: String): List<CloudflareResourceEntity>
+
+    @Query("SELECT * FROM temporary_worker_deployments WHERE temporaryDeploymentId = :id LIMIT 1")
+    suspend fun getTemporaryWorker(id: String): TemporaryWorkerDeploymentEntity?
+
+    @Query("SELECT * FROM temporary_worker_deployments WHERE claimStatus NOT IN ('CLAIMED', 'EXPIRED') ORDER BY expiresAt")
+    suspend fun getActiveTemporaryWorkers(): List<TemporaryWorkerDeploymentEntity>
+
+    @Query("SELECT * FROM temporary_worker_deployments ORDER BY expiresAt DESC")
+    suspend fun getTemporaryWorkers(): List<TemporaryWorkerDeploymentEntity>
+
+    @Query("UPDATE temporary_worker_deployments SET claimStatus = 'EXPIRED' WHERE temporaryDeploymentId = :id AND claimStatus IN ('ACTIVE', 'CLAIM_PENDING') AND expiresAt <= :now")
+    suspend fun markTemporaryWorkerExpired(id: String, now: Long): Int
+
+    @Query("DELETE FROM temporary_worker_deployments WHERE temporaryDeploymentId = :id")
+    suspend fun deleteTemporaryWorker(id: String)
+
+    @Upsert
+    suspend fun upsertTemporaryWorker(deployment: TemporaryWorkerDeploymentEntity)
     /** 只作为 Room 表变更信号，Service 收到后再执行带恢复语义的活动任务查询。 */
     @Query("SELECT COUNT(*) FROM computer_executions")
     fun observeExecutionChanges(): Flow<Int>

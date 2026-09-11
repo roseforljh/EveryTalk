@@ -24,6 +24,9 @@ import com.android.everytalk.data.computer.ComputerRemoteStatus
 import com.android.everytalk.data.computer.ComputerStatus
 import com.android.everytalk.data.computer.ComputerWorkspace
 import com.android.everytalk.data.computer.ComputerWorkspaceStatus
+import com.android.everytalk.data.computer.CloudflareComputerConfig
+import com.android.everytalk.data.computer.CloudflareAuthorizationRecord
+import com.android.everytalk.data.computer.ComputerCapability
 import kotlinx.serialization.json.Json
 
 @Entity(
@@ -55,6 +58,100 @@ data class ComputerEntity(
     val lastErrorCode: String?,
     val createdAt: Long,
     val updatedAt: Long,
+)
+
+/** Cloudflare Computer 的非敏感配置；Token 通过 authorizationId 间接引用安全存储。 */
+@Entity(tableName = "cloudflare_computer_configs")
+data class CloudflareComputerConfigEntity(
+    @PrimaryKey val computerId: String,
+    val authorizationId: String,
+    val accountId: String,
+    val accountName: String?,
+    val capabilitiesJson: String,
+)
+
+/** Cloudflare OAuth 授权索引，不保存 Token 明文。 */
+@Entity(tableName = "cloudflare_authorizations")
+data class CloudflareAuthorizationEntity(
+    @PrimaryKey val authorizationId: String,
+    val credentialReference: String,
+    val grantedScopesJson: String,
+    val issuedAt: Long,
+    val expiresAt: Long?,
+    val revoked: Boolean,
+    val generation: Long,
+    val identityDisplayName: String? = null,
+)
+
+/** Worker 部署账本，用于幂等、未知结果恢复和部署历史展示。 */
+@Entity(
+    tableName = "cloudflare_deployments",
+    indices = [Index(value = ["requestHash"], unique = true)],
+)
+data class CloudflareDeploymentEntity(
+    @PrimaryKey val deploymentId: String,
+    val computerId: String,
+    val accountId: String,
+    val workerName: String,
+    val requestHash: String,
+    val status: String,
+    val createdAt: Long,
+    val updatedAt: Long,
+    val safeSummary: String?,
+    val remoteDeploymentId: String? = null,
+    val versionId: String? = null,
+)
+
+/** D1/KV/R2 等资源的本地索引，不缓存云端 Secret 内容。 */
+@Entity(tableName = "cloudflare_resources")
+data class CloudflareResourceEntity(
+    @PrimaryKey val resourceRef: String,
+    val computerId: String,
+    val accountId: String,
+    val kind: String,
+    val resourceId: String,
+    val displayName: String,
+    val updatedAt: Long,
+)
+
+/** R2 等 Cloudflare 写操作的本地幂等账本；不保存对象正文，只保存 hash 和状态。 */
+@Entity(tableName = "cloudflare_resource_operations", indices = [Index(value = ["requestHash"], unique = true)])
+data class CloudflareResourceOperationEntity(
+    @PrimaryKey val operationId: String,
+    val computerId: String,
+    val accountId: String,
+    val resourceKind: String,
+    val resourceRef: String,
+    val requestHash: String,
+    val status: String,
+    val createdAt: Long,
+    val updatedAt: Long,
+    val safeSummary: String,
+)
+
+/** Worker 最近一次健康探测的本地摘要；不保存响应正文。 */
+@Entity(
+    tableName = "cloudflare_worker_health",
+    primaryKeys = ["computerId", "workerName"],
+)
+data class CloudflareWorkerHealthEntity(
+    val computerId: String,
+    val workerName: String,
+    val status: String,
+    val httpStatus: Int?,
+    val latencyMs: Long?,
+    val checkedAt: Long,
+)
+
+/** 临时 Worker 的可恢复索引；不作为 Computer，也不保存云端 Secret。 */
+@Entity(tableName = "temporary_worker_deployments", indices = [Index(value = ["claimStatus"])])
+data class TemporaryWorkerDeploymentEntity(
+    @PrimaryKey val temporaryDeploymentId: String,
+    val workerUrl: String?,
+    val claimUrl: String?,
+    val expiresAt: Long,
+    val claimStatus: String,
+    val sourceWorkspaceId: String,
 )
 
 @Entity(
@@ -298,6 +395,42 @@ fun Computer.toEntity(json: Json): ComputerEntity = ComputerEntity(
     lastErrorCode = lastErrorCode,
     createdAt = createdAt,
     updatedAt = updatedAt,
+)
+
+fun CloudflareComputerConfigEntity.toModel(json: Json): CloudflareComputerConfig = CloudflareComputerConfig(
+    computerId = computerId,
+    authorizationId = authorizationId,
+    accountId = accountId,
+    accountName = accountName,
+    capabilities = runCatching { json.decodeFromString<Set<ComputerCapability>>(capabilitiesJson) }.getOrDefault(emptySet()),
+)
+
+fun CloudflareComputerConfig.toEntity(json: Json): CloudflareComputerConfigEntity = CloudflareComputerConfigEntity(
+    computerId = computerId,
+    authorizationId = authorizationId,
+    accountId = accountId,
+    accountName = accountName,
+    capabilitiesJson = json.encodeToString(capabilities),
+)
+
+fun CloudflareAuthorizationEntity.toModel(json: Json): CloudflareAuthorizationRecord = CloudflareAuthorizationRecord(
+    authorizationId = authorizationId,
+    credentialReference = credentialReference,
+    grantedScopes = runCatching { json.decodeFromString<Set<String>>(grantedScopesJson) }.getOrDefault(emptySet()),
+    issuedAt = issuedAt,
+    expiresAt = expiresAt,
+    revoked = revoked,
+    generation = generation,
+)
+
+fun CloudflareAuthorizationRecord.toEntity(json: Json): CloudflareAuthorizationEntity = CloudflareAuthorizationEntity(
+    authorizationId = authorizationId,
+    credentialReference = credentialReference,
+    grantedScopesJson = json.encodeToString(grantedScopes),
+    issuedAt = issuedAt,
+    expiresAt = expiresAt,
+    revoked = revoked,
+    generation = generation,
 )
 
 fun ComputerWorkspaceEntity.toModel(): ComputerWorkspace = ComputerWorkspace(

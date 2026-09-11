@@ -1070,6 +1070,64 @@ interface AgentDao {
         if (snapshotChunks.isNotEmpty()) upsertRunSnapshotChunks(snapshotChunks)
     }
 
+    /**
+     * 重新授权恢复只更新快照，禁止用旧 Run 整行 upsert 复活已取消任务。
+     * 在同一 Room 事务核对 Suspension、原快照及当前 Account/generation，再替换所有分块。
+     */
+    @Transaction
+    suspend fun replaceCloudflareSnapshotIfCurrent(
+        expectedRun: AgentRunEntity,
+        suspensionId: String,
+        expectedVersion: Long,
+        expectedChunks: List<AgentRunSnapshotChunkEntity>,
+        chunks: List<AgentRunSnapshotChunkEntity>,
+        computerId: String,
+        workspaceId: String,
+        accountId: String,
+        authorizationId: String,
+        generation: Long,
+        now: Long,
+    ): Boolean {
+        val run = getRun(expectedRun.id) ?: return false
+        if (run != expectedRun || run.status in listOf("COMPLETED", "FAILED", "CANCELLED")) return false
+        val suspension = getSuspension(suspensionId) ?: return false
+        if (suspension.runId != run.id || suspension.runGeneration != run.runGeneration ||
+            suspension.rowVersion != expectedVersion || suspension.status != "RESUMING" ||
+            !suspension.failureCode.isNullOrBlank() || suspension.capabilityId != "cloudflare.reauthorize") return false
+        val currentChunks = mutableListOf<AgentRunSnapshotChunkEntity>()
+        while (true) {
+            val page = getRunSnapshotChunkPage(run.id, currentChunks.lastOrNull()?.chunkIndex ?: -1, 8)
+            currentChunks.addAll(page)
+            if (page.size < 8) break
+        }
+        if (currentChunks != expectedChunks || !cloudflareSnapshotBindingIsCurrent(
+                computerId, workspaceId, accountId, authorizationId, generation, now)) return false
+        // 只写快照字段，Run 的取消、审批和执行状态都保留。
+        clearLegacySnapshot(run.id, now)
+        deleteRunSnapshotChunks(run.id)
+        upsertRunSnapshotChunks(chunks)
+        return true
+    }
+
+    @Query("UPDATE agent_runs SET requestSnapshotJson = NULL, updatedAt = :now WHERE id = :runId")
+    suspend fun clearLegacySnapshot(runId: String, now: Long)
+
+    @Query("""
+        SELECT EXISTS (SELECT 1 FROM cloudflare_computer_configs AS config
+        JOIN cloudflare_authorizations AS auth ON auth.authorizationId = config.authorizationId
+        JOIN computers AS computer ON computer.id = config.computerId
+        JOIN computer_workspaces AS workspace ON workspace.computerId = computer.id
+        WHERE computer.id = :computerId AND computer.provider = 'CLOUDFLARE'
+            AND computer.status NOT IN ('DELETING', 'DELETED') AND workspace.id = :workspaceId
+            AND config.accountId = :accountId AND config.authorizationId = :authorizationId
+            AND auth.generation = :generation AND auth.revoked = 0
+            AND (auth.expiresAt IS NULL OR auth.expiresAt > :now))
+    """)
+    suspend fun cloudflareSnapshotBindingIsCurrent(
+        computerId: String, workspaceId: String, accountId: String,
+        authorizationId: String, generation: Long, now: Long,
+    ): Boolean
+
 
     /** App 进程已经消失：模型流等待续写，可能产生副作用的工具流等待对账。 */
     @Transaction
