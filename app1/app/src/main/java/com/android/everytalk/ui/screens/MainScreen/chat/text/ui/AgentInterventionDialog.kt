@@ -31,6 +31,7 @@ import com.android.everytalk.data.agent.AgentInterventionPolicyRegistry
 import com.android.everytalk.data.agent.PendingIntervention
 import com.android.everytalk.data.agent.ResolutionMaterialKind
 import com.android.everytalk.data.agent.SuspensionState
+import com.android.everytalk.ui.components.dialog.AppDialogActionContent
 import com.android.everytalk.ui.components.dialog.AppDialogButtonShape
 import com.android.everytalk.ui.components.dialog.AppDialogShape
 import com.android.everytalk.ui.components.dialog.AppDialogTextFieldShape
@@ -51,6 +52,7 @@ internal fun AgentInterventionDialog(
     onResolveEphemeral: (PendingIntervention, CharArray) -> Unit,
     onCreateAuthorization: (PendingIntervention, CharArray) -> Unit,
     onStartCloudflareReauthorization: (PendingIntervention) -> Unit,
+    cloudflareReauthInProgress: Boolean = false,
     onLoadCloudflareResources: suspend (PendingIntervention) -> List<com.android.everytalk.data.computer.ResourceOption>,
     onSelectCloudflareResource: (PendingIntervention, String) -> Unit,
     onReject: (PendingIntervention) -> Unit,
@@ -82,7 +84,8 @@ internal fun AgentInterventionDialog(
             finally { loading = false }
         }
     }
-    val canSubmit = if (requiresUserDecision) true else if (isResourceSelection) selectedId != null && !loading else when (intervention.materialKind) {
+    val reauthBusy = isCloudflareReauthorization && cloudflareReauthInProgress
+    val canSubmit = if (reauthBusy) false else if (requiresUserDecision) true else if (isResourceSelection) selectedId != null && !loading else when (intervention.materialKind) {
         ResolutionMaterialKind.NONE -> true
         ResolutionMaterialKind.EPHEMERAL -> sensitiveInput.isNotEmpty()
         ResolutionMaterialKind.DURABLE_REFERENCE -> sensitiveInput.isNotEmpty()
@@ -215,9 +218,10 @@ internal fun AgentInterventionDialog(
                     contentColor = dialogBg,
                 ),
             ) {
-                Text(
-                    if (requiresUserDecision) "确认已完成" else if (isCloudflareReauthorization) "重新授权" else "继续",
-                    fontWeight = FontWeight.SemiBold,
+                AppDialogActionContent(
+                    label = if (requiresUserDecision) "确认已完成" else if (isCloudflareReauthorization) "重新授权" else "继续",
+                    isLoading = reauthBusy,
+                    loadingContentDescription = "正在完成 Cloudflare 重新授权",
                 )
             }
         },

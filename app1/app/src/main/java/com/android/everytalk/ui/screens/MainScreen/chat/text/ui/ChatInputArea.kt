@@ -226,6 +226,7 @@ fun ChatInputArea(
         )
     }
     var pendingCloudflareReauthorization by remember { mutableStateOf<PendingIntervention?>(null) }
+    var cloudflareReauthRunning by remember { mutableStateOf(false) }
     val pendingMessages by viewModel.pendingMessages.collectAsState()
     val composerMode by viewModel.composerMode.collectAsState()
     val chatRunState by viewModel.chatRunState.collectAsState()
@@ -254,6 +255,9 @@ fun ChatInputArea(
             val oauthBinding = "agent:${pending.suspensionId}"
             if (!cloudflareOAuthFlow.ownsCallback(uri ?: return@collect, oauthBinding)) return@collect
             CloudflareOAuthCallbackBus.consume(uri)
+            // 从浏览器回到应用后要换 Token、校验 Account、恢复 Run，中间有真实的等待窗口；
+            // 这段时间按钮必须转圈，否则看着像点了没反应。
+            cloudflareReauthRunning = true
             runCatching {
                 val result = cloudflareOAuthFlow.consume(uri, oauthBinding)
                 try {
@@ -282,6 +286,7 @@ fun ChatInputArea(
             }.onFailure { failure ->
                 if (failure is CancellationException) throw failure
                 // 授权失败不解决 Suspension。用户可以重新点按钮，重新生成 state/verifier。
+                cloudflareReauthRunning = false
                 onShowSnackbar(failure.message ?: "Cloudflare 重新授权失败，请重试")
             }
         }
@@ -1666,6 +1671,7 @@ fun ChatInputArea(
                 }
             },
             onStartCloudflareReauthorization = ::startCloudflareReauthorization,
+            cloudflareReauthInProgress = cloudflareReauthRunning,
             onLoadCloudflareResources = { pending -> withContext(Dispatchers.IO) { viewModel.cloudflareResourceOptions(pending) } },
             onSelectCloudflareResource = { pending, resourceId ->
                 coroutineScope.launch {
