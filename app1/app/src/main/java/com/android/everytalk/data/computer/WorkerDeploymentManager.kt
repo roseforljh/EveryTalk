@@ -22,7 +22,11 @@ class WorkerDeploymentManager(
         require(pack.files.any { it.relativePath == pack.entryPoint }) { "Worker 入口文件不存在" }
         val requestHash = sha256("$computerId\n$accountId\n$workerName\n${pack.requestHash}".toByteArray())
         dao.getCloudflareDeploymentByHash(requestHash)?.let { existing ->
-            return CloudflareDeploymentResult(workerName, existing.remoteDeploymentId, recoveredStatus(existing.status), existing.versionId, null)
+            // 明确失败表示 Cloudflare 已确认没有接受这次写请求，可以用同一份包安全重试。
+            // UNKNOWN/PENDING/ACCEPTED 仍必须先对账，避免重复创建远端版本或 deployment。
+            if (statusOf(existing.status) != CloudflareDeploymentStatus.DEPLOYMENT_FAILED) {
+                return CloudflareDeploymentResult(workerName, existing.remoteDeploymentId, recoveredStatus(existing.status), existing.versionId, null)
+            }
         }
         val localId = "deployment-${UUID.randomUUID()}"
         val now = System.currentTimeMillis()
@@ -30,9 +34,13 @@ class WorkerDeploymentManager(
         if (dao.insertCloudflareDeploymentIfAbsent(pending) == -1L) {
             val existing = dao.getCloudflareDeploymentByHash(requestHash)
                 ?: error("部署占位状态无法读取")
-            return CloudflareDeploymentResult(workerName, existing.remoteDeploymentId, recoveredStatus(existing.status), existing.versionId, null)
+            if (statusOf(existing.status) != CloudflareDeploymentStatus.DEPLOYMENT_FAILED) {
+                return CloudflareDeploymentResult(workerName, existing.remoteDeploymentId, recoveredStatus(existing.status), existing.versionId, null)
+            }
+            // 失败记录复用同一个幂等键，但重置为新的未发送占位；失败记录的原因会被新结果覆盖。
+            dao.upsertCloudflareDeployment(pending.copy(deploymentId = existing.deploymentId))
         }
-        var known = pending
+        var known = dao.getCloudflareDeploymentByHash(requestHash) ?: pending
         suspend fun save(status: CloudflareDeploymentStatus, summary: String) {
             known = known.copy(status = status.name, updatedAt = System.currentTimeMillis(), safeSummary = summary)
             dao.upsertCloudflareDeployment(known)
@@ -71,7 +79,13 @@ class WorkerDeploymentManager(
             } else failureStatus(cloudflareError)
             kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
                 // 持久化失败时保留之前的占位或已接受记录；恢复会统一按未知处理。
-                runCatching { save(status, if (status == CloudflareDeploymentStatus.RESULT_UNKNOWN) "部署结果需要查询确认" else "部署请求已明确失败") }
+                val summary = if (status == CloudflareDeploymentStatus.RESULT_UNKNOWN) {
+                    "部署结果需要查询确认"
+                } else {
+                    // 仅保存错误码和已截断的安全消息，不保存 token、请求体或原始响应。
+                    "部署请求已明确失败：${cloudflareError?.code ?: "UNKNOWN"} ${cloudflareError?.message?.take(500).orEmpty()}".trim()
+                }
+                runCatching { save(status, summary) }
             }
             throw error
         }
