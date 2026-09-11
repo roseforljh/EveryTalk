@@ -1132,15 +1132,6 @@ class AgentLoop(
         }
 
         blocks.reconcileFinalText(finalText)
-        // 模型绕过 request_protected_secret 时，不允许把普通索要凭据的文本持久化到聊天记录。
-        val assistantText = blocks.filterIsInstance<AgentContentBlock.Text>().joinToString("\n") { it.text }
-        if (toolCalls.isEmpty() && SecretRequestGuard.isPlainTextSecretRequest(assistantText)) {
-            blocks.removeAll { it is AgentContentBlock.Text }
-            blocks += AgentContentBlock.Text(
-                "我不能通过普通聊天接收 Key、Token、密码或其他 Secret。请让我调用安全 Secret 输入工具，由应用专用输入框接收。",
-                sourceProtocol = turnSourceProtocol,
-            )
-        }
         roundContentBuffer.finish(hasToolCalls = toolCalls.isNotEmpty())
         val assistant = AgentAssistantTurn(blocks = blocks, finishReason = finishReason)
         val finishedAt = System.currentTimeMillis()

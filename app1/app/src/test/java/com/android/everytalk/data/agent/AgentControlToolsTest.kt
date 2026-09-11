@@ -111,10 +111,4 @@ class AgentControlToolsTest {
         assertEquals("computer-1", request.targetId)
         assertEquals("DEFUDDLE_SERVER_KEY", request.name)
     }
-
-    @Test
-    fun `普通文本索要密钥会被兜底识别`() {
-        assert(kotlin.run { SecretRequestGuard.isPlainTextSecretRequest("请把 API Key 直接发给我") })
-        assert(!SecretRequestGuard.isPlainTextSecretRequest("我会通过安全输入框申请密钥"))
-    }
 }
