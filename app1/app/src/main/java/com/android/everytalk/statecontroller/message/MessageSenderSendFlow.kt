@@ -526,21 +526,17 @@ internal fun MessageSender.sendMessageInternal(
 
                 // 当"系统提示接入"处于暂停状态时，过滤掉会话历史中的系统消息，避免仍然将 Prompt 注入到请求
                 val engagedForThisConversation = stateHolder.systemPromptEngagedState[stateHolder._currentConversationId.value] ?: false
-                val historyUiMessages = if (engagedForThisConversation) {
-                    historyUiMessagesRaw
-                } else {
-                    historyUiMessagesRaw.filter { msg ->
-                        // Notice 是 App 插的提示行，任何情况下都不进模型上下文。
-                        val filteredOut = msg.sender == UiSender.Notice ||
-                            (msg.sender == UiSender.System && !msg.isPlaceholderName)
-                        if (filteredOut) {
-                            Log.d(
-                                "MessageSender",
-                                "filteredOutUiMessage: role=${msg.role} reason=systemPromptPaused textChars=${msg.text.length}"
-                            )
-                        }
-                        !filteredOut
+                val historyUiMessages = historyUiMessagesRaw.filter { msg ->
+                    // Notice 是 App 插的提示行，任何情况下都不进模型上下文。
+                    val filteredOut = msg.sender == UiSender.Notice ||
+                        (!engagedForThisConversation && msg.sender == UiSender.System && !msg.isPlaceholderName)
+                    if (filteredOut) {
+                        Log.d(
+                            "MessageSender",
+                            "filteredOutUiMessage: role=${msg.role} textChars=${msg.text.length}"
+                        )
                     }
+                    !filteredOut
                 }
                 logUiMessages("filteredMessages", historyUiMessages)
 

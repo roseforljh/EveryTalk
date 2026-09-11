@@ -2,6 +2,7 @@ package com.android.everytalk.statecontroller.facade
 
 import android.util.Log
 import com.android.everytalk.data.DataClass.Message
+import com.android.everytalk.data.DataClass.ContextUsageSnapshot
 import com.android.everytalk.data.DataClass.ExecutionStep
 import com.android.everytalk.data.DataClass.ExecutionTraceEvent
 import com.android.everytalk.data.DataClass.Sender
@@ -112,6 +113,8 @@ open class MessageItemsController(
         val currentWebSearchStage: String?,
         val executionSteps: List<ExecutionStep>,
         val executionTrace: List<ExecutionTraceEvent>,
+        /** 用量卡片直接读 message 里的快照；压缩改写快照时必须让缓存失效。 */
+        val contextUsageSnapshot: ContextUsageSnapshot?,
         val items: List<ChatListItem>
     )
 
@@ -375,6 +378,7 @@ open class MessageItemsController(
                                 cached.currentWebSearchStage == message.currentWebSearchStage &&
                                 cached.executionSteps == message.executionSteps &&
                                 cached.executionTrace == message.executionTrace &&
+                                cached.contextUsageSnapshot == message.contextUsageSnapshot &&
                                 activityStatusMatches &&
                                 (cached.items.isNotEmpty() || message.text.isBlank()) &&
                                 footerMatches &&
@@ -421,6 +425,7 @@ open class MessageItemsController(
                                     currentWebSearchStage = message.currentWebSearchStage,
                                     executionSteps = message.executionSteps,
                                     executionTrace = message.executionTrace,
+                                    contextUsageSnapshot = message.contextUsageSnapshot,
                                     items = newItems
                                 )
                                 newItems
@@ -482,6 +487,7 @@ open class MessageItemsController(
                                 cached.currentWebSearchStage == message.currentWebSearchStage &&
                                 cached.executionSteps == message.executionSteps &&
                                 cached.executionTrace == message.executionTrace &&
+                                cached.contextUsageSnapshot == message.contextUsageSnapshot &&
                                 activityStatusMatches
 
                             if (cacheValid) {
@@ -513,6 +519,7 @@ open class MessageItemsController(
                                     currentWebSearchStage = message.currentWebSearchStage,
                                     executionSteps = message.executionSteps,
                                     executionTrace = message.executionTrace,
+                                    contextUsageSnapshot = message.contextUsageSnapshot,
                                     items = newItems
                                 )
                                 newItems

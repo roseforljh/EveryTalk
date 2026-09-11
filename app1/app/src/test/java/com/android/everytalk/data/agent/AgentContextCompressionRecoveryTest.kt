@@ -473,10 +473,11 @@ class AgentContextCompressionRecoveryTest {
             },
         )
         // 阈值和窗口都设成 100 万，正常路径绝不会触发压缩；能压成就是 forceLocalCompaction 生效。
+        // 内容要够长，否则会走「没有可压缩内容」的短路。
         val request = manualCompactionRequest(
             listOf(
-                SimpleTextApiMessage(id = "old-user", role = "user", content = "早期需求".repeat(400)),
-                SimpleTextApiMessage(id = "old-assistant", role = "assistant", content = "早期结论".repeat(400)),
+                SimpleTextApiMessage(id = "old-user", role = "user", content = "早期需求".repeat(7_000)),
+                SimpleTextApiMessage(id = "old-assistant", role = "assistant", content = "早期结论".repeat(7_000)),
                 SimpleTextApiMessage(id = "latest-user", role = "user", content = "继续处理"),
             ),
         )
@@ -516,6 +517,45 @@ class AgentContextCompressionRecoveryTest {
             AgentRunStatus.COMPLETED.name,
             database.agentDao().getRunsForSession(sessionId).single().status,
         )
+    }
+
+    @Test
+    fun `窗口远大于会话时手动压缩仍给出可用的摘要预算`() = runBlocking {
+        val sessionId = "manual-compaction-budget"
+        seedSession(sessionId)
+        var summaryOutputTokens = -1
+        val loop = AgentLoop(
+            runStore = store,
+            modelTransport = ModelTurnTransport { turn ->
+                summaryOutputTokens = turn.request.generationConfig?.maxOutputTokens ?: -1
+                flowOf(
+                    AppStreamEvent.Content("## 用户目标\n压缩摘要"),
+                    AppStreamEvent.StreamEnd("summary"),
+                )
+            },
+        )
+        // 约 7 万 token 的中文历史，对应「窗口 100 万、当前占用 7 万」的真实场景。
+        // 第一条故意很短：窗口远大于占用时，计划只会摘要最老的那一组。
+        val request = manualCompactionRequest(
+            buildList {
+                add(SimpleTextApiMessage(id = "u0", role = "user", content = "帮我看看这个"))
+                repeat(8) { index ->
+                    val ordinal = index + 1
+                    add(SimpleTextApiMessage(id = "u$ordinal", role = "user", content = "用户第 $ordinal 轮需求".repeat(700)))
+                    add(SimpleTextApiMessage(id = "a$ordinal", role = "assistant", content = "助手第 $ordinal 轮结论".repeat(700)))
+                }
+                add(SimpleTextApiMessage(id = "latest", role = "user", content = "继续处理"))
+            },
+        )
+
+        val outcome = loop.compactNow(
+            sessionId = sessionId,
+            baseRequest = request,
+            limits = ModelTokenLimits(maxOutputTokens = 4_096, maxContextTokens = 1_000_000),
+        )
+
+        assertTrue("压缩没有执行：$outcome", outcome is ManualCompactionOutcome.Compacted)
+        assertTrue("摘要输出预算过小：$summaryOutputTokens", summaryOutputTokens >= 1_024)
     }
 
     private fun manualCompactionRequest(messages: List<SimpleTextApiMessage>): ChatRequest = ChatRequest(

@@ -1060,7 +1060,35 @@ import java.util.UUID
                             outcome.tokensBefore,
                             outcome.tokensAfter,
                         )
-                        appendContextCompactionNotice(text)
+                        // 压缩结果只落进检查点，消息里的用量快照还停在压缩前。
+                        // 不一起改写的话，悬浮卡片会一直显示旧值。
+                        withContext(Dispatchers.Main.immediate) {
+                            val index = stateHolder.messages.indexOfFirst { it.id == messageId }
+                            if (index >= 0) {
+                                val message = stateHolder.messages[index]
+                                message.contextUsageSnapshot?.let { snapshot ->
+                                    stateHolder.messages[index] = message.copy(
+                                        contextUsageSnapshot = snapshot.copy(
+                                            activeContextTokensOverride = outcome.tokensAfter,
+                                        ),
+                                    )
+                                }
+                            }
+                            stateHolder.messages.add(
+                                Message(
+                                    id = "context-compaction-${UUID.randomUUID()}",
+                                    text = text,
+                                    sender = Sender.Notice,
+                                    contentStarted = true,
+                                ),
+                            )
+                        }
+                        // 快照和提示行都只在内存里，重开就没了，必须显式落库。
+                        runCatching {
+                            withContext(Dispatchers.IO) {
+                                historyManager.saveCurrentChatToHistoryNow(forceSave = true, isImageGeneration = false)
+                            }
+                        }
                         showSnackbar(text)
                     }
                 }
@@ -1073,26 +1101,6 @@ import java.util.UUID
                 )
             } finally {
                 stateHolder._isCompactingContext.value = false
-            }
-        }
-    }
-
-    /**
-     * 压缩是异步动作，不在会话里留一条可见记录，用户不知道发生过。
-     * Sender.Notice 只在界面显示，所有模型输入路径都会把它过滤掉。
-     */
-    private suspend fun AppViewModel.appendContextCompactionNotice(text: String) {
-        val notice = Message(
-            id = "context-compaction-${UUID.randomUUID()}",
-            text = text,
-            sender = Sender.Notice,
-            contentStarted = true,
-        )
-        withContext(Dispatchers.Main.immediate) { stateHolder.messages.add(notice) }
-        // 只加到内存列表重开就没了，必须显式落库。
-        runCatching {
-            withContext(Dispatchers.IO) {
-                historyManager.saveCurrentChatToHistoryNow(forceSave = true, isImageGeneration = false)
             }
         }
     }

@@ -1,6 +1,7 @@
 package com.android.everytalk.data.agent
 
 import android.content.Context
+import android.net.Uri
 import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.GenerationConfig
@@ -25,6 +26,8 @@ import com.android.everytalk.models.SelectedMediaItem
 import com.android.everytalk.service.ComputerConnectionServiceController
 import com.android.everytalk.util.AgentNotificationManager
 import com.android.everytalk.util.AppLogger
+import com.android.everytalk.util.image.ImageHandlingLimits
+import com.android.everytalk.util.storage.readAtMost
 import com.android.everytalk.data.skill.SkillRepository
 import com.android.everytalk.data.skill.SkillRuntimeTools
 import kotlinx.coroutines.CoroutineStart
@@ -318,14 +321,28 @@ class AgentRunCoordinator(
         )
         // Run 一进终态，恢复快照就被回收（AGENT_FINAL_RUN_STATUSES），restoreChatRequest 拿不到历史。
         // 这里从还活着的两张表重建：会话消息表给原始对话，AgentEntry 给工具轨迹。
+        // 附件编码必须和发送管线一致（真实 Base64 + Context 解析 MIME），
+        // 否则 PartsApiMessage.parts 内容对不上，压缩检查点的指纹校验会静默失败。
         val history = database.chatDao().getMessagesForSession(run.sessionId)
-            .map { it.toMessage().toApiMessage(uriEncoder = { null }) }
+            .map { it.toMessage().toApiMessage(::encodeUriAsBase64, appContext) }
         val request = buildManualCompactionRequest(
             config = config,
             limits = limits,
             messages = agentRunStore.expandTranscript(run.sessionId, history),
         )
         return agentLoop.compactNow(run.sessionId, request, limits)
+    }
+
+    /** 与发送管线相同的附件编码：同一份字节才能算出同一份检查点指纹。 */
+    private fun encodeUriAsBase64(uri: Uri): String? = try {
+        appContext.contentResolver.openInputStream(uri)?.use { stream ->
+            val bytes = readAtMost(stream, ImageHandlingLimits.USER_UPLOAD_MAX_BYTES)
+            android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
+        }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (error: Exception) {
+        null
     }
 
     /**

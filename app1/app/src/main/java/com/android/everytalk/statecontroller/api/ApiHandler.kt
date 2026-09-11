@@ -346,11 +346,17 @@ class ApiHandler(
     val pendingInterventions: StateFlow<List<com.android.everytalk.data.agent.PendingIntervention>>
         get() = agentRunCoordinator.pendingInterventions
 
-    /** 手动「立即压缩」：不看阈值，直接给该可见消息所属会话压出一条新检查点。 */
+    /**
+     * 手动「立即压缩」：不看阈值，直接给该可见消息所属会话压出一条新检查点。
+     * 内部要把整段会话历史展开、逐条解码 AgentEntry 并做两遍 token 预算，
+     * 放 IO 上跑，否则会卡住主线程，按钮刚出现的转圈动画第一帧就丢帧。
+     */
     suspend fun compressContextNow(
         visibleAssistantMessageId: String,
     ): com.android.everytalk.data.agent.ManualCompactionOutcome =
-        agentRunCoordinator.compressContextNow(visibleAssistantMessageId)
+        withContext(Dispatchers.IO) {
+            agentRunCoordinator.compressContextNow(visibleAssistantMessageId)
+        }
 
     fun resolveIntervention(suspensionId: String, expectedVersion: Long, resolutionNonce: String) {
         viewModelScope.launch(Dispatchers.IO) {

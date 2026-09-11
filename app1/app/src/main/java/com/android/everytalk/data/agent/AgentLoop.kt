@@ -61,6 +61,9 @@ internal const val MAX_IDENTICAL_TOOL_CALLS = 3
 internal const val MAX_PARALLEL_TOOL_CALLS = 4
 internal const val PI_DEFAULT_MAX_PROVIDER_RETRIES = 3
 private const val COMPACTION_OUTPUT_TOKENS = 4_096
+
+/** 手动压缩低于这个占用就没有可压的历史，直接告诉用户没事可做。 */
+private const val MIN_MANUAL_COMPACTION_WINDOW_TOKENS = 32_000L
 private const val PARTIAL_ASSISTANT_CHECKPOINT_INTERVAL_MILLIS = 500L
 private const val PARTIAL_ASSISTANT_CHECKPOINT_CHARACTERS = 512
 
@@ -1824,11 +1827,33 @@ class AgentLoop(
         )
         var failed = true
         try {
-            val prepared = contextManager.prepare(
+            val checkpoint = runStore.latestCompaction(sessionId)
+            val probe = contextManager.prepare(
                 requestId = UUID.randomUUID().toString(),
                 request = compactionRequest,
                 limits = limits,
-                checkpoint = runStore.latestCompaction(sessionId),
+                checkpoint = checkpoint,
+                forceLocalCompaction = true,
+            )
+            // 会话太短就没有可压的历史：硬压只会把最老那一组摘要掉，占用反而减不下来。
+            if (probe.snapshot.activeContextTokens < MIN_MANUAL_COMPACTION_WINDOW_TOKENS) {
+                failed = false
+                return ManualCompactionOutcome.NothingToCompress
+            }
+            // 手动压缩的预算窗口按「当前真实占用」算，不按模型上限。
+            // 按上限算时，100 万窗口下「近期至少保留 10%」就是 10 万 token，比整个会话还大，
+            // 计划只摘要最老的那一组：来源小了摘要预算就塌到几十个 token，模型返回空；
+            // 就算返回了，换掉那一组也减不了占用。缩到实际占用后百分比才有意义。
+            val scaledLimits = limits.copy(
+                maxContextTokens = probe.snapshot.activeContextTokens
+                    .coerceAtMost(limits.maxContextTokens.toLong())
+                    .toInt(),
+            )
+            val prepared = contextManager.prepare(
+                requestId = UUID.randomUUID().toString(),
+                request = compactionRequest,
+                limits = scaledLimits,
+                checkpoint = checkpoint,
                 forceLocalCompaction = true,
             )
             val plan = prepared.compactionPlan

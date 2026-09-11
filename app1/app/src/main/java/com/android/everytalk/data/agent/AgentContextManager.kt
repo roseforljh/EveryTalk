@@ -486,8 +486,17 @@ class AgentContextManager(
         }
     }
 
+    /**
+     * 摘要边界之前的内容指纹。system 消息必须排除：它不进摘要（applyCheckpoint 也只保留当前 system），
+     * 且每轮发送时才现拼（用户提示词 + 环境说明 + Skill 目录），手动压缩按数据库历史重建时根本没有它。
+     * 把它算进指纹会让检查点永远匹配失败，下一轮又把完整历史发回去。
+     */
     private fun prefixFingerprint(messages: List<AbstractApiMessage>, throughIndex: Int): String =
-        agentTranscriptFingerprint(messages.take(throughIndex + 1).map(::fingerprintPart))
+        agentTranscriptFingerprint(
+            messages.take(throughIndex + 1)
+                .filterNot { it.role.equals("system", true) }
+                .map(::fingerprintPart)
+        )
 
     /** 官方接口先尝试 Provider 原生压缩，通用摘要保留为硬窗口兜底。 */
     private fun ChatRequest.prefersNativeCompaction(): Boolean {
