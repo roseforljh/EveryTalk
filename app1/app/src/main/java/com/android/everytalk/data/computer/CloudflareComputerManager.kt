@@ -9,9 +9,11 @@ import com.android.everytalk.data.database.entities.toEntity
 import com.android.everytalk.data.database.entities.toModel
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import io.ktor.client.HttpClient
 import java.util.UUID
 
 /**
@@ -23,6 +25,8 @@ internal class CloudflareRequestCredentials(
     private val dao: ComputerDao,
     private val credentials: ComputerCredentialStore,
     private val json: Json = Json,
+    private val httpClient: HttpClient? = null,
+    private val oauthConfig: CloudflareOAuthConfig? = null,
 ) {
     suspend fun token(context: ComputerRequestContext): String {
         val config = dao.getCloudflareConfig(context.computerId)
@@ -47,15 +51,65 @@ internal class CloudflareRequestCredentials(
                 throw CloudflareApiException("REQUEST_CONTEXT_STALE", "读取凭据期间 Cloudflare 目标或授权已变化")
             }
             context.requireCloudflareBinding(config.toModel(json), authorization.toModel(json))
-            return runCatching {
-                json.parseToJsonElement(payload.concatToString()).jsonObject["access_token"]?.jsonPrimitive?.contentOrNull
-            }.getOrNull()?.takeIf { it.isNotBlank() && '\r' !in it && '\n' !in it }
+            val stored = runCatching { json.parseToJsonElement(payload.concatToString()).jsonObject }.getOrNull()
                 ?: throw CloudflareApiException("AUTHORIZATION_REQUIRED", "Cloudflare Token 格式无效")
+            val accessToken = stored["access_token"]?.jsonPrimitive?.contentOrNull
+                ?.takeIf { it.isNotBlank() && '\r' !in it && '\n' !in it }
+                ?: throw CloudflareApiException("AUTHORIZATION_REQUIRED", "Cloudflare Token 格式无效")
+            return refreshIfExpiring(authorization, stored) ?: accessToken
         } finally {
             payload.fill('\u0000')
         }
     }
+
+    /**
+     * access token 快到期时用 refresh_token 续期，避免每小时把用户拉去重新登录。
+     * 续期只换 Token 和到期时间，不动授权代次，否则正在等待的写审批会全部作废。
+     * 拿不到续期材料时沿用旧 Token；续期失败按授权失效处理，和以前的到期行为一致。
+     */
+    private suspend fun refreshIfExpiring(
+        authorization: CloudflareAuthorizationEntity,
+        stored: JsonObject,
+    ): String? {
+        val expiresAt = authorization.expiresAt ?: return null
+        if (expiresAt - System.currentTimeMillis() > TOKEN_REFRESH_MARGIN_MILLIS) return null
+        val refreshToken = stored["refresh_token"]?.jsonPrimitive?.contentOrNull?.takeIf(String::isNotBlank)
+        val client = httpClient
+        val oauth = oauthConfig
+        if (refreshToken == null || client == null || oauth == null) return null
+        val result = try {
+            exchangeCloudflareRefreshToken(client, oauth, refreshToken.toCharArray(), json)
+        } catch (error: kotlinx.coroutines.CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            throw CloudflareApiException("AUTHORIZATION_REQUIRED", "Cloudflare 授权已过期且续期失败，请重新授权")
+        }
+        return try {
+            val newAccess = result.accessToken.concatToString()
+            val storedPayload = json.encodeToString(
+                mapOf("access_token" to newAccess, "refresh_token" to result.refreshToken?.concatToString()),
+            ).toCharArray()
+            try {
+                credentials.saveAgentAuthorization(authorization.credentialReference, storedPayload)
+            } finally {
+                storedPayload.fill(ZERO_CHAR)
+            }
+            dao.upsertCloudflareAuthorization(
+                authorization.copy(expiresAt = result.expiresInSeconds?.let { System.currentTimeMillis() + it * 1000L }),
+            )
+            newAccess
+        } finally {
+            result.accessToken.fill(ZERO_CHAR)
+            result.refreshToken?.fill(ZERO_CHAR)
+        }
+    }
 }
+
+/** access token 距到期不足这个余量就先续期，避免请求刚好卡在过期点上。 */
+private const val TOKEN_REFRESH_MARGIN_MILLIS = 5 * 60 * 1000L
+
+/** 安全存储里的 CharArray 用完清零。 */
+private val ZERO_CHAR = Char(0)
 
 /** 保存 OAuth Token 的安全存储和 Cloudflare Computer 的本地配置。 */
 class CloudflareComputerManager(

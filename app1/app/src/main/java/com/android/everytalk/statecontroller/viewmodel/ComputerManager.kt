@@ -43,6 +43,7 @@ import com.android.everytalk.data.computer.CloudflareComputerConfig
 import com.android.everytalk.data.computer.CloudflareRequestBinding
 import com.android.everytalk.data.computer.CloudflareRequestCredentials
 import com.android.everytalk.data.computer.CloudflareComputerManager
+import com.android.everytalk.data.computer.CloudflareOAuthConfig
 import com.android.everytalk.data.computer.CloudflareResourceOperationManager
 import com.android.everytalk.data.computer.CloudflareResourceIndex
 import com.android.everytalk.data.computer.WorkerDeploymentManager
@@ -376,7 +377,16 @@ class ComputerManager(
         val credentials = ComputerCredentialStore(context.applicationContext)
         val json = Json { ignoreUnknownKeys = true }
         val tokenProvider: suspend (ComputerRequestContext) -> String =
-            CloudflareRequestCredentials(repository.dao(), credentials, json)::token
+            CloudflareRequestCredentials(
+                repository.dao(),
+                credentials,
+                json,
+                httpClient,
+                CloudflareOAuthConfig(
+                    BuildConfig.CLOUDFLARE_OAUTH_CLIENT_ID,
+                    BuildConfig.CLOUDFLARE_OAUTH_REDIRECT_URI,
+                ),
+            )::token
         ComputerProviderRouter(
             computerLookup = repository::getComputer,
             sshExecutor = { name, args, id, request, status ->
@@ -503,7 +513,16 @@ class ComputerManager(
     private suspend fun reconcileUnknownCloudflareDeployments() {
         if (!featureFlags.cloudflareEnabled) return
         val dao = repository.dao()
-        val credentials = CloudflareRequestCredentials(dao, ComputerCredentialStore(appContext), cloudflareJson)
+        val credentials = CloudflareRequestCredentials(
+            dao,
+            ComputerCredentialStore(appContext),
+            cloudflareJson,
+            cloudflareHttpClient,
+            CloudflareOAuthConfig(
+                BuildConfig.CLOUDFLARE_OAUTH_CLIENT_ID,
+                BuildConfig.CLOUDFLARE_OAUTH_REDIRECT_URI,
+            ),
+        )
         val records = WorkerDeploymentManager.recoverableStatuses.flatMap { dao.getCloudflareDeploymentsByStatus(it.name) }
         for (record in records) {
             try {
@@ -718,7 +737,7 @@ class ComputerManager(
         )
     }
 
-    /** 停止按钮仅取消当前 Run 等待中的命令，已交付的后台服务由独立管理入口处理。 */
+    /** 停止按钮仅取消当前 Run 的前台和后台任务，不影响其他 Run。 */
     fun cancelActiveExecutions(
         conversationId: String,
         runId: String? = null,
