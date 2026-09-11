@@ -1008,14 +1008,15 @@ internal fun ComputerPermissionModeSelector(
                 modifier = Modifier.fillMaxWidth(),
                 shape = shape,
                 color = if (isSelected) {
-                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f)
+                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.16f)
                 } else {
                     Color.Transparent
                 },
                 border = androidx.compose.foundation.BorderStroke(
                     width = 1.dp,
+                    // 未选中也要看得见边框，否则在深色底上和背景糊成一片。
                     color = MaterialTheme.colorScheme.onSurface.copy(
-                        alpha = if (isSelected) 0.18f else 0.08f,
+                        alpha = if (isSelected) 0.45f else 0.22f,
                     ),
                 ),
             ) {

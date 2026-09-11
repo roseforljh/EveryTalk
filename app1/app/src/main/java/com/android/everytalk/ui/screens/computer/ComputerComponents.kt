@@ -31,6 +31,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.android.everytalk.R
 import com.android.everytalk.data.computer.Computer
+import com.android.everytalk.data.computer.ComputerProvider
 import com.android.everytalk.data.computer.ComputerRunMode
 import com.android.everytalk.data.computer.ComputerStatus
 import com.android.everytalk.ui.screens.MainScreen.chat.text.ui.computerStatusLabelRes
@@ -94,9 +95,12 @@ internal fun ComputerCard(
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Icon(
-                painter = painterResource(R.drawable.ic_gpt_terminal),
+                // Cloudflare 用品牌橙云，不再和 VPS 共用一个终端图标。
+                painter = painterResource(
+                    if (computer.provider == ComputerProvider.CLOUDFLARE) R.drawable.ic_cloudflare else R.drawable.ic_gpt_terminal,
+                ),
                 contentDescription = null,
-                tint = accentColor,
+                tint = if (computer.provider == ComputerProvider.CLOUDFLARE && isReady) Color.Unspecified else accentColor,
                 modifier = Modifier.size(28.dp),
             )
             Spacer(Modifier.width(14.dp))

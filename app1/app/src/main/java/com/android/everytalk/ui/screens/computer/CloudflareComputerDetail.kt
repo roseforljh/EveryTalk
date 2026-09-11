@@ -1,5 +1,6 @@
 package com.android.everytalk.ui.screens.computer
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -183,7 +184,6 @@ internal fun CloudflareComputerDetail(
                         else -> "已授权"
                     })
                     CloudflareInfoRow("登录身份", authorization?.identityDisplayName ?: "暂不可用")
-                    details?.config?.accountName?.let { CloudflareInfoRow("Account", it) }
                     if (grantedScopeCount > 0) CloudflareInfoRow("授权范围", "已授予 $grantedScopeCount 项")
                     // 只有真的有部署或探测记录时才占版面，没记录不再铺一行“暂无”。
                     deployments.firstOrNull()?.status?.let { CloudflareInfoRow("最近部署", it) }
@@ -206,10 +206,16 @@ internal fun CloudflareComputerDetail(
                     enabled = !busy,
                     modifier = Modifier.weight(1f),
                 ) { Text(if (authorization == null) "登录 Cloudflare" else "重新授权") }
-                OutlinedButton(onClick = { perform { reload() } }, enabled = !busy, modifier = Modifier.weight(1f)) { Text("刷新") }
+                OutlinedButton(
+                    onClick = { perform { reload() } },
+                    enabled = !busy,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                ) { Text("刷新") }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                TextButton(
+                OutlinedButton(
                     onClick = {
                         perform {
                             val available = withContext(Dispatchers.IO) { viewModel.listCloudflareComputerAccounts(computer.id) }
@@ -220,14 +226,23 @@ internal fun CloudflareComputerDetail(
                     },
                     enabled = !busy,
                     modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
                 ) { Text("切换 Account") }
-                TextButton(onClick = { pendingAction = "logout" }, enabled = !busy, modifier = Modifier.weight(1f)) { Text("退出登录") }
+                OutlinedButton(
+                    onClick = { pendingAction = "logout" },
+                    enabled = !busy,
+                    modifier = Modifier.weight(1f),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onSurface),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline),
+                ) { Text("退出登录") }
             }
             TextButton(
                 onClick = { pendingAction = "delete" },
                 enabled = !busy,
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text("删除本地 Computer", color = MaterialTheme.colorScheme.error) }
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error),
+            ) { Text("删除本地 Computer") }
             ComputerPermissionSettingsCard(
                 computer = computer,
                 busyAction = if (busy) "permission-mode" else null,
