@@ -58,3 +58,8 @@ WEBFETCH_API_KEY=your-webfetch-api-key
 
 ## AI 内容举报接收接口（必须为 HTTPS，接收应用内举报 JSON）
 AI_CONTENT_REPORT_URL=https://your-backend.example.com/ai-content-reports
+
+## Cloudflare OAuth 与临时部署配置
+CLOUDFLARE_OAUTH_CLIENT_ID=your-cloudflare-oauth-client-id
+CLOUDFLARE_OAUTH_REDIRECT_URI=everytalk://oauth/cloudflare
+TEMPORARY_WORKER_GATEWAY_URL=https://your-temporary-worker-gateway.com
