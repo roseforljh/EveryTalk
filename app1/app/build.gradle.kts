@@ -487,6 +487,21 @@ val buildJustBashRuntime = tasks.register<Exec>("buildJustBashRuntime") {
         layout.projectDirectory.file("../tools/just-bash-runtime/bun.lock"),
     )
     outputs.file(layout.projectDirectory.file("src/main/assets/just-bash/runtime.js"))
+    // runtime.js 已入库。环境里没有 bun 时退回入库版本，别让 preBuild 因为缺一个前端工具整条断掉。
+    // 改了 tools/just-bash-runtime/src 就必须本地重新构建并提交产物，否则这里会静默用旧的。
+    onlyIf {
+        val bunName = if (System.getProperty("os.name").startsWith("Windows")) "bun.exe" else "bun"
+        val available = System.getenv("PATH").orEmpty()
+            .split(File.pathSeparator)
+            .any { File(it, bunName).canExecute() }
+        if (!available) {
+            logger.warn(
+                "未找到 bun，沿用已提交的 src/main/assets/just-bash/runtime.js。" +
+                    "改动 tools/just-bash-runtime/src 后请重新执行 bun install && bun run build 并提交产物。",
+            )
+        }
+        available
+    }
 }
 
 tasks.named("preBuild").configure {

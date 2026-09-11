@@ -87,6 +87,19 @@ jobs:
       - name: Grant Gradle permissions
         run: chmod +x "./${{ env.APP_DIR }}/gradlew"
 
+      # preBuild 依赖 buildJustBashRuntime 任务，它会在 tools/just-bash-runtime 里跑 bun。
+      # node_modules 不入库，esbuild 是 devDependency，所以必须先装 bun 再装依赖。
+      # 这两步允许失败：runtime.js 已入库且与重新构建逐字节一致，
+      # 装不上时 Gradle 会打警告退回入库产物，不让整条构建因为一个前端工具挂掉。
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        continue-on-error: true
+
+      - name: Install just-bash runtime dependencies
+        working-directory: ${{ env.APP_DIR }}/tools/just-bash-runtime
+        run: bun install --frozen-lockfile
+        continue-on-error: true
+
       - name: Extract Version from Tag
         if: startsWith(github.ref, 'refs/tags/')
         run: |
