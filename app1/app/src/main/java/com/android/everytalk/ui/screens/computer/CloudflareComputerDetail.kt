@@ -20,6 +20,7 @@ import com.android.everytalk.data.computer.CloudflareSettingsOAuthStore
 import com.android.everytalk.data.computer.CloudflareTokenExchangeResult
 import com.android.everytalk.data.computer.CloudflareComputerManager
 import com.android.everytalk.data.computer.Computer
+import com.android.everytalk.data.computer.ComputerPermissionMode
 import com.android.everytalk.data.computer.ComputerWorkspace
 import com.android.everytalk.data.computer.TemporaryWorkerDeployment
 import com.android.everytalk.data.computer.TemporaryWorkerStatus
@@ -27,6 +28,7 @@ import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.statecontroller.cloudflareComputerDetails
 import com.android.everytalk.statecontroller.listCloudflareComputerAccounts
 import com.android.everytalk.statecontroller.switchCloudflareComputerAccount
+import com.android.everytalk.statecontroller.setComputerPermissionMode
 import com.android.everytalk.statecontroller.logoutCloudflareComputer
 import com.android.everytalk.statecontroller.deleteLocalCloudflareComputer
 import com.android.everytalk.statecontroller.reauthorizeCloudflareComputer
@@ -66,6 +68,7 @@ internal fun CloudflareComputerDetail(
     var accounts by remember(computer.id) { mutableStateOf<List<CloudflareApiAccount>?>(null) }
     var selectedAccount by remember(computer.id) { mutableStateOf<String?>(null) }
     var pendingAction by remember(computer.id) { mutableStateOf<String?>(null) }
+    var pendingPermissionMode by remember(computer.id) { mutableStateOf<ComputerPermissionMode?>(null) }
     var busy by remember(computer.id) { mutableStateOf(false) }
     var error by remember(computer.id) { mutableStateOf<String?>(null) }
     val deploymentFlow = remember(computer.id) { viewModel.observeCloudflareDeployments(computer.id) }
@@ -165,64 +168,84 @@ internal fun CloudflareComputerDetail(
             TextButton(onClick = { navController.popBackStack() }) { Text("返回") }
             Text(computer.displayName, style = MaterialTheme.typography.headlineSmall)
             Text("Cloudflare Computer", style = MaterialTheme.typography.labelLarge)
+            val authorization = details?.authorization
+            val grantedScopeCount = remember(authorization?.grantedScopesJson) {
+                runCatching { Json.decodeFromString<Set<String>>(authorization?.grantedScopesJson ?: "[]") }
+                    .getOrDefault(emptySet()).size
+            }
             Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    val authorization = details?.authorization
-                    Text("连接状态：${computer.status}")
-                    Text("Cloudflare API 状态：" + when {
-                        authorization == null -> "未配置授权"
-                        authorization.revoked -> "已退出登录"
-                        authorization.expiresAt?.let { it <= System.currentTimeMillis() } == true -> "授权已过期"
-                        else -> "可访问性待请求验证"
-                    })
-                    Text("登录身份：${authorization?.identityDisplayName ?: "身份信息暂不可用"}")
-                    Text("Worker 部署状态：${deployments.firstOrNull()?.status ?: "暂无部署记录"}")
-                    val health = details?.latestHealth
-                    Text("Worker 运行时状态：${health?.status ?: "暂无探测记录"}")
-                    health?.let {
-                        Text("最近探测：${it.workerName}，HTTP ${it.httpStatus ?: "—"}，${it.latencyMs ?: "—"} ms")
-                    }
-                    Text("Account：${details?.config?.accountName ?: "尚未读取"}")
-                    Text("Account ID：${details?.config?.accountId ?: "—"}")
-                    val scopes = remember(authorization?.grantedScopesJson) {
-                        runCatching { Json.decodeFromString<Set<String>>(authorization?.grantedScopesJson ?: "[]") }.getOrDefault(emptySet())
-                    }
-                    Text("授权状态：" + when {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    CloudflareInfoRow("连接状态", computer.status.name)
+                    CloudflareInfoRow("授权", when {
                         authorization == null -> "需要登录"
                         authorization.revoked -> "已退出登录"
                         authorization.expiresAt?.let { it <= System.currentTimeMillis() } == true -> "已过期，需要重新授权"
                         else -> "已授权"
                     })
-                    Text("授权范围：${scopes.sorted().joinToString("、").ifBlank { "无" }}")
+                    CloudflareInfoRow("登录身份", authorization?.identityDisplayName ?: "暂不可用")
+                    details?.config?.accountName?.let { CloudflareInfoRow("Account", it) }
+                    if (grantedScopeCount > 0) CloudflareInfoRow("授权范围", "已授予 $grantedScopeCount 项")
+                    // 只有真的有部署或探测记录时才占版面，没记录不再铺一行“暂无”。
+                    deployments.firstOrNull()?.status?.let { CloudflareInfoRow("最近部署", it) }
+                    details?.latestHealth?.let { health ->
+                        CloudflareInfoRow(
+                            "运行时",
+                            "${health.status}，HTTP ${health.httpStatus ?: "—"}，${health.latencyMs ?: "—"} ms",
+                        )
+                    }
                 }
             }
             if (busy) CircularProgressIndicator(Modifier.size(24.dp))
             error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-            OutlinedButton(onClick = { perform { reload() } }, enabled = !busy) { Text("刷新连接信息") }
-            OutlinedButton(onClick = {
-                runCatching { CloudflareOAuthLaunchCoordinator(context, oauthFlow).launch(oauthBinding).getOrThrow() }
-                    .onFailure { error = it.message ?: "Cloudflare OAuth 配置错误" }
-            }, enabled = !busy) { Text("重新授权") }
-            OutlinedButton(onClick = {
-                perform {
-                    val available = withContext(Dispatchers.IO) { viewModel.listCloudflareComputerAccounts(computer.id) }
-                    check(available.isNotEmpty()) { "当前身份没有可用 Account" }
-                    selectedAccount = null
-                    accounts = available
-                }
-            }, enabled = !busy) { Text("切换 Account") }
-            OutlinedButton(onClick = { pendingAction = "logout" }, enabled = !busy) { Text("退出登录") }
-            TextButton(onClick = { pendingAction = "delete" }, enabled = !busy) { Text("删除本地 Computer", color = MaterialTheme.colorScheme.error) }
-            Text("切换 Account 会保留 Workspace 和原 Account 的云端资源。退出登录会同时影响共用此授权的 Computer。", style = MaterialTheme.typography.bodySmall)
-            Card(Modifier.fillMaxWidth()) {
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                Button(
+                    onClick = {
+                        runCatching { CloudflareOAuthLaunchCoordinator(context, oauthFlow).launch(oauthBinding).getOrThrow() }
+                            .onFailure { error = it.message ?: "Cloudflare OAuth 配置错误" }
+                    },
+                    enabled = !busy,
+                    modifier = Modifier.weight(1f),
+                ) { Text(if (authorization == null) "登录 Cloudflare" else "重新授权") }
+                OutlinedButton(onClick = { perform { reload() } }, enabled = !busy, modifier = Modifier.weight(1f)) { Text("刷新") }
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
+                TextButton(
+                    onClick = {
+                        perform {
+                            val available = withContext(Dispatchers.IO) { viewModel.listCloudflareComputerAccounts(computer.id) }
+                            check(available.isNotEmpty()) { "当前身份没有可用 Account" }
+                            selectedAccount = null
+                            accounts = available
+                        }
+                    },
+                    enabled = !busy,
+                    modifier = Modifier.weight(1f),
+                ) { Text("切换 Account") }
+                TextButton(onClick = { pendingAction = "logout" }, enabled = !busy, modifier = Modifier.weight(1f)) { Text("退出登录") }
+            }
+            TextButton(
+                onClick = { pendingAction = "delete" },
+                enabled = !busy,
+                modifier = Modifier.fillMaxWidth(),
+            ) { Text("删除本地 Computer", color = MaterialTheme.colorScheme.error) }
+            ComputerPermissionSettingsCard(
+                computer = computer,
+                busyAction = if (busy) "permission-mode" else null,
+                summary = cloudflarePermissionSummary(computer.permissionMode),
+                onPermissionModeChange = { permissionMode ->
+                    if (permissionMode == computer.permissionMode) return@ComputerPermissionSettingsCard
+                    if (permissionMode == ComputerPermissionMode.FULL) {
+                        pendingPermissionMode = permissionMode
+                    } else {
+                        perform { viewModel.setComputerPermissionMode(computer.id, permissionMode) }
+                    }
+                },
+            )
+            if (viewModel.temporaryWorkerEnabled) Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Temporary Worker", style = MaterialTheme.typography.titleMedium)
                     Text(
-                        if (viewModel.temporaryWorkerEnabled) {
-                            "把当前 Cloudflare Workspace 临时部署为可测试 URL；它不创建正式 Computer。"
-                        } else {
-                            "功能开关未开启。开启后仍需要配置 Temporary Worker Gateway。"
-                        },
+                        "把当前 Cloudflare Workspace 临时部署为可测试 URL；它不创建正式 Computer。",
                         style = MaterialTheme.typography.bodySmall,
                     )
                     if (workspaces.isEmpty()) {
@@ -287,7 +310,7 @@ internal fun CloudflareComputerDetail(
                 Column(Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) {
                     available.forEach { account ->
                         TextButton(onClick = { selectedAccount = account.id }, enabled = !busy, modifier = Modifier.fillMaxWidth()) {
-                            Text((if (selectedAccount == account.id) "✓ " else "") + account.name + "\n" + account.id)
+                            Text((if (selectedAccount == account.id) "✓ " else "") + account.name)
                         }
                     }
                     error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
@@ -330,6 +353,16 @@ internal fun CloudflareComputerDetail(
         )
     }
 
+    ComputerFullApprovalWarningDialog(
+        visible = pendingPermissionMode == ComputerPermissionMode.FULL,
+        isBusy = busy,
+        onDismiss = { if (!busy) pendingPermissionMode = null },
+        onConfirm = {
+            pendingPermissionMode = null
+            perform { viewModel.setComputerPermissionMode(computer.id, ComputerPermissionMode.FULL) }
+        },
+    )
+
     if (temporaryWorkspaceDialogVisible) {
         AlertDialog(
             onDismissRequest = { if (!temporaryBusy) temporaryWorkspaceDialogVisible = false },
@@ -370,6 +403,31 @@ internal fun CloudflareComputerDetail(
             },
         )
     }
+}
+
+/** 信息行统一“浅色标签 + 常规值”，避免整屏同字号的纯文本墙。 */
+@Composable
+private fun CloudflareInfoRow(label: String, value: String) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = value,
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(start = 16.dp),
+        )
+    }
+}
+
+/** Cloudflare 没有容器和端口，权限模式说明要用云端写入来解释，不能复用 VPS 的容器文案。 */
+private fun cloudflarePermissionSummary(mode: ComputerPermissionMode): String = when (mode) {
+    ComputerPermissionMode.MANUAL -> "云端写操作（部署、删除、D1/KV/R2 写入等）会先请你确认；读取直接执行。"
+    ComputerPermissionMode.SMART -> "由模型判断哪些云端写操作需要你确认；读取直接执行。"
+    ComputerPermissionMode.FULL -> "所有合法操作直接执行，不再弹确认。"
 }
 
 /** Temporary Worker 的状态和可恢复操作集中显示，避免用户误以为它已经成为正式 Computer。 */

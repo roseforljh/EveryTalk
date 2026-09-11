@@ -281,6 +281,7 @@ internal fun appendComputerTools(
     return tools + if (cloudflare) ComputerToolCatalog.cloudflareDefinitions(
         workerWriteEnabled = cloudflareWorkerWriteEnabled,
         resourceToolsEnabled = cloudflareResourceToolsEnabled,
+        permissionMode = permissionMode,
     ) else ComputerToolCatalog.definitions(permissionMode)
 }
 
@@ -293,44 +294,54 @@ internal fun appendLocalBashTool(
     if (tools.any { extractToolName(it).equals(ComputerToolNames.LOCAL_FILE_SAVE, ignoreCase = true) }) {
         throw ComputerException(ComputerErrorCodes.TOOL_NAME_CONFLICT, "Agent 工具名与本地文件保存工具冲突")
     }
-    return tools + mapOf(
-        "name" to "local_bash",
-        "description" to "在当前 App 私有 Workspace 的临时内存快照中执行受限 Bash 命令；不能访问系统文件或网络。命令产生的文件变化不会自动保存，需要保存时使用 local_file_save。",
-        "parameters" to mapOf(
-            "type" to "object",
-            "properties" to mapOf(
-                "command" to mapOf("type" to "string"),
-                "cwd" to mapOf("type" to "string"),
-                "timeout_ms" to mapOf("type" to "integer"),
-                "max_output_chars" to mapOf("type" to "integer"),
+    return tools + listOf(
+        mapOf(
+            "type" to "function",
+            "function" to mapOf(
+                "name" to "local_bash",
+                "description" to "在当前 App 私有 Workspace 的临时内存快照中执行受限 Bash 命令；不能访问系统文件或网络。命令产生的文件变化不会自动保存，需要保存时使用 local_file_save。",
+                "parameters" to mapOf(
+                    "type" to "object",
+                    "properties" to mapOf(
+                        "command" to mapOf("type" to "string"),
+                        "cwd" to mapOf("type" to "string"),
+                        "timeout_ms" to mapOf("type" to "integer"),
+                        "max_output_chars" to mapOf("type" to "integer"),
+                    ),
+                    "required" to listOf("command"),
+                ),
             ),
-            "required" to listOf("command"),
         ),
-    ) + mapOf(
-        "name" to ComputerToolNames.LOCAL_FILE_SAVE,
-        "description" to "经用户确认后保存文本文件到当前本地 Workspace，并返回可打开的文件引用。",
-        "parameters" to mapOf("type" to "object", "properties" to mapOf(
-            "path" to mapOf("type" to "string"), "content" to mapOf("type" to "string")),
-            "required" to listOf("path", "content")),
+        mapOf(
+            "type" to "function",
+            "function" to mapOf(
+                "name" to ComputerToolNames.LOCAL_FILE_SAVE,
+                "description" to "经用户确认后保存文本文件到当前本地 Workspace，并返回可打开的文件引用。",
+                "parameters" to mapOf("type" to "object", "properties" to mapOf(
+                    "path" to mapOf("type" to "string"), "content" to mapOf("type" to "string")),
+                    "required" to listOf("path", "content")),
+            ),
+        ),
     )
 }
 
 /** Agent 和 Skill 密钥申请名称由应用独占，模型只能通过这两张接口申请。 */
 internal fun appendAgentRequestTool(
     tools: List<Map<String, Any>>,
-    enabled: Boolean,
+    agentRequestEnabled: Boolean,
 ): List<Map<String, Any>> {
-    if (!enabled) return tools
     val conflict = tools.mapNotNull(::extractToolName).firstOrNull { name ->
         com.android.everytalk.data.agent.AgentControlToolNames.all.any { it.equals(name, ignoreCase = true) }
     }
     require(conflict == null) { "Agent 控制工具名已被占用：$conflict" }
-    return tools + listOf(
-        com.android.everytalk.data.agent.agentRequestToolDefinition(),
-        com.android.everytalk.data.agent.skillSecretRequestToolDefinition(),
-        com.android.everytalk.data.agent.protectedSecretRequestToolDefinition(),
-        com.android.everytalk.data.agent.capabilityRequestToolDefinition(),
-    )
+    // 开启 Agent 的申请只在 Agent 未运行时才有意义；
+    // Secret 与能力接力申请反过来只在 Agent 运行中才有意义，选了服务器目标时同样必须下发。
+    return tools + buildList {
+        if (agentRequestEnabled) add(com.android.everytalk.data.agent.agentRequestToolDefinition())
+        add(com.android.everytalk.data.agent.skillSecretRequestToolDefinition())
+        add(com.android.everytalk.data.agent.protectedSecretRequestToolDefinition())
+        add(com.android.everytalk.data.agent.capabilityRequestToolDefinition())
+    }
 }
 
 /**

@@ -5,7 +5,8 @@ import com.android.everytalk.BuildConfig
 
 /**
  * 新能力的本地发布开关。
- * 默认只开启 local_bash；Cloudflare 写操作保持关闭，待 OAuth 配置和联调完成后再逐步开启。
+ * 默认开启 local_bash 与 Cloudflare 能力。Cloudflare 写的危险性由每台 Computer 的权限模式
+ * （MANUAL / SMART / FULL）和审批卡控制，不再用全局开关把整族工具藏起来。
  * 关闭开关只停止新请求，不删除 Workspace、Computer 或云端资源。
  */
 class ComputerFeatureFlags(context: Context) {
@@ -15,8 +16,8 @@ class ComputerFeatureFlags(context: Context) {
     // 没有 OAuth Client ID 时保持关闭，避免 UI 能保存半成品后 Agent 才失败；
     // 配置到本地安全构建参数后，读取能力可直接进入内测。
     val cloudflareEnabled: Boolean get() = preferences.getBoolean(KEY_CLOUDFLARE, BuildConfig.CLOUDFLARE_OAUTH_CLIENT_ID.isNotBlank())
-    val cloudflareWorkerWriteEnabled: Boolean get() = preferences.getBoolean(KEY_WORKER_WRITE, false)
-    val cloudflareResourceToolsEnabled: Boolean get() = preferences.getBoolean(KEY_RESOURCE_TOOLS, false)
+    val cloudflareWorkerWriteEnabled: Boolean get() = preferences.getBoolean(KEY_WORKER_WRITE, true)
+    val cloudflareResourceToolsEnabled: Boolean get() = preferences.getBoolean(KEY_RESOURCE_TOOLS, true)
     val temporaryWorkerEnabled: Boolean get() = preferences.getBoolean(KEY_TEMPORARY_WORKER, false)
 
     fun setLocalBashEnabled(enabled: Boolean) = preferences.edit().putBoolean(KEY_LOCAL_BASH, enabled).apply()

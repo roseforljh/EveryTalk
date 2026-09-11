@@ -239,9 +239,14 @@ internal fun MessageSender.sendMessageInternal(
                 withContext(Dispatchers.IO) { skillRepository.createSnapshot(manualReferences) }
             }
             // Workspace 准备和附件处理并行。用户消息无需等待 SSH，点击发送后立即进入消息列表。
+            // 生图和未启用 Agent 的请求不依赖 Computer，避免无关的初始化阻塞发送。
             val computerPreparation = async(Dispatchers.IO) {
-                captureComputerPreparation {
-                    prepareComputerRequest(requestConversationId, isAgentEnabledForRequest)
+                if (isImageGeneration || !isAgentEnabledForRequest) {
+                    Result.success(null)
+                } else {
+                    captureComputerPreparation {
+                        prepareComputerRequest(requestConversationId, isAgentEnabledForRequest)
+                    }
                 }
             }
             val enabledToolIdsForRequest = enabledMessageToolIdsForRequest(
@@ -750,7 +755,7 @@ internal fun MessageSender.sendMessageInternal(
                     )
                     val toolsWithAgentRequest = appendAgentRequestTool(
                         tools = toolsWithAttachmentReader,
-                        enabled = preparedComputerRequest == null,
+                        agentRequestEnabled = preparedComputerRequest == null,
                     )
                     val toolsWithLocalBash = appendLocalBashTool(
                         tools = toolsWithAgentRequest,

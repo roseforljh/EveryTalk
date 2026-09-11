@@ -201,20 +201,47 @@ internal fun ComputerAddCard(
 
                     if (form.provider == ComputerProvider.CLOUDFLARE) {
                         Text(
-                            text = if (form.cloudflareAuthorized) "Cloudflare 已登录：${form.cloudflareIdentity ?: "身份信息暂不可用"}" else "尚未登录 Cloudflare",
+                            text = if (form.cloudflareAuthorized) "已登录：${form.cloudflareIdentity ?: "身份信息暂不可用"}" else "尚未登录 Cloudflare",
                             color = contentColor,
-                            modifier = Modifier.padding(bottom = 12.dp),
                         )
-                        OutlinedButton(onClick = onCloudflareLogin, enabled = !isBusy) { Text("登录 Cloudflare") }
-                        if (form.cloudflareAuthorized) Text("授权范围：${form.cloudflareScopes.joinToString().ifBlank { "未返回" }}", color = contentColor)
-                        if (form.cloudflareAccountId.isNotBlank()) {
-                            Text("Account：${form.cloudflareAccountName} (${form.cloudflareAccountId})", color = contentColor)
+                        if (form.cloudflareAuthorized) {
+                            // 只报数量，不铺开 17 条 scope 原文。
+                            Text(
+                                text = "授权范围：已授予 ${form.cloudflareScopes.size} 项权限",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = contentColor.copy(alpha = 0.7f),
+                            )
                         }
-                        cloudflareAccounts.forEach { account ->
-                            OutlinedButton(
-                                onClick = { onCloudflareAccountSelected(account.id, account.name) },
-                                enabled = !isBusy,
-                            ) { Text("使用 ${account.name}") }
+                        Spacer(Modifier.height(10.dp))
+                        Button(
+                            onClick = onCloudflareLogin,
+                            enabled = !isBusy,
+                            shape = AppDialogButtonShape,
+                            colors = androidx.compose.material3.ButtonDefaults.buttonColors(
+                                containerColor = contentColor,
+                                contentColor = dialogBackground,
+                                disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                            ),
+                        ) { Text(if (form.cloudflareAuthorized) "重新登录" else "登录 Cloudflare") }
+                        if (form.cloudflareAccountName.isNotBlank()) {
+                            Text("Account：${form.cloudflareAccountName}", color = contentColor, modifier = Modifier.padding(top = 10.dp))
+                        }
+                        // 只有一个 Account 且已经选中时不再摆一个没有选择余地的按钮。
+                        if (cloudflareAccounts.size > 1 || form.cloudflareAccountId.isBlank()) {
+                            cloudflareAccounts.forEach { account ->
+                                val selected = account.id == form.cloudflareAccountId
+                                OutlinedButton(
+                                    onClick = { onCloudflareAccountSelected(account.id, account.name) },
+                                    enabled = !isBusy && !selected,
+                                    shape = AppDialogButtonShape,
+                                    colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                                        containerColor = dialogBackground,
+                                        contentColor = contentColor,
+                                    ),
+                                    border = BorderStroke(1.dp, borderColor),
+                                ) { Text((if (selected) "✓ " else "") + account.name) }
+                            }
                         }
                     }
                     ComputerTextField(
@@ -316,6 +343,7 @@ internal fun ComputerAddCard(
                     }
 
                     if (!keepCredentialHint) {
+                        if (form.provider == ComputerProvider.SSH) {
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -348,9 +376,10 @@ internal fun ComputerAddCard(
                                 colors = sandboxSwitchColors,
                             )
                         }
+                        }
                     }
 
-                    if (form.username.trim() != "root") {
+                    if (form.provider == ComputerProvider.SSH && form.username.trim() != "root") {
                         ComputerTextField(
                             value = form.sudoPassword,
                             onValueChange = { onFormChange(form.copy(sudoPassword = it)) },

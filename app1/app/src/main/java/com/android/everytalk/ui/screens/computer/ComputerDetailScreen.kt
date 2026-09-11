@@ -393,6 +393,7 @@ fun ComputerDetailScreen(
                         ComputerPermissionSettingsCard(
                             computer = computer,
                             busyAction = busyAction,
+                            summary = computerPermissionSummary(computer),
                             onPermissionModeChange = { permissionMode ->
                                 if (permissionMode == computer.permissionMode) return@ComputerPermissionSettingsCard
                                 if (permissionMode == ComputerPermissionMode.FULL) {
@@ -751,9 +752,10 @@ private fun ComputerAgentUseCard(computer: Computer) {
 }
 
 @Composable
-private fun ComputerPermissionSettingsCard(
+internal fun ComputerPermissionSettingsCard(
     computer: Computer,
     busyAction: String?,
+    summary: String,
     onPermissionModeChange: (ComputerPermissionMode) -> Unit,
 ) {
     ComputerSectionCard {
@@ -773,7 +775,7 @@ private fun ComputerPermissionSettingsCard(
             onSelect = onPermissionModeChange,
         )
         Text(
-            text = computerPermissionSummary(computer),
+            text = summary,
             style = MaterialTheme.typography.bodySmall,
             color = if (computer.username == "root") {
                 MaterialTheme.colorScheme.error
@@ -991,7 +993,7 @@ private fun ComputerSettingsGroup(
 }
 
 @Composable
-private fun ComputerPermissionModeSelector(
+internal fun ComputerPermissionModeSelector(
     selected: ComputerPermissionMode,
     enabled: Boolean,
     onSelect: (ComputerPermissionMode) -> Unit,
@@ -1071,7 +1073,7 @@ private fun computerPermissionSummary(computer: Computer): String = when (comput
 }
 
 @Composable
-private fun ComputerSectionCard(content: @Composable ColumnScope.() -> Unit) {
+internal fun ComputerSectionCard(content: @Composable ColumnScope.() -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(24.dp),
@@ -1292,7 +1294,7 @@ private fun ComputerContainerRepairDialog(
 }
 
 @Composable
-private fun ComputerFullApprovalWarningDialog(
+internal fun ComputerFullApprovalWarningDialog(
     visible: Boolean,
     isBusy: Boolean,
     onDismiss: () -> Unit,
