@@ -5,6 +5,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
+import kotlinx.coroutines.CancellationException
 import com.android.everytalk.data.DataClass.AbstractApiMessage
 import com.android.everytalk.data.DataClass.MessageContentPart
 import com.android.everytalk.data.DataClass.GenerationConfig
@@ -62,6 +63,12 @@ object AgentTerminalReasons {
 
 /** Agent 编排、状态或持久化失败，禁止在 UI 层伪装成网络错误。 */
 const val AGENT_INTERNAL_ERROR_TYPE = "agent_internal"
+
+/**
+ * 只用于“调整方向”切换当前模型请求。
+ * 它与用户强制停止不同：Run 保留为可恢复状态，工具执行不会使用此异常中断。
+ */
+class AgentSteeringCancellation : CancellationException("agent steering requested")
 
 enum class AgentEntryKind {
     ASSISTANT,

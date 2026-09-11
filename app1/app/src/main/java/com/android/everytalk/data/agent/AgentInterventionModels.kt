@@ -228,6 +228,7 @@ data class PendingIntervention(
     val capabilityId: String,
     val reasonSafe: String,
     val userVisibleContext: String?,
+    val parameters: Map<String, String> = emptyMap(),
     val materialKind: ResolutionMaterialKind,
     val fields: List<AgentInterventionPolicyRegistry.Field>,
     val requestSource: InterventionRequestSource,

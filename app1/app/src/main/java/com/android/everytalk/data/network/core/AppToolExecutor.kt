@@ -11,6 +11,8 @@ import kotlinx.serialization.json.JsonObject
 data class AppToolExecutionResult(
     val content: JsonElement,
     val terminate: Boolean = false,
+    /** 只由 App 内置执行器生成，不从工具 JSON 或 MCP 响应反序列化。 */
+    val attachments: List<com.android.everytalk.models.SelectedMediaItem.GenericFile> = emptyList(),
 )
 
 /**

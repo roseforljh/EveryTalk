@@ -24,6 +24,8 @@ data class OAuthAuthorizationRequest(
     val state: String,
     val codeChallenge: String,
     val codeChallengeMethod: String = "S256",
+    /** OIDC/支持 nonce 的 OAuth 服务使用；普通 OAuth 回调可不返回该字段。 */
+    val nonce: String? = null,
 )
 
 data class ClaimedOAuthCallback(

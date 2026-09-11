@@ -53,6 +53,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.jsonPrimitive
 
 internal const val MAX_AGENT_MODEL_TURNS = 50
 internal const val MAX_AGENT_CONSECUTIVE_TOOL_CALLS = 100
@@ -884,8 +885,17 @@ class AgentLoop(
         } catch (error: CancellationException) {
             withContext(NonCancellable) {
                 run?.let { activeRun ->
-                    runStore.cancelOpenRequests(activeRun.id, error.message)
-                    runStore.updateRunStatus(activeRun, AgentRunStatus.CANCELLED, terminalReason = error.message)
+                    if (error is AgentSteeringCancellation) {
+                        runStore.interruptOpenRequests(activeRun.id, error.message ?: "STEERING")
+                        runStore.updateRunStatus(
+                            activeRun,
+                            AgentRunStatus.MODEL_CONTINUATION_PENDING,
+                            terminalReason = "STEERING_INTERRUPTED",
+                        )
+                    } else {
+                        runStore.cancelOpenRequests(activeRun.id, error.message)
+                        runStore.updateRunStatus(activeRun, AgentRunStatus.CANCELLED, terminalReason = error.message)
+                    }
                 }
             }
             throw error
@@ -1234,7 +1244,7 @@ class AgentLoop(
         // Computer 和 Agent Gate 会接触共享资源或暂停 Run，因此都属于 sequential Tool。
         val executeWholeBatchSequentially = calls.any { call ->
             toolExecutionModes[call.name] == "sequential" ||
-                call.name in ComputerToolNames.all ||
+                call.name in ComputerToolNames.allProviders ||
                 call.name in AgentControlToolNames.all
         }
 
@@ -1253,7 +1263,7 @@ class AgentLoop(
             val batch = parallelCalls.toList()
             parallelCalls.clear()
             batch.forEach { call -> runStore.appendToolExecutionStarted(run.id, requestId, call) }
-            val containsComputerCall = batch.any { it.name in ComputerToolNames.all }
+            val containsComputerCall = batch.any { it.name in ComputerToolNames.allProviders }
             if (containsComputerCall) {
                 runStore.updateRunStatus(run, AgentRunStatus.WAITING_REMOTE_EXECUTION)
             }
@@ -1476,11 +1486,58 @@ class AgentLoop(
 
             flushParallelCalls()
             runStore.appendToolExecutionStarted(run.id, requestId, call)
-            if (call.name in ComputerToolNames.all) {
+            if (call.name in ComputerToolNames.allProviders) {
                 // 先写等待状态，再让 Executor 连接 VPS。进程在此窗口退出时仍可恢复。
                 runStore.updateRunStatus(run, AgentRunStatus.WAITING_REMOTE_EXECUTION)
             }
             val result = executeToolObserved(call, contextualComputerContext, maxModelResultTokens, run.id, emit)
+            val resourceTarget = com.android.everytalk.data.computer.cloudflareResourceTarget(call.name)
+                ?.takeIf { result.requiresCloudflareResourceSelection() }
+            if (result.requiresCloudflareReauthorization() || resourceTarget != null) {
+                val broker = interventionBroker
+                if (broker != null && contextualComputerContext != null) {
+                    val ticket = broker.suspend(
+                        run = run,
+                        capabilityRequest = CapabilityRequest(
+                            requestedCapability = if (resourceTarget == null) "cloudflare.reauthorize" else "cloudflare.resource.select",
+                            reasonSafe = if (resourceTarget == null) "Cloudflare 授权已失效，需要重新登录后继续当前工具调用"
+                                else "当前工具需要选择 Cloudflare 资源，选择后仍须重新确认写操作",
+                            userVisibleContext = "目标 Cloudflare Computer：${contextualComputerContext.computerId}",
+                            parameters = mapOf(
+                                "computer_id" to contextualComputerContext.computerId,
+                                "workspace_id" to contextualComputerContext.workspaceId,
+                                "tool_name" to call.name,
+                                "authorization_id" to (result.content as kotlinx.serialization.json.JsonObject).getValue("authorization_id").jsonPrimitive.content,
+                                "previous_generation" to result.content.getValue("authorization_generation").jsonPrimitive.content,
+                                "account_id" to result.content.getValue("account_id").jsonPrimitive.content,
+                            ) + if (resourceTarget == null) emptyMap() else mapOf(
+                                "resource_kind" to resourceTarget.kind,
+                                "resource_parameter" to resourceTarget.parameter,
+                                "list_tool" to resourceTarget.listTool,
+                            ),
+                        ),
+                        turnId = requestId,
+                        requestId = requestId,
+                        toolCallId = call.id,
+                        executionSlot = call.id,
+                        requestHash = java.security.MessageDigest.getInstance("SHA-256")
+                            .digest("cloudflare-reauthorize|${call.id}|${call.arguments}".toByteArray(Charsets.UTF_8))
+                            .joinToString("") { "%02x".format(it) },
+                        requestSource = "EXECUTOR_PROVEN",
+                        targetBindingRef = "computer:${contextualComputerContext.computerId}:workspace:${contextualComputerContext.workspaceId}",
+                        bindingGeneration = 0,
+                        executionGeneration = 0,
+                    )
+                    runStore.updateExecutionStep(
+                        runId = run.id,
+                        currentStep = if (resourceTarget == null) "等待 Cloudflare 重新授权" else "等待选择 Cloudflare 资源",
+                        resumeInstruction = "完成用户操作后重试工具 ${call.name}",
+                    )
+                    emit(AppStreamEvent.ExecutionStatusUpdate(if (resourceTarget == null) "等待 Cloudflare 重新授权" else "等待选择 Cloudflare 资源"))
+                    emit(AppStreamEvent.AgentInterventionRequired(run.id, ticket.suspension.id))
+                    return ToolBatchOutcome(currentTranscript, paused = true)
+                }
+            }
             if (result.isUnknownExecution()) {
                 val unknownApproval = toolRuntime.approvalRequest(
                     call,
@@ -1501,7 +1558,7 @@ class AgentLoop(
                     return ToolBatchOutcome(currentTranscript, paused = true)
                 }
             }
-            if (call.name in ComputerToolNames.all) {
+            if (call.name in ComputerToolNames.allProviders) {
                 runStore.updateRunStatus(run, AgentRunStatus.PERSISTING_RESULT)
             }
             persistResult(result)
@@ -1524,7 +1581,7 @@ class AgentLoop(
      * 修改服务器的命令保留原始顺序，防止创建目录、写文件、启动服务等操作互相抢跑。
      */
     private fun canRunToolCallInParallel(call: AgentContentBlock.ToolCall): Boolean =
-        call.name !in ComputerToolNames.all || ComputerToolCallSafety.isReadOnly(call.name, call.arguments)
+        call.name !in ComputerToolNames.allProviders || ComputerToolCallSafety.isReadOnly(call.name, call.arguments)
 
     /**
      * 最多同时运行四条工具调用，避免模型异常返回大量调用时压垮手机或 SSH Transport。
@@ -1635,14 +1692,20 @@ class AgentLoop(
                 decision == AgentApprovalDecision.APPROVED || decision == AgentApprovalDecision.RETRY
             },
             retryUnknownToolCallId = record.toolCall.id.takeIf { decision == AgentApprovalDecision.RETRY },
+            approvedCloudflareCronChange = (record.request as? com.android.everytalk.data.computer.ComputerToolApprovalRequest.CloudflareCronChange),
+            approvedCloudflareWrite = (record.request as? com.android.everytalk.data.computer.ComputerToolApprovalRequest.CloudflareWrite),
+            // 预检时上下文可能还没有最终 Run ID；恢复执行时在可信的持久化 Run 上重新绑定，
+            // 防止另一轮 Agent 复用同一份本地写入批准。
+            approvedLocalFileWrite = (record.request as? com.android.everytalk.data.computer.ComputerToolApprovalRequest.LocalFileWrite)
+                ?.copy(context = record.request.context.copy(runId = run.id)),
         )
         runStore.appendToolExecutionStarted(run.id, record.requestId, record.toolCall)
-        if (record.toolCall.name in ComputerToolNames.all) {
+        if (record.toolCall.name in ComputerToolNames.allProviders) {
             // 审批卡片恢复后的远端调用也必须留下等待状态，进程退出时才能沿同一 Run 对账。
             runStore.updateRunStatus(run, AgentRunStatus.WAITING_REMOTE_EXECUTION)
         }
         val result = executeToolObserved(record.toolCall, approvedContext, maxModelResultTokens, run.id, emit)
-        if (record.toolCall.name in ComputerToolNames.all) {
+        if (record.toolCall.name in ComputerToolNames.allProviders) {
             runStore.updateRunStatus(run, AgentRunStatus.PERSISTING_RESULT)
         }
         return ResumedToolOutcome(
@@ -2009,6 +2072,21 @@ private fun MutableList<AgentContentBlock>.appendText(
     } else {
         add(AgentContentBlock.Text(text, thoughtSignature, sourceProtocol))
     }
+}
+
+/** Cloudflare 授权失败必须进入持久化人类接力，不能只把一次性错误交给模型重试。 */
+private fun AgentContentBlock.ToolResult.requiresCloudflareReauthorization(): Boolean {
+    val objectContent = content as? kotlinx.serialization.json.JsonObject ?: return false
+    return toolName in ComputerToolNames.cloudflare &&
+        (objectContent["error_code"] as? kotlinx.serialization.json.JsonPrimitive)?.content == "AUTHORIZATION_REQUIRED" &&
+        listOf("authorization_id", "authorization_generation", "account_id").all { objectContent[it] is kotlinx.serialization.json.JsonPrimitive }
+}
+
+private fun AgentContentBlock.ToolResult.requiresCloudflareResourceSelection(): Boolean {
+    val objectContent = content as? kotlinx.serialization.json.JsonObject ?: return false
+    return toolName in ComputerToolNames.cloudflare &&
+        (objectContent["error_code"] as? kotlinx.serialization.json.JsonPrimitive)?.content == "RESOURCE_SELECTION_REQUIRED" &&
+        listOf("authorization_id", "authorization_generation", "account_id").all { objectContent[it] is kotlinx.serialization.json.JsonPrimitive }
 }
 
 /**

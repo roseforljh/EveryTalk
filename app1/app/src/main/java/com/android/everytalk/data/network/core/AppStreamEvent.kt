@@ -46,6 +46,10 @@ data class TokenUsage(
 @Serializable
 sealed class AppStreamEvent {
     @Serializable
+    @SerialName("local_file_artifact")
+    data class LocalFileArtifact(val attachment: SelectedMediaItem.GenericFile) : AppStreamEvent()
+
+    @Serializable
     @SerialName("text")
     data class Text(val text: String) : AppStreamEvent()
 

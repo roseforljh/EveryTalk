@@ -74,6 +74,18 @@ class AgentInterventionPolicyRegistry {
             listOf(Field("secret", "服务器环境变量值", FieldKind.SENSITIVE_TEXT)),
             "ADAPTER_TARGET",
         ),
+        "cloudflare.reauthorize" to Policy(
+            "cloudflare.reauthorize", "1", "1", AgentContinuationKind.RETRY_TOOL,
+            ResolutionMaterialKind.NONE, "cloudflare-reauthorization-adapter",
+            listOf(Field("confirmed", "完成 Cloudflare 重新授权", FieldKind.CONFIRMATION)),
+            "CLOUDFLARE_AUTHORIZATION",
+            InterventionRequestSource.EXECUTOR_PROVEN,
+        ),
+        "cloudflare.resource.select" to Policy(
+            "cloudflare.resource.select", "1", "1", AgentContinuationKind.RETRY_TOOL,
+            ResolutionMaterialKind.NONE, "cloudflare-resource-selection-adapter",
+            emptyList(), minimumSource = InterventionRequestSource.EXECUTOR_PROVEN,
+        ),
     )
 
     fun resolve(capability: String): Policy? = policies[capability]

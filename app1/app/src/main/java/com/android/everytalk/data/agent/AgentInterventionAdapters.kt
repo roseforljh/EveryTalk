@@ -42,6 +42,50 @@ private object AcknowledgementInterventionAdapter : AgentInterventionAdapter {
     override suspend fun cleanup(request: TrustedInterventionRequest) = Unit
 }
 
+/**
+ * Cloudflare 重新授权 Adapter。
+ * OAuth 浏览器交互由 UI 完成，Adapter 只在用户提交“已完成”后重新读取本地授权事实，
+ * 这样点击按钮本身不能绕过授权，也不会把 Token 放进 Agent 接力协议。
+ */
+class CloudflareReauthorizationAdapter(
+    private val authorizationReady: suspend (TrustedInterventionRequest) -> Boolean,
+) : AgentInterventionAdapter {
+    override suspend fun validate(request: TrustedInterventionRequest): Boolean =
+        request.resolutionMaterialKind == ResolutionMaterialKind.NONE &&
+            request.parameters["computer_id"].orEmpty().isNotBlank()
+
+    override suspend fun present(request: TrustedInterventionRequest): String = "重新登录 Cloudflare 后继续"
+
+    override suspend fun fulfill(
+        request: TrustedInterventionRequest,
+        protectedResolution: ProtectedResolution,
+    ): AdapterFulfillmentResult = if (protectedResolution === ProtectedResolution.None && authorizationReady(request)) {
+        AdapterFulfillmentResult(AdapterDeliveryFact.DELIVERED, "Cloudflare 授权已恢复")
+    } else {
+        AdapterFulfillmentResult(AdapterDeliveryFact.NOT_DELIVERED, "Cloudflare 授权尚未恢复")
+    }
+
+    override suspend fun reconcile(request: TrustedInterventionRequest): AdapterDeliveryFact =
+        if (authorizationReady(request)) AdapterDeliveryFact.DELIVERED else AdapterDeliveryFact.NOT_DELIVERED
+
+    override suspend fun cleanup(request: TrustedInterventionRequest) = Unit
+}
+
+/** 只接受 App 选择控件已落库且仍属于原目标的选择；点击继续本身不能伪造资源。 */
+class CloudflareResourceSelectionAdapter(
+    private val selectionReady: suspend (TrustedInterventionRequest) -> Boolean,
+) : AgentInterventionAdapter {
+    override suspend fun validate(request: TrustedInterventionRequest): Boolean =
+        request.capabilityId == "cloudflare.resource.select" && request.resolutionMaterialKind == ResolutionMaterialKind.NONE
+    override suspend fun present(request: TrustedInterventionRequest): String = "选择 Cloudflare 资源"
+    override suspend fun fulfill(request: TrustedInterventionRequest, protectedResolution: ProtectedResolution): AdapterFulfillmentResult =
+        AdapterFulfillmentResult(if (protectedResolution === ProtectedResolution.None && selectionReady(request))
+            AdapterDeliveryFact.DELIVERED else AdapterDeliveryFact.NOT_DELIVERED)
+    override suspend fun reconcile(request: TrustedInterventionRequest): AdapterDeliveryFact =
+        if (selectionReady(request)) AdapterDeliveryFact.DELIVERED else AdapterDeliveryFact.NOT_DELIVERED
+    override suspend fun cleanup(request: TrustedInterventionRequest) = Unit
+}
+
 /** 长期授权 capability proxy。只验证授权存在和绑定，不把凭据交给模型或任意命令。 */
 class StoredAuthorizationCapabilityAdapter(
     private val provider: String,

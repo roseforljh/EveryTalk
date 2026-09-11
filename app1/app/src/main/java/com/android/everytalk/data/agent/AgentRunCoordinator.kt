@@ -42,6 +42,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -139,6 +141,24 @@ class AgentRunCoordinator(
                     ),
                     computerRepository,
                 ),
+                "cloudflare-reauthorization-adapter" to CloudflareReauthorizationAdapter { request ->
+                    val computerId = request.parameters["computer_id"]
+                    val expectedGeneration = request.parameters["previous_generation"]?.toLongOrNull()
+                    if (computerId.isNullOrBlank() || expectedGeneration == null) false else {
+                        val config = computerDao.getCloudflareConfig(computerId)
+                        val authorization = config?.let { computerDao.getCloudflareAuthorization(it.authorizationId) }
+                        authorization != null &&
+                            authorization.authorizationId == request.parameters["authorization_id"] &&
+                            config.accountId == request.parameters["account_id"] &&
+                            !authorization.revoked &&
+                            authorization.generation > expectedGeneration &&
+                            (authorization.expiresAt == null || authorization.expiresAt > System.currentTimeMillis())
+                    }
+                },
+                "cloudflare-resource-selection-adapter" to CloudflareResourceSelectionAdapter { request ->
+                    com.android.everytalk.data.computer.CloudflareResourceIndex(computerDao)
+                        .selectionReady(request.suspensionId, request.parameters)
+                },
             ),
         )
     }
@@ -169,6 +189,7 @@ class AgentRunCoordinator(
                             capabilityId = suspension.capabilityId,
                             reasonSafe = suspension.reasonSafe,
                             userVisibleContext = suspension.userVisibleContext,
+                            parameters = runCatching { kotlinx.serialization.json.Json.decodeFromString<Map<String, String>>(suspension.parametersJson) }.getOrDefault(emptyMap()),
                             materialKind = ResolutionMaterialKind.valueOf(suspension.resolutionMaterialKind),
                             fields = interventionPolicyRegistry.resolve(suspension.capabilityId)?.fields.orEmpty(),
                             requestSource = InterventionRequestSource.valueOf(suspension.requestSource),
@@ -340,8 +361,9 @@ class AgentRunCoordinator(
     }
 
     /**
-     * 正式 steering API。只把指令写入当前 Run 的 steering queue，不取消当前模型或工具 Job。
-     * AgentLoop 在工具结果落库后的下一个模型边界消费它。
+     * 正式 steering API。
+     * 模型正在输出时切断当前模型请求并恢复同一个 Run；工具执行时不取消工具，
+     * 由 AgentLoop 在工具结果落库后的安全边界消费方向。
      */
     suspend fun steer(
         sessionId: String,
@@ -352,7 +374,7 @@ class AgentRunCoordinator(
     ): Boolean {
         if ((content.isBlank() && contentParts.isEmpty() && attachments.isEmpty()) || steeringId.isBlank()) return false
         val run = agentDao.getLatestSteerableRun(sessionId) ?: return false
-        return agentRunStore.enqueueSteering(
+        val enqueued = agentRunStore.enqueueSteering(
             runId = run.id,
             instruction = AgentSteeringInstruction(
                 id = steeringId,
@@ -362,6 +384,34 @@ class AgentRunCoordinator(
                 createdAt = System.currentTimeMillis(),
             ),
         )
+        if (!enqueued) return false
+
+        // 只打断模型请求；EXECUTING_TOOL/WAITING_REMOTE_EXECUTION 等状态绝不取消，
+        // 防止 edit/write/bash 被截断。恢复调用沿用原 Run，不创建新的用户任务。
+        val latest = agentDao.getRun(run.id) ?: return true
+        val modelIsActive = latest.status in setOf(
+            AgentRunStatus.PREPARING_CONTEXT.name,
+            AgentRunStatus.WAITING_MODEL.name,
+            AgentRunStatus.STREAMING_MODEL.name,
+        )
+        if (!modelIsActive) return true
+
+        // 首次运行在 Run 持久化前后可能仍使用 message key；恢复运行才使用 run key。
+        // 两个 key 都指向同一个 AgentLoop，必须都能被 steering 找到。
+        val job = activeJobs["run:${run.id}"]
+            ?: activeJobs["message:${run.visibleAssistantMessageId}"]
+        if (job != null && job.isActive) {
+            job.cancel(AgentSteeringCancellation())
+            job.join()
+        }
+        val interrupted = agentDao.getRun(run.id) ?: return true
+        if (interrupted.status == AgentRunStatus.MODEL_CONTINUATION_PENDING.name) {
+            resumeRun(interrupted)
+        } else {
+            // 取消与自然终态竞争时，不重复启动已结束的 Run；steering 仍已持久化。
+            true
+        }
+        return true
     }
 
     private suspend fun resumeRunLocked(
@@ -494,6 +544,7 @@ class AgentRunCoordinator(
                     capabilityId = suspension.capabilityId,
                     reasonSafe = suspension.reasonSafe,
                     userVisibleContext = suspension.userVisibleContext,
+                    parameters = runCatching { kotlinx.serialization.json.Json.decodeFromString<Map<String, String>>(suspension.parametersJson) }.getOrDefault(emptyMap()),
                     materialKind = ResolutionMaterialKind.valueOf(suspension.resolutionMaterialKind),
                     fields = interventionPolicyRegistry.resolve(suspension.capabilityId)?.fields.orEmpty(),
                     requestSource = InterventionRequestSource.valueOf(suspension.requestSource),
@@ -538,29 +589,79 @@ class AgentRunCoordinator(
             suspension = interventionStore.get(suspension.id) ?: return false
         }
         val state = SuspensionState.valueOf(suspension.status)
+        val run = agentDao.getRun(suspension.runId) ?: return false
         if (state == SuspensionState.RESUMING) {
-            val failed = !suspension.failureCode.isNullOrBlank()
+            var failed = !suspension.failureCode.isNullOrBlank()
+            val cloudflareReauthorization = suspension.capabilityId == "cloudflare.reauthorize"
+            val resourceSelection = suspension.capabilityId == "cloudflare.resource.select"
+            val selection = if (resourceSelection) com.android.everytalk.data.computer.CloudflareResourceIndex(computerDao)
+                .selection(suspension.id) else null
+            val parameters = runCatching {
+                kotlinx.serialization.json.Json.decodeFromString<Map<String, String>>(suspension.parametersJson)
+            }.getOrDefault(emptyMap())
+            if (cloudflareReauthorization && !failed) {
+                // 重新授权完成后把新的 generation 写回恢复快照；只要绑定校验失败，
+                // 就不能把“授权已恢复”交给模型，更不能继续执行旧请求。
+                val computerId = parameters["computer_id"]
+                val config = computerId?.let { computerDao.getCloudflareConfig(it) }
+                val authorization = config?.let { computerDao.getCloudflareAuthorization(it.authorizationId) }
+                val previousGeneration = parameters["previous_generation"]?.toLongOrNull()
+                val currentBinding = if (config != null && authorization != null && previousGeneration != null &&
+                    config.authorizationId == parameters["authorization_id"] &&
+                    config.accountId == parameters["account_id"] &&
+                    authorization.generation > previousGeneration && !authorization.revoked &&
+                    (authorization.expiresAt == null || authorization.expiresAt > System.currentTimeMillis())
+                ) {
+                    com.android.everytalk.data.computer.CloudflareRequestBinding(
+                        config.accountId, config.authorizationId, authorization.generation,
+                    )
+                } else null
+                if (currentBinding == null || !agentRunStore.refreshCloudflareRequestBinding(
+                        run.id, suspension.id, suspension.rowVersion, currentBinding,
+                    )) failed = true
+            }
             agentRunStore.appendToolResult(
                 runId = suspension.runId,
                 requestId = suspension.requestId,
                 result = AgentContentBlock.ToolResult(
                     toolCallId = suspension.toolCallId,
-                    toolName = AgentControlToolNames.REQUEST_CAPABILITY,
-                    content = kotlinx.serialization.json.JsonPrimitive(
-                        if (failed) {
-                            "能力接力未完成：${suspension.failureCode}。请根据当前条件重新规划。"
+                    toolName = if (cloudflareReauthorization || resourceSelection) runCatching {
+                        kotlinx.serialization.json.Json.decodeFromString<Map<String, String>>(suspension.parametersJson)["tool_name"]
+                    }.getOrNull() ?: AgentControlToolNames.REQUEST_CAPABILITY else AgentControlToolNames.REQUEST_CAPABILITY,
+                    content = if (cloudflareReauthorization) kotlinx.serialization.json.buildJsonObject {
+                        put("ok", false)
+                        put("error_code", if (failed) "REAUTHORIZATION_FAILED" else "AUTHORIZATION_RESTORED")
+                        put("retryable", !failed)
+                        put("message", if (failed) {
+                            "Cloudflare 重新授权未完成：${suspension.failureCode}。请重新规划。"
                         } else {
-                            "所需能力已由本地 Broker 准备完成。授权仅限当前 Run、Tool 和目标。"
-                        },
+                            "Cloudflare 授权已恢复，原工具调用尚未执行，请重新调用原工具。"
+                        })
+                    } else if (resourceSelection) kotlinx.serialization.json.buildJsonObject {
+                        put("ok", false)
+                        put("error_code", if (failed || selection == null) "RESOURCE_SELECTION_FAILED" else "RESOURCE_SELECTED")
+                        put("retryable", !failed && selection != null)
+                        put("message", "资源选择已结束，原工具尚未执行；重新调用时仍需通过写操作审批")
+                        if (!failed && selection != null) {
+                            put("resource_parameter", parameters["resource_parameter"].orEmpty())
+                            put("resource_id", selection.resourceId)
+                            put("account_id", selection.accountId)
+                        }
+                    } else kotlinx.serialization.json.JsonPrimitive(
+                        if (failed) "能力接力未完成：${suspension.failureCode}。请根据当前条件重新规划。"
+                        else "所需能力已由本地 Broker 准备完成。授权仅限当前 Run、Tool 和目标。",
                     ),
-                    isError = failed,
+                    /*
+                     * 原工具没有执行成功，因此必须保留 isError=true；模型得到的是
+                     * “可重试的授权状态”，不能把重新授权误报成 Worker/D1 已完成。
+                     */
+                    isError = cloudflareReauthorization || resourceSelection || failed,
                 ),
             )
             if (!interventionStore.finishResume(suspension.id, suspension.rowVersion)) return false
             suspension = interventionStore.get(suspension.id) ?: return false
         }
         if (suspension.status != SuspensionState.RESUMED.name) return false
-        val run = agentDao.getRun(suspension.runId) ?: return false
         if (run.runGeneration != suspension.runGeneration || run.status in setOf(
                 AgentRunStatus.COMPLETED.name,
                 AgentRunStatus.FAILED.name,

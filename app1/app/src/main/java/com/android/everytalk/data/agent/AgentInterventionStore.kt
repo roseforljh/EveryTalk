@@ -6,6 +6,8 @@ import com.android.everytalk.data.database.entities.AgentSuspensionEntity
 import com.android.everytalk.data.database.entities.AgentExecutionSlotEntity
 import java.security.MessageDigest
 import java.util.UUID
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 /** AgentIntervention 的持久化入口，所有并发控制下沉到 Room DAO。 */
 class AgentInterventionStore(private val dao: AgentDao) {
@@ -34,6 +36,7 @@ class AgentInterventionStore(private val dao: AgentDao) {
             capabilityId = request.capabilityId,
             reasonSafe = request.reasonSafe,
             userVisibleContext = request.userVisibleContext,
+            parametersJson = Json.encodeToString(request.parameters),
             targetBindingRef = request.targetBindingRef,
             requestSource = request.requestSource,
             policyVersion = request.policyVersion,

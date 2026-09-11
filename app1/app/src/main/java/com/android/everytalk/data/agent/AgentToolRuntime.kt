@@ -92,6 +92,7 @@ class AgentToolRuntime(
                 computerContext,
             ) { status -> emit(AppStreamEvent.ExecutionStatusUpdate(status)) }
             val raw = execution.content
+            execution.attachments.forEach { emit(AppStreamEvent.LocalFileArtifact(it)) }
             computerExecutionCompletedEvent(raw, preparedCall.id)?.let { emit(it) }
             WebSearchToolResultExtractor.extract(preparedCall.name, raw)
                 .takeIf(List<*>::isNotEmpty)
@@ -133,7 +134,7 @@ class AgentToolRuntime(
     }
 
     private fun stripUiOnlyFields(result: JsonElement): JsonElement = (result as? JsonObject)
-        ?.let { JsonObject(it.filterKeys { key -> key != "_images" }) }
+        ?.let { JsonObject(it.filterKeys { key -> key != "_images" && key != "_local_file_attachment" }) }
         ?: result
 
     /**

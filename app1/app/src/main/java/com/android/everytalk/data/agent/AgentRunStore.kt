@@ -33,6 +33,7 @@ import com.android.everytalk.data.DataClass.toApiText
 import com.android.everytalk.data.DataClass.Sender
 import com.android.everytalk.data.network.TokenUsage
 import com.android.everytalk.data.computer.ComputerRequestContext
+import com.android.everytalk.data.computer.CloudflareRequestBinding
 import com.android.everytalk.data.computer.ComputerExecutionStatus
 import com.android.everytalk.data.computer.ComputerToolApprovalRequest
 import com.android.everytalk.data.computer.ComputerToolRequestHasher
@@ -412,6 +413,52 @@ class AgentRunStore(
         }
     }
 
+    /**
+     * 重新授权成功后只替换恢复快照中的 Cloudflare 身份。
+     * 原来的工具调用不会在这里自动重放；AgentLoop 会先收到“授权已恢复”，
+     * 再由模型重新调用原工具。这样可以同时避免旧代次继续请求和隐藏的自动副作用。
+     */
+    suspend fun refreshCloudflareRequestBinding(
+        runId: String,
+        suspensionId: String,
+        expectedSuspensionVersion: Long,
+        binding: CloudflareRequestBinding,
+    ): Boolean {
+        val run = dao.getRun(runId) ?: return false
+        val snapshot = decodeRequestSnapshot(run) ?: return false
+        val context = snapshot.computerRequestContext ?: return false
+        if (context.computerId.isBlank() || context.workspaceId.isBlank()) return false
+        val updatedSnapshot = snapshot.copy(
+            computerRequestContext = context.copy(cloudflareBinding = binding),
+        )
+        val encoded = json.encodeToString(AgentRequestSnapshot.serializer(), updatedSnapshot)
+        val newChunks = agentRequestSnapshotChunks(run.id, encoded)
+        val currentChunks = mutableListOf<AgentRunSnapshotChunkEntity>()
+        var after = -1
+        while (true) {
+            val page = dao.getRunSnapshotChunkPage(run.id, after, AGENT_REQUEST_SNAPSHOT_READ_PAGE_SIZE)
+            if (page.isEmpty()) break
+            currentChunks += page
+            after = page.last().chunkIndex
+            if (page.size < AGENT_REQUEST_SNAPSHOT_READ_PAGE_SIZE) break
+        }
+        val replaced = dao.replaceCloudflareSnapshotIfCurrent(
+            expectedRun = run,
+            suspensionId = suspensionId,
+            expectedVersion = expectedSuspensionVersion,
+            expectedChunks = currentChunks,
+            chunks = newChunks,
+            computerId = context.computerId,
+            workspaceId = context.workspaceId,
+            accountId = binding.accountId,
+            authorizationId = binding.authorizationId,
+            generation = binding.generation,
+            now = System.currentTimeMillis(),
+        )
+        if (replaced) snapshotCache[run.id] = updatedSnapshot
+        return replaced
+    }
+
     suspend fun updateRunStatus(
         run: AgentRunEntity,
         status: AgentRunStatus,
@@ -617,6 +664,27 @@ class AgentRunStore(
             dao.deletePartialAssistantEntries(runId)
             finalEntry
         }
+    }
+
+    /** 调整方向只中断当前模型请求，保留它为可恢复的 INTERRUPTED，而不是取消整个 Run。 */
+    suspend fun interruptOpenRequests(runId: String, reason: String): Boolean {
+        val finishedAt = System.currentTimeMillis()
+        var changed = false
+        dao.getRequests(runId)
+            .filter { request ->
+                request.status == AgentRequestStatus.PREPARED.name ||
+                    request.status == AgentRequestStatus.STREAMING.name
+            }
+            .forEach { request ->
+                updateRequest(
+                    request = request,
+                    status = AgentRequestStatus.INTERRUPTED,
+                    finishReason = reason,
+                    finishedAt = finishedAt,
+                )
+                changed = true
+            }
+        return changed
     }
 
     /**

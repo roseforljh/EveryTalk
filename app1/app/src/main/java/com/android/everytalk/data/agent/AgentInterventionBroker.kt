@@ -10,6 +10,8 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.json.Json
 
 /**
  * 统一人类接力 Broker。
@@ -529,6 +531,7 @@ class AgentInterventionBroker(
         capabilityId = capabilityId,
         reasonSafe = reasonSafe,
         userVisibleContext = userVisibleContext,
+        parameters = runCatching { Json.decodeFromString<Map<String, String>>(parametersJson) }.getOrDefault(emptyMap()),
         targetBindingRef = targetBindingRef,
         requestSource = requestSource,
         policyVersion = policyVersion,
