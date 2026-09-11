@@ -52,6 +52,10 @@ class ComputerConnectionPool(
     private val entries = ConcurrentHashMap<String, Entry>()
 
     suspend fun acquire(computer: Computer): ComputerConnectionLease {
+        // 所有 SSH/SFTP/PTY/预热共用的最终边界，阻止任何上游遗漏路由的云端目标。
+        if (computer.provider != ComputerProvider.SSH) {
+            throw ComputerException("PROVIDER_MISMATCH", "当前 Computer 不支持 SSH 连接")
+        }
         val entry = entries.computeIfAbsent(computer.id) { Entry(clock()) }
         val connection = entry.mutex.withLock {
             entry.connection?.takeIf(ComputerSshConnection::isUsable) ?: run {

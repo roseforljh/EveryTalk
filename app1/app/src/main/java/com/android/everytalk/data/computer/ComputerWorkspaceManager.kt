@@ -3,6 +3,7 @@ package com.android.everytalk.data.computer
 import com.android.everytalk.data.database.entities.toEntity
 import com.android.everytalk.data.database.entities.toModel
 import kotlinx.coroutines.sync.withLock
+import java.io.File
 import java.util.UUID
 
 private const val WORKSPACE_COMMAND_TIMEOUT_MILLIS = 30_000L
@@ -31,6 +32,52 @@ class ComputerWorkspaceManager(private val repository: ComputerRepository) {
     }
 
     /**
+     * 为 Cloudflare Computer 保存 App 私有 Workspace 映射，读取不会创建目录。
+     * Cloudflare 不是 SSH 主机，不能复用 prepare() 的远端目录流程；这个 Workspace
+     * 只服务于 just-bash、Worker 打包和本地文件保存，状态创建后即可 READY。
+     */
+    suspend fun getOrCreateAppLocal(
+        computerId: String,
+        conversationId: String,
+        root: File,
+    ): ComputerWorkspace {
+        require(conversationId.isNotBlank()) { "Conversation ID 不能为空" }
+        require(root.isAbsolute) { "App Workspace 必须使用绝对路径" }
+        val lockKey = "$computerId\u0000$conversationId"
+        return workspaceLocks.forKey(lockKey).withLock {
+            val dao = repository.dao()
+            val computer = repository.getComputer(computerId)
+                ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "Computer 不存在")
+            require(computer.provider == ComputerProvider.CLOUDFLARE) { "App Workspace 只用于 Cloudflare" }
+            dao.getWorkspace(computerId, conversationId)?.toModel()?.let { existing ->
+                // 修复早期版本误写的远端路径；保持 ID，已有本地文件原位保留。
+                val local = existing.copy(hostPath = File(root, existing.id).absolutePath,
+                    status = ComputerWorkspaceStatus.READY, runMode = ComputerRunMode.DIRECT,
+                    containerName = null, containerImage = null)
+                if (local != existing) dao.upsertWorkspace(local.toEntity())
+                return@withLock local
+            }
+            val now = System.currentTimeMillis()
+            val localId = "ws_local_${UUID.randomUUID().toString().replace("-", "")}"
+            val workspace = ComputerWorkspace(
+                id = localId,
+                computerId = computerId,
+                conversationId = conversationId,
+                runMode = ComputerRunMode.DIRECT,
+                hostPath = File(root, localId).canonicalPath,
+                containerName = null,
+                containerImage = null,
+                status = ComputerWorkspaceStatus.READY,
+                createdAt = now,
+                lastUsedAt = now,
+            )
+            // 只有 local_file_save 的可信批准可以创建持久目录。
+            dao.upsertWorkspace(workspace.toEntity())
+            workspace
+        }
+    }
+
+    /**
      * 按模型请求已经冻结的 Workspace ID 准备远端目录。
      * 会话 ID 在首条消息入库时会变化，Workspace ID 始终不变，因此它才是并发准备的稳定主键。
      */
@@ -41,6 +88,9 @@ class ComputerWorkspaceManager(private val repository: ComputerRepository) {
             val existing = dao.getWorkspaceById(workspaceId)?.toModel()
                 ?: throw ComputerException(ComputerErrorCodes.WORKSPACE_NOT_READY, "Workspace 不存在")
             val computerId = existing.computerId
+            if (repository.getComputer(computerId)?.provider == ComputerProvider.CLOUDFLARE) {
+                throw ComputerException("PROVIDER_MISMATCH", "Cloudflare Workspace 不支持 SSH 准备")
+            }
             if (existing.status == ComputerWorkspaceStatus.READY) {
                 val restored = existing.copy(lastUsedAt = System.currentTimeMillis())
                 dao.updateWorkspaceRuntimeState(
@@ -124,6 +174,13 @@ class ComputerWorkspaceManager(private val repository: ComputerRepository) {
         ComputerIdentifier.requireValid(workspaceId, "Workspace ID")
         val workspace = repository.dao().getWorkspaceById(workspaceId)?.toModel()
             ?: throw ComputerException(ComputerErrorCodes.WORKSPACE_NOT_READY, "Workspace 不存在")
+        val computer = repository.getComputer(workspace.computerId)
+            ?: throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "服务器记录不存在")
+        if (computer.provider == ComputerProvider.CLOUDFLARE) {
+            // Cloudflare Workspace 是 App 私有目录，没有远端 SSH 资源可清理。
+            // 调用方随后删除映射；这里绝不进入 SSH 连接池。
+            return
+        }
         repository.dao().upsertWorkspace(workspace.copy(status = ComputerWorkspaceStatus.DELETING).toEntity())
         try {
             repository.withConnection(workspace.computerId, requireReady = false) { connection, computer ->

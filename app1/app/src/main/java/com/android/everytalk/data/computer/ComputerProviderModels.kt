@@ -38,6 +38,9 @@ enum class ComputerCapability {
     KV_WRITE,
     R2_READ,
     R2_WRITE,
+    DURABLE_OBJECTS_READ,
+    QUEUES_READ,
+    QUEUES_WRITE,
 }
 
 /** Cloudflare Computer 与 OAuth 授权之间的非敏感绑定信息。 */
@@ -74,6 +77,37 @@ data class CloudflareAuthorizationRecord(
     val generation: Long = 0L,
 )
 
+/** Account 和授权代次是请求目标的一部分，不能在重试时改成当前选中的账号。 */
+@Serializable
+data class CloudflareRequestBinding(
+    val accountId: String,
+    val authorizationId: String,
+    val generation: Long,
+)
+
+/**
+ * Provider 和每次 HTTP 取凭据共用的身份边界。
+ * 授权失效可以进入重新登录流程；账号变化或缺少快照必须重新发起任务，不能静默换目标。
+ */
+internal fun ComputerRequestContext.requireCloudflareBinding(
+    config: CloudflareComputerConfig,
+    authorization: CloudflareAuthorizationRecord,
+    now: Long = System.currentTimeMillis(),
+) {
+    val binding = cloudflareBinding
+    if (binding == null || computerId != config.computerId || workspaceId.isBlank() ||
+        binding.accountId != config.accountId || binding.authorizationId != config.authorizationId ||
+        authorization.authorizationId != binding.authorizationId) {
+        throw CloudflareApiException("COMPUTER_CONTEXT_MISMATCH", "Cloudflare 请求目标缺失或已变化，请重新发起任务")
+    }
+    if (authorization.revoked || authorization.expiresAt?.let { it <= now } == true) {
+        throw CloudflareApiException("AUTHORIZATION_REQUIRED", "Cloudflare 授权已失效")
+    }
+    if (binding.generation != authorization.generation) {
+        throw CloudflareApiException("REQUEST_CONTEXT_STALE", "Cloudflare 授权已变化，旧请求不能使用新授权")
+    }
+}
+
 /** App 根据这个结构渲染 OAuth、Account 选择或确认界面。 */
 @Serializable
 sealed interface ComputerIntervention {
@@ -83,10 +117,28 @@ sealed interface ComputerIntervention {
         val scopes: Set<String>,
     ) : ComputerIntervention
 
+    /** 授权已过期、退出或 scope 不足时，UI 应显示“重新授权”入口。 */
+    @Serializable
+    data class Reauthorization(
+        val provider: ComputerProvider,
+        val computerId: String? = null,
+        val missingScopes: Set<String> = emptySet(),
+        val reason: String? = null,
+    ) : ComputerIntervention
+
     @Serializable
     data class AccountSelection(
         val authorizationId: String,
         val accounts: List<CloudflareAccountOption>,
+    ) : ComputerIntervention
+
+    /** 资源参数不明确时由 App 展示可信资源列表，模型不能自行猜测资源 ID。 */
+    @Serializable
+    data class ResourceSelection(
+        val provider: ComputerProvider,
+        val resourceType: String,
+        val resources: List<ResourceOption>,
+        val computerId: String? = null,
     ) : ComputerIntervention
 
     @Serializable
@@ -101,6 +153,12 @@ sealed interface ComputerIntervention {
 data class CloudflareAccountOption(
     val id: String,
     val name: String,
+)
+
+@Serializable
+data class ResourceOption(
+    val id: String,
+    val displayName: String,
 )
 
 /** Provider 工具统一返回的安全结果。 */
@@ -146,7 +204,10 @@ object SshComputerProviderContract : ComputerProviderContract {
         ComputerCapability.KV_READ,
         ComputerCapability.KV_WRITE,
         ComputerCapability.R2_READ,
-        ComputerCapability.R2_WRITE -> false
+        ComputerCapability.R2_WRITE,
+        ComputerCapability.DURABLE_OBJECTS_READ,
+        ComputerCapability.QUEUES_READ,
+        ComputerCapability.QUEUES_WRITE -> false
     }
 }
 
@@ -168,7 +229,10 @@ object CloudflareComputerProviderContract : ComputerProviderContract {
         ComputerCapability.KV_READ,
         ComputerCapability.KV_WRITE,
         ComputerCapability.R2_READ,
-        ComputerCapability.R2_WRITE -> true
+        ComputerCapability.R2_WRITE,
+        ComputerCapability.DURABLE_OBJECTS_READ,
+        ComputerCapability.QUEUES_READ,
+        ComputerCapability.QUEUES_WRITE -> true
         ComputerCapability.LOCAL_WORKSPACE_READ,
         ComputerCapability.LOCAL_WORKSPACE_WRITE,
         ComputerCapability.LOCAL_SHELL_EXECUTE -> false

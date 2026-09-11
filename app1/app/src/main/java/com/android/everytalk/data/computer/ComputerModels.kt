@@ -13,6 +13,8 @@ enum class ComputerStatus {
     AUTHENTICATING,
     PROBING,
     CONFIGURATION_REQUIRED,
+    /** Cloudflare 本地授权已退出、过期或被撤销；需要重新授权才能执行云端工具。 */
+    AUTHORIZATION_REQUIRED,
     PROVISIONING,
     VERIFYING,
     READY,
@@ -429,8 +431,18 @@ data class ComputerRequestContext(
     val permissionMode: ComputerPermissionMode = ComputerPermissionMode.MANUAL,
     /** 当前关联的 AgentRun ID */
     val runId: String? = null,
+    /**
+     * 请求开始时固定的 Cloudflare 身份。只保存非敏感引用并随本地恢复快照持久化，
+     * ChatRequest 的整个 localComputerRequestContext 不会发给模型服务。
+     * 旧快照缺少此字段时不能推断为当前账号，必须重新发起请求。
+     */
+    val cloudflareBinding: CloudflareRequestBinding? = null,
     /** 只在当前工具调用内有效，禁止写进请求快照。 */
     @Transient val approvedToolCallId: String? = null,
+    /** 仅由已批准的 Agent 审批记录恢复，模型参数无法设置此字段。 */
+    @Transient val approvedCloudflareCronChange: ComputerToolApprovalRequest.CloudflareCronChange? = null,
+    @Transient val approvedCloudflareWrite: ComputerToolApprovalRequest.CloudflareWrite? = null,
+    @Transient val approvedLocalFileWrite: ComputerToolApprovalRequest.LocalFileWrite? = null,
     /** 用户明确选择重试 UNKNOWN 工具后才设置，禁止写进请求快照。 */
     @Transient val retryUnknownToolCallId: String? = null,
 )
@@ -450,6 +462,10 @@ data class PreparedComputerRequest(
     val context: ComputerRequestContext,
     val environmentPrompt: String,
     val permissionMode: ComputerPermissionMode,
+    /** 模型工具目录必须按目标 Provider 隔离，避免把 Cloudflare 当成 SSH。 */
+    val provider: ComputerProvider = ComputerProvider.SSH,
+    /** true 表示本请求只有 App 内置 Workspace 能力，不应开启远端 Computer 工具。 */
+    val localOnly: Boolean = false,
 )
 
 @Serializable

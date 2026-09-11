@@ -11,7 +11,18 @@ import kotlinx.serialization.json.booleanOrNull
  */
 internal object ComputerToolCallSafety {
     fun isReadOnly(toolName: String, arguments: JsonObject): Boolean = when (toolName) {
-        ComputerToolNames.READ_FILE, ComputerToolNames.DOWNLOAD -> true
+        ComputerToolNames.READ_FILE, ComputerToolNames.DOWNLOAD,
+        ComputerToolNames.WORKER_LIST, ComputerToolNames.WORKER_READ,
+        "computer.worker.status", "computer.worker.logs", ComputerToolNames.WORKER_HEALTH,
+        "computer.kv.list_keys", "computer.kv.get",
+        ComputerToolNames.D1_LIST, ComputerToolNames.D1_SCHEMA,
+        ComputerToolNames.KV_LIST_NAMESPACES, ComputerToolNames.R2_LIST_BUCKETS,
+        ComputerToolNames.R2_LIST_OBJECTS, ComputerToolNames.R2_GET_METADATA,
+        ComputerToolNames.DO_LIST, ComputerToolNames.QUEUES_LIST,
+        ComputerToolNames.DO_OBJECTS_LIST, ComputerToolNames.QUEUES_GET,
+        ComputerToolNames.QUEUES_METRICS, ComputerToolNames.QUEUES_PEEK,
+        ComputerToolNames.CRON_LIST -> true
+        ComputerToolNames.D1_QUERY -> isReadOnlySql(arguments.stringValue("sql"))
         ComputerToolNames.EXEC -> isReadOnlyExec(arguments)
         else -> false
     }
@@ -41,6 +52,22 @@ internal object ComputerToolCallSafety {
         return !ComputerHostCommandPolicy.assess(
             ComputerExecRequest(command = command, cwd = cwd, target = ComputerExecTarget.HOST),
         ).requiresConfirmation
+    }
+
+    /** D1 查询的读写边界由应用判断，避免模型通过参数绕过确认。 */
+    private fun isReadOnlySql(sql: String?): Boolean {
+        val withoutComments = sql
+            ?.replace(Regex("--[^\\r\\n]*"), " ")
+            ?.replace(Regex("/\\*[\\s\\S]*?\\*/"), " ")
+            ?: return false
+        val normalized = withoutComments.trim().lowercase().replace(Regex("\\s+"), " ")
+        if (normalized.isBlank() || normalized.length > 64 * 1024) return false
+        // 只接受一个查询语句；尾部一个分号允许，分号后的第二条语句一律视为写入风险。
+        val statement = normalized.removeSuffix(";").trim()
+        if (';' in statement) return false
+        if (!Regex("^(select|with|pragma|explain)(\\s|$)").containsMatchIn(statement)) return false
+        return listOf("insert", "update", "delete", "replace", "drop", "alter", "create", "attach", "detach", "vacuum")
+            .none { Regex("\\b$it\\b").containsMatchIn(statement) }
     }
 
     private fun JsonObject.stringValue(key: String): String? =
