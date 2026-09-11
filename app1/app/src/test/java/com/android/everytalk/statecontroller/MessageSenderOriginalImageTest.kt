@@ -181,6 +181,7 @@ class MessageSenderOriginalImageTest {
                 isImageGeneration = any(),
                 preCreatedAiMessageId = any(),
                 contextUsageSnapshot = any(),
+                onRequestFinished = any(),
             )
         } answers {
             requestStarted.complete(Unit)

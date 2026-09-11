@@ -488,7 +488,7 @@ interface ComputerDao {
         conversationId: String,
     ): List<ComputerExecutionEntity>
 
-    /** 返回指定 Run 的停止候选；Composer 在执行器中排除 RETURN_HANDLE，不能扩大到会话。 */
+    /** 返回指定 Run 的前台和后台停止候选；空结果不能扩大为会话级取消。 */
     @Query(
         """
         SELECT * FROM computer_executions

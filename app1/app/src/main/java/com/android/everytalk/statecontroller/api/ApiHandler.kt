@@ -1094,10 +1094,11 @@ class ApiHandler(
                     val run = agentRunStore.cancelActiveRunByVisibleMessage(
                         messageIdBeingCancelled, AgentTerminalReasons.USER_STOP,
                     )
-                    var success = run == null
-                    if (run != null) {
+                    val activeRunId = run?.id
+                    var success = activeRunId == null
+                    if (activeRunId != null) {
                         // 固定点击时的会话和 Run，不能在异步返回时取消用户新打开的会话。
-                        cancelComputerExecutions(conversationIdBeingCancelled, run.id) { success = it }.join()
+                        cancelComputerExecutions(conversationIdBeingCancelled, activeRunId) { success = it }.join()
                     }
                     resultMessage = if (success) "任务已停止" else "本地任务已停止，远端停止尚未确认"
                 } catch (error: CancellationException) {
@@ -1440,7 +1441,12 @@ class ApiHandler(
                         }
                         stateHolder.checkMemoryUsage()
                         processStreamEvent(appEvent, aiMessageId, isImageGeneration = false)
-                        if (appEvent is AppStreamEvent.AgentApprovalRequired) {
+                        // Approval 和 Intervention 都会让 AgentLoop 暂停并等待用户。
+                        // Intervention 漏记会导致 finally 把 UI 清成完成态，用户确认后
+                        // 虽然 Room 能恢复原 Run，页面却已经把这轮请求当成失败结束。
+                        if (appEvent is AppStreamEvent.AgentApprovalRequired ||
+                            appEvent is AppStreamEvent.AgentInterventionRequired
+                        ) {
                             waitingForAgentApproval = true
                         }
                     }

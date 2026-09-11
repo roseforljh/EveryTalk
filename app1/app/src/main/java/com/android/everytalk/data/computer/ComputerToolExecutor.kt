@@ -65,7 +65,7 @@ class ComputerToolExecutor(
     }
 
     /**
-     * Composer 停止只收尾指定 Run 中仍等待结果的命令，不停止已经交付的后台服务。
+     * 用户停止会收尾指定 Run 的前台和后台受管任务，以远端确认的终态为准。
      * 未指定 Run 的 Workspace 删除流程保留原来的全量停止语义；两者不能互相回退。
      */
     suspend fun cancelActiveExecutions(conversationId: String, runId: String? = null): Boolean {
@@ -78,9 +78,6 @@ class ComputerToolExecutor(
         }
         var allSucceeded = true
         for (execution in executions) {
-            if (!runId.isNullOrBlank() &&
-                execution.completionMode == ComputerExecutionCompletionMode.RETURN_HANDLE.name
-            ) continue
             try {
                 // 先落库取消意图再进入 SSH；本地 Agent 的取消独立进行，
                 // 断网后恢复扫描仍能识别这条远端任务需要补发停止请求。

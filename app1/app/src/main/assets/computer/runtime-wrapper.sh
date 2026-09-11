@@ -206,7 +206,7 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
         [ "$state_pid" -gt 1 ] || return 1
         read_process_identity "$state_pid" &&
             [ "$cancel_process_ticks" = "$state_ticks" ] &&
-            [ "$cancel_process_group" = "$state_pid" ] && process_owner_allowed
+            [ "$cancel_process_group" = "$state_pid" ] && process_group_owner_allowed
     }
 
     state_has_expected_identity() {
@@ -361,6 +361,10 @@ if [ "$input_mode" = --envelope-v2 ] || [ "$input_mode" = --host-envelope-v2 ] |
             cancel_member_matches "$cancel_pid" "$cancel_ticks" && return 0
         done < "$execution_dir/cancel.members"
         return 1
+    }
+    process_group_owner_allowed() {
+        # 进程组必须通过同一所有者检查；调用方另外校验 PID、start_ticks 和 session。
+        process_owner_allowed
     }
     save_cancel_members() {
         cancel_members_tmp="$(mktemp "$execution_dir/cancel-members.XXXXXX")" || return 1

@@ -18,6 +18,16 @@ class ApiHandlerApprovalUiStateTest {
     }
 
     @Test
+    fun `等待人工协助时同样保留文本会话进行中状态`() {
+        assertTrue(
+            shouldKeepApprovalUiActive(
+                waitingForAgentApproval = true,
+                isImageGeneration = false,
+            ),
+        )
+    }
+
+    @Test
     fun `普通结束和图片任务不会保留审批中的文本状态`() {
         assertFalse(
             shouldKeepApprovalUiActive(

@@ -23,7 +23,7 @@ class ComputerCancellationScopeTest {
     ).toEntity()
 
     @Test
-    fun `强制停止仅发送当前前台命令的取消请求并保留后台服务`() = runTest {
+    fun `强制停止取消当前Run的前台和后台任务但不扩大到会话`() = runTest {
         val context = mockk<Context>()
         every { context.applicationContext } returns context
         val dao = mockk<ComputerDao>(relaxed = true)
@@ -36,11 +36,15 @@ class ComputerCancellationScopeTest {
             executionId = "execution_current", processId = "process_execution_current",
             status = ComputerRemoteStatus.CANCELLED,
         )
+        coEvery { repository.cancelRemoteExecution("execution_service") } returns ComputerRemoteExecutionSnapshot(
+            executionId = "execution_service", processId = "process_execution_service",
+            status = ComputerRemoteStatus.CANCELLED,
+        )
         ComputerToolExecutor(context, repository, mockk(), mockk(), mockk()).use { executor ->
             assertTrue(executor.cancelActiveExecutions("session-1", "run-1"))
             coVerify(exactly = 1) { repository.cancelRemoteExecution("execution_current") }
-            coVerify(exactly = 0) { repository.cancelRemoteExecution("execution_service") }
-            coVerify(exactly = 0) { dao.markRemoteExecutionCancellationRequested("execution_service", any()) }
+            coVerify(exactly = 1) { repository.cancelRemoteExecution("execution_service") }
+            coVerify(exactly = 1) { dao.markRemoteExecutionCancellationRequested("execution_service", any()) }
             coVerify(exactly = 0) { dao.getCancellableRemoteExecutionsForConversation(any()) }
         }
     }
@@ -57,6 +61,7 @@ class ComputerCancellationScopeTest {
             assertFalse(running.copy(cancelRequestedAt = 1L, remoteStatus = terminal).shouldRetryRemoteCancellation())
         }
         assertFalse(execution("execution_service", background = true).shouldRetryRemoteCancellation())
+        assertTrue(execution("execution_service", background = true).copy(cancelRequestedAt = 1L).shouldRetryRemoteCancellation())
     }
 
     @Test
