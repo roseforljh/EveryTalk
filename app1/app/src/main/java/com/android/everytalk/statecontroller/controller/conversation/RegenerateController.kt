@@ -94,17 +94,17 @@ class RegenerateController(
         scope.launch {
             val success = withContext(Dispatchers.Default) {
                 val listRef = if (isImageGeneration) stateHolder.imageGenerationMessages else stateHolder.messages
-                val userMsgIndex = listRef.indexOfFirst { it.id == originalUserMessageId }
-                if (userMsgIndex == -1) {
-                    withContext(Dispatchers.Main) {
-                        showSnackbar("无法重新生成：原始用户消息在当前列表中未找到。")
+                val removed = messagesMutex.withLock {
+                    val userMsgIndex = listRef.indexOfFirst { it.id == originalUserMessageId }
+                    if (userMsgIndex == -1) {
+                        withContext(Dispatchers.Main) {
+                            showSnackbar("无法重新生成：原始用户消息在当前列表中未找到。")
+                        }
+                        return@withLock false
                     }
-                    return@withContext false
-                }
-
-                val messagesToRemove = collectRegenerationBranch(listRef, userMsgIndex)
-
-                messagesMutex.withLock {
+                    // 必须在同一把锁内读取并删除分支，避免发送流程或流式回调在两次操作之间修改列表。
+                    // 这里只删除目标用户消息后的连续 AI 消息，遇到下一条用户消息立即停止。
+                    val messagesToRemove = collectRegenerationBranch(listRef, userMsgIndex)
                     withContext(Dispatchers.Main.immediate) {
                         val idsToRemove = messagesToRemove.map { it.id }.toSet()
                         // 若这些消息中存在正在流式的，则取消之
@@ -145,10 +145,12 @@ class RegenerateController(
                         }
 
                         // 仅移除旧 AI 分支，保留用户项直到新消息原位替换或移动，避免锚点 key 中断。
-                        listRef.removeAll(messagesToRemove.toSet())
+                        // 按稳定 ID 删除，避免 Message 数据类字段变化导致 equals 判断不准确。
+                        listRef.removeAll { it.id in idsToRemove }
                     }
+                    true
                 }
-                true
+                removed
             }
 
             if (success) {

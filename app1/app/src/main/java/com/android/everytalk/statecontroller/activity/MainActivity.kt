@@ -157,6 +157,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        intent.data?.let(com.android.everytalk.data.computer.CloudflareOAuthCallbackBus::publish)
         
         // 异步初始化ProfileInstaller
         lifecycleScope.launch(Dispatchers.IO) {
@@ -927,6 +928,7 @@ class MainActivity : AppCompatActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        intent.data?.let(com.android.everytalk.data.computer.CloudflareOAuthCallbackBus::publish)
         // 处理分享过来的内容（应用已在运行时）
         handleIncomingShareIntent(intent)
     }

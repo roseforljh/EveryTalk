@@ -29,6 +29,7 @@ import com.android.everytalk.ui.screens.viewmodel.HistoryManager
 import android.graphics.Bitmap
 import android.net.Uri
 import android.widget.Toast
+import android.webkit.MimeTypeMap
 import com.android.everytalk.R
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -90,6 +91,7 @@ import com.android.everytalk.data.agent.AgentTerminalReasons
 import com.android.everytalk.data.agent.AgentRunControlState
 import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.data.computer.hostConfirmationRequest
+import com.android.everytalk.data.computer.CloudflareSettingsOAuthStore
 import com.android.everytalk.data.computer.publicPreviewRequest
 import com.android.everytalk.data.network.AppToolExecutor
 import com.android.everytalk.data.network.AppToolExecutionResult
@@ -116,6 +118,9 @@ import java.util.TimeZone
 // Constructor changed: removed dataSource
 @OptIn(ExperimentalCoroutinesApi::class)
 class AppViewModel(application: Application) : AndroidViewModel(application) {
+
+    /** 设置、Computer 详情和聊天页共用一份 OAuth 草稿，避免 PKCE verifier 丢失。 */
+    val cloudflareOAuthStore: CloudflareSettingsOAuthStore = CloudflareSettingsOAuthStore()
 
     internal val json = Json {
         prettyPrint = true
@@ -319,7 +324,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         }
         return request.copy(
             messages = messages,
-            tools = appendComputerTools(toolsWithoutRequest, enabled = true, permissionMode = prepared.permissionMode),
+            tools = appendComputerTools(
+                toolsWithoutRequest,
+                enabled = true,
+                permissionMode = prepared.permissionMode,
+                cloudflare = prepared.provider == com.android.everytalk.data.computer.ComputerProvider.CLOUDFLARE,
+                cloudflareWorkerWriteEnabled = computerManager.cloudflareWorkerWriteEnabled,
+                cloudflareResourceToolsEnabled = computerManager.cloudflareResourceToolsEnabled,
+            ),
             localComputerRequestContext = prepared.context,
         )
     }
@@ -342,6 +354,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                 getSelectedExternalWebSearchProvider = { selectedExternalWebSearchProvider },
                 getSelectedExternalWebSearchProviderApiKey = { selectedExternalWebSearchProviderApiKey },
                 prepareComputerRequest = computerManager::prepareRequest,
+                cloudflareWorkerWriteEnabled = { computerManager.cloudflareWorkerWriteEnabled },
+                cloudflareResourceToolsEnabled = { computerManager.cloudflareResourceToolsEnabled },
+                localBashEnabled = { computerManager.localBashEnabled },
         )
     }
 
@@ -812,6 +827,27 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
    )
 
   private val mcpToolExecutorOwner = Any()
+  private val computerFeatureFlags by lazy {
+      com.android.everytalk.data.computer.ComputerFeatureFlags(getApplication())
+  }
+  private val localBashRuntime by lazy {
+      com.android.everytalk.data.computer.SandboxJustBashRuntime(getApplication())
+  }
+  private val localBashToolExecutor by lazy {
+      com.android.everytalk.data.computer.LocalBashToolExecutor(
+          runtime = localBashRuntime,
+          workspaceRoot = { workspaceId ->
+              java.io.File(getApplication<Application>().filesDir, "agent-workspaces/$workspaceId")
+          },
+          enabled = { computerFeatureFlags.localBashEnabled },
+      )
+  }
+  private val localFileSaveToolExecutor by lazy {
+      com.android.everytalk.data.computer.LocalFileSaveToolExecutor(
+          workspaceRoot = { workspaceId -> java.io.File(getApplication<Application>().filesDir, "agent-workspaces/$workspaceId") },
+          enabled = { computerFeatureFlags.localBashEnabled },
+      )
+  }
 
   init {
          val appToolExecutor: AppToolExecutor = {
@@ -821,8 +857,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
              computerRequestContext,
              updateStatus,
          ->
-            AppToolExecutionResult(
-                executeSharedToolCall(
+            // 可信对象只由本地保存分支填充；MCP/云端 JSON 无法创建可打开的本机附件。
+            var savedAttachment: SelectedMediaItem.GenericFile? = null
+            val rawResult = executeSharedToolCall(
                     toolName = toolName,
                     arguments = arguments,
                     toolCallId = toolCallId,
@@ -831,6 +868,30 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     mcpWebFetchFallback = buildMcpWebFetchFallback(),
                     localWebSearchExecutor = buildLocalWebSearchExecutor(),
                     localAttachmentExecutor = buildLocalAttachmentExecutor(),
+                    localBashExecutor = localBashToolExecutor::execute,
+                    localFileSaveExecutor = { arguments, context ->
+                        val saved = localFileSaveToolExecutor.execute(
+                            arguments,
+                            toolCallId,
+                            context,
+                        )
+                        val attachment = com.android.everytalk.models.SelectedMediaItem.GenericFile(
+                            uri = androidx.core.content.FileProvider.getUriForFile(
+                                getApplication(), "${getApplication<Application>().packageName}.provider", saved.file,
+                            ),
+                            id = "local-file-${saved.sha256.take(16)}-${saved.path.hashCode().toUInt().toString(16)}",
+                            displayName = "Workspace/${saved.path}",
+                            mimeType = MimeTypeMap.getSingleton()
+                                .getMimeTypeFromExtension(saved.path.substringAfterLast('.', "").lowercase())
+                                ?: "text/plain",
+                            filePath = saved.file.absolutePath,
+                        )
+                        savedAttachment = attachment
+                        kotlinx.serialization.json.buildJsonObject {
+                            put("ok", kotlinx.serialization.json.JsonPrimitive(true)); put("persisted", kotlinx.serialization.json.JsonPrimitive(true)); put("path", kotlinx.serialization.json.JsonPrimitive("Workspace/${saved.path}"))
+                            put("bytes", kotlinx.serialization.json.JsonPrimitive(saved.bytes)); put("sha256", kotlinx.serialization.json.JsonPrimitive(saved.sha256))
+                        }
+                    },
                     localComputerExecutor = { localToolName, localArguments, localToolCallId, requestContext, updateComputerStatus ->
                         computerManager.execute(
                             localToolName,
@@ -843,7 +904,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                     fallbackExecutor = { fallbackToolName, fallbackArguments ->
                         mcpManager.callTool(fallbackToolName, fallbackArguments)
                     },
-                ),
+                )
+            AppToolExecutionResult(
+                content = rawResult,
+                attachments = listOfNotNull(savedAttachment),
             )
          }
          AgentToolExecutorRegistry.register(
@@ -1158,7 +1222,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
      * 用于消息编辑后强制UI更新
      */
 
-    override fun onCleared() {
+   override fun onCleared() {
+       cloudflareOAuthStore.clear()
+       (localBashRuntime as? AutoCloseable)?.close()
         AgentToolExecutorRegistry.clear(mcpToolExecutorOwner)
         // 清理消息内容控制器（若未来扩展内部资源）
         messageContentController.cleanup()

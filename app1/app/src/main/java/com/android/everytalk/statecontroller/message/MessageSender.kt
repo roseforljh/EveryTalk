@@ -264,10 +264,13 @@ internal fun appendComputerTools(
     tools: List<Map<String, Any>>,
     enabled: Boolean,
     permissionMode: ComputerPermissionMode = ComputerPermissionMode.MANUAL,
+    cloudflare: Boolean = false,
+    cloudflareWorkerWriteEnabled: Boolean = true,
+    cloudflareResourceToolsEnabled: Boolean = true,
 ): List<Map<String, Any>> {
     if (!enabled) return tools
     val conflicts = tools.mapNotNull(::extractToolName).filter { existingName ->
-        ComputerToolNames.all.any { it.equals(existingName, ignoreCase = true) }
+            ComputerToolNames.allProviders.any { it.equals(existingName, ignoreCase = true) }
     }
     if (conflicts.isNotEmpty()) {
         throw ComputerException(
@@ -275,7 +278,41 @@ internal fun appendComputerTools(
             "Agent 工具名与现有工具冲突：${conflicts.distinct().joinToString()}",
         )
     }
-    return tools + ComputerToolCatalog.definitions(permissionMode)
+    return tools + if (cloudflare) ComputerToolCatalog.cloudflareDefinitions(
+        workerWriteEnabled = cloudflareWorkerWriteEnabled,
+        resourceToolsEnabled = cloudflareResourceToolsEnabled,
+    ) else ComputerToolCatalog.definitions(permissionMode)
+}
+
+/** 无外部 Computer 时提供受限的 Workspace 本地 Shell。 */
+internal fun appendLocalBashTool(
+    tools: List<Map<String, Any>>,
+    enabled: Boolean,
+): List<Map<String, Any>> {
+    if (!enabled || tools.any { extractToolName(it).equals("local_bash", ignoreCase = true) }) return tools
+    if (tools.any { extractToolName(it).equals(ComputerToolNames.LOCAL_FILE_SAVE, ignoreCase = true) }) {
+        throw ComputerException(ComputerErrorCodes.TOOL_NAME_CONFLICT, "Agent 工具名与本地文件保存工具冲突")
+    }
+    return tools + mapOf(
+        "name" to "local_bash",
+        "description" to "在当前 App 私有 Workspace 的临时内存快照中执行受限 Bash 命令；不能访问系统文件或网络。命令产生的文件变化不会自动保存，需要保存时使用 local_file_save。",
+        "parameters" to mapOf(
+            "type" to "object",
+            "properties" to mapOf(
+                "command" to mapOf("type" to "string"),
+                "cwd" to mapOf("type" to "string"),
+                "timeout_ms" to mapOf("type" to "integer"),
+                "max_output_chars" to mapOf("type" to "integer"),
+            ),
+            "required" to listOf("command"),
+        ),
+    ) + mapOf(
+        "name" to ComputerToolNames.LOCAL_FILE_SAVE,
+        "description" to "经用户确认后保存文本文件到当前本地 Workspace，并返回可打开的文件引用。",
+        "parameters" to mapOf("type" to "object", "properties" to mapOf(
+            "path" to mapOf("type" to "string"), "content" to mapOf("type" to "string")),
+            "required" to listOf("path", "content")),
+    )
 }
 
 /** Agent 和 Skill 密钥申请名称由应用独占，模型只能通过这两张接口申请。 */
@@ -357,6 +394,9 @@ internal fun safeApiConfigSummary(config: ApiConfig?): String {
     internal val getSelectedExternalWebSearchProvider: () -> ExternalWebSearchProvider? = { null },
     internal val getSelectedExternalWebSearchProviderApiKey: () -> String = { "" },
     internal val prepareComputerRequest: suspend (String, Boolean) -> PreparedComputerRequest? = { _, _ -> null },
+    internal val cloudflareWorkerWriteEnabled: () -> Boolean = { true },
+    internal val cloudflareResourceToolsEnabled: () -> Boolean = { true },
+    internal val localBashEnabled: () -> Boolean = { true },
 ) {
 
     internal val fileManager: FileManager by lazy { FileManager(application) }

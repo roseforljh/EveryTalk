@@ -91,6 +91,9 @@ import com.android.everytalk.data.network.WebFetchToolExecutor
 import com.android.everytalk.data.computer.ComputerErrorCodes
 import com.android.everytalk.data.computer.ComputerRequestContext
 import com.android.everytalk.data.computer.ComputerToolNames
+import com.android.everytalk.data.computer.LocalShellRequest
+import com.android.everytalk.data.computer.LocalWorkspaceFileBridge
+import com.android.everytalk.data.computer.JustBashRuntime
 import com.android.everytalk.util.storage.readAtMost
 import com.android.everytalk.util.ConversationNameHelper
 import kotlinx.serialization.json.JsonElement
@@ -158,6 +161,8 @@ internal suspend fun executeSharedToolCall(
     mcpWebFetchFallback: (suspend (JsonObject) -> JsonElement)? = null,
     localWebSearchExecutor: (suspend (String) -> JsonElement)? = null,
     localAttachmentExecutor: (suspend (JsonObject) -> JsonElement)? = null,
+    localBashExecutor: (suspend (JsonObject, ComputerRequestContext?) -> JsonElement)? = null,
+    localFileSaveExecutor: (suspend (JsonObject, ComputerRequestContext?) -> JsonElement)? = null,
     localComputerExecutor: (suspend (String, JsonObject, String, ComputerRequestContext, suspend (String?) -> Unit) -> JsonElement)? = null,
     localCurrentTimeExecutor: suspend () -> JsonElement = {
         val now = Date()
@@ -190,6 +195,22 @@ internal suspend fun executeSharedToolCall(
     },
     fallbackExecutor: suspend (String, JsonObject) -> JsonElement,
 ): JsonElement {
+    if (toolName.equals("local_bash", ignoreCase = true)) {
+        updateStatus("执行本地 Shell")
+        return try {
+            localBashExecutor?.invoke(arguments, computerRequestContext) ?: buildJsonObject {
+                put("ok", JsonPrimitive(false))
+                put("error", JsonPrimitive("本地 Shell 执行器未初始化"))
+            }
+        } finally {
+            updateStatus(null)
+        }
+    }
+    if (toolName.equals(ComputerToolNames.LOCAL_FILE_SAVE, ignoreCase = true)) {
+        updateStatus("保存本地文件")
+        return try { localFileSaveExecutor?.invoke(arguments, computerRequestContext) ?: buildJsonObject { put("ok", JsonPrimitive(false)); put("error", JsonPrimitive("本地文件保存器未初始化")) } }
+        finally { updateStatus(null) }
+    }
     if (toolName.equals(BUILT_IN_WEBFETCH_TOOL_NAME, ignoreCase = true)) {
         val url = arguments["url"]?.jsonPrimitive?.contentOrNull.orEmpty()
         updateStatus(buildToolStatus("读取网页", url))
@@ -230,7 +251,7 @@ internal suspend fun executeSharedToolCall(
         updateStatus(null)
         return result
     }
-    val computerToolName = ComputerToolNames.all.firstOrNull { candidate ->
+    val computerToolName = ComputerToolNames.allProviders.firstOrNull { candidate ->
         candidate.equals(toolName, ignoreCase = true)
     }
     if (computerToolName != null) {

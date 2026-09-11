@@ -502,12 +502,10 @@ import java.util.TimeZone
             showSnackbar("原工作区已删除，请先确认创建新工作区")
             return false
         }
-        try {
+        // 没有 VPS 时仍允许启用 Agent；发送阶段会使用 local_bash。
+        val selectedComputer = runCatching {
             computerManager.requireSelectedReadyComputer(conversationId)
-        } catch (error: ComputerException) {
-            showSnackbar(error.message)
-            return false
-        }
+        }.getOrNull()
         stateHolder.updateCurrentConversationFunctionToggleState { state ->
             state.copy(
                 agentEnabled = true,
@@ -523,7 +521,7 @@ import java.util.TimeZone
                 stateHolder.conversationFunctionToggleStates.value,
             )
             try {
-                computerManager.prepareRequest(conversationId, agentEnabled = true)
+                if (selectedComputer != null) computerManager.prepareRequest(conversationId, agentEnabled = true)
             } catch (error: CancellationException) {
                 throw error
             } catch (error: ComputerException) {
@@ -690,6 +688,55 @@ import java.util.TimeZone
     /** 服务器页面调用这些挂起函数，所有网络流量仍由 Android 本地 SSH 组件处理。 */
     internal suspend fun AppViewModel.probeComputerHostKey(request: AddComputerRequest): HostKeyProbeResult =
         computerManager.probeHostKey(request)
+
+    internal suspend fun AppViewModel.listCloudflareAccounts(accessToken: CharArray) =
+        computerManager.listCloudflareAccounts(accessToken)
+
+    internal suspend fun AppViewModel.cloudflareLoginIdentity(accessToken: CharArray) =
+        computerManager.cloudflareLoginIdentity(accessToken)
+
+    internal suspend fun AppViewModel.createCloudflareComputer(
+        displayName: String,
+        tokenResult: com.android.everytalk.data.computer.CloudflareTokenExchangeResult,
+        account: com.android.everytalk.data.computer.CloudflareApiAccount,
+    ): Computer = computerManager.createCloudflareComputer(displayName, tokenResult, account)
+
+    internal suspend fun AppViewModel.logoutCloudflareComputer(computerId: String) =
+        computerManager.logoutCloudflareComputer(computerId)
+
+    internal suspend fun AppViewModel.cloudflareComputerDetails(computerId: String) = computerManager.cloudflareComputerDetails(computerId)
+
+    internal suspend fun AppViewModel.listCloudflareComputerAccounts(computerId: String) = computerManager.listCloudflareComputerAccounts(computerId)
+
+    internal suspend fun AppViewModel.switchCloudflareComputerAccount(computerId: String, accountId: String) = computerManager.switchCloudflareComputerAccount(computerId, accountId)
+
+    internal suspend fun AppViewModel.reauthorizeCloudflareComputer(computerId: String, tokenResult: com.android.everytalk.data.computer.CloudflareTokenExchangeResult) = computerManager.reauthorizeCloudflareComputer(computerId, tokenResult)
+
+    internal suspend fun AppViewModel.cloudflareResourceOptions(pending: com.android.everytalk.data.agent.PendingIntervention) = computerManager.cloudflareResourceOptions(pending)
+
+    internal suspend fun AppViewModel.selectCloudflareResource(pending: com.android.everytalk.data.agent.PendingIntervention, resourceId: String) = computerManager.selectCloudflareResource(pending, resourceId)
+
+    internal fun AppViewModel.observeCloudflareDeployments(computerId: String) = computerManager.observeCloudflareDeployments(computerId)
+
+    internal val AppViewModel.temporaryWorkerEnabled: Boolean
+        get() = computerManager.temporaryWorkerEnabled
+
+    internal suspend fun AppViewModel.listTemporaryWorkers() = computerManager.listTemporaryWorkers()
+
+    internal suspend fun AppViewModel.createTemporaryWorkerFromWorkspace(workspaceId: String) =
+        computerManager.createTemporaryWorkerFromWorkspace(workspaceId)
+
+    internal suspend fun AppViewModel.beginTemporaryWorkerClaim(deploymentId: String) =
+        computerManager.beginTemporaryWorkerClaim(deploymentId)
+
+    internal suspend fun AppViewModel.completeTemporaryWorkerClaim(deploymentId: String) =
+        computerManager.completeTemporaryWorkerClaim(deploymentId)
+
+    internal suspend fun AppViewModel.cancelTemporaryWorkerClaim(deploymentId: String) =
+        computerManager.cancelTemporaryWorkerClaim(deploymentId)
+
+    internal suspend fun AppViewModel.deleteLocalCloudflareComputer(computerId: String) =
+        computerManager.deleteLocalCloudflareComputer(computerId)
 
     internal suspend fun AppViewModel.addConfirmedComputer(
         request: AddComputerRequest,

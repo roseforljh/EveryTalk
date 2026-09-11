@@ -253,7 +253,7 @@ internal fun MessageSender.sendMessageInternal(
             val isDefaultProvider = currentConfig.provider.trim().lowercase() in listOf("默认", "default")
             val customModelParameters = if (parameterProtocol == ModelParameterProtocol.OPENAI_COMPATIBLE) {
                 try {
-                    currentConfig.modelParameters.openAICompatibleRequestParameters(currentConfig.model)
+                    currentConfig.modelParameters.openAICompatibleRequestParameters()
                 } catch (e: IllegalArgumentException) {
                     Log.e("MessageSender", "模型参数校验失败", e)
                     withContext(Dispatchers.Main.immediate) {
@@ -379,10 +379,12 @@ internal fun MessageSender.sendMessageInternal(
             if (onUserMessageAccepted != null) {
                 val persisted = runCatching {
                     withContext(Dispatchers.IO) {
-                        historyManager.saveCurrentChatToHistoryNow(
+                        historyManager.run {
+                            saveCurrentChatToHistoryNow(
                             forceSave = true,
                             isImageGeneration = isImageGeneration,
-                        )
+                            )
+                        }
                     }
                 }.isSuccess
                 if (!persisted) {
@@ -750,11 +752,23 @@ internal fun MessageSender.sendMessageInternal(
                         tools = toolsWithAttachmentReader,
                         enabled = preparedComputerRequest == null,
                     )
-                    appendComputerTools(
+                    val toolsWithLocalBash = appendLocalBashTool(
                         tools = toolsWithAgentRequest,
-                        enabled = preparedComputerRequest != null,
+                        // just-bash 属于 EveryTalk 的本地能力层。Cloudflare 部署经常需要
+                        // 先在当前 Workspace 检查/整理文件，因此不能因已选择云端目标而隐藏。
+                        enabled = (preparedComputerRequest == null || preparedComputerRequest.localOnly ||
+                            preparedComputerRequest.provider == com.android.everytalk.data.computer.ComputerProvider.CLOUDFLARE) &&
+                            localBashEnabled(),
+                    )
+                    appendComputerTools(
+                        tools = toolsWithLocalBash,
+                        enabled = preparedComputerRequest != null && !preparedComputerRequest.localOnly,
                         permissionMode = preparedComputerRequest?.permissionMode
                             ?: com.android.everytalk.data.computer.ComputerPermissionMode.MANUAL,
+                        cloudflare = preparedComputerRequest?.provider ==
+                            com.android.everytalk.data.computer.ComputerProvider.CLOUDFLARE,
+                        cloudflareWorkerWriteEnabled = cloudflareWorkerWriteEnabled(),
+                        cloudflareResourceToolsEnabled = cloudflareResourceToolsEnabled(),
                     ).ifEmpty { null }
                 })
 

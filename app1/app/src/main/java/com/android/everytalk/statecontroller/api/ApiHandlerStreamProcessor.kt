@@ -711,6 +711,13 @@ internal class ApiHandlerStreamProcessor(
             }
     
             when (appEvent) {
+                is AppStreamEvent.LocalFileArtifact -> {
+                    // 事件绑定 aiMessageId，切换会话时也不会把产物插入另一条正在流式输出的消息。
+                    if (currentMessage.attachments.none { it.id == appEvent.attachment.id }) {
+                        updatedMessage = currentMessage.copy(attachments = currentMessage.attachments + appEvent.attachment)
+                        stateHolder.isTextConversationDirty.value = true
+                    }
+                }
                 is AppStreamEvent.AgentTurnRetryReset -> {
                     // 旧 StreamingBuffer 和泄漏检测器都包含失败 attempt 的内容，必须一起轮换。
                     stateHolder.clearStreamingBuffer(aiMessageId)
