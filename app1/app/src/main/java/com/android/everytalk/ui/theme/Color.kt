@@ -12,15 +12,17 @@ val Pink40 = Color(0xFF7D5260)
 val SeaBlue = Color(0xFF0091ff)
 
 // 夜间模式专用颜色 - 统一和谐的设计
-// 深色背景系列 - 使用更柔和的灰色调，避免纯黑
+// 深色背景系列：主背景保持纯黑（OLED 省电），容器必须比背景亮一点，
+// 否则卡片、输入框、边框在纯黑底上完全没有层次。
 val DarkBackground = Color(0xFF000000)          // 主背景色 - 纯黑
-val DarkSurface = Color(0xFF000000)            // 表面颜色 - 纯黑
-val DarkSurfaceVariant = Color(0xFF000000)     // 表面变体颜色 - 纯黑
-val DarkSurfaceContainer = Color(0xFF000000)    // 容器表面颜色 - 纯黑
+val DarkSurface = Color(0xFF000000)            // 最低层容器 - 纯黑
+val DarkSurfaceVariant = Color(0xFF1C1C1C)     // 表面变体 - 比背景亮一档
+val DarkSurfaceContainer = Color(0xFF141414)    // 容器表面 - 卡片/分组容器
 
 // 卡片和容器颜色 - 关键改进，避免白色突兀
 val DarkCardBackground = Color(0xFF2A2A2A)     // 卡片背景 - 取代白色
-val DarkCardElevated = Color(0xFF000000)       // 悬浮卡片背景
+val DarkCardElevated = Color(0xFF1F1F1F)       // 最高层容器 - 比容器再亮一档
+val DarkSurfaceDim = Color(0xFF0A0A0A)         // 被压暗的表面 - 必须暗于 surfaceBright
 
 // 深色前景系列 - 纯白主文字 + 灰阶次级文字
 val DarkOnBackground = Color(0xFFFFFFFF)       // 背景上的文字 - 纯白
@@ -48,9 +50,9 @@ val DarkError = Color(0xFFE57373)              // 错误色 - 柔和红
 val DarkOnError = Color(0xFF000000)            // 错误色上的文字
 val DarkErrorContainer = Color(0xFF4A1A1A)     // 错误容器
 
-// 深色轮廓线 - 更微妙的分割线
-val DarkOutline = Color(0xFF000000)            // 轮廓线 - 纯黑
-val DarkOutlineVariant = Color(0xFF000000)     // 轮廓线变体
+// 深色轮廓线 - 纯黑描边在纯黑背景上等于没画，必须用中性灰
+val DarkOutline = Color(0xFF5A5A5A)            // 轮廓线 - 按钮/输入框描边
+val DarkOutlineVariant = Color(0xFF333333)     // 轮廓线变体 - 分割线
 
 // 文字颜色
 val DarkTextPrimary = Color(0xFFFFFFFF)        // 主要文字 - 纯白

@@ -163,7 +163,7 @@ internal fun AiMessageOptionsBottomSheet(
     ModalBottomSheet(
         onDismissRequest = onDismissRequest,
         sheetState = sheetState,
-        containerColor = MaterialTheme.colorScheme.surfaceDim,
+        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
     ) {
         Column(modifier = Modifier.padding(bottom = 32.dp)) {
             AiMessageOption.values().forEach { option ->
@@ -183,7 +183,7 @@ internal fun AiMessageOptionsBottomSheet(
                     },
                     modifier = Modifier.clickable { onOptionSelected(option) },
                     colors = ListItemDefaults.colors(
-                        containerColor = MaterialTheme.colorScheme.surfaceDim,
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                         headlineColor = MaterialTheme.colorScheme.onSurface,
                         leadingIconColor = MaterialTheme.colorScheme.onSurface
                     )

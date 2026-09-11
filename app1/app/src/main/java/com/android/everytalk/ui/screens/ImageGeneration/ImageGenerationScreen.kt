@@ -505,7 +505,7 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
         ModalBottomSheet(
             onDismissRequest = { showImageMessageOptionsBottomSheet = false },
             sheetState = imageMessageOptionsSheetState,
-            containerColor = MaterialTheme.colorScheme.surfaceDim,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
         ) {
             Column(modifier = Modifier.padding(bottom = 32.dp)) {
                 // 查看图片
@@ -534,7 +534,7 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                             }
                         },
                     colors = ListItemDefaults.colors(
-                        containerColor = MaterialTheme.colorScheme.surfaceDim,
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                         headlineColor = MaterialTheme.colorScheme.onSurface,
                         leadingIconColor = MaterialTheme.colorScheme.onSurface
                     )
@@ -564,7 +564,7 @@ fun ImageGenerationScreen(viewModel: AppViewModel, navController: NavController)
                             }
                         },
                     colors = ListItemDefaults.colors(
-                        containerColor = MaterialTheme.colorScheme.surfaceDim,
+                        containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
                         headlineColor = MaterialTheme.colorScheme.onSurface,
                         leadingIconColor = MaterialTheme.colorScheme.onSurface
                     )

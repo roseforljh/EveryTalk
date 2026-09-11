@@ -59,7 +59,7 @@ private val DarkColorScheme = darkColorScheme(
     // Material 3 新增颜色
     surfaceTint = DarkPrimary,                     // 表面色调
     surfaceBright = DarkCardElevated,              // 明亮表面
-    surfaceDim = DarkPopupBackground,              // 夜间模式弹出选项卡使用深灰色
+    surfaceDim = DarkSurfaceDim,                   // 比 surfaceBright 暗
     surfaceContainerLowest = DarkBackground,       // 最低容器
     surfaceContainerLow = DarkSurface,             // 低容器
     surfaceContainerHigh = DarkSurfaceContainer,   // 高容器
@@ -111,13 +111,14 @@ private val LightColorScheme = lightColorScheme(
 
     // Material 3 新增颜色 - 优化弹出选项卡颜色
     surfaceTint = Color.White,
+    // 主背景保持纯白，容器逐级压暗，否则白卡片在白底上没有层次。
     surfaceBright = Color.White,
-    surfaceDim = LightPopupBackground, // 白天模式弹出选项卡使用淡灰色
+    surfaceDim = Color(0xFFE8E8E8), // 比 surfaceBright 暗，语义上是“被压暗的表面”
     surfaceContainerLowest = Color.White,
-    surfaceContainerLow = Color.White,
-    surfaceContainer = Color.White,
-    surfaceContainerHigh = Color.White,
-    surfaceContainerHighest = Color.White
+    surfaceContainerLow = Color(0xFFFAFAFA),
+    surfaceContainer = Color(0xFFF4F4F4),
+    surfaceContainerHigh = Color(0xFFEFEFEF),
+    surfaceContainerHighest = Color(0xFFE8E8E8)
 )
 
 internal fun lightThemeOnBackground(): Color = LightColorScheme.onBackground
