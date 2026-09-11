@@ -49,6 +49,13 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="everytalk" android:host="oauth" android:path="/cloudflare" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="www.everytalk.cc" android:path="/oauth/cloudflare" />
+                <data android:scheme="https" android:host="everytalk.cc" android:path="/oauth/cloudflare" />
+            </intent-filter>
         </activity-alias>
 
         <activity-alias
