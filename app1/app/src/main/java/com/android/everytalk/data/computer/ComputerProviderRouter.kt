@@ -96,7 +96,7 @@ class CloudflareComputerProvider(
             val auth = try { requireCloudflareAccess(config, context, toolName, arguments) }
             catch (error: CloudflareApiException) {
                 // 交给执行边界返回带目标快照的授权干预；不生成一张无法执行的写审批。
-                if (error.code in setOf("AUTHORIZATION_REQUIRED", "RESOURCE_SELECTION_REQUIRED")) return null else throw error
+                if (error.code in setOf("AUTHORIZATION_REQUIRED", "RESOURCE_SELECTION_REQUIRED", "RESOURCE_NOT_FOUND")) return null else throw error
             }
             val packageForRequest = workerPackageForRequest(toolName, arguments, context)
             if (packageForRequest != null) requireWorkerBindings(config, context, packageForRequest)
@@ -109,12 +109,12 @@ class CloudflareComputerProvider(
         val config = configLookup(context.computerId) ?: return null
         val auth = try { requireCronAccess(config, context) }
         catch (error: CloudflareApiException) {
-            if (error.code in setOf("AUTHORIZATION_REQUIRED", "RESOURCE_SELECTION_REQUIRED")) return null else throw error
+            if (error.code in setOf("AUTHORIZATION_REQUIRED", "RESOURCE_SELECTION_REQUIRED", "RESOURCE_NOT_FOUND")) return null else throw error
         }
         val requested = CloudflareCronSchedules.fromArguments(arguments)
         try { requireResourceTarget(config, context, toolName, arguments) }
         catch (error: CloudflareApiException) {
-            if (error.code == "RESOURCE_SELECTION_REQUIRED") return null else throw error
+            if (error.code in setOf("RESOURCE_SELECTION_REQUIRED", "RESOURCE_NOT_FOUND")) return null else throw error
         }
         val workerName = arguments.requireText("worker_name")
         val ownedResources = resourcesFactory?.invoke(context)
@@ -225,11 +225,14 @@ class CloudflareComputerProvider(
         if (!toolName.startsWith("computer_worker_")) {
             if (featureFlags?.cloudflareResourceToolsEnabled == false) return failure("FEATURE_DISABLED", "Cloudflare 资源工具当前未开启")
         }
-        if (!readOnly && context.approvedToolCallId != toolCallId) {
+        // 执行侧的确认门必须和审批卡用同一套权限模式判定：FULL 不产生审批卡，
+        // 这里却仍要求 approvedToolCallId，会把所有写操作一律挡成 CONFIRMATION_REQUIRED。
+        val requiresConfirmation = ComputerToolCallSafety.requiresUnknownApproval(toolName, arguments, context.permissionMode)
+        if (requiresConfirmation && context.approvedToolCallId != toolCallId) {
             return failure("CONFIRMATION_REQUIRED", "该 Cloudflare 操作会修改云端资源，需要用户确认")
         }
         // Cron 使用包含旧值/新值的专用审批，不能同时要求另一个通用审批。
-        if (!readOnly && toolName != ComputerToolNames.CRON_UPDATE) {
+        if (requiresConfirmation && toolName != ComputerToolNames.CRON_UPDATE) {
             val approval = context.approvedCloudflareWrite
                 ?: return failure("CONFIRMATION_REQUIRED", "该 Cloudflare 操作需要用户确认")
             if (approval.toolCallId != toolCallId || approval.context.runId != context.runId ||
@@ -583,8 +586,9 @@ class CloudflareComputerProvider(
         val auth = authorizationLookup?.invoke(config.authorizationId)
             ?: throw CloudflareApiException("AUTHORIZATION_REQUIRED", "Cloudflare 授权不存在")
         context.requireCloudflareBinding(config, auth)
+        // 到期与否交给取 Token 那一层判断：它会先用 refresh_token 续期，续不上才报失效。
+        // 这里如果按 expiresAt 直接拒绝，续期逻辑永远走不到（路由检查排在取 Token 之前）。
         if (auth.authorizationId != config.authorizationId || auth.revoked ||
-            (auth.expiresAt != null && auth.expiresAt <= System.currentTimeMillis()) ||
             (expectedGeneration != null && auth.generation != expectedGeneration)
         ) throw CloudflareApiException("AUTHORIZATION_REQUIRED", "Cloudflare 授权已失效，请重新确认")
         if (ComputerCapability.WORKER_UPDATE !in config.capabilities || !auth.hasAnyScope(WORKER_WRITE_SCOPES)) {
@@ -617,7 +621,8 @@ class CloudflareComputerProvider(
         val auth = authorizationLookup?.invoke(config.authorizationId)
             ?: throw CloudflareApiException("AUTHORIZATION_REQUIRED", "Cloudflare 授权不存在")
         context.requireCloudflareBinding(config, auth)
-        if (auth.authorizationId != config.authorizationId || auth.revoked || (auth.expiresAt != null && auth.expiresAt <= System.currentTimeMillis())) {
+        // 同上：过期只代表需要续期，不代表要重新登录。
+        if (auth.authorizationId != config.authorizationId || auth.revoked) {
             throw CloudflareApiException("AUTHORIZATION_REQUIRED", "Cloudflare 授权已失效")
         }
         val writesD1 = toolName == ComputerToolNames.D1_QUERY && !ComputerToolCallSafety.isReadOnly(toolName, arguments)
@@ -638,9 +643,15 @@ class CloudflareComputerProvider(
         val index = resourceIndex ?: throw CloudflareApiException("RESOURCE_CLIENT_UNAVAILABLE", "资源索引未初始化，未发送请求")
         if (index.isKnown(context.computerId, config.accountId, target.kind, id)) return
         // 索引只保留 10 分钟。过期只说明本地缓存旧了，不代表用户没授权：
-        // 先由 App 自己重新列一次，列完仍然找不到这个 ID 才转人工。
+        // 先由 App 自己重新列一次。
         refreshResourceIndex(config, context, target)
-        index.requireKnown(context.computerId, config.accountId, target.kind, id)
+        if (index.isKnown(context.computerId, config.accountId, target.kind, id)) return
+        // 模型给了名字但当前 Account 里没有：这是执行错误，直接告诉模型重新列一遍改名，
+        // 不要把用户拉进来替它在已有资源里选一个它本来就不想要的目标。
+        throw CloudflareApiException(
+            "RESOURCE_NOT_FOUND",
+            "当前 Account 没有 ${target.kind} 资源「$id」，请先用列表工具确认名称",
+        )
     }
 
     /** 重新读取该类资源的列表并写回索引；刷新失败按未命中处理，不把网络错误当成权限结论。 */

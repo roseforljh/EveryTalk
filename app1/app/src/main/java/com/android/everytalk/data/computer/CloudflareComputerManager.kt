@@ -106,7 +106,7 @@ internal class CloudflareRequestCredentials(
 }
 
 /** access token 距到期不足这个余量就先续期，避免请求刚好卡在过期点上。 */
-private const val TOKEN_REFRESH_MARGIN_MILLIS = 5 * 60 * 1000L
+private const val TOKEN_REFRESH_MARGIN_MILLIS = 30 * 60 * 1000L
 
 /** 安全存储里的 CharArray 用完清零。 */
 private val ZERO_CHAR = Char(0)

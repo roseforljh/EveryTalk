@@ -104,7 +104,7 @@ class ComputerProviderRouterTest {
     }
 
     @Test
-    fun `刷新后仍然找不到的资源依旧转人工`() = runTest {
+    fun `刷新后仍然找不到的资源返回错误给模型而不是转人工`() = runTest {
         val dao = mockk<ComputerDao>()
         coEvery { dao.getCloudflareResources("computer", "WORKER") } returns emptyList()
         val api = mockk<CloudflareApiClient>()
@@ -114,10 +114,33 @@ class ComputerProviderRouterTest {
             api = api, tokenProvider = { "token" }, authorizationLookup = { authorization },
             resourceIndex = CloudflareResourceIndex(dao),
         )
+        val args = buildJsonObject { put("worker_name", "demo") }
 
+        // 名字是模型给的、Account 里没有：交给模型自己重新列一遍改名，不要人接力。
+        assertEquals(null, provider.approvalRequest(ComputerToolNames.WORKER_DELETE, args, "call", context))
+        val result = provider.execute(ComputerToolNames.WORKER_DELETE, args, "call", context) {}.jsonObject
+        assertEquals("RESOURCE_NOT_FOUND", result["error_code"]?.jsonPrimitive?.content)
+    }
+
+    @Test
+    fun `执行侧确认门跟随权限模式，FULL 不再要求审批`() = runTest {
+        val api = mockk<CloudflareApiClient>()
+        val provider = CloudflareComputerProvider(
+            configLookup = { config }, api = api, tokenProvider = { "token" }, authorizationLookup = { authorization },
+        )
+        val args = buildJsonObject { put("worker_name", "demo"); put("script", "export default {}") }
+        fun codeOf(result: kotlinx.serialization.json.JsonElement): String? =
+            (result as? kotlinx.serialization.json.JsonObject)?.get("error_code")?.jsonPrimitive?.content
+
+        // MANUAL 且没有审批：仍然按未确认拦下。
         assertEquals(
-            null,
-            provider.approvalRequest(ComputerToolNames.WORKER_DELETE, buildJsonObject { put("worker_name", "demo") }, "call", context),
+            "CONFIRMATION_REQUIRED",
+            codeOf(provider.execute(ComputerToolNames.WORKER_CREATE, args, "call", context.copy(permissionMode = ComputerPermissionMode.MANUAL)) { }),
+        )
+        // FULL：不再卡在确认门，直接往下走到部署环节。
+        assertEquals(
+            "DEPLOYMENT_MANAGER_UNAVAILABLE",
+            codeOf(provider.execute(ComputerToolNames.WORKER_CREATE, args, "call", context.copy(permissionMode = ComputerPermissionMode.FULL)) { }),
         )
     }
 
