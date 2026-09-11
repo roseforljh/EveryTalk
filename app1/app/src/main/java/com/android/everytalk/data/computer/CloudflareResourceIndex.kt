@@ -62,13 +62,15 @@ class CloudflareResourceIndex(private val dao: ComputerDao, private val clock: (
     }
 
     suspend fun requireKnown(computerId: String, accountId: String, kind: String, resourceId: String) {
-        require(resourceId.isNotBlank()) { "资源 ID 无效" }
-        val known = options(computerId, accountId, kind).any { it.id == resourceId }
-        if (!known) throw CloudflareApiException(
+        if (!isKnown(computerId, accountId, kind, resourceId)) throw CloudflareApiException(
             "RESOURCE_SELECTION_REQUIRED",
             "请先通过 App 列出并选择当前 Account 的 $kind 资源",
         )
     }
+
+    /** 不抛异常的命中判断；调用方据此决定是重新列一次还是转人工。 */
+    suspend fun isKnown(computerId: String, accountId: String, kind: String, resourceId: String): Boolean =
+        resourceId.isNotBlank() && options(computerId, accountId, kind).any { it.id == resourceId }
 
     /**
      * Worker binding 必须使用列表接口返回的真实资源引用。
@@ -139,11 +141,11 @@ internal fun cloudflareResourceTarget(toolName: String): CloudflareResourceTarge
         ComputerToolNames.WORKER_STATUS, ComputerToolNames.WORKER_LOGS, ComputerToolNames.WORKER_DELETE,
         ComputerToolNames.CRON_LIST, ComputerToolNames.CRON_UPDATE) ->
         CloudflareResourceTarget("worker_name", "WORKER", ComputerToolNames.WORKER_LIST)
-    toolName.startsWith("computer.d1.") && toolName != ComputerToolNames.D1_LIST ->
+    toolName.startsWith("computer_d1_") && toolName != ComputerToolNames.D1_LIST ->
         CloudflareResourceTarget("database_id", "D1", ComputerToolNames.D1_LIST)
-    toolName.startsWith("computer.kv.") && toolName != ComputerToolNames.KV_LIST_NAMESPACES ->
+    toolName.startsWith("computer_kv_") && toolName != ComputerToolNames.KV_LIST_NAMESPACES ->
         CloudflareResourceTarget("namespace_id", "KV_NAMESPACE", ComputerToolNames.KV_LIST_NAMESPACES)
-    toolName.startsWith("computer.r2.") && toolName != ComputerToolNames.R2_LIST_BUCKETS ->
+    toolName.startsWith("computer_r2_") && toolName != ComputerToolNames.R2_LIST_BUCKETS ->
         CloudflareResourceTarget("bucket", "R2_BUCKET", ComputerToolNames.R2_LIST_BUCKETS)
     toolName == ComputerToolNames.DO_OBJECTS_LIST ->
         CloudflareResourceTarget("namespace_id", "DO_NAMESPACE", ComputerToolNames.DO_LIST)

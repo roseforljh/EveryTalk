@@ -87,6 +87,9 @@ class CloudflareComputerProvider(
 ) {
     suspend fun approvalRequest(toolName: String, arguments: JsonObject, toolCallId: String, context: ComputerRequestContext): ComputerToolApprovalRequest? {
         if (toolName == ComputerToolNames.CRON_TRIGGER) return null
+        // 和 VPS 共用同一套权限模式判定：MANUAL 全弹、SMART 看模型自报、FULL 不弹，
+        // 只读工具在任何模式下都不弹。写操作的 scope 与能力校验不在这里，仍然照常执行。
+        if (!ComputerToolCallSafety.requiresUnknownApproval(toolName, arguments, context.permissionMode)) return null
         if (toolName != ComputerToolNames.CRON_UPDATE) {
             if (toolName !in ComputerToolNames.cloudflare || ComputerToolCallSafety.isReadOnly(toolName, arguments)) return null
             val config = configLookup(context.computerId) ?: return null
@@ -216,10 +219,10 @@ class CloudflareComputerProvider(
         val accountId = config.accountId
         val operationKey = "${context.runId.orEmpty()}:${ComputerToolRequestHasher.toolCallKey(toolCallId, context)}"
         val readOnly = ComputerToolCallSafety.isReadOnly(toolName, arguments)
-        if (!readOnly && featureFlags?.cloudflareWorkerWriteEnabled == false && toolName.startsWith("computer.worker.")) {
+        if (!readOnly && featureFlags?.cloudflareWorkerWriteEnabled == false && toolName.startsWith("computer_worker_")) {
             return failure("FEATURE_DISABLED", "Cloudflare Worker 写操作当前未开启")
         }
-        if (!toolName.startsWith("computer.worker.")) {
+        if (!toolName.startsWith("computer_worker_")) {
             if (featureFlags?.cloudflareResourceToolsEnabled == false) return failure("FEATURE_DISABLED", "Cloudflare 资源工具当前未开启")
         }
         if (!readOnly && context.approvedToolCallId != toolCallId) {
@@ -245,14 +248,14 @@ class CloudflareComputerProvider(
             ownedResources = resourcesFactory?.invoke(context)
             val requestResources = ownedResources ?: resources
             when (toolName) {
-                "computer.worker.list" -> requestApi.listWorkers(
+                "computer_worker_list" -> requestApi.listWorkers(
                     accountId,
                     arguments["page"]?.jsonPrimitive?.intOrNull ?: 1,
                     arguments["per_page"]?.jsonPrimitive?.intOrNull ?: 100,
                 ).also { result ->
                     resourceIndex?.rememberWorkers(context.computerId, accountId, result.workers)
                 }.toJson().let(::safeExternalJson)
-                "computer.worker.read" -> {
+                "computer_worker_read" -> {
                     val name = arguments.requireText("worker_name")
                     val source = sanitizeExternalText(requestApi.downloadWorker(accountId, name), 64_000)
                     buildJsonObject {
@@ -263,10 +266,10 @@ class CloudflareComputerProvider(
                         put("untrusted_external_data", true)
                     }
                 }
-                "computer.worker.create", "computer.worker.update", "computer.worker.deploy" -> {
+                "computer_worker_create", "computer_worker_update", "computer_worker_deploy" -> {
                     val name = arguments.requireText("worker_name")
                     val script = arguments["script"]?.jsonPrimitive?.contentOrNull
-                    val result = if (toolName == "computer.worker.deploy" && script.isNullOrBlank()) {
+                    val result = if (toolName == "computer_worker_deploy" && script.isNullOrBlank()) {
                         val root = workspaceRootLookup?.invoke(context.workspaceId)
                             ?: return failure("WORKSPACE_NOT_FOUND", "当前 Workspace 不存在")
                         val subPath = arguments["workspace_path"]?.jsonPrimitive?.contentOrNull.orEmpty()
@@ -296,7 +299,7 @@ class CloudflareComputerProvider(
                         result.versionId?.let { put("version_id", it) }
                     }
                 }
-                "computer.worker.status" -> {
+                "computer_worker_status" -> {
                     val name = arguments.requireText("worker_name")
                     val raw = sanitizeExternalText(requestApi.workerSettings(accountId, name), 16_000)
                     val deployments = ComputerExternalOutput.json(requestApi.workerDeployments(accountId, name), 16_000)
@@ -311,7 +314,7 @@ class CloudflareComputerProvider(
                         put("untrusted_external_data", true)
                     }
                 }
-                "computer.worker.logs" -> {
+                "computer_worker_logs" -> {
                     val name = arguments.requireText("worker_name")
                     val raw = requestApi.workerTailLogs(accountId, name)
                     val safeLogs = sanitizeExternalLog(raw, 32_000)
@@ -331,7 +334,7 @@ class CloudflareComputerProvider(
                         health.latencyMs?.let { put("latency_ms", it) }
                     }
                 }
-                "computer.worker.delete" -> {
+                "computer_worker_delete" -> {
                     val name = arguments.requireText("worker_name")
                     val manager = requireResourceOperationManager(context)
                     val status = manager.run(context.computerId, accountId, "WORKER_DELETE", name, "delete", "删除 Worker：$name", operationKey) {
@@ -341,13 +344,13 @@ class CloudflareComputerProvider(
                     if (status == CloudflareResourceOperationStatus.FAILED) return failure("OPERATION_FAILED", "Worker 删除已明确失败")
                     buildJsonObject { put("ok", true); put("worker_name", name); put("status", status.name) }
                 }
-                "computer.d1.list" -> requestResources?.listD1(accountId)?.also { resourceIndex?.rememberPage(context.computerId, accountId, "D1", it) }?.let(::safeExternalJson)
+                "computer_d1_list" -> requestResources?.listD1(accountId)?.also { resourceIndex?.rememberPage(context.computerId, accountId, "D1", it) }?.let(::safeExternalJson)
                     ?: failure("RESOURCE_CLIENT_UNAVAILABLE", "D1 客户端未初始化")
-                "computer.d1.schema" -> {
+                "computer_d1_schema" -> {
                     val databaseId = arguments.requireText("database_id")
                     requestResources?.d1Schema(accountId, databaseId)?.let(::safeExternalJson) ?: failure("RESOURCE_CLIENT_UNAVAILABLE", "D1 客户端未初始化")
                 }
-                "computer.d1.query" -> {
+                "computer_d1_query" -> {
                     val databaseId = arguments.requireText("database_id")
                     val sql = arguments.requireText("sql")
                     val resourceClient = requestResources ?: return failure("RESOURCE_CLIENT_UNAVAILABLE", "D1 客户端未初始化")
@@ -365,7 +368,7 @@ class CloudflareComputerProvider(
                         buildJsonObject { put("ok", true); put("status", status.name); put("request_hash", requestHash) }
                     }
                 }
-                "computer.d1.migration" -> {
+                "computer_d1_migration" -> {
                     val databaseId = arguments.requireText("database_id")
                     val sql = arguments.requireText("sql")
                     val manager = migrationManagerFactory?.invoke(context)
@@ -378,16 +381,16 @@ class CloudflareComputerProvider(
                         failure("RESOURCE_CLIENT_UNAVAILABLE", "D1 migration 账本未初始化，未发送请求")
                     }
                 }
-                "computer.kv.list_namespaces" -> requestResources?.listKvNamespaces(accountId)?.also { resourceIndex?.rememberPage(context.computerId, accountId, "KV_NAMESPACE", it) }?.let(::safeExternalJson)
+                "computer_kv_list_namespaces" -> requestResources?.listKvNamespaces(accountId)?.also { resourceIndex?.rememberPage(context.computerId, accountId, "KV_NAMESPACE", it) }?.let(::safeExternalJson)
                     ?: failure("RESOURCE_CLIENT_UNAVAILABLE", "KV 客户端未初始化")
-                "computer.kv.list_keys" -> {
+                "computer_kv_list_keys" -> {
                     val namespaceId = arguments.requireText("namespace_id")
                     requestResources?.listKvKeys(accountId, namespaceId,
                         arguments["cursor"]?.jsonPrimitive?.contentOrNull,
                         arguments["limit"]?.jsonPrimitive?.intOrNull ?: 100,
                     )?.let(::safeExternalJson) ?: failure("RESOURCE_CLIENT_UNAVAILABLE", "KV 客户端未初始化")
                 }
-                "computer.kv.get" -> {
+                "computer_kv_get" -> {
                     val namespaceId = arguments.requireText("namespace_id")
                     val value = (requestResources ?: return failure("RESOURCE_CLIENT_UNAVAILABLE", "KV 客户端未初始化"))
                         .getKv(accountId, namespaceId, arguments.requireText("key"))
@@ -400,7 +403,7 @@ class CloudflareComputerProvider(
                         put("untrusted_external_data", true)
                     }
                 }
-                "computer.kv.put" -> {
+                "computer_kv_put" -> {
                     val namespaceId = arguments.requireText("namespace_id")
                     val key = arguments.requireText("key")
                     val value = arguments.requireText("value")
@@ -413,7 +416,7 @@ class CloudflareComputerProvider(
                     if (status == CloudflareResourceOperationStatus.FAILED) return failure("OPERATION_FAILED", "KV 写入已明确失败")
                     buildJsonObject { put("ok", true); put("status", status.name) }
                 }
-                "computer.kv.delete" -> {
+                "computer_kv_delete" -> {
                     val namespaceId = arguments.requireText("namespace_id")
                     val key = arguments.requireText("key")
                     val client = requestResources ?: return failure("RESOURCE_CLIENT_UNAVAILABLE", "KV 客户端未初始化")
@@ -425,21 +428,21 @@ class CloudflareComputerProvider(
                     if (status == CloudflareResourceOperationStatus.FAILED) return failure("OPERATION_FAILED", "KV 删除已明确失败")
                     buildJsonObject { put("ok", true); put("status", status.name) }
                 }
-                "computer.r2.list_buckets" -> requestResources?.listR2Buckets(accountId)?.also { resourceIndex?.rememberPage(context.computerId, accountId, "R2_BUCKET", it) }?.let(::safeExternalJson)
+                "computer_r2_list_buckets" -> requestResources?.listR2Buckets(accountId)?.also { resourceIndex?.rememberPage(context.computerId, accountId, "R2_BUCKET", it) }?.let(::safeExternalJson)
                     ?: failure("RESOURCE_CLIENT_UNAVAILABLE", "R2 客户端未初始化")
-                "computer.r2.list_objects" -> {
+                "computer_r2_list_objects" -> {
                     val bucket = arguments.requireText("bucket")
                     requestResources?.listR2Objects(accountId, bucket,
                         arguments["cursor"]?.jsonPrimitive?.contentOrNull,
                         arguments["per_page"]?.jsonPrimitive?.intOrNull ?: 100,
                     )?.let(::safeExternalJson) ?: failure("RESOURCE_CLIENT_UNAVAILABLE", "R2 客户端未初始化")
                 }
-                "computer.r2.get_metadata" -> {
+                "computer_r2_get_metadata" -> {
                     val bucket = arguments.requireText("bucket")
                     requestResources?.getR2Metadata(accountId, bucket, arguments.requireText("key"))?.let(::safeExternalJson)
                         ?: failure("RESOURCE_CLIENT_UNAVAILABLE", "R2 客户端未初始化")
                 }
-                "computer.r2.upload" -> {
+                "computer_r2_upload" -> {
                     val bytes = r2Bytes ?: throw CloudflareApiException("WORKSPACE_NOT_FOUND", "R2 上传文件未冻结")
                     val bucket = arguments.requireText("bucket")
                     val key = arguments.requireText("key")
@@ -452,7 +455,7 @@ class CloudflareComputerProvider(
                     if (status == CloudflareResourceOperationStatus.FAILED) return failure("OPERATION_FAILED", "R2 上传已明确失败")
                     buildJsonObject { put("ok", true); put("status", status.name) }
                 }
-                "computer.r2.delete" -> {
+                "computer_r2_delete" -> {
                     val bucket = arguments.requireText("bucket")
                     val key = arguments.requireText("key")
                     val manager = requireResourceOperationManager(context)
@@ -464,9 +467,9 @@ class CloudflareComputerProvider(
                     if (status == CloudflareResourceOperationStatus.FAILED) return failure("OPERATION_FAILED", "R2 删除已明确失败")
                     buildJsonObject { put("ok", true); put("status", status.name) }
                 }
-                "computer.durable_objects.list" -> requestResources?.listDurableObjectNamespaces(accountId)?.also { resourceIndex?.rememberPage(context.computerId, accountId, "DO_NAMESPACE", it) }?.let(::safeExternalJson)
+                "computer_durable_objects_list" -> requestResources?.listDurableObjectNamespaces(accountId)?.also { resourceIndex?.rememberPage(context.computerId, accountId, "DO_NAMESPACE", it) }?.let(::safeExternalJson)
                     ?: failure("RESOURCE_CLIENT_UNAVAILABLE", "资源客户端未初始化")
-                "computer.durable_objects.list_objects" -> {
+                "computer_durable_objects_list_objects" -> {
                     val namespaceId = arguments.requireText("namespace_id")
                     requestResources?.listDurableObjectInstances(accountId, namespaceId,
                         arguments["cursor"]?.jsonPrimitive?.contentOrNull,
@@ -474,26 +477,26 @@ class CloudflareComputerProvider(
                     )?.let(::safeExternalJson)
                         ?: failure("RESOURCE_CLIENT_UNAVAILABLE", "资源客户端未初始化")
                 }
-                "computer.queues.list" -> requestResources?.listQueues(accountId)?.also { resourceIndex?.rememberPage(context.computerId, accountId, "QUEUE", it) }?.let(::safeExternalJson)
+                "computer_queues_list" -> requestResources?.listQueues(accountId)?.also { resourceIndex?.rememberPage(context.computerId, accountId, "QUEUE", it) }?.let(::safeExternalJson)
                     ?: failure("RESOURCE_CLIENT_UNAVAILABLE", "资源客户端未初始化")
-                "computer.queues.get" -> {
+                "computer_queues_get" -> {
                     val queueId = arguments.requireText("queue_id")
                     requestResources?.getQueue(accountId, queueId)?.let(::safeExternalJson)
                     ?: failure("RESOURCE_CLIENT_UNAVAILABLE", "资源客户端未初始化")
                 }
-                "computer.queues.metrics" -> {
+                "computer_queues_metrics" -> {
                     val queueId = arguments.requireText("queue_id")
                     requestResources?.queueMetrics(accountId, queueId)?.let(::safeExternalJson)
                         ?: failure("RESOURCE_CLIENT_UNAVAILABLE", "资源客户端未初始化")
                 }
-                "computer.queues.peek" -> {
+                "computer_queues_peek" -> {
                     val queueId = arguments.requireText("queue_id")
                     val batchSize = arguments["batch_size"]?.jsonPrimitive?.intOrNull ?: 10
                     val raw = requestResources?.peekQueue(accountId, queueId, batchSize)
                         ?: return failure("RESOURCE_CLIENT_UNAVAILABLE", "资源客户端未初始化")
                     safeQueuePeek(raw)
                 }
-                "computer.queues.create" -> {
+                "computer_queues_create" -> {
                     val name = arguments.requireText("name")
                     val manager = requireResourceOperationManager(context)
                     val status = manager.run(context.computerId, accountId, "QUEUE_CREATE", name, "create", "创建 Queue：$name", operationKey) {
@@ -504,7 +507,7 @@ class CloudflareComputerProvider(
                     if (status == CloudflareResourceOperationStatus.FAILED) return failure("OPERATION_FAILED", "Queue 创建已明确失败")
                     buildJsonObject { put("ok", true); put("status", status.name); put("queue_name", name) }
                 }
-                "computer.queues.delete" -> {
+                "computer_queues_delete" -> {
                     val queueId = arguments.requireText("queue_id")
                     val manager = requireResourceOperationManager(context)
                     val status = manager.run(context.computerId, accountId, "QUEUE_DELETE", queueId, "delete", "删除 Queue：$queueId", operationKey) {
@@ -515,8 +518,8 @@ class CloudflareComputerProvider(
                     if (status == CloudflareResourceOperationStatus.FAILED) return failure("OPERATION_FAILED", "Queue 删除已明确失败")
                     buildJsonObject { put("ok", true); put("status", status.name) }
                 }
-                "computer.cron.list" -> requestResources?.listWorkerSchedules(accountId, arguments.requireText("worker_name"))?.let(::safeExternalJson) ?: failure("RESOURCE_CLIENT_UNAVAILABLE", "资源客户端未初始化")
-                "computer.cron.update" -> {
+                "computer_cron_list" -> requestResources?.listWorkerSchedules(accountId, arguments.requireText("worker_name"))?.let(::safeExternalJson) ?: failure("RESOURCE_CLIENT_UNAVAILABLE", "资源客户端未初始化")
+                "computer_cron_update" -> {
                     val change = context.approvedCloudflareCronChange
                         ?: return failure("CONFIRMATION_REQUIRED", "Cron 修改需要先读取旧值并确认")
                     val requested = CloudflareCronSchedules.fromArguments(arguments)
@@ -584,7 +587,7 @@ class CloudflareComputerProvider(
             (auth.expiresAt != null && auth.expiresAt <= System.currentTimeMillis()) ||
             (expectedGeneration != null && auth.generation != expectedGeneration)
         ) throw CloudflareApiException("AUTHORIZATION_REQUIRED", "Cloudflare 授权已失效，请重新确认")
-        if (ComputerCapability.WORKER_UPDATE !in config.capabilities || "workers:write" !in auth.grantedScopes) {
+        if (ComputerCapability.WORKER_UPDATE !in config.capabilities || !auth.hasAnyScope(WORKER_WRITE_SCOPES)) {
             throw CloudflareApiException("PERMISSION_DENIED", "Cloudflare 授权缺少 Worker 写权限")
         }
         return auth
@@ -598,8 +601,8 @@ class CloudflareComputerProvider(
         arguments: JsonObject,
     ): CloudflareAuthorizationRecord {
         if (featureFlags?.cloudflareEnabled == false ||
-            (!toolName.startsWith("computer.worker.") && featureFlags?.cloudflareResourceToolsEnabled == false) ||
-            (toolName.startsWith("computer.worker.") && !ComputerToolCallSafety.isReadOnly(toolName, arguments) && featureFlags?.cloudflareWorkerWriteEnabled == false)) {
+            (!toolName.startsWith("computer_worker_") && featureFlags?.cloudflareResourceToolsEnabled == false) ||
+            (toolName.startsWith("computer_worker_") && !ComputerToolCallSafety.isReadOnly(toolName, arguments) && featureFlags?.cloudflareWorkerWriteEnabled == false)) {
             throw CloudflareApiException("FEATURE_DISABLED", "Cloudflare 功能当前未开启")
         }
         if (configLookup(context.computerId) != config || context.computerId != config.computerId || context.workspaceId.isBlank()) {
@@ -619,8 +622,8 @@ class CloudflareComputerProvider(
         }
         val writesD1 = toolName == ComputerToolNames.D1_QUERY && !ComputerToolCallSafety.isReadOnly(toolName, arguments)
         val capability = if (writesD1) ComputerCapability.D1_WRITE else capabilityFor(toolName)
-        val scope = if (writesD1) "d1:write" else requiredScope(toolName)
-        if (capability == null || capability !in config.capabilities || (scope != null && scope !in auth.grantedScopes)) {
+        val scopes = if (writesD1) setOf("d1.write") else requiredScopes(toolName)
+        if (capability == null || capability !in config.capabilities || !auth.hasAnyScope(scopes)) {
             throw CloudflareApiException("PERMISSION_DENIED", "当前 Cloudflare 授权缺少该操作所需的能力或 scope")
         }
         requireResourceTarget(config, context, toolName, arguments)
@@ -633,7 +636,44 @@ class CloudflareComputerProvider(
         val id = (arguments[target.parameter] as? JsonPrimitive)?.contentOrNull?.takeIf(String::isNotBlank)
             ?: throw CloudflareApiException("RESOURCE_SELECTION_REQUIRED", "请先选择 ${target.kind} 资源")
         val index = resourceIndex ?: throw CloudflareApiException("RESOURCE_CLIENT_UNAVAILABLE", "资源索引未初始化，未发送请求")
+        if (index.isKnown(context.computerId, config.accountId, target.kind, id)) return
+        // 索引只保留 10 分钟。过期只说明本地缓存旧了，不代表用户没授权：
+        // 先由 App 自己重新列一次，列完仍然找不到这个 ID 才转人工。
+        refreshResourceIndex(config, context, target)
         index.requireKnown(context.computerId, config.accountId, target.kind, id)
+    }
+
+    /** 重新读取该类资源的列表并写回索引；刷新失败按未命中处理，不把网络错误当成权限结论。 */
+    private suspend fun refreshResourceIndex(
+        config: CloudflareComputerConfig,
+        context: ComputerRequestContext,
+        target: CloudflareResourceTarget,
+    ) {
+        val index = resourceIndex ?: return
+        val accountId = config.accountId
+        val ownedApi = apiFactory?.invoke(context)
+        val ownedResources = resourcesFactory?.invoke(context)
+        try {
+            val requestApi = ownedApi ?: api
+            val requestResources = ownedResources ?: resources
+            when (target.kind) {
+                "WORKER" -> requestApi?.let {
+                    index.rememberWorkers(context.computerId, accountId, it.listWorkers(accountId, 1, 1000).workers)
+                }
+                "D1" -> requestResources?.let { index.rememberPage(context.computerId, accountId, "D1", it.listD1(accountId)) }
+                "KV_NAMESPACE" -> requestResources?.let { index.rememberPage(context.computerId, accountId, "KV_NAMESPACE", it.listKvNamespaces(accountId)) }
+                "R2_BUCKET" -> requestResources?.let { index.rememberPage(context.computerId, accountId, "R2_BUCKET", it.listR2Buckets(accountId)) }
+                "DO_NAMESPACE" -> requestResources?.let { index.rememberPage(context.computerId, accountId, "DO_NAMESPACE", it.listDurableObjectNamespaces(accountId)) }
+                "QUEUE" -> requestResources?.let { index.rememberPage(context.computerId, accountId, "QUEUE", it.listQueues(accountId)) }
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            // 交给后面的 requireKnown 决定是否转人工。
+        } finally {
+            ownedResources?.close()
+            ownedApi?.close()
+        }
     }
 
 
@@ -806,50 +846,67 @@ class CloudflareComputerProvider(
 
 
     private fun capabilityFor(toolName: String): ComputerCapability? = when (toolName) {
-        "computer.worker.list" -> ComputerCapability.WORKER_LIST
-        "computer.worker.read" -> ComputerCapability.WORKER_READ
-        "computer.worker.create" -> ComputerCapability.WORKER_CREATE
-        "computer.worker.update" -> ComputerCapability.WORKER_UPDATE
-        "computer.worker.deploy" -> ComputerCapability.WORKER_DEPLOY
-        "computer.worker.status" -> ComputerCapability.WORKER_STATUS
-        "computer.worker.logs" -> ComputerCapability.WORKER_LOGS
+        "computer_worker_list" -> ComputerCapability.WORKER_LIST
+        "computer_worker_read" -> ComputerCapability.WORKER_READ
+        "computer_worker_create" -> ComputerCapability.WORKER_CREATE
+        "computer_worker_update" -> ComputerCapability.WORKER_UPDATE
+        "computer_worker_deploy" -> ComputerCapability.WORKER_DEPLOY
+        "computer_worker_status" -> ComputerCapability.WORKER_STATUS
+        "computer_worker_logs" -> ComputerCapability.WORKER_LOGS
         ComputerToolNames.WORKER_HEALTH -> ComputerCapability.WORKER_STATUS
-        "computer.worker.delete" -> ComputerCapability.WORKER_DELETE
-        "computer.d1.list", "computer.d1.schema" -> ComputerCapability.D1_READ
-        "computer.d1.query" -> ComputerCapability.D1_READ
-        "computer.d1.migration" -> ComputerCapability.D1_WRITE
-        "computer.kv.list_namespaces", "computer.kv.list_keys", "computer.kv.get" -> ComputerCapability.KV_READ
-        "computer.kv.put", "computer.kv.delete" -> ComputerCapability.KV_WRITE
-        "computer.r2.list_buckets", "computer.r2.list_objects" -> ComputerCapability.R2_READ
-        "computer.r2.get_metadata" -> ComputerCapability.R2_READ
-        "computer.r2.upload", "computer.r2.delete" -> ComputerCapability.R2_WRITE
-        "computer.durable_objects.list", "computer.durable_objects.list_objects" -> ComputerCapability.DURABLE_OBJECTS_READ
-        "computer.queues.list", "computer.queues.get", "computer.queues.metrics", "computer.queues.peek" -> ComputerCapability.QUEUES_READ
-        "computer.queues.create", "computer.queues.delete" -> ComputerCapability.QUEUES_WRITE
-        "computer.cron.list" -> ComputerCapability.WORKER_READ
-        "computer.cron.update" -> ComputerCapability.WORKER_UPDATE
+        "computer_worker_delete" -> ComputerCapability.WORKER_DELETE
+        "computer_d1_list", "computer_d1_schema" -> ComputerCapability.D1_READ
+        "computer_d1_query" -> ComputerCapability.D1_READ
+        "computer_d1_migration" -> ComputerCapability.D1_WRITE
+        "computer_kv_list_namespaces", "computer_kv_list_keys", "computer_kv_get" -> ComputerCapability.KV_READ
+        "computer_kv_put", "computer_kv_delete" -> ComputerCapability.KV_WRITE
+        "computer_r2_list_buckets", "computer_r2_list_objects" -> ComputerCapability.R2_READ
+        "computer_r2_get_metadata" -> ComputerCapability.R2_READ
+        "computer_r2_upload", "computer_r2_delete" -> ComputerCapability.R2_WRITE
+        "computer_durable_objects_list", "computer_durable_objects_list_objects" -> ComputerCapability.DURABLE_OBJECTS_READ
+        "computer_queues_list", "computer_queues_get", "computer_queues_metrics", "computer_queues_peek" -> ComputerCapability.QUEUES_READ
+        "computer_queues_create", "computer_queues_delete" -> ComputerCapability.QUEUES_WRITE
+        "computer_cron_list" -> ComputerCapability.WORKER_READ
+        "computer_cron_update" -> ComputerCapability.WORKER_UPDATE
         ComputerToolNames.CRON_TRIGGER -> ComputerCapability.WORKER_UPDATE
         else -> null
     }
 
-    /** 工具能力与 OAuth scope 双重校验；Computer capabilities 不能替代当前授权实际授予的 scope。 */
-    private fun requiredScope(toolName: String): String? = when {
-        toolName == "computer.worker.list" || toolName == "computer.worker.read" ||
-        toolName == "computer.worker.status" || toolName == "computer.worker.logs" || toolName == ComputerToolNames.WORKER_HEALTH -> "workers:read"
-        toolName.startsWith("computer.worker.") || toolName == "computer.cron.update" || toolName == ComputerToolNames.CRON_TRIGGER -> "workers:write"
-        toolName == "computer.d1.list" || toolName == "computer.d1.schema" || toolName == "computer.d1.query" -> "d1:read"
-        toolName == "computer.d1.migration" -> "d1:write"
-        toolName == "computer.kv.list_namespaces" || toolName == "computer.kv.list_keys" || toolName == "computer.kv.get" -> "kv:read"
-        toolName.startsWith("computer.kv.") -> "kv:write"
-        toolName == "computer.r2.list_buckets" || toolName == "computer.r2.list_objects" || toolName == "computer.r2.get_metadata" -> "r2:read"
-        toolName.startsWith("computer.r2.") -> "r2:write"
-        toolName == "computer.durable_objects.list" || toolName == "computer.durable_objects.list_objects" -> "durable_objects:read"
-        toolName == "computer.queues.list" || toolName == "computer.queues.get" || toolName == "computer.queues.metrics" || toolName == "computer.queues.peek" -> "queues:read"
-        toolName.startsWith("computer.queues.") -> "queues:write"
-        toolName == "computer.cron.list" -> "workers:read"
-        else -> null
+    /**
+     * 工具能力与 OAuth scope 双重校验。
+     *
+     * 这里的名字必须与 Cloudflare 授权端点实际返回的 scope 标识一致（形如 workers-scripts.read），
+     * 不能用自造的 workers:read 这类写法，否则真实授权永远匹配不上，所有工具都会被判成 PERMISSION_DENIED。
+     * 同一族资源在 Cloudflare 侧有 read/write/edit/bind 多个标识，返回集合表示命中任意一个即可。
+     */
+    internal fun requiredScopes(toolName: String): Set<String> = when (toolName) {
+        "computer_worker_list", "computer_worker_read", "computer_worker_status",
+        ComputerToolNames.WORKER_HEALTH, "computer_cron_list" -> setOf("workers-scripts.read")
+        "computer_worker_logs" -> setOf("workers-tail.read", "workers-scripts.read")
+        "computer_worker_create", "computer_worker_update", "computer_worker_delete" -> WORKER_WRITE_SCOPES
+        "computer_worker_deploy" -> WORKER_WRITE_SCOPES
+        "computer_cron_update", ComputerToolNames.CRON_TRIGGER -> WORKER_WRITE_SCOPES
+        "computer_d1_list", "computer_d1_schema", "computer_d1_query" -> setOf("d1.read")
+        "computer_d1_migration" -> setOf("d1.write")
+        "computer_kv_list_namespaces", "computer_kv_list_keys", "computer_kv_get" -> setOf("workers-kv-storage.read")
+        "computer_kv_put", "computer_kv_delete" -> setOf("workers-kv-storage.write")
+        "computer_r2_list_buckets", "computer_r2_list_objects", "computer_r2_get_metadata" ->
+            setOf("workers-r2.read", "workers-r2-bucket-item.read")
+        "computer_r2_upload", "computer_r2_delete" ->
+            setOf("workers-r2-bucket-item.write", "workers-r2.write")
+        "computer_durable_objects_list", "computer_durable_objects_list_objects" -> setOf("workers-scripts.read")
+        "computer_queues_list", "computer_queues_get", "computer_queues_metrics", "computer_queues_peek" -> setOf("queues.read")
+        "computer_queues_create", "computer_queues_delete" -> setOf("queues.write")
+        else -> emptySet()
     }
 }
+
+/** Worker 写操作在 Cloudflare 侧可能落在 write/edit/bind 任一 scope 上。 */
+private val WORKER_WRITE_SCOPES = setOf("workers-scripts.write", "workers-scripts.edit", "workers-scripts.bind")
+
+/** 要求的 scope 为空表示该工具没有额外 scope 约束；否则必须命中当前授权实际授予的标识。 */
+private fun CloudflareAuthorizationRecord.hasAnyScope(required: Set<String>): Boolean =
+    required.isEmpty() || required.any { it in grantedScopes }
 
 private fun cronRequestHash(accountId: String, workerName: String, previous: List<String>, next: List<String>): String =
     java.security.MessageDigest.getInstance("SHA-256").digest(buildJsonObject {

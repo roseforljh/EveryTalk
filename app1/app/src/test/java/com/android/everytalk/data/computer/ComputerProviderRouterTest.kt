@@ -25,7 +25,101 @@ class ComputerProviderRouterTest {
         cloudflareBinding = CloudflareRequestBinding("account", "auth", 0L),
     )
     private val config = CloudflareComputerConfig("computer", "auth", "account")
-    private val authorization = CloudflareAuthorizationRecord("auth", "credential", setOf("workers:read", "workers:write"), 1L, generation = 0L)
+    private val authorization = CloudflareAuthorizationRecord("auth", "credential", setOf("workers-scripts.read", "workers-scripts.write"), 1L, generation = 0L)
+
+    @Test
+    fun `Cloudflare 工具要求的 scope 与 OAuth 请求的标识属于同一套`() {
+        val provider = CloudflareComputerProvider(configLookup = { error("不应查询配置") })
+        val oauthScopes = CloudflareOAuthConfig(clientId = "client", redirectUri = "everytalk://oauth/cloudflare").scopes
+        val toolNames = ComputerToolCatalog.cloudflareDefinitions().map { definition ->
+            (definition["function"] as Map<*, *>)["name"] as String
+        }
+
+        toolNames.forEach { name ->
+            val required = provider.requiredScopes(name)
+            assertTrue("$name 未声明 scope", required.isNotEmpty())
+            required.forEach { scope ->
+                assertTrue("$name 使用了 OAuth 客户端未登记的 scope: $scope", scope in oauthScopes)
+            }
+        }
+    }
+
+    @Test
+    fun `Cloudflare 写审批跟随权限模式且只读工具永不弹卡`() = runTest {
+        val provider = CloudflareComputerProvider(configLookup = { config }, tokenProvider = { "token" }, authorizationLookup = { authorization })
+        val writeArgs = buildJsonObject { put("worker_name", "demo"); put("script", "export default {}") }
+        val smartArgs = buildJsonObject {
+            put("worker_name", "demo"); put("script", "export default {}"); put("ask_user_approval", true)
+        }
+        val smartNoAskArgs = buildJsonObject {
+            put("worker_name", "demo"); put("script", "export default {}"); put("ask_user_approval", false)
+        }
+        fun contextWith(mode: ComputerPermissionMode) = context.copy(permissionMode = mode)
+
+        // MANUAL：写操作一律弹卡。
+        assertTrue(provider.approvalRequest(ComputerToolNames.WORKER_CREATE, writeArgs, "call", contextWith(ComputerPermissionMode.MANUAL)) != null)
+        // FULL：写操作不弹卡。
+        assertEquals(null, provider.approvalRequest(ComputerToolNames.WORKER_CREATE, writeArgs, "call", contextWith(ComputerPermissionMode.FULL)))
+        // SMART：模型自报不打断就不弹；没给参数时按打断处理。
+        assertEquals(null, provider.approvalRequest(ComputerToolNames.WORKER_CREATE, smartNoAskArgs, "call", contextWith(ComputerPermissionMode.SMART)))
+        assertTrue(provider.approvalRequest(ComputerToolNames.WORKER_CREATE, smartArgs, "call", contextWith(ComputerPermissionMode.SMART)) != null)
+        assertTrue(provider.approvalRequest(ComputerToolNames.WORKER_CREATE, writeArgs, "call", contextWith(ComputerPermissionMode.SMART)) != null)
+        // 只读工具在三种模式下都不弹卡。
+        ComputerPermissionMode.entries.forEach { mode ->
+            assertEquals(
+                "$mode 下只读工具不应弹卡",
+                null,
+                provider.approvalRequest(ComputerToolNames.WORKER_LIST, JsonObject(emptyMap()), "call", contextWith(mode)),
+            )
+        }
+    }
+
+    @Test
+    fun `资源索引过期时自动重新列一次而不是转人工`() = runTest {
+        val dao = mockk<ComputerDao>()
+        // 索引里的行超过 10 分钟，options() 会把它过滤掉；刷新写回后必须能被读到。
+        val rows = mutableListOf(
+            CloudflareResourceEntity("r", "computer", "account", "WORKER", "demo", "demo", System.currentTimeMillis() - 11 * 60 * 1000L),
+        )
+        coEvery { dao.getCloudflareResources("computer", "WORKER") } answers { rows.toList() }
+        coEvery { dao.upsertCloudflareResource(any()) } answers {
+            val entity = firstArg<CloudflareResourceEntity>()
+            rows.removeAll { it.resourceRef == entity.resourceRef }
+            rows.add(entity)
+        }
+        val api = mockk<CloudflareApiClient>()
+        coEvery { api.listWorkers("account", 1, 1000) } returns CloudflareWorkerListResult(
+            listOf(CloudflareWorkerSummary("demo")),
+        )
+        val provider = CloudflareComputerProvider(
+            configLookup = { config.copy(capabilities = config.capabilities + ComputerCapability.WORKER_DELETE) },
+            api = api, tokenProvider = { "token" }, authorizationLookup = { authorization },
+            resourceIndex = CloudflareResourceIndex(dao),
+        )
+        val args = buildJsonObject { put("worker_name", "demo") }
+
+        // 刷新后命中，走正常审批，不再转人工。
+        assertTrue(provider.approvalRequest(ComputerToolNames.WORKER_DELETE, args, "call", context) != null)
+        coVerify(exactly = 1) { api.listWorkers("account", 1, 1000) }
+    }
+
+    @Test
+    fun `刷新后仍然找不到的资源依旧转人工`() = runTest {
+        val dao = mockk<ComputerDao>()
+        coEvery { dao.getCloudflareResources("computer", "WORKER") } returns emptyList()
+        val api = mockk<CloudflareApiClient>()
+        coEvery { api.listWorkers("account", 1, 1000) } returns CloudflareWorkerListResult(listOf(CloudflareWorkerSummary("other")))
+        val provider = CloudflareComputerProvider(
+            configLookup = { config.copy(capabilities = config.capabilities + ComputerCapability.WORKER_DELETE) },
+            api = api, tokenProvider = { "token" }, authorizationLookup = { authorization },
+            resourceIndex = CloudflareResourceIndex(dao),
+        )
+
+        assertEquals(
+            null,
+            provider.approvalRequest(ComputerToolNames.WORKER_DELETE, buildJsonObject { put("worker_name", "demo") }, "call", context),
+        )
+    }
 
     @Test fun `公共输出边界遮蔽带引号字段 Header 和不完整私钥`() {
         val raw = """
@@ -70,7 +164,7 @@ class ComputerProviderRouterTest {
         coEvery { dao.updateCloudflareResourceOperation(any(), any(), any(), any()) } just Runs
         val provider = CloudflareComputerProvider(
             configLookup = { config.copy(capabilities = setOf(ComputerCapability.R2_WRITE)) },
-            authorizationLookup = { authorization.copy(grantedScopes = setOf("r2:write")) }, tokenProvider = { "token" },
+            authorizationLookup = { authorization.copy(grantedScopes = setOf("workers-r2-bucket-item.write")) }, tokenProvider = { "token" },
             workspaceRootLookup = { root }, resourceIndex = CloudflareResourceIndex(dao), resources = resources,
             resourceOperationManagerFactory = { CloudflareResourceOperationManager(dao) },
             apiFactory = { root.resolve("report.txt").writeText("unapproved replacement"); api },
