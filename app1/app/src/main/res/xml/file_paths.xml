@@ -8,6 +8,8 @@
 
     <!-- Path for general chat attachments (saved to context.filesDir/chat_attachments/) -->
     <files-path name="my_chat_attachments" path="chat_attachments/" />
+    <!-- 仅暴露已通过用户保存审批的 Workspace 产物，禁止开放整个 filesDir。 -->
+    <files-path name="agent_workspaces" path="agent-workspaces/" />
 
     <!-- Cache directories used by image preview/share -->
     <cache-path name="preview_cache" path="preview_cache/" />

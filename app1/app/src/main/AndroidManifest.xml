@@ -39,6 +39,19 @@
         </activity>
 
         <activity-alias
+            android:name=".CloudflareOAuthCallback"
+            android:targetActivity="com.android.everytalk.statecontroller.MainActivity"
+            android:exported="true"
+            android:noHistory="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="everytalk" android:host="oauth" android:path="/cloudflare" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
             android:name=".ShareReceiver"
             android:targetActivity="com.android.everytalk.statecontroller.MainActivity"
             android:enabled="true"

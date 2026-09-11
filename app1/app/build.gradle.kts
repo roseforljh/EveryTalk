@@ -176,6 +176,10 @@ android {
             buildConfigField("String", "WEBFETCH_BASE_URL", "\"${getConfigValue("WEBFETCH_BASE_URL")}\"")
             buildConfigField("String", "WEBFETCH_API_KEY", "\"${getConfigValue("WEBFETCH_API_KEY")}\"")
             buildConfigField("String", "AI_CONTENT_REPORT_URL", "\"${getConfigValue("AI_CONTENT_REPORT_URL")}\"")
+            // OAuth Client ID 仅作为公开客户端标识；Client Secret 永不进入 APK。
+            buildConfigField("String", "CLOUDFLARE_OAUTH_CLIENT_ID", "\"${getConfigValue("CLOUDFLARE_OAUTH_CLIENT_ID")}\"")
+            buildConfigField("String", "CLOUDFLARE_OAUTH_REDIRECT_URI", "\"${getConfigValue("CLOUDFLARE_OAUTH_REDIRECT_URI", "everytalk://oauth/cloudflare")}\"")
+            buildConfigField("String", "TEMPORARY_WORKER_GATEWAY_URL", "\"${getConfigValue("TEMPORARY_WORKER_GATEWAY_URL")}\"")
         }
         debug {
             isProfileable = false // debug 构建也可以设为 profileable,方便测试
@@ -198,6 +202,9 @@ android {
             buildConfigField("String", "WEBFETCH_BASE_URL", "\"${getConfigValue("WEBFETCH_BASE_URL")}\"")
             buildConfigField("String", "WEBFETCH_API_KEY", "\"${getConfigValue("WEBFETCH_API_KEY")}\"")
             buildConfigField("String", "AI_CONTENT_REPORT_URL", "\"${getConfigValue("AI_CONTENT_REPORT_URL")}\"")
+            buildConfigField("String", "CLOUDFLARE_OAUTH_CLIENT_ID", "\"${getConfigValue("CLOUDFLARE_OAUTH_CLIENT_ID")}\"")
+            buildConfigField("String", "CLOUDFLARE_OAUTH_REDIRECT_URI", "\"${getConfigValue("CLOUDFLARE_OAUTH_REDIRECT_URI", "everytalk://oauth/cloudflare")}\"")
+            buildConfigField("String", "TEMPORARY_WORKER_GATEWAY_URL", "\"${getConfigValue("TEMPORARY_WORKER_GATEWAY_URL")}\"")
 
             applicationIdSuffix = ".debug"
             versionNameSuffix = "-debug"
@@ -303,6 +310,8 @@ ksp {
         // ===== Coroutines =====
         implementation(libs.kotlinx.coroutines.core)
         implementation(libs.kotlinx.coroutines.android)
+        // 独立 JS 隔离进程：后台执行不依赖 WebView 页面，取消可以终止整个执行环境。
+        implementation("androidx.javascriptengine:javascriptengine:1.1.0")
 
         // ===== Ktor Client (网络请求) =====
         implementation(libs.ktor.client.core)
@@ -466,6 +475,21 @@ val verifyMathJaxAssets = tasks.register("verifyMathJaxAssets") {
     }
 }
 
+/** 构建 just-bash 浏览器 Bundle，并将产物放入 APK 私有 assets。 */
+val buildJustBashRuntime = tasks.register<Exec>("buildJustBashRuntime") {
+    group = "build"
+    description = "构建 EveryTalk 的 just-bash 浏览器运行时"
+    workingDir(layout.projectDirectory.dir("../tools/just-bash-runtime").asFile)
+    commandLine("bun", "run", "build")
+    inputs.files(
+        layout.projectDirectory.dir("../tools/just-bash-runtime/src"),
+        layout.projectDirectory.file("../tools/just-bash-runtime/package.json"),
+        layout.projectDirectory.file("../tools/just-bash-runtime/bun.lock"),
+    )
+    outputs.file(layout.projectDirectory.file("src/main/assets/just-bash/runtime.js"))
+}
+
 tasks.named("preBuild").configure {
     dependsOn(verifyMathJaxAssets)
+    dependsOn(buildJustBashRuntime)
 }
