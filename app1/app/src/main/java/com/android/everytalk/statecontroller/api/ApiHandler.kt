@@ -346,26 +346,30 @@ class ApiHandler(
     val pendingInterventions: StateFlow<List<com.android.everytalk.data.agent.PendingIntervention>>
         get() = agentRunCoordinator.pendingInterventions
 
+    /** 手动「立即压缩」：不看阈值，直接给该可见消息所属会话压出一条新检查点。 */
+    suspend fun compressContextNow(
+        visibleAssistantMessageId: String,
+    ): com.android.everytalk.data.agent.ManualCompactionOutcome =
+        agentRunCoordinator.compressContextNow(visibleAssistantMessageId)
+
     fun resolveIntervention(suspensionId: String, expectedVersion: Long, resolutionNonce: String) {
         viewModelScope.launch(Dispatchers.IO) {
             agentRunCoordinator.resolveIntervention(suspensionId, expectedVersion, resolutionNonce)
         }
     }
 
-    fun resolveEphemeralIntervention(
+    suspend fun resolveEphemeralIntervention(
         suspensionId: String,
         expectedVersion: Long,
         resolutionNonce: String,
         secret: CharArray,
-    ) {
-        viewModelScope.launch(Dispatchers.IO) {
+    ): Boolean = withContext(Dispatchers.IO) {
             agentRunCoordinator.resolveEphemeralIntervention(
                 suspensionId,
                 expectedVersion,
                 resolutionNonce,
                 secret,
             )
-        }
     }
 
     fun resolveDurableIntervention(
@@ -384,26 +388,21 @@ class ApiHandler(
         }
     }
 
-    fun rejectIntervention(suspensionId: String, expectedVersion: Long) {
-        viewModelScope.launch(Dispatchers.IO) {
-            agentRunCoordinator.rejectIntervention(suspensionId, expectedVersion)
-        }
-    }
+    suspend fun rejectIntervention(suspensionId: String, expectedVersion: Long): Boolean =
+        withContext(Dispatchers.IO) { agentRunCoordinator.rejectIntervention(suspensionId, expectedVersion) }
 
-    fun createAndResolveAuthorizationIntervention(
+    suspend fun createAndResolveAuthorizationIntervention(
         suspensionId: String,
         expectedVersion: Long,
         resolutionNonce: String,
         secret: CharArray,
-    ) {
-        viewModelScope.launch(Dispatchers.IO) {
+    ): Boolean = withContext(Dispatchers.IO) {
             agentRunCoordinator.createAndResolveAuthorizationIntervention(
                 suspensionId,
                 expectedVersion,
                 resolutionNonce,
                 secret,
             )
-        }
     }
 
     fun confirmUnknownInterventionDelivered(suspensionId: String, expectedVersion: Long) {

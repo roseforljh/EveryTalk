@@ -134,6 +134,9 @@ class AgentInterventionStore(private val dao: AgentDao) {
         dao.compareAndSetSuspension(id, expectedStatus.name, SuspensionState.WAITING_USER_REENTRY.name, expectedVersion, System.currentTimeMillis(), sha256(newNonce)) == 1
 
     /** nonce 明文只在内存中；冷启动投影等待卡片时必须轮换并只持久化摘要。 */
+    internal fun matchesResolutionNonce(suspension: AgentSuspensionEntity, nonce: String?): Boolean =
+        nonce != null && suspension.resolutionNonceHash == sha256(nonce)
+
     suspend fun rotateResolutionNonce(
         id: String,
         state: SuspensionState,

@@ -1,5 +1,10 @@
 package com.android.everytalk.data.agent
 
+import com.android.everytalk.data.DataClass.ApiConfig
+import com.android.everytalk.data.DataClass.ModelParameters
+import com.android.everytalk.data.DataClass.ModelTokenLimits
+import com.android.everytalk.data.DataClass.SimpleTextApiMessage
+import com.android.everytalk.data.DataClass.resolvedModelTokenLimits
 import com.android.everytalk.data.database.entities.AgentRunEntity
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.test.runTest
@@ -11,6 +16,50 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AgentRunCoordinatorTest {
+    @Test
+    fun `拒绝续写等待原 Run 收尾后主动唤醒且不等待其他任务`() = runTest {
+        val previous = Job()
+        val unrelated = Job()
+        val calls = mutableListOf<String>()
+        val jobs = mapOf("message:${run.visibleAssistantMessageId}" to previous, "run:other" to unrelated)
+
+        val continuation = backgroundScope.launchInterventionContinuation(jobs, run) { calls += "resumed" }
+        testScheduler.runCurrent()
+        assertTrue(calls.isEmpty())
+        assertFalse(continuation.isCompleted)
+
+        previous.complete()
+        testScheduler.runCurrent()
+        assertEquals(listOf("resumed"), calls)
+        assertTrue(continuation.isCompleted)
+        assertTrue(unrelated.isActive)
+        unrelated.cancel()
+    }
+
+    @Test
+    fun `没有旧 Run 时拒绝续写不等待恢复轮询`() = runTest {
+        var resumed = false
+        val continuation = backgroundScope.launchInterventionContinuation(emptyMap(), run) { resumed = true }
+        testScheduler.runCurrent()
+        assertTrue(resumed)
+        assertTrue(continuation.isCompleted)
+        assertEquals(0L, testScheduler.currentTime)
+    }
+
+    @Test
+    fun `恢复的 Run 收尾交接不会取消原任务或重复续写`() = runTest {
+        val previous = Job()
+        var count = 0
+        val jobs = mapOf("run:${run.id}" to previous, "message:${run.visibleAssistantMessageId}" to previous)
+        val continuation = backgroundScope.launchInterventionContinuation(jobs, run) { count++ }
+        testScheduler.runCurrent()
+        assertTrue(previous.isActive)
+        previous.complete()
+        testScheduler.runCurrent()
+        assertEquals(1, count)
+        assertTrue(continuation.isCompleted)
+    }
+
     private val run = AgentRunEntity(
         id = "run-1",
         sessionId = "session-1",
@@ -135,6 +184,37 @@ class AgentRunCoordinatorTest {
         assertFalse(canExecuteAgentSnapshot(run, run.copy(status = AgentRunStatus.CANCELLED.name)))
         assertFalse(canExecuteAgentSnapshot(run, run.copy(runGeneration = run.runGeneration + 1)))
         assertFalse(canExecuteAgentSnapshot(run, null))
+    }
+
+    @Test
+    fun `手动压缩请求不依赖已被回收的恢复快照`() {
+        val config = ApiConfig(
+            address = "https://example.test",
+            key = "test-key",
+            model = "test-model",
+            provider = "OpenAI",
+            id = "config-1",
+            name = "默认",
+            channel = "OpenAI兼容",
+            maxTokens = 2_048,
+            modelParameters = ModelParameters(maxContextTokens = 32_000),
+        )
+        val messages = listOf(SimpleTextApiMessage(id = "m1", role = "user", content = "你好"))
+        val limits = resolvedModelTokenLimits(config.maxTokens, config.modelParameters.maxContextTokens)
+
+        val request = buildManualCompactionRequest(config = config, limits = limits, messages = messages)
+
+        assertEquals("test-model", request.model)
+        assertEquals("OpenAI兼容", request.channel)
+        assertEquals("test-key", request.apiKey)
+        assertEquals(messages, request.messages)
+        assertEquals(2_048, request.generationConfig?.maxOutputTokens)
+        val management = checkNotNull(request.contextManagement)
+        assertEquals("config-1", management.configId)
+        assertEquals(32_000, management.maxContextTokens)
+        assertEquals(2_048, management.reservedOutputTokens)
+        // forceLocalCompaction 还要 autoCompressionEnabled 才生效，手动压缩必须自己打开。
+        assertTrue(management.autoCompressionEnabled)
     }
 
     private fun agentRunCoordinatorSource(): String {

@@ -21,6 +21,8 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import kotlinx.coroutines.launch
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -49,13 +51,13 @@ import com.android.everytalk.ui.components.dialog.appDialogTextFieldColors
 internal fun AgentInterventionDialog(
     intervention: PendingIntervention,
     onResolveNone: (PendingIntervention) -> Unit,
-    onResolveEphemeral: (PendingIntervention, CharArray) -> Unit,
-    onCreateAuthorization: (PendingIntervention, CharArray) -> Unit,
+    onResolveEphemeral: suspend (PendingIntervention, CharArray) -> Boolean,
+    onCreateAuthorization: suspend (PendingIntervention, CharArray) -> Boolean,
     onStartCloudflareReauthorization: (PendingIntervention) -> Unit,
     cloudflareReauthInProgress: Boolean = false,
     onLoadCloudflareResources: suspend (PendingIntervention) -> List<com.android.everytalk.data.computer.ResourceOption>,
     onSelectCloudflareResource: (PendingIntervention, String) -> Unit,
-    onReject: (PendingIntervention) -> Unit,
+    onReject: suspend (PendingIntervention) -> Boolean,
     onConfirmUnknownDelivered: (PendingIntervention) -> Unit,
     onContinueUnknown: (PendingIntervention) -> Unit,
 ) {
@@ -63,6 +65,9 @@ internal fun AgentInterventionDialog(
     val dialogContent = appDialogContentColor()
     val dialogBorder = appDialogBorderColor()
     var sensitiveInput by remember(intervention.suspensionId, intervention.rowVersion) { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
+    var submitting by remember(intervention.suspensionId) { mutableStateOf(false) }
+    var submissionError by remember(intervention.suspensionId) { mutableStateOf<String?>(null) }
     val field = intervention.fields.firstOrNull()
     val fieldKind = field?.kind
     val requiresUserDecision = intervention.state == SuspensionState.USER_DECISION_REQUIRED
@@ -85,7 +90,7 @@ internal fun AgentInterventionDialog(
         }
     }
     val reauthBusy = isCloudflareReauthorization && cloudflareReauthInProgress
-    val canSubmit = if (reauthBusy) false else if (requiresUserDecision) true else if (isResourceSelection) selectedId != null && !loading else when (intervention.materialKind) {
+    val canSubmit = if (reauthBusy || submitting) false else if (requiresUserDecision) true else if (isResourceSelection) selectedId != null && !loading else when (intervention.materialKind) {
         ResolutionMaterialKind.NONE -> true
         ResolutionMaterialKind.EPHEMERAL -> sensitiveInput.isNotEmpty()
         ResolutionMaterialKind.DURABLE_REFERENCE -> sensitiveInput.isNotEmpty()
@@ -155,6 +160,7 @@ internal fun AgentInterventionDialog(
                         onValueChange = { sensitiveInput = it },
                         label = { Text(field?.label ?: "敏感输入") },
                         singleLine = true,
+                        enabled = !submitting,
                         shape = AppDialogTextFieldShape,
                         colors = appDialogTextFieldColors(),
                         modifier = Modifier.fillMaxWidth(),
@@ -165,11 +171,18 @@ internal fun AgentInterventionDialog(
                         onValueChange = { sensitiveInput = it },
                         label = { Text(field?.label ?: "授权凭据") },
                         singleLine = true,
+                        enabled = !submitting,
                         shape = AppDialogTextFieldShape,
                         colors = appDialogTextFieldColors(),
                         modifier = Modifier.fillMaxWidth(),
                         visualTransformation = PasswordVisualTransformation(),
                     )
+                }
+                if (!submitting) {
+                    val error = submissionError ?: if (intervention.state == SuspensionState.WAITING_USER_REENTRY) {
+                        "上次输入未送达，旧内容已清除，请重新输入后继续。"
+                    } else null
+                    error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
                 }
                 if (fieldKind in setOf(
                         AgentInterventionPolicyRegistry.FieldKind.SENSITIVE_TEXT,
@@ -200,15 +213,30 @@ internal fun AgentInterventionDialog(
                         onStartCloudflareReauthorization(intervention)
                     } else when (intervention.materialKind) {
                         ResolutionMaterialKind.NONE -> onResolveNone(intervention)
-                        ResolutionMaterialKind.EPHEMERAL -> {
-                            val chars = sensitiveInput.toCharArray()
-                            sensitiveInput = ""
-                            onResolveEphemeral(intervention, chars)
-                        }
+                        ResolutionMaterialKind.EPHEMERAL,
                         ResolutionMaterialKind.DURABLE_REFERENCE -> {
+                            if (submitting) return@Button
                             val chars = sensitiveInput.toCharArray()
                             sensitiveInput = ""
-                            onCreateAuthorization(intervention, chars)
+                            submitting = true
+                            submissionError = null
+                            // 等待真实接收结果；清空输入是密钥清理，不等同于任务已经恢复。
+                            scope.launch {
+                                try {
+                                    val accepted = if (intervention.materialKind == ResolutionMaterialKind.EPHEMERAL) {
+                                        onResolveEphemeral(intervention, chars)
+                                    } else onCreateAuthorization(intervention, chars)
+                                    if (!accepted) submissionError = "接力状态已更新，本次输入未被接收，请重新输入后继续。"
+                                } catch (error: kotlinx.coroutines.CancellationException) {
+                                    throw error
+                                } catch (_: Exception) {
+                                    // 异常可能包含凭据，只展示固定错误提示。
+                                    submissionError = "接力提交未完成，请核对当前状态后重试。"
+                                } finally {
+                                    chars.fill('\u0000')
+                                    submitting = false
+                                }
+                            }
                         }
                     }
                 },
@@ -219,17 +247,32 @@ internal fun AgentInterventionDialog(
                 ),
             ) {
                 AppDialogActionContent(
-                    label = if (requiresUserDecision) "确认已完成" else if (isCloudflareReauthorization) "重新授权" else "继续",
-                    isLoading = reauthBusy,
-                    loadingContentDescription = "正在完成 Cloudflare 重新授权",
+                    label = if (submitting) "正在处理" else if (requiresUserDecision) "确认已完成" else if (isCloudflareReauthorization) "重新授权" else "继续",
+                    isLoading = reauthBusy || submitting,
+                    loadingContentDescription = if (submitting) "正在提交接力内容" else "正在完成 Cloudflare 重新授权",
                 )
             }
         },
         dismissButton = {
             OutlinedButton(
+                enabled = !submitting,
                 onClick = {
                     sensitiveInput = ""
-                    if (requiresUserDecision) onContinueUnknown(intervention) else onReject(intervention)
+                    if (requiresUserDecision) onContinueUnknown(intervention) else {
+                        submitting = true
+                        submissionError = null
+                        scope.launch {
+                            try {
+                                if (!onReject(intervention)) submissionError = "拒绝操作未被接收，请重试。"
+                            } catch (error: kotlinx.coroutines.CancellationException) {
+                                throw error
+                            } catch (_: Exception) {
+                                submissionError = "拒绝操作未完成，请重试。"
+                            } finally {
+                                submitting = false
+                            }
+                        }
+                    }
                 },
                 shape = AppDialogButtonShape,
                 colors = ButtonDefaults.outlinedButtonColors(

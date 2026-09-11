@@ -26,7 +26,14 @@ enum class Sender {
     User,
     AI,
     System,
-    Tool
+    Tool,
+
+    /**
+     * App 自己插入的会话内提示（例如手动压缩完成）。
+     * 只在聊天界面显示，永远不进模型上下文，也不参与 token 统计。
+     * 不复用 System：System 非占位消息被用来反推会话的系统提示词。
+     */
+    Notice
 }
 
 object MessageToolIds {
@@ -127,6 +134,8 @@ fun Sender.toRole(): String = when(this) {
     Sender.AI -> "assistant"
     Sender.System -> "system"
     Sender.Tool -> "tool"
+    // Notice 不会进请求；万一漏了，用非法 role 让 Provider 直接报错而不是静默发出。
+    Sender.Notice -> "notice"
 }
 
 @Serializable

@@ -1799,10 +1799,65 @@ class AgentLoop(
         )
 
     /**
+     * 用户手动触发的「立即压缩」：不看阈值，直接把会话历史压成一条摘要检查点。
+     * 压缩请求必须挂在一次真实 Run 上（agent_requests.runId 对 agent_runs 有外键），
+     * 所以这里建一个隐藏 Run，跑完立刻置终态，避免被重启恢复当成待办捡起来。
+     */
+    suspend fun compactNow(
+        sessionId: String,
+        baseRequest: ChatRequest,
+        limits: ModelTokenLimits,
+    ): ManualCompactionOutcome {
+        val transcript = runStore.expandTranscript(sessionId, baseRequest.messages)
+        val compactionRequest = baseRequest.copy(messages = transcript)
+        val run = runStore.createRun(
+            sessionId = sessionId,
+            userMessageId = "agent-manual-compaction",
+            visibleAssistantMessageId = "agent-manual-compaction-${UUID.randomUUID()}",
+            configIdSnapshot = baseRequest.contextManagement?.configId,
+            request = compactionRequest,
+        )
+        var failed = true
+        try {
+            val prepared = contextManager.prepare(
+                requestId = UUID.randomUUID().toString(),
+                request = compactionRequest,
+                limits = limits,
+                checkpoint = runStore.latestCompaction(sessionId),
+                forceLocalCompaction = true,
+            )
+            val plan = prepared.compactionPlan
+            if (plan == null) {
+                failed = false
+                return ManualCompactionOutcome.NothingToCompress
+            }
+            val saved = executeCompaction(
+                run = run,
+                requestOrdinal = 1,
+                plan = plan,
+                baseRequest = compactionRequest,
+                limits = limits,
+            )
+            failed = false
+            return ManualCompactionOutcome.Compacted(
+                tokensBefore = plan.tokensBefore,
+                tokensAfter = saved.estimatedTokensAfter,
+            )
+        } finally {
+            runStore.updateRunStatus(
+                run = run,
+                status = if (failed) AgentRunStatus.FAILED else AgentRunStatus.COMPLETED,
+                requestOrdinal = 1,
+                terminalReason = AgentTerminalReasons.MANUAL_COMPACTION,
+            )
+        }
+    }
+
+    /**
      * 压缩请求走同一个单次 Provider Transport，并独立保存 Request、Usage 和耗时。
      * 其输出不进入可见 AI 消息，也不携带业务工具，防止摘要模型调用工具。
      */
-    private suspend fun kotlinx.coroutines.flow.FlowCollector<AppStreamEvent>.executeCompaction(
+    private suspend fun executeCompaction(
         run: AgentRunEntity,
         requestOrdinal: Int,
         plan: AgentCompactionPlan,

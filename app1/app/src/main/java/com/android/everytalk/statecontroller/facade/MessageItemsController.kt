@@ -1001,7 +1001,8 @@ open class MessageItemsController(
                         attachments = message.attachments
                     )
                 )
-            message.sender == Sender.System ->
+            // Notice 是 App 自己插的提示行，和系统行一样按普通提示渲染。
+            message.sender == Sender.System || message.sender == Sender.Notice ->
                 listOf(
                     ChatListItem.SystemMessage(
                         messageId = message.id,

@@ -432,6 +432,7 @@ fun AiMessageFooterItem(
     val shareFailedMessage = stringResource(R.string.chat_share_failed)
     val availableModels by viewModel.apiConfigs.collectAsState()
     val selectedModel by viewModel.selectedApiConfig.collectAsState()
+    val compactingContext by viewModel.isCompactingContext.collectAsState()
     val liveContextWindowTokens = remember(
         message.contextUsageSnapshot?.configId,
         message.modelName,
@@ -500,6 +501,8 @@ fun AiMessageFooterItem(
                     showContextUsage = true
                 },
                 onDismiss = { showContextUsage = false },
+                onCompress = { viewModel.compressContextNow(message.id) },
+                compressInProgress = compactingContext,
             )
             Box {
                 IconButton(

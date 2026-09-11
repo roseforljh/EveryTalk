@@ -149,7 +149,7 @@ class AgentInterventionBroker(
                 }
             }
         }
-        recordFulfillmentResult(claimed, policy, result.fact)
+        recordFulfillmentResult(claimed, policy, result.fact, result.failureCode)
         if (result.fact != AdapterDeliveryFact.UNKNOWN) releaseResourceLease(claimed, policy)
         return result.fact
     }
@@ -356,6 +356,7 @@ class AgentInterventionBroker(
         claimed: AgentSuspensionEntity,
         policy: AgentInterventionPolicyRegistry.Policy,
         fact: AdapterDeliveryFact,
+        failureCode: String? = null,
     ) {
         val runActive = isRunActive(claimed)
         when (fact) {
@@ -378,7 +379,7 @@ class AgentInterventionBroker(
                         claimed.rowVersion,
                         AgentRunTerminalResult.RUN_TERMINATED_NOT_DELIVERED,
                     )
-                } else if (claimed.resolutionMaterialKind == ResolutionMaterialKind.EPHEMERAL.name) {
+                } else if (claimed.resolutionMaterialKind == ResolutionMaterialKind.EPHEMERAL.name && failureCode == null) {
                     store.enterUserReentry(
                         claimed.id,
                         SuspensionState.FULFILLING,
@@ -391,7 +392,7 @@ class AgentInterventionBroker(
                         SuspensionState.FULFILLING,
                         SuspensionState.READY_TO_RESUME_WITH_FAILURE,
                         claimed.rowVersion,
-                        "NOT_DELIVERED",
+                        failureCode ?: "NOT_DELIVERED",
                     )
                 }
             }

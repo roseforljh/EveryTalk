@@ -10,6 +10,10 @@ class AgentInterventionRecovery(
     private val registry: AgentInterventionPolicyRegistry = AgentInterventionPolicyRegistry(),
     private val broker: AgentInterventionBroker? = null,
 ) {
+    /** 兼容旧调用方：旧集合只能表示“已有投影”，无法验证 nonce，因此会安全轮换。 */
+    suspend fun recover(activeNonceIds: Set<String>): List<RecoveryAction> =
+        recover(activeNonces = activeNonceIds.associateWith { null })
+
     data class RecoveryAction(
         val suspensionId: String,
         val action: String,
@@ -17,7 +21,7 @@ class AgentInterventionRecovery(
         val newResolutionNonce: String? = null,
     )
 
-    suspend fun recover(activeNonceIds: Set<String> = emptySet()): List<RecoveryAction> = buildList {
+    suspend fun recover(activeNonces: Map<String, String?> = emptyMap()): List<RecoveryAction> = buildList {
         store.startupCandidates().forEach { suspension ->
             val run = dao.getRun(suspension.runId) ?: return@forEach
             if (run.status in TERMINAL_RUN_STATUSES || run.runGeneration != suspension.runGeneration) {
@@ -123,7 +127,9 @@ class AgentInterventionRecovery(
                 SuspensionState.WAITING_USER,
                 SuspensionState.WAITING_USER_REENTRY,
                 -> {
-                    if (suspension.id in activeNonceIds) {
+                    // “仍持有旧 nonce”不代表它与 Room 匹配；重新输入分支会替换 nonce hash。
+                    if (suspension.id in activeNonces &&
+                        (activeNonces[suspension.id] == null || store.matchesResolutionNonce(suspension, activeNonces[suspension.id]))) {
                         add(RecoveryAction(suspension.id, "PROJECT_TO_UI"))
                     } else {
                         val nonce = UUID.randomUUID().toString()

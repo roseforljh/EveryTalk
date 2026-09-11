@@ -59,6 +59,9 @@ object AgentTerminalReasons {
     const val REMOTE_PROCESS_TERMINATED = "REMOTE_PROCESS_TERMINATED"
     const val CONFIG_ERROR = "CONFIG_ERROR"
     const val VISIBLE_MESSAGE_TERMINAL = "VISIBLE_MESSAGE_TERMINAL"
+
+    /** 用户手动触发的压缩用的隐藏 Run，不是一次真实对话。 */
+    const val MANUAL_COMPACTION = "MANUAL_COMPACTION"
 }
 
 /** Agent 编排、状态或持久化失败，禁止在 UI 层伪装成网络错误。 */
@@ -140,6 +143,14 @@ enum class AgentCompactionStatus {
     PREPARING,
     COMPLETED,
     FAILED,
+}
+
+/** 手动「立即压缩」的结果；失败走异常，不在这里重复表达。 */
+sealed interface ManualCompactionOutcome {
+    /** 只剩一个原子组，没有可以摘要掉的历史。 */
+    data object NothingToCompress : ManualCompactionOutcome
+
+    data class Compacted(val tokensBefore: Long, val tokensAfter: Long) : ManualCompactionOutcome
 }
 
 @Serializable

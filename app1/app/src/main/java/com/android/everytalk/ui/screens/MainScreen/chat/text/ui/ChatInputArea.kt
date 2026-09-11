@@ -1648,6 +1648,7 @@ fun ChatInputArea(
                 val nonce = pending.resolutionNonce
                 if (nonce == null) {
                     secret.fill('\u0000')
+                    false
                 } else {
                     viewModel.resolveEphemeralIntervention(
                         pending.suspensionId,
@@ -1661,6 +1662,7 @@ fun ChatInputArea(
                 val nonce = pending.resolutionNonce
                 if (nonce == null) {
                     secret.fill('\u0000')
+                    false
                 } else {
                     viewModel.createAndResolveAuthorizationIntervention(
                         pending.suspensionId,

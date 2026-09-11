@@ -63,6 +63,7 @@ object ConversationExporter {
                 Sender.AI -> "**${context.getString(R.string.conversation_search_source_ai)}**"
                 Sender.System -> "**${context.getString(R.string.conversation_search_source_system)}**"
                 Sender.Tool -> "**${context.getString(R.string.conversation_search_source_tool)}**"
+                Sender.Notice -> "**${context.getString(R.string.conversation_search_source_system)}**"
             }
 
             sb.appendLine("### $roleLabel")

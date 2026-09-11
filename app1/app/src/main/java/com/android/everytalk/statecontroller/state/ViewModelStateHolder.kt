@@ -314,6 +314,9 @@ val _isStreamingPaused = MutableStateFlow(false)
     val _scrollToItemEvent =
         MutableSharedFlow<String>(replay = 0, extraBufferCapacity = 1)
 
+    /** 手动「立即压缩」进行中；要发一次模型请求，按钮据此转圈并禁用。 */
+    val _isCompactingContext = MutableStateFlow(false)
+
 
     val _showSettingsDialog = MutableStateFlow(false)
     

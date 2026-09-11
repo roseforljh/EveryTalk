@@ -25,6 +25,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -455,6 +456,83 @@ class AgentContextCompressionRecoveryTest {
         assertEquals(3, requestCount)
         assertTrue(events.any { it is AppStreamEvent.Content && it.text == "恢复成功" })
     }
+
+    @Test
+    fun `手动压缩无视阈值直接生成检查点并把隐藏 Run 置为终态`() = runBlocking {
+        val sessionId = "manual-compaction"
+        seedSession(sessionId)
+        var summaryCalls = 0
+        val loop = AgentLoop(
+            runStore = store,
+            modelTransport = ModelTurnTransport {
+                summaryCalls++
+                flowOf(
+                    AppStreamEvent.Content("## 用户目标\n手动压缩摘要"),
+                    AppStreamEvent.StreamEnd("summary"),
+                )
+            },
+        )
+        // 阈值和窗口都设成 100 万，正常路径绝不会触发压缩；能压成就是 forceLocalCompaction 生效。
+        val request = manualCompactionRequest(
+            listOf(
+                SimpleTextApiMessage(id = "old-user", role = "user", content = "早期需求".repeat(400)),
+                SimpleTextApiMessage(id = "old-assistant", role = "assistant", content = "早期结论".repeat(400)),
+                SimpleTextApiMessage(id = "latest-user", role = "user", content = "继续处理"),
+            ),
+        )
+
+        val outcome = loop.compactNow(sessionId, request, ModelTokenLimits(maxOutputTokens = 512, maxContextTokens = 1_000_000))
+
+        assertTrue(outcome is ManualCompactionOutcome.Compacted)
+        assertEquals(1, summaryCalls)
+        assertNotNull(store.latestCompaction(sessionId))
+        val hiddenRun = database.agentDao().getRunsForSession(sessionId).single()
+        assertEquals(AgentRunStatus.COMPLETED.name, hiddenRun.status)
+        assertEquals(AgentTerminalReasons.MANUAL_COMPACTION, hiddenRun.terminalReason)
+    }
+
+    @Test
+    fun `没有可摘要的历史时手动压缩不调模型并返回 NothingToCompress`() = runBlocking {
+        val sessionId = "manual-compaction-nothing"
+        seedSession(sessionId)
+        var summaryCalls = 0
+        val loop = AgentLoop(
+            runStore = store,
+            modelTransport = ModelTurnTransport {
+                summaryCalls++
+                flowOf(AppStreamEvent.Content("不该被调用"), AppStreamEvent.StreamEnd("summary"))
+            },
+        )
+        val request = manualCompactionRequest(
+            listOf(SimpleTextApiMessage(id = "only-user", role = "user", content = "你好")),
+        )
+
+        val outcome = loop.compactNow(sessionId, request, ModelTokenLimits(maxOutputTokens = 512, maxContextTokens = 1_000_000))
+
+        assertEquals(ManualCompactionOutcome.NothingToCompress, outcome)
+        assertEquals(0, summaryCalls)
+        assertEquals(null, store.latestCompaction(sessionId))
+        assertEquals(
+            AgentRunStatus.COMPLETED.name,
+            database.agentDao().getRunsForSession(sessionId).single().status,
+        )
+    }
+
+    private fun manualCompactionRequest(messages: List<SimpleTextApiMessage>): ChatRequest = ChatRequest(
+        messages = messages,
+        provider = "OpenAI",
+        channel = "OpenAI兼容",
+        apiAddress = "https://example.test",
+        apiKey = "test-key",
+        model = "test-model",
+        contextManagement = RequestContextManagement(
+            configId = "config-1",
+            maxContextTokens = 1_000_000,
+            reservedOutputTokens = 512,
+            compactThresholdTokens = 1_000_000,
+            autoCompressionEnabled = true,
+        ),
+    )
 
     private suspend fun seedSession(sessionId: String) {
         database.chatDao().insertSession(ChatSessionEntity(sessionId, 1L, 1L, false))

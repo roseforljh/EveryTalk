@@ -499,6 +499,8 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         get() = stateHolder._scrollToBottomEvent.asSharedFlow()
     val scrollToItemEvent: SharedFlow<String>
         get() = stateHolder._scrollToItemEvent.asSharedFlow()
+    val isCompactingContext: StateFlow<Boolean>
+        get() = stateHolder._isCompactingContext.asStateFlow()
     val selectedMediaItems: SnapshotStateList<SelectedMediaItem>
         get() = stateHolder.selectedMediaItems
 
@@ -587,7 +589,7 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     fun resolveIntervention(suspensionId: String, expectedVersion: Long, resolutionNonce: String) =
         apiHandler.resolveIntervention(suspensionId, expectedVersion, resolutionNonce)
 
-    fun resolveEphemeralIntervention(
+    suspend fun resolveEphemeralIntervention(
         suspensionId: String,
         expectedVersion: Long,
         resolutionNonce: String,
@@ -606,10 +608,10 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         secureReference,
     )
 
-    fun rejectIntervention(suspensionId: String, expectedVersion: Long) =
+    suspend fun rejectIntervention(suspensionId: String, expectedVersion: Long): Boolean =
         apiHandler.rejectIntervention(suspensionId, expectedVersion)
 
-    fun createAndResolveAuthorizationIntervention(
+    suspend fun createAndResolveAuthorizationIntervention(
         suspensionId: String,
         expectedVersion: Long,
         resolutionNonce: String,

@@ -105,15 +105,22 @@ class ComputerRepository(
     ): Boolean {
         val workspace = getWorkspace(workspaceId)
             ?: throw ComputerException(ComputerErrorCodes.WORKSPACE_NOT_READY, "Workspace 不存在")
-        if (workspace.runMode != ComputerRunMode.DIRECT) {
-            throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "仅 Direct SSH 模式支持服务器 .env")
+        if (workspace.runMode != ComputerRunMode.DIRECT && workspace.runMode != ComputerRunMode.CONTAINER) {
+            throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "当前执行模式不支持服务器 .env")
+        }
+        if (workspace.runMode == ComputerRunMode.CONTAINER && workspace.containerName.isNullOrBlank()) {
+            throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "Container 尚未就绪")
         }
         val secret = credentialStore.loadWorkspaceSecret(
             dao.getWorkspaceSecret(workspaceId, name)?.id
                 ?: throw ComputerException(ComputerErrorCodes.CREDENTIAL_MISSING, "Workspace Secret 不存在"),
         )
         return try {
-            val command = ComputerSecretEnvWriter.buildUpsertCommand(path, name)
+            val command = if (workspace.runMode == ComputerRunMode.CONTAINER) {
+                ComputerSecretEnvWriter.buildContainerUpsertCommand(
+                    checkNotNull(workspace.containerName), path, name,
+                )
+            } else ComputerSecretEnvWriter.buildUpsertCommand(workspace.hostPath, path, name)
             val secretBytes = secret.concatToString().toByteArray(Charsets.UTF_8)
             try {
                 val result = withConnection(workspace.computerId) { connection, _ ->

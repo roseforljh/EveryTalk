@@ -97,6 +97,32 @@ class AgentInterventionPersistenceTest {
     }
 
     @Test
+    fun `拒绝本地落库后立即可恢复且不会履行被拒绝的工具`() = runBlocking {
+        val run = insertRun("run-reject-fast")
+        var adapterCalls = 0
+        val activeBroker = AgentInterventionBroker(
+            store,
+            adapters = AgentInterventionAdapterRegistry(mapOf("acknowledgement-adapter" to RecordingAdapter({
+                adapterCalls++
+                AdapterDeliveryFact.DELIVERED
+            }))),
+        )
+        val ticket = activeBroker.suspend(
+            run, CapabilityRequest("server.restart.confirm", "请求操作"),
+            "turn", "request", "tool", "slot", "hash", "MODEL_HINT", 1, 1,
+        )
+        assertTrue(activeBroker.reject(ticket.suspension.id, ticket.suspension.rowVersion))
+        val rejected = requireNotNull(store.get(ticket.suspension.id))
+        assertEquals(SuspensionState.READY_TO_RESUME_WITH_FAILURE.name, rejected.status)
+        assertEquals("INTERVENTION_REJECTED", rejected.failureCode)
+        assertFalse(activeBroker.reject(ticket.suspension.id, ticket.suspension.rowVersion))
+        assertFalse(activeBroker.resolve(ticket.suspension.id, ticket.suspension.rowVersion, ticket.resolutionNonce!!))
+        assertEquals(0, adapterCalls)
+        assertTrue(store.claimResume(rejected.id, SuspensionState.READY_TO_RESUME_WITH_FAILURE,
+            rejected.rowVersion, rejected.runGeneration, "resume-now"))
+    }
+
+    @Test
     fun `一次性 Grant 并发 claim 只有一个成功`() = runBlocking {
         val run = insertRun("run-grant")
         val grantStore = AgentCapabilityGrantStore(database.agentDao())

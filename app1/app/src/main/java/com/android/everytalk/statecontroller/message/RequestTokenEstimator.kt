@@ -182,7 +182,8 @@ internal fun estimateConversationDraftContextUsage(
         systemPrompt?.trim()?.takeIf(String::isNotEmpty)?.let { prompt ->
             add(SimpleTextApiMessage(id = "draft-system", role = "system", content = prompt))
         }
-        messages.filter { it.sender != Sender.System }.forEach { message ->
+        // 系统提示和 App 自己的提示行都不进模型上下文，不能算进占用。
+        messages.filter { it.sender != Sender.System && it.sender != Sender.Notice }.forEach { message ->
             if (message.attachments.isEmpty()) {
                 add(
                     SimpleTextApiMessage(

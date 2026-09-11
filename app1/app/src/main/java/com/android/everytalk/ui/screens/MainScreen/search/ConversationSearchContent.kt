@@ -619,4 +619,5 @@ private fun Sender.searchSourceType(): ConversationSearchSourceType = when (this
     Sender.AI -> ConversationSearchSourceType.AI
     Sender.System -> ConversationSearchSourceType.SYSTEM
     Sender.Tool -> ConversationSearchSourceType.TOOL
+    Sender.Notice -> ConversationSearchSourceType.SYSTEM
 }

@@ -19,6 +19,7 @@ import com.android.everytalk.data.DataClass.WebSearchResult
 import com.android.everytalk.data.DataClass.ThinkingConfig
 import com.android.everytalk.data.DataClass.ChatRequest
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
+import com.android.everytalk.data.agent.ManualCompactionOutcome
 import com.android.everytalk.data.safety.AiContentReportCategory
 import com.android.everytalk.data.safety.AiContentReportSubmissionResult
 import com.android.everytalk.data.computer.AddComputerRequest
@@ -120,6 +121,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+import java.util.UUID
 
 
 
@@ -1036,6 +1038,63 @@ import java.util.TimeZone
                 com.android.everytalk.data.agent.AgentRunControlState.PAUSE_REQUESTED
         ) return
         apiHandler.cancelCurrentApiJob("等待安全暂停时用户再次点击停止", isImageGeneration = false, showFeedback = true)
+    }
+
+    /**
+     * 手动「立即压缩」：不看阈值，直接给当前会话压出一条新检查点。
+     * 要真发一次模型请求，置位期间按钮转圈并禁用，避免连点发出两次压缩。
+     */
+    internal fun AppViewModel.compressContextNow(messageId: String) {
+        if (isCompactingContext.value) return
+        stateHolder._isCompactingContext.value = true
+        viewModelScope.launch {
+            try {
+                when (val outcome = apiHandler.compressContextNow(messageId)) {
+                    ManualCompactionOutcome.NothingToCompress -> showSnackbar(
+                        getApplication<Application>().getString(R.string.context_usage_compress_nothing)
+                    )
+
+                    is ManualCompactionOutcome.Compacted -> {
+                        val text = getApplication<Application>().getString(
+                            R.string.context_usage_compress_done,
+                            outcome.tokensBefore,
+                            outcome.tokensAfter,
+                        )
+                        appendContextCompactionNotice(text)
+                        showSnackbar(text)
+                    }
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                showSnackbar(
+                    error.message?.takeIf(String::isNotBlank)
+                        ?: getApplication<Application>().getString(R.string.unknown_error)
+                )
+            } finally {
+                stateHolder._isCompactingContext.value = false
+            }
+        }
+    }
+
+    /**
+     * 压缩是异步动作，不在会话里留一条可见记录，用户不知道发生过。
+     * Sender.Notice 只在界面显示，所有模型输入路径都会把它过滤掉。
+     */
+    private suspend fun AppViewModel.appendContextCompactionNotice(text: String) {
+        val notice = Message(
+            id = "context-compaction-${UUID.randomUUID()}",
+            text = text,
+            sender = Sender.Notice,
+            contentStarted = true,
+        )
+        withContext(Dispatchers.Main.immediate) { stateHolder.messages.add(notice) }
+        // 只加到内存列表重开就没了，必须显式落库。
+        runCatching {
+            withContext(Dispatchers.IO) {
+                historyManager.saveCurrentChatToHistoryNow(forceSave = true, isImageGeneration = false)
+            }
+        }
     }
 
 

@@ -761,6 +761,10 @@
     <string name="context_usage_window_total">上下文上限</string>
     <string name="context_usage_unknown">未知</string>
     <string name="context_usage_tokens_description">%1$s令牌数</string>
+    <string name="context_usage_compress">压缩上下文</string>
+    <string name="context_usage_compress_description">立即压缩当前上下文</string>
+    <string name="context_usage_compress_nothing">当前上下文没有可压缩的内容</string>
+    <string name="context_usage_compress_done">上下文已压缩：%1$,d → %2$,d</string>
     <string name="attachment_selected_gallery_image">从相册选择的图片</string>
     <string name="attachment_selected_camera_image">相机拍摄的图片</string>
     <string name="attachment_remove">移除附件</string>

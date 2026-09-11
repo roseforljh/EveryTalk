@@ -530,7 +530,9 @@ internal fun MessageSender.sendMessageInternal(
                     historyUiMessagesRaw
                 } else {
                     historyUiMessagesRaw.filter { msg ->
-                        val filteredOut = msg.sender == UiSender.System && !msg.isPlaceholderName
+                        // Notice 是 App 插的提示行，任何情况下都不进模型上下文。
+                        val filteredOut = msg.sender == UiSender.Notice ||
+                            (msg.sender == UiSender.System && !msg.isPlaceholderName)
                         if (filteredOut) {
                             Log.d(
                                 "MessageSender",

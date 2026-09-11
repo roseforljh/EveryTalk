@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -226,6 +227,8 @@ internal fun AiContextUsageButton(
     expanded: Boolean,
     onClick: () -> Unit,
     onDismiss: () -> Unit,
+    onCompress: () -> Unit = {},
+    compressInProgress: Boolean = false,
 ) {
     val summary = remember(
         message.tokenUsage,
@@ -271,7 +274,11 @@ internal fun AiContextUsageButton(
             modifier = Modifier.width(308.dp),
             offset = popupOffset,
         ) {
-            AiContextUsagePopupContent(summary)
+            AiContextUsagePopupContent(
+                summary = summary,
+                onCompress = onCompress,
+                compressInProgress = compressInProgress,
+            )
         }
     }
 }
@@ -303,7 +310,11 @@ private fun ContextUsageRing(
 }
 
 @Composable
-private fun AiContextUsagePopupContent(summary: AiContextUsageSummary?) {
+private fun AiContextUsagePopupContent(
+    summary: AiContextUsageSummary?,
+    onCompress: () -> Unit,
+    compressInProgress: Boolean,
+) {
     Column(modifier = Modifier.padding(horizontal = 18.dp, vertical = 16.dp)) {
         Row(
             modifier = Modifier.fillMaxWidth(),
@@ -315,12 +326,23 @@ private fun AiContextUsagePopupContent(summary: AiContextUsageSummary?) {
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.SemiBold,
             )
-            summary?.let {
-                UsageSourceBadge(
-                    stringResource(
-                        if (it.isMeasured) R.string.context_usage_measured else R.string.context_usage_estimated,
-                    )
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                ContextCompressButton(
+                    onCompress = onCompress,
+                    compressInProgress = compressInProgress,
+                    // 没有用量数据就没有可压缩的会话记录。
+                    enabled = summary != null,
                 )
+                summary?.let {
+                    UsageSourceBadge(
+                        stringResource(
+                            if (it.isMeasured) R.string.context_usage_measured else R.string.context_usage_estimated,
+                        )
+                    )
+                }
             }
         }
         if (summary == null) {
@@ -434,6 +456,38 @@ private fun AiContextUsagePopupContent(summary: AiContextUsageSummary?) {
         }
         Spacer(Modifier.height(12.dp))
         UsageProgressBar(summary.fraction)
+    }
+}
+
+/** 压缩要发一次模型请求，进行中换成转圈，避免看着像点了没反应。 */
+@Composable
+private fun ContextCompressButton(
+    onCompress: () -> Unit,
+    compressInProgress: Boolean,
+    enabled: Boolean,
+) {
+    val description = stringResource(R.string.context_usage_compress_description)
+    IconButton(
+        onClick = onCompress,
+        enabled = enabled && !compressInProgress,
+        modifier = Modifier
+            .size(32.dp)
+            .semantics { contentDescription = description },
+    ) {
+        if (compressInProgress) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(15.dp),
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+            )
+        } else {
+            Icon(
+                painter = painterResource(R.drawable.ic_gpt_collapse),
+                contentDescription = null,
+                modifier = Modifier.size(17.dp),
+                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = if (enabled) 0.7f else 0.32f),
+            )
+        }
     }
 }
 

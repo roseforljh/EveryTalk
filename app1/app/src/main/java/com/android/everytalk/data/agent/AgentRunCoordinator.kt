@@ -1,14 +1,22 @@
 package com.android.everytalk.data.agent
 
 import android.content.Context
+import com.android.everytalk.data.DataClass.ApiConfig
+import com.android.everytalk.data.DataClass.ChatRequest
+import com.android.everytalk.data.DataClass.GenerationConfig
 import com.android.everytalk.data.DataClass.MessageContentPart
 import com.android.everytalk.data.DataClass.AbstractApiMessage
+import com.android.everytalk.data.DataClass.ModelTokenLimits
+import com.android.everytalk.data.DataClass.RequestContextManagement
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
+import com.android.everytalk.data.DataClass.effectiveModelChannel
+import com.android.everytalk.data.DataClass.resolvedModelTokenLimits
 import com.android.everytalk.data.DataClass.toApiText
 import com.android.everytalk.data.database.AppDatabase
 import com.android.everytalk.data.database.entities.AgentRunEntity
 import com.android.everytalk.data.database.entities.ComputerExecutionEntity
 import com.android.everytalk.data.database.entities.toApiConfig
+import com.android.everytalk.data.database.entities.toMessage
 import com.android.everytalk.data.computer.ComputerRequestContext
 import com.android.everytalk.data.computer.ComputerToolRequestHasher
 import com.android.everytalk.data.network.AppStreamEvent
@@ -64,6 +72,33 @@ internal suspend fun materializeAndroidQueuedMessage(
         context = context,
     ).messages.single()
 }
+
+/**
+ * 手动「立即压缩」用的请求。
+ * Run 一进终态，恢复快照就被回收，restoreChatRequest 拿不到历史。所以模型参数从 ApiConfig 重建，
+ * 历史由会话消息表加 AgentEntry 投影拼出来，再交给调用方送进 compactNow。
+ */
+internal fun buildManualCompactionRequest(
+    config: ApiConfig,
+    limits: ModelTokenLimits,
+    messages: List<AbstractApiMessage>,
+): ChatRequest = ChatRequest(
+    messages = messages,
+    provider = config.provider,
+    channel = config.effectiveModelChannel(),
+    apiAddress = config.address,
+    apiKey = config.key,
+    model = config.model,
+    generationConfig = GenerationConfig(maxOutputTokens = limits.maxOutputTokens),
+    contextManagement = RequestContextManagement(
+        configId = config.id,
+        maxContextTokens = limits.maxContextTokens,
+        reservedOutputTokens = limits.maxOutputTokens,
+        // forceLocalCompaction 会跳过阈值判断，这里只为满足压缩的前置开关。
+        compactThresholdTokens = limits.maxContextTokens.toLong(),
+        autoCompressionEnabled = true,
+    ),
+)
 
 /**
  * 独立的全局应用级/服务级 AgentRun 协调器。
@@ -217,6 +252,8 @@ class AgentRunCoordinator(
     private val recoveringRunIds = ConcurrentHashMap.newKeySet<String>()
     private val resumeRetryStates = ConcurrentHashMap<String, ResumeRetryState>()
     private val resumeMutex = Mutex()
+    // 恢复扫描不能把仍在本进程履行的接力误当成崩溃遗留状态。
+    private val interventionMutex = Mutex()
 
     private val _events = MutableSharedFlow<Pair<String, AppStreamEvent>>(extraBufferCapacity = 128)
     val events = _events.asSharedFlow()
@@ -260,6 +297,36 @@ class AgentRunCoordinator(
      * 两种登记都代表同一个 Run 正在执行，恢复器必须同时检查，避免重复驱动同一轮请求。
      */
     fun isRunActive(run: AgentRunEntity): Boolean = isAgentRunActive(activeJobs, run)
+
+    /**
+     * 手动「立即压缩」：不看阈值，直接给当前会话压出一条新的摘要检查点。
+     * 压缩必须挂在一次真实 Run 上，而建 Run 会取消同会话里等待审批的其他 Run，
+     * 所以有活跃 Run 时直接拒绝，等它停下来再压。
+     */
+    suspend fun compressContextNow(visibleAssistantMessageId: String): ManualCompactionOutcome {
+        val run = agentRunStore.getRunByVisibleMessage(visibleAssistantMessageId)
+            ?: throw IllegalStateException("当前消息没有可压缩的会话记录")
+        if (agentRunStore.getRunsForSession(run.sessionId).any(::isRunActive)) {
+            throw IllegalStateException("会话正在执行，结束后再压缩")
+        }
+        val configId = run.configIdSnapshot ?: throw IllegalStateException("会话缺少模型配置，无法压缩")
+        val config = database.apiConfigDao().getTextConfig(configId)?.toApiConfig()
+            ?: throw IllegalStateException("模型配置已不存在，无法压缩")
+        val limits = resolvedModelTokenLimits(
+            maxOutputTokens = config.maxTokens,
+            maxContextTokens = config.modelParameters.maxContextTokens,
+        )
+        // Run 一进终态，恢复快照就被回收（AGENT_FINAL_RUN_STATUSES），restoreChatRequest 拿不到历史。
+        // 这里从还活着的两张表重建：会话消息表给原始对话，AgentEntry 给工具轨迹。
+        val history = database.chatDao().getMessagesForSession(run.sessionId)
+            .map { it.toMessage().toApiMessage(uriEncoder = { null }) }
+        val request = buildManualCompactionRequest(
+            config = config,
+            limits = limits,
+            messages = agentRunStore.expandTranscript(run.sessionId, history),
+        )
+        return agentLoop.compactNow(run.sessionId, request, limits)
+    }
 
     /**
      * AgentLoop 由应用级 scope 执行。页面停止收集事件只会断开 UI，不会取消任务。
@@ -513,10 +580,13 @@ class AgentRunCoordinator(
     }
 
     /** App 启动时显式扫描全部非终态 Suspension，包括 RESOLUTION_RECEIVED 与 DELIVERED。 */
-    suspend fun recoverInterventions(): List<AgentInterventionRecovery.RecoveryAction> {
+    suspend fun recoverInterventions(): List<AgentInterventionRecovery.RecoveryAction> =
+        interventionMutex.withLock { recoverInterventionsLocked() }
+
+    private suspend fun recoverInterventionsLocked(): List<AgentInterventionRecovery.RecoveryAction> {
         val nonceById = _pendingInterventions.value.associate { it.suspensionId to it.resolutionNonce }.toMutableMap()
         val actions = interventionRecovery.recover(
-            activeNonceIds = nonceById.filterValues { it != null }.keys,
+            activeNonces = nonceById.filterValues { it != null },
         )
         actions.forEach { action ->
             if (action.newResolutionNonce != null) nonceById[action.suspensionId] = action.newResolutionNonce
@@ -683,10 +753,11 @@ class AgentRunCoordinator(
         expectedVersion: Long,
         resolutionNonce: String,
         material: ProtectedResolution = ProtectedResolution.None,
-    ): Boolean {
+    ): Boolean = interventionMutex.withLock {
         val resolved = interventionBroker.resolve(suspensionId, expectedVersion, resolutionNonce, material)
-        if (resolved) recoverInterventions()
-        return resolved
+        // CAS 拒绝也刷新版本和 nonce；不重发 Secret、不重放外部动作。
+        recoverInterventionsLocked()
+        resolved
     }
 
     /** 调用方的可变缓冲区无论提交成功与否都在返回前清零。 */
@@ -755,9 +826,31 @@ class AgentRunCoordinator(
     }
 
     suspend fun rejectIntervention(suspensionId: String, expectedVersion: Long): Boolean {
-        val rejected = interventionBroker.reject(suspensionId, expectedVersion)
-        if (rejected) recoverInterventions()
-        return rejected
+        // 拒绝只做本地 CAS，不能排在持有 interventionMutex 的远端履行/对账之后。
+        // 决策一旦落库，关闭弹窗导致的 UI 协程取消也不能丢失这次唤醒。
+        return withContext(NonCancellable) {
+            val rejected = interventionBroker.reject(suspensionId, expectedVersion)
+            if (!rejected) {
+                scope.launch { recoverInterventions() }
+                return@withContext false
+            }
+            val suspension = interventionStore.get(suspensionId)
+            val run = suspension?.let { agentDao.getRun(it.runId) }
+            if (run != null) {
+                scope.launchInterventionContinuation(activeJobs, run) {
+                    try {
+                        resumeSuspension(suspensionId)
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (_: Exception) {
+                        // 决策仍在 Room 中，保留给恢复机制重试；不记录外部异常正文。
+                        AppLogger.warn("AgentRunCoordinator", "Intervention continuation needs recovery: $suspensionId")
+                    }
+                }
+            }
+            _pendingInterventions.update { items -> items.filterNot { it.suspensionId == suspensionId } }
+            true
+        }
     }
 
     suspend fun confirmUnknownInterventionDelivered(suspensionId: String, expectedVersion: Long): Boolean {
@@ -956,6 +1049,25 @@ internal fun isAgentRunActive(
     run: AgentRunEntity,
 ): Boolean = listOf("run:${run.id}", "message:${run.visibleAssistantMessageId}")
     .any { key -> activeJobs[key]?.let { !it.isCompleted && !it.isCancelled } == true }
+
+/**
+ * 接力决策使用应用级作用域交接：仅等待发布弹窗的原 Run 退出，再消费决策。
+ * 不取消原任务，也不等待其他 Run。捕获旧 Job，避免把后来启动的续写也加入等待。
+ */
+internal fun CoroutineScope.launchInterventionContinuation(
+    activeJobs: Map<String, Job>,
+    run: AgentRunEntity,
+    resume: suspend () -> Unit,
+): Job {
+    val previousJobs = listOfNotNull(
+        activeJobs["run:${run.id}"],
+        activeJobs["message:${run.visibleAssistantMessageId}"],
+    ).distinct()
+    return launch {
+        previousJobs.forEach { it.join() }
+        resume()
+    }
+}
 
 /** 只有实际使用过 VPS 且整个 Run 已结束时，才允许发送最终通知。 */
 internal fun shouldNotifyAgentRunTerminal(
