@@ -102,13 +102,14 @@ class ComputerRepository(
         workspaceId: String,
         name: String,
         path: String,
+        hostTarget: Boolean = false,
     ): Boolean {
         val workspace = getWorkspace(workspaceId)
             ?: throw ComputerException(ComputerErrorCodes.WORKSPACE_NOT_READY, "Workspace 不存在")
-        if (workspace.runMode != ComputerRunMode.DIRECT && workspace.runMode != ComputerRunMode.CONTAINER) {
+        if (!hostTarget && workspace.runMode != ComputerRunMode.DIRECT && workspace.runMode != ComputerRunMode.CONTAINER) {
             throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "当前执行模式不支持服务器 .env")
         }
-        if (workspace.runMode == ComputerRunMode.CONTAINER && workspace.containerName.isNullOrBlank()) {
+        if (!hostTarget && workspace.runMode == ComputerRunMode.CONTAINER && workspace.containerName.isNullOrBlank()) {
             throw ComputerException(ComputerErrorCodes.COMPUTER_NOT_READY, "Container 尚未就绪")
         }
         val secret = credentialStore.loadWorkspaceSecret(
@@ -116,24 +117,38 @@ class ComputerRepository(
                 ?: throw ComputerException(ComputerErrorCodes.CREDENTIAL_MISSING, "Workspace Secret 不存在"),
         )
         return try {
-            val command = if (workspace.runMode == ComputerRunMode.CONTAINER) {
+            val command = if (hostTarget) {
+                ComputerSecretEnvWriter.buildHostUpsertCommand(path, name)
+            } else if (workspace.runMode == ComputerRunMode.CONTAINER) {
                 ComputerSecretEnvWriter.buildContainerUpsertCommand(
                     checkNotNull(workspace.containerName), path, name,
                 )
             } else ComputerSecretEnvWriter.buildUpsertCommand(workspace.hostPath, path, name)
             val secretBytes = secret.concatToString().toByteArray(Charsets.UTF_8)
             try {
-                val result = withConnection(workspace.computerId) { connection, _ ->
-                    connection.execute(
-                        command = command,
-                        stdin = secretBytes,
-                        timeoutMillis = 30_000,
-                        maxOutputBytes = 8 * 1024,
+                var executeRequested = false
+                val result = try {
+                    withConnection(workspace.computerId) { connection, _ ->
+                        executeRequested = true
+                        connection.execute(
+                            command = command,
+                            stdin = secretBytes,
+                            timeoutMillis = 30_000,
+                            maxOutputBytes = 8 * 1024,
+                        )
+                    }
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (error: Exception) {
+                    // 在连接池完成失效连接处理后再分类，保留它原有的安全重连行为。
+                    // 发出命令后若未收到退出事实，就不能声称没有写入，亦不能自动重放。
+                    if (executeRequested) throw ComputerException(
+                        ComputerErrorCodes.EXECUTION_UNKNOWN,
+                        "服务器环境变量更新结果无法确认",
                     )
+                    throw error
                 }
-                if (result.timedOut || result.exitCode != 0) {
-                    throw ComputerException(ComputerErrorCodes.EXECUTION_UNKNOWN, "服务器 .env 更新失败", retryable = true)
-                }
+                ComputerSecretEnvWriter.requireSuccessfulWrite(result)
             } finally {
                 secretBytes.fill(0)
             }

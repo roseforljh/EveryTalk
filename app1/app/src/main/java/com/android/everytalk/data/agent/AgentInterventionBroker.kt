@@ -228,14 +228,13 @@ class AgentInterventionBroker(
         return store.get(suspension.id)?.status == SuspensionState.READY_TO_RESUME.name
     }
 
-    /** 保留 UNKNOWN 事实并恢复失败结果，Agent 只能验证或重规划，不能自动重放原动作。 */
+    /** UNKNOWN 不能重放旧 Secret；“继续”只创建新 nonce，要求用户重新输入一次。 */
     suspend fun continueAfterUnknown(suspensionId: String, expectedVersion: Long): Boolean =
-        store.outcome(
+        store.enterUserReentry(
             suspensionId,
             SuspensionState.USER_DECISION_REQUIRED,
-            SuspensionState.READY_TO_RESUME_WITH_FAILURE,
             expectedVersion,
-            "DELIVERY_UNKNOWN_DO_NOT_REPLAY",
+            UUID.randomUUID().toString(),
         )
 
     private suspend fun finishWaitingIntervention(

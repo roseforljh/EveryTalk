@@ -1344,10 +1344,15 @@ class AgentLoop(
                         agentRequest.targetId != context.computerId && agentRequest.targetId != context.workspaceId
                     } != false
                 ) {
+                    val currentContext = contextualComputerContext
                     val result = AgentContentBlock.ToolResult(
                         toolCallId = call.id,
                         toolName = call.name,
-                        content = kotlinx.serialization.json.JsonPrimitive("Secret 目标与当前服务器或 Workspace 不匹配"),
+                        content = kotlinx.serialization.json.JsonPrimitive(
+                            currentContext?.let {
+                                "Secret 目标不匹配。当前允许的 target_id 是 computer_id=${it.computerId} 或 workspace_id=${it.workspaceId}；请重新使用其中一个，不要传 Container 名称。"
+                            } ?: "当前运行没有可用的服务器 Workspace 上下文，无法安全写入 Secret；请先选择服务器和 Workspace。",
+                        ),
                         isError = true,
                     )
                     persistResult(result)

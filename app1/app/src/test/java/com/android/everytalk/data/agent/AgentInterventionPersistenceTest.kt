@@ -835,8 +835,8 @@ class AgentInterventionPersistenceTest {
         assertEquals(1, calls)
         val unknown = requireNotNull(store.get(ticket.suspension.id))
         assertTrue(activeBroker.continueAfterUnknown(unknown.id, unknown.rowVersion))
-        assertEquals(SuspensionState.READY_TO_RESUME_WITH_FAILURE.name, store.get(unknown.id)?.status)
-        assertEquals("DELIVERY_UNKNOWN_DO_NOT_REPLAY", store.get(unknown.id)?.failureCode)
+        assertEquals(SuspensionState.WAITING_USER_REENTRY.name, store.get(unknown.id)?.status)
+        assertTrue(store.get(unknown.id)?.resolutionNonceHash?.isNotBlank() == true)
     }
 
     @Test

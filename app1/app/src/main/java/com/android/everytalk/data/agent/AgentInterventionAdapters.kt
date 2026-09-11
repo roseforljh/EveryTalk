@@ -156,14 +156,20 @@ class WorkspaceSecretCapabilityAdapter(
         val material = protectedResolution as? ProtectedResolution.Ephemeral
             ?: return AdapterFulfillmentResult(AdapterDeliveryFact.NOT_DELIVERED)
         val workspaceId = request.targetBindingRef.substringAfter(":workspace:").substringBefore(":")
-        var remoteWriteStarted = false
         return try {
             val name = request.parameters["name"]?.takeIf { it.isNotBlank() }
                 ?: return AdapterFulfillmentResult(AdapterDeliveryFact.NOT_DELIVERED, failureCode = "SECRET_NAME_MISSING")
             val path = request.parameters["path"]
                 ?: return AdapterFulfillmentResult(AdapterDeliveryFact.NOT_DELIVERED, failureCode = "ENV_PATH_MISSING")
+            val scope = request.parameters["scope"]?.uppercase()
+            if (scope != SecretScope.SERVER_ENV.name) {
+                return AdapterFulfillmentResult(
+                    AdapterDeliveryFact.NOT_DELIVERED,
+                    failureCode = com.android.everytalk.data.computer.ComputerErrorCodes.SECRET_SCOPE_UNSUPPORTED,
+                )
+            }
             com.android.everytalk.data.computer.ComputerEnvironmentName.requireValid(name)
-            com.android.everytalk.data.computer.ComputerSecretEnvWriter.requireWorkspaceRelativePath(path)
+            com.android.everytalk.data.computer.ComputerSecretEnvWriter.requireTargetPath(path)
             val workspace = repository.getWorkspace(workspaceId)
                 ?: return AdapterFulfillmentResult(AdapterDeliveryFact.NOT_DELIVERED, failureCode = "WORKSPACE_NOT_FOUND")
             // Direct 和 Container 都有对应的安全写入路径；其它模式在保存密钥前拒绝，
@@ -175,19 +181,23 @@ class WorkspaceSecretCapabilityAdapter(
                 return AdapterFulfillmentResult(AdapterDeliveryFact.NOT_DELIVERED, failureCode = "SECRET_ENV_TARGET_NOT_READY")
             }
             secrets.save(workspaceId, name, material.borrow())
-            remoteWriteStarted = true
-            if (!repository.writeWorkspaceSecretToEnv(workspaceId, name, path)) {
+            if (!repository.writeWorkspaceSecretToEnv(workspaceId, name, path, hostTarget = true)) {
                 return AdapterFulfillmentResult(AdapterDeliveryFact.UNKNOWN)
             }
             AdapterFulfillmentResult(AdapterDeliveryFact.DELIVERED, "Secret 已保存到当前 Workspace")
         } catch (error: kotlinx.coroutines.CancellationException) {
             throw error
+        } catch (error: com.android.everytalk.data.computer.ComputerException) {
+            // 只有超时、连接中断等无法判断远端是否执行的情况才进入人工决策。
+            // 远端已经返回明确错误时，保留稳定错误码，让 Agent 能继续修正路径或权限。
+            if (error.code == com.android.everytalk.data.computer.ComputerErrorCodes.EXECUTION_UNKNOWN) {
+                AdapterFulfillmentResult(AdapterDeliveryFact.UNKNOWN)
+            } else {
+                AdapterFulfillmentResult(AdapterDeliveryFact.NOT_DELIVERED, failureCode = error.code)
+            }
         } catch (_: Exception) {
-            // 开始远端写入后的异常不能证明未投递。只返回固定码，异常文本可能包含 Secret。
-            AdapterFulfillmentResult(
-                if (remoteWriteStarted) AdapterDeliveryFact.UNKNOWN else AdapterDeliveryFact.NOT_DELIVERED,
-                failureCode = if (remoteWriteStarted) null else "SECRET_PREPARATION_FAILED",
-            )
+            // 本地准备阶段失败时不伪装成远端结果未知。
+            AdapterFulfillmentResult(AdapterDeliveryFact.NOT_DELIVERED, failureCode = "SECRET_PREPARATION_FAILED")
         } finally {
             material.clear()
         }
