@@ -63,7 +63,7 @@ class CloudflareApiClient(
     /** 只返回身份展示所需的白名单字段，不把完整用户响应暴露给模型。 */
     suspend fun currentUser(): CloudflareUserIdentity? {
         val envelope = json.decodeFromString<CloudflareUserEnvelope>(transport.request(HttpMethod.Get, "/user"))
-        checkSuccess(envelope.success)
+        checkSuccess(envelope.success, envelope.errors)
         val result = envelope.result ?: return null
         val name = listOfNotNull(result.firstName, result.lastName).filter { it.isNotBlank() }.joinToString(" ").ifBlank { null }
         return CloudflareUserIdentity(result.id, result.email, name)
@@ -97,7 +97,7 @@ class CloudflareApiClient(
             val envelope = json.decodeFromString<CloudflareApiAccountEnvelope>(
                 transport.request(HttpMethod.Get, "/accounts", query = mapOf("page" to page.toString(), "per_page" to "100")),
             )
-            checkSuccess(envelope.success)
+            checkSuccess(envelope.success, envelope.errors)
             accounts += envelope.result.map { CloudflareApiAccount(it.id, it.name) }
             val totalPages = envelope.resultInfo?.totalPages ?: if (envelope.result.size < 100) page else page + 1
             if (page >= totalPages || envelope.result.isEmpty()) break
@@ -111,7 +111,7 @@ class CloudflareApiClient(
         require(page in 1..10000 && perPage in 1..1000) { "分页参数无效" }
         val response = transport.request(HttpMethod.Get, "/accounts/$accountId/workers/scripts", query = mapOf("page" to page.toString(), "per_page" to perPage.toString()))
         val envelope = json.decodeFromString<CloudflareWorkerListEnvelope>(response)
-        checkSuccess(envelope.success)
+        checkSuccess(envelope.success, envelope.errors)
         return CloudflareWorkerListResult(envelope.result, page, perPage, envelope.result.size)
     }
 
@@ -178,8 +178,17 @@ class CloudflareApiClient(
                     "txt", "html", "css", "json" -> "text/plain"
                     else -> "application/octet-stream"
                 }
-                add(CloudflareMultipartPart("files", file.bytes, contentType, file.relativePath))
+                add(CloudflareMultipartPart(file.relativePath, file.bytes, contentType, file.relativePath))
             }
+        }
+        // versions 接口只对已存在的脚本有效：新名字直接 POST 会 404，建不出 Worker。
+        // 所以先确认脚本存在，不存在就用 PUT /scripts 建出来，再走后面的版本与部署流程。
+        if (!workerScriptExists(accountId, workerName)) {
+            transport.requestMultipart(
+                HttpMethod.Put,
+                "/accounts/$accountId/workers/scripts/$workerName",
+                parts,
+            )
         }
         // 先上传不可见版本，再创建正式 deployment，才能获得可恢复查询的 UUID。
         val uploadResponse = transport.requestMultipart(
@@ -188,7 +197,7 @@ class CloudflareApiClient(
             parts,
         )
         val uploadEnvelope = json.decodeFromString<CloudflareWorkerVersionUploadEnvelope>(uploadResponse)
-        checkSuccess(uploadEnvelope.success)
+        checkSuccess(uploadEnvelope.success, uploadEnvelope.errors)
         val versionId = uploadEnvelope.result?.id?.takeIf { it.isNotBlank() }
             ?: throw CloudflareApiException("RESPONSE_INVALID", "Cloudflare 未返回 Worker 版本 ID")
         // 创建 deployment 之前先让账本保存 versionId。保存失败就停止后续写请求，
@@ -223,10 +232,18 @@ class CloudflareApiClient(
         catch (_: IllegalArgumentException) {
             throw CloudflareApiException("RESULT_UNKNOWN", "部署响应未完整解析，需要查询确认", versionId = versionId)
         }
-        checkSuccess(deploymentEnvelope.success)
+        checkSuccess(deploymentEnvelope.success, deploymentEnvelope.errors)
         val deploymentId = deploymentEnvelope.result?.id?.takeIf { it.isNotBlank() }
             ?: throw CloudflareApiException("RESPONSE_INVALID", "Cloudflare 未返回 deployment ID", versionId = versionId)
         return CloudflareDeploymentResult(workerName, deploymentId, CloudflareDeploymentStatus.REQUEST_ACCEPTED, versionId, null)
+    }
+
+    /** 脚本是否已存在；只把 404 当成“不存在”，其它错误照常抛出。 */
+    private suspend fun workerScriptExists(accountId: String, workerName: String): Boolean = try {
+        transport.request(HttpMethod.Get, "/accounts/$accountId/workers/scripts/$workerName")
+        true
+    } catch (error: CloudflareApiException) {
+        if (error.code == "RESOURCE_NOT_FOUND") false else throw error
     }
 
     /** 兼容 Agent 直接传入单文件源码的调用；正式 Workspace 部署走上面的完整包接口。 */
@@ -292,7 +309,7 @@ class CloudflareApiClient(
         val path = "/accounts/$accountId/workers/scripts/$workerName/tails"
         val startRaw = transport.request(HttpMethod.Post, path)
         val start = json.decodeFromString<CloudflareTailEnvelope>(startRaw)
-        checkSuccess(start.success)
+        checkSuccess(start.success, start.errors)
         val tail = start.result ?: throw CloudflareApiException("RESPONSE_INVALID", "Cloudflare 未返回 Tail 会话")
         return try {
             sanitizeTailLogs(transport.readTailWebSocket(tail.url, maxLines, maxChars, timeoutMs), maxChars)
@@ -306,7 +323,7 @@ class CloudflareApiClient(
         requireValidId(accountId, "Account ID"); requireValidId(workerName, "Worker 名称"); requireValidId(deploymentId, "部署 ID")
         val raw = transport.request(HttpMethod.Get, "/accounts/$accountId/workers/scripts/$workerName/deployments/$deploymentId")
         val envelope = json.decodeFromString<CloudflareDeploymentEnvelope>(raw)
-        checkSuccess(envelope.success)
+        checkSuccess(envelope.success, envelope.errors)
         val remoteId = envelope.result?.id
         if (remoteId == null) return CloudflareDeploymentStatus.DEPLOYMENT_PENDING
         if (remoteId != deploymentId) throw CloudflareApiException("RESPONSE_INVALID", "部署查询返回的 ID 不一致")
@@ -325,8 +342,11 @@ class CloudflareApiClient(
         }
     }
 
-    private fun checkSuccess(success: Boolean) {
-        if (!success) throw CloudflareApiException("CLOUDFLARE_API_ERROR", "Cloudflare API 操作失败")
+    private fun checkSuccess(success: Boolean, errors: List<CloudflareErrorItem> = emptyList()) {
+        if (!success) {
+            val detail = errors.firstOrNull()?.let { "（${it.code}: ${it.message.take(500)}）" }.orEmpty()
+            throw CloudflareApiException("CLOUDFLARE_API_ERROR", "Cloudflare API 操作失败$detail")
+        }
     }
 
     override fun close() = transport.close()
@@ -342,6 +362,7 @@ class CloudflareApiClient(
 private data class CloudflareApiAccountEnvelope(
     val success: Boolean = false,
     val result: List<CloudflareAccountResult> = emptyList(),
+    val errors: List<CloudflareErrorItem> = emptyList(),
     @kotlinx.serialization.SerialName("result_info") val resultInfo: CloudflareResultInfo? = null,
 )
 
@@ -349,6 +370,7 @@ private data class CloudflareApiAccountEnvelope(
 private data class CloudflareUserEnvelope(
     val success: Boolean = false,
     val result: CloudflareUserResult? = null,
+    val errors: List<CloudflareErrorItem> = emptyList(),
 )
 
 @Serializable
@@ -366,6 +388,7 @@ private data class CloudflareResultInfo(@kotlinx.serialization.SerialName("total
 private data class CloudflareWorkerListEnvelope(
     val success: Boolean = false,
     val result: List<CloudflareWorkerSummary> = emptyList(),
+    val errors: List<CloudflareErrorItem> = emptyList(),
 )
 
 @Serializable
@@ -375,12 +398,14 @@ private data class CloudflareWorkerVersionUploadResult(val id: String? = null)
 private data class CloudflareWorkerVersionUploadEnvelope(
     val success: Boolean = false,
     val result: CloudflareWorkerVersionUploadResult? = null,
+    val errors: List<CloudflareErrorItem> = emptyList(),
 )
 
 @Serializable
 private data class CloudflareDeploymentEnvelope(
     val success: Boolean = false,
     val result: CloudflareDeploymentApiResult? = null,
+    val errors: List<CloudflareErrorItem> = emptyList(),
 )
 
 @Serializable
@@ -398,6 +423,7 @@ private data class CloudflareDeploymentVersion(
 private data class CloudflareTailEnvelope(
     val success: Boolean = false,
     val result: CloudflareTailResult? = null,
+    val errors: List<CloudflareErrorItem> = emptyList(),
 )
 
 @Serializable

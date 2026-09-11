@@ -24,6 +24,9 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.io.IOException
 import com.android.everytalk.data.network.readTextAtMost
 import io.ktor.websocket.Frame
@@ -75,7 +78,7 @@ internal class CloudflareHttpTransport(
                         if (body != null) { contentType(contentType); setBody(body) }
                     }.execute { response ->
                         val status = response.status.value
-                        if (status !in 200..299) throw statusError(status, readOnly)
+                        if (status !in 200..299) throw statusError(status, response.readTextAtMost(maxResponseBytes), readOnly)
                         response.readTextAtMost(maxResponseBytes)
                     }
                 }
@@ -130,7 +133,7 @@ internal class CloudflareHttpTransport(
                         }
                     }))
                 }.execute { response ->
-                    if (response.status.value !in 200..299) throw statusError(response.status.value, readOnly = false)
+                    if (response.status.value !in 200..299) throw statusError(response.status.value, response.readTextAtMost(maxResponseBytes), readOnly = false)
                     response.readTextAtMost(maxResponseBytes)
                 }
             }
@@ -163,7 +166,7 @@ internal class CloudflareHttpTransport(
                     method = HttpMethod.Get
                     header(HttpHeaders.Authorization, "Bearer $token")
                 }.execute { response ->
-                    if (response.status.value !in 200..299) throw statusError(response.status.value, readOnly = true)
+                    if (response.status.value !in 200..299) throw statusError(response.status.value, response.readTextAtMost(maxResponseBytes), readOnly = true)
                     response.headers.also { response.bodyAsChannel().cancel() }
                 }
             }
@@ -183,7 +186,7 @@ internal class CloudflareHttpTransport(
                     header(HttpHeaders.Authorization, "Bearer $token")
                     setBody(ByteArrayContent(bytes, contentType))
                 }.execute { response ->
-                    if (response.status.value !in 200..299) throw statusError(response.status.value, readOnly = false)
+                    if (response.status.value !in 200..299) throw statusError(response.status.value, response.readTextAtMost(maxResponseBytes), readOnly = false)
                     response.readTextAtMost(maxResponseBytes)
                 }
             }
@@ -238,7 +241,7 @@ internal class CloudflareHttpTransport(
         }
     }
 
-    private fun statusError(status: Int, readOnly: Boolean): CloudflareApiException {
+    private fun statusError(status: Int, responseBody: String, readOnly: Boolean): CloudflareApiException {
         val code = when (status) {
             401 -> "AUTHORIZATION_REQUIRED"
             403 -> "PERMISSION_DENIED"
@@ -249,7 +252,18 @@ internal class CloudflareHttpTransport(
             in 500..599 -> if (readOnly) "SERVICE_UNAVAILABLE" else "RESULT_UNKNOWN"
             else -> "HTTP_$status"
         }
-        return CloudflareApiException(code, "Cloudflare API 请求失败（$status）", readOnly && status in setOf(408, 429, 500, 502, 503, 504))
+        val detail = runCatching {
+            val errors = Json.parseToJsonElement(responseBody).jsonObject["errors"] as? kotlinx.serialization.json.JsonArray
+            val first = errors?.firstOrNull()?.jsonObject
+            val apiCode = first?.get("code")?.jsonPrimitive?.contentOrNull
+            val apiMessage = first?.get("message")?.jsonPrimitive?.contentOrNull
+            listOfNotNull(apiCode, apiMessage?.take(500)).joinToString(": ").takeIf { it.isNotBlank() }
+        }.getOrNull()
+        val message = buildString {
+            append("Cloudflare API 请求失败（$status）")
+            if (detail != null) append("：").append(detail)
+        }
+        return CloudflareApiException(code, message, readOnly && status in setOf(408, 429, 500, 502, 503, 504))
     }
 
     override fun close() = client.close()

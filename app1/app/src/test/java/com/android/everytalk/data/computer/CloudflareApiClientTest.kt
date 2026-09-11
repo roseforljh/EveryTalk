@@ -5,8 +5,14 @@ import io.ktor.client.engine.mock.MockEngine
 import io.ktor.client.engine.mock.MockEngineConfig
 import io.ktor.client.engine.mock.respond
 import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import io.ktor.http.content.OutgoingContent
+import io.ktor.http.content.ByteArrayContent
+import io.ktor.utils.io.ByteChannel
+import io.ktor.utils.io.readRemaining
+import io.ktor.utils.io.core.readBytes
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.StandardTestDispatcher
 import org.junit.Assert.assertEquals
@@ -92,6 +98,13 @@ class CloudflareApiClientTest {
                 paths += request.url.encodedPath
                 methods += request.method.value
                 when {
+                    // 已存在的脚本：只做一次存在性检查，然后照旧上传版本并创建 deployment。
+                    request.url.encodedPath.endsWith("/workers/scripts/hello") &&
+                        request.method == HttpMethod.Get -> respond(
+                        "{\"success\":true,\"result\":{}}",
+                        HttpStatusCode.OK,
+                        headersOf("Content-Type", "application/json"),
+                    )
                     request.url.encodedPath.endsWith("/versions") -> respond(
                         "{\"success\":true,\"result\":{\"id\":\"11111111-1111-1111-1111-111111111111\"}}",
                         HttpStatusCode.OK,
@@ -113,8 +126,126 @@ class CloudflareApiClientTest {
         )
         assertEquals("22222222-2222-2222-2222-222222222222", result.deploymentId)
         assertEquals("11111111-1111-1111-1111-111111111111", result.versionId)
-        assertEquals(listOf("/client/v4/accounts/account/workers/scripts/hello/versions", "/client/v4/accounts/account/workers/scripts/hello/deployments"), paths)
-        assertEquals(listOf("POST", "POST"), methods)
+        assertEquals(
+            listOf(
+                "/client/v4/accounts/account/workers/scripts/hello",
+                "/client/v4/accounts/account/workers/scripts/hello/versions",
+                "/client/v4/accounts/account/workers/scripts/hello/deployments",
+            ),
+            paths,
+        )
+        assertEquals(listOf("GET", "POST", "POST"), methods)
+    }
+
+    @Test
+    fun `脚本不存在时先用 PUT 建出脚本再上传版本`() = runTest {
+        val paths = CopyOnWriteArrayList<String>()
+        val methods = CopyOnWriteArrayList<String>()
+        val client = HttpClient(MockEngine(MockEngineConfig().apply {
+            dispatcher = StandardTestDispatcher(testScheduler)
+            addHandler { request ->
+                paths += request.url.encodedPath
+                methods += request.method.value
+                val isScriptPath = request.url.encodedPath.endsWith("/workers/scripts/hello")
+                when {
+                    // versions 接口只对已存在的脚本有效，新名字必须能拿到 404 才会去 PUT。
+                    isScriptPath && request.method == HttpMethod.Get -> respond(
+                        "{\"success\":false,\"errors\":[{\"code\":10007,\"message\":\"not found\"}]}",
+                        HttpStatusCode.NotFound,
+                        headersOf("Content-Type", "application/json"),
+                    )
+                    isScriptPath && request.method == HttpMethod.Put -> respond(
+                        "{\"success\":true,\"result\":{}}",
+                        HttpStatusCode.OK,
+                        headersOf("Content-Type", "application/json"),
+                    )
+                    request.url.encodedPath.endsWith("/versions") -> respond(
+                        "{\"success\":true,\"result\":{\"id\":\"11111111-1111-1111-1111-111111111111\"}}",
+                        HttpStatusCode.OK,
+                        headersOf("Content-Type", "application/json"),
+                    )
+                    request.url.encodedPath.endsWith("/deployments") -> respond(
+                        "{\"success\":true,\"result\":{\"id\":\"22222222-2222-2222-2222-222222222222\",\"versions\":[{\"version_id\":\"11111111-1111-1111-1111-111111111111\"}]}}",
+                        HttpStatusCode.OK,
+                        headersOf("Content-Type", "application/json"),
+                    )
+                    else -> error("unexpected path ${request.url.encodedPath}")
+                }
+            }
+        }))
+        val result = CloudflareApiClient(client, tokenProvider = { "token" }).deployModuleWorker(
+            "account",
+            "hello",
+            WorkerPackage(listOf(WorkerPackageFile("worker.js", "export default {}".toByteArray(), "hash")), "hash", 18),
+        )
+        assertEquals("22222222-2222-2222-2222-222222222222", result.deploymentId)
+        assertEquals(
+            listOf(
+                "/client/v4/accounts/account/workers/scripts/hello",
+                "/client/v4/accounts/account/workers/scripts/hello",
+                "/client/v4/accounts/account/workers/scripts/hello/versions",
+                "/client/v4/accounts/account/workers/scripts/hello/deployments",
+            ),
+            paths,
+        )
+        assertEquals(listOf("GET", "PUT", "POST", "POST"), methods)
+    }
+
+    @Test
+    fun `模块 multipart part 名与 metadata main_module 一致`() = runTest {
+        var multipartBody = ""
+        val client = HttpClient(MockEngine(MockEngineConfig().apply {
+            dispatcher = StandardTestDispatcher(testScheduler)
+            addHandler { request ->
+                if (request.method == HttpMethod.Put || request.url.encodedPath.endsWith("/versions")) {
+                    val content = request.body as OutgoingContent
+                    multipartBody = when (content) {
+                        is ByteArrayContent -> content.bytes().toString(Charsets.UTF_8)
+                        is OutgoingContent.WriteChannelContent -> {
+                            val channel = ByteChannel(autoFlush = true)
+                            content.writeTo(channel)
+                            channel.close()
+                            channel.readRemaining().readBytes().toString(Charsets.UTF_8)
+                        }
+                        is OutgoingContent.ReadChannelContent ->
+                            content.readFrom().readRemaining().readBytes().toString(Charsets.UTF_8)
+                        else -> error("unexpected content type: ${content::class.qualifiedName}")
+                    }
+                }
+                when (request.method) {
+                    HttpMethod.Get -> respond("{\"success\":true,\"result\":{}}", HttpStatusCode.OK)
+                    HttpMethod.Post -> if (request.url.encodedPath.endsWith("/versions"))
+                        respond("{\"success\":true,\"result\":{\"id\":\"v1\"}}", HttpStatusCode.OK)
+                    else respond("{\"success\":true,\"result\":{\"id\":\"d1\"}}", HttpStatusCode.OK)
+                    else -> error("unexpected request")
+                }
+            }
+        }))
+        CloudflareApiClient(client, tokenProvider = { "token" }).deployModuleWorker(
+            "account", "hello", WorkerPackage(
+                listOf(WorkerPackageFile("worker.js", "export default {}".toByteArray(), "hash")),
+                "worker.js", 18,
+            ),
+        )
+        assertTrue(multipartBody.contains("name=\"metadata\""))
+        assertTrue(multipartBody.contains("\"main_module\":\"worker.js\""))
+        assertTrue(multipartBody.contains("name=\"worker.js\"; filename=\"worker.js\""))
+    }
+
+    @Test
+    fun `HTTP 错误包含 Cloudflare code 和 message`() = runTest {
+        val client = HttpClient(MockEngine(MockEngineConfig().apply {
+            addHandler { respond(
+                "{\"success\":false,\"errors\":[{\"code\":10090,\"message\":\"invalid main module\"}]}",
+                HttpStatusCode.BadRequest,
+                headersOf("Content-Type", "application/json"),
+            ) }
+        }))
+        val error = assertThrows(CloudflareApiException::class.java) {
+            kotlinx.coroutines.runBlocking { CloudflareApiClient(client, tokenProvider = { "token" }).listAccounts() }
+        }
+        assertTrue(error.message!!.contains("10090"))
+        assertTrue(error.message!!.contains("invalid main module"))
     }
 
     @Test
