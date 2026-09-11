@@ -846,6 +846,9 @@ class AgentRunStore(
     ): AgentApprovalRecord? {
         val entries = dao.getEntries(runId)
         if (decidedApprovalAwaitingResult(runId) != null || pendingApproval(runId) != null) return null
+        // 正在等人接力的工具调用不是“中断批次”。过去这里会给 Cloudflare 工具补一条
+        // “App 在工具执行期间退出”，模型据此以为工具崩溃并放弃任务，实际只是挂起等待。
+        if (dao.getUnresolvedSuspension(runId) != null) return null
         val assistantEntry = entries.asReversed().firstOrNull { entry ->
             entry.kind == AgentEntryKind.ASSISTANT.name && entry.status == AgentEntryStatus.FINAL.name
         } ?: return null

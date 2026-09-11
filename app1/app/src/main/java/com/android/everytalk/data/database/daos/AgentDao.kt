@@ -135,6 +135,13 @@ interface AgentDao {
     @Query("SELECT * FROM agent_suspensions WHERE status IN (:statuses) ORDER BY updatedAt ASC")
     suspend fun getSuspensionsByStatuses(statuses: List<String>): List<AgentSuspensionEntity>
 
+    /**
+     * 该 Run 是否还有没走完的接力。等待人接力的 Run 不是“中断批次”，
+     * 恢复扫描不能把它的工具调用补成“App 退出”。
+     */
+    @Query("SELECT * FROM agent_suspensions WHERE runId = :runId AND status NOT IN ('CANCELLED', 'EXPIRED', 'TARGET_LOST') LIMIT 1")
+    suspend fun getUnresolvedSuspension(runId: String): AgentSuspensionEntity?
+
     @Query("""
         UPDATE agent_suspensions SET status = :nextStatus, rowVersion = rowVersion + 1,
             updatedAt = :updatedAt, resolutionNonceHash = :resolutionNonceHash
