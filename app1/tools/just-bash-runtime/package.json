@@ -1,0 +1,17 @@
+{
+  "name": "everytalk-just-bash-runtime",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/runtime.ts --bundle --format=iife --platform=browser --define:__BROWSER__=true --alias:node:zlib=./src/zlib-shim.ts --outfile=../../app/src/main/assets/just-bash/runtime.js",
+    "test": "bun test src/runtime.test.ts"
+  },
+  "dependencies": {
+    "abort-controller": "3.0.0",
+    "just-bash": "3.4.2",
+    "text-encoding": "0.7.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.12"
+  }
+}
