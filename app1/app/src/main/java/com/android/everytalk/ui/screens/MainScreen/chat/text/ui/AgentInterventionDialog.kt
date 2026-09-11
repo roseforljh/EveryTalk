@@ -128,7 +128,10 @@ internal fun AgentInterventionDialog(
                     Column(Modifier.heightIn(max = 240.dp).verticalScroll(rememberScrollState())) {
                         resources.forEach { resource ->
                             TextButton(onClick = { selectedId = resource.id }, enabled = !loading) {
-                                Text((if (selectedId == resource.id) "✓ " else "") + resource.displayName + "\n" + resource.id)
+                                // Worker 的 displayName 和 id 就是同一个字符串，只有两者不同时才补第二行。
+                                val label = (if (selectedId == resource.id) "✓ " else "") + resource.displayName +
+                                    if (resource.id == resource.displayName) "" else "\n" + resource.id
+                                Text(label)
                             }
                         }
                     }

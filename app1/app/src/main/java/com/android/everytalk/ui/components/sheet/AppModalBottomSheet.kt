@@ -170,7 +170,9 @@ internal fun AppModalBottomSheet(
             (AppModalBottomSheetMaximumHeightFraction -
                 AppModalBottomSheetDefaultHeightFraction)
         ).toInt()
-    val overflowTolerancePx = with(density) { 1.dp.roundToPx() }
+    // 内容盒包含标题/内边距在不同 Compose 测量阶段的舍入差异；保留一小段缓冲，
+    // 避免刚好贴近默认高度的短内容被误判为需要全屏展开。
+    val overflowTolerancePx = with(density) { 16.dp.roundToPx() }
     var initiallyExpanded by remember { mutableStateOf<Boolean?>(null) }
     if (initiallyExpanded == null) {
         AppModalBottomSheetInitialMeasure(

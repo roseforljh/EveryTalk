@@ -402,7 +402,11 @@ internal fun ModelParametersDialog(
                 loader(workingConfig).fold(
                     onSuccess = { loadedConfig ->
                         workingConfig = loadedConfig
-                        // 刷新只更新模型规格，不覆盖用户正在编辑的思考等级或自定义选项。
+                        // 保留正在编辑的等级；接口明确声明不支持思考时才关闭，
+                        // 避免刷新后仍向不支持的模型发送思考参数。
+                        if (loadedConfig.modelParameters.resolvedCapability?.supportsReasoning == false) {
+                            selectedValue = "none"
+                        }
                         maxOutputTokens = (
                             loadedConfig.maxTokens ?: DEFAULT_MAX_OUTPUT_TOKENS
                         ).toString()

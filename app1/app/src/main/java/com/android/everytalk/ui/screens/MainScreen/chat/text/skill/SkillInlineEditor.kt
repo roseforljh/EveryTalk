@@ -105,7 +105,8 @@ internal fun insertSkillReference(
             replaceEnd++
         }
     }
-    val replacement = if (isDuplicate) "" else "${SKILL_TAG_MARKER}"
+    // 标签后固定保留一个普通空格，保证继续输入正文时光标和视觉间距一致。
+    val replacement = if (isDuplicate) "" else "${SKILL_TAG_MARKER} "
     val newText = value.text.replaceRange(query.start, replaceEnd, replacement)
     val markerIndex = value.text.take(query.start).count { it == SKILL_TAG_MARKER }
     val newReferences = if (replacement.isEmpty()) {
