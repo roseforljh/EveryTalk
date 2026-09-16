@@ -41,6 +41,9 @@ import kotlinx.coroutines.flow.flowOn
 import androidx.compose.runtime.snapshotFlow
 import java.util.concurrent.ConcurrentHashMap
 
+/** 回复仍在流式、但段间没有事件时的等待占位文案，经 localizedExecutionStatusText 本地化。 */
+internal const val STREAMING_WAITING_STATUS = "正在处理"
+
 /**
  * AI 缓存只保存自身的渲染段；每次投影时按接收边界插入真实用户项。
  * 不改变消息存储顺序、Run ID 或模型上下文。尚未到达显示层的用户消息不占位也不被丢弃。
@@ -828,6 +831,7 @@ open class MessageItemsController(
             )
         }
         val lastProcessIndex = segments.indexOfLast { it is OrderedAiOutputSegment.Process }
+        val lastContentIndex = segments.indexOfLast { it is OrderedAiOutputSegment.Content }
         val processCount = segments.count { it is OrderedAiOutputSegment.Process }
         // 正文已经继续输出时，前一个过程段已经结束，不能继续沿用整条回复的计时器。
         val activeProcessIndex = lastProcessIndex.takeIf {
@@ -877,6 +881,10 @@ open class MessageItemsController(
                             contentStarted = true,
                             timestamp = message.timestamp,
                             outputType = message.outputType,
+                            // 来源引用属于整条回复，只挂到最后一段正文顶部，
+                            // 避免每个正文段重复出现同一个来源胶囊。
+                            webSearchResults = message.webSearchResults
+                                .takeIf { segmentIndex == lastContentIndex },
                         )
                         val contentItem = ChatListItem.AiMessageContentSegment(
                             sourceMessageId = message.id,
@@ -958,6 +966,17 @@ open class MessageItemsController(
                         ))
                     }
                 }
+            }
+
+            // 正文之后等待下一波事件（内置搜索、续写）期间没有任何 trace 事件，
+            // 末尾补一个呼吸指示，避免界面长时间完全静止看起来像卡死。
+            if (replyIsStreaming && segments.lastOrNull() !is OrderedAiOutputSegment.Process) {
+                add(
+                    ChatListItem.LoadingIndicator(
+                        messageId = message.id,
+                        text = activityStatus ?: STREAMING_WAITING_STATUS,
+                    )
+                )
             }
 
             if (!replyIsStreaming && !message.isError) {

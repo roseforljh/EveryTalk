@@ -581,6 +581,11 @@ object AnthropicDirectClient {
             val raw = dataLines.joinToString("\n")
             dataLines.clear()
             val event = Json.parseToJsonElement(raw).jsonObject
+            // web_search 工具的 url_citation 会挂在 text block 的 citations / citations_delta 里，
+            // 与其他客户端一样统一提取成消息级来源，供顶部来源胶囊展示。
+            NativeWebSearchResultExtractor.extract(event)
+                .takeIf { it.isNotEmpty() }
+                ?.let { sources -> emitEvent(AppStreamEvent.WebSearchResults(sources)) }
             when (event["type"]?.jsonPrimitive?.contentOrNull) {
                 "message_start" -> {
                     val usage = ((event["message"] as? JsonObject)?.get("usage") as? JsonObject)

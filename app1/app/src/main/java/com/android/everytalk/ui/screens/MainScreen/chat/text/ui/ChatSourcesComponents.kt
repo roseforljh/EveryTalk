@@ -22,6 +22,7 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -140,6 +141,8 @@ internal fun PageSourcesButton(
         modifier = modifier.wrapContentWidth(align = Alignment.Start),
         shape = RoundedCornerShape(24.dp),
         color = buttonColor,
+        // 暗色下透明底会融进背景，补一条细边框让胶囊边界可辨。
+        border = if (isDarkTheme) BorderStroke(1.dp, appDialogBorderColor()) else null,
         contentColor = MaterialTheme.colorScheme.onSurface,
     ) {
         Row(

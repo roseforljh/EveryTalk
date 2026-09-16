@@ -78,6 +78,7 @@ internal fun localizedExecutionStatusText(status: String?): String? {
     val context = LocalContext.current
     return when {
         text == "等待首个响应" -> stringResource(R.string.thinking_waiting_first_response)
+        text == "正在处理" -> stringResource(R.string.computer_action_working)
         text == TOOL_CALL_WRITING_STATUS -> stringResource(R.string.thinking_writing)
         text == "正在接收思考" -> stringResource(R.string.thinking_receiving)
         text == "已收到思考，等待正文" -> stringResource(R.string.thinking_received_waiting_content)
