@@ -40,7 +40,6 @@ import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.isSystemInDarkTheme
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.BasicTextField
@@ -60,6 +59,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.TransformOrigin
@@ -295,6 +295,13 @@ internal fun ComputerSelectionCard(
             .wrapContentWidth()
             .widthIn(max = 320.dp)
             .heightIn(max = 380.dp)
+            // 给弹层右侧和底部留一层柔和阴影，避免它贴在聊天内容上时边界不清楚。
+            .shadow(
+                elevation = 12.dp,
+                shape = RoundedCornerShape(22.dp),
+                ambientColor = Color.Black.copy(alpha = 0.20f),
+                spotColor = Color.Black.copy(alpha = 0.26f),
+            )
             .verticalScroll(rememberScrollState())
             .padding(10.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -310,70 +317,76 @@ internal fun ComputerSelectionCard(
                 Text("添加服务器")
             }
         } else {
-            // 始终单行排列，超出弹层时横向滑动；胶囊不再按服务器数量挤压名称。
-            Row(
-                modifier = Modifier.horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                computers.forEach { computer ->
-                    val isReady = computer.status == ComputerStatus.READY
-                    val isSelected = selectedComputerId == computer.id
-                    val accentColor = ComputerCardAccentPalette[accentColorIndexes.getValue(computer.id)]
-                    val shape = RoundedCornerShape(percent = 50)
-                    Box(
-                        modifier = Modifier
-                            .widthIn(min = 72.dp, max = 220.dp)
-                            .height(48.dp)
-                            .background(
-                                color = if (isSelected) {
-                                    accentColor.copy(alpha = if (isSystemInDarkTheme()) 0.18f else 0.11f)
-                                } else {
-                                    MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.52f)
-                                },
-                                shape = shape,
-                            )
-                            .then(if (isSelected) Modifier.border(1.dp, accentColor, shape) else Modifier)
-                            .clip(shape)
-                            .combinedClickable(
-                                onClick = {
-                                    if (isReady) onSelect(computer) else onUnavailable(computer)
-                                },
-                                onLongClick = onAddComputer,
-                            )
-                            .padding(horizontal = 10.dp),
-                        contentAlignment = Alignment.CenterStart,
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_gpt_terminal),
-                                contentDescription = null,
-                                tint = if (isReady) accentColor else accentColor.copy(alpha = 0.42f),
-                                modifier = Modifier.size(20.dp),
-                            )
-                            Spacer(Modifier.width(6.dp))
-                            Text(
-                                text = computer.displayName,
-                                // 先给图标和勾选标记留足空间，名称在剩余宽度内按内容收紧。
-                                modifier = Modifier.weight(1f, fill = false),
-                                style = MaterialTheme.typography.bodyMedium,
-                                fontWeight = FontWeight.Medium,
-                                color = if (isReady) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 1,
-                                softWrap = false,
-                                overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
-                            )
-                            if (isSelected) {
-                                Spacer(Modifier.width(6.dp))
-                                Icon(
-                                    painter = painterResource(R.drawable.ic_check),
-                                    contentDescription = stringResource(R.string.state_selected),
-                                    tint = accentColor,
-                                    modifier = Modifier.size(16.dp),
+            // 每行固定三枚等宽胶囊，多出来的自动换行；末行不足三枚时用占位补齐，保持列对齐。
+            computers.chunked(3).forEach { rowComputers ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    rowComputers.forEach { computer ->
+                        val isReady = computer.status == ComputerStatus.READY
+                        val isSelected = selectedComputerId == computer.id
+                        val accentColor = ComputerCardAccentPalette[accentColorIndexes.getValue(computer.id)]
+                        val shape = RoundedCornerShape(percent = 50)
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .heightIn(min = 48.dp)
+                                .background(
+                                    color = if (isSelected) {
+                                        accentColor.copy(alpha = if (isSystemInDarkTheme()) 0.18f else 0.11f)
+                                    } else {
+                                        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.52f)
+                                    },
+                                    shape = shape,
                                 )
+                                .then(if (isSelected) Modifier.border(1.dp, accentColor, shape) else Modifier)
+                                .clip(shape)
+                                .combinedClickable(
+                                    onClick = {
+                                        if (isReady) onSelect(computer) else onUnavailable(computer)
+                                    },
+                                    onLongClick = onAddComputer,
+                                )
+                                .padding(horizontal = 10.dp),
+                            contentAlignment = Alignment.CenterStart,
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_gpt_terminal),
+                                    contentDescription = null,
+                                    tint = if (isReady) accentColor else accentColor.copy(alpha = 0.42f),
+                                    modifier = Modifier.size(20.dp),
+                                )
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    text = computer.displayName,
+                                    // 窄胶囊只放单行，超出部分省略号截断。
+                                    modifier = Modifier.weight(1f),
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium,
+                                    color = if (isReady) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                                )
+                                if (isSelected) {
+                                    Spacer(Modifier.width(6.dp))
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_check),
+                                        contentDescription = stringResource(R.string.state_selected),
+                                        tint = accentColor,
+                                        modifier = Modifier.size(16.dp),
+                                    )
+                                }
                             }
                         }
+                    }
+                    repeat(3 - rowComputers.size) {
+                        Spacer(Modifier.weight(1f))
                     }
                 }
             }
