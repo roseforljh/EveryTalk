@@ -950,21 +950,25 @@ class ComputerManager(
         if (conversationId.isBlank()) return true
         if (!toolExecutor.cancelActiveExecutions(conversationId)) return false
         val workspaces = repository.dao().getWorkspacesForConversation(conversationId)
-        return try {
-            workspaces.forEach { entity ->
+        workspaces.forEach { entity ->
+            runCatching {
                 val workspace = entity.toModel()
                 toolExecutor.closeWorkspace(workspace.id)
                 previewManager.stopByWorkspace(workspace.id)
                 workspaceManager.deleteRemote(workspace.id, deleteRemoteFiles)
                 secretManager.deleteAll(workspace.id)
                 workspaceManager.deleteMapping(workspace.id)
+            }.onFailure { error ->
+                // 会话删除的前置安全条件是取消活动任务；服务器或 Workspace 清理失败
+                // 不能继续阻止本地会话删除，否则一个失效绑定会永久锁住历史记录。
+                if (error is kotlinx.coroutines.CancellationException) throw error
+                AppLogger.warn(
+                    "ComputerRuntime",
+                    "删除会话 Workspace 失败，保留待清理记录：${error.message}",
+                )
             }
-            true
-        } catch (error: Throwable) {
-            if (error is kotlinx.coroutines.CancellationException) throw error
-            AppLogger.warn("ComputerRuntime", "删除会话 Workspace 失败：${error.message}")
-            false
         }
+        return true
     }
 
     suspend fun syncSkills(
