@@ -90,9 +90,8 @@ fun AppDrawerContent(
     var showCreateGroupDialog by remember { mutableStateOf(false) }
     var showMoveToGroupDialog by remember { mutableStateOf<Int?>(null) }
     var isAddGroupButtonVisible by remember(isGroupSectionExpanded) { mutableStateOf(isGroupSectionExpanded) } // 控制"创建分组"按钮的可见性（跟随展开状态）
-    // Animation states for deletion
+    // 分组删除保留原有动画；会话显示状态直接由历史列表决定。
     val deletingGroups = remember { mutableStateListOf<String>() }
-    val deletingItems = remember { mutableStateListOf<String>() }
     val scope = rememberCoroutineScope()
     LaunchedEffect(loadedHistoryIndex) {
         if (loadedHistoryIndex == null) {
@@ -360,13 +359,7 @@ fun AppDrawerContent(
                                                 Column(modifier = Modifier.fillMaxWidth()) {
                                                     if (groupItems.isNotEmpty()) {
                                                         groupItems.forEach { itemData ->
-                                                            androidx.compose.animation.AnimatedVisibility(
-                                                                visible = !deletingItems.contains(itemData.stableId),
-                                                                exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
-                                                                enter = expandVertically(animationSpec = tween(300)) + fadeIn(animationSpec = tween(300)),
-                                                            ) {
-                                                                ConversationItem(itemData)
-                                                            }
+                                                            ConversationItem(itemData)
                                                         }
                                                     } else {
                                                         Box(
@@ -449,13 +442,7 @@ fun AppDrawerContent(
                                 ) {
                                     Column(modifier = Modifier.fillMaxWidth()) {
                                         processedItems.pinned.forEach { itemData ->
-                                            androidx.compose.animation.AnimatedVisibility(
-                                                visible = !deletingItems.contains(itemData.stableId),
-                                                exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
-                                                enter = expandVertically(animationSpec = tween(300)) + fadeIn(animationSpec = tween(300)),
-                                            ) {
-                                                ConversationItem(itemData)
-                                            }
+                                            ConversationItem(itemData)
                                         }
                                     }
                                 }
@@ -466,17 +453,10 @@ fun AppDrawerContent(
                             items = processedItems.ungrouped,
                             key = { item -> "ungrouped_${item.stableId}_${isImageGenerationMode}" },
                         ) { itemData ->
-                            androidx.compose.animation.AnimatedVisibility(
-                                visible = !deletingItems.contains(itemData.stableId),
-                                exit = shrinkVertically(animationSpec = tween(300)) + fadeOut(animationSpec = tween(300)),
-                                enter = expandVertically(animationSpec = tween(300)) + fadeIn(animationSpec = tween(300)),
-                                modifier = if (deletingItems.contains(itemData.stableId)) Modifier else Modifier.animateItem(placementSpec = tween(300)),
-                            ) {
-                                ConversationItem(
-                                    itemData = itemData,
-                                    modifier = Modifier,
-                                )
-                            }
+                            ConversationItem(
+                                itemData = itemData,
+                                modifier = Modifier.animateItem(placementSpec = tween(300)),
+                            )
                         }
                     }
                 }
@@ -511,17 +491,10 @@ fun AppDrawerContent(
                     showDeleteConfirm = false // 关闭对话框
                     selectedSet.clear()
                     onExpandItem(null) // 如果有菜单打开，也关闭它
-                    // 收集需要删除的项的ID以进行动画
-                    val idsToAnimate = indicesToDelete.mapNotNull { index ->
-                        historicalConversations.getOrNull(index)?.let { resolveStableId(it) }
-                    }
-                    deletingItems.addAll(idsToAnimate)
-                    scope.launch {
-                        delay(300) // 等待动画完成
-                        // 从后往前删除，避免索引错位
-                        indicesToDelete.forEach(onDeleteRequest)
-                        deletingItems.removeAll(idsToAnimate)
-                    }
+                    // 删除回调只发起异步操作，绑定服务器时还要等待远端清理。
+                    // 以历史列表实际移除为准，交给 animateItem 播放退出动画，
+                    // 避免定时隐藏再恢复造成闪回；删除失败时也不会错误隐藏会话。
+                    indicesToDelete.forEach(onDeleteRequest)
                 }
             )
             ClearAllConfirmationDialog(
