@@ -102,6 +102,7 @@ android {
         val envVersionName = System.getenv("VERSION_NAME")
         versionName = if (!envVersionName.isNullOrBlank()) envVersionName else baseVersionName
 
+        buildConfigField("String", "GITHUB_MCP_OAUTH_CLIENT_ID", "\"${getConfigValue("GITHUB_MCP_OAUTH_CLIENT_ID")}\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
             useSupportLibrary = true

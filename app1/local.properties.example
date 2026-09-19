@@ -63,3 +63,8 @@ AI_CONTENT_REPORT_URL=https://your-backend.example.com/ai-content-reports
 CLOUDFLARE_OAUTH_CLIENT_ID=your-cloudflare-oauth-client-id
 CLOUDFLARE_OAUTH_REDIRECT_URI=https://oauth.everytalk.cc/oauth/cloudflare
 TEMPORARY_WORKER_GATEWAY_URL=https://your-temporary-worker-gateway.com
+
+## GitHub MCP OAuth（公开客户端 ID；Client Secret 仅放 Worker Secret）
+GITHUB_MCP_OAUTH_CLIENT_ID=your-github-oauth-client-id
+## 固定回调：https://oauth.everytalk.cc/oauth/mcp/github
+## Cloudflare MCP 自动注册客户端，无需复用 Computer OAuth Client ID。

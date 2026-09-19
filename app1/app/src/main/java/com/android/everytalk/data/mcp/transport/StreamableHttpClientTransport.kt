@@ -55,6 +55,8 @@ class StreamableHttpClientTransport(
     private val client: HttpClient,
     private val url: String,
     private val requestBuilder: HttpRequestBuilder.() -> Unit = {},
+    // 每次请求重新取 token，长时间存活的 MCP session 也能使用续期后的凭据。
+    private val accessToken: suspend () -> String? = { null },
 ) : AbstractTransport() {
     var sessionId: String? = null
         private set
@@ -100,12 +102,14 @@ class StreamableHttpClientTransport(
         }
 
         val jsonBody = McpJson.encodeToString(message)
+        val bearer = accessToken()
         client.preparePost(url) {
             applyCommonHeaders(this)
             headers.append(HttpHeaders.Accept, "${ContentType.Application.Json}, ${ContentType.Text.EventStream}")
             contentType(ContentType.Application.Json)
             setBody(jsonBody)
             requestBuilder()
+            bearer?.let { headers.remove(HttpHeaders.Authorization); headers.append(HttpHeaders.Authorization, "Bearer $it") }
         }.execute { response ->
             response.headers[MCP_SESSION_ID_HEADER]?.let { sessionId = it }
 
@@ -129,7 +133,7 @@ class StreamableHttpClientTransport(
             if (!response.status.isSuccess()) {
                 val error = StreamableHttpError(
                     response.status.value,
-                    response.readErrorTextAtMost() ?: "(no body)",
+                    if (bearer != null) "HTTP ${response.status.value}" else response.readErrorTextAtMost() ?: "(no body)",
                 )
                 _onError(error)
                 throw error
@@ -191,12 +195,14 @@ class StreamableHttpClientTransport(
     suspend fun terminateSession() {
         if (sessionId == null) return
         Log.d(TAG, "Terminating MCP session")
+        val bearer = accessToken()
         client.prepareDelete(url) {
             applyCommonHeaders(this)
             requestBuilder()
+            bearer?.let { headers.remove(HttpHeaders.Authorization); headers.append(HttpHeaders.Authorization, "Bearer $it") }
         }.execute { response ->
             if (!response.status.isSuccess() && response.status != HttpStatusCode.MethodNotAllowed) {
-                val details = response.readErrorTextAtMost() ?: response.status.description
+                val details = if (bearer != null) "HTTP ${response.status.value}" else response.readErrorTextAtMost() ?: response.status.description
                 val error = StreamableHttpError(
                     response.status.value,
                     "Failed to terminate session: $details",
@@ -227,11 +233,13 @@ class StreamableHttpClientTransport(
         val started = CompletableDeferred<Unit>()
         sseJob = scope.launch(CoroutineName("StreamableHttpTransport.collect#${hashCode()}")) {
             try {
+                val bearer = accessToken()
                 client.prepareGet(url) {
                     applyCommonHeaders(this)
                     accept(ContentType.Text.EventStream)
                     (resumptionToken ?: lastEventId)?.let { headers.append(MCP_RESUMPTION_TOKEN_HEADER, it) }
                     requestBuilder()
+                    bearer?.let { headers.remove(HttpHeaders.Authorization); headers.append(HttpHeaders.Authorization, "Bearer $it") }
                 }.execute { response ->
                     val responseContentType = response.contentType()?.withoutParameters()
                     if (response.status == HttpStatusCode.MethodNotAllowed) {
@@ -247,7 +255,7 @@ class StreamableHttpClientTransport(
                     if (!response.status.isSuccess()) {
                         throw StreamableHttpError(
                             response.status.value,
-                            response.readErrorTextAtMost() ?: "(no body)",
+                            if (bearer != null) "HTTP ${response.status.value}" else response.readErrorTextAtMost() ?: "(no body)",
                         )
                     }
                     if (responseContentType != null && responseContentType != ContentType.Text.EventStream) {

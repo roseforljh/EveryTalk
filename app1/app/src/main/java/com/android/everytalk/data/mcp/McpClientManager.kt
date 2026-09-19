@@ -109,6 +109,7 @@ private fun classifyFailureType(error: Throwable): McpFailureType {
 
 class McpClientManager(
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
+    private val accessToken: suspend (McpServerConfig) -> String? = { null },
     private val connectClient: suspend (Client, AbstractTransport) -> Unit = { client, transport ->
         client.connect(transport)
     },
@@ -122,11 +123,12 @@ class McpClientManager(
         .connectTimeout(20, TimeUnit.SECONDS)
         .readTimeout(10, TimeUnit.MINUTES)
         .writeTimeout(120, TimeUnit.SECONDS)
-        .followSslRedirects(true)
-        .followRedirects(true)
+        .followSslRedirects(false)
+        .followRedirects(false)
         .build()
 
     private val httpClient = HttpClient(OkHttp) {
+        followRedirects = false
         engine {
             preconfigured = okHttpClient
         }
@@ -221,6 +223,7 @@ class McpClientManager(
             StreamableHttpClientTransport(
                 url = config.url,
                 client = httpClient,
+                accessToken = { accessToken(config) },
                 requestBuilder = {
                     headers.appendAll(StringValues.build {
                         config.commonOptions.headers.forEach {
@@ -325,7 +328,19 @@ class McpClientManager(
             connectClient(client, getTransport(config))
         }
 
-        val serverTools = client.listTools().tools
+        // SDK listTools 只返回一页；收齐分页再发布，避免 GitHub 工具被静默截断。
+        val serverTools = mutableListOf<io.modelcontextprotocol.kotlin.sdk.types.Tool>()
+        val seenCursors = mutableSetOf<String>()
+        var cursor: String? = null
+        do {
+            val page = client.listTools(io.modelcontextprotocol.kotlin.sdk.types.ListToolsRequest(
+                params = io.modelcontextprotocol.kotlin.sdk.types.PaginatedRequestParams(cursor = cursor),
+            ))
+            serverTools.addAll(page.tools)
+            cursor = page.nextCursor
+            check(cursor == null || seenCursors.add(cursor)) { "MCP 工具分页游标重复" }
+            check(seenCursors.size <= 1_000) { "MCP 工具分页超出限制" }
+        } while (cursor != null)
         Log.i(TAG, "syncTools: ${serverTools.size} tools from ${config.name}")
 
         val tools = serverTools.map { serverTool ->

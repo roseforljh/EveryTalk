@@ -58,6 +58,36 @@
         </activity-alias>
 
         <activity-alias
+            android:name=".McpOAuthCallback"
+            android:targetActivity="com.android.everytalk.statecontroller.MainActivity"
+            android:exported="true">
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="oauth.everytalk.cc" android:path="/oauth/mcp/github" />
+            </intent-filter>
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="oauth.everytalk.cc" android:path="/oauth/mcp/cloudflare" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="everytalk" android:host="oauth" android:path="/mcp/github" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="everytalk" android:host="oauth" android:path="/mcp/cloudflare" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
             android:name=".ShareReceiver"
             android:targetActivity="com.android.everytalk.statecontroller.MainActivity"
             android:enabled="true"
