@@ -1,0 +1,13 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "everytalk-oauth",
+  "main": "src/index.js",
+  "compatibility_date": "2026-09-19",
+  "workers_dev": false,
+  "routes": [
+    { "pattern": "oauth.everytalk.cc", "custom_domain": true }
+  ],
+  "vars": {
+    "GITHUB_MCP_OAUTH_CLIENT_ID": "your-github-oauth-client-id"
+  }
+}
