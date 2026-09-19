@@ -577,7 +577,7 @@ internal fun MessageSender.sendMessageInternal(
                     currentUserHasAttachments = attachmentsForApiClient.isNotEmpty(),
                 )
 
-                val dispatchCandidates = if (isMcpEnabledForRequest) {
+                val dispatchCandidates = if (!isImageGeneration) {
                     getMcpDispatchCandidates()
                 } else {
                     emptyList()
@@ -653,10 +653,11 @@ internal fun MessageSender.sendMessageInternal(
                     selectedExternalProvider = selectedExternalProvider,
                     selectedExternalProviderApiKey = selectedExternalProviderApiKey,
                 )
-                val preparedMcpDispatch = if (isMcpEnabledForRequest && dispatchCandidates.isNotEmpty()) {
+                val preparedMcpDispatch = if (dispatchCandidates.isNotEmpty()) {
                     prepareMcpDispatch(
                         messageText = originalText,
                         allCandidates = dispatchCandidates,
+                        enabled = isMcpEnabledForRequest,
                     )
                 } else {
                     PreparedMcpDispatch(
@@ -666,7 +667,7 @@ internal fun MessageSender.sendMessageInternal(
                 }
                 val mcpToolsForRequest = preparedMcpDispatch.tools
                 val shouldEnableGoogleSearch = isGeminiChannel && webSearchRouting.useNativeWebSearch
-                val mcpHasSearchTool = mcpToolsForRequest.any { classifyMcpTool(it).isSearchLike }
+                val mcpHasSearchTool = isMcpEnabledForRequest && mcpToolsForRequest.any { classifyMcpTool(it).isSearchLike }
                 val shouldInjectWebSearchTool = !shouldEnableGoogleSearch && !mcpHasSearchTool
                         && webSearchRouting.externalProvider != null
 
@@ -719,10 +720,6 @@ internal fun MessageSender.sendMessageInternal(
                         Log.d("MessageSender", "启用代码执行工具 (code_execution)")
                         toolsList.add(mapOf("code_execution" to emptyMap<String, Any>()))
                     }
-                    if (mcpToolsForRequest.isNotEmpty()) {
-                        Log.d("MessageSender", "注入 ${mcpToolsForRequest.size} 个 MCP 工具")
-                        toolsList.addAll(mcpToolsForRequest)
-                    }
                     if (shouldInjectWebSearchTool) {
                         Log.d("MessageSender", "注入内建 web_search 工具")
                         toolsList.add(builtInWebSearchToolDefinition())
@@ -755,8 +752,10 @@ internal fun MessageSender.sendMessageInternal(
                         tools = toolsWithAttachmentReader,
                         agentRequestEnabled = preparedComputerRequest == null,
                     )
+                    // 先校验自定义控制工具名称，再加入可信的 MCP 申请/执行接口。
+                    val toolsWithMcp = toolsWithAgentRequest + mcpToolsForRequest
                     val toolsWithLocalBash = appendLocalBashTool(
-                        tools = toolsWithAgentRequest,
+                        tools = toolsWithMcp,
                         // just-bash 属于 EveryTalk 的本地能力层。Cloudflare 部署经常需要
                         // 先在当前 Workspace 检查/整理文件，因此不能因已选择云端目标而隐藏。
                         enabled = (preparedComputerRequest == null || preparedComputerRequest.localOnly ||

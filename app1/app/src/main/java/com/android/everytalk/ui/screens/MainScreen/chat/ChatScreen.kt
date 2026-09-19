@@ -125,6 +125,7 @@ fun ChatScreen(
     val conversationId by viewModel.currentConversationId.collectAsState()
     val pendingHostCommand by viewModel.pendingComputerHostCommand.collectAsState()
     val pendingAgentEnableApproval by viewModel.pendingAgentEnableApproval.collectAsState()
+    val pendingMcpEnableApproval by viewModel.pendingMcpEnableApproval.collectAsState()
     val pendingSkillSecretApproval by viewModel.pendingSkillSecretApproval.collectAsState()
     val currentHostCommand = pendingHostCommand?.takeIf { request ->
         request.context.conversationId == conversationId
@@ -707,6 +708,7 @@ fun ChatScreen(
                 onHeightChange = { height -> inputAreaHeightPx = height },
                 hostCommandConfirmationRequest = currentHostCommand,
                 agentEnableApprovalRequest = pendingAgentEnableApproval,
+                mcpEnableApprovalRequest = pendingMcpEnableApproval,
                 skillSecretApprovalRequest = pendingSkillSecretApproval,
                 onOpenComputerSettings = { navController.navigate(Screen.COMPUTER_SCREEN) },
                 onHostCommandCardVisibilityChange = { isVisible ->

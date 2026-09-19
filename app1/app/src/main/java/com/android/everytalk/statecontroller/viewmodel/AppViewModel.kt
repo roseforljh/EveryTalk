@@ -63,6 +63,7 @@ import com.android.everytalk.statecontroller.viewmodel.ExportManager
 import com.android.everytalk.statecontroller.viewmodel.SettingsExportRequest
 import com.android.everytalk.statecontroller.facade.MessageItemsController
 import com.android.everytalk.statecontroller.mcp.dispatch.McpToolCategory
+import com.android.everytalk.statecontroller.mcp.dispatch.toToolDefinition
 import com.android.everytalk.statecontroller.controller.systemprompt.SystemPromptController
 import com.android.everytalk.statecontroller.controller.config.SettingsController
 import com.android.everytalk.statecontroller.controller.conversation.HistoryController
@@ -289,7 +290,34 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
                   },
                 computerSessionStateProvider = computerManager::computerSessionState,
                 prepareAgentResumeRequest = ::prepareAgentRequestedChatRequest,
+                prepareMcpResumeRequest = ::prepareMcpRequestedChatRequest,
         )
+    }
+
+    /** 仅在持久化批准后启用原会话，切换页面不会把权限误授给另一个会话。 */
+    private suspend fun prepareMcpRequestedChatRequest(conversationId: String, request: ChatRequest): ChatRequest {
+        val tools = mcpManager.getDispatchCandidates().map { it.toToolDefinition() }
+        check(tools.isNotEmpty()) { "没有已连接的 MCP 工具，请检查 MCP 服务连接后重试" }
+        val requestMcpName = com.android.everytalk.data.agent.AgentControlToolNames.REQUEST_MCP
+        val resumed = request.copy(
+            tools = request.tools.orEmpty()
+                .filterNot { tool ->
+                    val function = tool["function"] as? Map<*, *>
+                    function?.get("name")?.toString()?.equals(requestMcpName, ignoreCase = true) == true
+                }
+                .plus(tools),
+        )
+        withContext(Dispatchers.Main.immediate) {
+            stateHolder.conversationFunctionToggleStates.update { states ->
+                val current = states[conversationId] ?: ConversationFunctionToggleState()
+                states + (conversationId to current.copy(mcpEnabled = true))
+            }
+            if (stateHolder._currentConversationId.value == conversationId) {
+                stateHolder._isMcpEnabledForNextRequest.value = true
+            }
+        }
+        persistenceManager.saveConversationFunctionToggleStates(stateHolder.conversationFunctionToggleStates.value)
+        return resumed
     }
 
     /** request_agent 获批后，为原 Run 补齐服务器快照、环境说明和 Agent 工具。 */
@@ -633,6 +661,20 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         stateHolder._currentConversationId,
     ) { approvals, conversationId -> approvals.firstOrNull { it.conversationId == conversationId } }
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    val pendingMcpEnableApproval = kotlinx.coroutines.flow.combine(
+        apiHandler.pendingMcpEnableApprovals,
+        stateHolder._currentConversationId,
+    ) { approvals, conversationId -> approvals.firstOrNull { it.conversationId == conversationId } }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    fun respondToMcpEnableApproval(runId: String, approvalRequestId: String, approved: Boolean) {
+        apiHandler.respondToAgentApproval(
+            runId, approvalRequestId,
+            if (approved) com.android.everytalk.data.agent.AgentApprovalDecision.APPROVED
+            else com.android.everytalk.data.agent.AgentApprovalDecision.REJECTED,
+        )
+    }
+
     val pendingSkillSecretApproval = kotlinx.coroutines.flow.combine(
         apiHandler.pendingSkillSecretApprovals,
         stateHolder._currentConversationId,

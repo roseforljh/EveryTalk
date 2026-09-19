@@ -126,6 +126,7 @@ import com.android.everytalk.data.database.entities.SkillInstallationEntity
 import com.android.everytalk.data.skill.effectivePackageName
 import com.android.everytalk.data.agent.PendingAgentEnableApproval
 import com.android.everytalk.data.agent.PendingSkillSecretApproval
+import com.android.everytalk.data.agent.PendingMcpEnableApproval
 import com.android.everytalk.data.agent.PendingIntervention
 import com.android.everytalk.statecontroller.reauthorizeCloudflareComputer
 import com.android.everytalk.BuildConfig
@@ -182,6 +183,7 @@ fun ChatInputArea(
     hostCommandConfirmationRequest: ComputerHostCommandConfirmationRequest? = null,
     agentEnableApprovalRequest: PendingAgentEnableApproval? = null,
     skillSecretApprovalRequest: PendingSkillSecretApproval? = null,
+    mcpEnableApprovalRequest: PendingMcpEnableApproval? = null,
     onOpenComputerSettings: () -> Unit = {},
     onHostCommandCardVisibilityChange: (Boolean) -> Unit = {},
     // MCP 相关参数
@@ -1585,6 +1587,7 @@ fun ChatInputArea(
         onAddMcpServer = onAddMcpServer,
         onRemoveMcpServer = onRemoveMcpServer,
         onToggleMcpServer = onToggleMcpServer,
+        mcpEnableApprovalRequest = mcpEnableApprovalRequest,
         tempCameraImageUri = tempCameraImageUri,
         context = context,
     )

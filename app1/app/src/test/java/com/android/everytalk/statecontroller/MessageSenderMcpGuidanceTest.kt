@@ -52,6 +52,26 @@ class MessageSenderMcpGuidanceTest {
     }
 
     @Test
+    fun `disabled mcp exposes an approval tool and capability catalog instead of external tools`() {
+        val tools = prepareMcpDispatch(
+            messageText = "帮我创建一个客户工单",
+            allCandidates = listOf(
+                com.android.everytalk.statecontroller.mcp.dispatch.toMcpToolCandidate(
+                    serverName = "InternalService",
+                    tool = com.android.everytalk.data.mcp.McpTool("create_ticket", "Create customer ticket"),
+                ),
+            ),
+            enabled = false,
+        ).tools
+
+        assertEquals(
+            listOf(com.android.everytalk.data.agent.AgentControlToolNames.REQUEST_MCP),
+            tools.map { ((it["function"] as Map<*, *>)["name"] as String) },
+        )
+        assertTrue((tools.single()["function"] as Map<*, *>)["description"].toString().contains("create_ticket"))
+    }
+
+    @Test
     fun `built in time tool definition uses expected tool name`() {
         val tool = builtInCurrentTimeToolDefinition()
         val function = tool["function"] as Map<*, *>

@@ -22,6 +22,7 @@ import com.android.everytalk.data.agent.AgentApprovalDecision
 import com.android.everytalk.data.agent.AgentApprovalRecord
 import com.android.everytalk.data.agent.AgentPauseRequest
 import com.android.everytalk.data.agent.PendingAgentEnableApproval
+import com.android.everytalk.data.agent.PendingMcpEnableApproval
 import com.android.everytalk.data.agent.PendingSkillSecretApproval
 import com.android.everytalk.data.agent.AgentRunStatus
 import com.android.everytalk.data.computer.PendingComputerToolApproval
@@ -302,6 +303,7 @@ class ApiHandler(
     },
     private val computerSessionStateProvider: suspend (ComputerRequestContext?) -> String? = { null },
     private val prepareAgentResumeRequest: suspend (String, ChatRequest, List<String>) -> ChatRequest = { _, request, _ -> request },
+    private val prepareMcpResumeRequest: suspend (String, ChatRequest) -> ChatRequest = { _, _ -> error("MCP 开启入口不可用") },
 ) {
     private val context = context.applicationContext
     private val logger = AppLogger.forComponent("ApiHandler")
@@ -329,6 +331,8 @@ class ApiHandler(
     val pendingAgentApprovals: StateFlow<List<PendingComputerToolApproval>> = _pendingAgentApprovals.asStateFlow()
     private val _pendingAgentEnableApprovals = MutableStateFlow<List<PendingAgentEnableApproval>>(emptyList())
     val pendingAgentEnableApprovals: StateFlow<List<PendingAgentEnableApproval>> = _pendingAgentEnableApprovals.asStateFlow()
+    private val _pendingMcpEnableApprovals = MutableStateFlow<List<PendingMcpEnableApproval>>(emptyList())
+    val pendingMcpEnableApprovals = _pendingMcpEnableApprovals.asStateFlow()
     private val _pendingSkillSecretApprovals = MutableStateFlow<List<PendingSkillSecretApproval>>(emptyList())
     val pendingSkillSecretApprovals: StateFlow<List<PendingSkillSecretApproval>> = _pendingSkillSecretApprovals.asStateFlow()
     private val skillSecretStore by lazy { com.android.everytalk.data.skill.SkillSecretStore(context) }
@@ -555,6 +559,7 @@ class ApiHandler(
         val previouslyVisibleRunIds = buildSet {
             _pendingAgentApprovals.value.mapTo(this) { it.runId }
             _pendingAgentEnableApprovals.value.mapTo(this) { it.runId }
+            _pendingMcpEnableApprovals.value.mapTo(this) { it.runId }
             _pendingSkillSecretApprovals.value.mapTo(this) { it.runId }
         }
         val waitingRuns = agentRunStore.getWaitingApprovalRuns()
@@ -594,6 +599,11 @@ class ApiHandler(
                     reason = request.reason,
                     requiredSkillIds = request.requiredSkillIds,
                 )
+            }
+        }
+        _pendingMcpEnableApprovals.value = pending.mapNotNull { (run, record) ->
+            (record.agentRequest as? AgentPauseRequest.EnableMcp)?.let { request ->
+                PendingMcpEnableApproval(run.id, record.approvalRequestId, run.sessionId, request.reason)
             }
         }
         _pendingSkillSecretApprovals.value = pending.mapNotNull { (run, record) ->
@@ -681,6 +691,9 @@ class ApiHandler(
                     it.runId == runId && it.approvalRequestId == approvalRequestId
                 }
                 _pendingAgentEnableApprovals.value = _pendingAgentEnableApprovals.value.filterNot {
+                    it.runId == runId && it.approvalRequestId == approvalRequestId
+                }
+                _pendingMcpEnableApprovals.value = _pendingMcpEnableApprovals.value.filterNot {
                     it.runId == runId && it.approvalRequestId == approvalRequestId
                 }
                 _pendingSkillSecretApprovals.value = _pendingSkillSecretApprovals.value.filterNot {
@@ -820,6 +833,18 @@ class ApiHandler(
             }
             run = agentRunStore.updateRequestSnapshot(run, request)
         }
+        if (record?.decision == AgentApprovalDecision.APPROVED && record.agentRequest is AgentPauseRequest.EnableMcp) {
+            // 与 Agent 开启共用持久化暂停点。更新原请求后再续写，不重新发送用户消息。
+            request = try {
+                prepareMcpResumeRequest(run.sessionId, request)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (error: Exception) {
+                markApprovalDecisionFailure(run, error.message ?: "MCP 开启失败")
+                return false
+            }
+            run = agentRunStore.updateRequestSnapshot(run, request)
+        }
         val limits = resolvedModelTokenLimits(
             maxOutputTokens = request.generationConfig?.maxOutputTokens,
             maxContextTokens = request.contextManagement?.maxContextTokens
@@ -895,6 +920,7 @@ class ApiHandler(
         agentRunStore.updateRunStatus(run, com.android.everytalk.data.agent.AgentRunStatus.FAILED, terminalReason = reason)
         _pendingAgentApprovals.value = _pendingAgentApprovals.value.filterNot { it.runId == run.id }
         _pendingAgentEnableApprovals.value = _pendingAgentEnableApprovals.value.filterNot { it.runId == run.id }
+        _pendingMcpEnableApprovals.value = _pendingMcpEnableApprovals.value.filterNot { it.runId == run.id }
         _pendingSkillSecretApprovals.value = _pendingSkillSecretApprovals.value.filterNot { it.runId == run.id }
         withContext(Dispatchers.Main.immediate) {
             updatePreparedMessageStatus(stateHolder.messages, run.visibleAssistantMessageId, reason)

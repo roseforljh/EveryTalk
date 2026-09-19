@@ -31,6 +31,19 @@ class AgentControlToolsTest {
     }
 
     @Test
+    fun `request_mcp 解析为开启 MCP 申请`() {
+        val request = agentPauseRequest(
+            AgentContentBlock.ToolCall(
+                id = "call-mcp",
+                name = AgentControlToolNames.REQUEST_MCP,
+                arguments = buildJsonObject { put("reason", "需要查询客户工单") },
+            ),
+        ) as AgentPauseRequest.EnableMcp
+
+        assertEquals("需要查询客户工单", request.reason)
+    }
+
+    @Test
     fun `request_skill_secret 只能申请当前快照中的 Skill`() {
         val call = AgentContentBlock.ToolCall(
             id = "call-secret",

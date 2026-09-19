@@ -92,6 +92,7 @@ import com.android.everytalk.data.mcp.McpServerState
 import com.android.everytalk.data.mcp.McpServerConfig
 import com.android.everytalk.data.computer.Computer
 import com.android.everytalk.data.computer.ComputerDisclosureKind
+import com.android.everytalk.data.agent.PendingMcpEnableApproval
 import com.android.everytalk.ui.components.dialog.AppDialogButtonShape
 import com.android.everytalk.ui.components.dialog.AppDialogShape
 import com.android.everytalk.ui.components.dialog.appDialogBorderColor
@@ -114,6 +115,7 @@ internal fun ChatInputDialogs(
     onAddMcpServer: (McpServerConfig) -> Unit,
     onRemoveMcpServer: (String) -> Unit,
     onToggleMcpServer: (String, Boolean) -> Unit,
+    mcpEnableApprovalRequest: PendingMcpEnableApproval? = null,
     tempCameraImageUri: Uri?,
     context: Context,
 ) {
@@ -126,6 +128,40 @@ internal fun ChatInputDialogs(
             onRemoveServer = onRemoveMcpServer,
             onToggleServer = onToggleMcpServer,
             onDismiss = { onShowMcpServerListDialogChange(false) }
+        )
+    }
+
+    mcpEnableApprovalRequest?.let { request ->
+        val dialogBg = appDialogContainerColor()
+        val dialogContent = appDialogContentColor()
+        AlertDialog(
+            onDismissRequest = {},
+            modifier = Modifier.border(1.dp, appDialogBorderColor(), AppDialogShape),
+            shape = AppDialogShape,
+            containerColor = dialogBg,
+            titleContentColor = dialogContent,
+            textContentColor = dialogContent,
+            title = { Text("开启 MCP？") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("AI 发现当前任务可能需要已配置的 MCP 工具。")
+                    Text(request.reason, color = dialogContent.copy(alpha = 0.72f))
+                }
+            },
+            confirmButton = {
+                Button(
+                    onClick = { viewModel.respondToMcpEnableApproval(request.runId, request.approvalRequestId, true) },
+                    shape = AppDialogButtonShape,
+                    colors = ButtonDefaults.buttonColors(containerColor = dialogContent, contentColor = dialogBg),
+                ) { Text("允许") }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = { viewModel.respondToMcpEnableApproval(request.runId, request.approvalRequestId, false) },
+                    shape = AppDialogButtonShape,
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = dialogContent),
+                ) { Text("拒绝") }
+            },
         )
     }
 

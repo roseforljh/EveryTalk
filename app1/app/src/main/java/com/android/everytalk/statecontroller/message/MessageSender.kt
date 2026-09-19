@@ -210,9 +210,17 @@ data class PreparedMcpDispatch(
 internal fun prepareMcpDispatch(
     messageText: String,
     allCandidates: List<McpToolCandidate>,
+    enabled: Boolean = true,
 ): PreparedMcpDispatch {
     val intent = classifyMcpIntent(messageText)
-    val tools = selectMcpCandidates(intent, allCandidates).map { it.toToolDefinition() }
+    val candidates = selectMcpCandidates(intent, allCandidates)
+    // 感知与执行权限分离：关闭时只提供带能力目录的申请工具，不提供外部工具的执行接口。
+    val tools = if (enabled) candidates.map { it.toToolDefinition() }
+    else if (candidates.isNotEmpty()) listOf(
+        com.android.everytalk.data.agent.mcpRequestToolDefinition(
+            candidates.joinToString("\n") { "- ${it.toolName}: ${it.description.take(300)}" },
+        ),
+    ) else emptyList()
     return PreparedMcpDispatch(
         intent = intent,
         tools = tools,

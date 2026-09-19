@@ -1427,7 +1427,9 @@ class AgentLoop(
                     currentStep = "等待确认工具 ${call.name}",
                     resumeInstruction = "确认后继续执行工具 ${call.name} 及其后续调用",
                 )
-                emit(AppStreamEvent.ExecutionStatusUpdate("等待你确认开启 Agent"))
+                emit(AppStreamEvent.ExecutionStatusUpdate(
+                    if (agentRequest is AgentPauseRequest.EnableMcp) "等待你确认开启 MCP" else "等待你确认开启 Agent",
+                ))
                 emit(AppStreamEvent.AgentApprovalRequired(run.id, record.approvalRequestId))
                 return ToolBatchOutcome(currentTranscript, paused = true)
             }
@@ -1654,6 +1656,18 @@ class AgentLoop(
                     toolName = record.toolCall.name,
                     content = kotlinx.serialization.json.JsonPrimitive(message),
                     isError = true,
+                ),
+            )
+        }
+        if (record.agentRequest is AgentPauseRequest.EnableMcp) {
+            return ResumedToolOutcome(
+                AgentContentBlock.ToolResult(
+                    toolCallId = record.toolCall.id,
+                    toolName = record.toolCall.name,
+                    content = kotlinx.serialization.json.buildJsonObject {
+                        put("enabled", kotlinx.serialization.json.JsonPrimitive(true))
+                        put("message", kotlinx.serialization.json.JsonPrimitive("用户已允许开启 MCP，请使用本轮提供的 MCP 工具继续任务"))
+                    },
                 ),
             )
         }

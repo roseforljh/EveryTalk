@@ -214,6 +214,12 @@ sealed class AgentPauseRequest {
     ) : AgentPauseRequest()
 
     @Serializable
+    @SerialName("enable_mcp")
+    data class EnableMcp(
+        val reason: String,
+    ) : AgentPauseRequest()
+
+    @Serializable
     @SerialName("skill_secret")
     data class SkillSecret(
         val skillId: String,
@@ -258,6 +264,13 @@ data class PendingAgentEnableApproval(
     val conversationId: String,
     val reason: String,
     val requiredSkillIds: List<String>,
+)
+
+data class PendingMcpEnableApproval(
+    val runId: String,
+    val approvalRequestId: String,
+    val conversationId: String,
+    val reason: String,
 )
 
 data class PendingSkillSecretApproval(
