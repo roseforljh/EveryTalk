@@ -281,7 +281,7 @@ private fun getServerIcon(name: String): Int {
     val lowerName = name.lowercase()
     return when {
         lowerName.contains("cloudflare") -> R.drawable.ic_cloudflare
-        lowerName.contains("github") -> R.drawable.ic_gpt_code
+        lowerName.contains("github") -> R.drawable.ic_github
         lowerName.contains("context7") -> R.drawable.ic_gpt_sparkle
         lowerName.contains("exa") -> R.drawable.ic_search
         lowerName.contains("firecrawl") || lowerName.contains("crawl") -> R.drawable.ic_globe

@@ -16,6 +16,7 @@ enum class ExternalWebSearchProvider(
     val baseUrl: String,
     val apiKeyPlaceholder: String,
     val accentColorHex: Long,
+    val iconRes: Int = 0,
 ) {
     TAVILY(
         providerId = "tavily",
@@ -24,6 +25,7 @@ enum class ExternalWebSearchProvider(
         baseUrl = "https://api.tavily.com/search",
         apiKeyPlaceholder = "tvly-xxxxxxxx",
         accentColorHex = 0xFF14B8A6,
+        iconRes = com.android.everytalk.R.drawable.ic_tavily,
     ),
     EXA(
         providerId = "exa",
@@ -32,6 +34,7 @@ enum class ExternalWebSearchProvider(
         baseUrl = "https://api.exa.ai/search",
         apiKeyPlaceholder = "exa_xxxxxxxxxxxx",
         accentColorHex = 0xFF6366F1,
+        iconRes = com.android.everytalk.R.drawable.ic_exa,
     ),
     BOCHA(
         providerId = "bocha",
@@ -40,6 +43,7 @@ enum class ExternalWebSearchProvider(
         baseUrl = "https://api.bochaai.com/v1/web-search",
         apiKeyPlaceholder = "bocha-xxxxxxxx",
         accentColorHex = 0xFFF97316,
+        iconRes = com.android.everytalk.R.drawable.ic_bocha,
     ),
     SERPAPI(
         providerId = "serpapi",
@@ -48,6 +52,7 @@ enum class ExternalWebSearchProvider(
         baseUrl = "https://serpapi.com/search.json",
         apiKeyPlaceholder = "serpapi_xxxxxxxxxxxx",
         accentColorHex = 0xFFEF4444,
+        iconRes = com.android.everytalk.R.drawable.ic_serpapi,
     );
 
     val accentColor: Color

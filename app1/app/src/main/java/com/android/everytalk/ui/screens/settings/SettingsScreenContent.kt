@@ -280,87 +280,86 @@ private fun ExternalWebSearchProviderCards(
     onSelectProvider: (ExternalWebSearchProvider) -> Unit,
     onEditProvider: (ExternalWebSearchProvider) -> Unit,
 ) {
-    val infiniteTransition = rememberInfiniteTransition(label = "breath")
-    val breatheAlpha by infiniteTransition.animateFloat(
-        initialValue = 0.4f,
-        targetValue = 1f,
-        animationSpec = infiniteRepeatable(animation = tween(1200), repeatMode = RepeatMode.Reverse),
-        label = "breatheAlpha",
-    )
+    val isDark = isSystemInDarkTheme()
     ExternalWebSearchProvider.entries.forEach { provider ->
         val config = configs[provider.providerId]
         val isSelected = selectedProviderId == provider.providerId
         val isConfigured = !config?.apiKey.isNullOrBlank()
-        val backgroundColor = provider.accentColor.copy(alpha = if (isSelected) 0.14f else 0.08f)
+        val containerColor = if (isDark) Color(0xFF141414) else Color.White
         val borderColor = if (isSelected) {
-            provider.accentColor.copy(alpha = 0.8f)
+            provider.accentColor.copy(alpha = 0.6f)
         } else {
-            Color.White.copy(alpha = 0.15f)
+            if (isDark) Color(0xFF2E2E2E) else Color(0xFFEDEDED)
         }
 
-        Surface(
+        OutlinedCard(
             onClick = { onEditProvider(provider) },
+            modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(20.dp),
-            color = backgroundColor,
-            border = androidx.compose.foundation.BorderStroke(1.2.dp, borderColor),
-            tonalElevation = if (isSelected) 2.dp else 0.dp,
+            colors = CardDefaults.outlinedCardColors(containerColor = containerColor),
+            elevation = CardDefaults.outlinedCardElevation(defaultElevation = 0.dp),
+            border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
         ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 22.dp),
+                    .padding(horizontal = 16.dp, vertical = 14.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Column(
-                    modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                Surface(
+                    modifier = Modifier.size(44.dp),
+                    shape = RoundedCornerShape(14.dp),
+                    color = provider.accentColor.copy(alpha = 0.1f),
                 ) {
-                    Box(contentAlignment = Alignment.TopEnd) {
-                        Text(
-                            text = provider.displayName,
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.Bold,
-                            color = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.padding(end = if (isConfigured) 8.dp else 0.dp)
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            painter = painterResource(provider.iconRes),
+                            contentDescription = null,
+                            modifier = Modifier.size(22.dp),
+                            tint = provider.accentColor
                         )
-                        if (isConfigured) {
-                            Box(
-                                modifier = Modifier
-                                    .size(6.dp)
-                                    .alpha(breatheAlpha)
-                                    .background(Color(0xFF4CAF50), CircleShape)
-                            )
-                        }
                     }
+                }
 
+                Spacer(modifier = Modifier.width(14.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = provider.displayName,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = stringResource(provider.descriptionRes),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                        maxLines = 2,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
 
-                Spacer(modifier = Modifier.width(16.dp))
+                Spacer(modifier = Modifier.width(8.dp))
 
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(RoundedCornerShape(20.dp))
-                        .clickable(
-                            interactionSource = remember { MutableInteractionSource() },
-                            indication = null
-                        ) { onSelectProvider(provider) },
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        painter = if (isSelected) painterResource(R.drawable.ic_check_circle) else painterResource(R.drawable.ic_circle_empty),
-                        contentDescription = stringResource(R.string.settings_select_provider, provider.displayName),
-                        tint = if (isSelected) provider.accentColor else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-                        modifier = Modifier.size(24.dp)
+                Switch(
+                    checked = isSelected && isConfigured,
+                    onCheckedChange = { enabled ->
+                        if (enabled) onSelectProvider(provider)
+                    },
+                    enabled = isConfigured,
+                    modifier = Modifier.scale(0.8f),
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = provider.accentColor,
+                        checkedBorderColor = Color.Transparent,
+                        uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        uncheckedTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                        uncheckedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.7f)
                     )
-                }
+                )
             }
         }
     }
