@@ -24,8 +24,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.animation.togetherWith
 import androidx.compose.animation.AnimatedContent
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.graphicsLayer
@@ -36,7 +34,6 @@ import com.android.everytalk.data.DataClass.ModalityType
 import com.android.everytalk.statecontroller.AppViewModel
 import com.android.everytalk.statecontroller.SimpleModeManager
 import com.android.everytalk.statecontroller.controller.config.modelsForPendingConfigGroup
-import com.android.everytalk.ui.screens.mcp.McpServerListContent
 import com.android.everytalk.ui.screens.settings.EditExternalWebSearchProviderDialog
 import com.android.everytalk.data.network.ExternalWebSearchProvider
 import com.android.everytalk.ui.screens.settings.dialogs.AutoFetchModelsConfirmDialog
@@ -105,6 +102,20 @@ fun SettingsScreen(
     val showModelSelection by viewModel.showModelSelectionDialog.collectAsState()
     
     val mcpServerStates by viewModel.mcpServerStates.collectAsState()
+    val mcpOAuthBusy by viewModel.mcpManager.oauthBusy.collectAsState()
+    val mcpOAuthMessage by viewModel.mcpManager.oauthMessage.collectAsState()
+    mcpOAuthMessage?.let { message ->
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = viewModel.mcpManager::dismissOAuthMessage,
+            text = { Text(message) },
+            confirmButton = {
+                TextButton(onClick = viewModel.mcpManager::dismissOAuthMessage) {
+                    Text(stringResource(R.string.action_done))
+                }
+            },
+        )
+    }
+
     val allMcpConfigs by viewModel.allMcpConfigs.collectAsState()
     val externalWebSearchConfigs by viewModel.externalWebSearchConfigs.collectAsState()
     val selectedExternalWebSearchProviderId by viewModel.selectedExternalWebSearchProviderId.collectAsState()
@@ -179,10 +190,9 @@ fun SettingsScreen(
     val iconButtonSize = 44.dp
     val topButtonSize = iconButtonSize + 2.dp
 
-    // Tab 状态：0=平台配置, 1=联网搜索, 2=MCP
+    // Tab 状态：0=平台配置，1=MCP（含联网搜索配置）。
     val tabs = listOf(
         stringResource(R.string.settings_tab_platforms),
-        stringResource(R.string.settings_tab_web_search),
         stringResource(R.string.settings_tab_mcp),
     )
     // 保存设置页当前页签，避免从其他设置入口返回时默认跳回配置页。
@@ -202,9 +212,28 @@ fun SettingsScreen(
         .getStateFlow(Screen.SETTINGS_TAB_REQUEST_KEY, -1)
         .collectAsState()
     LaunchedEffect(requestedTabIndex) {
-        if (requestedTabIndex in tabs.indices) {
-            currentTabIndex = requestedTabIndex
+        // 应用升级后恢复的旧 MCP 索引也必须落到合并页，不能显示空白页面。
+        if (currentTabIndex == 2) currentTabIndex = 1
+        // 兼容旧页面传入的 2（原 MCP 页签），统一落到合并后的工具页。
+        val targetTabIndex = when (requestedTabIndex) {
+            0 -> 0
+            1, 2 -> 1
+            else -> -1
+        }
+        if (targetTabIndex in tabs.indices) {
+            currentTabIndex = targetTabIndex
             settingsBackStackEntry.savedStateHandle[Screen.SETTINGS_TAB_REQUEST_KEY] = -1
+        }
+    }
+    val displayedMcpServerStates = remember(allMcpConfigs, mcpServerStates) {
+        allMcpConfigs.mapValues { (id, persistedState) ->
+            val runtimeState = mcpServerStates[id]
+            if (persistedState.config.enabled) {
+                runtimeState ?: persistedState
+            } else {
+                // 关闭操作已经写入数据库时立即显示关闭，避免旧连接态覆盖开关。
+                persistedState.copy(tools = runtimeState?.tools.orEmpty())
+            }
         }
     }
     val topContentPadding = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + topButtonSize + 24.dp
@@ -310,47 +339,21 @@ fun SettingsScreen(
                                 )
                             }
                             1 -> {
-                                ExternalWebSearchSettingsContent(
+                                McpSettingsContent(
                                     selectedProviderId = selectedExternalWebSearchProviderId,
-                                    configs = externalWebSearchConfigs,
-                                    onSelectProvider = { viewModel.selectExternalWebSearchProvider(it) },
-                                    onEditProvider = { editingExternalProvider = it },
+                                    webSearchConfigs = externalWebSearchConfigs,
+                                    onSelectWebSearchProvider = { viewModel.selectExternalWebSearchProvider(it) },
+                                    onEditWebSearchProvider = { editingExternalProvider = it },
+                                    mcpServerStates = displayedMcpServerStates,
+                                    onLoginMcp = viewModel.mcpManager::login,
+                                    oauthBusy = mcpOAuthBusy,
+                                    onAddMcpServer = { viewModel.addMcpServer(it) },
+                                    onUpdateMcpServer = { viewModel.updateMcpServer(it) },
+                                    onRemoveMcpServer = { viewModel.removeMcpServer(it) },
+                                    onToggleMcpServer = { id, enabled -> viewModel.toggleMcpServer(id, enabled) },
                                     topContentPadding = topContentPadding,
                                     bottomContentPadding = bottomContentPadding,
                                 )
-                            }
-                            2 -> {
-                                Column(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .padding(horizontal = 20.dp)
-                                        .padding(bottom = bottomContentPadding)
-                                ) {
-                                    Spacer(Modifier.height(topContentPadding))
-                                    McpServerListContent(
-                                        serverStates = allMcpConfigs.mapValues { (id, persistedState) ->
-                                            val runtimeState = mcpServerStates[id]
-                                            if (persistedState.config.enabled) {
-                                                runtimeState ?: persistedState
-                                            } else {
-                                                // 关闭操作已经写入数据库时立即显示关闭，避免旧连接态覆盖开关。
-                                                persistedState.copy(tools = runtimeState?.tools.orEmpty())
-                                            }
-                                        },
-                                        onAddServer = { config -> 
-                                            viewModel.addMcpServer(config) 
-                                        },
-                                        onUpdateServer = { config ->
-                                            viewModel.updateMcpServer(config)
-                                        },
-                                        onRemoveServer = { id -> 
-                                            viewModel.removeMcpServer(id) 
-                                        },
-                                        onToggleServer = { id, enabled -> 
-                                            viewModel.toggleMcpServer(id, enabled) 
-                                        }
-                                    )
-                                }
                             }
                         }
                     }
@@ -402,16 +405,10 @@ fun SettingsScreen(
 
                     // 右侧按钮
                     if (!isInImageMode) {
-                        val showAddButton = currentTabIndex != 1
-                        val rightButtonWidth by animateDpAsState(
-                            targetValue = if (showAddButton) topButtonSize * 2 else topButtonSize,
-                            animationSpec = tween(durationMillis = 180),
-                            label = "settingsRightButtonWidth"
-                        )
                         Box {
                             Row(
                                 modifier = Modifier
-                                    .width(rightButtonWidth)
+                                    .width(topButtonSize * 2)
                                     .height(topButtonSize)
                                     .shadow(3.dp, RoundedCornerShape(percent = 50), clip = false)
                                     .clip(RoundedCornerShape(percent = 50))
@@ -419,30 +416,28 @@ fun SettingsScreen(
                                 verticalAlignment = Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.End
                             ) {
-                                if (showAddButton) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(topButtonSize)
-                                            .clip(CircleShape)
-                                            .clickable {
-                                                if (currentTabIndex == 0) {
-                                                    newFullConfigProvider = ""
-                                                    newFullConfigKey = ""
-                                                    newFullConfigAddress = ""
-                                                    showAddFullConfigDialog = true
-                                                } else if (currentTabIndex == 2) {
-                                                    showMcpAddDialog = true
-                                                }
-                                            },
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(
-                                            painter = painterResource(R.drawable.ic_plus),
-                                            contentDescription = stringResource(R.string.action_add),
-                                            tint = contentColor,
-                                            modifier = Modifier.size(20.dp)
-                                        )
-                                    }
+                                Box(
+                                    modifier = Modifier
+                                        .size(topButtonSize)
+                                        .clip(CircleShape)
+                                        .clickable {
+                                            if (currentTabIndex == 0) {
+                                                newFullConfigProvider = ""
+                                                newFullConfigKey = ""
+                                                newFullConfigAddress = ""
+                                                showAddFullConfigDialog = true
+                                            } else if (currentTabIndex == 1) {
+                                                showMcpAddDialog = true
+                                            }
+                                        },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Icon(
+                                        painter = painterResource(R.drawable.ic_plus),
+                                        contentDescription = stringResource(R.string.action_add),
+                                        tint = contentColor,
+                                        modifier = Modifier.size(20.dp)
+                                    )
                                 }
                                 Box(
                                     modifier = Modifier
@@ -811,7 +806,7 @@ internal fun SettingsTabMenu(
         Column(
             modifier = Modifier.padding(vertical = 6.dp)
         ) {
-            // 菜单顺序与设置页页签一致，服务器入口固定紧跟第三项 MCP。
+            // 菜单顺序与设置页页签一致，服务器入口固定紧跟 MCP。
             tabs.forEachIndexed { index, title ->
                 val isSelected = index == currentTabIndex
                 Box(

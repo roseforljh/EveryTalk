@@ -56,12 +56,21 @@ fun McpServerListContent(
     onUpdateServer: (McpServerConfig) -> Unit,
     onRemoveServer: (String) -> Unit,
     onToggleServer: (String, Boolean) -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    contentPadding: PaddingValues = PaddingValues(top = 8.dp, bottom = 8.dp),
+    // 合并设置页把搜索配置作为列表头，所有内容共用一个滚动区域；聊天弹窗不传此项。
+    header: (@Composable () -> Unit)? = null,
+    onLogin: ((McpOAuthProvider) -> Unit)? = null,
+    // 为 true 时把 GitHub/Cloudflare 这类内置 OAuth 服务渲染成未登录占位卡片；
+    // 打开开关即发起登录，登录成功后落库变成普通服务器卡片。
+    showOAuthPlaceholders: Boolean = false,
+    oauthBusy: Boolean = false,
 ) {
     var showAddDialog by remember { mutableStateOf(false) }
     var serverToEdit by remember { mutableStateOf<McpServerConfig?>(null) }
     var serverToDeleteId by remember { mutableStateOf<String?>(null) }
     var serverForToolsDialog by remember { mutableStateOf<McpServerState?>(null) }
+    var serverForManageDialog by remember { mutableStateOf<McpServerState?>(null) }
 
     if (serverToDeleteId != null) {
         val server = serverStates[serverToDeleteId]
@@ -101,62 +110,78 @@ fun McpServerListContent(
         }
     }
 
-    Column(modifier = modifier.fillMaxSize()) {
-        if (serverStates.isEmpty()) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(16.dp)
+    LazyColumn(
+        modifier = modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+        contentPadding = contentPadding,
+    ) {
+        if (header != null) {
+            item(key = "settings-header", contentType = "header") { header() }
+        }
+        // 设置页已有内置服务卡片，仅独立 MCP 弹窗需要显示空连接提示。
+        if (serverStates.isEmpty() && header == null && !showOAuthPlaceholders) {
+            item(key = "empty", contentType = "empty") {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .then(if (header == null) Modifier.fillParentMaxHeight() else Modifier)
+                        .padding(vertical = 24.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    Surface(
-                        shape = CircleShape,
-                        color = MaterialTheme.colorScheme.surfaceContainerHighest,
-                        modifier = Modifier.size(80.dp)
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                painterResource(R.drawable.ic_gpt_connectors),
-                                contentDescription = null,
-                                modifier = Modifier.size(40.dp),
-                                tint = MaterialTheme.colorScheme.secondary
+                        Surface(
+                            shape = CircleShape,
+                            color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                            modifier = Modifier.size(80.dp)
+                        ) {
+                            Box(contentAlignment = Alignment.Center) {
+                                Icon(
+                                    painterResource(R.drawable.ic_gpt_connectors),
+                                    contentDescription = null,
+                                    modifier = Modifier.size(40.dp),
+                                    tint = MaterialTheme.colorScheme.secondary
+                                )
+                            }
+                        }
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                stringResource(R.string.mcp_no_connections),
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.SemiBold
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                stringResource(R.string.mcp_no_connections_description),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
                         }
-                    }
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            stringResource(R.string.mcp_no_connections),
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold
-                        )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            stringResource(R.string.mcp_no_connections_description),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
                     }
                 }
             }
         } else {
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f),
-                verticalArrangement = Arrangement.spacedBy(16.dp),
-                contentPadding = PaddingValues(top = 8.dp, bottom = 8.dp)
-            ) {
-                items(serverStates.values.toList(), key = { it.config.id }) { state ->
-                    McpServerItem(
-                        serverState = state,
-                        onClick = { serverToEdit = state.config },
-                        onToolsClick = { serverForToolsDialog = state },
-                        onToggle = { onToggleServer(state.config.id, it) },
-                        onDeleteClick = { serverToDeleteId = state.config.id }
+            items(serverStates.values.toList(), key = { it.config.id }) { state ->
+                McpServerItem(
+                    serverState = state,
+                    onClick = { serverForManageDialog = state },
+                    onToolsClick = { serverForToolsDialog = state },
+                    onToggle = { onToggleServer(state.config.id, it) },
+                )
+            }
+            if (showOAuthPlaceholders) {
+                items(
+                    McpOAuthProvider.entries.filter { !serverStates.containsKey(it.serverId) },
+                    key = { "oauth-${it.key}" },
+                    contentType = { "oauth" }
+                ) { provider ->
+                    McpOAuthProviderItem(
+                        provider = provider,
+                        busy = oauthBusy,
+                        onClick = { onLogin?.invoke(provider) },
+                        onToggle = { enabled -> if (enabled) onLogin?.invoke(provider) }
                     )
                 }
             }
@@ -188,6 +213,29 @@ fun McpServerListContent(
         McpServerToolsDialog(
             serverState = selectedServer,
             onDismiss = { serverForToolsDialog = null }
+        )
+    }
+
+    serverForManageDialog?.let { selected ->
+        val oauthProvider = McpOAuthProvider.entries.firstOrNull { it.serverId == selected.config.id }
+        McpServerManageDialog(
+            serverState = selected,
+            onDismiss = { serverForManageDialog = null },
+            onEdit = if (oauthProvider != null) null else { ->
+                serverForManageDialog = null
+                serverToEdit = selected.config
+            },
+            onRelogin = if (oauthProvider != null && onLogin != null) { ->
+                serverForManageDialog = null
+                onLogin(oauthProvider)
+            } else null,
+            onShowTools = if (selected.tools.isNotEmpty()) { ->
+                serverForToolsDialog = selected
+            } else null,
+            onDelete = {
+                serverForManageDialog = null
+                serverToDeleteId = selected.config.id
+            }
         )
     }
 }
@@ -232,6 +280,8 @@ fun McpServerListDialog(
 private fun getServerIcon(name: String): Int {
     val lowerName = name.lowercase()
     return when {
+        lowerName.contains("cloudflare") -> R.drawable.ic_cloudflare
+        lowerName.contains("github") -> R.drawable.ic_gpt_code
         lowerName.contains("context7") -> R.drawable.ic_gpt_sparkle
         lowerName.contains("exa") -> R.drawable.ic_search
         lowerName.contains("firecrawl") || lowerName.contains("crawl") -> R.drawable.ic_globe
@@ -256,6 +306,7 @@ private fun getServerIcon(name: String): Int {
 private fun getServerIconColor(name: String): Color {
     val lowerName = name.lowercase()
     return when {
+        lowerName.contains("cloudflare") -> Color(0xFFF59E0B)
         lowerName.contains("context7") -> Color(0xFF10B981)
         lowerName.contains("exa") -> Color(0xFF6366F1)
         lowerName.contains("firecrawl") -> Color(0xFFEF4444)
@@ -273,174 +324,339 @@ private fun McpServerItem(
     onClick: () -> Unit,
     onToolsClick: () -> Unit,
     onToggle: (Boolean) -> Unit,
-    onDeleteClick: () -> Unit
 ) {
     val config = serverState.config
     val status = serverState.status
-    
+
     val iconColor = getServerIconColor(config.name)
     val icon = getServerIcon(config.name)
 
     val isDarkMode = isSystemInDarkTheme()
-    val containerColor = if (isDarkMode) Color.Black else Color.White
-    val cardBorderColor = if (isDarkMode) Color(0xFF414141) else Color(0xFFF3F3F3)
+    val containerColor = if (isDarkMode) Color(0xFF141414) else Color.White
+    val cardBorderColor = if (isDarkMode) Color(0xFF2E2E2E) else Color(0xFFEDEDED)
     val contentColor = MaterialTheme.colorScheme.onSurface
+    val active = config.enabled && status is McpStatus.Connected
 
     OutlinedCard(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick),
-        shape = RoundedCornerShape(24.dp),
+        shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.outlinedCardColors(
             containerColor = containerColor
         ),
         elevation = CardDefaults.outlinedCardElevation(defaultElevation = 0.dp),
         border = BorderStroke(
             width = 1.dp,
-            color = if (config.enabled && status is McpStatus.Connected)
-                iconColor.copy(alpha = 0.5f)
-            else
-                cardBorderColor
+            color = if (active) iconColor.copy(alpha = 0.6f) else cardBorderColor
         )
     ) {
-        Column(
-            modifier = Modifier.padding(16.dp)
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
+            Surface(
+                modifier = Modifier.size(44.dp),
+                shape = RoundedCornerShape(14.dp),
+                color = if (config.enabled) iconColor.copy(alpha = 0.1f) else MaterialTheme.colorScheme.surfaceContainer,
             ) {
-                Surface(
-                    modifier = Modifier.size(48.dp),
-                    shape = RoundedCornerShape(14.dp),
-                    color = if (config.enabled) iconColor.copy(alpha = 0.1f) else MaterialTheme.colorScheme.surfaceContainer,
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            painter = painterResource(icon),
-                            contentDescription = null,
-                            modifier = Modifier.size(24.dp),
-                            tint = if (config.enabled) iconColor else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                        )
-                    }
-                }
-
-                Spacer(modifier = Modifier.width(16.dp))
-
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = config.name,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = if (config.enabled) contentColor else contentColor.copy(alpha = 0.5f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        painter = painterResource(icon),
+                        contentDescription = null,
+                        modifier = Modifier.size(22.dp),
+                        tint = if (config.enabled) iconColor else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                     )
-                    
-                    Spacer(modifier = Modifier.height(4.dp))
-                    
-                    if (status is McpStatus.Connecting) {
-                        EveryTalkTimedLoadingStatus(
-                            text = stringResource(R.string.mcp_connecting),
-                            size = 12.dp,
-                            strokeWidth = 1.5.dp,
-                            textStyle = MaterialTheme.typography.labelMedium,
-                            textColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                            contentDescription = stringResource(R.string.mcp_connecting_content_description),
-                        )
-                    } else {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .clip(CircleShape)
-                                    .background(
-                                        when (status) {
-                                            is McpStatus.Connected -> iconColor
-                                            is McpStatus.Error -> MaterialTheme.colorScheme.error
-                                            is McpStatus.Idle -> MaterialTheme.colorScheme.outline
-                                            is McpStatus.Connecting -> MaterialTheme.colorScheme.tertiary
-                                        }
-                                    )
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = when (status) {
-                                    is McpStatus.Connected -> pluralStringResource(
-                                        R.plurals.mcp_available_tool_count,
-                                        serverState.tools.size,
-                                        serverState.tools.size,
-                                    )
-                                    is McpStatus.Connecting -> stringResource(R.string.mcp_connecting)
-                                    is McpStatus.Error -> stringResource(R.string.mcp_connection_failed)
-                                    is McpStatus.Idle -> stringResource(R.string.mcp_paused)
-                                },
-                                style = MaterialTheme.typography.labelMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                modifier = if (status is McpStatus.Connected && serverState.tools.isNotEmpty()) {
-                                    Modifier.clickable(onClick = onToolsClick)
-                                } else {
-                                    Modifier
-                                }
-                            )
-                        }
-                    }
                 }
-
-                Spacer(modifier = Modifier.width(8.dp))
-
-                Switch(
-                    checked = config.enabled,
-                    onCheckedChange = onToggle,
-                    modifier = Modifier.scale(0.85f),
-                    colors = SwitchDefaults.colors(
-                        checkedThumbColor = Color.White,
-                        checkedTrackColor = iconColor,
-                        checkedBorderColor = Color.Transparent,
-                        uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant,
-                        uncheckedTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
-                        uncheckedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.7f)
-                    )
-                )
             }
-            
-            if (!config.enabled || status is McpStatus.Error) {
-                HorizontalDivider(
-                    modifier = Modifier.padding(top = 16.dp, bottom = 8.dp),
-                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+
+            Spacer(modifier = Modifier.width(14.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = config.name,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = if (config.enabled) contentColor else contentColor.copy(alpha = 0.5f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = stringResource(
-                            if (status is McpStatus.Error) {
-                                R.string.mcp_check_configuration
+
+                Spacer(modifier = Modifier.height(4.dp))
+
+                if (status is McpStatus.Connecting) {
+                    EveryTalkTimedLoadingStatus(
+                        text = stringResource(R.string.mcp_connecting),
+                        size = 12.dp,
+                        strokeWidth = 1.5.dp,
+                        textStyle = MaterialTheme.typography.labelMedium,
+                        textColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        contentDescription = stringResource(R.string.mcp_connecting_content_description),
+                    )
+                } else {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(7.dp)
+                                .clip(CircleShape)
+                                .background(
+                                    when (status) {
+                                        is McpStatus.Connected -> iconColor
+                                        is McpStatus.Error -> MaterialTheme.colorScheme.error
+                                        is McpStatus.Idle -> MaterialTheme.colorScheme.outline
+                                        is McpStatus.Connecting -> MaterialTheme.colorScheme.tertiary
+                                    }
+                                )
+                        )
+                        Spacer(modifier = Modifier.width(6.dp))
+                        Text(
+                            text = when (status) {
+                                is McpStatus.Connected -> pluralStringResource(
+                                    R.plurals.mcp_available_tool_count,
+                                    serverState.tools.size,
+                                    serverState.tools.size,
+                                )
+                                is McpStatus.Connecting -> stringResource(R.string.mcp_connecting)
+                                is McpStatus.Error -> stringResource(R.string.mcp_connection_failed)
+                                is McpStatus.Idle -> stringResource(R.string.mcp_paused)
+                            },
+                            style = MaterialTheme.typography.labelMedium,
+                            color = if (status is McpStatus.Error)
+                                MaterialTheme.colorScheme.error
+                            else
+                                MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = if (status is McpStatus.Connected && serverState.tools.isNotEmpty()) {
+                                Modifier.clickable(onClick = onToolsClick)
                             } else {
-                                R.string.mcp_enable_hint
+                                Modifier
                             }
-                        ),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = if (status is McpStatus.Error) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                    )
-                    
-                    IconButton(
-                        onClick = onDeleteClick,
-                        modifier = Modifier.size(32.dp)
-                    ) {
-                        Icon(
-                            painterResource(R.drawable.ic_trash),
-                            contentDescription = stringResource(R.string.action_delete),
-                            modifier = Modifier.size(18.dp),
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
                 }
             }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            Switch(
+                checked = config.enabled,
+                onCheckedChange = onToggle,
+                modifier = Modifier.scale(0.8f),
+                colors = SwitchDefaults.colors(
+                    checkedThumbColor = Color.White,
+                    checkedTrackColor = iconColor,
+                    checkedBorderColor = Color.Transparent,
+                    uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    uncheckedTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    uncheckedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.7f)
+                )
+            )
         }
     }
+}
+
+/**
+ * 未登录的内置 OAuth 服务占位卡片（GitHub / Cloudflare）。
+ * 点击卡片或打开开关都会触发浏览器登录；登录成功后落库，变为普通服务器卡片。
+ */
+@Composable
+private fun McpOAuthProviderItem(
+    provider: McpOAuthProvider,
+    busy: Boolean,
+    onClick: () -> Unit,
+    onToggle: (Boolean) -> Unit
+) {
+    val iconColor = getServerIconColor(provider.displayName)
+    val icon = getServerIcon(provider.displayName)
+    val isDarkMode = isSystemInDarkTheme()
+
+    OutlinedCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = !busy, onClick = onClick),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.outlinedCardColors(
+            containerColor = if (isDarkMode) Color(0xFF141414) else Color.White
+        ),
+        elevation = CardDefaults.outlinedCardElevation(defaultElevation = 0.dp),
+        border = BorderStroke(
+            width = 1.dp,
+            color = if (isDarkMode) Color(0xFF2E2E2E) else Color(0xFFEDEDED)
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Surface(
+                modifier = Modifier.size(44.dp),
+                shape = RoundedCornerShape(14.dp),
+                color = iconColor.copy(alpha = 0.1f),
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(
+                        painter = painterResource(icon),
+                        contentDescription = null,
+                        modifier = Modifier.size(22.dp),
+                        tint = iconColor
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.width(14.dp))
+
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = provider.displayName,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = stringResource(R.string.mcp_oauth_description),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            Switch(
+                checked = false,
+                onCheckedChange = onToggle,
+                enabled = !busy,
+                modifier = Modifier.scale(0.8f),
+                colors = SwitchDefaults.colors(
+                    uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    uncheckedTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                    uncheckedBorderColor = MaterialTheme.colorScheme.outline.copy(alpha = 0.7f)
+                )
+            )
+        }
+    }
+}
+
+/**
+ * 点击服务器卡片后的管理对话框：编辑、重新登录、查看工具、删除。
+ * OAuth 服务隐藏编辑（地址固定不可改），普通服务隐藏重新登录。
+ */
+@Composable
+private fun McpServerManageDialog(
+    serverState: McpServerState,
+    onDismiss: () -> Unit,
+    onEdit: (() -> Unit)?,
+    onRelogin: (() -> Unit)?,
+    onShowTools: (() -> Unit)?,
+    onDelete: () -> Unit,
+) {
+    val isDark = isSystemInDarkTheme()
+    val dlgBg = if (isDark) Color(0xFF141414) else Color.White
+    val dlgBorder = if (isDark) Color(0xFF2E2E2E) else Color(0xFFEDEDED)
+    val dlgContent = if (isDark) Color.White else Color(0xFF0D0D0D)
+    val dlgSubtext = MaterialTheme.colorScheme.onSurfaceVariant
+    val config = serverState.config
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        modifier = Modifier.border(1.dp, dlgBorder, RoundedCornerShape(24.dp)),
+        shape = RoundedCornerShape(24.dp),
+        containerColor = dlgBg,
+        titleContentColor = dlgContent,
+        textContentColor = dlgContent,
+        title = {
+            Column {
+                Text(
+                    text = config.name,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = dlgContent,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = config.url,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = dlgSubtext,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                onEdit?.let { action ->
+                    TextButton(
+                        onClick = action,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            stringResource(R.string.mcp_action_edit),
+                            modifier = Modifier.fillMaxWidth(),
+                            color = dlgContent,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+                onRelogin?.let { action ->
+                    TextButton(
+                        onClick = action,
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            stringResource(R.string.mcp_oauth_relogin),
+                            modifier = Modifier.fillMaxWidth(),
+                            color = dlgContent,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+                onShowTools?.let { action ->
+                    TextButton(
+                        onClick = {
+                            action()
+                            onDismiss()
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(12.dp)
+                    ) {
+                        Text(
+                            stringResource(R.string.mcp_available_tools),
+                            modifier = Modifier.fillMaxWidth(),
+                            color = dlgContent,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                    }
+                }
+                TextButton(
+                    onClick = onDelete,
+                    modifier = Modifier.fillMaxWidth(),
+                    shape = RoundedCornerShape(12.dp)
+                ) {
+                    Text(
+                        stringResource(R.string.action_remove),
+                        modifier = Modifier.fillMaxWidth(),
+                        color = MaterialTheme.colorScheme.error,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(stringResource(R.string.action_close))
+            }
+        }
+    )
 }
 
 @Composable

@@ -897,7 +897,6 @@
     <string name="action_hide">Hide</string>
 
     <string name="settings_tab_platforms">Platform configurations</string>
-    <string name="settings_tab_web_search">Web search</string>
     <string name="settings_tab_mcp">MCP</string>
     <string name="settings_import_too_large">The import file is too large. Maximum size: 50 MB.</string>
     <string name="settings_export_content_expired">Export failed: the prepared content has expired</string>
@@ -1166,7 +1165,7 @@
     <string name="ui_message_new_image_chat_failed">Failed to start a new image generation conversation: %1$s</string>
     <string name="ui_message_text_history_load_failed">Failed to load text conversation history: %1$s</string>
     <string name="ui_message_image_download_failed">Failed to download image: %1$s</string>
-    <string name="ui_message_web_search_provider_required">Configure and select a search provider under Settings &gt; Web search first</string>
+    <string name="ui_message_web_search_provider_required">Configure and select a search provider under Settings &gt; MCP first</string>
     <string name="ui_message_new_chat_failed">Failed to start a new conversation: %1$s</string>
     <string name="ui_message_shared_content_received">Shared content received</string>
     <string name="ui_message_shared_file_received">Shared file content received</string>
@@ -1405,4 +1404,9 @@
     <string name="computer_connection_notification_title">Agent is using a server</string>
     <string name="computer_connection_notification_text">SSH activity is running locally on this device.</string>
     <string name="computer_connection_stop">Stop connection</string>
+    <string name="mcp_oauth_login">Sign in</string>
+    <string name="mcp_oauth_relogin">Sign in again</string>
+    <string name="mcp_oauth_description">Sign in with your browser to connect MCP tools</string>
+    <string name="mcp_oauth_manage_hint">Sign in again from Settings → MCP. Disable to pause tools, or remove this connection to delete the saved authorization.</string>
+    <string name="mcp_action_edit">Edit connection</string>
 </resources>

@@ -15,7 +15,7 @@ object Screen {
     const val IMAGE_GENERATION_SETTINGS_SCREEN = "image_generation_settings_screen"
     const val VOICE_INPUT_SCREEN = "voice_input_screen"
 
-    /** 服务器页返回设置页时，用于指定平台配置、联网搜索或 MCP 页签。 */
+    /** 服务器页返回设置页时，用于指定平台配置或合并后的 MCP 工具页。 */
     const val SETTINGS_TAB_REQUEST_KEY = "settings_tab_request"
 
     

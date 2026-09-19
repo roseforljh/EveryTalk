@@ -51,8 +51,11 @@ import com.android.everytalk.data.DataClass.ApiConfig
 import com.android.everytalk.data.DataClass.ModalityType
 import com.android.everytalk.data.network.ExternalWebSearchProvider
 import com.android.everytalk.data.network.ExternalWebSearchProviderConfig
+import com.android.everytalk.data.mcp.McpServerConfig
+import com.android.everytalk.data.mcp.McpServerState
 import com.android.everytalk.statecontroller.controller.config.modelConfigGroupId
 import com.android.everytalk.ui.components.popup.AppFloatingCardPopup
+import com.android.everytalk.ui.screens.mcp.McpServerListContent
 import com.android.everytalk.ui.screens.MainScreen.chat.models.sortModelConfigs
 
 @SuppressLint("ConfigurationScreenWidthHeight")
@@ -217,113 +220,149 @@ internal fun SettingsScreenContent(
     }
 }
 
+/**
+ * 设置页的统一工具页。
+ *
+ * 联网搜索服务直接作为 MCP 能力的一部分展示和管理。
+ * 搜索服务仍沿用原有配置状态，避免改变已有搜索逻辑。
+ */
 @Composable
-internal fun ExternalWebSearchSettingsContent(
+internal fun McpSettingsContent(
+    selectedProviderId: String?,
+    webSearchConfigs: Map<String, ExternalWebSearchProviderConfig>,
+    onSelectWebSearchProvider: (ExternalWebSearchProvider) -> Unit,
+    onEditWebSearchProvider: (ExternalWebSearchProvider) -> Unit,
+    mcpServerStates: Map<String, McpServerState>,
+    onAddMcpServer: (McpServerConfig) -> Unit,
+    onUpdateMcpServer: (McpServerConfig) -> Unit,
+    onRemoveMcpServer: (String) -> Unit,
+    onToggleMcpServer: (String, Boolean) -> Unit,
+    topContentPadding: Dp,
+    bottomContentPadding: Dp,
+    onLoginMcp: (com.android.everytalk.data.mcp.McpOAuthProvider) -> Unit,
+    oauthBusy: Boolean,
+) {
+    McpServerListContent(
+        serverStates = mcpServerStates,
+        onLogin = onLoginMcp,
+        showOAuthPlaceholders = true,
+        oauthBusy = oauthBusy,
+        onAddServer = onAddMcpServer,
+        onUpdateServer = onUpdateMcpServer,
+        onRemoveServer = onRemoveMcpServer,
+        onToggleServer = onToggleMcpServer,
+        contentPadding = PaddingValues(
+            start = 20.dp, end = 20.dp,
+            top = topContentPadding, bottom = bottomContentPadding,
+        ),
+        header = {
+            Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Text(
+                    text = stringResource(R.string.settings_tab_mcp),
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                )
+                ExternalWebSearchProviderCards(
+                    selectedProviderId = selectedProviderId,
+                    configs = webSearchConfigs,
+                    onSelectProvider = onSelectWebSearchProvider,
+                    onEditProvider = onEditWebSearchProvider,
+                )
+            }
+        },
+    )
+}
+
+@Composable
+private fun ExternalWebSearchProviderCards(
     selectedProviderId: String?,
     configs: Map<String, ExternalWebSearchProviderConfig>,
     onSelectProvider: (ExternalWebSearchProvider) -> Unit,
     onEditProvider: (ExternalWebSearchProvider) -> Unit,
-    topContentPadding: Dp = 0.dp,
-    bottomContentPadding: Dp = 0.dp,
 ) {
     val infiniteTransition = rememberInfiniteTransition(label = "breath")
     val breatheAlpha by infiniteTransition.animateFloat(
         initialValue = 0.4f,
         targetValue = 1f,
-        animationSpec = infiniteRepeatable(
-            animation = tween(1200),
-            repeatMode = RepeatMode.Reverse
-        ),
-        label = "breatheAlpha"
+        animationSpec = infiniteRepeatable(animation = tween(1200), repeatMode = RepeatMode.Reverse),
+        label = "breatheAlpha",
     )
+    ExternalWebSearchProvider.entries.forEach { provider ->
+        val config = configs[provider.providerId]
+        val isSelected = selectedProviderId == provider.providerId
+        val isConfigured = !config?.apiKey.isNullOrBlank()
+        val backgroundColor = provider.accentColor.copy(alpha = if (isSelected) 0.14f else 0.08f)
+        val borderColor = if (isSelected) {
+            provider.accentColor.copy(alpha = 0.8f)
+        } else {
+            Color.White.copy(alpha = 0.15f)
+        }
 
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp)
-            .padding(top = 20.dp, bottom = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
-    ) {
-        Spacer(Modifier.height(topContentPadding - 16.dp))
-        ExternalWebSearchProvider.entries.forEach { provider ->
-            val config = configs[provider.providerId]
-            val isSelected = selectedProviderId == provider.providerId
-            val isConfigured = !config?.apiKey.isNullOrBlank()
-            val backgroundColor = provider.accentColor.copy(alpha = if (isSelected) 0.14f else 0.08f)
-            val borderColor = if (isSelected) {
-                provider.accentColor.copy(alpha = 0.8f)
-            } else {
-                Color.White.copy(alpha = 0.15f)
-            }
-
-            Surface(
-                onClick = { onEditProvider(provider) },
-                shape = RoundedCornerShape(20.dp),
-                color = backgroundColor,
-                border = androidx.compose.foundation.BorderStroke(1.2.dp, borderColor),
-                tonalElevation = if (isSelected) 2.dp else 0.dp,
+        Surface(
+            onClick = { onEditProvider(provider) },
+            shape = RoundedCornerShape(20.dp),
+            color = backgroundColor,
+            border = androidx.compose.foundation.BorderStroke(1.2.dp, borderColor),
+            tonalElevation = if (isSelected) 2.dp else 0.dp,
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 22.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 22.dp),
-                    verticalAlignment = Alignment.CenterVertically
+                Column(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    Column(
-                        modifier = Modifier.weight(1f),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        Box(contentAlignment = Alignment.TopEnd) {
-                            Text(
-                                text = provider.displayName,
-                                style = MaterialTheme.typography.titleMedium,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.padding(end = if (isConfigured) 8.dp else 0.dp)
-                            )
-                            if (isConfigured) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(6.dp)
-                                        .alpha(breatheAlpha)
-                                        .background(Color(0xFF4CAF50), CircleShape)
-                                )
-                            }
-                        }
-
+                    Box(contentAlignment = Alignment.TopEnd) {
                         Text(
-                            text = stringResource(provider.descriptionRes),
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
+                            text = provider.displayName,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.padding(end = if (isConfigured) 8.dp else 0.dp)
                         )
+                        if (isConfigured) {
+                            Box(
+                                modifier = Modifier
+                                    .size(6.dp)
+                                    .alpha(breatheAlpha)
+                                    .background(Color(0xFF4CAF50), CircleShape)
+                            )
+                        }
                     }
 
-                    Spacer(modifier = Modifier.width(16.dp))
+                    Text(
+                        text = stringResource(provider.descriptionRes),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
 
-                    Box(
-                        modifier = Modifier
-                            .size(40.dp)
-                            .clip(RoundedCornerShape(20.dp))
-                            .clickable(
-                                interactionSource = remember { MutableInteractionSource() },
-                                indication = null
-                            ) { onSelectProvider(provider) },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Icon(
-                            painter = if (isSelected) painterResource(R.drawable.ic_check_circle) else painterResource(R.drawable.ic_circle_empty),
-                            contentDescription = stringResource(R.string.settings_select_provider, provider.displayName),
-                            tint = if (isSelected) provider.accentColor else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
-                            modifier = Modifier.size(24.dp)
-                        )
-                    }
+                Spacer(modifier = Modifier.width(16.dp))
+
+                Box(
+                    modifier = Modifier
+                        .size(40.dp)
+                        .clip(RoundedCornerShape(20.dp))
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = null
+                        ) { onSelectProvider(provider) },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        painter = if (isSelected) painterResource(R.drawable.ic_check_circle) else painterResource(R.drawable.ic_circle_empty),
+                        contentDescription = stringResource(R.string.settings_select_provider, provider.displayName),
+                        tint = if (isSelected) provider.accentColor else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f),
+                        modifier = Modifier.size(24.dp)
+                    )
                 }
             }
         }
-        Spacer(Modifier.height(bottomContentPadding))
     }
 }
 

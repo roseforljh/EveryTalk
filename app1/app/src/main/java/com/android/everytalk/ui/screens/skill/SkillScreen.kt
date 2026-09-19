@@ -59,6 +59,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -287,7 +288,10 @@ fun SkillScreen(
                     }
                     SettingsTabMenu(
                         expanded = showTabMenu,
-                        tabs = listOf("配置", "联网搜索", "MCP"),
+                        tabs = listOf(
+                            stringResource(R.string.settings_tab_platforms),
+                            stringResource(R.string.settings_tab_mcp),
+                        ),
                         currentTabIndex = -1,
                         onTabSelected = { returnToSettings(it) },
                         onImportExport = onImportExport,

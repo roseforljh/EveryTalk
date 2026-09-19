@@ -52,7 +52,8 @@ class ComputerUiAlignmentRulesTest {
         assertTrue(hostSource.contains("viewModel.settingsExportRequest.collect"))
         assertTrue(computerSource.contains("popBackStack(Screen.SETTINGS_SCREEN, inclusive = false)"))
         assertTrue(settingsSource.contains("getStateFlow(Screen.SETTINGS_TAB_REQUEST_KEY, -1)"))
-        assertTrue(settingsSource.contains("currentTabIndex = requestedTabIndex"))
+        assertTrue(settingsSource.contains("currentTabIndex = targetTabIndex"))
+        assertTrue(settingsSource.contains("1, 2 -> 1"))
         // 技能页没有设置页历史记录时，新建页面也必须收到目标页签。
         assertTrue(skillSource.contains("targetEntry?.savedStateHandle?.set(Screen.SETTINGS_TAB_REQUEST_KEY, tabIndex)"))
     }

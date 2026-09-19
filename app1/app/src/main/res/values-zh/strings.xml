@@ -893,7 +893,6 @@
     <string name="action_hide">隐藏</string>
 
     <string name="settings_tab_platforms">平台配置</string>
-    <string name="settings_tab_web_search">联网搜索</string>
     <string name="settings_tab_mcp">MCP</string>
     <string name="settings_import_too_large">导入文件过大，最大支持 50 MB</string>
     <string name="settings_export_content_expired">导出失败：待导出内容已失效</string>
@@ -1157,7 +1156,7 @@
     <string name="ui_message_new_image_chat_failed">启动新图像生成失败：%1$s</string>
     <string name="ui_message_text_history_load_failed">加载文本历史对话失败：%1$s</string>
     <string name="ui_message_image_download_failed">图片下载失败：%1$s</string>
-    <string name="ui_message_web_search_provider_required">请先在设置 &gt; 联网搜索中配置并勾选一个搜索服务商</string>
+    <string name="ui_message_web_search_provider_required">请先在设置 &gt; MCP 中配置并勾选一个搜索服务商</string>
     <string name="ui_message_new_chat_failed">启动新聊天失败：%1$s</string>
     <string name="ui_message_shared_content_received">已接收分享内容</string>
     <string name="ui_message_shared_file_received">已接收分享文件内容</string>
@@ -1379,4 +1378,9 @@
     <string name="computer_connection_notification_title">Agent 正在使用服务器</string>
     <string name="computer_connection_notification_text">SSH 活动仅在本机运行。</string>
     <string name="computer_connection_stop">停止连接</string>
+    <string name="mcp_oauth_login">登录</string>
+    <string name="mcp_oauth_relogin">重新登录</string>
+    <string name="mcp_oauth_description">通过浏览器登录，接入 MCP 工具</string>
+    <string name="mcp_oauth_manage_hint">可在设置 → MCP 中重新登录。关闭开关可暂停工具，删除连接会清除本机授权。</string>
+    <string name="mcp_action_edit">编辑连接</string>
 </resources>

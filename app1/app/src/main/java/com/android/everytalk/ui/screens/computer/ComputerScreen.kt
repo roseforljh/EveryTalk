@@ -355,7 +355,6 @@ fun ComputerScreen(
     val topButtonContentColor = if (isDarkTheme) Color.White else Color(0xFF0D0D0D)
     val settingsTabs = listOf(
         stringResource(R.string.settings_tab_platforms),
-        stringResource(R.string.settings_tab_web_search),
         stringResource(R.string.settings_tab_mcp),
     )
     val topContentPadding =
