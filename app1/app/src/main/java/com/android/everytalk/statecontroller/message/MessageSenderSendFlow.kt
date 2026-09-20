@@ -678,6 +678,10 @@ internal fun MessageSender.sendMessageInternal(
                     systemPrompt?.trim()?.takeIf(String::isNotBlank) ?: existingSystemPrompt,
                     preparedComputerRequest?.environmentPrompt,
                     skillSnapshotForRequest?.renderCatalog(),
+                    mcpApprovalSystemPrompt(
+                        mcpEnabled = isMcpEnabledForRequest,
+                        mcpTools = mcpToolsForRequest,
+                    ),
                 ).joinToString("\n\n")
                 if (effectiveSystemPrompt.isNotBlank()) {
                     val systemMessage = SimpleTextApiMessage(role = "system", content = effectiveSystemPrompt)

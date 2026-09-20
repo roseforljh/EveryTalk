@@ -227,6 +227,42 @@ internal fun prepareMcpDispatch(
     )
 }
 
+/**
+ * 给模型补充本轮 MCP 权限边界。
+ *
+ * 工具描述只能说明接口用途，部分模型仍会在需要外部数据时直接回答“没有权限”，
+ * 从而完全不调用 request_mcp。把规则放进当前请求的 system message，模型才知道
+ * 需要 MCP 时必须先申请，申请后由应用等待用户确认。
+ */
+internal fun mcpApprovalSystemPrompt(
+    mcpEnabled: Boolean,
+    mcpTools: List<Map<String, Any>>,
+): String? {
+    if (mcpEnabled || mcpTools.none {
+            extractToolName(it)?.equals(
+                com.android.everytalk.data.agent.AgentControlToolNames.REQUEST_MCP,
+                ignoreCase = true,
+            ) == true
+        }
+    ) return null
+    return MCP_PENDING_APPROVAL_PROMPT
+}
+
+/**
+ * 删除恢复请求中残留的“尚未授权 MCP”提示。
+ *
+ * 首次请求必须告诉模型先申请权限；用户批准后，同一份请求快照会继续使用，
+ * 因此旧提示不能继续留在系统消息里，否则模型会再次寻找已经移除的 request_mcp。
+ */
+internal fun removeMcpPendingApprovalPrompt(content: String): String =
+    content.replace(MCP_PENDING_APPROVAL_PROMPT, "").trim()
+
+private val MCP_PENDING_APPROVAL_PROMPT = """
+        当前会话有已连接的 MCP 外部工具，但本轮尚未获得 MCP 使用授权。
+        如果用户的问题需要读取或操作外部服务数据，必须先调用 request_mcp 申请开启，说明申请原因，然后等待用户确认；不要直接回答“没有该能力”，也不要假装已经读取到数据。
+        如果用户的问题与外部工具无关，则直接正常回答。
+    """.trimIndent()
+
 internal fun builtInReadAttachmentToolDefinition(): Map<String, Any> = mapOf(
     "type" to "function",
     "function" to mapOf(

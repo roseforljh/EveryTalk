@@ -296,10 +296,19 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     /** 仅在持久化批准后启用原会话，切换页面不会把权限误授给另一个会话。 */
     private suspend fun prepareMcpRequestedChatRequest(conversationId: String, request: ChatRequest): ChatRequest {
-        val tools = mcpManager.getDispatchCandidates().map { it.toToolDefinition() }
-        check(tools.isNotEmpty()) { "没有已连接的 MCP 工具，请检查 MCP 服务连接后重试" }
+        // 这里表示用户已经明确批准开启 MCP。即使设置页开关之前是关闭的，也要先连接
+        // 已保存的服务器，再把当前可用工具注入原 Run，否则恢复请求会拿到空工具列表。
+        val tools = mcpManager.enableConfiguredServersForCurrentRequest().map { it.toToolDefinition() }
+        check(tools.isNotEmpty()) { "没有可用的 MCP 工具，请检查已配置服务器的连接状态" }
         val requestMcpName = com.android.everytalk.data.agent.AgentControlToolNames.REQUEST_MCP
         val resumed = request.copy(
+            messages = request.messages.map { message ->
+                if (message is SimpleTextApiMessage && message.role.equals("system", ignoreCase = true)) {
+                    message.copy(content = removeMcpPendingApprovalPrompt(message.content))
+                } else {
+                    message
+                }
+            },
             tools = request.tools.orEmpty()
                 .filterNot { tool ->
                     val function = tool["function"] as? Map<*, *>
@@ -326,6 +335,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         request: ChatRequest,
         requiredSkillIds: List<String>,
     ): ChatRequest {
+        // 冷启动恢复也必须补齐原会话开关；保存后再连接服务器，标签不依赖网络准备成功。
+        withContext(Dispatchers.Main.immediate) {
+            stateHolder.conversationFunctionToggleStates.update { states ->
+                val current = states[conversationId] ?: ConversationFunctionToggleState()
+                states + (conversationId to current.copy(agentEnabled = true))
+            }
+            if (stateHolder._currentConversationId.value == conversationId) {
+                stateHolder._isAgentEnabled.value = true
+            }
+        }
+        persistenceManager.saveConversationFunctionToggleStates(stateHolder.conversationFunctionToggleStates.value)
         if (request.localComputerRequestContext != null) return request
         val prepared = computerManager.prepareRequest(conversationId, agentEnabled = true)
             ?: error("Agent 服务器准备失败")

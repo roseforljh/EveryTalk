@@ -683,10 +683,36 @@ class ApiHandler(
                 // Room 中的待审批记录才是事实来源。UI StateFlow 只是卡片投影，Compose 重组或
                 // 卡片退场时可能短暂为空，不能因此吞掉用户已经点击的批准结果。
                 val record = agentRunStore.decideApproval(runId, approvalRequestId, decision) ?: run {
+                    logger.warn("审批记录不存在或已处理: runId=$runId approvalRequestId=$approvalRequestId")
                     refreshPendingAgentApprovals()
                     return@launch
                 }
+                logger.debug("审批决定已落库: runId=$runId decision=$decision request=${record.agentRequest?.javaClass?.simpleName}")
                 decisionSaved = true
+                val enableMcp = record.agentRequest is AgentPauseRequest.EnableMcp
+                val enableAgent = record.agentRequest is AgentPauseRequest.EnableAgent
+                if (decision == AgentApprovalDecision.APPROVED && (enableMcp || enableAgent)) {
+                    // 审批结果已经写入 Room 后立即更新输入框状态。服务器连接属于后续准备步骤，
+                    // 不能因为连接或快照恢复异常让“已允许”在 UI 上看起来像没有生效。
+                    val conversationId = agentRunStore.getRun(runId)?.sessionId
+                    if (conversationId != null) {
+                        withContext(Dispatchers.Main.immediate) {
+                            val current = stateHolder.conversationFunctionToggleStates.value[conversationId]
+                                ?: ConversationFunctionToggleState()
+                            stateHolder.conversationFunctionToggleStates.value =
+                                stateHolder.conversationFunctionToggleStates.value +
+                                    (conversationId to current.copy(
+                                        mcpEnabled = current.mcpEnabled || enableMcp,
+                                        agentEnabled = current.agentEnabled || enableAgent,
+                                    ))
+                            if (stateHolder._currentConversationId.value == conversationId) {
+                                if (enableMcp) stateHolder._isMcpEnabledForNextRequest.value = true
+                                if (enableAgent) stateHolder._isAgentEnabled.value = true
+                            }
+                        }
+                        logger.debug("已将能力审批结果同步到输入框状态: runId=$runId conversationId=$conversationId")
+                    }
+                }
                 _pendingAgentApprovals.value = _pendingAgentApprovals.value.filterNot {
                     it.runId == runId && it.approvalRequestId == approvalRequestId
                 }
@@ -762,21 +788,49 @@ class ApiHandler(
         }
     }
 
-    private suspend fun resumeAgentRun(runId: String, record: AgentApprovalRecord): Boolean =
-        agentResumeMutex.withLock {
-            if (stateHolder.textApiJob?.isActive == true) {
+    private suspend fun resumeAgentRun(runId: String, record: AgentApprovalRecord): Boolean {
+        val run = agentRunStore.getRun(runId) ?: run {
+            logger.error("审批恢复失败：找不到 Run: runId=$runId")
+            return false
+        }
+        val activeTextJob = stateHolder.textApiJob
+        if (activeTextJob?.isActive == true) {
+            // 点击审批时，原 Agent 流刚发完 AgentApprovalRequired，通常还在执行
+            // streamChatResponse 的 finally。等待旧流必须放在恢复锁外：旧流的 finally
+            // 可能触发恢复扫描，而恢复扫描也需要这把锁；在锁内 join 会形成死锁。
+            if (stateHolder._currentTextStreamingAiMessageId.value != run.visibleAssistantMessageId) {
+                logger.debug("已有其他会话的文本流，暂不恢复 Agent: runId=$runId")
+                return false
+            }
+            val currentJob = kotlinx.coroutines.currentCoroutineContext()[Job]
+            if (activeTextJob !== currentJob) {
+                logger.debug("等待原审批流退出后恢复 Agent: runId=$runId")
+                activeTextJob.join()
+            }
+        }
+        return agentResumeMutex.withLock {
+            // 等待期间可能已有另一条恢复路径启动了新流，不能覆盖它。
+            val latestJob = stateHolder.textApiJob
+            if (latestJob?.isActive == true && latestJob !== kotlinx.coroutines.currentCoroutineContext()[Job]) {
+                logger.debug("审批恢复已由其他路径接管: runId=$runId")
                 return@withLock false
             }
+            logger.debug("开始恢复 Agent Run: runId=$runId decision=${record.decision}")
             startResumedAgentRun(runId, record)
         }
+    }
 
     /** 同一时刻只允许一个文本 Run 占用统一流状态，避免恢复覆盖正在进行的会话。 */
     private suspend fun startResumedAgentRun(runId: String, record: AgentApprovalRecord?): Boolean {
+        logger.debug("Agent 恢复前置开始: runId=$runId")
         var run = agentRunStore.getRun(runId) ?: run {
+            logger.error("Agent 恢复失败：找不到 Run: runId=$runId")
             restorePendingAgentApproval(resumeDecided = false)
             return false
         }
+        logger.debug("Agent 恢复读取 Run: runId=${run.id} status=${run.status} configId=${run.configIdSnapshot}")
         val configId = run.configIdSnapshot ?: run {
+            logger.error("Agent 恢复失败：Run 没有模型配置: runId=${run.id} status=${run.status}")
             if (run.status == AgentRunStatus.MODEL_CONTINUATION_PENDING.name) {
                 // 模型续写失败必须保留待续写状态 MODEL_CONTINUATION_PENDING 而不是标记 Run 失败
                 return false
@@ -786,20 +840,24 @@ class ApiHandler(
         }
         val config = AppDatabase.getDatabase(context).apiConfigDao().getTextConfig(configId)?.toApiConfig()
             ?: run {
+                logger.error("Agent 恢复失败：模型配置不存在: runId=${run.id} configId=$configId")
                 if (run.status == AgentRunStatus.MODEL_CONTINUATION_PENDING.name) {
                     return false
                 }
                 markApprovalDecisionFailure(run, "原模型配置已删除")
                 return false
             }
+        logger.debug("Agent 恢复读取模型配置完成: runId=${run.id} model=${config.model}")
         var request = agentRunStore.restoreChatRequest(run, config.key)
             ?: run {
+                logger.error("Agent 恢复失败：请求快照不可解码: runId=${run.id} status=${run.status}")
                 if (run.status == AgentRunStatus.MODEL_CONTINUATION_PENDING.name) {
                     return false
                 }
                 markApprovalDecisionFailure(run, "Agent 恢复快照不可用")
                 return false
             }
+        logger.debug("Agent 恢复请求快照完成: runId=${run.id} messages=${request.messages.size} tools=${request.tools?.size ?: 0}")
         if (record?.decision == AgentApprovalDecision.APPROVED && record.agentRequest is AgentPauseRequest.SkillSecret) {
             val secretRequest = record.agentRequest
             if (!com.android.everytalk.data.skill.SkillSecretSessionStore.contains(run.id, secretRequest.name)) {
@@ -835,6 +893,7 @@ class ApiHandler(
         }
         if (record?.decision == AgentApprovalDecision.APPROVED && record.agentRequest is AgentPauseRequest.EnableMcp) {
             // 与 Agent 开启共用持久化暂停点。更新原请求后再续写，不重新发送用户消息。
+            logger.debug("开始准备获批的 MCP: runId=${run.id}")
             request = try {
                 prepareMcpResumeRequest(run.sessionId, request)
             } catch (error: CancellationException) {
@@ -844,6 +903,7 @@ class ApiHandler(
                 return false
             }
             run = agentRunStore.updateRequestSnapshot(run, request)
+            logger.debug("获批 MCP 已写回请求快照: runId=${run.id} tools=${request.tools?.size ?: 0}")
         }
         val limits = resolvedModelTokenLimits(
             maxOutputTokens = request.generationConfig?.maxOutputTokens,
@@ -851,6 +911,7 @@ class ApiHandler(
                 ?: com.android.everytalk.data.DataClass.DEFAULT_MAX_CONTEXT_TOKENS,
         )
         withContext(Dispatchers.Main.immediate) {
+            logger.debug("恢复请求准备 UI 状态: runId=${run.id}")
             val trace = agentRunStore.executionTrace(run.id)
             val messageIndex = stateHolder.messages.indexOfFirst { it.id == run.visibleAssistantMessageId }
             if (messageIndex >= 0 && trace.isNotEmpty()) {
@@ -863,6 +924,7 @@ class ApiHandler(
             stateHolder._isRemoteCancellationPending.value = false
         }
         withContext(Dispatchers.Main.immediate) {
+            logger.debug("开始注册恢复后的 Agent 流: runId=${run.id}")
             viewModelScope.launchRegisteredJob(
                 register = { job -> stateHolder.textApiJob = job },
             ) {
@@ -910,6 +972,7 @@ class ApiHandler(
                 }
             }
         }
+        logger.debug("恢复后的 Agent 流已注册: runId=${run.id}")
         return true
     }
 
@@ -924,6 +987,13 @@ class ApiHandler(
         _pendingSkillSecretApprovals.value = _pendingSkillSecretApprovals.value.filterNot { it.runId == run.id }
         withContext(Dispatchers.Main.immediate) {
             updatePreparedMessageStatus(stateHolder.messages, run.visibleAssistantMessageId, reason)
+            // 原审批流在等待用户时会故意保留 isTextApiCalling=true。恢复准备失败后没有
+            // 新流可以负责 finally 清理，因此这里必须主动结束该 UI 状态，否则发送按钮永久转圈。
+            if (stateHolder._currentTextStreamingAiMessageId.value == run.visibleAssistantMessageId) {
+                stateHolder._isTextApiCalling.value = false
+                stateHolder._currentTextStreamingAiMessageId.value = null
+                stateHolder._isRemoteCancellationPending.value = false
+            }
         }
         restorePendingAgentApproval(resumeDecided = false)
     }
@@ -1600,14 +1670,23 @@ class ApiHandler(
         }
     }
 
-    private suspend fun processStreamEvent(
+    internal suspend fun processStreamEvent(
         appEvent: AppStreamEvent,
         aiMessageId: String,
         isImageGeneration: Boolean = false,
     ) {
         streamProcessor.processStreamEvent(appEvent, aiMessageId, isImageGeneration)
-        if (appEvent is AppStreamEvent.AgentApprovalRequired || appEvent is AppStreamEvent.AgentInterventionRequired) {
-            restorePendingAgentApproval()
+        when (appEvent) {
+            is AppStreamEvent.AgentApprovalRequired -> {
+                // 事件发出前审批已原子落库。直接刷新全部审批类型，
+                // 不等待无关的接力恢复和模型续写扫描，也不遗漏 Secret 审批。
+                logger.debug("收到 Agent 审批事件: runId=${appEvent.runId} approvalRequestId=${appEvent.approvalRequestId}")
+                refreshPendingAgentApprovals()
+            }
+            is AppStreamEvent.AgentInterventionRequired -> {
+                restorePendingAgentApproval()
+            }
+            else -> Unit
         }
         if (appEvent is AppStreamEvent.Finish && !isImageGeneration) {
             agentRunStore.getRunByVisibleMessage(aiMessageId)?.let { run ->

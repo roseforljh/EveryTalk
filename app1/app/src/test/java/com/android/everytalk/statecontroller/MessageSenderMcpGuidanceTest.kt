@@ -72,6 +72,40 @@ class MessageSenderMcpGuidanceTest {
     }
 
     @Test
+    fun `disabled mcp adds mandatory approval guidance to the system prompt`() {
+        val requestTool = prepareMcpDispatch(
+            messageText = "查看我的邮箱",
+            allCandidates = listOf(
+                com.android.everytalk.statecontroller.mcp.dispatch.toMcpToolCandidate(
+                    serverName = "Gmail",
+                    tool = com.android.everytalk.data.mcp.McpTool("search_messages", "Search mail"),
+                ),
+            ),
+            enabled = false,
+        ).tools
+
+        val guidance = requireNotNull(mcpApprovalSystemPrompt(mcpEnabled = false, mcpTools = requestTool))
+        assertTrue(guidance.contains("必须先调用 request_mcp"))
+        assertTrue(mcpApprovalSystemPrompt(mcpEnabled = true, mcpTools = requestTool) == null)
+    }
+
+    @Test
+    fun `批准后恢复请求会删除旧的未授权提示`() {
+        val pending = requireNotNull(
+            mcpApprovalSystemPrompt(
+                mcpEnabled = false,
+                mcpTools = listOf(
+                    com.android.everytalk.data.agent.mcpRequestToolDefinition("Gmail: search_messages"),
+                ),
+            ),
+        )
+        val restored = removeMcpPendingApprovalPrompt("基础系统提示\n\n$pending\n\n其他说明")
+
+        assertEquals("基础系统提示\n\n\n\n其他说明", restored)
+        assertTrue("request_mcp" !in restored)
+    }
+
+    @Test
     fun `built in time tool definition uses expected tool name`() {
         val tool = builtInCurrentTimeToolDefinition()
         val function = tool["function"] as Map<*, *>
