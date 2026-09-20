@@ -82,8 +82,6 @@ import com.android.everytalk.ui.components.streaming.UnifiedMarkdownRenderer
 import com.android.everytalk.ui.components.streaming.contentVersionForRendering
 
 private val CONTEXT_MENU_ITEM_ICON_SIZE = 22.dp
-// Markdown 字形视觉重心偏下，用户气泡只移动内容绘制位置，不改变气泡尺寸。
-private val USER_BUBBLE_TEXT_OPTICAL_OFFSET = (-8).dp
 
 internal fun attachmentStripHorizontalAlignment(sender: Sender): Alignment.Horizontal =
     if (sender == Sender.User) Alignment.End else Alignment.Start
@@ -248,7 +246,10 @@ internal fun UserOrErrorMessageContent(
                         vertical = if (message.sender == Sender.User) 0.dp else 14.dp
                     )
                     .wrapContentWidth()
-                    .defaultMinSize(minHeight = 28.dp),
+                    .then(
+                        if (message.sender == Sender.User) Modifier
+                        else Modifier.defaultMinSize(minHeight = 28.dp)
+                    ),
                 contentAlignment = Alignment.CenterStart
             ) {
                 Box(
@@ -314,15 +315,7 @@ internal fun UserOrErrorMessageContent(
                             UnifiedMarkdownRenderer(
                                 preparedMessage = preparedMessage,
                                 sender = message.sender,
-                                modifier = Modifier
-                                    .wrapContentWidth()
-                                    .offset(
-                                        y = if (message.sender == Sender.User) {
-                                            USER_BUBBLE_TEXT_OPTICAL_OFFSET
-                                        } else {
-                                            0.dp
-                                        }
-                                    ),
+                                modifier = Modifier.wrapContentWidth(),
                             )
                         }
                     }
