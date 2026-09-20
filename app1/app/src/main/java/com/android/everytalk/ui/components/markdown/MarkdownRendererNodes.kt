@@ -470,6 +470,8 @@ internal fun shouldIncludeMarkdownNodeSpacer(nodes: List<ASTNode>, index: Int): 
     ) {
         return false
     }
+    // 首个可见节点（前面只剩 EOL/空白）不加上方块间距，否则首行顶部会多出一段空白
+    if (previousVisibleMarkdownNode(nodes, index) == null) return false
     return !hasHorizontalRuleNeighbor(nodes, index, -1)
 }
 

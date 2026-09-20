@@ -286,10 +286,10 @@ internal fun UserOrErrorMessageContent(
                         modifier = Modifier
                             .wrapContentWidth()
                             .padding(
-                                start = if (message.sender == Sender.User) 10.dp else 0.dp,
-                                end = if (message.sender == Sender.User) 10.dp else 0.dp,
-                                top = if (message.sender == Sender.User) 6.dp else 0.dp,
-                                bottom = if (message.sender == Sender.User) 6.dp else 0.dp,
+                                start = if (message.sender == Sender.User) 14.dp else 0.dp,
+                                end = if (message.sender == Sender.User) 14.dp else 0.dp,
+                                top = if (message.sender == Sender.User) 10.dp else 0.dp,
+                                bottom = if (message.sender == Sender.User) 10.dp else 0.dp,
                             )
                             // 如果显示按钮，给底部留出空间，防止内容被按钮遮挡
                             .padding(

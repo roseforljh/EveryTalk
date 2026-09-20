@@ -822,6 +822,10 @@ fun MikePenzMarkdownRenderer(
                 tableBackground = Color.Transparent,
             )
             val markdownInlineContent = markdownInlineContent(markdownInlineContentMap)
+            // 底部 4dp 是为 AI 长文块间节奏留的；用户气泡要求垂直居中，不能加
+            val markdownRootModifier = Modifier.markdownWidth(sender).then(
+                if (sender == Sender.User) Modifier else Modifier.padding(bottom = 4.dp)
+            )
             val renderStaticMarkdown: @Composable () -> Unit = {
                 val selectedMarkdownNodes = markdownNodes ?: markdownNode?.let(::listOf)
                 if (preparedMarkdownDocument != null && selectedMarkdownNodes != null) {
@@ -834,7 +838,7 @@ fun MikePenzMarkdownRenderer(
                         colors = markdownColors,
                         typography = typography,
                         padding = padding,
-                        modifier = Modifier.markdownWidth(sender).padding(bottom = 4.dp),
+                        modifier = markdownRootModifier,
                         imageTransformer = EveryTalkMarkdownImageTransformer,
                         annotator = annotator,
                         extendedSpans = markdownExtendedSpans,
@@ -858,7 +862,7 @@ fun MikePenzMarkdownRenderer(
                         typography = typography,
                         padding = padding,
                         flavour = EveryTalkMarkdownFlavourDescriptor,
-                        modifier = Modifier.markdownWidth(sender).padding(bottom = 4.dp),
+                        modifier = markdownRootModifier,
                         imageTransformer = EveryTalkMarkdownImageTransformer,
                         annotator = annotator,
                         extendedSpans = markdownExtendedSpans,
@@ -897,7 +901,7 @@ fun MikePenzMarkdownRenderer(
                                 colors = markdownColors,
                                 typography = typography,
                                 padding = padding,
-                                modifier = Modifier.markdownWidth(sender).padding(bottom = 4.dp),
+                                modifier = markdownRootModifier,
                                 imageTransformer = EveryTalkMarkdownImageTransformer,
                                 annotator = annotator,
                                 extendedSpans = markdownExtendedSpans,
