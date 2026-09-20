@@ -8,6 +8,8 @@
     { "pattern": "oauth.everytalk.cc", "custom_domain": true }
   ],
   "vars": {
-    "GITHUB_MCP_OAUTH_CLIENT_ID": "your-github-oauth-client-id"
+    "GITHUB_MCP_OAUTH_CLIENT_ID": "your-github-oauth-client-id",
+    "GMAIL_MCP_OAUTH_CLIENT_ID": "your-google-web-oauth-client-id",
+    "MICROSOFT_MCP_OAUTH_CLIENT_ID": "your-microsoft-application-client-id"
   }
 }

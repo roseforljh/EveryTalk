@@ -1,0 +1,8 @@
+{
+  "name": "everytalk-mail-gateway",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": { "start": "node src/index.js", "test": "node --test" },
+  "dependencies": { "imapflow": "^1.0.181", "mailparser": "^3.7.4", "nodemailer": "^7.0.6" }
+}
