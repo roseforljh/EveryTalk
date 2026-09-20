@@ -113,6 +113,8 @@ jobs:
         env:
           # Actions Secret 不能以 GITHUB_ 开头；写入文件时再映射到 App 的配置名。
           GH_MCP_OAUTH_CLIENT_ID: ${{ secrets.GH_MCP_OAUTH_CLIENT_ID }}
+          GMAIL_MCP_OAUTH_CLIENT_ID: ${{ secrets.GMAIL_MCP_OAUTH_CLIENT_ID }}
+          MICROSOFT_MCP_OAUTH_CLIENT_ID: ${{ secrets.MICROSOFT_MCP_OAUTH_CLIENT_ID }}
           # ===== 直连模式 API 配置 =====
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
           GOOGLE_API_BASE_URL: ${{ secrets.GOOGLE_API_BASE_URL }}
@@ -135,6 +137,8 @@ jobs:
           cat > ${{ env.APP_DIR }}/local.properties <<EOF
           sdk.dir=$ANDROID_HOME
           GITHUB_MCP_OAUTH_CLIENT_ID=$GH_MCP_OAUTH_CLIENT_ID
+          GMAIL_MCP_OAUTH_CLIENT_ID=$GMAIL_MCP_OAUTH_CLIENT_ID
+          MICROSOFT_MCP_OAUTH_CLIENT_ID=$MICROSOFT_MCP_OAUTH_CLIENT_ID
           GOOGLE_API_KEY=$GOOGLE_API_KEY
           GOOGLE_API_BASE_URL=$GOOGLE_API_BASE_URL
           GOOGLE_CSE_ID=$GOOGLE_CSE_ID

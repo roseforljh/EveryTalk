@@ -10,10 +10,151 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.*
 import org.junit.Assert.*
 import org.junit.Test
 
 class McpOAuthTest {
+    @Test fun `Gmail 使用离线授权且通过 Worker 交换 PKCE 和刷新令牌`() = runTest {
+        val store = MemorySecrets()
+        val provider = McpOAuthProvider.GMAIL
+        var time = 100_000L
+        var exchanges = 0
+        var challenge = ""
+        val client = HttpClient(MockEngine(MockEngineConfig().apply {
+            dispatcher = StandardTestDispatcher(testScheduler)
+            addHandler { request ->
+                assertEquals("https://oauth.everytalk.cc/oauth/mcp/gmail/token", request.url.toString())
+                val form = parseQueryString((request.body as OutgoingContent.ByteArrayContent).bytes().decodeToString())
+                assertEquals("google-client", form["client_id"])
+                assertNull(form["client_secret"])
+                assertNull(form["resource"])
+                exchanges++
+                if (exchanges == 1) {
+                    assertEquals("authorization_code", form["grant_type"])
+                    assertEquals(provider.redirectUri, form["redirect_uri"])
+                    assertEquals(challenge, mcpPkceChallenge(form["code_verifier"]!!))
+                } else {
+                    assertEquals("refresh_token", form["grant_type"])
+                    // Google 续期通常不返回 refresh_token，下一轮仍须保留旧值。
+                    assertEquals("google-refresh", form["refresh_token"])
+                }
+                val refresh = if (exchanges == 1) ",\"refresh_token\":\"google-refresh\"" else ""
+                respond("""{"access_token":"google-$exchanges","expires_in":120,"token_type":"Bearer"$refresh}""",
+                    HttpStatusCode.OK, headersOf("Content-Type", "application/json"))
+            }
+        }))
+        try {
+            val missing = McpOAuthManager(store, client, "", gmailClientId = "") { time }
+            assertTrue(runCatching { missing.start(provider) }.isFailure)
+            assertTrue(store.values.isEmpty())
+            val flow = McpOAuthManager(store, client, "", gmailClientId = "google-client") { time }
+            val url = Url(flow.start(provider))
+            assertEquals("accounts.google.com", url.host)
+            assertEquals("/o/oauth2/v2/auth", url.encodedPath)
+            assertEquals("offline", url.parameters["access_type"])
+            assertEquals("consent", url.parameters["prompt"])
+            assertEquals("https://www.googleapis.com/auth/gmail.modify", url.parameters["scope"])
+            assertEquals(provider.redirectUri, url.parameters["redirect_uri"])
+            assertEquals("S256", url.parameters["code_challenge_method"])
+            challenge = url.parameters["code_challenge"]!!
+            val callback = "${provider.appRedirectUri}?code=c&state=${url.parameters["state"]}"
+            val restored = McpOAuthManager(store, client, "", gmailClientId = "google-client") { time }
+            assertTrue(runCatching { restored.consume("$callback&iss=https%3A%2F%2Fevil.example") }.isFailure)
+            assertEquals(provider, restored.consume(callback))
+            assertTrue(runCatching { restored.consume(callback) }.isFailure)
+            val config = provider.defaultConfig()
+            assertTrue(config.headers.isEmpty())
+            assertEquals("google-1", restored.accessTokenFor(config))
+            time += 70_000
+            assertEquals(listOf("google-2", "google-2"), listOf(
+                async { restored.accessTokenFor(config) }, async { restored.accessTokenFor(config) },
+            ).awaitAll())
+            time += 70_000
+            assertEquals("google-3", restored.accessTokenFor(config))
+            val malicious = (config as McpServerConfig.StreamableHTTPServer).copy(url = "https://evil.example/mcp")
+            assertTrue(runCatching { restored.accessTokenFor(malicious) }.isFailure)
+            restored.logout(provider)
+            assertTrue(store.values.isEmpty())
+        } finally { client.close() }
+    }
+
+    @Test fun `Notion 注册登录跨进程回调续期和删除复用安全存储`() = runTest {
+        val store = MemorySecrets()
+        val provider = McpOAuthProvider.NOTION
+        var time = 100_000L
+        var exchanges = 0
+        var challenge = ""
+        val client = HttpClient(MockEngine(MockEngineConfig().apply {
+            dispatcher = StandardTestDispatcher(testScheduler)
+            addHandler { request ->
+                assertEquals("https", request.url.protocol.name)
+                assertEquals("mcp.notion.com", request.url.host)
+                val body = (request.body as OutgoingContent.ByteArrayContent).bytes().decodeToString()
+                when (request.url.encodedPath) {
+                    "/register" -> {
+                        val registration = Json.parseToJsonElement(body).jsonObject
+                        assertEquals("none", registration["token_endpoint_auth_method"]!!.jsonPrimitive.content)
+                        assertEquals(listOf("everytalk://oauth/mcp/notion"),
+                            registration["redirect_uris"]!!.jsonArray.map { it.jsonPrimitive.content })
+                        respond("""{"client_id":"notion-client"}""", HttpStatusCode.Created, headersOf("Content-Type", "application/json"))
+                    }
+                    "/token" -> {
+                        val form = parseQueryString(body)
+                        assertEquals("notion-client", form["client_id"])
+                        assertEquals(provider.endpoint, form["resource"])
+                        assertNull(form["client_secret"])
+                        exchanges++
+                        if (exchanges == 1) {
+                            assertEquals("authorization_code", form["grant_type"])
+                            assertEquals(provider.appRedirectUri, form["redirect_uri"])
+                            assertEquals(challenge, mcpPkceChallenge(form["code_verifier"]!!))
+                        } else {
+                            assertEquals("refresh_token", form["grant_type"])
+                            assertEquals("refresh-1", form["refresh_token"])
+                        }
+                        respond("""{"access_token":"notion-$exchanges","refresh_token":"refresh-$exchanges","expires_in":120,"token_type":"Bearer"}""",
+                            HttpStatusCode.OK, headersOf("Content-Type", "application/json"))
+                    }
+                    else -> error("不应调用其他端点")
+                }
+            }
+        }))
+        try {
+            val initial = McpOAuthManager(store, client, "") { time }
+            val url = Url(initial.start(provider))
+            assertEquals("https://mcp.notion.com/authorize", url.toString().substringBefore('?'))
+            assertEquals("default", url.parameters["scope"])
+            assertEquals(provider.endpoint, url.parameters["resource"])
+            assertEquals(provider.appRedirectUri, url.parameters["redirect_uri"])
+            assertEquals("S256", url.parameters["code_challenge_method"])
+            challenge = url.parameters["code_challenge"]!!
+            val callback = "${provider.appRedirectUri}?code=notion-code&state=${url.parameters["state"]}"
+            assertEquals(provider, McpOAuthCallbackBus.providerFor(callback))
+            val restored = McpOAuthManager(store, client, "") { time }
+            assertTrue(runCatching { restored.consume("$callback&iss=https%3A%2F%2Fevil.example") }.isFailure)
+            assertTrue(runCatching { restored.consume("$callback&state=duplicate") }.isFailure)
+            assertEquals(provider, restored.consume(callback))
+            assertTrue(runCatching { restored.consume(callback) }.isFailure)
+            val config = provider.defaultConfig()
+            assertTrue(config.headers.isEmpty())
+            assertEquals("notion-1", restored.accessTokenFor(config))
+            time += 70_000
+            assertEquals(listOf("notion-2", "notion-2"), listOf(
+                async { restored.accessTokenFor(config) }, async { restored.accessTokenFor(config) },
+            ).awaitAll())
+            assertEquals(2, exchanges)
+            val malicious = (config as McpServerConfig.StreamableHTTPServer).copy(url = "https://evil.example/mcp")
+            assertTrue(runCatching { restored.accessTokenFor(malicious) }.isFailure)
+            restored.logout(provider)
+            assertTrue(store.values.isEmpty())
+            assertTrue(runCatching { restored.accessTokenFor(config) }.isFailure)
+            val cancelled = Url(restored.start(provider))
+            assertTrue(runCatching { restored.consume("${provider.appRedirectUri}?error=access_denied&state=${cancelled.parameters["state"]}") }.isFailure)
+            assertTrue(store.values.isEmpty())
+        } finally { client.close() }
+    }
+
     private class MemorySecrets : McpOAuthSecrets {
         val values = mutableMapOf<String, String>()
         override suspend fun read(key: String) = values[key]

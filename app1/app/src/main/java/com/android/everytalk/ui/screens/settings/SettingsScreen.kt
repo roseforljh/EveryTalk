@@ -104,6 +104,16 @@ fun SettingsScreen(
     val mcpServerStates by viewModel.mcpServerStates.collectAsState()
     val mcpOAuthBusy by viewModel.mcpManager.oauthBusy.collectAsState()
     val mcpOAuthMessage by viewModel.mcpManager.oauthMessage.collectAsState()
+    var mailProviderToConfigure by remember { mutableStateOf<com.android.everytalk.data.mcp.McpMailProvider?>(null) }
+    var mailEndpointToConfigure by remember { mutableStateOf<String?>(null) }
+    mailProviderToConfigure?.let { provider ->
+        com.android.everytalk.ui.screens.mcp.McpMailDialog(provider, mailEndpointToConfigure,
+            onSave = { input ->
+                viewModel.mcpManager.configureMail(provider, input)
+                mailProviderToConfigure = null
+                mailEndpointToConfigure = null
+            }, onDismiss = { mailProviderToConfigure = null; mailEndpointToConfigure = null })
+    }
     mcpOAuthMessage?.let { message ->
         androidx.compose.material3.AlertDialog(
             onDismissRequest = viewModel.mcpManager::dismissOAuthMessage,
@@ -346,6 +356,10 @@ fun SettingsScreen(
                                     onEditWebSearchProvider = { editingExternalProvider = it },
                                     mcpServerStates = displayedMcpServerStates,
                                     onLoginMcp = viewModel.mcpManager::login,
+                                    onConfigureMail = { provider, endpoint ->
+                                        mailProviderToConfigure = provider
+                                        mailEndpointToConfigure = endpoint
+                                    },
                                     oauthBusy = mcpOAuthBusy,
                                     onAddMcpServer = { viewModel.addMcpServer(it) },
                                     onUpdateMcpServer = { viewModel.updateMcpServer(it) },

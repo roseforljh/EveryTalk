@@ -1,6 +1,9 @@
 package com.android.everytalk.ui.screens.mcp
 
 import com.android.everytalk.data.mcp.McpTransportType
+import com.android.everytalk.data.mcp.Context7Mcp
+import com.android.everytalk.data.mcp.McpServerConfig
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -18,6 +21,13 @@ class McpServerPresetTest {
             mapOf("CONTEXT7_API_KEY" to "test-key"),
             preset.buildHeaders("test-key")
         )
-        assertTrue(preset.requiresApiKey)
+        assertFalse(preset.requiresApiKey)
+        assertTrue(preset.buildHeaders("").isEmpty())
+        val config = Context7Mcp.defaultConfig()
+        assertTrue(config is McpServerConfig.StreamableHTTPServer)
+        assertEquals(preset.buildUrl(""), config.url)
+        assertEquals(Context7Mcp.defaultConfig().id, config.id)
+        assertTrue(config.enabled)
+        assertTrue(config.headers.isEmpty())
     }
 }

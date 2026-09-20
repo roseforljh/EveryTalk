@@ -9,6 +9,18 @@ enum class McpTransportType {
     HTTP
 }
 
+/** Context7 默认匿名连接；稳定 ID 让反复启用只更新同一配置，不生成重复服务器。 */
+object Context7Mcp {
+    const val SERVER_ID = "mcp-context7"
+    const val ENDPOINT = "https://mcp.context7.com/mcp"
+
+    fun defaultConfig(): McpServerConfig = McpServerConfig.StreamableHTTPServer(
+        id = SERVER_ID,
+        url = ENDPOINT,
+        commonOptions = McpCommonOptions(name = "Context7"),
+    )
+}
+
 @Serializable
 data class McpCommonOptions(
     val enable: Boolean = true,

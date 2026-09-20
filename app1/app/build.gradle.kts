@@ -103,6 +103,8 @@ android {
         versionName = if (!envVersionName.isNullOrBlank()) envVersionName else baseVersionName
 
         buildConfigField("String", "GITHUB_MCP_OAUTH_CLIENT_ID", "\"${getConfigValue("GITHUB_MCP_OAUTH_CLIENT_ID")}\"")
+        buildConfigField("String", "GMAIL_MCP_OAUTH_CLIENT_ID", "\"${getConfigValue("GMAIL_MCP_OAUTH_CLIENT_ID")}\"")
+        buildConfigField("String", "MICROSOFT_MCP_OAUTH_CLIENT_ID", "\"${getConfigValue("MICROSOFT_MCP_OAUTH_CLIENT_ID")}\"")
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
             useSupportLibrary = true

@@ -35,6 +35,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.graphicsLayer
 import kotlinx.coroutines.launch
@@ -240,11 +241,13 @@ internal fun McpSettingsContent(
     topContentPadding: Dp,
     bottomContentPadding: Dp,
     onLoginMcp: (com.android.everytalk.data.mcp.McpOAuthProvider) -> Unit,
+    onConfigureMail: (com.android.everytalk.data.mcp.McpMailProvider, String?) -> Unit,
     oauthBusy: Boolean,
 ) {
     McpServerListContent(
         serverStates = mcpServerStates,
         onLogin = onLoginMcp,
+        onConfigureMail = onConfigureMail,
         showOAuthPlaceholders = true,
         oauthBusy = oauthBusy,
         onAddServer = onAddMcpServer,
@@ -291,12 +294,15 @@ private fun ExternalWebSearchProviderCards(
         } else {
             if (isDark) Color(0xFF2E2E2E) else Color(0xFFEDEDED)
         }
+        val contentAlpha = if (isConfigured) 1f else 0.5f
 
         OutlinedCard(
             onClick = { onEditProvider(provider) },
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(20.dp),
-            colors = CardDefaults.outlinedCardColors(containerColor = containerColor),
+            colors = CardDefaults.outlinedCardColors(
+                containerColor = containerColor
+            ),
             elevation = CardDefaults.outlinedCardElevation(defaultElevation = 0.dp),
             border = androidx.compose.foundation.BorderStroke(1.dp, borderColor)
         ) {
@@ -309,14 +315,14 @@ private fun ExternalWebSearchProviderCards(
                 Surface(
                     modifier = Modifier.size(44.dp),
                     shape = RoundedCornerShape(14.dp),
-                    color = provider.accentColor.copy(alpha = 0.1f),
+                    color = provider.accentColor.copy(alpha = 0.1f * contentAlpha),
                 ) {
                     Box(contentAlignment = Alignment.Center) {
                         Icon(
                             painter = painterResource(provider.iconRes),
                             contentDescription = null,
                             modifier = Modifier.size(22.dp),
-                            tint = provider.accentColor
+                            tint = provider.accentColor.copy(alpha = contentAlpha)
                         )
                     }
                 }
@@ -328,7 +334,7 @@ private fun ExternalWebSearchProviderCards(
                         text = provider.displayName,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.onSurface,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = contentAlpha),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -336,7 +342,7 @@ private fun ExternalWebSearchProviderCards(
                     Text(
                         text = stringResource(provider.descriptionRes),
                         style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = contentAlpha),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )

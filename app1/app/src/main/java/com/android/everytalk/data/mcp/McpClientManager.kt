@@ -33,6 +33,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.ClassDiscriminatorMode
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -53,6 +54,8 @@ import kotlin.time.Duration.Companion.seconds
 
 private const val TAG = "McpClientManager"
 private const val MCP_TOOL_NAME_MAX_LENGTH = 64
+private const val MCP_CONNECT_TIMEOUT_MS = 15_000L
+private const val MCP_CLOSE_TIMEOUT_MS = 2_000L
 
 internal fun buildMcpToolAlias(serverId: String, toolName: String): String {
     val hash = MessageDigest.getInstance("SHA-256")
@@ -110,6 +113,7 @@ private fun classifyFailureType(error: Throwable): McpFailureType {
 class McpClientManager(
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
     private val accessToken: suspend (McpServerConfig) -> String? = { null },
+    private val connectTimeoutMillis: Long = MCP_CONNECT_TIMEOUT_MS,
     private val connectClient: suspend (Client, AbstractTransport) -> Unit = { client, transport ->
         client.connect(transport)
     },
@@ -281,42 +285,59 @@ class McpClientManager(
                 McpServerState(config = config, status = McpStatus.Connecting)
             }
 
-            connectClient(client, transport)
-            check(!closed.get()) { "McpClientManager is closed" }
-            syncToolsLocked(config)
+            // MCP 服务端可能卡在 DNS、TLS 或初始化请求。连接必须有独立上限，
+            // 否则用户批准后 Agent 会一直保持“正在发送”，无法回到正常对话状态。
+            val connected = withTimeoutOrNull(connectTimeoutMillis) {
+                connectClient(client, transport)
+                check(!closed.get()) { "McpClientManager is closed" }
+                syncToolsLocked(config)
+                true
+            }
+            // 仅把本次连接的超时转成服务器错误；用户取消、父任务超时仍向上传播。
+            check(connected == true) { "MCP 连接超时 (timeout)" }
 
             Log.i(TAG, "addServer: connected ${config.name}")
         } catch (e: CancellationException) {
-            withContext(NonCancellable) {
-                try {
-                    client.close()
-                } catch (closeError: Exception) {
-                    Log.w(TAG, "addServer cancellation cleanup failed: ${config.name}", closeError)
-                }
-            }
+            closeClient(client)
             clients.remove(config.id, client)
             configs.remove(config.id, config)
             _serverStates.update { it - config.id }
             throw e
         } catch (e: Exception) {
-            Log.e(TAG, "addServer failed: ${config.name}", e)
-            withContext(NonCancellable) {
+            handleConnectionFailure(config, client, e)
+        }
+    }
+
+    /** 连接失败只影响当前服务器，不能让其他 MCP 或原 Agent 恢复流程一起卡住。 */
+    private suspend fun handleConnectionFailure(
+        config: McpServerConfig,
+        client: Client,
+        error: Throwable,
+    ) {
+        Log.e(TAG, "addServer failed: ${config.name}", error)
+        closeClient(client)
+        clients.remove(config.id, client)
+        if (closed.get()) {
+            configs.remove(config.id, config)
+            _serverStates.update { it - config.id }
+            return
+        }
+        val failureType = classifyFailureType(error)
+        updateServerState(config.id) {
+            McpServerState(
+                config = config,
+                status = McpStatus.Error(error.message ?: "Connection failed", failureType.name),
+                errorMessage = error.message
+            )
+        }
+    }
+
+    /** 关闭可能发送远端 DELETE；即使断网，也必须限时释放服务器锁。 */
+    private suspend fun closeClient(client: Client) {
+        withContext(NonCancellable) {
+            withTimeoutOrNull(MCP_CLOSE_TIMEOUT_MS) {
                 runCatching { client.close() }
-                    .onFailure { closeError -> Log.w(TAG, "addServer failure cleanup failed: ${config.name}", closeError) }
-            }
-            clients.remove(config.id, client)
-            if (closed.get()) {
-                configs.remove(config.id, config)
-                _serverStates.update { it - config.id }
-                return
-            }
-            val failureType = classifyFailureType(e)
-            updateServerState(config.id) {
-                McpServerState(
-                    config = config,
-                    status = McpStatus.Error(e.message ?: "Connection failed", failureType.name),
-                    errorMessage = e.message
-                )
+                    .onFailure { closeError -> Log.w(TAG, "MCP client cleanup failed", closeError) }
             }
         }
     }
@@ -385,7 +406,7 @@ class McpClientManager(
         var closeCancellation: CancellationException? = null
 
         try {
-            client?.close()
+            client?.let { closeClient(it) }
         } catch (e: CancellationException) {
             closeCancellation = e
         } catch (e: Exception) {
@@ -420,7 +441,7 @@ class McpClientManager(
         var closeCancellation: CancellationException? = null
 
         try {
-            client?.close()
+            client?.let { closeClient(it) }
         } catch (e: CancellationException) {
             closeCancellation = e
         } catch (e: Exception) {
@@ -484,7 +505,7 @@ class McpClientManager(
             withContext(NonCancellable) {
                 try {
                     clients.values.toList().forEach { client ->
-                        runCatching { client.close() }
+                        runCatching { closeClient(client) }
                             .onFailure { Log.w(TAG, "MCP client close failed", it) }
                     }
                     clients.clear()

@@ -68,3 +68,10 @@ TEMPORARY_WORKER_GATEWAY_URL=https://your-temporary-worker-gateway.com
 GITHUB_MCP_OAUTH_CLIENT_ID=your-github-oauth-client-id
 ## 固定回调：https://oauth.everytalk.cc/oauth/mcp/github
 ## Cloudflare MCP 自动注册客户端，无需复用 Computer OAuth Client ID。
+
+## Gmail MCP：Google Web application 客户端 ID，Secret 只放 Worker。
+## 固定回调：https://oauth.everytalk.cc/oauth/mcp/gmail
+GMAIL_MCP_OAUTH_CLIENT_ID=your-google-web-oauth-client-id
+
+# 微软 Entra 应用（个人 Microsoft 账户 + 组织目录），Secret 仅放 Worker
+MICROSOFT_MCP_OAUTH_CLIENT_ID=your-microsoft-application-client-id

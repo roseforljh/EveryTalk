@@ -85,6 +85,26 @@
                 <category android:name="android.intent.category.BROWSABLE" />
                 <data android:scheme="everytalk" android:host="oauth" android:path="/mcp/cloudflare" />
             </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="everytalk" android:host="oauth" android:path="/mcp/notion" />
+            </intent-filter>
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="everytalk" android:host="oauth" android:path="/mcp/gmail" />
+                <data android:scheme="everytalk" android:host="oauth" android:path="/mcp/microsoft" />
+            </intent-filter>
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="oauth.everytalk.cc" android:path="/oauth/mcp/gmail" />
+                <data android:scheme="https" android:host="oauth.everytalk.cc" android:path="/oauth/mcp/microsoft" />
+            </intent-filter>
         </activity-alias>
 
         <activity-alias

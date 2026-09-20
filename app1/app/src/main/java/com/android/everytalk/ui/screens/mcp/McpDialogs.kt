@@ -61,8 +61,8 @@ fun McpServerListContent(
     // 合并设置页把搜索配置作为列表头，所有内容共用一个滚动区域；聊天弹窗不传此项。
     header: (@Composable () -> Unit)? = null,
     onLogin: ((McpOAuthProvider) -> Unit)? = null,
-    // 为 true 时把 GitHub/Cloudflare 这类内置 OAuth 服务渲染成未登录占位卡片；
-    // 打开开关即发起登录，登录成功后落库变成普通服务器卡片。
+    onConfigureMail: ((McpMailProvider, String?) -> Unit)? = null,
+    // 设置页展示内置服务：Context7 直接启用，OAuth 服务在授权后落库。
     showOAuthPlaceholders: Boolean = false,
     oauthBusy: Boolean = false,
 ) {
@@ -124,7 +124,7 @@ fun McpServerListContent(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .then(if (header == null) Modifier.fillParentMaxHeight() else Modifier)
+                        .fillParentMaxHeight()
                         .padding(vertical = 24.dp),
                     contentAlignment = Alignment.Center
                 ) {
@@ -172,16 +172,45 @@ fun McpServerListContent(
                 )
             }
             if (showOAuthPlaceholders) {
+                // 兼容此前手动添加的 Context7，已有官方连接时不再显示重复入口。
+                if (serverStates.values.none { it.config.id == Context7Mcp.SERVER_ID || it.config.url == Context7Mcp.ENDPOINT }) {
+                    item(key = "preset-context7", contentType = "preset") {
+                        McpBuiltinProviderItem(
+                            name = "Context7",
+                            description = stringResource(R.string.mcp_context7_description),
+                            busy = false,
+                            onClick = { onAddServer(Context7Mcp.defaultConfig()) },
+                            onToggle = { enabled -> if (enabled) onAddServer(Context7Mcp.defaultConfig()) },
+                        )
+                    }
+                }
                 items(
                     McpOAuthProvider.entries.filter { !serverStates.containsKey(it.serverId) },
                     key = { "oauth-${it.key}" },
                     contentType = { "oauth" }
                 ) { provider ->
-                    McpOAuthProviderItem(
-                        provider = provider,
+                    McpBuiltinProviderItem(
+                        name = provider.displayName,
+                        description = stringResource(
+                            if (provider == McpOAuthProvider.GMAIL) R.string.mcp_gmail_description
+                            else if (provider == McpOAuthProvider.MICROSOFT) R.string.mcp_microsoft_description
+                            else R.string.mcp_oauth_description,
+                        ),
                         busy = oauthBusy,
                         onClick = { onLogin?.invoke(provider) },
                         onToggle = { enabled -> if (enabled) onLogin?.invoke(provider) }
+                    )
+                }
+                items(
+                    McpMailProvider.entries.filter { !serverStates.containsKey(it.serverId) },
+                    key = { "mail-${it.key}" }, contentType = { "mail" }
+                ) { provider ->
+                    McpBuiltinProviderItem(
+                        name = provider.displayName,
+                        description = stringResource(R.string.mcp_mail_description),
+                        busy = oauthBusy,
+                        onClick = { onConfigureMail?.invoke(provider, null) },
+                        onToggle = { enabled -> if (enabled) onConfigureMail?.invoke(provider, null) },
                     )
                 }
             }
@@ -218,16 +247,21 @@ fun McpServerListContent(
 
     serverForManageDialog?.let { selected ->
         val oauthProvider = McpOAuthProvider.entries.firstOrNull { it.serverId == selected.config.id }
+        val mailProvider = McpMailProvider.entries.firstOrNull { it.serverId == selected.config.id }
         McpServerManageDialog(
             serverState = selected,
             onDismiss = { serverForManageDialog = null },
-            onEdit = if (oauthProvider != null) null else { ->
+            onEdit = if (oauthProvider != null || mailProvider != null) null else { ->
                 serverForManageDialog = null
                 serverToEdit = selected.config
             },
             onRelogin = if (oauthProvider != null && onLogin != null) { ->
                 serverForManageDialog = null
                 onLogin(oauthProvider)
+            } else null,
+            onMailReconfigure = if (mailProvider != null && onConfigureMail != null) { ->
+                serverForManageDialog = null
+                onConfigureMail(mailProvider, selected.config.url)
             } else null,
             onShowTools = if (selected.tools.isNotEmpty()) { ->
                 serverForToolsDialog = selected
@@ -282,15 +316,20 @@ private fun getServerIcon(name: String): Int {
     return when {
         lowerName.contains("cloudflare") -> R.drawable.ic_cloudflare
         lowerName.contains("github") -> R.drawable.ic_github
+        lowerName.contains("notion") -> R.drawable.ic_notion
+        lowerName.contains("gmail") -> R.drawable.ic_gmail
+        lowerName.contains("microsoft") || lowerName.contains("微软") -> R.drawable.ic_microsoft
+        lowerName.contains("qq") -> R.drawable.ic_qq
+        lowerName.contains("netease") || lowerName.contains("网易") -> R.drawable.ic_netease
         lowerName.contains("context7") -> R.drawable.ic_gpt_sparkle
-        lowerName.contains("exa") -> R.drawable.ic_search
+        lowerName.contains("exa") -> R.drawable.ic_exa
         lowerName.contains("firecrawl") || lowerName.contains("crawl") -> R.drawable.ic_globe
         lowerName.contains("wiki") -> R.drawable.ic_gpt_book_open_study
         lowerName.contains("news") -> R.drawable.ic_gpt_newspaper
-        lowerName.contains("tavily") -> R.drawable.ic_gpt_deep_research
+        lowerName.contains("tavily") -> R.drawable.ic_tavily
         lowerName.contains("search") -> R.drawable.ic_search
         lowerName.contains("web") -> R.drawable.ic_globe
-        lowerName.contains("code") || lowerName.contains("github") -> R.drawable.ic_gpt_code
+        lowerName.contains("code") -> R.drawable.ic_gpt_code
         lowerName.contains("data") || lowerName.contains("database") -> R.drawable.ic_gpt_data_controls
         lowerName.contains("ai") || lowerName.contains("chat") -> R.drawable.ic_gpt_sparkle
         lowerName.contains("file") || lowerName.contains("doc") -> R.drawable.ic_gpt_file_document
@@ -305,15 +344,22 @@ private fun getServerIcon(name: String): Int {
 @Composable
 private fun getServerIconColor(name: String): Color {
     val lowerName = name.lowercase()
+    val isDark = isSystemInDarkTheme()
     return when {
-        lowerName.contains("cloudflare") -> Color(0xFFF59E0B)
+        lowerName.contains("cloudflare") -> Color(0xFFF6821F)
+        lowerName.contains("github") -> if (isDark) Color(0xFFE6EDF3) else Color(0xFF24292F)
+        lowerName.contains("notion") -> if (isDark) Color(0xFFE6EDF3) else Color(0xFF24292F)
+        lowerName.contains("gmail") -> Color(0xFFEA4335)
+        lowerName.contains("microsoft") || lowerName.contains("微软") -> Color(0xFF00A4EF)
+        lowerName.contains("qq") -> Color(0xFF12B7F5)
+        lowerName.contains("netease") || lowerName.contains("网易") -> Color(0xFFE60012)
         lowerName.contains("context7") -> Color(0xFF10B981)
         lowerName.contains("exa") -> Color(0xFF6366F1)
         lowerName.contains("firecrawl") -> Color(0xFFEF4444)
         lowerName.contains("wiki") -> Color(0xFF3B82F6)
         lowerName.contains("news") -> Color(0xFF8B5CF6)
-        lowerName.contains("tavily") -> Color(0xFF10B981)
-        lowerName.contains("code") || lowerName.contains("github") -> Color(0xFFF59E0B)
+        lowerName.contains("tavily") -> Color(0xFF14B8A6)
+        lowerName.contains("code") -> Color(0xFFF59E0B)
         else -> Color(0xFF6B7280)
     }
 }
@@ -330,17 +376,19 @@ private fun McpServerItem(
 
     val iconColor = getServerIconColor(config.name)
     val icon = getServerIcon(config.name)
-
     val isDarkMode = isSystemInDarkTheme()
+    val iconTint = when {
+        config.name.lowercase().let { it.contains("github") || it.contains("notion") } -> if (isDarkMode) Color(0xFFE6EDF3) else Color(0xFF24292F)
+        else -> iconColor
+    }
     val containerColor = if (isDarkMode) Color(0xFF141414) else Color.White
     val cardBorderColor = if (isDarkMode) Color(0xFF2E2E2E) else Color(0xFFEDEDED)
     val contentColor = MaterialTheme.colorScheme.onSurface
     val active = config.enabled && status is McpStatus.Connected
 
     OutlinedCard(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
+        modifier = Modifier.fillMaxWidth(),
+        onClick = onClick,
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.outlinedCardColors(
             containerColor = containerColor
@@ -367,7 +415,7 @@ private fun McpServerItem(
                         painter = painterResource(icon),
                         contentDescription = null,
                         modifier = Modifier.size(22.dp),
-                        tint = if (config.enabled) iconColor else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
+                        tint = if (config.enabled) iconTint else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
                     )
                 }
             }
@@ -403,7 +451,7 @@ private fun McpServerItem(
                                 .clip(CircleShape)
                                 .background(
                                     when (status) {
-                                        is McpStatus.Connected -> iconColor
+                                        is McpStatus.Connected -> if (config.name.lowercase().let { it.contains("github") || it.contains("notion") }) MaterialTheme.colorScheme.onSurfaceVariant else iconColor
                                         is McpStatus.Error -> MaterialTheme.colorScheme.error
                                         is McpStatus.Idle -> MaterialTheme.colorScheme.outline
                                         is McpStatus.Connecting -> MaterialTheme.colorScheme.tertiary
@@ -445,7 +493,7 @@ private fun McpServerItem(
                 modifier = Modifier.scale(0.8f),
                 colors = SwitchDefaults.colors(
                     checkedThumbColor = Color.White,
-                    checkedTrackColor = iconColor,
+                    checkedTrackColor = if (config.name.lowercase().let { it.contains("github") || it.contains("notion") }) MaterialTheme.colorScheme.onSurfaceVariant else iconColor,
                     checkedBorderColor = Color.Transparent,
                     uncheckedThumbColor = MaterialTheme.colorScheme.onSurfaceVariant,
                     uncheckedTrackColor = MaterialTheme.colorScheme.surfaceContainerHighest,
@@ -457,24 +505,25 @@ private fun McpServerItem(
 }
 
 /**
- * 未登录的内置 OAuth 服务占位卡片（GitHub / Cloudflare）。
- * 点击卡片或打开开关都会触发浏览器登录；登录成功后落库，变为普通服务器卡片。
+ * 未添加的内置服务共用现有卡片布局，点击和开关执行同一接入动作。
+ * Context7 直接保存配置；OAuth 服务先登录，成功后统一使用普通服务器卡片。
  */
 @Composable
-private fun McpOAuthProviderItem(
-    provider: McpOAuthProvider,
+private fun McpBuiltinProviderItem(
+    name: String,
+    description: String,
     busy: Boolean,
     onClick: () -> Unit,
     onToggle: (Boolean) -> Unit
 ) {
-    val iconColor = getServerIconColor(provider.displayName)
-    val icon = getServerIcon(provider.displayName)
+    val iconColor = getServerIconColor(name)
+    val icon = getServerIcon(name)
     val isDarkMode = isSystemInDarkTheme()
 
     OutlinedCard(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(enabled = !busy, onClick = onClick),
+        onClick = onClick,
+        enabled = !busy,
+        modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
         colors = CardDefaults.outlinedCardColors(
             containerColor = if (isDarkMode) Color(0xFF141414) else Color.White
@@ -510,7 +559,7 @@ private fun McpOAuthProviderItem(
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = provider.displayName,
+                    text = name,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     color = MaterialTheme.colorScheme.onSurface,
@@ -519,7 +568,7 @@ private fun McpOAuthProviderItem(
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = stringResource(R.string.mcp_oauth_description),
+                    text = description,
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 2,
@@ -554,6 +603,7 @@ private fun McpServerManageDialog(
     onDismiss: () -> Unit,
     onEdit: (() -> Unit)?,
     onRelogin: (() -> Unit)?,
+    onMailReconfigure: (() -> Unit)?,
     onShowTools: (() -> Unit)?,
     onDelete: () -> Unit,
 ) {
@@ -591,61 +641,81 @@ private fun McpServerManageDialog(
             }
         },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                val buttonShape = RoundedCornerShape(14.dp)
+                val buttonBorder = BorderStroke(1.dp, dlgBorder)
+                val buttonColors = ButtonDefaults.outlinedButtonColors(
+                    containerColor = Color.Transparent,
+                    contentColor = dlgContent
+                )
+
                 onEdit?.let { action ->
-                    TextButton(
+                    OutlinedButton(
                         onClick = action,
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp)
+                        shape = buttonShape,
+                        colors = buttonColors,
+                        border = buttonBorder
                     ) {
                         Text(
                             stringResource(R.string.mcp_action_edit),
                             modifier = Modifier.fillMaxWidth(),
-                            color = dlgContent,
                             fontWeight = FontWeight.SemiBold
                         )
                     }
                 }
                 onRelogin?.let { action ->
-                    TextButton(
+                    OutlinedButton(
                         onClick = action,
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp)
+                        shape = buttonShape,
+                        colors = buttonColors,
+                        border = buttonBorder
                     ) {
                         Text(
                             stringResource(R.string.mcp_oauth_relogin),
                             modifier = Modifier.fillMaxWidth(),
-                            color = dlgContent,
                             fontWeight = FontWeight.SemiBold
                         )
                     }
                 }
+                onMailReconfigure?.let { action ->
+                    OutlinedButton(onClick = action, modifier = Modifier.fillMaxWidth(), shape = buttonShape,
+                        colors = buttonColors, border = buttonBorder) {
+                        Text(stringResource(R.string.mcp_mail_reconfigure), modifier = Modifier.fillMaxWidth(), fontWeight = FontWeight.SemiBold)
+                    }
+                }
                 onShowTools?.let { action ->
-                    TextButton(
+                    OutlinedButton(
                         onClick = {
                             action()
                             onDismiss()
                         },
                         modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp)
+                        shape = buttonShape,
+                        colors = buttonColors,
+                        border = buttonBorder
                     ) {
                         Text(
                             stringResource(R.string.mcp_available_tools),
                             modifier = Modifier.fillMaxWidth(),
-                            color = dlgContent,
                             fontWeight = FontWeight.SemiBold
                         )
                     }
                 }
-                TextButton(
+                OutlinedButton(
                     onClick = onDelete,
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = buttonShape,
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        containerColor = Color.Transparent,
+                        contentColor = MaterialTheme.colorScheme.error
+                    ),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.error.copy(alpha = 0.4f))
                 ) {
                     Text(
                         stringResource(R.string.action_remove),
                         modifier = Modifier.fillMaxWidth(),
-                        color = MaterialTheme.colorScheme.error,
                         fontWeight = FontWeight.SemiBold
                     )
                 }
@@ -821,9 +891,9 @@ enum class McpServerPreset(
     ),
     CONTEXT7(
         displayName = "Context7",
-        urlTemplate = "https://mcp.context7.com/mcp",
+        urlTemplate = Context7Mcp.ENDPOINT,
         transportType = McpTransportType.HTTP,
-        requiresApiKey = true,
+        requiresApiKey = false,
         apiKeyPlaceholder = "Context7 API Key",
         useHeaderAuth = true,
         headerName = "CONTEXT7_API_KEY"
@@ -834,7 +904,7 @@ enum class McpServerPreset(
     }
     
     fun buildHeaders(apiKey: String): Map<String, String> {
-        return if (useHeaderAuth && headerName.isNotBlank()) {
+        return if (useHeaderAuth && headerName.isNotBlank() && apiKey.isNotBlank()) {
             mapOf(headerName to apiKey)
         } else {
             emptyMap()
@@ -861,7 +931,9 @@ fun AddMcpServerDialog(
     }
     var name by remember(existingConfig) { mutableStateOf(existingConfig?.name.orEmpty()) }
     var url by remember(existingConfig) { mutableStateOf(existingConfig?.url.orEmpty()) }
-    var apiKey by remember { mutableStateOf("") }
+    var apiKey by remember(existingConfig) {
+        mutableStateOf(existingConfig?.headers?.get("CONTEXT7_API_KEY").orEmpty())
+    }
     var apiKeyVisible by remember { mutableStateOf(false) }
     var transportType by remember(existingConfig) {
         mutableStateOf(
@@ -883,7 +955,7 @@ fun AddMcpServerDialog(
         name.isNotBlank() && url.isNotBlank() &&
             (url.startsWith("http://") || url.startsWith("https://"))
     } else {
-        name.isNotBlank() && apiKey.isNotBlank()
+        name.isNotBlank() && (!selectedPreset.requiresApiKey || apiKey.isNotBlank())
     }
 
     val isDarkTheme = isSystemInDarkTheme()
@@ -1108,6 +1180,9 @@ fun AddMcpServerDialog(
                             value = apiKey,
                             onValueChange = { apiKey = it },
                             label = { Text(selectedPreset.apiKeyPlaceholder) },
+                            supportingText = if (!selectedPreset.requiresApiKey) {
+                                { Text(stringResource(R.string.mcp_api_key_optional)) }
+                            } else null,
                             placeholder = { Text(stringResource(R.string.mcp_api_key_hint)) },
                             visualTransformation = if (apiKeyVisible) VisualTransformation.None else PasswordVisualTransformation(),
                             singleLine = true,

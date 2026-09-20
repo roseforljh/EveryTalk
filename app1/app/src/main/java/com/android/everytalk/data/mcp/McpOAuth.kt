@@ -30,10 +30,21 @@ import java.util.Base64
 /** 内置服务只把授权发送到固定官方端点；导入配置不能靠复用 ID 获取凭据。 */
 enum class McpOAuthProvider(val key: String, val serverId: String, val displayName: String, val endpoint: String) {
     GITHUB("github", "mcp-github", "GitHub", "https://api.githubcopilot.com/mcp/x/all"),
-    CLOUDFLARE("cloudflare", "mcp-cloudflare", "Cloudflare", "https://mcp.cloudflare.com/mcp");
+    CLOUDFLARE("cloudflare", "mcp-cloudflare", "Cloudflare", "https://mcp.cloudflare.com/mcp"),
+    NOTION("notion", "mcp-notion", "Notion", "https://mcp.notion.com/mcp"),
+    GMAIL("gmail", "mcp-gmail", "Gmail", "https://oauth.everytalk.cc/mcp/gmail"),
+    MICROSOFT("microsoft", "mcp-microsoft", "微软邮箱", "https://oauth.everytalk.cc/mcp/microsoft");
 
-    val redirectUri: String get() = "https://oauth.everytalk.cc/oauth/mcp/$key"
+    // Notion 直接接受原生回调；Gmail 通过 ET Worker 交换 client secret 并转发回调。
+    val redirectUri: String get() = if (this == NOTION) appRedirectUri else "https://oauth.everytalk.cc/oauth/mcp/$key"
     val appRedirectUri: String get() = "everytalk://oauth/mcp/$key"
+    val authorizationOrigin: String get() = when (this) {
+        GITHUB -> "https://github.com"
+        CLOUDFLARE -> "https://mcp.cloudflare.com"
+        NOTION -> "https://mcp.notion.com"
+        GMAIL -> "https://accounts.google.com"
+        MICROSOFT -> "https://login.microsoftonline.com"
+    }
     fun defaultConfig(): McpServerConfig = McpServerConfig.StreamableHTTPServer(
         id = serverId,
         url = endpoint,
@@ -95,8 +106,8 @@ internal fun parseMcpCallback(raw: String, provider: McpOAuthProvider): Map<Stri
     }
     require(pairs.map { it.first }.toSet().size == pairs.size) { "MCP OAuth 回调参数重复" }
     return pairs.toMap().also {
-        if (provider == McpOAuthProvider.CLOUDFLARE && it["iss"] != null) {
-            require(it["iss"] == "https://mcp.cloudflare.com") { "MCP OAuth issuer 不匹配" }
+        if (provider != McpOAuthProvider.GITHUB && it["iss"] != null) {
+            require(it["iss"] == provider.authorizationOrigin) { "MCP OAuth issuer 不匹配" }
         }
     }
 }
@@ -117,7 +128,7 @@ object McpOAuthCallbackBus {
 }
 
 /**
- * GitHub 经 Worker 交换授权码（Secret 永不进入 APK）；Cloudflare MCP 动态注册公开客户端。
+ * GitHub、Gmail、微软邮箱经 Worker 交换授权码（Secret 永不进入 APK）；Cloudflare 和 Notion 动态注册公开客户端。
  * 每个提供方的一把锁覆盖登录、回调、续期和删除，避免刷新令牌轮换及退出登录之间竞争。
  * PKCE 草稿只保留最新一份，10 分钟失效，进程重启后仍能安全接收回调。
  */
@@ -125,6 +136,8 @@ class McpOAuthManager(
     private val secrets: McpOAuthSecrets,
     private val http: HttpClient,
     private val githubClientId: String = BuildConfig.GITHUB_MCP_OAUTH_CLIENT_ID,
+    private val gmailClientId: String = BuildConfig.GMAIL_MCP_OAUTH_CLIENT_ID,
+    private val microsoftClientId: String = BuildConfig.MICROSOFT_MCP_OAUTH_CLIENT_ID,
     private val now: () -> Long = System::currentTimeMillis,
 ) {
     private val json = Json { ignoreUnknownKeys = true }
@@ -136,7 +149,13 @@ class McpOAuthManager(
             McpOAuthProvider.GITHUB -> githubClientId.also {
                 require(it.isNotBlank()) { "GitHub MCP OAuth Client ID 未配置" }
             }
-            McpOAuthProvider.CLOUDFLARE -> registerCloudflareClient(provider.redirectUri)
+            McpOAuthProvider.CLOUDFLARE, McpOAuthProvider.NOTION -> registerPublicClient(provider)
+            McpOAuthProvider.GMAIL -> gmailClientId.also {
+                require(it.isNotBlank()) { "Gmail MCP OAuth Client ID 未配置" }
+            }
+            McpOAuthProvider.MICROSOFT -> microsoftClientId.also {
+                require(it.isNotBlank()) { "微软邮箱 Client ID 未配置" }
+            }
         }
         val pending = PendingMcpOAuth(randomToken(), randomToken(), clientId, now())
         secrets.write("pending:${provider.key}", json.encodeToString(pending))
@@ -148,10 +167,26 @@ class McpOAuthManager(
         if (provider == McpOAuthProvider.GITHUB) {
             params["scope"] = "repo read:org read:user user:email read:packages write:packages project gist notifications workflow offline_access"
         } else {
-            params["resource"] = provider.endpoint
+            if (provider == McpOAuthProvider.NOTION) {
+                params["resource"] = provider.endpoint
+                params["scope"] = "default"
+            } else if (provider == McpOAuthProvider.MICROSOFT) {
+                // common 同时支持个人 Outlook 和组织邮箱；只请求邮件委托权限。
+                params["scope"] = "offline_access https://graph.microsoft.com/Mail.ReadWrite https://graph.microsoft.com/Mail.Send"
+                params["prompt"] = "select_account"
+            } else if (provider == McpOAuthProvider.GMAIL) {
+                // modify 已覆盖读取、标签和发信；不额外申请个人资料或永久删除权限。
+                params["scope"] = "https://www.googleapis.com/auth/gmail.modify"
+                params["access_type"] = "offline"
+                params["prompt"] = "consent"
+            } else {
+                params["resource"] = provider.endpoint
+            }
         }
         val endpoint = if (provider == McpOAuthProvider.GITHUB) "https://github.com/login/oauth/authorize"
-            else "https://mcp.cloudflare.com/authorize"
+            else if (provider == McpOAuthProvider.GMAIL) "https://accounts.google.com/o/oauth2/v2/auth"
+            else if (provider == McpOAuthProvider.MICROSOFT) "https://login.microsoftonline.com/common/oauth2/v2.0/authorize"
+            else "${provider.authorizationOrigin}/authorize"
         endpoint + "?" + params.entries.joinToString("&") { "${encode(it.key)}=${encode(it.value)}" }
     }
 
@@ -203,26 +238,29 @@ class McpOAuthManager(
         secrets.remove("token:${provider.key}")
     }
 
-    private suspend fun registerCloudflareClient(redirectUri: String): String {
+    /** 固定官方注册端点 + PKCE 公共客户端，不在 APK 内嵌 client secret。 */
+    private suspend fun registerPublicClient(provider: McpOAuthProvider): String {
         val body = buildJsonObject {
             put("client_name", "EveryTalk")
-            put("redirect_uris", JsonArray(listOf(JsonPrimitive(redirectUri))))
+            put("redirect_uris", JsonArray(listOf(JsonPrimitive(provider.redirectUri))))
             put("grant_types", JsonArray(listOf(JsonPrimitive("authorization_code"), JsonPrimitive("refresh_token"))))
             put("response_types", JsonArray(listOf(JsonPrimitive("code"))))
             put("token_endpoint_auth_method", "none")
         }
-        val payload = post("https://mcp.cloudflare.com/register", body.toString(), ContentType.Application.Json)
+        val payload = post("${provider.authorizationOrigin}/register", body.toString(), ContentType.Application.Json)
         return payload["client_id"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
-            ?: error("Cloudflare MCP 客户端注册失败")
+            ?: error("${provider.displayName} MCP 客户端注册失败")
     }
 
     private suspend fun exchange(provider: McpOAuthProvider, clientId: String, parameters: Parameters): McpAuthorizationSecret {
-        val endpoint = if (provider == McpOAuthProvider.GITHUB)
-            "https://oauth.everytalk.cc/oauth/mcp/github/token" else "https://mcp.cloudflare.com/token"
+        val endpoint = if (provider in setOf(McpOAuthProvider.GITHUB, McpOAuthProvider.GMAIL, McpOAuthProvider.MICROSOFT))
+            "https://oauth.everytalk.cc/oauth/mcp/${provider.key}/token" else "${provider.authorizationOrigin}/token"
         val form = FormDataContent(Parameters.build {
             appendAll(parameters)
             append("client_id", clientId)
-            if (provider == McpOAuthProvider.CLOUDFLARE) append("resource", provider.endpoint)
+            if (provider == McpOAuthProvider.CLOUDFLARE || provider == McpOAuthProvider.NOTION) {
+                append("resource", provider.endpoint)
+            }
         })
         val payload = post(endpoint, form, ContentType.Application.FormUrlEncoded)
         require(payload["error"] == null) { "MCP OAuth 授权无效，请重新登录" }

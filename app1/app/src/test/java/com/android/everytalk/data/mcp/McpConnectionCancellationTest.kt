@@ -87,4 +87,28 @@ class McpConnectionCancellationTest {
             manager.close()
         }
     }
+
+    @Test
+    fun `connection timeout becomes a server error instead of hanging approval`() = runBlocking {
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        val manager = McpClientManager(
+            scope = scope,
+            connectTimeoutMillis = 50,
+            connectClient = { _, _ -> awaitCancellation() },
+        )
+        val config = McpServerConfig.SseTransportServer(
+            id = "server-timeout",
+            commonOptions = McpCommonOptions(name = "Timeout server"),
+            url = "https://example.com",
+        )
+
+        try {
+            manager.addServer(config)
+            val state = manager.serverStates.value[config.id]
+            assertTrue(state?.status is McpStatus.Error)
+            assertTrue(state?.errorMessage?.contains("超时") == true)
+        } finally {
+            manager.close()
+        }
+    }
 }

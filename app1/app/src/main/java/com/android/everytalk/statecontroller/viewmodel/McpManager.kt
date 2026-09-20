@@ -21,7 +21,10 @@ class McpManager(private val context: Context) {
         engine { config { followRedirects(false); followSslRedirects(false) } }
     }
     private val oauth = McpOAuthManager(EncryptedMcpOAuthSecrets(context), oauthHttp)
-    private val clientManager = McpClientManager(accessToken = oauth::accessTokenFor)
+    private val mail = McpMailManager(EncryptedMcpOAuthSecrets(context))
+    private val clientManager = McpClientManager(accessToken = { config ->
+        mail.accessTokenFor(config) ?: oauth.accessTokenFor(config)
+    })
     private val _oauthMessage = MutableStateFlow<String?>(null)
     val oauthMessage = _oauthMessage.asStateFlow()
     private val _oauthBusy = MutableStateFlow(false)
@@ -85,6 +88,21 @@ class McpManager(private val context: Context) {
 
     fun dismissOAuthMessage() { _oauthMessage.value = null }
 
+    /** 保存 QQ/网易授权码后立即创建对应 MCP 连接；授权码本身只进入 Keystore。 */
+    fun configureMail(provider: McpMailProvider, input: McpMailInput) {
+        if (_oauthBusy.value) return
+        _oauthBusy.value = true
+        scope.launch {
+            try {
+                val config = mail.save(provider, input)
+                addServer(config)
+                _oauthMessage.value = "${provider.displayName} 已配置"
+            } catch (error: CancellationException) { throw error }
+            catch (error: Exception) { _oauthMessage.value = error.message ?: "邮箱配置失败" }
+            finally { _oauthBusy.value = false }
+        }
+    }
+
     fun getAllConfigs(): Flow<List<McpServerConfig>> {
         return mcpDao.getAllConfigs().map { entities ->
             entities.map { it.toModel() }
@@ -109,6 +127,7 @@ class McpManager(private val context: Context) {
         mcpDao.deleteConfigById(serverId)
         clientManager.removeServer(serverId)
         McpOAuthProvider.entries.firstOrNull { it.serverId == serverId }?.let { oauth.logout(it) }
+        McpMailProvider.entries.firstOrNull { it.serverId == serverId }?.let { mail.remove(it) }
     }
 
     suspend fun toggleServer(serverId: String, enabled: Boolean) {
@@ -135,6 +154,27 @@ class McpManager(private val context: Context) {
                     )
                 }
             }
+    }
+
+    /**
+     * 为已经获得用户批准的当前请求准备 MCP 工具。
+     *
+     * 输入框的会话开关与设置页的服务器开关是两层状态：只连接用户在设置中启用的服务，
+     * 不改写已停用的服务器。并行准备，避免多个失败服务器把等待时间叠加。
+     * 直接调用客户端，不重复写配置触发 Room 监听再次连接同一个服务器。
+     */
+    suspend fun enableConfiguredServersForCurrentRequest(): List<McpToolCandidate> {
+        supervisorScope {
+            mcpDao.getEnabledConfigs().first().map { entity ->
+                async(Dispatchers.IO) {
+                    val config = entity.toModel()
+                    if (serverStates.value[config.id]?.status !is McpStatus.Connected) {
+                        clientManager.addServer(config)
+                    }
+                }
+            }.awaitAll()
+        }
+        return getDispatchCandidates()
     }
 
     suspend fun callTool(toolName: String, arguments: JsonObject): JsonElement {
