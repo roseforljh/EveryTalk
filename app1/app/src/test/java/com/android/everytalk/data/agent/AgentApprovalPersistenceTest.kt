@@ -267,6 +267,22 @@ class AgentApprovalPersistenceTest {
     }
 
     @Test
+    fun `已取消Run的旧审批不能重新复活Run`() = runBlocking {
+        seedRun()
+        val run = requireNotNull(store.getRun("run-1"))
+        val record = approvalRecord()
+        store.pauseForApproval(run, record)
+        store.updateRunStatus(
+            requireNotNull(store.getRun("run-1")),
+            AgentRunStatus.CANCELLED,
+            terminalReason = "VISIBLE_MESSAGE_TERMINAL",
+        )
+
+        assertNull(store.decideApproval("run-1", record.approvalRequestId, AgentApprovalDecision.APPROVED))
+        assertEquals(AgentRunStatus.CANCELLED.name, store.getRun("run-1")?.status)
+    }
+
+    @Test
     fun `同会话新Run作废已批准但尚未续接的旧审批`() = runBlocking {
         seedRun()
         store.pauseForApproval(requireNotNull(store.getRun("run-1")), approvalRecord())

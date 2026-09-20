@@ -890,6 +890,11 @@ class AgentRunCoordinator(
     suspend fun resumeInterruptedToolRuns(): Int {
         var resumedCount = 0
         agentRunStore.resumableApprovalRuns(computerDao)
+            // request_agent/request_mcp/request_secret 的恢复必须经过 ApiHandler：
+            // 它负责把获批能力写回原请求快照（尤其是 MCP 工具和 Agent 服务器上下文）。
+            // 服务层只自动接管没有本地能力申请的普通计算机工具审批，否则会绕过
+            // 输入框开关和恢复准备，直接用旧请求继续，表现为批准后任务立即结束。
+            .filter { (_, record) -> record.agentRequest == null }
             .filter { (run, _) -> run.status == AgentRunStatus.INTERRUPTED.name }
             .forEach { (run, record) ->
                 if (resumeRun(run, record)) resumedCount++

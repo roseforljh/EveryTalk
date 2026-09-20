@@ -1,6 +1,7 @@
 package com.android.everytalk.data.agent
 
 import com.android.everytalk.data.DataClass.ChatRequest
+import com.android.everytalk.data.agent.AgentRequestSnapshot
 import com.android.everytalk.data.DataClass.ModelParameterProtocol
 import com.android.everytalk.data.DataClass.ProviderTurnContinuation
 import com.android.everytalk.data.DataClass.SimpleTextApiMessage
@@ -20,6 +21,10 @@ import io.mockk.mockk
 import io.mockk.slot
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -154,6 +159,46 @@ class AgentRunStoreContinuationTest {
         assertEquals("fresh-secret", restored?.apiKey)
         assertEquals(true, restored?.forceGoogleReasoningPrompt)
         org.junit.Assert.assertFalse(run.requestSnapshotJson.orEmpty().contains("fresh-secret"))
+    }
+
+    @Test
+    fun `恢复工具定义中的JSON null不会让整个请求失败`() = runBlocking {
+        val run = AgentRunEntity(
+            id = "run-null-tool-field",
+            sessionId = "session-1",
+            userMessageId = "user-1",
+            visibleAssistantMessageId = "assistant-1",
+            configIdSnapshot = "config-1",
+            requestSnapshotJson = Json.encodeToString(
+                AgentRequestSnapshot.serializer(),
+                AgentRequestSnapshot(
+                    messages = emptyList(),
+                    provider = "OpenAI",
+                    channel = "OpenAI Chat Completions",
+                    apiAddress = "https://example.test/v1",
+                    model = "model-1",
+                    toolsJson = JsonArray(
+                        listOf(
+                            JsonObject(
+                                mapOf(
+                                    "type" to JsonPrimitive("function"),
+                                    "description" to JsonNull,
+                                ),
+                            ),
+                        ),
+                    ),
+                ),
+            ),
+            status = AgentRunStatus.WAITING_APPROVAL.name,
+            currentRequestOrdinal = 1,
+            terminalReason = null,
+            createdAt = 1L,
+            updatedAt = 1L,
+        )
+
+        val restored = AgentRunStore(dao).restoreChatRequest(run, "fresh-secret")
+
+        assertEquals(JsonNull, restored?.tools?.single()?.get("description"))
     }
 
     @Test

@@ -597,6 +597,85 @@ class AgentParallelToolExecutionTest {
     }
 
     @Test
+    fun `request_mcp 会原子保存等待审批并发出审批事件`() = runBlocking {
+        val sessionId = "mcp-approval-session"
+        seedSession(sessionId)
+        val loop = AgentLoop(
+            runStore = store,
+            toolRuntime = AgentToolRuntime(executorProvider = { null }, approvalProvider = { null }),
+            modelTransport = ModelTurnTransport {
+                flowOf(
+                    AppStreamEvent.ToolCall(
+                        id = "call-request-mcp",
+                        name = AgentControlToolNames.REQUEST_MCP,
+                        argumentsObj = buildJsonObject { put("reason", "读取 Notion 页面") },
+                    ),
+                    AppStreamEvent.Finish("tool_calls"),
+                )
+            },
+        )
+
+        val events = loop.run(
+            loopRequest(
+                sessionId = sessionId,
+                tools = listOf(mcpRequestToolDefinition("Notion: read pages")),
+            ),
+        ).toList()
+
+        val approvalEvent = events.filterIsInstance<AppStreamEvent.AgentApprovalRequired>().single()
+        val waitingRun = store.getWaitingApprovalRuns().single()
+        assertEquals(waitingRun.id, approvalEvent.runId)
+        val approval = requireNotNull(store.pendingApproval(waitingRun.id))
+        assertEquals(approvalEvent.approvalRequestId, approval.approvalRequestId)
+        assertEquals(
+            AgentPauseRequest.EnableMcp("读取 Notion 页面"),
+            approval.agentRequest,
+        )
+    }
+
+    @Test
+    fun `批准request_mcp后继续请求模型而不是直接结束`() = runBlocking {
+        val sessionId = "mcp-approval-resume-session"
+        seedSession(sessionId)
+        var modelTurn = 0
+        val loop = AgentLoop(
+            runStore = store,
+            toolRuntime = AgentToolRuntime(executorProvider = { null }, approvalProvider = { null }),
+            modelTransport = ModelTurnTransport {
+                modelTurn++
+                if (modelTurn == 1) {
+                    flowOf(
+                        AppStreamEvent.ToolCall(
+                            id = "call-request-mcp-resume",
+                            name = AgentControlToolNames.REQUEST_MCP,
+                            argumentsObj = buildJsonObject { put("reason", "读取 Notion 页面") },
+                        ),
+                        AppStreamEvent.Finish("tool_calls"),
+                    )
+                } else {
+                    flowOf(AppStreamEvent.Content("MCP 已开启，继续处理"), AppStreamEvent.Finish("stop"))
+                }
+            },
+        )
+        val request = loopRequest(
+            sessionId = sessionId,
+            tools = listOf(mcpRequestToolDefinition("Notion: read pages")),
+        )
+        loop.run(request).toList()
+        val waitingRun = store.getWaitingApprovalRuns().single()
+        val pending = requireNotNull(store.pendingApproval(waitingRun.id))
+        val decided = requireNotNull(
+            store.decideApproval(waitingRun.id, pending.approvalRequestId, AgentApprovalDecision.APPROVED),
+        )
+
+        val events = loop.run(request.copy(existingRun = waitingRun, approvalDecision = decided)).toList()
+
+        assertEquals(2, modelTurn)
+        assertTrue(events.any { it is AppStreamEvent.Content && it.text == "MCP 已开启，继续处理" })
+        assertTrue(store.getRun(waitingRun.id)?.status == AgentRunStatus.COMPLETED.name)
+    }
+
+    @Test
     fun `并行批次先完成整批预检再开始任何工具`() = runBlocking {
         seedSession("parallel-preflight-session")
         val executedIds = mutableListOf<String>()

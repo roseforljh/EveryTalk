@@ -63,6 +63,9 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import kotlinx.coroutines.sync.withLock
+import android.util.Log
+
+private const val AGENT_RUN_STORE_TAG = "AgentRunStore"
 
 /**
  * Agent 运行事实的唯一写入口。每次真实模型请求独立保存，禁止再按可见 AI 消息累计 Usage。
@@ -343,10 +346,29 @@ class AgentRunStore(
         return snapshotReadLock.withLock {
             snapshotCache[run.id]?.let { return@withLock it }
             // requestSnapshotJson 只用于兼容 24 版及更早的数据；25 版开始分页读取小块。
-            val encoded = run.requestSnapshotJson ?: readChunkedSnapshot(run.id) ?: return@withLock null
-            runCatching {
+            val legacySnapshot = run.requestSnapshotJson?.takeIf(String::isNotBlank)
+            val encoded = legacySnapshot ?: readChunkedSnapshot(run.id)
+            if (encoded == null) {
+                Log.e(
+                    AGENT_RUN_STORE_TAG,
+                    "恢复快照不存在: runId=${run.id}, legacy=${legacySnapshot != null}",
+                )
+                return@withLock null
+            }
+            try {
                 json.decodeFromString(AgentRequestSnapshot.serializer(), encoded)
-            }.getOrNull()?.also { snapshotCache[run.id] = it }
+                    .also { snapshotCache[run.id] = it }
+            } catch (error: Throwable) {
+                // 这里不能只返回 null：恢复入口只能看到“不可解码”，无法区分块缺失、
+                // 多态消息不兼容还是新增参数转换失败。只记录长度和异常类型，不记录快照正文。
+                Log.e(
+                    AGENT_RUN_STORE_TAG,
+                    "恢复快照 JSON 解码失败: runId=${run.id}, chars=${encoded.length}, " +
+                        "error=${error.javaClass.simpleName}: ${error.message}",
+                    error,
+                )
+                null
+            }
         }
     }
 
@@ -363,9 +385,21 @@ class AgentRunStore(
                 afterChunkIndex = expectedChunkIndex - 1,
                 limit = AGENT_REQUEST_SNAPSHOT_READ_PAGE_SIZE,
             )
-            if (page.isEmpty()) return snapshot.takeIf { expectedChunkIndex > 0 }?.toString()
+            if (page.isEmpty()) {
+                if (expectedChunkIndex == 0) {
+                    Log.e(AGENT_RUN_STORE_TAG, "恢复快照分块为空: runId=$runId")
+                    return null
+                }
+                return snapshot.toString()
+            }
             page.forEach { chunk ->
-                if (chunk.chunkIndex != expectedChunkIndex) return null
+                if (chunk.chunkIndex != expectedChunkIndex) {
+                    Log.e(
+                        AGENT_RUN_STORE_TAG,
+                        "恢复快照分块不连续: runId=$runId, expected=$expectedChunkIndex, actual=${chunk.chunkIndex}",
+                    )
+                    return null
+                }
                 snapshot.append(chunk.payload)
                 expectedChunkIndex += 1
             }
@@ -375,7 +409,7 @@ class AgentRunStore(
 
     suspend fun restoreChatRequest(run: AgentRunEntity, apiKey: String): ChatRequest? {
         val snapshot = decodeRequestSnapshot(run) ?: return null
-        return runCatching {
+        return try {
             ChatRequest(
                 messages = snapshot.messages,
                 provider = snapshot.provider,
@@ -397,7 +431,18 @@ class AgentRunStore(
                 localComputerRequestContext = snapshot.computerRequestContext,
                 localSkillSnapshot = snapshot.skillSnapshot,
             )
-        }.getOrNull()
+        } catch (error: Throwable) {
+            // 快照 JSON 已经成功解码，但运行时参数还原仍可能因旧版本留下的 null、
+            // 工具 schema 形状变化等原因失败。保留具体失败阶段，避免审批恢复再次静默终止。
+            Log.e(
+                AGENT_RUN_STORE_TAG,
+                "恢复 ChatRequest 参数失败: runId=${run.id}, messages=${snapshot.messages.size}, " +
+                    "hasTools=${snapshot.toolsJson != null}, hasToolChoice=${snapshot.toolChoiceJson != null}, " +
+                    "error=${error.javaClass.simpleName}: ${error.message}",
+                error,
+            )
+            null
+        }
     }
 
     /** 用户批准 request_agent 后，先把服务器快照和工具写回原 Run，再继续同一次请求。 */
@@ -1063,7 +1108,7 @@ class AgentRunStore(
             status = AgentEntryStatus.FINAL,
             now = now,
         )
-        dao.persistApprovalDecision(
+        val persisted = dao.persistApprovalDecision(
             entry = entry,
             interruptedRun = run.copy(
                 status = AgentRunStatus.INTERRUPTED.name,
@@ -1071,6 +1116,7 @@ class AgentRunStore(
                 updatedAt = now,
             ),
         )
+        if (!persisted) return@withLock null
         decided
     }
 
@@ -1918,7 +1964,9 @@ private fun anyToJsonElement(value: Any?): JsonElement = when (value) {
 }
 
 internal fun jsonElementToAny(element: JsonElement): Any? = when (element) {
-    JsonNull -> null
+    // MCP 的 inputSchema 经常在嵌套字段中携带 JSON null。保留 JsonNull，
+    // 才能让 null 穿过任意层级的 Map/List，不会在恢复工具定义时被误判为缺失字段。
+    JsonNull -> JsonNull
     is JsonObject -> element.mapValues { (_, value) -> jsonElementToAny(value) }
     is JsonArray -> element.map(::jsonElementToAny)
     is JsonPrimitive -> when {
@@ -1935,7 +1983,9 @@ private fun jsonElementToStringMap(element: JsonElement): Map<String, Any> =
         ?.entries
         ?.associate { (key, value) ->
             (key as? String ?: throw IllegalArgumentException("恢复参数名无效")) to
-                (value ?: throw IllegalArgumentException("恢复参数值为空"))
+                // JsonNull 作为 Any 保留，交给现有请求序列化器输出 JSON null；
+                // 旧快照里出现 null 时不能因此放弃整次 Agent 恢复。
+                (value ?: JsonNull)
         }
         ?: throw IllegalArgumentException("恢复参数不是对象")
 
@@ -1945,7 +1995,7 @@ private fun jsonElementToStringMapList(element: JsonElement): List<Map<String, A
             val map = item as? Map<*, *> ?: throw IllegalArgumentException("恢复工具定义不是对象")
             map.entries.associate { (key, value) ->
                 (key as? String ?: throw IllegalArgumentException("恢复工具字段无效")) to
-                    (value ?: throw IllegalArgumentException("恢复工具字段为空"))
+                    (value ?: JsonNull)
             }
         }
         ?: throw IllegalArgumentException("恢复工具定义不是数组")

@@ -805,8 +805,12 @@ interface AgentDao {
         SET status = 'CANCELLED', terminalReason = :reason, updatedAt = :updatedAt,
             runGeneration = runGeneration + 1
         WHERE (
-            status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED')
-            OR (status = 'INTERRUPTED' AND terminalReason IN ('APP_PROCESS_RESTARTED', 'APPROVAL_DECIDED_PENDING_RESUME'))
+            (
+                status NOT IN ('COMPLETED', 'FAILED', 'CANCELLED', 'INTERRUPTED', 'WAITING_APPROVAL')
+            )
+            OR (
+                status = 'INTERRUPTED' AND terminalReason = 'APP_PROCESS_RESTARTED'
+            )
         )
         AND (
             NOT EXISTS (
@@ -1047,9 +1051,13 @@ interface AgentDao {
     suspend fun persistApprovalDecision(
         entry: AgentEntryEntity,
         interruptedRun: AgentRunEntity,
-    ) {
+    ): Boolean {
+        // 审批点击和清理/新消息可能并发。只有仍处于 WAITING_APPROVAL 的原 Run
+        // 才允许写入决定；否则旧审批不能把已取消的 Run 重新复活成 INTERRUPTED。
+        if (getRun(interruptedRun.id)?.status != "WAITING_APPROVAL") return false
         upsertEntry(entry)
         upsertRun(interruptedRun)
+        return true
     }
 
     /** 新用户消息会取代同一会话中尚未回答的旧审批，避免批准被旧 Run 接走。 */

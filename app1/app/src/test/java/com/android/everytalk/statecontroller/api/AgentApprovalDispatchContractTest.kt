@@ -27,11 +27,23 @@ class AgentApprovalDispatchContractTest {
         assertTrue(refresh.contains("\"已由新消息取代\""))
     }
 
-    private fun sourceFile(): File {
+    @Test
+    fun `服务恢复不能绕过本地能力审批的请求准备`() {
+        val source = sourceFile(
+            "app1/app/src/main/java/com/android/everytalk/data/agent/AgentRunCoordinator.kt",
+        ).readText(Charsets.UTF_8)
+        val recovery = source.substringAfter("suspend fun resumeInterruptedToolRuns()")
+            .substringBefore("fun cancelRun(")
+
+        assertTrue(recovery.contains("record.agentRequest == null"))
+        assertTrue(recovery.contains("MCP 工具和 Agent 服务器上下文"))
+    }
+
+    private fun sourceFile(relativePath: String = "app1/app/src/main/java/com/android/everytalk/statecontroller/api/ApiHandler.kt"): File {
         val candidates = listOf(
-            File("src/main/java/com/android/everytalk/statecontroller/api/ApiHandler.kt"),
-            File("app/src/main/java/com/android/everytalk/statecontroller/api/ApiHandler.kt"),
-            File("app1/app/src/main/java/com/android/everytalk/statecontroller/api/ApiHandler.kt"),
+            File(relativePath),
+            File("../$relativePath"),
+            File("../../$relativePath"),
         )
         return requireNotNull(candidates.firstOrNull(File::isFile))
     }

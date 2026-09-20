@@ -110,6 +110,67 @@ class AgentRunRecoveryTest {
     }
 
     @Test
+    fun `等待审批或审批已决定待恢复的Run不能被可见消息清理`() = runBlocking {
+        val dao = database.agentDao()
+        val sessionId = "session-approval-cleanup"
+        database.chatDao().insertSession(
+            ChatSessionEntity(sessionId, 1L, 1L, isImageGeneration = false),
+        )
+        database.chatDao().upsertMessages(
+            listOf(
+                Message(
+                    id = "assistant-waiting-approval",
+                    text = "需要确认 MCP",
+                    sender = Sender.AI,
+                    executionFinishedAt = 2L,
+                ).toEntity(sessionId),
+                Message(
+                    id = "assistant-decided-approval",
+                    text = "已允许，准备继续",
+                    sender = Sender.AI,
+                    executionFinishedAt = 3L,
+                ).toEntity(sessionId),
+            ),
+        )
+        dao.upsertRun(
+            AgentRunEntity(
+                id = "run-waiting-approval",
+                sessionId = sessionId,
+                userMessageId = "user-waiting-approval",
+                visibleAssistantMessageId = "assistant-waiting-approval",
+                configIdSnapshot = "config-1",
+                requestSnapshotJson = "{}",
+                status = "WAITING_APPROVAL",
+                currentRequestOrdinal = 1,
+                terminalReason = null,
+                createdAt = 1L,
+                updatedAt = 1L,
+            ),
+        )
+        dao.upsertRun(
+            AgentRunEntity(
+                id = "run-decided-approval",
+                sessionId = sessionId,
+                userMessageId = "user-decided-approval",
+                visibleAssistantMessageId = "assistant-decided-approval",
+                configIdSnapshot = "config-1",
+                requestSnapshotJson = "{}",
+                status = "INTERRUPTED",
+                currentRequestOrdinal = 1,
+                terminalReason = "APPROVAL_DECIDED_PENDING_RESUME",
+                createdAt = 1L,
+                updatedAt = 1L,
+            ),
+        )
+
+        val cancelled = dao.cancelStaleVisibleMessageRuns("VISIBLE_MESSAGE_TERMINAL", 10L)
+
+        assertEquals(0, cancelled)
+        assertEquals("WAITING_APPROVAL", dao.getRun("run-waiting-approval")?.status)
+        assertEquals("INTERRUPTED", dao.getRun("run-decided-approval")?.status)
+    }
+
+    @Test
     fun `Run结束后立即释放恢复快照`() = runBlocking {
         val dao = database.agentDao()
         database.chatDao().insertSession(
