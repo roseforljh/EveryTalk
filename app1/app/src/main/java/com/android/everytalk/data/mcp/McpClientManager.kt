@@ -74,7 +74,7 @@ internal fun resolveMcpToolWithServer(
     exposedToolName: String,
 ): Pair<McpServerConfig, McpTool>? {
     val routes = states
-        .filter { it.status is McpStatus.Connected && it.config.enabled }
+        .filter { (it.status is McpStatus.Connected || it.status is McpStatus.Error) && it.config.enabled }
         .flatMap { state -> state.tools.filter { it.enable }.map { tool -> state.config to tool } }
     return routes.firstOrNull { (config, tool) ->
         buildMcpToolAlias(config.id, tool.name) == exposedToolName
@@ -161,25 +161,34 @@ class McpClientManager(
 
         return try {
             withServerLock(initialRoute.first.id) {
-                val (config, tool) = resolveMcpToolWithServer(_serverStates.value.values, toolName)
+                // 等待服务器锁期间可能已关闭开关或删除配置，必须重新解析，不能拿旧配置重连。
+                val config = resolveMcpToolWithServer(_serverStates.value.values, toolName)?.first
                     ?: return@withServerLock mcpToolFailure("Failed to execute tool: no such tool '$toolName'")
-                val client = clients[config.id]
-                    ?: return@withServerLock mcpToolFailure("Failed to execute tool: no client for server '${config.name}'")
+                val currentState = _serverStates.value[config.id]
 
-                Log.i(TAG, "callTool: $toolName -> ${config.name}/${tool.name} / argumentKeys=${args.keys}")
-                Log.d(TAG, "callTool: transport=${client.transport?.javaClass?.simpleName}, connected=${client.transport != null}")
+                // 如果当前不是 Connected 状态，或者 clients 中无活跃客户端，先重新连接
+                if (currentState?.status !is McpStatus.Connected || !clients.containsKey(config.id)) {
+                    Log.d(TAG, "callTool: server '${config.name}' disconnected or in error, reconnecting before call...")
+                    addServerLocked(config)
+                    if (_serverStates.value[config.id]?.status !is McpStatus.Connected) {
+                        return@withServerLock mcpToolFailure("Failed to execute tool: server '${config.name}' is not connected")
+                    }
+                }
+
+                // 重连（含 syncToolsLocked）完成后，必须重新解析最新 tool；若远端已删除或禁用则不得执行
+                val (latestConfig, latestTool) = resolveMcpToolWithServer(_serverStates.value.values, toolName)
+                    ?: return@withServerLock mcpToolFailure("Failed to execute tool: tool '$toolName' is no longer available on server '${config.name}'")
+                val client = clients[latestConfig.id]
+                    ?: return@withServerLock mcpToolFailure("Failed to execute tool: no client for server '${latestConfig.name}'")
+
+                Log.i(TAG, "callTool: $toolName -> ${latestConfig.name}/${latestTool.name} / argumentKeys=${args.keys}")
 
                 try {
-                    if (client.transport == null) {
-                        Log.d(TAG, "callTool: reconnecting...")
-                        connectClient(client, getTransport(config))
-                    }
-
                     Log.d(TAG, "callTool: sending request...")
                     val result = client.callTool(
                         request = CallToolRequest(
                             params = CallToolRequestParams(
-                                name = tool.name,
+                                name = latestTool.name,
                                 arguments = args,
                             ),
                         ),
@@ -192,6 +201,23 @@ class McpClientManager(
                     throw e
                 } catch (e: Exception) {
                     Log.e(TAG, "callTool error: ${e.javaClass.simpleName}: ${e.message}", e)
+                    // 异常发生时移除坏 client 并异步限时关闭
+                    val badClient = clients.remove(latestConfig.id)
+                    if (badClient != null) {
+                        scope.launch {
+                            closeClient(badClient)
+                        }
+                    }
+                    val failureType = classifyFailureType(e)
+                    updateServerState(latestConfig.id) { current ->
+                        McpServerState(
+                            config = latestConfig,
+                            status = McpStatus.Error(e.message ?: "Tool call failed", failureType.name),
+                            tools = current?.tools.orEmpty(),
+                            errorMessage = e.message,
+                        )
+                    }
+                    // 严禁自动重放可能有副作用的 tool call，直接返回错误，留待下次调用时自愈重连
                     mcpToolFailure("Error executing tool '$toolName': ${e.message}")
                 }
             }
@@ -261,7 +287,7 @@ class McpClientManager(
         val currentState = _serverStates.value[config.id]
         if (
             currentState?.status is McpStatus.Connected &&
-            clients[config.id]?.transport != null &&
+            clients.containsKey(config.id) &&
             hasSameMcpConnectionSettings(currentState.config, config)
         ) {
             return
@@ -282,7 +308,7 @@ class McpClientManager(
 
         try {
             updateServerState(config.id) {
-                McpServerState(config = config, status = McpStatus.Connecting)
+                McpServerState(config = config, status = McpStatus.Connecting, tools = currentState?.tools.orEmpty())
             }
 
             // MCP 服务端可能卡在 DNS、TLS 或初始化请求。连接必须有独立上限，
@@ -323,10 +349,11 @@ class McpClientManager(
             return
         }
         val failureType = classifyFailureType(error)
-        updateServerState(config.id) {
+        updateServerState(config.id) { currentState ->
             McpServerState(
                 config = config,
                 status = McpStatus.Error(error.message ?: "Connection failed", failureType.name),
+                tools = currentState?.tools.orEmpty(),
                 errorMessage = error.message
             )
         }
@@ -344,10 +371,6 @@ class McpClientManager(
 
     private suspend fun syncToolsLocked(config: McpServerConfig) {
         val client = clients[config.id] ?: return
-
-        if (client.transport == null) {
-            connectClient(client, getTransport(config))
-        }
 
         // SDK listTools 只返回一页；收齐分页再发布，避免 GitHub 工具被静默截断。
         val serverTools = mutableListOf<io.modelcontextprotocol.kotlin.sdk.types.Tool>()
